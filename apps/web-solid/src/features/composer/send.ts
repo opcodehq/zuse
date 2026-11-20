@@ -1,18 +1,15 @@
 // Send, queue, steer and interrupt, plus attachment staging. User actions become engine requests.
-import { createEffect, createRoot, on } from "solid-js";
-import { rpc } from "@/core/connection";
 import { chatRequest } from "@/core/chat";
+import { rpc } from "@/core/connection";
 import { M } from "@/core/methods";
-import { filePreviewUrl } from "@/ui/imageUrl";
 import { RpcError } from "@/core/rpc";
 import { state } from "@/core/store";
 import { navigate, openChat, setView, view } from "@/core/view";
-import { canonicalText, workspaceCommandFor, type WorkspaceCommand } from "./completion";
+import { filePreviewUrl } from "@/ui/imageUrl";
+import { createEffect, createRoot } from "solid-js";
 import { catalog, chatConfig, draftSpace, resolve, selectedChat, setCatalog, targetDeviceId } from "./catalog";
-import {
-  addAttachment, attachmentsFor, clearDraft, clearFailure, composer, draftFor, fail, restoreAttachments, setComposer, setDraft,
-  snapshotDraft, takeAttachments, updateAttachment, type Attachment, type Draft,
-} from "./drafts";
+import { canonicalText, workspaceCommandFor, type WorkspaceCommand } from "./completion";
+import { addAttachment, attachmentsFor, clearDraft, clearFailure, composer, draftFor, fail, restoreAttachments, setComposer, setDraft, snapshotDraft, takeAttachments, updateAttachment, type Attachment, type Draft, } from "./drafts";
 
 export const MAX_ATTACHMENT = 32 * 1024 * 1024;
 const CHUNK = 45_000;
@@ -117,9 +114,9 @@ export function runWorkspaceCommand(command: WorkspaceCommand, openModelPicker: 
     case "model": return openModelPicker();
     case "new": return openChat(null);
     case "settings": return navigate({ kind: "settings" });
-    case "diff": return setView("rightPanel", "changes");
-    case "files": return setView("rightPanel", "files");
-    case "terminal": return setView("rightPanel", "terminal");
+    case "diff": return setView(draft => { draft["rightPanel"] = "changes"; });
+    case "files": return setView(draft => { draft["rightPanel"] = "files"; });
+    case "terminal": return setView(draft => { draft["rightPanel"] = "terminal"; });
     case "stop": return void interrupt();
   }
 }
@@ -150,7 +147,7 @@ async function queueMessage(key: string, draft: Draft, steer: boolean) {
   const files = takeAttachments(key);
   clearDraft(key);
   clearFailure();
-  setComposer("sending", true);
+  setComposer(draft => { draft["sending"] = true; });
   try {
     const paths = isLocal(chat.deviceId) ? files.map((f) => f.path!) : await Promise.all(files.map((f) => upload(f.file, uuid().replace(/-/g, ""), chat.deviceId)));
     const body = canonicalText(draft);
@@ -162,7 +159,7 @@ async function queueMessage(key: string, draft: Draft, steer: boolean) {
     restoreAttachments(key, files);
     fail(key, error instanceof RpcError && error.outcomeUnknown ? error.message : `Send failed: ${errorText(error)}`);
   } finally {
-    setComposer("sending", false);
+    setComposer(draft => { draft["sending"] = false; });
   }
 }
 
@@ -180,7 +177,7 @@ async function run(key: string, draft: Draft) {
   const files = takeAttachments(key);
   clearDraft(key);
   clearFailure();
-  setComposer("sending", true);
+  setComposer(draft => { draft["sending"] = true; });
   let created = false;
   try {
     // Remote hosts receive staged bytes from the local engine after the command is queued.
@@ -197,7 +194,7 @@ async function run(key: string, draft: Draft) {
         config,
       });
       created = true;
-      setCatalog("draft", { harness: undefined, model: undefined, reasoning: undefined, plan: false });
+      setCatalog(draft => { Object.assign(draft["draft"]!, { harness: undefined, model: undefined, reasoning: undefined, plan: false }); });
       openChat(chatId);
     }
     const prompt = withAttachments(canonicalText(draft), paths);
@@ -235,41 +232,37 @@ async function run(key: string, draft: Draft) {
     restoreAttachments(restoreKey, files);
     fail(restoreKey, unknown ? errorText(error) : `Send failed: ${errorText(error)}`);
   } finally {
-    setComposer("sending", false);
+    setComposer(draft => { draft["sending"] = false; });
   }
 }
 
 createRoot(() => {
   // A stop request lasts until its run ends; the next run gets a fresh Stop key.
-  createEffect(() => {
-    for (const [chatId, pending] of Object.entries(composer.interrupting)) if (pending && !runLive(chatId)) setComposer("interrupting", chatId, false);
-  });
-  // The open chat was deleted elsewhere and core moved to the new-chat canvas: carry its draft along.
   createEffect(
-    on(
-      () => view.selectedChatId,
-      (next, prev) => {
-        if (next !== null || !prev || state.chats[prev] || !state.workspaceSynced) return;
-        if (!hasContent(prev) || hasContent("")) return;
-        setDraft("", snapshotDraft(prev));
-        restoreAttachments("", takeAttachments(prev));
-        clearDraft(prev);
-      },
-    ),
+    () => Object.entries(composer.interrupting).filter(([id, pending]) => pending && !runLive(id)).map(([id]) => id),
+    ids => setComposer(draft => { for (const id of ids) draft.interrupting[id] = false; }),
   );
+  // The open chat was deleted elsewhere and core moved to the new-chat canvas: carry its draft along.
+  createEffect(() => view.selectedChatId, (next, prev) => {
+    if (next !== null || !prev || state.chats[prev] || !state.workspaceSynced) return;
+    if (!hasContent(prev) || hasContent("")) return;
+    setDraft("", snapshotDraft(prev));
+    restoreAttachments("", takeAttachments(prev));
+    clearDraft(prev);
+  });
   // "Engine not connected" is stale the moment the engine is back.
-  createEffect(() => {
-    if (state.connection.kind === "connected" && composer.failure?.message === "Engine not connected") clearFailure();
+  createEffect(() => state.connection.kind === "connected" && composer.failure?.message === "Engine not connected", (clear) => {
+    if (clear) clearFailure();
   });
 });
 
 export async function interrupt(chatId: string | null = view.selectedChatId) {
   if (!chatId || composer.interrupting[chatId]) return;
-  setComposer("interrupting", chatId, true);
+  setComposer(draft => { draft["interrupting"]![chatId] = true; });
   try {
     await rpc.call(M.QUEUE_COMMAND, chatRequest(chatId, { command: { kind: "interrupt" } }));
   } catch (error) {
-    setComposer("interrupting", chatId, false);
+    setComposer(draft => { draft["interrupting"]![chatId] = false; });
     fail(chatId, `Stop failed: ${errorText(error)}`);
   }
 }
@@ -313,5 +306,7 @@ export function lastPrompt(): string | null {
 export async function retry(prompt: string) {
   const key = draftKey();
   setDraft(key, { text: prompt.replace(/\n\nAttached images \(local files[^\n]*\):\n[\s\S]*$/, ""), mentions: [], skills: [] });
+  // Submit reads the committed composer draft.
+  await Promise.resolve();
   await submit({ openModelPicker: () => {} });
 }

@@ -1,12 +1,11 @@
 // Host-owned visual sessions (crates/protocol/src/visual_session.rs, as crates/viewport/src/visuals.rs drives them).
 // A control targets the revision the reader saw; disconnect and navigation retire sessions instead of replaying input.
-import { createEffect, createRoot, on } from "solid-js";
-import { createStore, produce, reconcile } from "solid-js/store";
 import { rpc } from "@/core/connection";
 import { M } from "@/core/methods";
 import type { Subscription } from "@/core/rpc";
 import { state } from "@/core/store";
 import { view } from "@/core/view";
+import { createEffect, createRoot, createStore, reconcile } from "solid-js";
 
 const VERSION = 1;
 const MAX_OPEN = 8;
@@ -136,11 +135,12 @@ function suspend(key: string) {
   session.queuedSlider = null;
   owner?.cancel();
   if (visuals[key])
-    setVisuals(key, produce((v) => {
+    setVisuals(draftState => {
+      const v = draftState[key]!;
       v.offline = true;
       v.busy = false;
       v.sliderTarget = null;
-    }));
+    });
 }
 
 function fail(key: string, message: string) {
@@ -151,11 +151,12 @@ function fail(key: string, message: string) {
     session.queuedSlider = null;
   }
   if (visuals[key])
-    setVisuals(key, produce((v) => {
+    setVisuals(draftState => {
+      const v = draftState[key]!;
       v.error = message.slice(0, 2000);
       v.busy = false;
       v.sliderTarget = null;
-    }));
+    });
 }
 
 const deviceOf = (chatId: string) => state.chats[chatId]?.deviceId ?? state.localDeviceId ?? "";
@@ -178,7 +179,7 @@ export function openVisual(chatId: string, visualId: string) {
   }
   const session: Internals = { owner: null, lease: null, started: performance.now(), queuedSlider: null, canvases: new Map() };
   sessions.set(key, session);
-  setVisuals(key, { chatId, revision: 0, tree: null, error: null, busy: false, offline: false, sliderTarget: null, canvases: {} });
+  setVisuals(draft => { draft[key] = { chatId, revision: 0, tree: null, error: null, busy: false, offline: false, sliderTarget: null, canvases: {} }; });
   session.owner = rpc.subscribe<JsonObject>(
     M.OPEN_VISUAL,
     { chatId, visualId, targetDeviceId: deviceOf(chatId) },
@@ -201,7 +202,7 @@ export function closeVisual(key: string) {
     owner?.cancel();
     sessions.delete(key);
   }
-  if (visuals[key]) setVisuals(key, undefined!);
+  if (visuals[key]) setVisuals(draft => { draft[key] = undefined!; });
   if (!sessions.size && timer) {
     clearInterval(timer);
     timer = undefined;
@@ -225,13 +226,14 @@ function receiveFrame(key: string, item: JsonObject) {
   session.canvases = new Map();
   collectCanvases(item.tree, "", session.canvases, previous);
   const revision = item.revision as number;
-  setVisuals(key, produce((v) => {
+  setVisuals(draftState => {
+    const v = draftState[key]!;
     v.revision = revision;
     v.busy = false;
     v.sliderTarget = null;
     v.canvases = Object.fromEntries([...session.canvases.keys()].map((path) => [path, v.canvases[path] ?? { commands: [], error: null }]));
-  }));
-  setVisuals(key, "tree", reconcile(item.tree as JsonObject, { merge: true }));
+  });
+  setVisuals(draft => { { const next = item.tree as JsonObject; if (draft[key]!["tree"] == null) draft[key]!["tree"] = next; else reconcile(next)(draft[key]!["tree"]); } });
   const queued = session.queuedSlider;
   session.queuedSlider = null;
   if (queued) {
@@ -251,19 +253,19 @@ export function control(key: string, path: string, revision: number, argument: A
   if (!node || !found) return;
   const [handler, kind] = found;
   const slider = kind === "Slider";
-  if (slider && argument.kind === "number") setVisuals(key, "sliderTarget", { path, value: argument.value });
+  if (slider && argument.kind === "number") setVisuals(draft => { draft[key]!["sliderTarget"] = { path, value: argument.value }; });
   if (current.busy) {
     if (slider) session.queuedSlider = { path, argument, node: JSON.parse(JSON.stringify(node)) as JsonObject };
     return;
   }
-  if (!slider) setVisuals(key, "sliderTarget", null);
+  if (!slider) setVisuals(draft => { draft[key]!["sliderTarget"] = null; });
   const payload = variant(node)?.[1];
   if (slider && argument.kind === "number" && isObject(payload) && payload.value === argument.value) {
-    setVisuals(key, "sliderTarget", null);
+    setVisuals(draft => { draft[key]!["sliderTarget"] = null; });
     return;
   }
   if (!session.lease) return;
-  setVisuals(key, "busy", true);
+  setVisuals(draft => { draft[key]!["busy"] = true; });
   rpc
     .call(M.CONTROL_VISUAL, { lease: session.lease, revision, handler, argument, targetDeviceId: deviceOf(current.chatId) })
     .catch(() => {
@@ -310,12 +312,12 @@ function refreshDraws() {
           (reply) => {
             canvas.pending = false;
             if (sessions.get(key) !== session || visuals[key]?.revision !== revision || !visuals[key]!.canvases[path]) return;
-            if (reply?.revision === revision && Array.isArray(reply.commands)) setVisuals(key, "canvases", path, { commands: reply.commands, error: null });
-            else setVisuals(key, "canvases", path, "error", "The canvas could not draw this frame.");
+            if (reply?.revision === revision && Array.isArray(reply.commands)) setVisuals(draft => { Object.assign(draft[key]!["canvases"]![path]!, { commands: reply.commands, error: null }); });
+            else setVisuals(draft => { draft[key]!["canvases"]![path]!["error"] = "The canvas could not draw this frame."; });
           },
           () => {
             canvas.pending = false;
-            if (sessions.get(key) === session && visuals[key]?.canvases[path]) setVisuals(key, "canvases", path, "error", "The canvas could not draw this frame.");
+            if (sessions.get(key) === session && visuals[key]?.canvases[path]) setVisuals(draft => { draft[key]!["canvases"]![path]!["error"] = "The canvas could not draw this frame."; });
           },
         );
       break;
@@ -333,6 +335,6 @@ function suspendAll() {
 
 // Navigation and reconnects retire every session; reopening starts fresh. A drop only suspends them.
 createRoot(() => {
-  createEffect(on(() => [view.selectedChatId, state.epoch] as const, closeAll, { defer: true }));
-  createEffect(on(() => state.connection.kind, (kind) => kind !== "connected" && suspendAll(), { defer: true }));
+  createEffect(() => [view.selectedChatId, state.epoch] as const, closeAll, { defer: true });
+  createEffect(() => state.connection.kind, (kind) => { void (kind !== "connected" && suspendAll()); }, { defer: true });
 });

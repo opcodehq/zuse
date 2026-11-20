@@ -1,6 +1,6 @@
 // Project archives: archived chats, a read-only transcript of one session, its file archive state, restore.
-import { batch } from "solid-js";
-import { createStore, type SetStoreFunction } from "solid-js/store";
+
+// Project archives: archived chats, a read-only transcript of one session, its file archive state, restore.
 import { chatRequest } from "@/core/chat";
 import { onConnected, rpc } from "@/core/connection";
 import { M } from "@/core/methods";
@@ -8,6 +8,7 @@ import type { Chat, SessionMessageEntry, TranscriptUpdate } from "@/core/protoco
 import type { Subscription } from "@/core/rpc";
 import { state } from "@/core/store";
 import { applyTranscriptFrame } from "@/core/transcript";
+import { createStore, type StoreSetter } from "solid-js";
 import { errorText, projectKey } from "./hosts";
 import type { FileArchiveStatus } from "./types";
 
@@ -75,16 +76,17 @@ interface Preview {
 
 export const [preview, setPreview] = createStore<Preview>({ chatId: null, messages: [], reading: false, error: null });
 
-const setMessages: SetStoreFunction<SessionMessageEntry[]> = ((...args: unknown[]) =>
-  (setPreview as (...a: unknown[]) => void)("messages", ...args)) as SetStoreFunction<SessionMessageEntry[]>;
+const setMessages: StoreSetter<SessionMessageEntry[]> = update => {
+  setPreview(draft => { update(draft.messages); });
+};
 
 let reading: Subscription | null = null;
 
 export function readSession(chatId: string) {
   closeSession();
-  setPreview({ chatId, messages: [], reading: true, error: null });
+  setPreview(draft => { Object.assign(draft, { chatId, messages: [], reading: true, error: null }); });
   if (!rpc.connected) {
-    setPreview({ reading: false, error: "Computer unavailable. Reconnect to load this transcript." });
+    setPreview(draft => { Object.assign(draft, { reading: false, error: "Computer unavailable. Reconnect to load this transcript." }); });
     return;
   }
   let received = false;
@@ -95,20 +97,20 @@ export function readSession(chatId: string) {
       if (preview.chatId !== chatId || reading !== sub) return;
       try {
         if (!received && !("reset" in update)) throw new Error("missing reset");
-        batch(() => {
+        (() => {
           applyTranscriptFrame(setMessages, preview.messages, update);
-          setPreview({ reading: false, error: null });
-        });
+          setPreview(draft => { Object.assign(draft, { reading: false, error: null }); });
+        })();
         received = true;
       } catch {
-        setPreview({ reading: false, error: "Could not read saved transcript. Retry to load it again." });
+        setPreview(draft => { Object.assign(draft, { reading: false, error: "Could not read saved transcript. Retry to load it again." }); });
         sub.cancel();
       }
     },
     (error) => {
       if (preview.chatId !== chatId || reading !== sub) return;
       reading = null;
-      if (error || !received) setPreview({ reading: false, error: error ? errorText(error) : "Could not read saved transcript. Retry to load it again." });
+      if (error || !received) setPreview(draft => { Object.assign(draft, { reading: false, error: error ? errorText(error) : "Could not read saved transcript. Retry to load it again." }); });
     },
   );
   reading = sub;
@@ -118,7 +120,7 @@ export function closeSession() {
   const sub = reading;
   reading = null;
   sub?.cancel();
-  setPreview({ chatId: null, messages: [], reading: false, error: null });
+  setPreview(draft => { Object.assign(draft, { chatId: null, messages: [], reading: false, error: null }); });
 }
 
 // A dropped connection ends the read and the status check; resume both when it returns.
@@ -147,16 +149,16 @@ export async function loadFiles(chatId: string) {
   clearTimeout(filesPoll);
   if (files.loading && files.chatId === chatId) return;
   const epoch = ++filesEpoch;
-  if (files.chatId !== chatId) setFiles({ chatId, value: null, error: null });
-  setFiles("loading", true);
+  if (files.chatId !== chatId) setFiles(draft => { Object.assign(draft, { chatId, value: null, error: null }); });
+  setFiles(draft => { draft["loading"] = true; });
   try {
     const status = await rpc.call<FileArchiveStatus>(M.GET_CHAT_ARCHIVE_STATUS, chatRequest(chatId));
     if (epoch !== filesEpoch) return;
-    if (status?.chatId === chatId) setFiles({ value: status, error: null, loading: false });
-    else setFiles({ error: "File archive response is unavailable.", loading: false });
+    if (status?.chatId === chatId) setFiles(draft => { Object.assign(draft, { value: status, error: null, loading: false }); });
+    else setFiles(draft => { Object.assign(draft, { error: "File archive response is unavailable.", loading: false }); });
   } catch (error) {
     if (epoch !== filesEpoch) return;
-    setFiles({ error: errorText(error), loading: false });
+    setFiles(draft => { Object.assign(draft, { error: errorText(error), loading: false }); });
   }
   if (!files.error && progressing(files.value)) filesPoll = setTimeout(() => void loadFiles(chatId), 2000);
 }
@@ -164,7 +166,7 @@ export async function loadFiles(chatId: string) {
 export function clearFiles() {
   filesEpoch++;
   clearTimeout(filesPoll);
-  setFiles({ chatId: null, value: null, loading: false, error: null });
+  setFiles(draft => { Object.assign(draft, { chatId: null, value: null, loading: false, error: null }); });
 }
 
 // ── Restore ──────────────────────────────────────────────────────────────
@@ -179,13 +181,13 @@ export async function restoreChat(chatId: string): Promise<boolean> {
   if (restoring.busy) return false;
   const chat = state.chats[chatId];
   if (!chat?.archived) return false;
-  setRestoring({ busy: chatId, target: chatId, error: null });
+  setRestoring(draft => { Object.assign(draft, { busy: chatId, target: chatId, error: null }); });
   try {
     await rpc.call(M.MUTATE, { op: "setChatArchived", chatId, archived: false, targetDeviceId: chat.deviceId });
-    setRestoring({ busy: null });
+    setRestoring(draft => { Object.assign(draft, { busy: null }); });
     return true;
   } catch (error) {
-    setRestoring({ busy: null, error: errorText(error, "Could not restore this chat.") });
+    setRestoring(draft => { Object.assign(draft, { busy: null, error: errorText(error, "Could not restore this chat.") }); });
     return false;
   }
 }

@@ -1,10 +1,9 @@
 // The footer's General-account plan and provider usage limits (crates/viewport sidebar_controls.rs).
-import { createEffect, createRoot, on } from "solid-js";
-import { createStore } from "solid-js/store";
 import { rpc } from "@/core/connection";
 import { M } from "@/core/methods";
 import { state } from "@/core/store";
 import { navigate } from "@/core/view";
+import { createEffect, createRoot, createStore } from "solid-js";
 
 interface UsageWindow {
   label: string;
@@ -86,7 +85,7 @@ function loadPlan() {
   const expected = owner();
   if (!expected || !available() || account.pending.plan) return;
   const key = ownerKey();
-  setAccount("pending", "plan", true);
+  setAccount(draft => { draft["pending"]!["plan"] = true; });
   rpc
     .call<{ accountId?: string; organizationId?: string | null; data?: unknown }>(M.CLOUD_BILLING_ENTITLEMENTS, {
       expectedAccountId: expected.accountId,
@@ -96,26 +95,24 @@ function loadPlan() {
       (value) => {
         if (key !== ownerKey()) return;
         if (!sameOwner(value, expected)) {
-          setAccount({ planError: "The account changed. Reopen Cloud settings to refresh." });
+          setAccount(draft => { Object.assign(draft, { planError: "The account changed. Reopen Cloud settings to refresh." }); });
           return;
         }
         const subscribed = cloudSubscribed(value.data, Date.now());
-        setAccount({ subscribed, planError: subscribed === null ? "The Cloud plan is unavailable. Open Cloud settings to retry." : null });
+        setAccount(draft => { Object.assign(draft, { subscribed, planError: subscribed === null ? "The Cloud plan is unavailable. Open Cloud settings to retry." : null }); });
       },
       (error: unknown) => {
-        if (key === ownerKey()) setAccount("planError", error instanceof Error ? error.message : String(error));
+        if (key === ownerKey()) setAccount(draft => { draft["planError"] = error instanceof Error ? error.message : String(error); });
       },
     )
-    .finally(() => setAccount("pending", "plan", false));
+    .finally(() => setAccount(draft => { draft["pending"]!["plan"] = false; }));
 }
 
 createRoot(() => {
-  createEffect(
-    on([ownerKey, () => state.epoch, available], () => {
-      setAccount({ subscribed: null, planError: null, accountError: null, accounts: [], usageLoadedAt: 0, usageError: null });
-      loadPlan();
-    }),
-  );
+  createEffect(() => [(ownerKey)(), (() => state.epoch)(), (available)()] as const, () => {
+    setAccount(draft => { Object.assign(draft, { subscribed: null, planError: null, accountError: null, accounts: [], usageLoadedAt: 0, usageError: null }); });
+    loadPlan();
+  });
 });
 
 export type PlanLabel = "Loading account" | "Account unavailable" | "Signing in" | "Sign in" | "Account" | "Cloud" | "Upgrade" | "Checking plan";
@@ -143,21 +140,21 @@ export function accountDisabled() {
 
 function openSecure(url: unknown) {
   if (typeof url === "string" && url.startsWith("https://")) window.open(url, "_blank", "noopener");
-  else setAccount("accountError", "No secure sign-in or checkout link was returned. Open Settings to retry.");
+  else setAccount(draft => { draft["accountError"] = "No secure sign-in or checkout link was returned. Open Settings to retry."; });
 }
 
 export function accountAction() {
   if (accountDisabled()) return;
-  setAccount("accountError", null);
+  setAccount(draft => { draft["accountError"] = null; });
   const expected = owner();
   if (!expected) {
-    setAccount("pending", "signin", true);
+    setAccount(draft => { draft["pending"]!["signin"] = true; });
     rpc
       .call<{ url?: string }>(M.CLOUD_ACCOUNT_SIGN_IN, {})
-      .then((value) => openSecure(value?.url), (error: unknown) => setAccount("accountError", error instanceof Error ? error.message : String(error)))
-      .finally(() => setAccount("pending", "signin", false));
+      .then((value) => openSecure(value?.url), (error: unknown) => setAccount(draft => { draft["accountError"] = error instanceof Error ? error.message : String(error); }))
+      .finally(() => setAccount(draft => { draft["pending"]!["signin"] = false; }));
   } else if (account.subscribed === false && !account.planError) {
-    setAccount("pending", "checkout", true);
+    setAccount(draft => { draft["pending"]!["checkout"] = true; });
     rpc
       .call<{ accountId?: string; organizationId?: string | null; data?: { checkoutUrl?: string } }>(M.CLOUD_BILLING_CHECKOUT, {
         offerId: OFFER,
@@ -165,10 +162,10 @@ export function accountAction() {
         expectedOrganizationId: expected.organizationId,
       })
       .then(
-        (value) => (sameOwner(value, expected) ? openSecure(value.data?.checkoutUrl) : setAccount("accountError", "The account changed. Reopen Cloud settings to refresh.")),
-        (error: unknown) => setAccount("accountError", error instanceof Error ? error.message : String(error)),
+        (value) => (sameOwner(value, expected) ? openSecure(value.data?.checkoutUrl) : setAccount(draft => { draft["accountError"] = "The account changed. Reopen Cloud settings to refresh."; })),
+        (error: unknown) => setAccount(draft => { draft["accountError"] = error instanceof Error ? error.message : String(error); }),
       )
-      .finally(() => setAccount("pending", "checkout", false));
+      .finally(() => setAccount(draft => { draft["pending"]!["checkout"] = false; }));
   } else navigate({ kind: "settings", section: "cloud" });
 }
 
@@ -186,27 +183,29 @@ export function loadUsage(force = false) {
   const stale = Date.now() - account.usageLoadedAt >= (missing ? 5_000 : 60_000);
   if (!stale && !force) return;
   const key = ownerKey();
-  setAccount("pending", "usage", true);
+  setAccount(draft => { draft["pending"]!["usage"] = true; });
   rpc
     .call<{ accounts?: AgentAccount[] }>(M.LIST_AGENT_ACCOUNTS, { forceUsage: force })
     .then(
       (value) => {
         if (key !== ownerKey()) return;
         if (!Array.isArray(value?.accounts)) {
-          setAccount({ usageError: "Could not read provider usage. Refresh to retry.", usageLoadedAt: Date.now() });
+          setAccount(draft => { Object.assign(draft, { usageError: "Could not read provider usage. Refresh to retry.", usageLoadedAt: Date.now() }); });
           return;
         }
-        setAccount({
-          accounts: value.accounts.map((a) => ({ ...a, usageWindows: Array.isArray(a.usageWindows) ? a.usageWindows : [] })),
-          usageLoadedAt: Date.now(),
-          usageError: null,
+        setAccount(draft => {
+          Object.assign(draft, {
+            accounts: value.accounts!.map((a) => ({ ...a, usageWindows: Array.isArray(a.usageWindows) ? a.usageWindows : [] })),
+            usageLoadedAt: Date.now(),
+            usageError: null,
+          });
         });
       },
       (error: unknown) => {
-        if (key === ownerKey()) setAccount({ usageError: error instanceof Error ? error.message : String(error), usageLoadedAt: Date.now() });
+        if (key === ownerKey()) setAccount(draft => { Object.assign(draft, { usageError: error instanceof Error ? error.message : String(error), usageLoadedAt: Date.now() }); });
       },
     )
-    .finally(() => setAccount("pending", "usage", false));
+    .finally(() => setAccount(draft => { draft["pending"]!["usage"] = false; }));
 }
 
 export function resetLabel(resetsAt: string | null | undefined, at: number) {

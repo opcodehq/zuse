@@ -1,25 +1,10 @@
 // Archived cloud chats with recovery and cleanup progress (crates/viewport/src/cloud_archive_cards.rs).
-import { createMemo, createSignal, For, onMount, Show } from "solid-js";
 import { Icon } from "@/ui/Icon";
 import { Dialog } from "@/ui/primitives";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { account, owner, signedIn } from "../account";
 import { Action, SearchField } from "../ui";
-import {
-  archiveStatus,
-  cleanupFailed,
-  cleanupPending,
-  cloud,
-  deleteFailed,
-  deleteWorkspace,
-  isArchived,
-  isDeleting,
-  loadWorkspaces,
-  openHistory,
-  restoreWorkspace,
-  retryCleanup,
-  workspaceBusy,
-  workspaceLabel,
-} from "./state";
+import { archiveStatus, cleanupFailed, cleanupPending, cloud, deleteFailed, deleteWorkspace, isArchived, isDeleting, loadWorkspaces, openHistory, restoreWorkspace, retryCleanup, workspaceBusy, workspaceLabel, } from "./state";
 import type { ArchiveStatus, Workspace } from "./types";
 
 export const archiveVisible = (row: Workspace) => isArchived(row) || isDeleting(row) || (row.state === "deleted" && (cleanupPending(row) || cleanupFailed(row)));
@@ -82,7 +67,7 @@ export function Archives() {
   const [query, setQuery] = createSignal("");
   const [confirm, setConfirm] = createSignal<string | null>(null);
   const ready = () => signedIn() && !owner()?.organizationId;
-  onMount(() => {
+  onSettled(() => {
     if (ready() && !cloud.workspaces.loading) void loadWorkspaces();
   });
   const rows = createMemo(() => cloud.workspaces.rows.filter((row) => matches(row, query())));

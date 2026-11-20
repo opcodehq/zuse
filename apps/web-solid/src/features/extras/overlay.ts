@@ -8,7 +8,7 @@ const [overlay, setOverlay] = createSignal<Overlay>(null);
 const [paletteTab, setPaletteTab] = createSignal<PaletteTab>("all");
 let returnFocus: HTMLElement | null = null;
 
-export { overlay, paletteTab };
+export { overlay,paletteTab };
 
 export function openOverlay(kind: Exclude<Overlay, null>) {
   if (overlay() === null) returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;

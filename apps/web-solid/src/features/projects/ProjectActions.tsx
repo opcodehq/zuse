@@ -1,23 +1,8 @@
 // The Actions section of the session info card and its editor (crates/ui/src/shell/session_info.rs, actions_ui.rs).
-import { createMemo, createSignal, For, Show } from "solid-js";
 import { Icon } from "@/ui/Icon";
 import { Button, Dialog } from "@/ui/primitives";
-import {
-  ACTION_ICONS,
-  actionGlyph,
-  actionsContext,
-  actionsStatus,
-  canRun,
-  closeEditor,
-  deleteEditorAction,
-  editor,
-  openEditor,
-  retryActions,
-  runAction,
-  saveEditor,
-  snapshotOf,
-  updateEditor,
-} from "./actions";
+import { createMemo, createSignal, For, Show } from "solid-js";
+import { ACTION_ICONS, actionGlyph, actionsContext, actionsStatus, canRun, closeEditor, deleteEditorAction, editor, openEditor, retryActions, runAction, saveEditor, snapshotOf, updateEditor, } from "./actions";
 
 /**
  * The selected chat's project actions: a header with the count, a row per action (click runs it,
@@ -35,14 +20,14 @@ export function ProjectActions(props: {
   const visible = () => !!context() && status()?.state !== "unsupported";
   const snapshot = () => snapshotOf(status());
   const actions = () => snapshot()?.actions ?? [];
-  const [open, setOpen] = createSignal(props.defaultOpen ?? true);
+  const [open, setOpen] = createSignal(() => props.defaultOpen ?? true);
   return (
     <Show when={visible()}>
       <section class="pj-actions" aria-label="Project actions">
         <button
           type="button"
           class="pj-actions-head"
-          aria-expanded={open()}
+          aria-expanded={(open()) ? "true" : "false"}
           aria-label={actions().length ? `Actions, ${actions().length}` : "Actions"}
           onClick={() => {
             setOpen((v) => !v);
@@ -166,7 +151,7 @@ export function ActionEditor() {
                 class="pj-field pj-field-command"
                 value={draft().command}
                 placeholder="Command"
-                spellcheck={false}
+                spellcheck="false"
                 disabled={draft().saving}
                 onInput={(e) => updateEditor({ command: e.currentTarget.value, error: null })}
                 onKeyDown={(e) => {
@@ -186,7 +171,7 @@ export function ActionEditor() {
                       type="button"
                       role="radio"
                       class="pj-icon-choice"
-                      aria-checked={draft().icon === choice.icon}
+                      aria-checked={(draft().icon === choice.icon) ? "true" : "false"}
                       aria-label={choice.label}
                       title={choice.label}
                       onClick={() => updateEditor({ icon: choice.icon })}
@@ -200,7 +185,7 @@ export function ActionEditor() {
                 type="button"
                 role="checkbox"
                 class="pj-check"
-                aria-checked={draft().runOnWorktreeCreate}
+                aria-checked={(draft().runOnWorktreeCreate) ? "true" : "false"}
                 onClick={() => updateEditor({ runOnWorktreeCreate: !draft().runOnWorktreeCreate })}
               >
                 <span class="pj-check-box">

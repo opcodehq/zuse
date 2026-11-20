@@ -1,7 +1,10 @@
+import { omit } from "solid-js";
 // The command-palette surface the project flows share with desktop's Cmd+K (command_palette.rs `cmd`).
-import { createVirtualizer } from "@tanstack/solid-virtual";
-import { createEffect, For, type JSX, on, Show, splitProps } from "solid-js";
+// The command-palette surface the project flows share with desktop's Cmd+K (command_palette.rs `cmd`).
 import { Icon } from "@/ui/Icon";
+import { createVirtualizer } from "@/ui/virtualizer";
+import { type JSX } from "@solidjs/web";
+import { createEffect, For, Show } from "solid-js";
 
 const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 
@@ -75,21 +78,21 @@ export function GroupLabel(props: { children: JSX.Element; status?: string | nul
 export function Row(
   props: JSX.ButtonHTMLAttributes<HTMLButtonElement> & { highlighted?: boolean; glyph?: string; children: JSX.Element },
 ) {
-  const [local, rest] = splitProps(props, ["highlighted", "glyph", "children", "class"]);
+  const rest = omit(props, "highlighted", "glyph", "children", "class");
   return (
     <button
       type="button"
       role="option"
-      tabIndex={-1}
-      aria-selected={local.highlighted ? "true" : "false"}
+      tabindex={-1}
+      aria-selected={props.highlighted ? "true" : "false"}
       {...rest}
-      class={`pj-row ${local.class ?? ""}`}
-      data-highlighted={local.highlighted ? "true" : undefined}
+      class={`pj-row ${props.class ?? ""}`}
+      data-highlighted={props.highlighted ? "true" : undefined}
       // The input keeps focus; a row press must not steal it.
       onMouseDown={(event) => event.preventDefault()}
     >
-      <Show when={local.glyph}>{(name) => <Icon name={name()} size={16} class="pj-glyph" />}</Show>
-      {local.children}
+      <Show when={props.glyph}>{(name) => <Icon name={name()} size={16} class="pj-glyph" />}</Show>
+      {props.children}
     </button>
   );
 }
@@ -135,14 +138,9 @@ export function VirtualList<T>(props: {
     // Measuring inside the observer callback resizes the list in the same frame and trips the loop guard.
     useAnimationFrameWithResizeObserver: true,
   });
-  createEffect(
-    on(
-      () => [props.active, props.items.length] as const,
-      ([active, count]) => {
-        if (active !== undefined && active >= 0 && active < count) virtualizer.scrollToIndex(active, { align: "auto" });
-      },
-    ),
-  );
+  createEffect(() => [props.active, props.items.length] as const, ([active, count]) => {
+    if (active !== undefined && active >= 0 && active < count) virtualizer.scrollToIndex(active, { align: "auto" });
+  });
   return (
     <div ref={scroller} id={props.id} class={`pj-list ${props.class ?? ""}`} role={props.role ?? "listbox"} aria-label={props.label}>
       <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative" }}>

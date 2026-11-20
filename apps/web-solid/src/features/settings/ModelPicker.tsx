@@ -1,7 +1,7 @@
 // One model menu for new-chat defaults and thread naming: models grouped under each enabled agent.
+import { Icon } from "@/ui/Icon";
 import { Select as KSelect } from "@kobalte/core/select";
 import { createEffect, createMemo, Show } from "solid-js";
-import { Icon } from "@/ui/Icon";
 import { data, harnessList, loadModels } from "./data";
 import { descriptorEnabled, harnessMark, harnessTint } from "./harness";
 
@@ -33,7 +33,7 @@ export function ModelPicker(props: {
   width?: number;
 }) {
   const offered = createMemo(() => harnessList().filter((h) => h.id !== "mock" && descriptorEnabled(h) && h.installed !== false));
-  createEffect(() => {
+  createEffect(() => offered().map(harness => harness.id), () => {
     for (const h of offered()) void loadModels(h.id);
   });
 

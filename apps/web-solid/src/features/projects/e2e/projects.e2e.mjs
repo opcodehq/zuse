@@ -11,7 +11,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const app = join(here, "../../../..");
 const { startEngine, openBrowser } = await import(join(app, "e2e/harness.mjs"));
 const { createServer } = await import("vite");
-const { default: solid } = await import("vite-plugin-solid");
+const { default: solid } = await import("@solidjs/vite-plugin");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const shots = process.env.SHOTS ?? mkdtempSync(join(tmpdir(), "pj-shots-"));

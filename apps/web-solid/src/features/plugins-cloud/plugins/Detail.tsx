@@ -1,14 +1,14 @@
 // One plugin: identity, connected accounts and information (crates/viewport/src/plugin_detail.rs).
 import { writeClipboard } from "@/ui/clipboard";
-import { createMemo, For, Show } from "solid-js";
 import { Icon } from "@/ui/Icon";
 import { GlyphSpinner } from "@/ui/loaders";
-import { Menu, Toggle, toast } from "@/ui/primitives";
+import { Menu, toast, Toggle } from "@/ui/primitives";
+import { createMemo, For, Show } from "solid-js";
 import { openExternal } from "../account";
 import { formatDate, Logo } from "../ui";
 import type { PluginConnection, PluginDefinition } from "./catalog";
 import { InlineKey } from "./parts";
-import { askRemoval, canManage, connect, disconnect, openDetail, plugins, setEnabled, activeAttempt } from "./state";
+import { activeAttempt, askRemoval, canManage, connect, disconnect, openDetail, plugins, setEnabled } from "./state";
 
 // Label-derived avatar hue, matching desktop's string hash.
 function hue(label: string) {

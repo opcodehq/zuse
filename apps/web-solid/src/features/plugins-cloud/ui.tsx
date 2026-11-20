@@ -1,8 +1,11 @@
+import { omit } from "solid-js";
 // Settings-frame building blocks shared by Plugins and Cloud (desktop settings_style and cloud_settings/style).
-import { createSignal, For, type JSX, Show, splitProps } from "solid-js";
+// Settings-frame building blocks shared by Plugins and Cloud (desktop settings_style and cloud_settings/style).
 import { Icon } from "@/ui/Icon";
 import { GlyphSpinner } from "@/ui/loaders";
 import { Tooltip } from "@/ui/primitives";
+import { type JSX } from "@solidjs/web";
+import { createSignal, For, Show } from "solid-js";
 import { logoUrl } from "./plugins/catalog";
 
 export function Logo(props: { domain: string; name: string; size: number; radius?: number }) {
@@ -64,8 +67,8 @@ export function Segmented<T extends string>(props: { items: SegmentItem<T>[]; va
             type="button"
             role="tab"
             class="pc-segment"
-            aria-selected={props.value === item.value}
-            tabIndex={props.value === item.value ? 0 : -1}
+            aria-selected={(props.value === item.value) ? "true" : "false"}
+            tabindex={props.value === item.value ? 0 : -1}
             disabled={props.disabled}
             onClick={() => props.onChange(item.value)}
             onKeyDown={(event) => move(event, index())}
@@ -136,22 +139,22 @@ export function Badge(props: { tone?: BadgeTone; children: JSX.Element; icon?: s
 type ActionProps = JSX.ButtonHTMLAttributes<HTMLButtonElement> & { primary?: boolean; busy?: boolean; icon?: string };
 /** Cloud's compact 28px action. Busy keeps the label's width and shows a spinner over it. */
 export function Action(props: ActionProps) {
-  const [local, rest] = splitProps(props, ["primary", "busy", "icon", "children", "class", "disabled"]);
+  const rest = omit(props, "primary", "busy", "icon", "children", "class", "disabled");
   return (
     <button
       type="button"
       {...rest}
-      class={`pc-action ${local.class ?? ""}`}
-      data-primary={local.primary ? "true" : undefined}
-      data-busy={local.busy ? "true" : undefined}
-      disabled={local.disabled || local.busy}
-      aria-busy={local.busy ? "true" : undefined}
+      class={`pc-action ${props.class ?? ""}`}
+      data-primary={props.primary ? "true" : undefined}
+      data-busy={props.busy ? "true" : undefined}
+      disabled={props.disabled || props.busy}
+      aria-busy={props.busy ? "true" : undefined}
     >
       <span class="pc-action-label">
-        <Show when={local.icon}>{(name) => <Icon name={name()} size={14} />}</Show>
-        {local.children}
+        <Show when={props.icon}>{(name) => <Icon name={name()} size={14} />}</Show>
+        {props.children}
       </span>
-      <Show when={local.busy}>
+      <Show when={props.busy}>
         <GlyphSpinner cell={1.75} tone="current" decorative class="pc-action-spinner" />
       </Show>
     </button>

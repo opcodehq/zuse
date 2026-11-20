@@ -1,12 +1,13 @@
 // Continue a recent agent conversation found on the host as a Zuse thread.
 // Same flow as crates/viewport/src/import_chat.rs: list on open, import with a stable request id so a retry is idempotent.
-import { createEffect, createMemo, createRoot, createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
 import { rpc } from "@/core/connection";
 import { RpcError } from "@/core/rpc";
 import { state } from "@/core/store";
 import { openChat, view } from "@/core/view";
 import { Icon } from "@/ui/Icon";
 import { Spinner } from "@/ui/primitives";
+import { type JSX } from "@solidjs/web";
+import { createEffect, createMemo, createRoot, createSignal, For, onCleanup, onSettled, Show } from "solid-js";
 import { Skeleton } from "./feedback";
 import { modalKeys } from "./modal";
 import { closeOverlay, openImportChat, overlayAnchor } from "./overlay";
@@ -49,7 +50,7 @@ function openWhenSynced(chatId: string) {
       dispose();
       openChat(chatId);
     }, 10_000);
-    createEffect(() => {
+    createEffect(() => state.chats[chatId], () => {
       if (!state.chats[chatId]) return;
       clearTimeout(timer);
       dispose();
@@ -120,7 +121,8 @@ export function ImportChat() {
       if (alive) setLoading(false);
     }
   }
-  onMount(() => {
+  onSettled(() => {
+    const cleanups: (() => void)[] = [];
     input.focus();
     void load();
     if (!anchor) return;
@@ -128,10 +130,12 @@ export function ImportChat() {
     const observer = new ResizeObserver(position);
     if (card) observer.observe(card);
     window.addEventListener("resize", position);
-    onCleanup(() => {
+    cleanups.push(() => {
       observer.disconnect();
       window.removeEventListener("resize", position);
     });
+
+    return () => cleanups.forEach(cleanup => cleanup());
   });
 
   const filtered = createMemo(() => {
@@ -141,7 +145,7 @@ export function ImportChat() {
       [row.title, row.preview, row.projectName, row.projectPath, harnessName(row.provider)].some((field) => field.toLowerCase().includes(query)),
     );
   });
-  createEffect(() => {
+  createEffect(search, () => {
     search();
     setActive(0);
     if (list) list.scrollTop = 0;
@@ -242,12 +246,12 @@ export function ImportChat() {
           aria-label="Search chats"
           placeholder="Search chats…"
           autocomplete="off"
-          spellcheck={false}
+          spellcheck="false"
           value={search()}
           onInput={(e) => setSearch(e.currentTarget.value)}
         />
       </label>
-      <div ref={list} id="x-import-list" class="x-import-list" role="listbox" aria-label="Recent provider chats" aria-busy={loading()}>
+      <div ref={list} id="x-import-list" class="x-import-list" role="listbox" aria-label="Recent provider chats" aria-busy={(loading()) ? "true" : "false"}>
         <Show
           when={rows().length}
           fallback={
@@ -266,9 +270,9 @@ export function ImportChat() {
                     id={optionId(index())}
                     class="x-import-row"
                     role="option"
-                    aria-selected={active() === index()}
+                    aria-selected={(active() === index()) ? "true" : "false"}
                     aria-label={`${row.title} · ${row.projectPath}`}
-                    aria-disabled={importing() !== null}
+                    aria-disabled={(importing() !== null) ? "true" : "false"}
                     onMouseDown={(e) => e.preventDefault()}
                     onMouseMove={() => setActive(index())}
                     onClick={() => void choose(row)}

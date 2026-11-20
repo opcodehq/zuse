@@ -124,7 +124,7 @@ export class PairedTransport implements Transport {
       if (this.receiver) this.receiver(text);
       else this.early.push(text);
     }
-    if (effects.status) setArea("link", effects.status);
+    if (effects.status) setArea(draft => { draft["link"] = effects.status!; });
     if (effects.saved && this.id) saveRoutes(this.id, effects.saved);
     if (effects.engineInfo && !this.verify(effects.engineInfo)) return;
     if (effects.connected && this.opening) {
@@ -228,7 +228,7 @@ export class PairedTransport implements Transport {
     window.removeEventListener("online", this.networkChanged);
     document.removeEventListener("visibilitychange", this.networkChanged);
     live.delete(this);
-    setArea("link", null);
+    setArea(draft => { draft["link"] = null; });
     const link = this.link;
     this.link = null;
     queueMicrotask(() => link?.free());

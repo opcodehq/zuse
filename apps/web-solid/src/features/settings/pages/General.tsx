@@ -1,8 +1,7 @@
 // General: account, language, theme, notifications, thread naming, worktrees and the engine version
 // (crates/ui/src/settings/general.rs and the groups shortcuts.rs composes around it).
-import { createEffect, createSignal, For, on, onMount, Show } from "solid-js";
-import { M } from "@/core/methods";
 import { rpc } from "@/core/connection";
+import { M } from "@/core/methods";
 import { state } from "@/core/store";
 import { analyticsEnabled, setAnalyticsEnabled } from "@/core/analytics";
 import { setView, view } from "@/core/view";
@@ -10,13 +9,14 @@ import { signInToAccount } from "@/features/connection";
 import { signOutOfAccount } from "@/features/connection/signin";
 import { Icon } from "@/ui/Icon";
 import { toast } from "@/ui/primitives";
+import { createEffect, createSignal, For, onSettled, Show } from "solid-js";
 import { data, message } from "../data";
 import { browseFolders, closeFolders, general, joinPath, loadNaming, loadWorktrees, parentPath, saveNaming, saveWorktrees, setGeneral } from "../general";
 import { activeLocale, languageLoadError, LOCALES, t } from "../i18n";
 import { ModelPicker } from "../ModelPicker";
-import { PRESET_LABELS, PRESETS, pref, setPref, type CompletionPreset } from "../prefs";
+import { pref, PRESET_LABELS, PRESETS, setPref, type CompletionPreset } from "../prefs";
 import { playCompletion } from "../sound";
-import { ActionButton, Card, ErrorStrip, Group, Row, SectionTitle, radioKeys, Segmented, Select, SettingsDialog, Switch } from "../widgets";
+import { ActionButton, Card, ErrorStrip, Group, radioKeys, Row, SectionTitle, Segmented, Select, SettingsDialog, Switch } from "../widgets";
 
 export function General() {
   return (
@@ -44,9 +44,8 @@ function Analytics() {
   const [engine, setEngine] = createSignal<{ enabled: boolean; configured: boolean } | null>(null);
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
-  createEffect(() => {
-    const epoch = state.epoch;
-    if (state.connection.kind !== "connected") { setEngine(null); return; }
+  createEffect(() => [state.epoch, state.connection.kind] as const, ([epoch, connection]) => {
+    if (connection !== "connected") { setEngine(null); return; }
     void rpc.call<{ enabled: boolean; configured: boolean }>(M.GET_ANALYTICS_SETTINGS).then(
       (status) => { if (state.epoch === epoch) setEngine(status); },
       () => { if (state.epoch === epoch) setEngine(null); },
@@ -108,7 +107,7 @@ function Account() {
   };
   const commitName = () => {
     const id = user()?.id;
-    if (id && nameInput) setView("preferences", "accountDisplayName", { userId: id, name: nameInput.value.trim() });
+    if (id && nameInput) setView(draft => { draft["preferences"]!["accountDisplayName"] = { userId: id, name: nameInput.value.trim() }; });
     setEditing(false);
   };
 
@@ -124,7 +123,7 @@ function Account() {
       class="st-email"
       data-hidden={revealed() ? undefined : "true"}
       aria-label={revealed() ? `Email ${p.value}. Hide email` : "Show email"}
-      aria-pressed={revealed()}
+      aria-pressed={(revealed()) ? "true" : "false"}
       onClick={() => setRevealed(!revealed())}
     >
       {p.value}
@@ -266,10 +265,10 @@ function Language() {
                   role="radio"
                   class="st-chip"
                   lang={choice.code === "system" ? undefined : choice.code}
-                  aria-checked={selected() === choice.code}
-                  tabIndex={selected() === choice.code ? 0 : -1}
-                  onClick={() => setView("preferences", "language", choice.code)}
-                  onKeyDown={(e) => radioKeys(e, choices().map((c) => c.code), selected(), (code) => setView("preferences", "language", code))}
+                  aria-checked={(selected() === choice.code) ? "true" : "false"}
+                  tabindex={selected() === choice.code ? 0 : -1}
+                  onClick={() => setView(draft => { draft["preferences"]!["language"] = choice.code; })}
+                  onKeyDown={(e) => radioKeys(e, choices().map((c) => c.code), selected(), (code) => setView(draft => { draft["preferences"]!["language"] = code; }))}
                 >
                   {choice.name}
                 </button>
@@ -303,7 +302,7 @@ function Theme() {
             label={t("settings-settings_page_theme", "Theme")}
             value={view.preferences.theme}
             options={THEMES.map((o) => ({ value: o.value, label: o.label() }))}
-            onChange={(value) => setView("preferences", "theme", value)}
+            onChange={(value) => setView(draft => { draft["preferences"]!["theme"] = value; })}
           />
         </Row>
       </Card>
@@ -380,8 +379,8 @@ function CompletionSoundPicker(props: { disabled: boolean }) {
 }
 
 function ThreadNaming() {
-  onMount(() => void loadNaming());
-  createEffect(on(() => state.epoch, () => void loadNaming(), { defer: true }));
+  onSettled(() => { void (void loadNaming()); });
+  createEffect(() => state.epoch, () => { void (void loadNaming()); }, { defer: true });
   const enabled = () => state.connection.kind === "connected" && !!general.naming && !general.namingSaving;
   return (
     <Group
@@ -434,8 +433,8 @@ function ThreadNaming() {
 }
 
 function Worktrees() {
-  onMount(() => void loadWorktrees());
-  createEffect(on(() => state.epoch, () => void loadWorktrees(), { defer: true }));
+  onSettled(() => { void (void loadWorktrees()); });
+  createEffect(() => state.epoch, () => { void (void loadWorktrees()); }, { defer: true });
   const [draft, setDraft] = createSignal<string | null>(null);
   const status = () => general.worktrees;
   const locked = () => !!status()?.environmentOverride;
@@ -498,7 +497,7 @@ function Worktrees() {
                   disabled={!editable()}
                   onChange={(on) => {
                     setLocalError(null);
-                    setGeneral("worktreesError", null);
+                    setGeneral(draft => { draft["worktreesError"] = null; });
                     if (on) setDraft(s().settings.customDirectory ?? "");
                     else {
                       setDraft(null);
@@ -563,7 +562,7 @@ function FolderBrowser(props: { onChoose: (path: string) => void }) {
           </button>
           <span title={listing()?.path}>{listing()?.path ?? ""}</span>
         </div>
-        <div class="st-folders-list" role="list" aria-label="Folders" aria-busy={general.foldersLoading}>
+        <div class="st-folders-list" role="list" aria-label="Folders" aria-busy={(general.foldersLoading) ? "true" : "false"}>
           <Show when={!general.foldersLoading} fallback={<div class="st-empty">Loading folders…</div>}>
             <Show when={!general.foldersError} fallback={<div class="st-empty">{general.foldersError}</div>}>
               <For each={listing()?.entries.filter((e) => e.isDir) ?? []} fallback={<div class="st-empty">No subfolders</div>}>

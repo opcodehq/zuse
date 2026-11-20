@@ -1,7 +1,7 @@
 // Providers page actions: enable, install, updates. Replies refresh the shared harness list in the store.
-import { createStore } from "solid-js/store";
-import { M } from "@/core/methods";
 import { onConnected, rpc } from "@/core/connection";
+import { M } from "@/core/methods";
+import { createStore } from "solid-js";
 import { data, harnessList, message, setHarnesses, uncertain } from "./data";
 import { descriptorEnabled, type HarnessDescriptor, type UpdatePolicy } from "./harness";
 
@@ -27,21 +27,21 @@ export const [providers, setProviders] = createStore<ProvidersState>({
 });
 
 onConnected(() => {
-  setProviders({ pendingToggle: null, installing: null, checking: false, updateAction: null, error: null });
+  setProviders(draft => { Object.assign(draft, { pendingToggle: null, installing: null, checking: false, updateAction: null, error: null }); });
 });
 
 const failure = (error: unknown, prefix?: string) =>
   uncertain(error) ? "The connection dropped before the engine answered. Check the current state before trying again." : prefix ? `${prefix} — ${message(error)}` : message(error);
 
 export async function loadHarnesses() {
-  setProviders({ loading: true });
+  setProviders(draft => { Object.assign(draft, { loading: true }); });
   try {
     setHarnesses(await rpc.call(M.LIST_HARNESSES));
-    setProviders({ listError: null });
+    setProviders(draft => { Object.assign(draft, { listError: null }); });
   } catch (error) {
-    setProviders({ listError: message(error) });
+    setProviders(draft => { Object.assign(draft, { listError: message(error) }); });
   } finally {
-    setProviders({ loading: false });
+    setProviders(draft => { Object.assign(draft, { loading: false }); });
   }
 }
 
@@ -56,25 +56,25 @@ export const effectiveEnabled = (d: HarnessDescriptor) =>
   providers.pendingToggle?.harness === d.id ? providers.pendingToggle.enabled : descriptorEnabled(d);
 
 export async function setEnabled(harness: string, enabled: boolean) {
-  setProviders({ error: null, pendingToggle: { harness, enabled } });
+  setProviders(draft => { Object.assign(draft, { error: null, pendingToggle: { harness, enabled } }); });
   try {
     setHarnesses(await rpc.call(M.SET_HARNESS_ENABLED, { harness, enabled }));
   } catch (error) {
-    setProviders({ error: failure(error) });
+    setProviders(draft => { Object.assign(draft, { error: failure(error) }); });
   } finally {
-    if (providers.pendingToggle?.harness === harness && providers.pendingToggle.enabled === enabled) setProviders({ pendingToggle: null });
+    if (providers.pendingToggle?.harness === harness && providers.pendingToggle.enabled === enabled) setProviders(draft => { Object.assign(draft, { pendingToggle: null }); });
   }
 }
 
 export async function install(harness: string) {
   if (providers.installing) return;
-  setProviders({ installing: harness, error: null });
+  setProviders(draft => { Object.assign(draft, { installing: harness, error: null }); });
   try {
     setHarnesses(await rpc.call(M.INSTALL_HARNESS, { harness }));
   } catch (error) {
-    setProviders({ error: failure(error, "Installation failed") });
+    setProviders(draft => { Object.assign(draft, { error: failure(error, "Installation failed") }); });
   } finally {
-    setProviders({ installing: null });
+    setProviders(draft => { Object.assign(draft, { installing: null }); });
   }
 }
 
@@ -84,31 +84,31 @@ export async function cancelInstall() {
   try {
     await rpc.call(M.CANCEL_INSTALL, { harness });
   } catch (error) {
-    setProviders({ error: `Cancellation failed — ${message(error)}` });
+    setProviders(draft => { Object.assign(draft, { error: `Cancellation failed — ${message(error)}` }); });
   }
 }
 
 export async function checkUpdates() {
   if (providers.checking) return;
-  setProviders({ checking: true, error: null });
+  setProviders(draft => { Object.assign(draft, { checking: true, error: null }); });
   try {
     await rpc.call(M.CHECK_HARNESS_UPDATES, {});
   } catch (error) {
-    setProviders({ error: failure(error, "Couldn't check for updates") });
+    setProviders(draft => { Object.assign(draft, { error: failure(error, "Couldn't check for updates") }); });
   } finally {
-    setProviders({ checking: false });
+    setProviders(draft => { Object.assign(draft, { checking: false }); });
   }
 }
 
 async function updateAction(method: string, harness: string, extra: Record<string, unknown> = {}) {
   if (providers.updateAction && method !== M.CANCEL_HARNESS_UPDATE) return;
-  setProviders({ updateAction: harness, error: null });
+  setProviders(draft => { Object.assign(draft, { updateAction: harness, error: null }); });
   try {
     await rpc.call(method, { harness, ...extra });
   } catch (error) {
-    setProviders({ error: failure(error) });
+    setProviders(draft => { Object.assign(draft, { error: failure(error) }); });
   } finally {
-    if (providers.updateAction === harness) setProviders({ updateAction: null });
+    if (providers.updateAction === harness) setProviders(draft => { Object.assign(draft, { updateAction: null }); });
   }
 }
 

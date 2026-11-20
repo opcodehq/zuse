@@ -1,9 +1,9 @@
 // A virtualized unified diff: file headers, notices, hunks and numbered lines.
 // Only the visible rows exist in the DOM, so a large patch costs what fits on screen.
-import { createVirtualizer } from "@tanstack/solid-virtual";
-import { createMemo, createSignal, For, Show } from "solid-js";
 import { Icon } from "@/ui/Icon";
 import { IconButton } from "@/ui/primitives";
+import { createVirtualizer } from "@/ui/virtualizer";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import { diffRows, type DiffRow, type FileDiff } from "./diff";
 import { DiffStat, FileIcon, statusTone } from "./parts";
 import { basename, dirname } from "./util";
@@ -52,7 +52,7 @@ export function DiffView(props: { files: FileDiff[]; wrap?: boolean; onOpenFile?
           onClick={() => setCollapsed(allCollapsed() ? new Set<string>() : new Set(props.files.map((f) => f.path)))}
         />
       </div>
-      <div class="ws-diff-scroll" ref={scroller} data-wrap={props.wrap ? "true" : undefined} tabIndex={0} aria-label={props.label}>
+      <div class="ws-diff-scroll" ref={scroller} data-wrap={props.wrap ? "true" : undefined} tabindex={0} aria-label={props.label}>
         <div class="ws-diff-sizer" style={{ height: `${virtualizer.getTotalSize()}px` }}>
           <For each={virtualizer.getVirtualItems()}>
             {(item) => {
@@ -88,7 +88,7 @@ function Row(props: { row: DiffRow; files: FileDiff[]; collapsed: ReadonlySet<st
           <button
             type="button"
             class="ws-diff-file-toggle"
-            aria-expanded={!props.collapsed.has(file().path)}
+            aria-expanded={(!props.collapsed.has(file().path)) ? "true" : "false"}
             aria-label={`${file().path}, ${props.collapsed.has(file().path) ? "expand" : "collapse"}`}
             onClick={() => props.onToggle(file().path)}
           >

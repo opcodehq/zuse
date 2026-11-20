@@ -2,20 +2,19 @@
 // Same data path as crates/ui/src/terminal/panel.rs: OpenTerminal, then SubscribeTerminal resuming from
 // afterSeq with backoff; keystrokes coalesce 12 ms before WriteTerminal; resizes debounce 80 ms.
 // Leaving a chat detaches; the PTY keeps running and its retained output replays on return.
-import { FitAddon } from "@xterm/addon-fit";
-import { Terminal as XTerm, type ITheme } from "@xterm/xterm";
-import "@xterm/xterm/css/xterm.css";
-import { batch, createEffect, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
-import { createStore, produce } from "solid-js/store";
 import { rpc } from "@/core/connection";
 import { M } from "@/core/methods";
 import type { Subscription } from "@/core/rpc";
 import { state } from "@/core/store";
+import { actionTerminals, claimActionTerminal } from "@/features/projects/actions";
 import { resolvedTheme } from "@/shell/theme";
 import { Icon } from "@/ui/Icon";
 import { Button, IconButton } from "@/ui/primitives";
+import { FitAddon } from "@xterm/addon-fit";
+import { Terminal as XTerm, type ITheme } from "@xterm/xterm";
+import "@xterm/xterm/css/xterm.css";
+import { createEffect, createSignal, createStore, For, onSettled, Show } from "solid-js";
 import { Empty } from "./parts";
-import { actionTerminals, claimActionTerminal } from "@/features/projects/actions";
 import { errorText, keyedWatch, type Target } from "./store";
 import type { TerminalEvent, TerminalSession } from "./types";
 import { decodeBase64Bytes } from "./util";
@@ -44,9 +43,12 @@ interface ChatTerminals {
 const [terminals, setTerminals] = createStore<Record<string, ChatTerminals>>({});
 let nextKey = 1;
 
-function chatTerminals(chatId: string) {
-  if (!terminals[chatId]) setTerminals(chatId, { tabs: [], active: null, restored: false, restoring: false, error: null });
-  return terminals[chatId]!;
+function chatTerminals(chatId: string): ChatTerminals {
+  const current = terminals[chatId];
+  if (current) return current;
+  const initial: ChatTerminals = { tabs: [], active: null, restored: false, restoring: false, error: null };
+  setTerminals(draft => { draft[chatId] ??= initial; });
+  return initial;
 }
 
 export function shellTitle(shell: string) {
@@ -56,16 +58,17 @@ export function shellTitle(shell: string) {
 
 function addTab(chatId: string, tab: Omit<TermTab, "key">) {
   const key = nextKey++;
-  setTerminals(chatId, produce((c) => {
+  setTerminals(draftState => {
+    const c = draftState[chatId]!;
     c.tabs.push({ key, ...tab });
     c.active = key;
-  }));
+  });
   return key;
 }
 
 function updateTab(chatId: string, key: number, patch: Partial<TermTab>) {
   const index = terminals[chatId]?.tabs.findIndex((t) => t.key === key) ?? -1;
-  if (index >= 0) setTerminals(chatId, "tabs", index, patch);
+  if (index >= 0) setTerminals(draft => { Object.assign(draft[chatId]!.tabs[index]!, patch); });
 }
 
 /** Reattach the chat's retained PTYs, or open a first one. */
@@ -73,18 +76,25 @@ function restore(target: Target) {
   const chatId = target.chatId;
   const current = chatTerminals(chatId);
   if (current.restored || current.restoring) return;
-  setTerminals(chatId, { restoring: true, error: null });
+  setTerminals(draft => { Object.assign(draft[chatId]!, { restoring: true, error: null }); });
   rpc.call<TerminalSession[]>(M.LIST_TERMINALS, { chatId, targetDeviceId: target.deviceId }).then(
-    (sessions) =>
-      batch(() => {
-        setTerminals(chatId, { restoring: false, restored: true });
-        for (const session of Array.isArray(sessions) ? sessions : []) {
-          if (terminals[chatId]!.tabs.some((t) => t.terminalId === session.id)) continue;
-          addTab(chatId, { terminalId: session.id, title: shellTitle(session.shell), opening: false, exited: null, error: null });
-        }
-        if (!terminals[chatId]!.tabs.length) newTab(chatId);
-      }),
-    (error) => setTerminals(chatId, { restoring: false, error: `Couldn't load retained terminals: ${errorText(error)}` }),
+    (sessions) => setTerminals(draft => {
+      const current = draft[chatId]!;
+      current.restoring = false;
+      current.restored = true;
+      for (const session of Array.isArray(sessions) ? sessions : []) {
+        if (current.tabs.some(tab => tab.terminalId === session.id)) continue;
+        const key = nextKey++;
+        current.tabs.push({ key, terminalId: session.id, title: shellTitle(session.shell), opening: false, exited: null, error: null });
+        current.active = key;
+      }
+      if (!current.tabs.length) {
+        const key = nextKey++;
+        current.tabs.push({ key, terminalId: null, title: "Terminal 1", opening: false, exited: null, error: null });
+        current.active = key;
+      }
+    }),
+    (error) => setTerminals(draft => { Object.assign(draft[chatId]!, { restoring: false, error: `Couldn't load retained terminals: ${errorText(error)}` }); }),
   );
 }
 
@@ -117,10 +127,11 @@ function closeTab(target: Target, key: number) {
   const tab = tabs[index];
   if (!tab) return;
   if (tab.terminalId) void rpc.call(M.CLOSE_TERMINAL, { terminalId: tab.terminalId, targetDeviceId: target.deviceId }).catch(() => {});
-  setTerminals(chatId, produce((c) => {
+  setTerminals(draftState => {
+    const c = draftState[chatId]!;
     c.tabs.splice(index, 1);
     if (c.active === key) c.active = c.tabs[Math.min(index, c.tabs.length - 1)]?.key ?? null;
-  }));
+  });
 }
 
 /** xterm colours from the desktop terminal palette (crates/theme/src/builtins.rs). */
@@ -154,18 +165,18 @@ export function Terminal(props: { target: Target; active: boolean }) {
   );
 
   // A project action's PTY is not in ListTerminals; the panel takes it over as a tab.
-  createEffect(() => {
+  createEffect(() => actionTerminals().map(item => ({ ...item })), () => {
     for (const started of actionTerminals()) {
       if (started.chatId !== chatId) continue;
       claimActionTerminal(started.terminalId);
-      chatTerminals(chatId);
-      if (!terminals[chatId]!.tabs.some((t) => t.terminalId === started.terminalId))
+      const current = chatTerminals(chatId);
+      if (!current.tabs.some((t) => t.terminalId === started.terminalId))
         addTab(chatId, { terminalId: started.terminalId, title: started.title, opening: false, exited: null, error: null });
     }
   });
 
   const retry = () => {
-    setTerminals(chatId, { restored: false, error: null });
+    setTerminals(draft => { Object.assign(draft[chatId]!, { restored: false, error: null }); });
     restore(props.target);
   };
 
@@ -176,7 +187,7 @@ export function Terminal(props: { target: Target; active: boolean }) {
     const next = tabs[(index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length];
     if (!next) return;
     event.preventDefault();
-    setTerminals(chatId, "active", next.key);
+    setTerminals(draft => { draft[chatId]!["active"] = next.key; });
     (event.currentTarget as HTMLElement).querySelector<HTMLElement>(`[data-key="${next.key}"]`)?.focus();
   };
 
@@ -192,9 +203,9 @@ export function Terminal(props: { target: Target; active: boolean }) {
                   role="tab"
                   class="ws-term-tab-main"
                   data-key={tab.key}
-                  aria-selected={data()?.active === tab.key}
-                  tabIndex={data()?.active === tab.key ? 0 : -1}
-                  onClick={() => setTerminals(chatId, "active", tab.key)}
+                  aria-selected={(data()?.active === tab.key) ? "true" : "false"}
+                  tabindex={data()?.active === tab.key ? 0 : -1}
+                  onClick={() => setTerminals(draft => { draft[chatId]!["active"] = tab.key; })}
                   onAuxClick={(e) => e.button === 1 && closeTab(props.target, tab.key)}
                   title={tab.title}
                 >
@@ -284,7 +295,7 @@ function TerminalView(props: { target: Target; tab: TermTab; visible: boolean })
     resizeTimer = setTimeout(() => {
       const id = props.tab.terminalId;
       if (!id || !term || exited) return;
-      void rpc.call(M.RESIZE_TERMINAL, { terminalId: id, cols: term.cols, rows: term.rows, targetDeviceId: props.target.deviceId }).catch(() => {});
+      void rpc.call(M.RESIZE_TERMINAL, { terminalId: id, cols: term.cols, rows: term.rows, targetDeviceId: props.target.deviceId }).catch(() => { });
     }, RESIZE_DEBOUNCE_MS);
   };
 
@@ -297,7 +308,8 @@ function TerminalView(props: { target: Target; tab: TermTab; visible: boolean })
     }
   };
 
-  onMount(() => {
+  onSettled(() => {
+    const cleanups: (() => void)[] = [];
     term = new XTerm({
       fontFamily: '"Geist Mono", ui-monospace, monospace',
       fontSize: 13,
@@ -316,7 +328,7 @@ function TerminalView(props: { target: Target; tab: TermTab; visible: boolean })
       if (event.type !== "keydown") return true;
       const mod = event.ctrlKey && event.shiftKey;
       if (mod && event.key.toLowerCase() === "c" && term?.hasSelection()) {
-        void navigator.clipboard?.writeText(term.getSelection()).catch(() => {});
+        void navigator.clipboard?.writeText(term.getSelection()).catch(() => { });
         return false;
       }
       // Let the browser deliver the paste event, which xterm turns into input.
@@ -332,7 +344,7 @@ function TerminalView(props: { target: Target; tab: TermTab; visible: boolean })
     const observer = new ResizeObserver(() => refit());
     observer.observe(host);
     setReady(true);
-    onCleanup(() => {
+    cleanups.push(() => {
       observer.disconnect();
       clearTimeout(flushTimer);
       clearTimeout(resizeTimer);
@@ -340,28 +352,25 @@ function TerminalView(props: { target: Target; tab: TermTab; visible: boolean })
       term?.dispose();
       term = undefined;
     });
+
+    return () => cleanups.forEach(cleanup => cleanup());
   });
 
-  createEffect(() => {
+  createEffect(() => resolvedTheme(), () => {
     const dark = resolvedTheme() === "dark";
     if (term) term.options.theme = xtermTheme(dark);
   });
 
-  createEffect(
-    on(
-      () => props.visible,
-      (visible) => {
-        if (!visible || !term) return;
-        queueMicrotask(() => {
-          refit();
-          term?.focus();
-        });
-      },
-    ),
-  );
+  createEffect(() => props.visible, (visible) => {
+    if (!visible || !term) return;
+    queueMicrotask(() => {
+      refit();
+      term?.focus();
+    });
+  });
 
   // Allocate the PTY once the grid has a size.
-  createEffect(() => {
+  createEffect(() => [ready(), connected(), props.tab.terminalId, props.tab.opening, props.tab.error, props.tab.exited], () => {
     if (!ready() || !connected()) return;
     const tab = props.tab;
     if (tab.terminalId || tab.opening || tab.error || tab.exited !== null) return;
@@ -369,7 +378,7 @@ function TerminalView(props: { target: Target; tab: TermTab; visible: boolean })
     openSession(props.target, key, term?.cols ?? 80, term?.rows ?? 24);
   });
 
-  createEffect(() => {
+  createEffect(() => props.tab.error, () => {
     const error = props.tab.error;
     if (error && term) term.write(`\x1b[31m${error}\x1b[0m\r\n`);
   });

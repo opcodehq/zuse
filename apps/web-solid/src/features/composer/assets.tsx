@@ -1,6 +1,7 @@
 // Composer-only glyphs from crates/icons, agent brand marks, and the desktop's ordered-dither key texture.
-import { type JSX, Show, splitProps } from "solid-js";
 import { Icon } from "@/ui/Icon";
+import { type JSX } from "@solidjs/web";
+import { Show } from "solid-js";
 
 const extra = import.meta.glob("../../../../../crates/icons/assets/free/{access-ask,access-auto,access-full,access-read-only,chat-import,loading}.svg", {
   query: "?raw",
@@ -11,15 +12,15 @@ const extraIcons = new Map(Object.entries(extra).map(([path, svg]) => [path.slic
 
 /** An icon from the shared set, or one of the composer's extra glyphs. */
 export function Glyph(props: { name: string; size?: number; class?: string; style?: JSX.CSSProperties }) {
-  const [local] = splitProps(props, ["name", "size", "class", "style"]);
-  const size = () => `${local.size ?? 16}px`;
+
+  const size = () => `${props.size ?? 16}px`;
   return (
-    <Show when={extraIcons.get(local.name)} fallback={<Icon name={local.name} size={local.size} class={local.class} style={local.style} />}>
+    <Show when={extraIcons.get(props.name)} fallback={<Icon name={props.name} size={props.size} class={props.class} style={props.style} />}>
       {(svg) => (
         <span
-          class={local.class}
+          class={props.class}
           aria-hidden="true"
-          style={{ display: "inline-flex", width: size(), height: size(), "flex-shrink": 0, ...local.style }}
+          style={{ display: "inline-flex", width: size(), height: size(), "flex-shrink": 0, ...props.style }}
           // eslint-disable-next-line solid/no-innerhtml -- trusted SVGs bundled from the repository
           innerHTML={svg().replace("<svg ", '<svg width="100%" height="100%" ')}
         />

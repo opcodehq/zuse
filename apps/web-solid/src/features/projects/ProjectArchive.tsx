@@ -1,33 +1,14 @@
 // Archived chats of a project: search, a read-only preview of each session, and restore.
-import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, Show, Switch } from "solid-js";
 import type { Chat, SessionMessageEntry } from "@/core/protocol";
 import { state } from "@/core/store";
 import { navigate, openChat, view } from "@/core/view";
-import { Icon } from "@/ui/Icon";
-import { Button, IconButton, Spinner } from "@/ui/primitives";
-import {
-  activityLabel,
-  archivedThreads,
-  chatSummary,
-  chatTitle,
-  clearFiles,
-  closeSession,
-  dateLabel,
-  chatDate,
-  files,
-  loadFiles,
-  preview,
-  progressing,
-  projectSpaces,
-  readSession,
-  restoreChat,
-  restoring,
-  setRestoring,
-  threadSessions,
-} from "./archive";
-import { spaceName } from "./hosts";
 import { Entry, type EntryContext } from "@/features/transcript/Entry";
 import "@/features/transcript/transcript.css";
+import { Icon } from "@/ui/Icon";
+import { Button, IconButton, Spinner } from "@/ui/primitives";
+import { createEffect, createMemo, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js";
+import { activityLabel, archivedThreads, chatDate, chatSummary, chatTitle, clearFiles, closeSession, dateLabel, files, loadFiles, preview, progressing, projectSpaces, readSession, restoreChat, restoring, setRestoring, threadSessions, } from "./archive";
+import { spaceName } from "./hosts";
 import { VirtualList } from "./Palette";
 
 export function ProjectArchive() {
@@ -55,7 +36,7 @@ export function ProjectArchive() {
   });
 
   const open = (id: string) => {
-    setRestoring({ error: null, target: null });
+    setRestoring(draft => { Object.assign(draft, { error: null, target: null }); });
     setSelected(id);
     const first = threadSessions(id, spaces())[0]?.id ?? id;
     selectSession(first);
@@ -73,11 +54,11 @@ export function ProjectArchive() {
   };
 
   // Restored or deleted elsewhere: leave the preview.
-  createEffect(() => {
+  createEffect(() => [selected(), restoring.busy, selected() && state.chats[selected()!]?.archived], () => {
     const id = selected();
     if (id && !restoring.busy && !state.chats[id]?.archived) back();
   });
-  createEffect(on(projectKey, () => back(), { defer: true }));
+  createEffect(projectKey, () => back(), { defer: true });
   onCleanup(() => {
     clearFiles();
     closeSession();
@@ -233,7 +214,7 @@ function RestoreButton(props: { chatId: string; title: string; onRestore: (id: s
       type="button"
       class={`pj-restore ${props.class ?? ""}`}
       aria-label={working() ? "Restoring…" : `Restore chat ${props.title}`}
-      aria-disabled={!!restoring.busy}
+      aria-disabled={(!!restoring.busy) ? "true" : "false"}
       data-busy={restoring.busy ? "true" : undefined}
       onClick={() => !restoring.busy && props.onRestore(props.chatId)}
     >
@@ -271,7 +252,7 @@ function ArchivePreview(props: {
               type="button"
               role="tab"
               class="pj-session-tab"
-              aria-selected={props.session === session.id}
+              aria-selected={(props.session === session.id) ? "true" : "false"}
               onClick={() => props.onSession(session.id)}
             >
               <span>{session.title?.trim() || `Conversation ${index() + 1}`}</span>

@@ -1,4 +1,4 @@
-import solid from "eslint-plugin-solid/configs/typescript";
+import solid from "eslint-plugin-solid/configs/v2";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(

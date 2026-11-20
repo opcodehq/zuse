@@ -1,17 +1,17 @@
 // The environment summary card: where the chat runs, what it changed, its pull request, background work and the
 // project's actions. Mirrors crates/ui/src/shell/session_info.rs: 288px card, 28px rows with a 16px icon slot and 12px
 // labels, no dividers but a fading rule between the workspace rows and the session's activity.
-import { createMemo, createSignal, For, lazy, onCleanup, Show } from "solid-js";
-import { rpc } from "@/core/connection";
 import { chatRequest } from "@/core/chat";
+import { rpc } from "@/core/connection";
 import { M } from "@/core/methods";
 import { state } from "@/core/store";
 import { deviceOnline } from "@/core/util";
 import { Icon } from "@/ui/Icon";
 import { DitherRing } from "@/ui/loaders";
-import type { BackgroundTask } from "./types";
-import { diffStatFor, openPanel, selectedTarget, targetMemoOptions, workspace } from "./store";
+import { createMemo, createSignal, For, lazy, onCleanup, Show } from "solid-js";
 import { DiffStat, PrStateIcon } from "./parts";
+import { diffStatFor, openPanel, selectedTarget, targetMemoOptions, workspace } from "./store";
+import type { BackgroundTask } from "./types";
 
 // The project's run actions, as desktop's card ends with them; loaded with the first open card.
 const ProjectActions = lazy(() => import("@/features/projects/ProjectActions").then((m) => ({ default: m.ProjectActions })));
@@ -31,7 +31,7 @@ const [backgroundOpen, setBackgroundOpen] = createSignal(false);
 const [actionsOpen, setActionsOpen] = createSignal(false);
 
 export function SessionInfo(props: { onClose: () => void }) {
-  const target = createMemo(selectedTarget, null, targetMemoOptions);
+  const target = createMemo(selectedTarget, targetMemoOptions);
   return (
     <Show when={target()} fallback={<div class="ws-menu-note ws-muted">No conversation selected.</div>}>
       {(t) => {
@@ -135,7 +135,7 @@ function Background(props: { chatId: string; tasks: BackgroundTask[] }) {
       <button
         type="button"
         class="ws-summary-row ws-summary-action"
-        aria-expanded={backgroundOpen()}
+        aria-expanded={(backgroundOpen()) ? "true" : "false"}
         aria-label="Background work"
         onClick={() => setBackgroundOpen((open) => !open)}
       >

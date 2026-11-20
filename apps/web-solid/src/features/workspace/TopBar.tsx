@@ -1,18 +1,18 @@
 // The conversation's top bar: project mark, branch switcher with changed-file count, copy controls,
 // then the session card, terminal and right-panel toggles. Mirrors crates/ui/src/shell/top_bar.rs.
-import { Popover } from "@kobalte/core/popover";
-import { createMemo, createSignal, For, Show } from "solid-js";
 import { rpc } from "@/core/connection";
 import { M } from "@/core/methods";
 import { narrowLayout, setSidebarVisible, sidebarVisible, view } from "@/core/view";
 import { Icon } from "@/ui/Icon";
 import { IconButton, Spinner } from "@/ui/primitives";
+import { Popover } from "@kobalte/core/popover";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import { SessionInfo } from "./SessionInfo";
-import { diffStatFor, errorText, openPanel, readErrorText, refreshBranch, selectedTarget, targetMemoOptions, setWorkspace, toggleRightPanel, workspace, type Target } from "./store";
+import { diffStatFor, errorText, openPanel, readErrorText, refreshBranch, selectedTarget, setWorkspace, targetMemoOptions, toggleRightPanel, workspace, type Target } from "./store";
 import { basename, copyText, plural, rovingKeys } from "./util";
 
 export function TopBar() {
-  const target = createMemo(selectedTarget, null, targetMemoOptions);
+  const target = createMemo(selectedTarget, targetMemoOptions);
   return (
     <header class="ws-topbar" aria-label="Conversation">
       {/* A hidden sidebar comes back from here as well as with its shortcut. The drawer covers it on narrow
@@ -32,7 +32,7 @@ export function TopBar() {
             size="sm"
             iconSize={14}
             active={view.rightPanel === "terminal"}
-            aria-pressed={view.rightPanel === "terminal"}
+            aria-pressed={(view.rightPanel === "terminal") ? "true" : "false"}
             onClick={() => (view.rightPanel === "terminal" ? toggleRightPanel() : openPanel("terminal"))}
           />
           <IconButton
@@ -41,7 +41,7 @@ export function TopBar() {
             size="sm"
             iconSize={14}
             active={!!view.rightPanel}
-            aria-pressed={!!view.rightPanel}
+            aria-pressed={(!!view.rightPanel) ? "true" : "false"}
             onClick={toggleRightPanel}
           />
         </div>
@@ -171,7 +171,7 @@ function BranchMenu(props: { target: Target; branch: string }) {
                   type="button"
                   class="ws-branch-row"
                   role="option"
-                  aria-selected={name === props.branch}
+                  aria-selected={(name === props.branch) ? "true" : "false"}
                   disabled={!!switching() && switching() !== name}
                   onClick={() => switchTo(name)}
                 >
@@ -205,7 +205,7 @@ function BranchMenu(props: { target: Target; branch: string }) {
 
 function SessionInfoToggle() {
   return (
-    <Popover open={workspace.sessionInfoOpen} onOpenChange={(next) => setWorkspace("sessionInfoOpen", next)} placement="bottom-end" gutter={6}>
+    <Popover open={workspace.sessionInfoOpen} onOpenChange={(next) => setWorkspace(draft => { draft["sessionInfoOpen"] = next; })} placement="bottom-end" gutter={6}>
       <Popover.Trigger
         class="icon-btn"
         data-size="sm"
@@ -225,7 +225,7 @@ function SessionInfoToggle() {
             (event.currentTarget as HTMLElement | null)?.focus({ preventScroll: true });
           }}
         >
-          <SessionInfo onClose={() => setWorkspace("sessionInfoOpen", false)} />
+          <SessionInfo onClose={() => setWorkspace(draft => { draft["sessionInfoOpen"] = false; })} />
         </Popover.Content>
       </Popover.Portal>
     </Popover>

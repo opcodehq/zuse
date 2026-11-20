@@ -1,8 +1,8 @@
 // Settings → Plugins: connected plugins with on/off and disconnect (desktop PluginsCard::render_installed).
-import { createMemo, createSignal, For, Show } from "solid-js";
 import { Icon } from "@/ui/Icon";
 import { Button, Menu, Toggle } from "@/ui/primitives";
-import { signIn, signedIn } from "../account";
+import { createMemo, createSignal, For, Show } from "solid-js";
+import { signedIn, signIn } from "../account";
 import { Group, Logo, SearchField, Segmented } from "../ui";
 import { catalog, subtitle } from "./catalog";
 import { PluginStatus } from "./parts";

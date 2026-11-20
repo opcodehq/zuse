@@ -1,11 +1,12 @@
 // Settings: section navigation on the window surface and the section in a rounded pane (crates/ui/src/shell.rs
 // render_settings_page). Sections owned by other areas are mounted from their exports.
-import { createMemo, createSignal, For, type JSX, lazy, Match, onMount, Show, Switch } from "solid-js";
 import { navigate, view } from "@/core/view";
-import { Icon } from "@/ui/Icon";
 import { DevicesSettings } from "@/features/connection";
 import { CloudArchives, Plugins } from "@/features/plugins-cloud";
 import { ProjectArchive } from "@/features/projects";
+import { Icon } from "@/ui/Icon";
+import { type JSX } from "@solidjs/web";
+import { createMemo, createSignal, For, lazy, Match, onSettled, Show, Switch } from "solid-js";
 import { t } from "./i18n";
 import { General } from "./pages/General";
 import { Segmented } from "./widgets";
@@ -74,7 +75,7 @@ const layerOpen = () => !!document.querySelector('[role="dialog"]:not(.st-page),
 export function Settings() {
   let page: HTMLDivElement | undefined;
   const section = createMemo(currentSection);
-  onMount(() => page?.focus({ preventScroll: true }));
+  onSettled(() => { void (page?.focus({ preventScroll: true })); });
 
   return (
     <div
@@ -82,7 +83,7 @@ export function Settings() {
       class="st-page"
       role="group"
       aria-label={t("common-settings", "Settings")}
-      tabIndex={-1}
+      tabindex={-1}
       onKeyDown={(event) => {
         if (event.key !== "Escape" || event.defaultPrevented || layerOpen()) return;
         event.preventDefault();
@@ -176,11 +177,11 @@ function Nav(props: { section: SectionId }) {
             role="tab"
             id={`settings-tab-${item.id}`}
             class="st-tab"
-            aria-selected={props.section === item.id}
+            aria-selected={(props.section === item.id) ? "true" : "false"}
             aria-controls="settings-panel"
             aria-label={item.label()}
             title={item.label()}
-            tabIndex={props.section === item.id ? 0 : -1}
+            tabindex={props.section === item.id ? 0 : -1}
             onClick={() => openSection(item.id)}
             onKeyDown={(event) => move(event, index())}
           >

@@ -1,4 +1,4 @@
-import { createEffect, createRoot } from "solid-js";
+import { createEffect, createRoot, untrack } from "solid-js";
 import { ActiveTimeTracker, analyticsAccountId, createAnonymousAnalyticsId, type AnalyticsEventName, type AnalyticsProperties, sanitizeAnalyticsProperties } from "@zuse/analytics";
 import { sanitizeAnalyticsEnvelope } from "@zuse/analytics/envelope";
 import { state } from "./store";
@@ -23,7 +23,7 @@ let cleanup: (() => void) | null = null;
 let currentScreen = "chat";
 let lastOpenedChat: string | null = null;
 function reportChatOpened() {
-  const id = view.route.kind === "chat" ? view.selectedChatId : null;
+  const id = (view.route.kind === "chat" || view.route.kind === "zappers") ? view.selectedChatId : null;
   if (!id) { lastOpenedChat = null; return; }
   if (!enabled || state.connection.kind !== "connected" || !state.workspaceSynced || lastOpenedChat === id) return;
   lastOpenedChat = id;
@@ -114,14 +114,15 @@ function activity(): () => void {
 export function startAnalytics(): void {
   // Track closed route names, never paths, selected entities, titles, or URLs.
   createRoot(() => {
-    createEffect(reportChatOpened);
-    createEffect(() => {
-      currentScreen = view.route.kind === "newProject" ? "other" : view.route.kind === "archive" ? "archives" : view.route.kind;
+    createEffect(() => [view.route.kind, view.selectedChatId, state.connection.kind, state.workspaceSynced], () => untrack(reportChatOpened));
+    createEffect(() => view.route.kind, route => {
+      currentScreen = route === "newProject" || route === "newZapper" ? "other" : route === "archive" ? "archives" : route === "zappers" ? "chat" : route;
       captureAnalytics("screen viewed", { screen: currentScreen });
     });
     createEffect(() => {
       const user = state.account?.user as { id?: unknown } | undefined;
-      const next = typeof user?.id === "string" ? user.id : null;
+      return typeof user?.id === "string" ? user.id : null;
+    }, next => {
       if (account === next) return;
       const previous = account;
       account = next;

@@ -36,7 +36,7 @@ export function option<K extends keyof SidebarOptions>(key: K): SidebarOptions[K
 }
 
 export function setOption<K extends keyof SidebarOptions>(key: K, value: SidebarOptions[K]) {
-  (setView as (...args: unknown[]) => void)("preferences", keyFor(key), value);
+  setView(draft => { draft.preferences[keyFor(key)] = value; });
 }
 
 export type Organization = "projects" | "threads" | "devices";
@@ -48,7 +48,7 @@ export function setOrganization(next: Organization) {
   if (next === "devices") setOption("byDevice", true);
   else {
     setOption("byDevice", false);
-    setView("preferences", "sidebarView", next);
+    setView(draft => { draft["preferences"]!["sidebarView"] = next; });
   }
 }
 
@@ -58,5 +58,5 @@ export function isCollapsed(key: string) {
 
 export function toggleCollapsed(key: string) {
   const list = view.preferences.collapsedProjects;
-  setView("preferences", "collapsedProjects", list.includes(key) ? list.filter((k) => k !== key) : [...list, key]);
+  setView(draft => { draft["preferences"]!["collapsedProjects"] = list.includes(key) ? list.filter((k) => k !== key) : [...list, key]; });
 }

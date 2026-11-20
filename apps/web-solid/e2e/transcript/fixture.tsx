@@ -1,6 +1,6 @@
 // Test-only page: mounts the real Transcript on the real store and drives it with synthetic engine frames
 // through the same applyTranscriptFrame path the WebSocket uses. Never bundled into the app.
-import { render } from "solid-js/web";
+import { render } from "@solidjs/web";
 import "@/ui/tokens.css";
 import "@/ui/primitives.css";
 import "@/shell/shell.css";
@@ -9,26 +9,29 @@ import { setState, state } from "@/core/store";
 import { setView } from "@/core/view";
 import { applyTranscriptFrame } from "@/core/transcript";
 import type { MessagePart, SessionMessageEntry, TranscriptFrame } from "@/core/protocol";
-import type { SetStoreFunction } from "solid-js/store";
+import { flush, type StoreSetter } from "solid-js";
 import { Transcript } from "@/features/transcript";
 
 const CHAT = "fixture-chat";
 const DEVICE = "fixture-device";
 document.documentElement.dataset.theme = new URLSearchParams(location.search).get("theme") ?? "dark";
 
-setState({
+setState(draft => { Object.assign(draft, {
   localDeviceId: DEVICE,
   connection: { kind: "connected" },
   chats: { [CHAT]: { id: CHAT, deviceId: DEVICE, title: "Fixture chat", archived: false, cwd: "/tmp/fixture", createdAt: new Date().toISOString(), config: { harness: "claude-code", sandbox: "workspace-write" } } },
   harnesses: [{ id: "claude-code", name: "Fixture Agent" }],
-});
+}); });
 // Not connected to an engine, so core/chat leaves the transcript to this page.
-setState("connection", { kind: "connecting" });
-setView({ selectedChatId: CHAT, route: { kind: "chat" } });
-setState("transcript", { chatId: CHAT, ready: true, messages: [], contextUsage: null, notice: null });
+setState(draft => { draft["connection"] = { kind: "connecting" }; });
+setView(draft => { Object.assign(draft, { selectedChatId: CHAT, route: { kind: "chat" } }); });
+setState(draft => { draft["transcript"] = { chatId: CHAT, ready: true, messages: [], contextUsage: null, notice: null }; });
 
-const setMessages = ((...args: unknown[]) => (setState as (...a: unknown[]) => void)("transcript", "messages", ...args)) as SetStoreFunction<SessionMessageEntry[]>;
-const apply = (frame: TranscriptFrame) => applyTranscriptFrame(setMessages, state.transcript!.messages, frame);
+flush();
+const setMessages: StoreSetter<SessionMessageEntry[]> = update => {
+  setState(draft => { if (draft.transcript) update(draft.transcript.messages); });
+};
+const apply = (frame: TranscriptFrame) => flush(() => applyTranscriptFrame(setMessages, state.transcript!.messages, frame));
 
 let seq = 0;
 const id = (p: string) => `${p}-${++seq}`;
@@ -79,7 +82,7 @@ async function stream(opts: { tokens: number; batch: number; intervalMs: number 
   const entryId = id("a");
   const partId = id("x");
   upsert({ id: entryId, role: "assistant", createdAt: Date.now(), deviceId: DEVICE, status: "streaming", parts: [{ kind: "text", id: partId, text: "" }] });
-  setState("sessions", CHAT, { chatId: CHAT, status: "working", startedAt: new Date().toISOString() });
+  setState(draft => { draft["sessions"]![CHAT] = { chatId: CHAT, status: "working", startedAt: new Date().toISOString() }; });
   let len = 0;
   let sent = 0;
   const applyTimes: number[] = [];
@@ -112,7 +115,7 @@ async function stream(opts: { tokens: number; batch: number; intervalMs: number 
   }
   const elapsed = performance.now() - started;
   apply({ upsert: [{ after: state.transcript!.messages[count() - 2]!.id, entry: { ...JSON.parse(JSON.stringify(state.transcript!.messages[count() - 1])), status: "complete" } }], count: count() });
-  setState("sessions", CHAT, { chatId: CHAT, status: "idle" });
+  setState(draft => { draft["sessions"]![CHAT] = { chatId: CHAT, status: "idle" }; });
   await new Promise((r) => setTimeout(r, 300));
   running = false;
   observer.disconnect();
@@ -181,7 +184,7 @@ function kinds() {
       { kind: "input", id: id("i"), requestId: "req-1", questions: [{ id: "q1", header: "Migration", question: "Which readers should move first?", options: ["Legacy CSV", "JSON API", "Both"], multiSelect: false }] },
     ],
   });
-  setState("sessions", CHAT, { chatId: CHAT, status: "awaitingInput", startedAt: new Date(Date.now() - 95_000).toISOString() });
+  setState(draft => { draft["sessions"]![CHAT] = { chatId: CHAT, status: "awaitingInput", startedAt: new Date(Date.now() - 95_000).toISOString() }; });
 }
 
 function resolve(requestId: string) {

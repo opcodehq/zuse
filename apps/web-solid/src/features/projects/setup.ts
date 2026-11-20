@@ -1,48 +1,19 @@
 // The New project flow (crates/ui/src/shell/project_setup.rs) and its folder browser
 // (crates/ui/src/shell/spaces.rs AddSpaceFlow). Area-only state; the host owns the work.
-import { batch } from "solid-js";
-import { createStore, produce } from "solid-js/store";
+
+// The New project flow (crates/ui/src/shell/project_setup.rs) and its folder browser
+// (crates/ui/src/shell/spaces.rs AddSpaceFlow). Area-only state; the host owns the work.
 import { rpc } from "@/core/connection";
 import { M } from "@/core/methods";
 import type { Device, Space } from "@/core/protocol";
 import { RpcError } from "@/core/rpc";
 import { state } from "@/core/store";
 import { navigate, setView, view } from "@/core/view";
+import { createStore } from "solid-js";
 import { noteCreation, watchCreations } from "./creations";
 import { deviceList, errorText, placementComputers, spaceName, target, unknownMethod, uuid } from "./hosts";
-import {
-  childPath,
-  cloneName,
-  completionPrefixLength,
-  isTypedPath,
-  looksLikeGitUrl,
-  matchesWords,
-  parentPath,
-  pathKey,
-  rankFilter,
-  samePath,
-  segmentTarget,
-  typedPathTarget,
-} from "./paths";
-import {
-  type DriveEntry,
-  type FolderEntry,
-  type FolderListing,
-  type GithubProjectRepositories,
-  type GithubProjectRepository,
-  type GithubProjectStatus,
-  type HomeFolderMatch,
-  type HomeFolderSearchResult,
-  type Loadable,
-  type ProjectCreation,
-  type ProjectTemplate,
-  type StartProjectCreation,
-  failed,
-  idle,
-  loading,
-  ready,
-  readyValue,
-} from "./types";
+import { childPath, cloneName, completionPrefixLength, isTypedPath, looksLikeGitUrl, matchesWords, parentPath, pathKey, rankFilter, samePath, segmentTarget, typedPathTarget, } from "./paths";
+import { type DriveEntry, type FolderEntry, type FolderListing, type GithubProjectRepositories, type GithubProjectRepository, type GithubProjectStatus, type HomeFolderMatch, type HomeFolderSearchResult, type Loadable, type ProjectCreation, type ProjectTemplate, type StartProjectCreation, failed, idle, loading, ready, readyValue, } from "./types";
 
 export type Mode = "choose" | "clone" | "create";
 export type Step = "devices" | "locations" | "folders";
@@ -143,15 +114,15 @@ export function startSetup() {
   releaseHome();
   const deviceId = requestedDevice ?? state.localDeviceId;
   requestedDevice = null;
-  setSetup({ ...blank(), started: true, generation: uuid(), deviceId });
+  setSetup(draft => { Object.assign(draft, { ...blank(), started: true, generation: uuid(), deviceId }); });
   watchCreations(deviceId);
-  void loadDefaultParent();
+  queueMicrotask(() => void loadDefaultParent());
 }
 
 /** Called when the route unmounts. */
 export function endSetup() {
   releaseHome();
-  setSetup(blank());
+  setSetup(draft => { Object.assign(draft, blank()); });
 }
 
 export function closeSetup() {
@@ -164,7 +135,7 @@ export function closeSetup() {
 
 /** Desktop's land_in_space: a new chat homed on the project. */
 export function landInProject(path: string) {
-  setView({ route: { kind: "chat" }, selectedChatId: null, draftProjectPath: path });
+  setView(draft => { Object.assign(draft, { route: { kind: "chat" }, selectedChatId: null, draftProjectPath: path }); });
 }
 
 // ── Choose step ──────────────────────────────────────────────────────────
@@ -291,46 +262,46 @@ export function canSubmit(): boolean {
 }
 
 export function setMode(mode: Mode) {
-  setSetup({ mode, cloneConfirm: false, active: 0, navigating: false, error: null, query: "" });
-  if (mode !== "choose") void loadGithub(1);
+  setSetup(draft => { Object.assign(draft, { mode, cloneConfirm: false, active: 0, navigating: false, error: null, query: "" }); });
+  if (mode !== "choose") queueMicrotask(() => void loadGithub(1));
 }
 
 export function setQuery(query: string) {
-  setSetup({ query, active: 0, navigating: false, error: null });
+  setSetup(draft => { Object.assign(draft, { query, active: 0, navigating: false, error: null }); });
 }
 
 export function setName(name: string) {
-  setSetup({ name, active: 0, navigating: false, error: null });
+  setSetup(draft => { Object.assign(draft, { name, active: 0, navigating: false, error: null }); });
 }
 
 async function loadDefaultParent() {
   const generation = setup.generation;
   try {
     const parent = await rpc.call<string>(M.PROJECT_DEFAULT_PARENT, target(setup.deviceId));
-    if (setup.generation === generation && !setup.parent.trim()) setSetup("parent", parent);
+    if (setup.generation === generation && !setup.parent.trim()) setSetup(draft => { draft["parent"] = parent; });
   } catch {
     if (setup.generation === generation)
-      setSetup("error", "Could not load the default folder. Enter a parent folder on the selected computer.");
+      setSetup(draft => { draft["error"] = "Could not load the default folder. Enter a parent folder on the selected computer."; });
   }
 }
 
 export async function loadGithub(page: number) {
   const generation = setup.generation;
   const deviceId = setup.deviceId;
-  if (page === 1) setSetup({ github: loading(), repositories: loading() });
+  if (page === 1) setSetup(draft => { Object.assign(draft, { github: loading(), repositories: loading() }); });
   let authenticated = false;
   if (page === 1) {
     try {
       const status = await rpc.call<GithubProjectStatus>(M.PROJECT_GITHUB_STATUS, target(deviceId));
       if (setup.generation !== generation) return;
       authenticated = status.authenticated;
-      setSetup({ github: ready(status) });
+      setSetup(draft => { Object.assign(draft, { github: ready(status) }); });
     } catch {
       if (setup.generation !== generation) return;
-      setSetup({ github: failed("GitHub could not be reached on this computer.") });
+      setSetup(draft => { Object.assign(draft, { github: failed("GitHub could not be reached on this computer.") }); });
     }
     if (!authenticated) {
-      setSetup({ repositories: idle() });
+      setSetup(draft => { Object.assign(draft, { repositories: idle() }); });
       return;
     }
   }
@@ -344,54 +315,54 @@ export async function loadGithub(page: number) {
           ...result.repositories.filter((r) => !previous.repositories.some((p) => p.nameWithOwner === r.nameWithOwner)),
         ]
       : result.repositories;
-    setSetup({ repositories: ready({ repositories, nextPage: result.nextPage }) });
+    setSetup(draft => { Object.assign(draft, { repositories: ready({ repositories, nextPage: result.nextPage }) }); });
   } catch {
     if (setup.generation !== generation) return;
-    setSetup({ repositories: failed("Could not load repositories. Check GitHub access and retry.") });
+    setSetup(draft => { Object.assign(draft, { repositories: failed("Could not load repositories. Check GitHub access and retry.") }); });
   }
 }
 
 /** Moves the setup to another computer, keeping the step and the name. */
 export function pickHost(deviceId: string) {
   if (setup.deviceId === deviceId) return;
-  setSetup({ deviceId, generation: uuid(), github: idle(), repositories: idle(), error: null, parent: "" });
+  setSetup(draft => { Object.assign(draft, { deviceId, generation: uuid(), github: idle(), repositories: idle(), error: null, parent: "" }); });
   watchCreations(deviceId);
-  void loadDefaultParent();
-  if (setup.mode !== "choose") void loadGithub(1);
+  queueMicrotask(() => void loadDefaultParent());
+  if (setup.mode !== "choose") queueMicrotask(() => void loadGithub(1));
 }
 
 /** From the clone destination back to the repository search, else to the actions. */
 export function back() {
   if (setup.mode === "clone" && setup.cloneConfirm) {
-    setSetup({ cloneConfirm: false, active: 0, navigating: false, error: null });
+    setSetup(draft => { Object.assign(draft, { cloneConfirm: false, active: 0, navigating: false, error: null }); });
   } else {
     setMode("choose");
   }
 }
 
 function enterCloneConfirm() {
-  setSetup({ cloneConfirm: true, active: 0, navigating: false, error: null });
+  setSetup(draft => { Object.assign(draft, { cloneConfirm: true, active: 0, navigating: false, error: null }); });
 }
 
 export function chooseRepository(repo: GithubProjectRepository) {
   const name = repo.nameWithOwner.split("/").pop() || "project";
-  setSetup({ url: repo.httpsUrl, name, error: null });
+  setSetup(draft => { Object.assign(draft, { url: repo.httpsUrl, name, error: null }); });
   enterCloneConfirm();
 }
 
 function continueWithUrl(url: string) {
-  setSetup({ url, name: cloneName(url) });
+  setSetup(draft => { Object.assign(draft, { url, name: cloneName(url) }); });
   enterCloneConfirm();
 }
 
 export function activateFormRow(row: FormRow) {
   switch (row.kind) {
     case "template":
-      setSetup("template", row.template);
+      setSetup(draft => { draft["template"] = row.template; });
       return;
     case "publish":
-      if (githubReady()) setSetup("publish", (on) => !on);
-      else if (setup.github.state !== "loading") void loadGithub(1);
+      if (githubReady()) setSetup(draft => { draft["publish"] = ((on) => !on)(draft["publish"]); });
+      else if (setup.github.state !== "loading") queueMicrotask(() => void loadGithub(1));
       return;
     case "location":
       openBrowser("parent");
@@ -432,19 +403,21 @@ export async function submit() {
     source: clone ? { kind: "clone", url } : { kind: "create", template: setup.template, publish: setup.publish && githubReady() },
   };
   const generation = setup.generation;
-  setSetup({ busy: true, error: null });
+  setSetup(draft => { Object.assign(draft, { busy: true, error: null }); });
   try {
     const operation = await rpc.call<ProjectCreation>(M.PROJECT_START, target(setup.deviceId, { ...request }));
     noteCreation(operation);
     if (setup.generation === generation) landInProject(operation.destination);
   } catch (error) {
     if (setup.generation !== generation) return;
-    setSetup({
-      busy: false,
-      error:
-        error instanceof RpcError && error.outcomeUnknown
-          ? "The connection dropped while starting. The project may already be setting up; check the project list before trying again."
-          : errorText(error, "The project could not be started."),
+    setSetup(draft => {
+      Object.assign(draft, {
+        busy: false,
+        error:
+          error instanceof RpcError && error.outcomeUnknown
+            ? "The connection dropped while starting. The project may already be setting up; check the project list before trying again."
+            : errorText(error, "The project could not be started."),
+      });
     });
   }
 }
@@ -466,30 +439,31 @@ const blankHome = (unsupported = false): HomeSearch => ({
 });
 
 function setBrowser(update: Partial<Browser> | ((b: Browser) => void)) {
-  if (!setup.browser) return;
-  if (typeof update === "function") setSetup("browser", produce((b) => b && update(b)));
-  else setSetup("browser", update as Browser);
+  if (typeof update === "function") setSetup(draftState => { const b = draftState.browser; if (b) update(b); });
+  else setSetup(draft => { if (draft.browser) Object.assign(draft.browser, update); });
 }
 
 export function openBrowser(purpose: Browser["purpose"]) {
   if (setup.busy) return;
   releaseHome();
-  setSetup("browser", {
-    purpose,
-    step: "devices",
-    deviceId: null,
-    location: null,
-    query: "",
-    listing: idle(),
-    drives: idle(),
-    browserPath: null,
-    home: null,
-    browserRepo: false,
-    active: 0,
-    busy: false,
-    error: null,
-    homeSearch: blankHome(),
-    newFolder: null,
+  setSetup(draft => {
+    draft["browser"] = {
+      purpose,
+      step: "devices",
+      deviceId: null,
+      location: null,
+      query: "",
+      listing: idle(),
+      drives: idle(),
+      browserPath: null,
+      home: null,
+      browserRepo: false,
+      active: 0,
+      busy: false,
+      error: null,
+      homeSearch: blankHome(),
+      newFolder: null,
+    };
   });
   const deviceId = setup.deviceId ?? state.localDeviceId;
   if (!deviceId) return;
@@ -501,7 +475,7 @@ export function openBrowser(purpose: Browser["purpose"]) {
 
 export function closeBrowser() {
   releaseHome();
-  setSetup("browser", null);
+  setSetup(draft => { draft["browser"] = null; });
 }
 
 export function pickDevice(deviceId: string) {
@@ -519,13 +493,13 @@ export function pickDevice(deviceId: string) {
     query: "",
     newFolder: null,
   });
-  void loadDrives();
+  queueMicrotask(() => void loadDrives());
 }
 
 export function gotoLocation(name: string, path: string | null) {
   if (path !== null) releaseHome();
   setBrowser({ step: "folders", location: { name, path }, browserRepo: false, query: "", newFolder: null });
-  void loadFolders(path);
+  queueMicrotask(() => void loadFolders(path));
   searchHome();
 }
 
@@ -651,7 +625,7 @@ export function setBrowserQuery(query: string) {
 
 export function descend(path: string, isRepo: boolean) {
   setBrowser({ browserRepo: isRepo, query: "", newFolder: null });
-  void loadFolders(path);
+  queueMicrotask(() => void loadFolders(path));
 }
 
 export function openActive() {
@@ -746,7 +720,7 @@ export async function submitBrowser() {
   if (!listing) return;
   const path = listing.path;
   if (b.purpose === "parent") {
-    setSetup({ parent: path, error: null });
+    setSetup(draft => { Object.assign(draft, { parent: path, error: null }); });
     closeBrowser();
     return;
   }
@@ -853,7 +827,7 @@ async function requestHome(deviceId: string | null, query: string, generation: n
     }
     if (generation === null || b.homeSearch.unsupported) return;
     const selected = folderRows()[b.active];
-    batch(() => {
+    (() => {
       setBrowser((draft) => {
         draft.homeSearch.loading = false;
         draft.homeSearch.indexing = result?.indexing ?? false;
@@ -865,7 +839,7 @@ async function requestHome(deviceId: string | null, query: string, generation: n
         const at = folderRows().findIndex((row) => (row.kind === "home" ? row.match.path : row.path) === key);
         if (at >= 0) setBrowser({ active: at });
       }
-    });
+    })();
     if (!result?.indexing) return;
     await sleep(delay);
     delay = Math.min(delay * 2, 2000);

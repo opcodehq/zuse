@@ -1,21 +1,14 @@
 // Workspace data for the selected chat: diff sizes, pull request, previews, live Git status.
 // Engine-owned rows live here keyed by id; components read them and send requests.
-import { batch, createEffect, createMemo, createRoot, on, onCleanup, untrack } from "solid-js";
-import { createStore, reconcile, unwrap } from "solid-js/store";
 import { onConnected, rpc } from "@/core/connection";
 import { M } from "@/core/methods";
+import type { Chat, Space } from "@/core/protocol";
 import { RpcError, type Subscription } from "@/core/rpc";
 import { state } from "@/core/store";
-import { setView, view, type RightPanel } from "@/core/view";
-import type { Chat, Space } from "@/core/protocol";
 import { errorText } from "@/core/util";
-import type {
-  CheckoutChangeRequestStatus,
-  CheckoutDiff,
-  GitWorkspace,
-  PreviewSnapshot,
-  SourceControlFrame,
-} from "./types";
+import { setView, view, type RightPanel } from "@/core/view";
+import { createEffect, createMemo, createRoot, createStore, reconcile, snapshot as snapshotStore, untrack } from "solid-js";
+import type { CheckoutChangeRequestStatus, CheckoutDiff, GitWorkspace, PreviewSnapshot, SourceControlFrame, } from "./types";
 
 export interface Target {
   chatId: string;
@@ -160,47 +153,51 @@ export function diffStatFor(chatId: string): DiffStat | null {
 
 function applyDiffFrame(value: unknown) {
   const rows = (Array.isArray(value) ? value : value && typeof value === "object" ? [value] : []) as CheckoutDiff[];
-  batch(() => {
+  (() => {
     for (const diff of rows) {
       if (!diff?.checkoutId) continue;
-      setWorkspace("diffStats", diff.checkoutId, reconcile({
-        checkoutId: diff.checkoutId,
-        deviceId: diff.deviceId,
-        cwd: diff.cwd,
-        additions: diff.additions,
-        deletions: diff.deletions,
-        files: diff.files?.length ?? 0,
-        checksum: diff.checksum,
-      }));
+      setWorkspace(draft => {
+        {
+          const next = {
+            checkoutId: diff.checkoutId,
+            deviceId: diff.deviceId,
+            cwd: diff.cwd,
+            additions: diff.additions,
+            deletions: diff.deletions,
+            files: diff.files?.length ?? 0,
+            checksum: diff.checksum,
+          }; if (draft["diffStats"]![diff.checkoutId] == null) draft["diffStats"]![diff.checkoutId] = next; else reconcile(next)(draft["diffStats"]![diff.checkoutId]);
+        }
+      });
     }
-  });
+  })();
 }
 
 /** Open a surface in the right panel, adding its tab when needed. */
 export function openPanel(panel: Exclude<RightPanel, null>) {
-  batch(() => {
-    if (!workspace.tabs.includes(panel)) setWorkspace("tabs", (tabs) => [...tabs, panel]);
-    setWorkspace("lastPanel", panel);
-    setView("rightPanel", panel);
-  });
+  (() => {
+    if (!workspace.tabs.includes(panel)) setWorkspace(draft => { draft["tabs"] = ((tabs) => [...tabs, panel])(draft["tabs"]); });
+    setWorkspace(draft => { draft["lastPanel"] = panel; });
+    setView(draft => { draft["rightPanel"] = panel; });
+  })();
 }
 
 export function closePanelTab(panel: Exclude<RightPanel, null>) {
   const index = workspace.tabs.indexOf(panel);
   const tabs = workspace.tabs.filter((tab) => tab !== panel);
-  batch(() => {
-    setWorkspace("tabs", tabs);
+  (() => {
+    setWorkspace(draft => { draft["tabs"] = tabs; });
     if (view.rightPanel === panel) {
       // The right neighbour takes over, else the left, like desktop.
       const next = tabs[Math.min(index, tabs.length - 1)] ?? null;
-      setView("rightPanel", next);
-      if (next) setWorkspace("lastPanel", next);
+      setView(draft => { draft["rightPanel"] = next; });
+      if (next) setWorkspace(draft => { draft["lastPanel"] = next; });
     }
-  });
+  })();
 }
 
 export function toggleRightPanel() {
-  if (view.rightPanel) setView("rightPanel", null);
+  if (view.rightPanel) setView(draft => { draft["rightPanel"] = null; });
   else openPanel(workspace.tabs.includes(workspace.lastPanel) ? workspace.lastPanel : workspace.tabs[0] ?? "files");
 }
 
@@ -211,24 +208,24 @@ const sameItems = (a: readonly unknown[], b: readonly unknown[]) => a.length ===
 
 /** Run `start` whenever the key's values change; its subscription ends when they change again. */
 export function keyedWatch<K extends readonly unknown[]>(key: () => K, start: (key: K) => Subscription | void) {
-  const memo = createMemo(key, undefined, { equals: sameItems });
-  createEffect(
-    on(memo, (value) => {
-      const sub = start(value);
-      if (sub) onCleanup(() => sub.cancel());
-    }),
-  );
+  const memo = createMemo(key, { equals: sameItems });
+  createEffect(memo, (value) => {
+    const cleanups: (() => void)[] = [];
+    const sub = start(value);
+    if (sub) cleanups.push(() => sub.cancel());
+
+    return () => cleanups.forEach(cleanup => cleanup());
+  });
 }
 
 const connected = () => state.connection.kind === "connected";
 
 createRoot(() => {
   // Shell links (sidebar, palette) may set view.rightPanel directly; keep the strip in step.
-  createEffect(() => {
-    const panel = view.rightPanel;
+  createEffect(() => view.rightPanel, (panel) => {
     if (!panel) return;
-    if (!untrack(() => workspace.tabs.includes(panel))) setWorkspace("tabs", (tabs) => [...tabs, panel]);
-    setWorkspace("lastPanel", panel);
+    if (!untrack(() => workspace.tabs.includes(panel))) setWorkspace(draft => { draft["tabs"] = ((tabs) => [...tabs, panel])(draft["tabs"]); });
+    setWorkspace(draft => { draft["lastPanel"] = panel; });
   });
 
   // A remote chat's host streams its own diff sizes.
@@ -248,7 +245,7 @@ createRoot(() => {
         ? liveSubscribe<CheckoutChangeRequestStatus>(
             M.WATCH_CHECKOUT_CHANGE_REQUEST,
             { cwd, branch: branch ?? undefined, targetDeviceId: deviceId },
-            (status) => setWorkspace("changeRequests", chatId, reconcile(status)),
+            (status) => setWorkspace(draft => { { const next = status; if (draft["changeRequests"]![chatId] == null) draft["changeRequests"]![chatId] = next; else reconcile(next)(draft["changeRequests"]![chatId]); } }),
           )
         : undefined,
   );
@@ -272,7 +269,7 @@ createRoot(() => {
   keyedWatch(
     () => {
       const t = selectedTarget();
-      const visible = view.rightPanel === "git" && view.route.kind === "chat";
+      const visible = view.rightPanel === "git" && (view.route.kind === "chat" || view.route.kind === "zappers");
       return [visible && t?.cwd && !t.archived ? t.chatId : null, t?.cwd, t?.deviceId, state.epoch, connected()] as const;
     },
     ([chatId, cwd, deviceId, , live]) =>
@@ -281,7 +278,7 @@ createRoot(() => {
             M.WATCH_GIT_WORKSPACE,
             { chatId, cwd, targetDeviceId: deviceId },
             (frame) => applyGitFrame(chatId, frame),
-            (error) => setWorkspace("git", chatId, (prev) => ({ ...emptyGit(), ...prev, error: error.message })),
+            (error) => setWorkspace(draft => { draft["git"]![chatId] = ((prev) => ({ ...emptyGit(), ...prev, error: error.message }))(draft["git"]![chatId]); }),
           )
         : undefined,
   );
@@ -294,8 +291,8 @@ createRoot(() => {
         ? liveSubscribe<PreviewSnapshot>(
             M.WATCH_PREVIEWS,
             { chatId },
-            (snapshot) => setWorkspace("previews", chatId, reconcile({ ...snapshot, failed: null })),
-            (error) => setWorkspace("previews", chatId, (prev) => ({ ...(prev ?? { services: [], proxyPort: 7331 }), failed: error.message })),
+            (snapshot) => setWorkspace(draft => { { const next = { ...snapshot, failed: null }; if (draft["previews"]![chatId] == null) draft["previews"]![chatId] = next; else reconcile(next)(draft["previews"]![chatId]); } }),
+            (error) => setWorkspace(draft => { draft["previews"]![chatId] = ((prev) => ({ ...(prev ?? { services: [], proxyPort: 7331 }), failed: error.message }))(draft["previews"]![chatId]); }),
           )
         : undefined,
   );
@@ -303,7 +300,7 @@ createRoot(() => {
 
 export function refreshBranch(chatId: string, cwd: string, deviceId: string) {
   rpc.call<GitWorkspace>(M.GET_GIT_WORKSPACE, { chatId, cwd, targetDeviceId: deviceId }).then(
-    (value) => value?.chatId === chatId && value.branch && setWorkspace("branches", chatId, value.branch),
+    (value) => value?.chatId === chatId && value.branch && setWorkspace(draft => { draft["branches"]![chatId] = value.branch; }),
     () => {},
   );
 }
@@ -321,20 +318,24 @@ export function applyGitFrame(chatId: string, frame: SourceControlFrame) {
   // A refreshing frame still seeds an empty panel on reopen.
   const usable = !frame.refreshing || !prev?.snapshot;
   const snapshot = usable && frame.snapshot && frame.snapshot.chatId === chatId ? frame.snapshot : prev?.snapshot ?? null;
-  if (snapshot?.branch) setWorkspace("branches", chatId, snapshot.branch);
-  setWorkspace("git", chatId, reconcile({
-    snapshot: snapshot ? structuredClone(unwrap(snapshot)) : null,
-    updatedAt: usable && frame.snapshot ? frame.updatedAt ?? null : prev?.updatedAt ?? null,
-    refreshing: frame.refreshing,
-    error: frame.error ?? null,
-    fetchError: frame.fetchError ?? null,
-    lastFetchAt: frame.lastFetchAt ?? null,
-  }));
+  if (snapshot?.branch) setWorkspace(draft => { draft["branches"]![chatId] = snapshot.branch; });
+  setWorkspace(draft => {
+    {
+      const next = {
+        snapshot: snapshot ? structuredClone(snapshotStore(snapshot)) : null,
+        updatedAt: usable && frame.snapshot ? frame.updatedAt ?? null : prev?.updatedAt ?? null,
+        refreshing: frame.refreshing,
+        error: frame.error ?? null,
+        fetchError: frame.fetchError ?? null,
+        lastFetchAt: frame.lastFetchAt ?? null,
+      }; if (draft["git"]![chatId] == null) draft["git"]![chatId] = next; else reconcile(next)(draft["git"]![chatId]);
+    }
+  });
 }
 
 /** Install a snapshot returned by a Git request. */
 export function setGitSnapshot(chatId: string, snapshot: GitWorkspace) {
-  setWorkspace("git", chatId, (prev) => ({ ...emptyGit(), ...prev, snapshot: null }));
-  setWorkspace("git", chatId, "snapshot", reconcile(snapshot));
-  if (snapshot.branch) setWorkspace("branches", chatId, snapshot.branch);
+  setWorkspace(draft => { draft["git"]![chatId] = ((prev) => ({ ...emptyGit(), ...prev, snapshot: null }))(draft["git"]![chatId]); });
+  setWorkspace(draft => { { const next = snapshot; if (draft["git"]![chatId]!["snapshot"] == null) draft["git"]![chatId]!["snapshot"] = next; else reconcile(next)(draft["git"]![chatId]!["snapshot"]); } });
+  if (snapshot.branch) setWorkspace(draft => { draft["branches"]![chatId] = snapshot.branch; });
 }

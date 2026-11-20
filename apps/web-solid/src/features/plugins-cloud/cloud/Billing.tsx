@@ -1,6 +1,5 @@
-// Hosting, plans, usage and billing (crates/viewport/src/cloud_billing_view.rs). Plans are counted in machine minutes:
-// one minute of a 1 vCPU / 4 GB machine. Dollars appear only on plan prices, pay as you go, credits and invoices.
-import { createMemo, createSignal, For, Index, type JSX, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
+import type { JSX } from "@solidjs/web";
 import { openExternal, owner } from "../account";
 import { Icon } from "@/ui/Icon";
 import { Action, Badge, Group, Note, Row } from "../ui";
@@ -465,7 +464,7 @@ function CapRow(props: { title: string; description: string }) {
             <span aria-hidden="true">$</span>
             <input
               id={CAP_INPUT}
-              inputMode="decimal"
+              inputmode="decimal"
               aria-label="Monthly overage cap in dollars"
               value={cloud.billing.capInput}
               onInput={(event) => setCapInput(event.currentTarget.value)}
@@ -498,7 +497,7 @@ function RecentUsage() {
       <Row title="Recent usage" description={recent()} />
       <Show when={cloud.billing.usage.length > 3 || cloud.billing.cursor}>
         <div class="pc-row-tail">
-          <Action aria-expanded={historyOpen()} onClick={() => setHistoryOpen(!historyOpen())}>
+          <Action aria-expanded={historyOpen() ? "true" : "false"} onClick={() => setHistoryOpen(!historyOpen())}>
             {historyOpen() ? "Hide history" : "View history"}
           </Action>
         </div>
@@ -556,14 +555,14 @@ function Credits() {
               Credit amount
             </span>
             <div role="radiogroup" aria-labelledby="pc-credit-label" class="pc-radios">
-              <Index each={CREDIT_AMOUNTS}>
+              <For keyed={false} each={CREDIT_AMOUNTS}>
                 {(amount, index) => (
                   <button
                     type="button"
                     role="radio"
                     class="pc-radio"
-                    aria-checked={cloud.billing.creditAmount === amount()}
-                    tabIndex={enabled() && cloud.billing.creditAmount === amount() ? 0 : -1}
+                    aria-checked={cloud.billing.creditAmount === amount() ? "true" : "false"}
+                    tabindex={enabled() && cloud.billing.creditAmount === amount() ? 0 : -1}
                     disabled={!enabled()}
                     onClick={() => selectCredit(amount())}
                     onKeyDown={(event) => move(event, index)}
@@ -571,7 +570,7 @@ function Credits() {
                     {cents(amount())}
                   </button>
                 )}
-              </Index>
+              </For>
             </div>
           </div>
           <Action primary disabled={!enabled()} busy={cloud.billing.creditsBusy} onClick={() => void loadCredits(true)}>

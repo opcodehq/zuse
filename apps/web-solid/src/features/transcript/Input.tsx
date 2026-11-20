@@ -1,10 +1,9 @@
 // The docked answer surface for the agent's open request: a permission card, a question tray or a secret prompt.
 // Desktop shows these in place of the composer; here they dock at the transcript's foot, above the composer.
-import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from "solid-js";
-import { createStore } from "solid-js/store";
 import type { MessagePart } from "@/core/protocol";
 import { state } from "@/core/store";
 import { Icon } from "@/ui/Icon";
+import { createEffect, createMemo, createSignal, createStore, For, onCleanup, Show } from "solid-js";
 import { isAnswered, respondInput, submitSecret } from "./actions";
 import { Markdown } from "./Markdown";
 
@@ -69,8 +68,8 @@ function InputPanel(props: { chatId: string; part: InputPart }) {
     if (!q) return;
     const ix = q.options.indexOf(label);
     if (ix < 0) return;
-    setPicked(page(), [ix]);
-    setTyped(page(), "");
+    setPicked(draft => { draft[page()] = [ix]; });
+    setTyped(draft => { draft[page()] = ""; });
     advance();
   };
   return (
@@ -94,13 +93,13 @@ function InputPanel(props: { chatId: string; part: InputPart }) {
                 onPick={(ix) => {
                   if (q().multiSelect) {
                     const list = picked[page()] ?? [];
-                    setPicked(page(), list.includes(ix) ? list.filter((p) => p !== ix) : [...list, ix]);
+                    setPicked(draft => { draft[page()] = list.includes(ix) ? list.filter((p) => p !== ix) : [...list, ix]; });
                   } else {
-                    setPicked(page(), [ix]);
+                    setPicked(draft => { draft[page()] = [ix]; });
                     if (!typed[page()]?.trim() && !q().multiline) advance();
                   }
                 }}
-                onType={(text) => setTyped(page(), text)}
+                onType={(text) => setTyped(draft => { draft[page()] = text; })}
                 onBack={() => setPage(Math.max(0, page() - 1))}
                 onSubmit={advance}
               />
@@ -147,16 +146,11 @@ function Permission(props: { question: Question; remaining: number; onAnswer: (l
     }
   };
   // Desktop permission_prompt: take focus only from the composer (or nowhere), never from the terminal, an editor or settings.
-  createEffect(
-    on(
-      () => props.question.id,
-      () => {
-        const focused = document.activeElement;
-        if (focused && card.contains(focused)) return;
-        if (!focused || focused === document.body || focused.closest(".cmp-input")) card.focus();
-      },
-    ),
-  );
+  createEffect(() => props.question.id, () => {
+    const focused = document.activeElement;
+    if (focused && card.contains(focused)) return;
+    if (!focused || focused === document.body || focused.closest(".cmp-input")) card.focus();
+  });
   // Answered: the card unmounts with focus inside it, so hand focus back to the composer instead of the page.
   onCleanup(() => {
     if (!card.contains(document.activeElement)) return;
@@ -173,14 +167,14 @@ function Permission(props: { question: Question; remaining: number; onAnswer: (l
     event.stopPropagation();
   };
   return (
-    <div ref={card} class="t-permission" role="group" aria-label={text()[0]} tabIndex={-1} onKeyDown={onKey}>
+    <div ref={card} class="t-permission" role="group" aria-label={text()[0]} tabindex={-1} onKeyDown={onKey}>
       <div class="t-permission-head">
         <span class="t-permission-title">{text()[0]}</span>
         <Show when={props.remaining > 1}><span class="t-badge">+{props.remaining - 1} more</span></Show>
       </div>
-      <Show when={plan()} fallback={<div class="t-permission-detail" tabIndex={0}>{text()[1]}</div>}>
+      <Show when={plan()} fallback={<div class="t-permission-detail" tabindex={0}>{text()[1]}</div>}>
         {(markdown) => (
-          <div class="t-permission-plan" tabIndex={0} aria-label="Plan">
+          <div class="t-permission-plan" tabindex={0} aria-label="Plan">
             <Markdown text={markdown()} live={false} />
           </div>
         )}
@@ -210,7 +204,7 @@ function QuestionTray(props: {
   onSubmit: () => void;
 }) {
   let editor!: HTMLTextAreaElement;
-  createEffect(on(() => props.page, () => editor.focus()));
+  createEffect(() => props.page, () => editor.focus());
   const canSubmit = () => !!props.typed.trim() || props.picked.length > 0 || !!props.question.multiline;
   const last = () => props.page + 1 === props.count;
   const onKey = (event: KeyboardEvent) => {
@@ -261,7 +255,7 @@ function QuestionTray(props: {
                     type="button"
                     class="t-option"
                     role={props.question.multiSelect ? "checkbox" : "radio"}
-                    aria-checked={on()}
+                    aria-checked={(on()) ? "true" : "false"}
                     data-picked={on() ? "true" : undefined}
                     onClick={() => props.onPick(ix())}
                   >
@@ -299,7 +293,7 @@ function QuestionTray(props: {
 function Secret(props: { question: Question; onSubmit: (value: string, decline: boolean) => void }) {
   const [value, setValue] = createSignal("");
   let input!: HTMLInputElement;
-  createEffect(on(() => props.question.id, () => input.focus()));
+  createEffect(() => props.question.id, () => input.focus());
   return (
     <form
       class="t-question"

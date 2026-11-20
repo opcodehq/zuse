@@ -1,7 +1,7 @@
 // Paired computers this browser has reached. Each link is a device credential: it stays in this
 // origin's storage, never in the URL, logs or settings, and the host can revoke it at any time.
 // Keys match the earlier web client so saved computers carry over.
-import { createStore } from "solid-js/store";
+import { createStore } from "solid-js";
 
 const SAVED = "zuse.paired-computers.v1";
 export const SELECTED = "zuse.paired-target.v1";
@@ -74,13 +74,12 @@ export const savedComputers = () => list.computers;
 
 export function publish() {
   const current = describeLink(selectedLink() ?? "")?.id;
-  setList(
-    "computers",
-    load().map((link) => {
+  setList(draft => {
+    draft["computers"] = load().map((link) => {
       const described = describeLink(link)!;
       return { ...described, current: described.id === current };
-    }),
-  );
+    });
+  });
 }
 
 /** Saved only after a connection works, so a bad link never becomes the computer a new tab tries first. */

@@ -1,9 +1,9 @@
 // The right panel: a strip of open surfaces with a `+` menu, like desktop's right pane
 // (crates/ui/src/shell/panel_menu.rs). Open surfaces stay mounted so terminals and editors keep state.
-import { createEffect, createMemo, createSignal, For, lazy, Match, on, onCleanup, onMount, Show, Suspense, Switch } from "solid-js";
 import { setView, view, type RightPanel as Panel } from "@/core/view";
 import { Icon } from "@/ui/Icon";
 import { IconButton, Menu, Spinner } from "@/ui/primitives";
+import { createEffect, createMemo, createSignal, For, lazy, Loading, Match, onSettled, Show, Switch } from "solid-js";
 import { closePanelTab, openPanel, selectedTarget, targetMemoOptions, workspace } from "./store";
 // Surfaces load when first opened; the chat screen does not need them.
 const Changes = lazy(() => import("./Changes").then((m) => ({ default: m.Changes })));
@@ -30,7 +30,7 @@ const SURFACES: Record<Surface, { label: string; icon: string; git?: boolean }> 
 const ORDER: Surface[] = ["files", "pullRequest", "changes", "git", "terminal", "browser", "history"];
 
 export function RightPanel() {
-  const target = createMemo(selectedTarget, null, targetMemoOptions);
+  const target = createMemo(selectedTarget, targetMemoOptions);
   const [expanded, setExpanded] = createSignal<number | null>(null);
   const available = (surface: Surface) => !SURFACES[surface].git || !!target()?.git;
   const choices = () => ORDER.filter((s) => available(s) && !workspace.tabs.includes(s));
@@ -44,41 +44,40 @@ export function RightPanel() {
     const max = strip.scrollWidth - strip.clientWidth;
     setFade({ left: strip.scrollLeft > 1, right: strip.scrollLeft < max - 1 });
   };
-  onMount(() => {
+  onSettled(() => {
+    const cleanups: (() => void)[] = [];
     if (!strip || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
     observer.observe(strip);
-    onCleanup(() => observer.disconnect());
+    cleanups.push(() => observer.disconnect());
+
+    return () => cleanups.forEach(cleanup => cleanup());
   });
   // Keep the active surface's tab in view when the strip overflows, once a newly added tab has laid out. Only the
   // strip scrolls: scrollIntoView would also scroll the shell's clipping column mid-animation.
-  createEffect(
-    on(
-      () => [view.rightPanel, workspace.tabs.length] as const,
-      ([panel]) =>
-        requestAnimationFrame(() => {
-          const tab = panel && document.getElementById(`ws-tab-${panel}`)?.parentElement;
-          if (strip && tab) {
-            const box = strip.getBoundingClientRect();
-            const chip = tab.getBoundingClientRect();
-            if (chip.left < box.left) strip.scrollLeft -= box.left - chip.left;
-            else if (chip.right > box.right) strip.scrollLeft += chip.right - box.right;
-          }
-          measure();
-        }),
-    ),
-  );
+  createEffect(() => [view.rightPanel, workspace.tabs.length] as const, ([panel]) => {
+    void (requestAnimationFrame(() => {
+      const tab = panel && document.getElementById(`ws-tab-${panel}`)?.parentElement;
+      if (strip && tab) {
+        const box = strip.getBoundingClientRect();
+        const chip = tab.getBoundingClientRect();
+        if (chip.left < box.left) strip.scrollLeft -= box.left - chip.left;
+        else if (chip.right > box.right) strip.scrollLeft += chip.right - box.right;
+      }
+      measure();
+    }));
+  });
 
   // Expanding gives the panel all the width the conversation can spare (the shell keeps its minimum); collapsing
   // returns to the width it had.
   const toggleExpand = () => {
     const previous = expanded();
     if (previous !== null) {
-      setView("preferences", "rightPanelWidth", previous);
+      setView(draft => { draft["preferences"]!["rightPanelWidth"] = previous; });
       setExpanded(null);
     } else {
       setExpanded(view.preferences.rightPanelWidth);
-      setView("preferences", "rightPanelWidth", window.innerWidth);
+      setView(draft => { draft["preferences"]!["rightPanelWidth"] = window.innerWidth; });
     }
   };
 
@@ -102,7 +101,7 @@ export function RightPanel() {
                   role="tab"
                   class="ws-tab-main"
                   id={`ws-tab-${surface}`}
-                  aria-selected={current() === surface}
+                  aria-selected={(current() === surface) ? "true" : "false"}
                   aria-controls={`ws-surface-${surface}`}
                   aria-label={SURFACES[surface].label}
                   title={SURFACES[surface].label}
@@ -139,7 +138,7 @@ export function RightPanel() {
           class="ws-strip-btn"
           onClick={toggleExpand}
         />
-        <IconButton icon="close" label="Close panel" size="sm" iconSize={14} class="ws-strip-btn" onClick={() => setView("rightPanel", null)} />
+        <IconButton icon="close" label="Close panel" size="sm" iconSize={14} class="ws-strip-btn" onClick={() => setView(draft => { draft["rightPanel"] = null; })} />
       </div>
       <div class="ws-right-body">
         <Show when={target()?.chatId} fallback={<div class="ws-empty ws-muted">Select a conversation to see its workspace.</div>} keyed>
@@ -154,7 +153,7 @@ export function RightPanel() {
                   aria-labelledby={`ws-tab-${surface}`}
                   hidden={current() !== surface}
                 >
-                  <Suspense fallback={<div class="ws-empty"><Spinner label="Loading" /></div>}>
+                  <Loading fallback={<div class="ws-empty"><Spinner label="Loading" /></div>}>
                     <Switch>
                       <Match when={surface === "files"}><Files target={target()!} /></Match>
                       <Match when={surface === "changes"}><Changes target={target()!} /></Match>
@@ -164,7 +163,7 @@ export function RightPanel() {
                       <Match when={surface === "terminal"}><Terminal target={target()!} active={view.rightPanel === "terminal"} /></Match>
                       <Match when={surface === "browser"}><Browser target={target()!} /></Match>
                     </Switch>
-                  </Suspense>
+                  </Loading>
                 </section>
               )}
             </For>

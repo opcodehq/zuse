@@ -1,11 +1,12 @@
 // New-chat destination chips on the context tray: project, computer, and import.
-import { Popover } from "@kobalte/core/popover";
-import { createMemo, createSignal, For, type JSX, Show } from "solid-js";
 import type { Space } from "@/core/protocol";
 import { state } from "@/core/store";
 import { navigate, setView, view } from "@/core/view";
 import { openImportChat } from "@/features/extras/overlay";
 import { Icon } from "@/ui/Icon";
+import { Popover } from "@kobalte/core/popover";
+import { type JSX } from "@solidjs/web";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import { Glyph } from "./assets";
 import { catalog, deviceOnline, draftSpace, setCatalog, spaceName, targetDeviceId } from "./catalog";
 import { focusComposer } from "./drafts";
@@ -50,10 +51,13 @@ export function SearchPicker(props: {
     option.onSelect();
     picked = true;
     setOpen(false);
+    // Picking a project can replace the editor as the popover unmounts.
+    requestAnimationFrame(focusComposer);
   };
   const onOpenChange = (next: boolean) => {
     setOpen(next);
     if (next) {
+      picked = false;
       setQuery("");
       setActive(Math.max(0, filtered().findIndex((o) => o.selected)));
     }
@@ -81,10 +85,8 @@ export function SearchPicker(props: {
           style={{ width: "280px" }}
           onKeyDown={onKeyDown}
           onOpenAutoFocus={(event) => {
-            picked = false;
-            if (!searchInput) return;
             event.preventDefault();
-            searchInput.focus();
+            queueMicrotask(() => searchInput?.focus());
           }}
           onCloseAutoFocus={(event) => {
             if (!picked) return;
@@ -96,7 +98,7 @@ export function SearchPicker(props: {
             <label class="cmp-menu-search">
               <Icon name="magnifer" size={14} />
               <input
-                ref={searchInput}
+                ref={element => { searchInput = element; queueMicrotask(() => element.focus()); }}
                 value={query()}
                 placeholder={props.search}
                 aria-label={props.search}
@@ -109,14 +111,14 @@ export function SearchPicker(props: {
               />
             </label>
           </Show>
-          <div class="cmp-menu-scroll" role="listbox" id={listId} aria-label={props.ariaLabel} tabIndex={props.search ? -1 : 0}>
+          <div class="cmp-menu-scroll" role="listbox" id={listId} aria-label={props.ariaLabel} tabindex={props.search ? -1 : 0}>
             <For each={filtered()}>
               {(option, index) => (
                 <div
                   id={`${listId}-${index()}`}
                   role="option"
                   class="cmp-menu-row"
-                  aria-selected={option.selected}
+                  aria-selected={(option.selected) ? "true" : "false"}
                   data-highlighted={active() === index() ? "" : undefined}
                   onMouseMove={() => setActive(index())}
                   onClick={() => choose(option)}
@@ -182,8 +184,8 @@ export function ProjectChip() {
       selected: current()?.path === group.path,
       onSelect: () => {
         const space = group.spaces.find((s) => s.deviceId === catalog.draft.deviceId) ?? group.spaces.find((s) => s.deviceId === state.localDeviceId) ?? group.spaces[0]!;
-        setView("draftProjectPath", group.path);
-        setCatalog("draft", { noProject: false, deviceId: space.deviceId });
+        setView(draft => { draft["draftProjectPath"] = group.path; });
+        setCatalog(draft => { Object.assign(draft["draft"]!, { noProject: false, deviceId: space.deviceId }); });
       },
     })),
   );
@@ -191,7 +193,7 @@ export function ProjectChip() {
     id: "",
     label: "No project",
     selected: !current(),
-    onSelect: () => setCatalog("draft", { noProject: true, deviceId: targetDeviceId() ?? undefined }),
+    onSelect: () => setCatalog(draft => { Object.assign(draft["draft"]!, { noProject: true, deviceId: targetDeviceId() ?? undefined }); }),
   });
   return (
     <SearchPicker
@@ -221,7 +223,7 @@ export function ComputerChip() {
           icon: "dither-monitor",
           meta: deviceOnline(s.deviceId) ? undefined : "Offline",
           selected: s.id === space.id,
-          onSelect: () => setCatalog("draft", "deviceId", s.deviceId),
+          onSelect: () => setCatalog(draft => { draft["draft"]!["deviceId"] = s.deviceId; }),
         }));
     }
     const ids = [...new Set([state.localDeviceId, ...Object.keys(state.devices)].filter((id): id is string => !!id))];
@@ -231,7 +233,7 @@ export function ComputerChip() {
       icon: "dither-monitor",
       meta: deviceOnline(id) ? undefined : "Offline",
       selected: id === current(),
-      onSelect: () => setCatalog("draft", "deviceId", id),
+      onSelect: () => setCatalog(draft => { draft["draft"]!["deviceId"] = id; }),
     }));
   });
   // With only one computer to run on there is nothing to choose, so the chip stays out of the way.

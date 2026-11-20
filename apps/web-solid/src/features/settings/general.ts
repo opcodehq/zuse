@@ -1,9 +1,9 @@
 // Engine-owned preferences on the General page: thread naming and the worktree location.
-import { createStore } from "solid-js/store";
-import { M } from "@/core/methods";
 import { onConnected, rpc } from "@/core/connection";
-import { message, type TitleSettings, uncertain, type WorktreeStatus } from "./data";
+import { M } from "@/core/methods";
 import { childPath, parentPath } from "@/core/paths";
+import { createStore } from "solid-js";
+import { message, type TitleSettings, uncertain, type WorktreeStatus } from "./data";
 
 interface FolderListing {
   path: string;
@@ -40,67 +40,71 @@ export const [general, setGeneral] = createStore<GeneralState>({
 });
 
 onConnected(() => {
-  setGeneral({ naming: null, worktrees: null, folders: null, namingError: null, worktreesError: null, foldersError: null });
+  setGeneral(draft => { Object.assign(draft, { naming: null, worktrees: null, folders: null, namingError: null, worktreesError: null, foldersError: null }); });
 });
 
 export async function loadNaming() {
   if (general.namingLoading || general.namingSaving) return;
-  setGeneral({ namingLoading: true });
+  setGeneral(draft => { Object.assign(draft, { namingLoading: true }); });
   try {
-    setGeneral({ naming: await rpc.call<TitleSettings>(M.GET_TITLE_SETTINGS), namingError: null });
+    ((value: { naming: TitleSettings; namingError: null; }) => setGeneral(draft => { Object.assign(draft, value); }))({ naming: await rpc.call<TitleSettings>(M.GET_TITLE_SETTINGS), namingError: null });
   } catch (error) {
-    setGeneral({ namingError: message(error) });
+    setGeneral(draft => { Object.assign(draft, { namingError: message(error) }); });
   } finally {
-    setGeneral({ namingLoading: false });
+    setGeneral(draft => { Object.assign(draft, { namingLoading: false }); });
   }
 }
 
 export async function saveNaming(harness: string | null, model: string | null) {
   if (general.namingSaving) return;
-  setGeneral({ namingSaving: true, namingError: null });
+  setGeneral(draft => { Object.assign(draft, { namingSaving: true, namingError: null }); });
   try {
     const settings = { harness, model: model && model.trim() && model !== "default" ? model : null };
-    setGeneral({ naming: await rpc.call<TitleSettings>(M.SET_TITLE_SETTINGS, settings) });
+    ((value: { naming: TitleSettings; }) => setGeneral(draft => { Object.assign(draft, value); }))({ naming: await rpc.call<TitleSettings>(M.SET_TITLE_SETTINGS, settings) });
   } catch (error) {
-    setGeneral({
-      namingError: uncertain(error)
-        ? "The naming preference may have saved before disconnection. It will be read after reconnecting; the change will not be repeated automatically."
-        : message(error),
+    setGeneral(draft => {
+      Object.assign(draft, {
+        namingError: uncertain(error)
+          ? "The naming preference may have saved before disconnection. It will be read after reconnecting; the change will not be repeated automatically."
+          : message(error),
+      });
     });
-    setGeneral({ namingSaving: false });
+    setGeneral(draft => { Object.assign(draft, { namingSaving: false }); });
     void loadNaming();
     return;
   }
-  setGeneral({ namingSaving: false });
+  setGeneral(draft => { Object.assign(draft, { namingSaving: false }); });
 }
 
 export async function loadWorktrees() {
   if (general.worktreesLoading || general.worktreesSaving) return;
-  setGeneral({ worktreesLoading: true });
+  setGeneral(draft => { Object.assign(draft, { worktreesLoading: true }); });
   try {
-    setGeneral({ worktrees: await rpc.call<WorktreeStatus>(M.GET_WORKTREE_SETTINGS), worktreesError: null });
+    ((value: { worktrees: WorktreeStatus; worktreesError: null; }) => setGeneral(draft => { Object.assign(draft, value); }))({ worktrees: await rpc.call<WorktreeStatus>(M.GET_WORKTREE_SETTINGS), worktreesError: null });
   } catch (error) {
-    setGeneral({ worktreesError: message(error) });
+    setGeneral(draft => { Object.assign(draft, { worktreesError: message(error) }); });
   } finally {
-    setGeneral({ worktreesLoading: false });
+    setGeneral(draft => { Object.assign(draft, { worktreesLoading: false }); });
   }
 }
 
 export async function saveWorktrees(useCustomDirectory: boolean, customDirectory: string | null) {
   if (general.worktreesSaving) return false;
-  setGeneral({ worktreesSaving: true, worktreesError: null });
+  setGeneral(draft => { Object.assign(draft, { worktreesSaving: true, worktreesError: null }); });
   try {
-    setGeneral({ worktrees: await rpc.call<WorktreeStatus>(M.SET_WORKTREE_SETTINGS, { useCustomDirectory, customDirectory }) });
+    ((value: { worktrees: WorktreeStatus; }) => setGeneral(draft => { Object.assign(draft, value); }))({ worktrees: await rpc.call<WorktreeStatus>(M.SET_WORKTREE_SETTINGS, { useCustomDirectory, customDirectory }) });
     return true;
   } catch (error) {
-    setGeneral({
-      worktreesError: uncertain(error)
-        ? "The save may have completed before disconnection. The current location will be read after reconnecting. Your entered path is kept."
-        : message(error),
+    setGeneral(draft => {
+      Object.assign(draft, {
+        worktreesError: uncertain(error)
+          ? "The save may have completed before disconnection. The current location will be read after reconnecting. Your entered path is kept."
+          : message(error),
+      });
     });
     return false;
   } finally {
-    setGeneral({ worktreesSaving: false });
+    setGeneral(draft => { Object.assign(draft, { worktreesSaving: false }); });
   }
 }
 
@@ -108,13 +112,13 @@ let folderRequest = 0;
 /** `climb` opens the nearest existing ancestor when the starting folder doesn't exist yet (the default often doesn't). */
 export async function browseFolders(path?: string, climb = false) {
   const request = ++folderRequest;
-  setGeneral({ foldersLoading: true, foldersError: null });
+  setGeneral(draft => { Object.assign(draft, { foldersLoading: true, foldersError: null }); });
   let target = path;
   try {
     for (;;) {
       try {
         const listing = await rpc.call<FolderListing>(M.LIST_FOLDERS, target ? { path: target } : {});
-        if (request === folderRequest) setGeneral({ folders: listing });
+        if (request === folderRequest) setGeneral(draft => { Object.assign(draft, { folders: listing }); });
         return;
       } catch (error) {
         const parent = climb && target ? parentPath(target) : null;
@@ -123,15 +127,15 @@ export async function browseFolders(path?: string, climb = false) {
       }
     }
   } catch (error) {
-    if (request === folderRequest) setGeneral({ foldersError: message(error) });
+    if (request === folderRequest) setGeneral(draft => { Object.assign(draft, { foldersError: message(error) }); });
   } finally {
-    if (request === folderRequest) setGeneral({ foldersLoading: false });
+    if (request === folderRequest) setGeneral(draft => { Object.assign(draft, { foldersLoading: false }); });
   }
 }
 
 export function closeFolders() {
   folderRequest++;
-  setGeneral({ folders: null, foldersLoading: false, foldersError: null });
+  setGeneral(draft => { Object.assign(draft, { folders: null, foldersLoading: false, foldersError: null }); });
 }
 
-export { childPath as joinPath, parentPath };
+export { childPath as joinPath,parentPath };

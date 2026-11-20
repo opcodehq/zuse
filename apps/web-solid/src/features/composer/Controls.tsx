@@ -1,15 +1,15 @@
 // Toolbar controls: add menu, agent access, plan chip, plugins, context usage, and the send/stop key.
+import { state } from "@/core/store";
+import { navigate } from "@/core/view";
+import { resolvedTheme } from "@/shell/theme";
+import { Icon } from "@/ui/Icon";
+import { toast } from "@/ui/primitives";
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { Popover } from "@kobalte/core/popover";
 import { createMemo, createSignal, For, Show } from "solid-js";
-import { state } from "@/core/store";
-import { navigate } from "@/core/view";
-import { Icon } from "@/ui/Icon";
-import { toast } from "@/ui/primitives";
-import { resolvedTheme } from "@/shell/theme";
 import { ditherBackground, Glyph, SEND_DITHER } from "./assets";
-import { focusComposer } from "./drafts";
 import { automaticReviewSupported, catalog, changeConfig, planAvailable, resolve, SANDBOXES, selectedChat, type Sandbox } from "./catalog";
+import { focusComposer } from "./drafts";
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 const apply = (change: Parameters<typeof changeConfig>[0]) =>
@@ -82,7 +82,7 @@ export function PlanChip(props: { narrow: boolean }) {
         type="button"
         class="cmp-chip"
         data-tone="accent"
-        data-narrow={props.narrow}
+        data-narrow={(props.narrow) ? "true" : "false"}
         aria-label="Exit plan mode"
         title="Exit plan mode"
         onClick={() => {
@@ -106,7 +106,7 @@ export function AccessPicker(props: { narrow: boolean }) {
     <DropdownMenu placement="top-start" gutter={8} modal={false}>
       <DropdownMenu.Trigger
         class="cmp-chip"
-        data-narrow={props.narrow}
+        data-narrow={(props.narrow) ? "true" : "false"}
         data-tone={r().sandbox === "danger-full-access" ? "warning" : undefined}
         aria-label={`Permission mode: ${details().label}`}
         title={props.narrow ? details().label : undefined}
@@ -187,7 +187,7 @@ export function ContextRing() {
         <Popover open={open()} onOpenChange={setOpen} placement="top-end" gutter={8}>
           <Popover.Trigger
             class="cmp-key cmp-ring"
-            data-high={high()}
+            data-high={(high()) ? "true" : "false"}
             aria-label={`Context: ${r().header}${r().fraction !== null ? `, ${Math.round(r().fraction! * 100)}% used` : ""}`}
           >
             <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
@@ -212,7 +212,7 @@ export function ContextRing() {
                 <span class="cmp-usage-value">{r().header}</span>
               </div>
               <Show when={r().fraction !== null}>
-                <div class="cmp-meter" data-high={high()} role="meter" aria-label="Window used" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(r().fraction! * 100)}>
+                <div class="cmp-meter" data-high={(high()) ? "true" : "false"} role="meter" aria-label="Window used" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(r().fraction! * 100)}>
                   <span style={{ width: `${r().fraction! * 100}%` }} />
                 </div>
                 <div class="cmp-usage-head">
@@ -257,7 +257,7 @@ export function SendKey(props: { mode: SendMode; blocked: boolean; empty: boolea
         class="cmp-send"
         aria-label={props.label}
         title={props.label}
-        aria-disabled={props.blocked || props.empty}
+        aria-disabled={(props.blocked || props.empty) ? "true" : "false"}
         style={{ "background-image": props.blocked || props.empty ? undefined : ditherBackground(SEND_DITHER, 28, 28, 7) }}
         onClick={() => !props.blocked && props.onSend()}
       >

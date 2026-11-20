@@ -1,10 +1,10 @@
 // Recorded usage: one controller for the dashboard (crates/viewport/src/usage_dashboard/mod.rs). The engine
 // scans local agent logs; this keeps the latest overview, a page of sessions and live plan allowances.
-import { createStore, reconcile } from "solid-js/store";
-import { M } from "@/core/methods";
 import { rpc } from "@/core/connection";
+import { M } from "@/core/methods";
 import { state } from "@/core/store";
 import { view } from "@/core/view";
+import { createStore, reconcile } from "solid-js";
 import type { AccountsSnapshot } from "../data";
 import { message } from "../data";
 
@@ -175,139 +175,141 @@ export function checkOwner() {
   if (next === owner) return;
   owner = next;
   cache.clear();
-  setUsage({ report: null, page: null, limits: null, reportError: null, pageError: null, limitsError: null });
+  setUsage(draft => { Object.assign(draft, { report: null, page: null, limits: null, reportError: null, pageError: null, limitsError: null }); });
 }
 
 export async function refresh(force = false) {
   checkOwner();
   const key = reportKey();
   const cached = cache.get(key);
-  if (cached) setUsage("report", reconcile(cached));
+  if (cached) setUsage(draft => { { const next = cached; if (draft["report"] == null) draft["report"] = next; else reconcile(next)(draft["report"]); } });
   const seq = ++reportSeq;
-  setUsage({ reportError: null });
+  setUsage(draft => { Object.assign(draft, { reportError: null }); });
   // The engine only probes allowances when forced; a first look must, or every card reads unavailable.
   void loadLimits(force || !usage.limits);
-  if (usage.sessionsOpen) void loadSessions();
+  queueMicrotask(() => { if (usage.sessionsOpen) void loadSessions(); });
   if (unavailable()) {
-    setUsage({ reportError: "Computer unavailable. Reconnect and refresh usage." });
+    setUsage(draft => { Object.assign(draft, { reportError: "Computer unavailable. Reconnect and refresh usage." }); });
     return;
   }
-  setUsage({ reportLoading: true });
+  setUsage(draft => { Object.assign(draft, { reportLoading: true }); });
   try {
     const report = await rpc.call<Overview>(OVERVIEW, { ...request(), forceRefresh: force });
     if (seq !== reportSeq) return;
     if (!report || !Array.isArray(report.groups)) throw new Error("Usage report could not be read. Refresh to try again.");
     cache.set(key, report);
-    setUsage("report", reconcile(report));
+    setUsage(draft => { { const next = report; if (draft["report"] == null) draft["report"] = next; else reconcile(next)(draft["report"]); } });
   } catch (error) {
-    if (seq === reportSeq) setUsage({ reportError: message(error) });
+    if (seq === reportSeq) setUsage(draft => { Object.assign(draft, { reportError: message(error) }); });
   } finally {
-    if (seq === reportSeq) setUsage({ reportLoading: false });
+    if (seq === reportSeq) setUsage(draft => { Object.assign(draft, { reportLoading: false }); });
   }
 }
 
 export async function loadSessions() {
   if (!usage.sessionsOpen) return;
   const seq = ++pageSeq;
-  setUsage({ pageError: null });
+  setUsage(draft => { Object.assign(draft, { pageError: null }); });
   if (unavailable()) {
-    setUsage({ pageError: "Computer unavailable. Reconnect and retry." });
+    setUsage(draft => { Object.assign(draft, { pageError: "Computer unavailable. Reconnect and retry." }); });
     return;
   }
-  setUsage({ pageLoading: true });
+  setUsage(draft => { Object.assign(draft, { pageLoading: true }); });
   try {
     const page = await rpc.call<SessionsPage>(SESSIONS, request());
     if (seq !== pageSeq) return;
     if (!page || !Array.isArray(page.rows)) throw new Error("Saved sessions could not be read. Retry to load them.");
-    setUsage("page", reconcile(page));
+    setUsage(draft => { { const next = page; if (draft["page"] == null) draft["page"] = next; else reconcile(next)(draft["page"]); } });
   } catch (error) {
-    if (seq === pageSeq) setUsage({ pageError: message(error) });
+    if (seq === pageSeq) setUsage(draft => { Object.assign(draft, { pageError: message(error) }); });
   } finally {
-    if (seq === pageSeq) setUsage({ pageLoading: false });
+    if (seq === pageSeq) setUsage(draft => { Object.assign(draft, { pageLoading: false }); });
   }
 }
 
 async function loadLimits(force: boolean) {
   const seq = ++limitsSeq;
-  setUsage({ limitsError: null });
+  setUsage(draft => { Object.assign(draft, { limitsError: null }); });
   if (unavailable()) {
-    setUsage({ limitsError: "Computer unavailable." });
+    setUsage(draft => { Object.assign(draft, { limitsError: "Computer unavailable." }); });
     return;
   }
   try {
     const snapshot = await rpc.call<AccountsSnapshot>(M.LIST_AGENT_ACCOUNTS, { forceUsage: force, ...target() });
-    if (seq === limitsSeq) setUsage("limits", reconcile(snapshot, { key: "id" }));
+    if (seq === limitsSeq) setUsage(draft => { { const next = snapshot; if (draft["limits"] == null) draft["limits"] = next; else reconcile(next, "id")(draft["limits"]); } });
   } catch (error) {
-    if (seq === limitsSeq) setUsage({ limitsError: message(error) || "Usage limits are unavailable." });
+    if (seq === limitsSeq) setUsage(draft => { Object.assign(draft, { limitsError: message(error) || "Usage limits are unavailable." }); });
   }
 }
 
 let queryTimer: ReturnType<typeof setTimeout> | undefined;
 export function setQuery(value: string) {
-  setUsage({ query: value, offset: 0 });
+  setUsage(draft => { Object.assign(draft, { query: value, offset: 0 }); });
   clearTimeout(queryTimer);
   queryTimer = setTimeout(() => void loadSessions(), 150);
 }
 
 /** Opening resets the view the way desktop does, keeping the period. */
 export function open() {
-  setUsage({
-    projectScope: false,
-    range: null,
-    cost: true,
-    contributor: 0,
-    expanded: false,
-    sessionsOpen: false,
-    provider: null,
-    sort: "tokens",
-    query: "",
-    offset: 0,
-    page: null,
+  setUsage(draft => {
+    Object.assign(draft, {
+      projectScope: false,
+      range: null,
+      cost: true,
+      contributor: 0,
+      expanded: false,
+      sessionsOpen: false,
+      provider: null,
+      sort: "tokens",
+      query: "",
+      offset: 0,
+      page: null,
+    });
   });
-  void refresh(false);
+  queueMicrotask(() => void refresh(false));
 }
 
 export function setScope(project: boolean) {
   if (usage.projectScope === project || (project && !currentProject())) return;
-  setUsage({ projectScope: project, page: null, offset: 0 });
-  void refresh(false);
+  setUsage(draft => { Object.assign(draft, { projectScope: project, page: null, offset: 0 }); });
+  queueMicrotask(() => void refresh(false));
 }
 
 export function setPeriod(period: Period) {
-  setUsage({ period, range: null, page: null, offset: 0 });
-  void refresh(false);
+  setUsage(draft => { Object.assign(draft, { period, range: null, page: null, offset: 0 }); });
+  queueMicrotask(() => void refresh(false));
 }
 
 export function viewDay(group: UsageGroup) {
   if (!group.startedAt) return;
   const since = group.startedAt;
   const until = group.endedAt ?? new Date(Date.parse(since) + 86_400_000).toISOString();
-  setUsage({ range: { since, until, label: group.label }, page: null, offset: 0 });
-  void refresh(false);
+  setUsage(draft => { Object.assign(draft, { range: { since, until, label: group.label }, page: null, offset: 0 }); });
+  queueMicrotask(() => void refresh(false));
 }
 
 export function clearDay() {
-  setUsage({ range: null, page: null, offset: 0 });
-  void refresh(false);
+  setUsage(draft => { Object.assign(draft, { range: null, page: null, offset: 0 }); });
+  queueMicrotask(() => void refresh(false));
 }
 
 export function toggleSessions() {
-  setUsage("sessionsOpen", !usage.sessionsOpen);
-  if (usage.sessionsOpen) void loadSessions();
+  setUsage(draft => { draft["sessionsOpen"] = !usage.sessionsOpen; });
+  queueMicrotask(() => { if (usage.sessionsOpen) void loadSessions(); });
 }
 
 export function setProvider(provider: string | null) {
-  setUsage({ provider, offset: 0 });
-  void loadSessions();
+  setUsage(draft => { Object.assign(draft, { provider, offset: 0 }); });
+  queueMicrotask(() => void loadSessions());
 }
 
 export function setSort(sort: SessionSort) {
-  setUsage({ sort, offset: 0 });
-  void loadSessions();
+  setUsage(draft => { Object.assign(draft, { sort, offset: 0 }); });
+  queueMicrotask(() => void loadSessions());
 }
 
 export function setOffset(offset: number) {
   if (offset === usage.offset || usage.pageLoading) return;
-  setUsage({ offset });
-  void loadSessions();
+  setUsage(draft => { Object.assign(draft, { offset }); });
+  queueMicrotask(() => void loadSessions());
 }

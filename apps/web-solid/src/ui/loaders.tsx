@@ -6,7 +6,7 @@
 // All loaders share one clock, so every instance stays phase-locked like desktop's pulse clock, and offscreen
 // loaders skip their frames. Reduced motion follows desktop: activity glyphs keep a gentle uniform fade when the
 // system asks for less motion, explicit "Reduce motion: On" holds them still, and the ring and braille hold a frame.
-import { createEffect, onCleanup, onMount } from "solid-js";
+import { createEffect, onSettled } from "solid-js";
 
 /** Colour role. `glyph` is the accent family (desktop `theme.glyph`); the rest are single tints. */
 export type LoaderTone = "glyph" | "muted" | "faint" | "accent" | "warning" | "text" | "current";
@@ -150,32 +150,32 @@ function resolveColor(css: string) {
 
 /** Drive one loader: repaint on its clock, on theme changes and when it scrolls back into view. */
 function useLoader(el: () => HTMLElement | undefined, step: () => number, animated: () => boolean, paint: (seconds: number | null) => void) {
-  onMount(() => {
+  let sync: (() => void) | undefined;
+  createEffect(() => [step(), animated()], () => sync?.());
+  onSettled(() => {
     const node = el();
     if (!node) return;
-    const sub: Sub = { step: step(), last: -1, visible: true, paint: (s) => paint(s) };
+    const sub: Sub = { step: step(), last: -1, visible: true, paint: s => paint(s) };
     let stop: (() => void) | undefined;
-    const sync = () => {
+    const update = () => {
       sub.step = step();
       sub.last = -1;
-      if (animated()) {
-        stop ??= subscribe(sub);
-      } else {
-        stop?.();
-        stop = undefined;
-      }
+      if (animated()) stop ??= subscribe(sub);
+      else { stop?.(); stop = undefined; }
       paint(animated() ? performance.now() / 1000 : null);
     };
+    sync = update;
     visibility.set(node, sub);
     observer?.observe(node);
-    listeners.add(sync);
-    createEffect(sync);
-    onCleanup(() => {
+    listeners.add(update);
+    update();
+    return () => {
+      sync = undefined;
       stop?.();
-      listeners.delete(sync);
+      listeners.delete(update);
       observer?.unobserve(node);
       visibility.delete(node);
-    });
+    };
   });
 }
 

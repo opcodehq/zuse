@@ -1,10 +1,9 @@
 // Area-local data the engine serves on demand: full tool outputs and attachment images.
-import { untrack } from "solid-js";
-import { createStore } from "solid-js/store";
 import { rpc } from "@/core/connection";
 import { M } from "@/core/methods";
 import { state } from "@/core/store";
 import { imageMime, imageUrl, releaseImageUrl } from "@/ui/imageUrl";
+import { createStore, untrack } from "solid-js";
 
 // ---------------------------------------------------------------------------
 // Fold and disclosure state, kept outside components so it survives virtualization.
@@ -12,8 +11,8 @@ import { imageMime, imageUrl, releaseImageUrl } from "@/ui/imageUrl";
 
 const [open, setOpen] = createStore<Record<string, boolean>>({});
 export const isOpen = (key: string, fallback = false) => open[key] ?? fallback;
-export const setOpenKey = (key: string, value: boolean) => setOpen(key, value);
-export const toggleOpen = (key: string, fallback = false) => setOpen(key, !isOpen(key, fallback));
+export const setOpenKey = (key: string, value: boolean) => setOpen(draft => { draft[key] = value; });
+export const toggleOpen = (key: string, fallback = false) => setOpen(draft => { draft[key] = !isOpen(key, fallback); });
 
 // ---------------------------------------------------------------------------
 // Full tool output (sidecar blobs)
@@ -37,7 +36,7 @@ interface BlobPage {
 export async function fetchBlob(ref: string) {
   const current = untrack(() => blobs[ref]);
   if (current && current.status !== "failed") return;
-  setBlobs(ref, { status: "loading" });
+  setBlobs(draft => { draft[ref] = { status: "loading" }; });
   // The ref is `{chatId}/{partId}`, so the owning chat names the device to ask.
   const owner = state.chats[ref.split("/")[0] ?? ""];
   try {
@@ -57,9 +56,9 @@ export async function fetchBlob(ref: string) {
       if (page.done || page.nextOffset === offset || page.nextOffset >= BLOB_MAX) break;
       offset = page.nextOffset;
     }
-    setBlobs(ref, { status: "ready", text, total });
+    setBlobs(draft => { draft[ref] = { status: "ready", text, total }; });
   } catch (error) {
-    setBlobs(ref, { status: "failed", error: error instanceof Error ? error.message : String(error) });
+    setBlobs(draft => { draft[ref] = { status: "failed", error: error instanceof Error ? error.message : String(error) }; });
   }
 }
 
@@ -88,7 +87,7 @@ export async function loadImage(device: string | null, path: string, mimeType?: 
   const key = imageKey(device, path);
   const current = untrack(() => images[key]);
   if (current && (current.status !== "failed" || !retry)) return;
-  setImages(key, { status: "loading" });
+  setImages(draft => { draft[key] = { status: "loading" }; });
   try {
     const chunks: Uint8Array[] = [];
     let offset = 0;
@@ -107,15 +106,15 @@ export async function loadImage(device: string | null, path: string, mimeType?: 
     }
     // Never trust the part's type or the extension for a blob URL: `imageUrl` keeps SVG off this origin.
     const url = await imageUrl(chunks as BlobPart[], imageMime(path, mimeType));
-    setImages(key, { status: "ready", url });
+    setImages(draft => { draft[key] = { status: "ready", url }; });
     imageOrder.push(key);
     while (imageOrder.length > IMAGE_CACHE) {
       const old = imageOrder.shift()!;
       const evicted = images[old];
       if (evicted?.status === "ready") releaseImageUrl(evicted.url);
-      setImages(old, undefined as never);
+      setImages(draft => { delete draft[old]; });
     }
   } catch (error) {
-    setImages(key, { status: "failed", error: error instanceof Error ? error.message : String(error) });
+    setImages(draft => { draft[key] = { status: "failed", error: error instanceof Error ? error.message : String(error) }; });
   }
 }

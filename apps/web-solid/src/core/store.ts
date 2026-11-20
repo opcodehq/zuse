@@ -1,6 +1,7 @@
 // The one client-side store. The engine owns the data; this is its normalized projection.
-import { createStore, reconcile } from "solid-js/store";
+import { createStore, reconcile } from "solid-js";
 import type { Chat, ContextUsage, Device, Harness, Repo, Session, SessionMessageEntry, Space } from "./protocol";
+import type { Zapper } from "./zapper-types";
 
 export type ConnectionStatus =
   | { kind: "connecting" }
@@ -21,6 +22,10 @@ export interface Transcript {
 }
 
 export interface AppState {
+  zappers: Zapper[];
+  zappersReady: boolean;
+  zappersSupported: boolean | null;
+  zappersError: string | null;
   connection: ConnectionStatus;
   /** Bumps on every new connection, so views can drop work from an earlier one. */
   epoch: number;
@@ -41,6 +46,10 @@ export interface AppState {
 }
 
 export const [state, setState] = createStore<AppState>({
+  zappers: [],
+  zappersReady: false,
+  zappersSupported: null,
+  zappersError: null,
   connection: { kind: "connecting" },
   epoch: 0,
   localDeviceId: null,
@@ -64,7 +73,7 @@ const byId = <T,>(rows: T[], key: (row: T) => string) => Object.fromEntries(rows
 export function applySnapshot(domain: "chats" | "sessions" | "spaces" | "devices", rows: unknown) {
   const list = Array.isArray(rows) ? rows : [];
   const key = domain === "sessions" ? (row: Session) => row.chatId : (row: { id: string }) => row.id;
-  setState(domain, reconcile(byId(list as never[], key as (row: never) => string), { merge: true }));
+  setState(draft => { { const next = byId(list as never[], key as (row: never) => string); if (draft[domain] == null) draft[domain] = next; else reconcile(next)(draft[domain]); } });
 }
 
 export const chatList = () => Object.values(state.chats);

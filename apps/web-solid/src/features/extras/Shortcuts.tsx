@@ -1,12 +1,12 @@
 // The cheat sheet of shortcuts in effect right now (desktop's shell/chat_shortcuts.rs panel).
 // Application and chat rows come from what core/keys has registered, so a shortcut only shows once something handles it;
 // composer rows are the keys the composer handles itself.
-import { For, onMount } from "solid-js";
 import { formatKeys, listShortcuts } from "@/core/keys";
 import { navigate } from "@/core/view";
 import { IconButton } from "@/ui/primitives";
-import { closeOverlay } from "./overlay";
+import { For, onSettled } from "solid-js";
 import { modalKeys } from "./modal";
+import { closeOverlay } from "./overlay";
 
 interface Row {
   label: string;
@@ -50,7 +50,7 @@ export function Shortcuts() {
     .map((s) => ({ label: s.label, keys: formatKeys(s.keys) }));
   const chat = registered.filter((row) => CHAT_LABELS.has(row.label));
   const app = registered.filter((row) => !CHAT_LABELS.has(row.label));
-  onMount(() => close?.focus());
+  onSettled(() => { void (close?.focus()); });
 
   return (
     <div class="x-scrim" onPointerDown={(e) => e.target === e.currentTarget && closeOverlay()}>

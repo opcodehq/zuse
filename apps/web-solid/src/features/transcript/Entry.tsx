@@ -1,24 +1,18 @@
 // One message entry: a user bubble or an assistant turn, plus its hover metadata strip.
-import { DropdownMenu } from "@kobalte/core/dropdown-menu";
-import { createMemo, createSignal, For, lazy, Match, onCleanup, Show, Switch } from "solid-js";
 import type { MessagePart, SessionMessageEntry } from "@/core/protocol";
 import { state } from "@/core/store";
-import { view } from "@/core/view";
+import { Avatar, defaultAvatar } from "@/features/zappers/Avatar";
+import { zapperMessage } from "@/features/zappers/messages";
+import { openChat, view } from "@/core/view";
 import { Icon } from "@/ui/Icon";
+import { DropdownMenu } from "@kobalte/core/dropdown-menu";
+import { createMemo, createSignal, For, lazy, Match, onCleanup, Show, Switch } from "solid-js";
 import { FORK_MENU, forkChat } from "./actions";
 import { copyText } from "./clipboard";
 import { frameThrottled } from "./frame";
 import { buildItems, foldsTurn, type Item } from "./layout";
 import { Markdown } from "./Markdown";
-import {
-  type AgentIdentity,
-  assistantCopyText,
-  formatElapsed,
-  formatTimestamp,
-  parseAttachments,
-  userNeedsCollapse,
-  userRawText,
-} from "./model";
+import { type AgentIdentity, assistantCopyText, formatElapsed, formatTimestamp, parseAttachments, userNeedsCollapse, userRawText, } from "./model";
 import { AgentSwitch, Attachments, ErrorChip, ForkMarker, GeneratedImage, InputChip, UiBlockNotice } from "./parts";
 import { isOpen, toggleOpen } from "./resources";
 import { FoldHeader, type GroupContext, ToolGroup } from "./ToolGroup";
@@ -50,7 +44,8 @@ export function Entry(props: { entry: SessionMessageEntry; ctx: EntryContext }) 
 // ---------------------------------------------------------------------------
 
 function UserEntry(props: { entry: SessionMessageEntry; ctx: EntryContext }) {
-  const parsed = createMemo(() => parseAttachments(userRawText(props.entry)));
+  const attributed = createMemo(() => zapperMessage(userRawText(props.entry)));
+  const parsed = createMemo(() => parseAttachments(attributed()?.text ?? userRawText(props.entry)));
   const switches = createMemo(() =>
     props.entry.parts.flatMap((part) =>
       part.kind === "agentContext" && part.previousAgent ? [{ from: part.previousAgent as AgentIdentity, to: part.agent as AgentIdentity }] : [],
@@ -61,7 +56,8 @@ function UserEntry(props: { entry: SessionMessageEntry; ctx: EntryContext }) {
   const expanded = () => isOpen(foldKey());
   const bodyId = () => `${props.entry.id}-body`;
   return (
-    <div class="t-entry" data-role="user">
+    <div class="t-entry" data-role="user" data-zapper-message={attributed() ? "true" : undefined}>
+      <Show when={attributed()}>{message => <button class="zp-message-sender" onClick={() => openChat(message().sender.chatId)}><Avatar avatar={message().sender.avatar ?? defaultAvatar(message().sender.zotId)} size={22} /><strong>{message().sender.name}</strong><Show when={message().sender.activity}><span>Activity</span></Show></button>}</Show>
       <For each={switches()}>{(s) => <AgentSwitch from={s.from} to={s.to} />}</For>
       <Show when={parsed().attachments.length}>
         <Attachments items={parsed().attachments} device={props.ctx.device()} />
@@ -73,7 +69,7 @@ function UserEntry(props: { entry: SessionMessageEntry; ctx: EntryContext }) {
               {parsed().text}
             </div>
             <Show when={collapsible()}>
-              <button type="button" class="t-bubble-toggle" aria-expanded={expanded()} aria-controls={bodyId()} onClick={() => toggleOpen(foldKey())}>
+              <button type="button" class="t-bubble-toggle" aria-expanded={(expanded()) ? "true" : "false"} aria-controls={bodyId()} onClick={() => toggleOpen(foldKey())}>
                 {expanded() ? "Show less" : "Show more"}
               </button>
             </Show>
@@ -92,11 +88,7 @@ function UserEntry(props: { entry: SessionMessageEntry; ctx: EntryContext }) {
 function AssistantEntry(props: { entry: SessionMessageEntry; ctx: EntryContext }) {
   const streaming = () => props.entry.status === "streaming";
   // Visibility of text parts only flips once per part, so this never rebuilds items on a token.
-  const filled = createMemo(
-    () => props.entry.parts.map((p) => (p.kind === "text" || p.kind === "reasoning" ? /\S/.test(p.text) : true)),
-    [],
-    { equals: sameList },
-  );
+  const filled = createMemo(() => props.entry.parts.map((p) => (p.kind === "text" || p.kind === "reasoning" ? /\S/.test(p.text) : true)), { equals: sameList });
   const compact = () => foldsTurn(props.entry) || view.preferences.transcriptCompactMode === true;
   const items = createMemo(() => buildItems(props.entry.id, props.entry.parts, filled(), streaming(), compact()));
   const settledCopy = () => (streaming() ? "" : assistantCopyText(props.entry));
@@ -112,7 +104,7 @@ function AssistantEntry(props: { entry: SessionMessageEntry; ctx: EntryContext }
 
 /** Renders items keyed by `item.key`, so a rebuilt item list keeps every mounted row. */
 function ItemList(props: { items: Item[]; entry: SessionMessageEntry; ctx: EntryContext }) {
-  const keys = createMemo(() => props.items.map((item) => item.key), [], { equals: sameList });
+  const keys = createMemo(() => props.items.map((item) => item.key), { equals: sameList });
   const byKey = createMemo(() => new Map(props.items.map((item) => [item.key, item])));
   return (
     <For each={keys()}>
@@ -194,7 +186,7 @@ function MetaStrip(props: { entry: SessionMessageEntry; copy: string; align: "st
   return (
     <div class="t-meta" data-align={props.align}>
       <span class="t-meta-time">
-        <time dateTime={new Date(props.entry.createdAt).toISOString()}>{formatTimestamp(props.entry.createdAt)}</time>
+        <time datetime={new Date(props.entry.createdAt).toISOString()}>{formatTimestamp(props.entry.createdAt)}</time>
         <Show when={worked()}>{(w) => <span title="Time worked">{w()}</span>}</Show>
       </span>
       <Show when={props.copy}>

@@ -1,6 +1,4 @@
 // Transcript actions: each is one engine request. Nothing here edits server data locally.
-import { createEffect, createRoot } from "solid-js";
-import { createStore } from "solid-js/store";
 import { chatRequest } from "@/core/chat";
 import { rpc } from "@/core/connection";
 import { M } from "@/core/methods";
@@ -9,6 +7,7 @@ import { RpcError } from "@/core/rpc";
 import { state } from "@/core/store";
 import { openChat, view } from "@/core/view";
 import { toast } from "@/ui/primitives";
+import { createEffect, createRoot, createStore } from "solid-js";
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -35,26 +34,24 @@ export const isAnswered = (requestId: string) => !!answered[requestId];
 const unsure = new Map<string, { chatId: string; epoch: number }>();
 
 createRoot(() => {
-  createEffect(() => {
-    const epoch = state.epoch;
-    const transcript = state.transcript;
+  createEffect(() => [state.epoch, state.transcript?.chatId, state.transcript?.syncedEpoch] as const, ([epoch, chatId, syncedEpoch]) => {
     for (const [requestId, at] of unsure) {
       if (epoch <= at.epoch) continue;
       // The open chat's fresh reset decides; any other chat reloads its history before showing a card anyway.
-      if (transcript?.chatId === at.chatId && transcript.syncedEpoch !== epoch) continue;
+      if (chatId === at.chatId && syncedEpoch !== epoch) continue;
       unsure.delete(requestId);
-      setAnswered(requestId, undefined as never);
+      setAnswered(draft => { delete draft[requestId]; });
     }
   });
 });
 
 async function answer(chatId: string, requestId: string, action: string, send: () => Promise<unknown>) {
-  setAnswered(requestId, true);
+  setAnswered(draft => { draft[requestId] = true; });
   try {
     await send();
   } catch (error) {
     if (error instanceof RpcError && error.outcomeUnknown) unsure.set(requestId, { chatId, epoch: state.epoch });
-    else setAnswered(requestId, undefined as never);
+    else setAnswered(draft => { delete draft[requestId]; });
     failure(action, error);
   }
 }
@@ -175,7 +172,7 @@ export function closeConversation(chatId: string) {
   const at = ids.indexOf(chatId);
   if (at < 0) return;
   const neighbour = ids[at + 1] ?? ids[at - 1];
-  setClosed(tabs.root, (list = []) => (list.includes(chatId) ? list : [...list, chatId]));
+  setClosed(draft => { draft[tabs.root] = ((list = []) => (list.includes(chatId) ? list : [...list, chatId]))(draft[tabs.root]); });
   save();
   if (view.selectedChatId === chatId && neighbour) openChat(neighbour);
 }
@@ -183,7 +180,7 @@ export function closeConversation(chatId: string) {
 export function restoreConversation(chatId: string) {
   const tabs = conversationTabs();
   if (tabs) {
-    setClosed(tabs.root, (list = []) => list.filter((id) => id !== chatId));
+    setClosed(draft => { draft[tabs.root] = ((list = []) => list.filter((id) => id !== chatId))(draft[tabs.root]); });
     save();
   }
   openChat(chatId);

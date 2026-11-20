@@ -1,8 +1,9 @@
 // Shared states for any surface: empty, loading and failed. Content sits on the surface, no cards.
 import { writeClipboard } from "@/ui/clipboard";
-import { createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
 import { Icon } from "@/ui/Icon";
 import { Button, toast } from "@/ui/primitives";
+import { type JSX } from "@solidjs/web";
+import { createSignal, For, onCleanup, onSettled, Show } from "solid-js";
 import { errorText } from "./util";
 
 /** Centered title and hint, as desktop's palette and panel empties (`palette_empty`). */
@@ -58,7 +59,7 @@ export function ErrorScreen(props: { error: unknown; reset?: () => void; title?:
   const [copied, setCopied] = createSignal(false);
   let timer: ReturnType<typeof setTimeout> | undefined;
   onCleanup(() => clearTimeout(timer));
-  onMount(() => heading?.focus());
+  onSettled(() => { void (heading?.focus()); });
   const message = () => errorText(props.error, "An unexpected error stopped this view.");
   const copy = async () => {
     if (!(await writeClipboard(details(props.error)))) return toast("Couldn't copy the error details.", "danger");
@@ -69,7 +70,7 @@ export function ErrorScreen(props: { error: unknown; reset?: () => void; title?:
   return (
     <div class="x-error-screen" role="alert" aria-labelledby="x-error-title" aria-describedby="x-error-message">
       <span class="x-error-glyph" aria-hidden="true"><Icon name="danger-triangle" size={16} /></span>
-      <h1 ref={heading} id="x-error-title" class="x-error-title" tabIndex={-1}>{props.title ?? "Something went wrong"}</h1>
+      <h1 ref={heading} id="x-error-title" class="x-error-title" tabindex={-1}>{props.title ?? "Something went wrong"}</h1>
       <p id="x-error-message" class="x-error-message">{message()}</p>
       <div class="x-error-actions">
         <Show when={props.reset}>{(reset) => <Button variant="primary" onClick={() => reset()()}>Try again</Button>}</Show>

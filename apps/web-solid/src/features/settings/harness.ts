@@ -38,7 +38,7 @@ export interface HarnessUpdateStatus {
   manualCommand?: string;
 }
 
-export { harnessIcon as harnessMark, harnessTint } from "@/ui/harness";
+export { harnessIcon as harnessMark,harnessTint } from "@/ui/harness";
 export const isCustomAcp = (id: string) => id.startsWith("acp-");
 
 const CLI: Record<string, string> = {

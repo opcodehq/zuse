@@ -1,16 +1,18 @@
 // The window frame: sidebar, main pane and optional right panel, matching desktop's layout.
-import { ErrorBoundary, Match, Show, Switch, batch, createEffect, createSignal, lazy, on, onCleanup, type JSX } from "solid-js";
-import { Dynamic } from "solid-js/web";
 import { narrowLayout, setSidebarVisible, setView, sidebarVisible, view } from "@/core/view";
-import { ToastRegion } from "@/ui/primitives";
-import { Sidebar } from "@/features/sidebar";
-import { Transcript } from "@/features/transcript";
 import { Composer } from "@/features/composer";
-import { RightPanel, TopBar } from "@/features/workspace";
 import { ConnectionGate } from "@/features/connection";
 import { ErrorScreen, Extras } from "@/features/extras";
+import { Sidebar } from "@/features/sidebar";
+import { Transcript } from "@/features/transcript";
+import { RightPanel, TopBar } from "@/features/workspace";
+import { ToastRegion } from "@/ui/primitives";
+import { dynamic, type JSX } from "@solidjs/web";
+import { Errored, Match, Show, Switch, createEffect, createSignal, lazy, onCleanup } from "solid-js";
+// App-wide effects that must run before Settings is ever opened: session chimes, banners, reduced motion.
 // App-wide effects that must run before Settings is ever opened: session chimes, banners, reduced motion.
 import "@/features/settings/alerts";
+// The composer tray shows project setup progress, so the projects styles load with the frame.
 // The composer tray shows project setup progress, so the projects styles load with the frame.
 import "@/features/projects/projects.css";
 
@@ -18,6 +20,8 @@ import "@/features/projects/projects.css";
 const loadSettings = () => import("@/features/settings");
 const loadProjects = () => import("@/features/projects");
 const loadPlugins = () => import("@/features/plugins-cloud");
+const Zappers = lazy(() => import("@/features/zappers/Page").then(m => ({ default: m.ZapperPage })));
+const ZapperConfig = lazy(() => import("@/features/zappers/Config").then(m => ({ default: m.ConfigPage })));
 const Settings = lazy(() => loadSettings().then((m) => ({ default: m.Settings })));
 const Usage = lazy(() => loadSettings().then((m) => ({ default: m.Usage })));
 const Plugins = lazy(() => loadPlugins().then((m) => ({ default: m.Plugins })));
@@ -31,13 +35,13 @@ if (typeof window !== "undefined") {
 
 export function App() {
   return (
-    <ErrorBoundary fallback={(error, reset) => <Fatal error={error} reset={reset} />}>
+    <Errored fallback={(error, reset) => <Fatal error={error()} reset={reset} />}>
       <ConnectionGate>
         <Frame />
       </ConnectionGate>
       <Extras />
       <ToastRegion />
-    </ErrorBoundary>
+    </Errored>
   );
 }
 
@@ -121,7 +125,7 @@ function Seam(props: {
       aria-orientation="vertical"
       aria-label={props.label}
       aria-valuenow={Math.round(props.value)}
-      tabIndex={0}
+      tabindex={0}
       data-active={active() ? "true" : undefined}
       style={props.style}
       onPointerDown={start}
@@ -145,16 +149,16 @@ function Frame() {
 
   const sidebarShown = () => sidebarVisible() && !narrowLayout();
   const sidebarWidth = () => clamp(view.preferences.sidebarWidth, SIDEBAR_MIN, SIDEBAR_MAX);
-  const rightOpen = () => view.route.kind === "chat" && !!view.rightPanel;
+  const rightOpen = () => (view.route.kind === "chat" || view.route.kind === "zappers") && !!view.rightPanel;
   // The width app-main shares between its cards once the sidebar settles: the window less the sidebar and three gutters.
   const space = () => windowWidth() - (sidebarShown() ? sidebarWidth() : 0) - 3 * GUTTER;
   const rightMax = () => Math.max(RIGHT_MIN, space() - CHAT_MIN);
   const rightWidth = () => clamp(view.preferences.rightPanelWidth, RIGHT_MIN, rightMax());
   // Desktop's content_split: equal halves, the panel keeping its minimum and the conversation as much of its own as fits.
-  const resplit = () => setView("preferences", "rightPanelWidth", Math.round(clamp(space() / 2, RIGHT_MIN, rightMax())));
+  const resplit = () => setView(draft => { draft["preferences"]!["rightPanelWidth"] = Math.round(clamp(space() / 2, RIGHT_MIN, rightMax())); });
   const snapTo = (write: () => void) => {
     snap = true;
-    batch(write);
+    (write)();
     snap = false;
   };
 
@@ -168,33 +172,29 @@ function Frame() {
     enter[key] = false;
     return value;
   };
-  createEffect(
-    on(sidebarShown, (shown) => {
-      if (shown && !sidebarMounted()) {
-        enter.sidebar = true;
-        setSidebarMounted(true);
+  createEffect(sidebarShown, (shown) => {
+    if (shown && !sidebarMounted()) {
+      enter.sidebar = true;
+      setSidebarMounted(true);
+    }
+    if (!shown && narrowLayout()) setSidebarMounted(false);
+    // Opening or closing a column re-splits the conversation and the panel, like desktop; both ease together.
+    if (rightOpen() && !narrowLayout()) resplit();
+  }, { defer: true });
+  createEffect(rightOpen, (open) => {
+    if (narrowLayout()) return;
+    if (open) {
+      resplit();
+      if (!rightMounted()) {
+        enter.right = true;
+        setRightMounted(true);
       }
-      if (!shown && narrowLayout()) setSidebarMounted(false);
-      // Opening or closing a column re-splits the conversation and the panel, like desktop; both ease together.
-      if (rightOpen() && !narrowLayout()) resplit();
-    }, { defer: true }),
-  );
-  createEffect(
-    on(rightOpen, (open) => {
-      if (narrowLayout()) return;
-      if (open) {
-        resplit();
-        if (!rightMounted()) {
-          enter.right = true;
-          setRightMounted(true);
-        }
-      }
-    }, { defer: true }),
-  );
-  createEffect(on(narrowLayout, (narrow) => {
+    }
+  }, { defer: true });
+  createEffect(narrowLayout, (narrow) => {
     setSidebarMounted(sidebarShown());
     setRightMounted(rightOpen() && !narrow);
-  }, { defer: true }));
+  }, { defer: true });
   const onResize = () =>
     // eslint-disable-next-line solid/reactivity -- runs from the window's resize event
     snapTo(() => {
@@ -208,23 +208,17 @@ function Frame() {
   // The drawer takes focus when it opens and gives it back to whatever opened it.
   let drawer: HTMLElement | undefined;
   let opener: HTMLElement | null = null;
-  createEffect(
-    on(
-      () => narrowLayout() && view.drawerOpen,
-      (open) => {
-        if (open) {
-          opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-          queueMicrotask(() => drawer?.focus());
-        } else {
-          // Closing by Escape or the scrim drops focus with the drawer; a pick that moved focus elsewhere keeps it.
-          const lost = !document.activeElement || document.activeElement === document.body || !!drawer?.contains(document.activeElement);
-          if (lost && opener?.isConnected) opener.focus();
-          opener = null;
-        }
-      },
-      { defer: true },
-    ),
-  );
+  createEffect(() => narrowLayout() && view.drawerOpen, (open) => {
+    if (open) {
+      opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      queueMicrotask(() => drawer?.focus());
+    } else {
+      // Closing by Escape or the scrim drops focus with the drawer; a pick that moved focus elsewhere keeps it.
+      const lost = !document.activeElement || document.activeElement === document.body || !!drawer?.contains(document.activeElement);
+      if (lost && opener?.isConnected) opener.focus();
+      opener = null;
+    }
+  }, { defer: true });
   return (
     <div class="app" data-narrow={narrowLayout() ? "true" : undefined} data-resizing={dragging() ? "true" : undefined}>
       <Show
@@ -251,24 +245,24 @@ function Frame() {
                 value={sidebarWidth()}
                 style={{ left: `${sidebarWidth() + GUTTER / 2 - 10}px`, top: `${TITLEBAR}px` }}
                 onActive={setDragging}
-                onDrag={(x) => setView("preferences", "sidebarWidth", clamp(Math.round(x - GUTTER / 2), SIDEBAR_MIN, SIDEBAR_MAX))}
-                onKey={(delta) => snapTo(() => setView("preferences", "sidebarWidth", clamp(sidebarWidth() + delta, SIDEBAR_MIN, SIDEBAR_MAX)))}
-                onReset={() => batch(() => {
-                  setView("preferences", "sidebarWidth", SIDEBAR_DEFAULT);
+                onDrag={(x) => setView(draft => { draft["preferences"]!["sidebarWidth"] = clamp(Math.round(x - GUTTER / 2), SIDEBAR_MIN, SIDEBAR_MAX); })}
+                onKey={(delta) => snapTo(() => setView(draft => { draft["preferences"]!["sidebarWidth"] = clamp(sidebarWidth() + delta, SIDEBAR_MIN, SIDEBAR_MAX); }))}
+                onReset={() => (() => {
+                  setView(draft => { draft["preferences"]!["sidebarWidth"] = SIDEBAR_DEFAULT; });
                   if (rightOpen()) resplit();
-                })}
+                })()}
               />
             </Show>
           </Show>
         }
       >
         <Show when={sidebarVisible()}>
-          <button type="button" class="app-scrim" aria-label="Close sidebar" tabIndex={-1} onClick={() => setSidebarVisible(false)} />
+          <button type="button" class="app-scrim" aria-label="Close sidebar" tabindex={-1} onClick={() => setSidebarVisible(false)} />
           <aside
             ref={drawer}
             class="app-sidebar"
             aria-label="Sidebar"
-            tabIndex={-1}
+            tabindex={-1}
             onKeyDown={(event) => {
               if (event.key === "Escape" && !event.defaultPrevented) {
                 event.preventDefault();
@@ -284,8 +278,10 @@ function Frame() {
       </Show>
       <div class="app-main">
         <main class="app-pane">
-          <ErrorBoundary fallback={(error, reset) => <Fatal error={error} reset={reset} />}>
+          <Errored fallback={(error, reset) => <Fatal error={error()} reset={reset} />}>
             <Switch>
+              <Match when={view.route.kind === "zappers"}><Zappers /></Match>
+              <Match when={view.route.kind === "newZapper"}><ZapperConfig /></Match>
               <Match when={view.route.kind === "settings"}><Settings /></Match>
               <Match when={view.route.kind === "usage"}><Usage /></Match>
               <Match when={view.route.kind === "plugins"}><Plugins /></Match>
@@ -299,7 +295,7 @@ function Frame() {
                 </div>
               </Match>
             </Switch>
-          </ErrorBoundary>
+          </Errored>
         </main>
         <Show
           when={!narrowLayout()}
@@ -319,7 +315,7 @@ function Frame() {
               class="app-right-slot"
               open={rightOpen()}
               width={rightWidth() + GUTTER}
-              direct={() => direct() || view.route.kind !== "chat"}
+              direct={() => direct() || (view.route.kind !== "chat" && view.route.kind !== "zappers")}
               enter={take("right")}
               onClosed={() => setRightMounted(false)}
             >
@@ -333,9 +329,9 @@ function Frame() {
                 value={rightWidth()}
                 style={{ right: `${GUTTER + rightWidth() + GUTTER / 2 - 10}px`, top: `${TITLEBAR}px` }}
                 onActive={setDragging}
-                onDrag={(x) => setView("preferences", "rightPanelWidth", clamp(Math.round(windowWidth() - 1.5 * GUTTER - x), RIGHT_MIN, rightMax()))}
+                onDrag={(x) => setView(draft => { draft["preferences"]!["rightPanelWidth"] = clamp(Math.round(windowWidth() - 1.5 * GUTTER - x), RIGHT_MIN, rightMax()); })}
                 // eslint-disable-next-line solid/reactivity -- a key handler
-                onKey={(delta) => snapTo(() => setView("preferences", "rightPanelWidth", clamp(rightWidth() - delta, RIGHT_MIN, rightMax())))}
+                onKey={(delta) => snapTo(() => setView(draft => { draft["preferences"]!["rightPanelWidth"] = clamp(rightWidth() - delta, RIGHT_MIN, rightMax()); }))}
                 onReset={resplit}
               />
             </Show>
@@ -359,24 +355,20 @@ function Column(props: {
   children: JSX.Element;
 }) {
   let el!: HTMLElement;
+  const Tag = dynamic(() => props.tag);
   const move = widthMotion();
   // eslint-disable-next-line solid/reactivity -- read once: whether this mount eases in
   const enter = props.enter;
   let first = true;
-  createEffect(
-    on(
-      () => [props.open, props.width] as const,
-      ([open, width]) => {
-        const direct = (first && !enter) || props.direct();
-        first = false;
-        move(el, open ? width : 0, { direct, done: open ? undefined : () => props.onClosed() });
-      },
-    ),
-  );
+  createEffect(() => [props.open, props.width, props.direct()] as const, ([open, width, immediate]) => {
+    const direct = (first && !enter) || immediate;
+    first = false;
+    move(el, open ? width : 0, { direct, done: open ? undefined : () => props.onClosed() });
+  });
   return (
-    <Dynamic component={props.tag} ref={(node: HTMLElement) => ((el = node), (node.style.width = enter ? "0px" : `${props.open ? props.width : 0}px`))} class={props.class} aria-label={props.label}>
+    <Tag ref={(node: HTMLElement) => { el = node; if (enter) node.style.width = "0px"; }} class={props.class} aria-label={props.label}>
       {props.children}
-    </Dynamic>
+    </Tag>
   );
 }
 

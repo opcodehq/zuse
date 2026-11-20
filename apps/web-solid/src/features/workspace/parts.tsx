@@ -1,7 +1,8 @@
 // Small presentational pieces shared by workspace surfaces.
-import { type JSX, Show } from "solid-js";
 import { Icon } from "@/ui/Icon";
 import { Spinner } from "@/ui/primitives";
+import { type JSX } from "@solidjs/web";
+import { Show } from "solid-js";
 import { fileIconUrl } from "./fileIcons";
 import type { ChangeRequestState, GitFileState } from "./types";
 
@@ -34,7 +35,7 @@ export function FileIcon(props: { name: string; directory?: boolean; open?: bool
       when={!props.directory}
       fallback={<Icon name={props.open ? "folder-open" : "folder"} size={props.size ?? 14} class="ws-folder-icon" />}
     >
-      <img class="ws-file-icon" src={fileIconUrl(props.name)} width={props.size ?? 14} height={props.size ?? 14} alt="" aria-hidden="true" draggable={false} />
+      <img class="ws-file-icon" src={fileIconUrl(props.name)} width={props.size ?? 14} height={props.size ?? 14} alt="" aria-hidden="true" draggable="false" />
     </Show>
   );
 }

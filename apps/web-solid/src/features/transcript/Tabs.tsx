@@ -1,12 +1,12 @@
 // The conversation tab row (desktop `render_thread_conversations`): the thread's conversations, its side chats,
 // `+` for a new conversation in the same checkout, and the history of closed ones.
-import { DropdownMenu } from "@kobalte/core/dropdown-menu";
-import { createMemo, For, Show } from "solid-js";
 import type { Chat } from "@/core/protocol";
 import { state } from "@/core/store";
 import { openChat } from "@/core/view";
 import { Icon } from "@/ui/Icon";
 import { GlyphSpinner } from "@/ui/loaders";
+import { DropdownMenu } from "@kobalte/core/dropdown-menu";
+import { createMemo, For, Show } from "solid-js";
 import { addConversation, closeConversation, conversationTabs, restoreConversation } from "./actions";
 import { harnessIcon } from "./model";
 
@@ -92,8 +92,8 @@ function Tab(props: { chat: Chat; title: string; active: boolean; closable: bool
     <div
       class="t-tab"
       role="tab"
-      tabIndex={props.active ? 0 : -1}
-      aria-selected={props.active}
+      tabindex={props.active ? 0 : -1}
+      aria-selected={(props.active) ? "true" : "false"}
       data-active={props.active ? "true" : undefined}
       title={props.side ? `${props.title} (side chat)` : props.title}
       onClick={() => props.onSelect()}
@@ -127,7 +127,7 @@ function Tab(props: { chat: Chat; title: string; active: boolean; closable: bool
           type="button"
           class="t-tab-close"
           aria-label="Close chat"
-          tabIndex={-1}
+          tabindex={-1}
           onClick={(e) => {
             e.stopPropagation();
             closeConversation(props.chat.id);

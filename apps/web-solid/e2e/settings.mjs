@@ -102,7 +102,7 @@ const run = async (chatId) => {
 };
 
 try {
-  await page.waitFor(`window.__zuse?.state.connection.kind === "connected"`, 30000);
+  await page.waitFor(`window.__zuse?.state.connection.kind === "connected" && !!window.__zuse.state.localDeviceId`, 30000);
   const deviceId = await page.eval(`window.__zuse.state.localDeviceId`);
   await engine.rpc("Mutate", { op: "createSpace", spaceId: "orbit", deviceId, path: project, name: "orbit", gitDetected: true });
   await engine.rpc("Mutate", { op: "createChat", chatId: "chat-1", spaceId: "orbit", branch: "main", config: { harness: "claude-code", model: null, reasoning: null, sandbox: "workspace-write" } });

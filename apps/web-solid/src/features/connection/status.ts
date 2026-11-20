@@ -1,5 +1,5 @@
 // What this tab is connected through. Area-only state; workspace data stays in the core store.
-import { createStore } from "solid-js/store";
+import { createStore } from "solid-js";
 import type { LinkStatus } from "./link/wasm";
 
 export type Mode = "owner" | "paired" | "account";

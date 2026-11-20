@@ -1,8 +1,8 @@
 // The connection-loss cue: desktop's Attention also covers a degraded connection. Session chimes and banners
 // belong to Settings (features/settings/alerts.ts); this reads the same preference keys so one switch governs both.
-import { createEffect, createRoot, on } from "solid-js";
 import { state } from "@/core/store";
 import { pref } from "@/features/settings/prefs";
+import { createEffect, createRoot } from "solid-js";
 import { playSound } from "./sounds";
 
 const CONNECTION_GRACE_MS = 10_000;
@@ -35,23 +35,18 @@ function warn() {
 export function startNotifications() {
   return createRoot((dispose) => {
     let lostTimer: ReturnType<typeof setTimeout> | undefined;
-    createEffect(
-      on(
-        () => state.connection.kind,
-        (kind, previous) => {
-          if (kind === "connected") {
-            clearTimeout(lostTimer);
-            lostTimer = undefined;
-            return;
-          }
-          if (previous !== "connected" || kind !== "reconnecting" || lostTimer) return;
-          lostTimer = setTimeout(() => {
-            lostTimer = undefined;
-            if (state.connection.kind === "reconnecting") warn();
-          }, CONNECTION_GRACE_MS);
-        },
-      ),
-    );
+    createEffect(() => state.connection.kind, (kind, previous) => {
+      if (kind === "connected") {
+        clearTimeout(lostTimer);
+        lostTimer = undefined;
+        return;
+      }
+      if (previous !== "connected" || kind !== "reconnecting" || lostTimer) return;
+      lostTimer = setTimeout(() => {
+        lostTimer = undefined;
+        if (state.connection.kind === "reconnecting") warn();
+      }, CONNECTION_GRACE_MS);
+    });
     return () => {
       clearTimeout(lostTimer);
       dispose();

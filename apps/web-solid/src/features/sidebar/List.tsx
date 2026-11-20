@@ -1,11 +1,12 @@
 // The virtualized session list: Pinned, custom sections, then project, device or flat rows.
 // Every item has an exact height from the model, so nothing is measured.
-import { ContextMenu } from "@kobalte/core/context-menu";
-import { createVirtualizer, defaultRangeExtractor } from "@tanstack/solid-virtual";
-import { createEffect, createMemo, createSignal, For, type JSX, Match, on, Show, Switch, untrack } from "solid-js";
 import { state } from "@/core/store";
 import { view } from "@/core/view";
 import { Icon } from "@/ui/Icon";
+import { createVirtualizer, defaultRangeExtractor } from "@/ui/virtualizer";
+import { ContextMenu } from "@kobalte/core/context-menu";
+import { type JSX } from "@solidjs/web";
+import { createEffect, createMemo, createSignal, For, Match, Show, Switch, untrack } from "solid-js";
 import { newChat } from "./actions";
 import { dropHandlers } from "./drag";
 import { EntriesMenu, MenuEntries, projectEntries, sectionEntries } from "./menus";
@@ -40,7 +41,7 @@ function PinnedHeader(props: { item: ItemOf<"pinned"> }) {
       <button
         type="button"
         class="sb-head-toggle sb-focus"
-        aria-expanded={props.item.open}
+        aria-expanded={(props.item.open) ? "true" : "false"}
         onClick={() => setOption("pinnedOpen", !props.item.open)}
       >
         <span class="sb-head-label">Pinned</span>
@@ -59,7 +60,7 @@ function SectionHeader(props: { item: ItemOf<"section"> }) {
       <button
         type="button"
         class="sb-head-toggle sb-focus"
-        aria-expanded={!section().collapsed}
+        aria-expanded={(!section().collapsed) ? "true" : "false"}
         onClick={() => changeSection({ action: "collapse", id: section().id, collapsed: !section().collapsed })}
       >
         <span class="sb-head-label">{section().name}</span>
@@ -88,7 +89,7 @@ function GroupHeader(props: { item: ItemOf<"group"> }) {
   const toggle = () => toggleCollapsed(props.item.groupKey);
   const header = (rest: Record<string, unknown>): JSX.Element => (
     <div {...rest} class="sb-head" data-project={props.item.project ? "true" : undefined} {...dropHandlers(() => ({ kind: "regular" }))}>
-      <button type="button" class="sb-head-toggle sb-focus" aria-expanded={props.item.open} onClick={toggle}>
+      <button type="button" class="sb-head-toggle sb-focus" aria-expanded={(props.item.open) ? "true" : "false"} onClick={toggle}>
         <Show
           when={props.item.project}
           fallback={
@@ -239,24 +240,19 @@ export function List() {
     }
     return map;
   });
-  const visibleKeys = createMemo(() => [...placement().keys()], undefined, { equals: (a, b) => a.length === b.length && a.every((k, i) => k === b[i]) });
+  const visibleKeys = createMemo(() => [...placement().keys()], { equals: (a, b) => a.length === b.length && a.every((k, i) => k === b[i]) });
 
   // Keep the open chat in view when something other than a click selects it.
-  createEffect(
-    on(
-      () => {
-        const id = view.selectedChatId;
-        const open = id ? state.chats[id] : undefined;
-        return open?.threadId ?? id;
-      },
-      (id) => {
-        if (!id) return;
-        const index = items().findIndex((item) => item.kind === "row" && item.chatId === id);
-        if (index >= 0) virtualizer.scrollToIndex(index, { align: "auto" });
-      },
-    ),
-  );
-  createEffect(on(query, () => scroller && (scroller.scrollTop = 0), { defer: true }));
+  createEffect(() => {
+    const id = view.selectedChatId;
+    const open = id ? state.chats[id] : undefined;
+    return open?.threadId ?? id;
+  }, (id) => {
+    if (!id) return;
+    const index = items().findIndex((item) => item.kind === "row" && item.chatId === id);
+    if (index >= 0) virtualizer.scrollToIndex(index, { align: "auto" });
+  });
+  createEffect(query, () => { void (scroller && (scroller.scrollTop = 0)); }, { defer: true });
 
   /** Up/Down move between rows and headings; virtualized targets are scrolled in first. */
   const onKeyDown = (event: KeyboardEvent) => {

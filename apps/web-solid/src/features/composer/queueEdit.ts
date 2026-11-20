@@ -1,10 +1,10 @@
 // Editing a queued message in the composer under the host's edit lease.
-import { createEffect, createRoot, createSignal, on } from "solid-js";
-import { rpc } from "@/core/connection";
 import { chatRequest } from "@/core/chat";
+import { rpc } from "@/core/connection";
 import { M } from "@/core/methods";
 import { state } from "@/core/store";
 import { view } from "@/core/view";
+import { createEffect, createRoot, createSignal } from "solid-js";
 import { draftFor, fail, holdPersistedDraft, setDraft, snapshotDraft, type Draft } from "./drafts";
 
 export interface QueuedMessage {
@@ -182,20 +182,23 @@ export function cancelQueueEdit() {
 
 createRoot(() => {
   // An edit belongs to one visible row: leaving the chat cancels it.
-  createEffect(on(() => view.selectedChatId, (chatId) => {
+  createEffect(() => view.selectedChatId, (chatId) => {
     const current = edit();
     if (current && current.chatId !== chatId) cancelQueueEdit();
-  }, { defer: true }));
+  }, { defer: true });
   // Another device removed the row: keep both drafts in the composer.
   createEffect(() => {
     const current = edit();
-    if (!current?.lease || current.finishing) return;
+    if (!current?.lease || current.finishing) return null;
     const rows = (state.queue[current.chatId] ?? []) as QueuedMessage[];
-    if (rows.some((row) => row.id === current.id)) return;
+    if (rows.some(row => row.id === current.id)) return null;
+    return { current, text: [current.previous?.text ?? "", draftFor(current.chatId).text].filter(t => t.trim()).join("\n\n") };
+  }, (removed) => {
+    if (!removed) return;
+    const { current, text } = removed;
     clearInterval(renewTimer);
     rememberLease(null);
     holdPersistedDraft(current.chatId, null);
-    const text = [current.previous?.text ?? "", draftFor(current.chatId).text].filter((t) => t.trim()).join("\n\n");
     setEdit(null);
     setDraft(current.chatId, { text, mentions: current.previous?.mentions ?? [], skills: current.previous?.skills ?? [] });
     fail(current.chatId, "The queued message was removed; your edit remains in the composer");
@@ -207,8 +210,8 @@ createRoot(() => {
   const stale = heldLease();
   if (!stale) return;
   let pending = true;
-  createEffect(() => {
-    if (!pending || state.connection.kind !== "connected" || !state.chats[stale.chatId]) return;
+  createEffect(() => state.connection.kind === "connected" && !!state.chats[stale.chatId], (available) => {
+    if (!pending || !available) return;
     pending = false;
     if (heldLease()?.leaseId === stale.leaseId) rememberLease(null);
     void release(stale.chatId, stale.id, stale.leaseId, stale.hash);

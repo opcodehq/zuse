@@ -1,7 +1,7 @@
 // Confirmations and name prompts opened from sidebar menus.
-import { createSignal, Match, Switch } from "solid-js";
 import { state } from "@/core/store";
 import { Button, Dialog, TextField } from "@/ui/primitives";
+import { createSignal, Match, Switch } from "solid-js";
 import { deleteChat, removeProject, renameProject } from "./actions";
 import { deviceName, spaceName } from "./model";
 import { dialog, setDialog, type SidebarDialog, titleOf } from "./overlay";
@@ -16,7 +16,7 @@ function opened<K extends SidebarDialog["kind"]>(kind: K) {
 }
 
 function NamePrompt(props: { title: string; label: string; placeholder: string; initial: string; submit: string; onSubmit: (name: string) => boolean | void; allowEmpty?: boolean }) {
-  const [value, setValue] = createSignal(props.initial);
+  const [value, setValue] = createSignal(() => props.initial);
   const submit = (event: Event) => {
     event.preventDefault();
     const name = value().trim();

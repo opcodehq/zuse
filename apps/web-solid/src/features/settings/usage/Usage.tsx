@@ -1,39 +1,16 @@
 // Usage dashboard: locally recorded tokens and estimated cost, plan limits, breakdowns and sessions
 // (crates/viewport/src/usage_dashboard/view.rs).
-import { Select as KSelect } from "@kobalte/core/select";
-import { createEffect, createMemo, createSignal, For, type JSX, on, onMount, Show } from "solid-js";
 import { state } from "@/core/store";
 import { navigate } from "@/core/view";
 import { Icon } from "@/ui/Icon";
 import { GlyphSpinner } from "@/ui/loaders";
+import { Select as KSelect } from "@kobalte/core/select";
+import { type JSX } from "@solidjs/web";
+import { createEffect, createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { t } from "../i18n";
 import { Chart, COST_SERIES, SERIES } from "./Chart";
 import { delta, money, share, tokens } from "./format";
-import {
-  checkOwner,
-  clearDay,
-  currentProject,
-  LIMITS,
-  loadSessions,
-  open,
-  type Overview,
-  type Period,
-  PROVIDERS,
-  refresh,
-  type SessionSort,
-  setOffset,
-  setPeriod,
-  setProvider,
-  setQuery,
-  setScope,
-  setSort,
-  setUsage,
-  toggleSessions,
-  total,
-  usage,
-  type UsageGroup,
-  viewDay,
-} from "./state";
+import { checkOwner, clearDay, currentProject, LIMITS, loadSessions, open, type Overview, type Period, PROVIDERS, refresh, type SessionSort, setOffset, setPeriod, setProvider, setQuery, setScope, setSort, setUsage, toggleSessions, total, usage, type UsageGroup, viewDay, } from "./state";
 
 const close = () => navigate({ kind: "chat" });
 
@@ -47,7 +24,7 @@ function Seg(props: { label: string; children: JSX.Element }) {
 
 function SegButton(props: { pressed: boolean; disabled?: boolean; onClick: () => void; children: JSX.Element; label?: string }) {
   return (
-    <button type="button" class="us-btn" aria-pressed={props.pressed} aria-label={props.label} disabled={props.disabled} onClick={() => props.onClick()}>
+    <button type="button" class="us-btn" aria-pressed={(props.pressed) ? "true" : "false"} aria-label={props.label} disabled={props.disabled} onClick={() => props.onClick()}>
       {props.children}
     </button>
   );
@@ -55,24 +32,18 @@ function SegButton(props: { pressed: boolean; disabled?: boolean; onClick: () =>
 
 export function Usage() {
   let root: HTMLDivElement | undefined;
-  onMount(() => {
+  onSettled(() => {
     open();
     root?.focus({ preventScroll: true });
   });
-  createEffect(on(() => state.epoch, () => void refresh(false), { defer: true }));
-  createEffect(on(() => [state.localDeviceId, (state.account as { user?: { id?: string } } | null)?.user?.id], () => checkOwner(), { defer: true }));
+  createEffect(() => state.epoch, () => { void (void refresh(false)); }, { defer: true });
+  createEffect(() => [state.localDeviceId, (state.account as { user?: { id?: string } } | null)?.user?.id], () => checkOwner(), { defer: true });
   // The project scope follows the selected chat; losing the project falls back to all projects.
-  createEffect(
-    on(
-      () => currentProject()?.id,
-      (id, previous) => {
-        if (!usage.projectScope || id === previous) return;
-        if (!id) setScope(false);
-        else void refresh(false);
-      },
-      { defer: true },
-    ),
-  );
+  createEffect(() => currentProject()?.id, (id, previous) => {
+    if (!usage.projectScope || id === previous) return;
+    if (!id) setScope(false);
+    else void refresh(false);
+  }, { defer: true });
   const project = () => currentProject();
   const report = () => usage.report;
 
@@ -80,7 +51,7 @@ export function Usage() {
     <div
       ref={root}
       class="us-root"
-      tabIndex={-1}
+      tabindex={-1}
       role="region"
       aria-label={t("usage-usage_dashboard_usage", "Usage")}
       onKeyDown={(e) => {
@@ -212,10 +183,10 @@ function Daily(props: { report: Overview }) {
           </Show>
         </h2>
         <Seg label="Measure">
-          <SegButton pressed={!usage.cost} onClick={() => setUsage("cost", false)}>
+          <SegButton pressed={!usage.cost} onClick={() => setUsage(draft => { draft["cost"] = false; })}>
             Tokens
           </SegButton>
-          <SegButton pressed={usage.cost} onClick={() => setUsage("cost", true)}>
+          <SegButton pressed={usage.cost} onClick={() => setUsage(draft => { draft["cost"] = true; })}>
             Cost
           </SegButton>
         </Seg>
@@ -443,9 +414,9 @@ function Breakdown(props: { report: Overview }) {
                 type="button"
                 role="tab"
                 class="us-btn"
-                aria-selected={usage.contributor === i()}
-                aria-pressed={usage.contributor === i()}
-                onClick={() => setUsage({ contributor: i() as 0 | 1 | 2, expanded: false })}
+                aria-selected={(usage.contributor === i()) ? "true" : "false"}
+                aria-pressed={(usage.contributor === i()) ? "true" : "false"}
+                onClick={() => setUsage(draft => { Object.assign(draft, { contributor: i() as 0 | 1 | 2, expanded: false }); })}
               >
                 {name}
               </button>
@@ -469,7 +440,7 @@ function Breakdown(props: { report: Overview }) {
                 each={view().rows}
                 fallback={
                   <tr>
-                    <td colSpan={4} style={{ "text-align": "center", height: "64px", color: "var(--text-muted)", "max-width": "none" }}>
+                    <td colspan={4} style={{ "text-align": "center", height: "64px", color: "var(--text-muted)", "max-width": "none" }}>
                       {t("usage-usage_dashboard_no_contributors_found", "No contributors found")}
                     </td>
                   </tr>
@@ -490,7 +461,7 @@ function Breakdown(props: { report: Overview }) {
       </div>
       <Show when={view().count > 5}>
         <div style={{ display: "flex", "justify-content": "center", padding: "8px" }}>
-          <button type="button" class="us-btn" aria-expanded={usage.expanded} onClick={() => setUsage("expanded", !usage.expanded)}>
+          <button type="button" class="us-btn" aria-expanded={(usage.expanded) ? "true" : "false"} onClick={() => setUsage(draft => { draft["expanded"] = !usage.expanded; })}>
             {usage.expanded ? "Show less" : `View all ${view().count}`}
           </button>
         </div>
@@ -515,7 +486,7 @@ function Sessions(props: { report: Overview }) {
   const range = () => (totalRows() === 0 ? "0" : `${usage.offset + 1}–${Math.min(usage.offset + 10, totalRows())}`);
   return (
     <section class="us-frame">
-      <button type="button" class="us-sessions-toggle" aria-expanded={usage.sessionsOpen} aria-controls="usage-sessions" onClick={toggleSessions}>
+      <button type="button" class="us-sessions-toggle" aria-expanded={(usage.sessionsOpen) ? "true" : "false"} aria-controls="usage-sessions" onClick={toggleSessions}>
         <span>
           <strong>{t("native-sessions", "Sessions")}</strong>
           <small>{props.report.sessionCount} in this period</small>
@@ -541,7 +512,7 @@ function Sessions(props: { report: Overview }) {
           </Show>
           <div class="us-card" style={{ overflow: "hidden", margin: "0 0 0" }}>
             <div class="us-table-wrap">
-              <table class="us-table" aria-busy={usage.pageLoading}>
+              <table class="us-table" aria-busy={(usage.pageLoading) ? "true" : "false"}>
                 <thead>
                   <tr>
                     <th scope="col">{t("usage-usage_dashboard_session", "Session")}</th>
@@ -564,7 +535,7 @@ function Sessions(props: { report: Overview }) {
                     when={usage.page}
                     fallback={
                       <tr>
-                        <td colSpan={4} style={{ "text-align": "center", height: "80px", color: "var(--text-muted)", "max-width": "none" }}>
+                        <td colspan={4} style={{ "text-align": "center", height: "80px", color: "var(--text-muted)", "max-width": "none" }}>
                           {usage.pageLoading ? t("usage-usage_dashboard_loading_sessions", "Loading sessions…") : ""}
                         </td>
                       </tr>
@@ -574,7 +545,7 @@ function Sessions(props: { report: Overview }) {
                       each={usage.page!.rows}
                       fallback={
                         <tr>
-                          <td colSpan={4} style={{ "text-align": "center", height: "64px", color: "var(--text-muted)", "max-width": "none" }}>
+                          <td colspan={4} style={{ "text-align": "center", height: "64px", color: "var(--text-muted)", "max-width": "none" }}>
                             No sessions match.
                           </td>
                         </tr>

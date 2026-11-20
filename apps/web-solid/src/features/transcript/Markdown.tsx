@@ -1,12 +1,12 @@
 // Streamed markdown: settled blocks keep their DOM and only the open tail block re-renders, at most once per frame.
 // Lists and tables render per item and cell, so a growing one rebuilds only the part that changed.
-import { createEffect, createMemo, createSelector, createSignal, Index, Match, on, onCleanup, Show, Switch, untrack, type Accessor } from "solid-js";
-import { Dynamic } from "solid-js/web";
-import type { Tokens } from "marked";
 import { Icon } from "@/ui/Icon";
-import { blockHtml, IncrementalMarkdown, listItemHtml, tableCellHtml } from "./markdown";
-import { highlight, paintWindowed, renderTokens, SPAN_LINES } from "./highlight";
+import { dynamic } from "@solidjs/web";
+import type { Tokens } from "marked";
+import { createEffect, createMemo, createSignal, For, Match, onCleanup, Show, Switch, untrack, type Accessor } from "solid-js";
 import { copyText } from "./clipboard";
+import { highlight, paintWindowed, renderTokens, SPAN_LINES } from "./highlight";
+import { blockHtml, IncrementalMarkdown, listItemHtml, tableCellHtml } from "./markdown";
 
 /** Tail renders costing more than this stretch the interval between renders. */
 const BUDGET_MS = 6;
@@ -22,7 +22,7 @@ function afterPaint(done: () => void) {
 
 /** Follows `source`, but while live spaces out updates so rendering takes at most a quarter of the time. */
 function paced(source: Accessor<string>, live: Accessor<boolean>): Accessor<string> {
-  const [value, setValue] = createSignal(untrack(source));
+  const [value, setValue] = createSignal(() => source());
   let timer: ReturnType<typeof setTimeout> | undefined;
   let cost = 0;
   let last = 0;
@@ -41,18 +41,12 @@ function paced(source: Accessor<string>, live: Accessor<boolean>): Accessor<stri
       last = t0;
     });
   };
-  createEffect(
-    on(
-      [source, live],
-      ([text, isLive]) => {
-        clearTimeout(timer);
-        const wait = isLive && cost > BUDGET_MS ? last + cost * 4 - performance.now() : 0;
-        if (wait <= 0) commit(text);
-        else timer = setTimeout(() => commit(untrack(source)), wait);
-      },
-      { defer: true },
-    ),
-  );
+  createEffect(() => [(source)(), (live)()] as const, ([text, isLive]) => {
+    clearTimeout(timer);
+    const wait = isLive && cost > BUDGET_MS ? last + cost * 4 - performance.now() : 0;
+    if (wait <= 0) commit(text);
+    else timer = setTimeout(() => commit(untrack(source)), wait);
+  }, { defer: true });
   onCleanup(() => {
     disposed = true;
     clearTimeout(timer);
@@ -65,12 +59,13 @@ export function Markdown(props: { text: string; live: boolean; class?: string })
   // eslint-disable-next-line solid/reactivity -- paced reads both accessors inside an effect
   const text = paced(() => props.text, () => props.live);
   // The block list is updated in place, so every update must notify.
-  const blocks = createMemo(() => doc.update(text()), undefined, { equals: false });
+  const blocks = createMemo(() => doc.update(text()), { equals: false });
   // Only the tail block's `settled` flips, so a token never re-runs every code block.
-  const isTail = createSelector(() => (props.live ? blocks().length - 1 : -1));
+  const tailIndex = createMemo(() => (props.live ? blocks().length - 1 : -1));
+  const isTail = (index: number) => tailIndex() === index;
   return (
     <div class={`md ${props.live ? "md-live " : ""}${props.class ?? ""}`}>
-      <Index each={blocks()}>
+      <For keyed={false} each={blocks()}>
         {(block, ix) => {
           const settled = () => !isTail(ix);
           return (
@@ -84,27 +79,28 @@ export function Markdown(props: { text: string; live: boolean; class?: string })
             </Switch>
           );
         }}
-      </Index>
+      </For>
     </div>
   );
 }
 
 /** Same markup as marked's list renderer. */
 function MdList(props: { list: Tokens.List }) {
+  const ListTag = dynamic(() => props.list.ordered ? "ol" : "ul");
   const start = () => (props.list.ordered && props.list.start !== 1 && props.list.start !== "" ? props.list.start : undefined);
   return (
     <div class="md-block">
-      <Dynamic component={props.list.ordered ? "ol" : "ul"} start={start()}>
-        <Index each={props.list.items}>
+      <ListTag start={start()}>
+        <For keyed={false} each={props.list.items}>
           {(item) => {
             // Re-lexing makes new tokens every frame; only a changed source re-renders the item.
             const key = createMemo(() => `${props.list.loose ? "L" : "T"}${item().raw}`);
-            const html = createMemo(on(key, () => listItemHtml(untrack(item))));
+            const html = createMemo(() => { key(); return untrack(() => listItemHtml(untrack(item))); });
             // eslint-disable-next-line solid/no-innerhtml -- listItemHtml output is DOMPurify-sanitized
             return <li innerHTML={html()} />;
           }}
-        </Index>
-      </Dynamic>
+        </For>
+      </ListTag>
     </div>
   );
 }
@@ -117,18 +113,18 @@ function MdTable(props: { table: Tokens.Table }) {
         <table>
           <thead>
             <tr>
-              <Index each={props.table.header}>{(cell) => <Cell cell={cell()} header />}</Index>
+              <For keyed={false} each={props.table.header}>{(cell) => <Cell cell={cell()} header />}</For>
             </tr>
           </thead>
           <Show when={props.table.rows.length}>
             <tbody>
-              <Index each={props.table.rows}>
+              <For keyed={false} each={props.table.rows}>
                 {(row) => (
                   <tr>
-                    <Index each={row()}>{(cell) => <Cell cell={cell()} header={false} />}</Index>
+                    <For keyed={false} each={row()}>{(cell) => <Cell cell={cell()} header={false} />}</For>
                   </tr>
                 )}
-              </Index>
+              </For>
             </tbody>
           </Show>
         </table>
@@ -139,7 +135,7 @@ function MdTable(props: { table: Tokens.Table }) {
 
 function Cell(props: { cell: Tokens.TableCell; header: boolean }) {
   const key = createMemo(() => props.cell.text);
-  const html = createMemo(on(key, () => tableCellHtml(untrack(() => props.cell))));
+  const html = createMemo(() => { key(); return untrack(() => tableCellHtml(untrack(() => props.cell))); });
   const align = () => props.cell.align ?? undefined;
   return (
     <Show
@@ -159,23 +155,24 @@ export function CodeBlock(props: { code: string; lang?: string; settled: boolean
   const [copied, setCopied] = createSignal(false);
   const lang = () => props.lang?.trim().split(/\s+/)[0] || undefined;
   // Plain text first; colours replace it once the grammar has run on the settled block.
-  createEffect(
-    on([() => props.code, lang, () => props.settled], ([code, language, settled]) => {
-      pre.textContent = code;
-      if (!settled || !language) return;
-      let current = true;
-      let unpaint: (() => void) | undefined;
-      onCleanup(() => {
-        current = false;
-        unpaint?.();
-      });
-      void highlight(code, language).then((tokens) => {
-        if (!current || !tokens) return;
-        if (code.split("\n", SPAN_LINES + 1).length <= SPAN_LINES) renderTokens(pre, code, tokens);
-        else unpaint = paintWindowed(pre, code, tokens);
-      });
-    }),
-  );
+  createEffect(() => [(() => props.code)(), (lang)(), (() => props.settled)()] as const, ([code, language, settled]) => {
+    const cleanups: (() => void)[] = [];
+    pre.textContent = code;
+    if (!settled || !language) return;
+    let current = true;
+    let unpaint: (() => void) | undefined;
+    cleanups.push(() => {
+      current = false;
+      unpaint?.();
+    });
+    void highlight(code, language).then((tokens) => {
+      if (!current || !tokens) return;
+      if (code.split("\n", SPAN_LINES + 1).length <= SPAN_LINES) renderTokens(pre, code, tokens);
+      else unpaint = paintWindowed(pre, code, tokens);
+    });
+
+    return () => cleanups.forEach(cleanup => cleanup());
+  });
   let reset: ReturnType<typeof setTimeout> | undefined;
   onCleanup(() => clearTimeout(reset));
   const copy = async () => {
@@ -191,7 +188,7 @@ export function CodeBlock(props: { code: string; lang?: string; settled: boolean
         <button
           type="button"
           class="code-action"
-          aria-pressed={wrap()}
+          aria-pressed={(wrap()) ? "true" : "false"}
           aria-label={wrap() ? "Use horizontal scrolling" : "Fit content"}
           title={wrap() ? "Use horizontal scrolling" : "Fit content"}
           onClick={() => setWrap(!wrap())}
@@ -203,7 +200,7 @@ export function CodeBlock(props: { code: string; lang?: string; settled: boolean
           <Show when={copied()}><span>Copied</span></Show>
         </button>
       </div>
-      <pre class="code-body" data-wrap={wrap() ? "true" : undefined} tabIndex={0} aria-label={lang() ? `${lang()} code` : "Code"}>
+      <pre class="code-body" data-wrap={wrap() ? "true" : undefined} tabindex={0} aria-label={lang() ? `${lang()} code` : "Code"}>
         <code ref={pre} />
       </pre>
     </div>

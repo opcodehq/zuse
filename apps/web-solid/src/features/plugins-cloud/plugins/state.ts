@@ -1,8 +1,7 @@
 // Plugin management, ported from crates/protocol/src/plugin_state.rs: writes are reconciled by reads, never replayed.
-import { createEffect, createRoot, on } from "solid-js";
-import { createStore, reconcile } from "solid-js/store";
 import { onConnected, rpc } from "@/core/connection";
 import { M } from "@/core/methods";
+import { createEffect, createRoot, createStore, reconcile } from "solid-js";
 import { errorText, signIn, signedIn, user } from "../account";
 import { catalog, nextLabel, type PluginAttempt, type PluginDefinition, type PluginSnapshot } from "./catalog";
 import { connectRequest, type PluginRequest } from "./setup";
@@ -82,8 +81,8 @@ function begin(input: PluginRequest, selectingWorkspace = false): PluginRequest 
   if ((action === "poll" || action === "cancel") && (!activeAttempt() || request.attemptId !== plugins.attempt?.id)) {
     return "This plugin sign-in is no longer active. Refresh connections.";
   }
-  if (action !== "removeServer" && action !== "list") setPlugins("confirmation", null);
-  if (action !== "list" && action !== "poll") setPlugins("notice", null);
+  if (action !== "removeServer" && action !== "list") setPlugins(draft => { draft["confirmation"] = null; });
+  if (action !== "list" && action !== "poll") setPlugins(draft => { draft["notice"] = null; });
   pending = { action: selectingWorkspace ? "selectWorkspace" : action, tenant: target };
   return request;
 }
@@ -110,12 +109,12 @@ function apply(response: unknown): PluginRequest | null {
       throw new Error("The plugin service returned a different workspace. Refresh connections.");
     }
     const changed = tenant() !== snapshot.tenantId;
-    if (changed || plugins.attempt?.state !== "pending") setPlugins({ attempt: null, attemptTenant: null });
-    if (changed) setPlugins("notice", null);
+    if (changed || plugins.attempt?.state !== "pending") setPlugins(draft => { Object.assign(draft, { attempt: null, attemptTenant: null }); });
+    if (changed) setPlugins(draft => { draft["notice"] = null; });
     selectionUncertain = false;
-    setPlugins("snapshot", reconcile(snapshot, { key: "id", merge: true }));
+    setPlugins(draft => { { const next = snapshot; if (draft["snapshot"] == null) draft["snapshot"] = next; else reconcile(next, "id")(draft["snapshot"]); } });
     const confirmation = plugins.confirmation;
-    if (confirmation && (confirmation.tenant !== snapshot.tenantId || !removable(confirmation.kind, confirmation.id))) setPlugins("confirmation", null);
+    if (confirmation && (confirmation.tenant !== snapshot.tenantId || !removable(confirmation.kind, confirmation.id))) setPlugins(draft => { draft["confirmation"] = null; });
     pending = null;
     return null;
   }
@@ -128,10 +127,12 @@ function apply(response: unknown): PluginRequest | null {
       throw new Error("The plugin service returned a different sign-in attempt. Refresh connections.");
     }
     // Attempts replace each other whole; a merge would keep a stale authorization link.
-    setPlugins("attempt", reconcile(attempt));
-    setPlugins({
-      attemptTenant: current.tenant,
-      notice: attempt.state === "failed" ? "Plugin connection failed. Try connecting again." : attempt.state === "cancelled" ? "Plugin sign-in canceled." : null,
+    setPlugins(draft => { draft.attempt = attempt; });
+    setPlugins(draft => {
+      Object.assign(draft, {
+        attemptTenant: current.tenant,
+        notice: attempt.state === "failed" ? "Plugin connection failed. Try connecting again." : attempt.state === "cancelled" ? "Plugin sign-in canceled." : null,
+      });
     });
     pending = null;
     return attempt.state !== "pending" ? listRequest(current.tenant) : null;
@@ -140,9 +141,9 @@ function apply(response: unknown): PluginRequest | null {
     if (!["removeServer", "disconnect", "setEnabled", "cancel", "complete"].includes(current.action)) {
       throw new Error("The plugin service did not confirm the requested action. Refresh connections.");
     }
-    if (current.action === "removeServer") setPlugins("confirmation", null);
+    if (current.action === "removeServer") setPlugins(draft => { draft["confirmation"] = null; });
     if (current.action === "cancel" || current.action === "complete") {
-      setPlugins({ attempt: null, attemptTenant: null, notice: current.action === "cancel" ? "Plugin sign-in canceled." : null });
+      setPlugins(draft => { Object.assign(draft, { attempt: null, attemptTenant: null, notice: current.action === "cancel" ? "Plugin sign-in canceled." : null }); });
     }
     pending = null;
     return listRequest(current.tenant);
@@ -156,24 +157,24 @@ function failed(): PluginRequest | null {
   if (!current) return null;
   if (current.action === "selectWorkspace") {
     selectionUncertain = true;
-    setPlugins("notice", "Workspace selection could not be confirmed. Refreshing the saved selection.");
+    setPlugins(draft => { draft["notice"] = "Workspace selection could not be confirmed. Refreshing the saved selection."; });
     return refreshRequest();
   }
   if (current.action === "list") return null;
-  setPlugins("notice", "The plugin action could not be confirmed. Check connections before trying again.");
+  setPlugins(draft => { draft["notice"] = "The plugin action could not be confirmed. Check connections before trying again."; });
   return listRequest(current.tenant);
 }
 
 /** `followUp` reads reconcile a write; they keep the write's error visible instead of clearing it. */
 async function request(input: PluginRequest, selectingWorkspace = false, followUp = false) {
-  if (plugins.busy) return;
+  if (pending) return;
   const prepared = begin(input, selectingWorkspace);
   if (typeof prepared === "string") {
-    setPlugins("error", prepared);
+    setPlugins(draft => { draft["error"] = prepared; });
     return;
   }
   const mine = generation;
-  setPlugins(followUp ? { busy: true, setup: null } : { busy: true, error: null, setup: null });
+  setPlugins(draft => { Object.assign(draft, followUp ? { busy: true, setup: null } : { busy: true, error: null, setup: null }); });
   clearTimeout(poll);
   let next: PluginRequest | null = null;
   try {
@@ -182,19 +183,20 @@ async function request(input: PluginRequest, selectingWorkspace = false, followU
     try {
       next = apply(value);
     } catch (error) {
-      setPlugins("error", errorText(error));
+      setPlugins(draft => { draft["error"] = errorText(error); });
       next = failed();
     }
   } catch (error) {
     if (mine !== generation) return;
-    setPlugins("error", errorText(error));
+    setPlugins(draft => { draft["error"] = errorText(error); });
     next = failed();
   }
-  setPlugins("busy", false);
+  setPlugins(draft => { draft["busy"] = false; });
   // While disconnected the follow-up read waits for the reconnect refresh instead of failing again.
-  if (next) {
-    if (rpc.connected) void request(next, false, true);
-  } else schedulePoll();
+  queueMicrotask(() => {
+    if (next) { if (rpc.connected) void request(next, false, true); }
+    else schedulePoll();
+  });
 }
 
 function schedulePoll() {
@@ -215,7 +217,7 @@ function reset() {
   pending = null;
   selectionUncertain = false;
   clearTimeout(poll);
-  setPlugins({ snapshot: null, attempt: null, attemptTenant: null, confirmation: null, notice: null, error: null, busy: false, setup: null, selected: null });
+  setPlugins(draft => { Object.assign(draft, { snapshot: null, attempt: null, attemptTenant: null, confirmation: null, notice: null, error: null, busy: false, setup: null, selected: null }); });
 }
 
 export function refresh() {
@@ -223,26 +225,21 @@ export function refresh() {
 }
 
 createRoot(() => {
-  createEffect(
-    on(
-      () => user()?.id ?? null,
-      (id, previous) => {
-        if (id === previous) return;
-        reset();
-        if (id) refresh();
-      },
-    ),
-  );
+  createEffect(() => user()?.id ?? null, (id, previous) => {
+    if (id === previous) return;
+    reset();
+    if (id) queueMicrotask(refresh);
+  });
 });
 // A reconnect drops in-flight work; the refreshed read shows whether it landed.
 onConnected(() => {
   if (pending) {
     pending = null;
-    setPlugins({ busy: false, notice: "Connection interrupted. Check refreshed connections before trying an action again.", confirmation: null });
+    setPlugins(draft => { Object.assign(draft, { busy: false, notice: "Connection interrupted. Check refreshed connections before trying an action again.", confirmation: null }); });
   }
   generation++;
-  setPlugins("busy", false);
-  refresh();
+  setPlugins(draft => { draft["busy"] = false; });
+  queueMicrotask(refresh);
 });
 
 export function definition(id: string | null) {
@@ -257,14 +254,14 @@ export function connect(plugin: PluginDefinition) {
   }
   if (plugins.busy || !canManage()) return;
   if (activeAttempt()) {
-    setPlugins("error", "Finish or cancel the current plugin sign-in first.");
+    setPlugins(draft => { draft["error"] = "Finish or cancel the current plugin sign-in first."; });
     return;
   }
   const label = nextLabel(plugins.snapshot, plugin);
   const target = tenant();
   if (!target) return;
   if (plugin.apiKeyHeader) {
-    setPlugins({ selected: plugin.id, setup: { kind: "catalog", plugin, label } });
+    setPlugins(draft => { Object.assign(draft, { selected: plugin.id, setup: { kind: "catalog", plugin, label } }); });
     return;
   }
   const result = connectRequest(target, plugin, label, null);
@@ -277,14 +274,14 @@ export function openServerSetup() {
     return;
   }
   if (activeAttempt()) {
-    setPlugins("error", "Finish or cancel the current plugin sign-in first.");
+    setPlugins(draft => { draft["error"] = "Finish or cancel the current plugin sign-in first."; });
     return;
   }
   if (plugins.busy || !canManage() || !tenant()) return;
-  setPlugins("setup", { kind: "server" });
+  setPlugins(draft => { draft["setup"] = { kind: "server" }; });
 }
 
-export const closeSetup = () => setPlugins("setup", null);
+export const closeSetup = () => setPlugins(draft => { draft["setup"] = null; });
 
 /** Submits a validated setup request if the workspace it was built for is still current. */
 export function submitSetup(prepared: PluginRequest) {
@@ -312,24 +309,24 @@ export function selectWorkspace(id: string) {
 }
 
 export function askRemoval(kind: RemovalKind, id: string) {
-  if (pending || plugins.busy || activeAttempt()) return setPlugins("error", "Finish the current plugin action first.");
-  if (!canManage()) return setPlugins("error", "Only workspace administrators can manage these connections.");
+  if (pending || plugins.busy || activeAttempt()) return setPlugins(draft => { draft["error"] = "Finish the current plugin action first."; });
+  if (!canManage()) return setPlugins(draft => { draft["error"] = "Only workspace administrators can manage these connections."; });
   const target = tenant();
-  if (!target) return setPlugins("error", "Choose a workspace first.");
+  if (!target) return setPlugins(draft => { draft["error"] = "Choose a workspace first."; });
   const row = removable(kind, id);
-  if (!row) return setPlugins("error", "This connection or custom server is no longer available.");
+  if (!row) return setPlugins(draft => { draft["error"] = "This connection or custom server is no longer available."; });
   const label = ("label" in row ? row.label : row.name) || "Plugin";
-  setPlugins("confirmation", { kind, label, tenant: target, id });
+  setPlugins(draft => { draft["confirmation"] = { kind, label, tenant: target, id }; });
 }
 
-export const dismissRemoval = () => setPlugins("confirmation", null);
+export const dismissRemoval = () => setPlugins(draft => { draft["confirmation"] = null; });
 
 export function confirmRemoval() {
-  if (pending || plugins.busy) return setPlugins("error", "Wait for the current plugin action to finish.");
+  if (pending || plugins.busy) return setPlugins(draft => { draft["error"] = "Wait for the current plugin action to finish."; });
   const confirmed = plugins.confirmation;
-  if (!confirmed) return setPlugins("error", "Choose a connection or custom server to remove.");
+  if (!confirmed) return setPlugins(draft => { draft["error"] = "Choose a connection or custom server to remove."; });
   if (!canManage() || tenant() !== confirmed.tenant || !removable(confirmed.kind, confirmed.id)) {
-    setPlugins({ confirmation: null, error: "Connections changed. Review them before removing anything." });
+    setPlugins(draft => { Object.assign(draft, { confirmation: null, error: "Connections changed. Review them before removing anything." }); });
     return;
   }
   const next: PluginRequest =
@@ -337,12 +334,12 @@ export function confirmRemoval() {
       ? { action: "disconnect", tenantId: confirmed.tenant, connectionId: confirmed.id }
       : { action: "removeServer", tenantId: confirmed.tenant, pluginId: confirmed.id };
   // Server removal stays open until confirmed so a lost reply can be retried from the same dialog.
-  if (confirmed.kind !== "server") setPlugins("confirmation", null);
+  if (confirmed.kind !== "server") setPlugins(draft => { draft["confirmation"] = null; });
   void request(next);
 }
 
 export function openDetail(id: string | null) {
-  setPlugins({ selected: id, setup: null });
+  setPlugins(draft => { Object.assign(draft, { selected: id, setup: null }); });
 }
 
-export const clearError = () => setPlugins("error", null);
+export const clearError = () => setPlugins(draft => { draft["error"] = null; });

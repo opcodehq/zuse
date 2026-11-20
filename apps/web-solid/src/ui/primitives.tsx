@@ -1,8 +1,11 @@
+import { omit } from "solid-js";
 // Shared controls. Menus and dialogs use Kobalte for focus management and keyboard behaviour.
-import { DropdownMenu } from "@kobalte/core/dropdown-menu";
+// Shared controls. Menus and dialogs use Kobalte for focus management and keyboard behaviour.
 import { Dialog as KDialog } from "@kobalte/core/dialog";
+import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { Tooltip as KTooltip } from "@kobalte/core/tooltip";
-import { createSignal, For, type JSX, Show, splitProps } from "solid-js";
+import { type JSX } from "@solidjs/web";
+import { createSignal, For, Show } from "solid-js";
 import { Icon } from "./Icon";
 import { GlyphSpinner } from "./loaders";
 
@@ -13,17 +16,17 @@ type ButtonProps = JSX.ButtonHTMLAttributes<HTMLButtonElement> & {
 };
 
 export function Button(props: ButtonProps) {
-  const [local, rest] = splitProps(props, ["variant", "size", "icon", "children", "class"]);
+  const rest = omit(props, "variant", "size", "icon", "children", "class");
   return (
     <button
       type="button"
       {...rest}
-      class={`btn ${local.class ?? ""}`}
-      data-variant={local.variant ?? "default"}
-      data-size={local.size ?? "md"}
+      class={`btn ${props.class ?? ""}`}
+      data-variant={props.variant ?? "default"}
+      data-size={props.size ?? "md"}
     >
-      <Show when={local.icon}>{(name) => <Icon name={name()} size={14} />}</Show>
-      {local.children}
+      <Show when={props.icon}>{(name) => <Icon name={name()} size={14} />}</Show>
+      {props.children}
     </button>
   );
 }
@@ -31,20 +34,20 @@ export function Button(props: ButtonProps) {
 export function IconButton(
   props: JSX.ButtonHTMLAttributes<HTMLButtonElement> & { icon: string; label: string; size?: "md" | "sm"; active?: boolean; iconSize?: number; busy?: boolean },
 ) {
-  const [local, rest] = splitProps(props, ["icon", "label", "size", "active", "iconSize", "class", "busy"]);
+  const rest = omit(props, "icon", "label", "size", "active", "iconSize", "class", "busy");
   return (
     <button
       type="button"
       {...rest}
-      class={`icon-btn ${local.class ?? ""}`}
-      aria-label={local.label}
-      title={local.label}
-      data-size={local.size ?? "md"}
-      data-active={local.active ? "true" : undefined}
-      aria-busy={local.busy ? "true" : undefined}
+      class={`icon-btn ${props.class ?? ""}`}
+      aria-label={props.label}
+      title={props.label}
+      data-size={props.size ?? "md"}
+      data-active={props.active ? "true" : undefined}
+      aria-busy={props.busy ? "true" : undefined}
     >
       {/* Busy swaps the icon for the activity glyph, as desktop's refresh buttons do. */}
-      <Show when={local.busy} fallback={<Icon name={local.icon} size={local.iconSize ?? (local.size === "sm" ? 14 : 16)} />}>
+      <Show when={props.busy} fallback={<Icon name={props.icon} size={props.iconSize ?? (props.size === "sm" ? 14 : 16)} />}>
         <GlyphSpinner cell={1.75} decorative />
       </Show>
     </button>
@@ -52,8 +55,8 @@ export function IconButton(
 }
 
 export function TextField(props: JSX.InputHTMLAttributes<HTMLInputElement>) {
-  const [local, rest] = splitProps(props, ["class"]);
-  return <input {...rest} class={`field ${local.class ?? ""}`} />;
+  const rest = omit(props, "class");
+  return <input {...rest} class={`field ${props.class ?? ""}`} />;
 }
 
 export function Toggle(props: { checked: boolean; label: string; onChange: (value: boolean) => void; disabled?: boolean }) {
@@ -62,7 +65,7 @@ export function Toggle(props: { checked: boolean; label: string; onChange: (valu
       type="button"
       role="switch"
       class="toggle"
-      aria-checked={props.checked}
+      aria-checked={(props.checked) ? "true" : "false"}
       aria-label={props.label}
       disabled={props.disabled}
       onClick={() => props.onChange(!props.checked)}
@@ -146,7 +149,7 @@ export function Tabs<T extends string>(props: { value: T; items: { value: T; lab
     <div class="tabs" role="tablist" aria-label={props.label}>
       <For each={props.items}>
         {(item) => (
-          <button type="button" class="tab" role="tab" aria-selected={props.value === item.value} onClick={() => props.onChange(item.value)}>
+          <button type="button" class="tab" role="tab" aria-selected={(props.value === item.value) ? "true" : "false"} onClick={() => props.onChange(item.value)}>
             {item.label}
           </button>
         )}

@@ -35,7 +35,7 @@ export function AddComputer(props: { onDone?: () => void; autofocus?: boolean })
           aria-label="Private connection link"
           aria-invalid={error() ? "true" : undefined}
           autocomplete="off"
-          spellcheck={false}
+          spellcheck="false"
           autofocus={props.autofocus}
           value={value()}
           onInput={(event) => setValue(event.currentTarget.value)}

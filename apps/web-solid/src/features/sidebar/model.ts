@@ -7,6 +7,7 @@ import { pinnedIds, sections, type SidebarSection } from "./pins";
 import { isCollapsed, option, organization } from "./prefs";
 import { basename, time } from "./util";
 import { deviceOnline } from "@/core/util";
+import { isZapperChat } from "@/core/zappers";
 
 export type Indicator = "working" | "awaitingInput" | "errored" | "completed" | "idle";
 
@@ -45,7 +46,7 @@ export const awaitingKind = (chatId: string) => (state.sessions[chatId]?.awaitin
 export function workingThreads(at: number) {
   const roots = new Set<string>();
   for (const chat of Object.values(state.chats)) {
-    if (chat.parentChatId || isArchived(chat)) continue;
+    if (chat.parentChatId || isArchived(chat) || isZapperChat(chat.id)) continue;
     if (liveStatus(state.sessions[chat.id], at) === "working") roots.add(chat.threadId ?? chat.id);
   }
   return roots.size;
@@ -200,7 +201,7 @@ export function layout(input: LayoutInput): Layout {
   const at = input.at;
   const org = organization();
   const filter = option("spaceFilter");
-  const all = Object.values(state.chats);
+  const all = state.zappersReady ? Object.values(state.chats).filter(chat => !isZapperChat(chat.id)) : [];
   const topLevel = all.filter((chat) => !chat.parentChatId);
 
   // A row stands for its whole thread: a sibling conversation working lights the row too.

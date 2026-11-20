@@ -1,37 +1,11 @@
 // Tool groups: summary header, activity rail, chips with folding detail (desktop `render_tool_group`).
-import { createMemo, createSignal, For, Index, type JSX, Match, Show, Switch } from "solid-js";
 import { Icon } from "@/ui/Icon";
+import { type JSX } from "@solidjs/web";
+import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
 import { diffFile, type FileDiff } from "./diff";
 import { frameThrottled } from "./frame";
 import { Markdown } from "./Markdown";
-import {
-  agentStatus,
-  callBlock,
-  callOf,
-  chipDiffStats,
-  chipLabel,
-  fileBadgeName,
-  fileIcon,
-  filePathOf,
-  formatKb,
-  FULL_OUTPUT_MAX_LINES,
-  groupCollapses,
-  harnessIcon,
-  isAgentItem,
-  outputDetail,
-  type OutputDetail,
-  protocolGroupSummary,
-  type ReasoningPart,
-  type TextPart,
-  type TodoItem,
-  type ToolDiff,
-  type ToolDiffStat,
-  toolGroupSummary,
-  toolIcon,
-  type ToolItem,
-  type ToolPart,
-  turnSummary,
-} from "./model";
+import { agentStatus, callBlock, callOf, chipDiffStats, chipLabel, fileBadgeName, fileIcon, filePathOf, formatKb, FULL_OUTPUT_MAX_LINES, groupCollapses, harnessIcon, isAgentItem, outputDetail, type OutputDetail, protocolGroupSummary, type ReasoningPart, type TextPart, type TodoItem, type ToolDiff, type ToolDiffStat, toolGroupSummary, toolIcon, type ToolItem, type ToolPart, turnSummary, } from "./model";
 import { blobState, fetchBlob, isOpen, toggleOpen } from "./resources";
 
 export interface GroupContext {
@@ -54,7 +28,7 @@ export function ToolGroup(props: { id: string; tools: ToolItem[]; live: boolean;
         <button
           type="button"
           class="tool-group-head"
-          aria-expanded={open()}
+          aria-expanded={(open()) ? "true" : "false"}
           aria-controls={bodyId()}
           title={description()}
           onClick={() => toggleOpen(props.id, liveAgents())}
@@ -62,12 +36,12 @@ export function ToolGroup(props: { id: string; tools: ToolItem[]; live: boolean;
           <Show when={agentGroup()}>
             <AvatarStack count={props.tools.length} icon={harnessIcon(props.ctx.harness())} />
           </Show>
-          <span class="tool-group-title" classList={{ shimmer: summary().running || liveAgents() }}>{summary().text}</span>
+          <span class={["tool-group-title", { shimmer: summary().running || liveAgents() }]} >{summary().text}</span>
         </button>
       </Show>
       <Show when={open()}>
         <div id={bodyId()} class="tool-chips" data-rail={collapses() ? "true" : undefined}>
-          <Index each={props.tools}>
+          <For keyed={false} each={props.tools}>
             {(tool, ix) => (
               <ToolRow
                 groupId={props.id}
@@ -79,7 +53,7 @@ export function ToolGroup(props: { id: string; tools: ToolItem[]; live: boolean;
                 ctx={props.ctx}
               />
             )}
-          </Index>
+          </For>
         </div>
       </Show>
     </div>
@@ -102,8 +76,8 @@ export function FoldHeader(props: { id: string; tools: ToolItem[]; live: boolean
   const text = () => (props.live ? toolGroupSummary(props.tools, true).text : turnSummary(props.tools));
   return (
     <div class="tool-fold">
-      <button type="button" class="tool-group-head" aria-expanded={open()} onClick={() => toggleOpen(props.id)}>
-        <span class="tool-group-title" classList={{ shimmer: props.live && props.tools.some((t) => !(t.part as ToolPart).resolved) }}>{text()}</span>
+      <button type="button" class="tool-group-head" aria-expanded={(open()) ? "true" : "false"} onClick={() => toggleOpen(props.id)}>
+        <span class={["tool-group-title", { shimmer: props.live && props.tools.some((t) => !(t.part as ToolPart).resolved) }]} >{text()}</span>
         <For each={icons()}>{(icon) => <Icon name={icon} size={13} class="tool-fold-icon" />}</For>
       </button>
       <Show when={open()}>
@@ -222,7 +196,7 @@ function ToolRow(props: {
     <div class="tool-row" data-rail={props.rail ? "true" : undefined} data-first={props.index === 0 ? "true" : undefined} data-last={props.last ? "true" : undefined}>
       <Show when={props.rail}>
         <span class="tool-rail" aria-hidden="true">
-          <Icon name={toolIcon(props.item)} size={14} class="tool-rail-icon" classList={{ error: !!call()?.isError }} />
+          <Icon name={toolIcon(props.item)} size={14} class={["tool-rail-icon", { error: !!call()?.isError }]}  />
         </span>
       </Show>
       <div class="tool-card">
@@ -234,7 +208,7 @@ function ToolRow(props: {
             when={expandable()}
             fallback={<div class="chip-head"><ChipHeader item={props.item} text={text} live={props.live} flat={flatThought()} open={false} trail={false} /></div>}
           >
-            <button type="button" class="chip-head" aria-expanded={open()} aria-controls={panelId()} onClick={() => toggleOpen(key(), props.item.kind === "thought" && streaming())}>
+            <button type="button" class="chip-head" aria-expanded={(open()) ? "true" : "false"} aria-controls={panelId()} onClick={() => toggleOpen(key(), props.item.kind === "thought" && streaming())}>
               <ChipHeader item={props.item} text={text} live={props.live} flat={flatThought()} open={open()} trail />
             </button>
           </Show>
@@ -284,9 +258,9 @@ function ChipHeader(props: { item: ToolItem; text: () => string; live: boolean; 
   return (
     <>
       <Show when={props.flat}><Icon name="tool-thinking" size={14} class="chip-flat-icon" /></Show>
-      <span class="chip-label" classList={{ shimmer: pending() }}>{label()[0]}</span>
+      <span class={["chip-label", { shimmer: pending() }]} >{label()[0]}</span>
       <Show when={part()?.isError}><span class="chip-error">Error</span></Show>
-      <Switch fallback={<Show when={label()[1]}><span class="chip-detail" classList={{ italic: props.item.kind === "thought" }}>{label()[1]}</span></Show>}>
+      <Switch fallback={<Show when={label()[1]}><span class={["chip-detail", { italic: props.item.kind === "thought" }]} >{label()[1]}</span></Show>}>
         <Match when={path()}>
           {(p) => (
             <span class="chip-file" title={p()}>
@@ -394,7 +368,7 @@ function DetailBody(props: { detail: Detail; text: () => string; live: boolean }
 function OutputLines(props: { detail: OutputDetail }) {
   return (
     <div class="chip-output">
-      <pre tabIndex={0}>{props.detail.lines.join("\n")}</pre>
+      <pre tabindex={0}>{props.detail.lines.join("\n")}</pre>
       <Show when={props.detail.truncatedBy > 0}>
         <div class="chip-more-lines">… {props.detail.truncatedBy} more lines</div>
       </Show>

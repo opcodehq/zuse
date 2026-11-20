@@ -1,9 +1,11 @@
 // Local view state: what is open, not what exists. Persisted preferences live here too.
-import { createEffect, createRoot, createSignal, on } from "solid-js";
-import { createStore } from "solid-js/store";
+import { createEffect, createRoot, createSignal, createStore } from "solid-js";
+import { zapperForChat } from "./zappers";
 
 export type Route =
   | { kind: "chat" }
+  | { kind: "zappers"; zapperId: string }
+  | { kind: "newZapper"; zapperId?: string }
   | { kind: "newProject" }
   | { kind: "settings"; section?: string }
   | { kind: "plugins" }
@@ -101,24 +103,25 @@ export const narrowLayout = createRoot(() => {
 /** Whether the sidebar shows: the persisted preference on wide screens, the drawer on narrow ones. */
 export const sidebarVisible = () => (narrowLayout() ? view.drawerOpen : view.preferences.sidebarOpen);
 export function setSidebarVisible(open: boolean) {
-  if (narrowLayout()) setView("drawerOpen", open);
-  else setView("preferences", "sidebarOpen", open);
+  if (narrowLayout()) setView(draft => { draft["drawerOpen"] = open; });
+  else setView(draft => { draft["preferences"]!["sidebarOpen"] = open; });
 }
 
 createRoot(() => {
+  createEffect(() => view.route.kind === "chat" ? zapperForChat(view.selectedChatId)?.id : undefined, id => {
+    if (id) setView(draft => { draft.route = { kind: "zappers", zapperId: id }; });
+  });
   // Picking a chat, a project or another screen from the drawer closes it.
-  createEffect(on(() => [view.selectedChatId, view.draftProjectPath, view.route] as const, () => setView("drawerOpen", false), { defer: true }));
-  createEffect(on(narrowLayout, () => setView("drawerOpen", false), { defer: true }));
-  createEffect(() => {
-    const text = JSON.stringify(view.preferences);
+  createEffect(() => [view.selectedChatId, view.draftProjectPath, view.route] as const, () => setView(draft => { draft["drawerOpen"] = false; }), { defer: true });
+  createEffect(narrowLayout, () => setView(draft => { draft["drawerOpen"] = false; }), { defer: true });
+  createEffect(() => JSON.stringify(view.preferences), (text) => {
     try {
       localStorage.setItem(PREFERENCES, text);
     } catch {
       // Storage can be unavailable in private windows; preferences then last for the tab.
     }
   });
-  createEffect(() => {
-    const text = JSON.stringify({ selectedChatId: view.selectedChatId, draftProjectPath: view.draftProjectPath, rightPanel: view.rightPanel });
+  createEffect(() => JSON.stringify({ selectedChatId: view.selectedChatId, draftProjectPath: view.draftProjectPath, rightPanel: view.rightPanel }), (text) => {
     try {
       sessionStorage.setItem(TAB, text);
     } catch {
@@ -128,8 +131,13 @@ createRoot(() => {
 });
 
 export function openChat(chatId: string | null) {
-  setView({ selectedChatId: chatId, route: { kind: "chat" } });
+  const owner = zapperForChat(chatId);
+  setView(draft => { draft.selectedChatId = chatId; draft.route = owner ? { kind: "zappers", zapperId: owner.id } : { kind: "chat" }; });
 }
 export function navigate(route: Route) {
-  setView("route", route);
+  if (route.kind === "chat") {
+    const owner = zapperForChat(view.selectedChatId);
+    if (owner) route = { kind: "zappers", zapperId: owner.id };
+  }
+  setView(draft => { draft["route"] = route; });
 }

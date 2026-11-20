@@ -1,21 +1,20 @@
 // The chat transcript: conversation tabs, a virtualized message list that sticks to the bottom while it streams,
 // the outline rail, "Jump to latest", and the docked answer surface for the agent's open request.
-import { createVirtualizer } from "@tanstack/solid-virtual";
-import { batch, createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show, untrack } from "solid-js";
-import { unwrap } from "solid-js/store";
-import type { SessionMessageEntry } from "@/core/protocol";
 import { registerShortcut } from "@/core/keys";
+import type { SessionMessageEntry } from "@/core/protocol";
 import { state } from "@/core/store";
 import { openChat, view } from "@/core/view";
 import { Icon } from "@/ui/Icon";
 import { DitherRing } from "@/ui/loaders";
+import { createVirtualizer } from "@/ui/virtualizer";
+import { createEffect, createMemo, createSignal, For, onCleanup, onSettled, Show, snapshot as snapshotStore, untrack } from "solid-js";
 import { conversationTabs } from "./actions";
 import { Entry, type EntryContext } from "./Entry";
 import { FindBar, type FindHost } from "./Find";
 import { InputDock } from "./Input";
+import { TurnStatus, WorkingTrailer } from "./parts";
 import { Rail, RAIL_MIN_WIDTH, railTicks } from "./Rail";
 import { ConversationTabs } from "./Tabs";
-import { TurnStatus, WorkingTrailer } from "./parts";
 import "./transcript.css";
 
 /** Re-engage the bottom pin within this distance of the end (desktop STICK_THRESHOLD_PX). */
@@ -46,7 +45,7 @@ for (let n = 1; n <= 9; n++)
     label: n === 9 ? "Go to last tab" : `Go to tab ${n}`,
     inInputs: true,
     run: () => {
-      const open = view.route.kind === "chat" ? conversationTabs()?.open : undefined;
+      const open = (view.route.kind === "chat" || view.route.kind === "zappers") ? conversationTabs()?.open : undefined;
       const chat = open && (n === 9 ? open[open.length - 1] : open[n - 1]);
       if (chat) openChat(chat.id);
     },
@@ -95,7 +94,7 @@ function ChatTranscript(props: { chatId: string }) {
   let rows: readonly SessionMessageEntry[] = [];
   const virtualizer = createVirtualizer({
     get count() {
-      rows = unwrap(messages());
+      rows = snapshotStore(messages());
       return messages().length;
     },
     getScrollElement: () => scroller,
@@ -143,27 +142,30 @@ function ChatTranscript(props: { chatId: string }) {
     readPosition();
   };
 
-  onMount(() => {
+  onSettled(() => {
+    const cleanups: (() => void)[] = [];
     const resize = new ResizeObserver(() => {
-      batch(() => {
+      (() => {
         setWidth(scroller.clientWidth);
         setHeight(scroller.clientHeight);
-      });
+      })();
       stick();
     });
     resize.observe(scroller);
     resize.observe(inner);
-    onCleanup(() => resize.disconnect());
+    cleanups.push(() => resize.disconnect());
+
+    return () => cleanups.forEach(cleanup => cleanup());
   });
 
-  createEffect(on(() => virtualizer.getTotalSize(), () => queueMicrotask(stick)));
+  createEffect(() => virtualizer.getTotalSize(), () => queueMicrotask(stick));
 
   // Restore a saved reading position once the history has arrived.
-  createEffect(() => {
+  createEffect(() => state.transcript?.ready, () => {
     if (restored || !state.transcript?.ready || !saved?.anchor) return;
     const index = untrack(messages).findIndex((m) => m.id === saved.anchor);
     restored = true;
-    if (index < 0) return toBottom();
+    if (index < 0) return void (toBottom());
     virtualizer.scrollToIndex(index, { align: "start" });
     // Rows above are only estimated until they render, so settle on the anchor row's real position over a few frames.
     let frames = 0;
@@ -178,7 +180,7 @@ function ChatTranscript(props: { chatId: string }) {
     };
     requestAnimationFrame(settle);
   });
-  createEffect(() => {
+  createEffect(() => state.transcript?.ready, () => {
     if (state.transcript?.ready && !saved) restored = true;
   });
 
@@ -235,7 +237,7 @@ function ChatTranscript(props: { chatId: string }) {
   };
 
   const items = () => virtualizer.getVirtualItems();
-  const keys = createMemo(() => items().map((item) => String(item.key)), [], {
+  const keys = createMemo(() => items().map((item) => String(item.key)), {
     equals: (a, b) => a.length === b.length && a.every((v, i) => v === b[i]),
   });
   const byKey = createMemo(() => new Map(items().map((item) => [String(item.key), item])));
@@ -254,7 +256,7 @@ function ChatTranscript(props: { chatId: string }) {
     const list = messages();
     void list.length;
     void list[list.length - 1]?.id;
-    return railTicks(unwrap(list));
+    return railTicks(snapshotStore(list));
   });
   const empty = () => state.transcript?.ready && messages().length === 0;
   const width_ = () => {
@@ -268,14 +270,14 @@ function ChatTranscript(props: { chatId: string }) {
         <div
           ref={scroller}
           class="t-scroller"
-          tabIndex={0}
+          tabindex={0}
           role="region"
           aria-label="Conversation"
-          aria-busy={!state.transcript?.ready}
+          aria-busy={(!state.transcript?.ready) ? "true" : "false"}
           style={{ "--t-column": `${width_()}px` }}
           data-narrow={width() > 0 && width() < RAIL_MIN_WIDTH ? "true" : undefined}
           onScroll={onScroll}
-        on:scrollend={onScrollEnd}
+        onScrollEnd={onScrollEnd}
           onWheel={noteIntent}
           onTouchMove={noteIntent}
           onPointerDown={noteIntent}
@@ -289,7 +291,7 @@ function ChatTranscript(props: { chatId: string }) {
                   const index = () => item()?.index ?? -1;
                   const entry = () => messages()[index()];
                   let row!: HTMLDivElement;
-                  onMount(() => virtualizer.measureElement(row));
+                  onSettled(() => virtualizer.measureElement(row));
                   return (
                     <div ref={row} class="t-row" data-index={index()} data-entry={key}>
                       <div class="t-column">

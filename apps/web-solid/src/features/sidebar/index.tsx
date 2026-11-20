@@ -1,13 +1,14 @@
 // The left column (crates/ui shell.rs render_chat_sidebar): the title strip, global actions, the list
 // heading, the project filter, search, the session list and the footer.
-import "./sidebar.css";
-import { Popover } from "@kobalte/core/popover";
-import { createMemo, createSignal, For, type JSX, Show } from "solid-js";
+import { ZapperSidebar } from "@/features/zappers/Sidebar";
 import { formatKeys } from "@/core/keys";
 import { state } from "@/core/store";
 import { setSidebarVisible, view } from "@/core/view";
 import { Icon } from "@/ui/Icon";
 import { Tooltip } from "@/ui/primitives";
+import { Popover } from "@kobalte/core/popover";
+import { type JSX } from "@solidjs/web";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import { signedIn } from "./account";
 import { newChat, newProject, openPlugins } from "./actions";
 import { Dialogs } from "./Dialogs";
@@ -15,10 +16,11 @@ import { Footer } from "./Footer";
 import { List } from "./List";
 import { EntriesMenu, viewEntries } from "./menus";
 import { projectKey, projectList, projectOffline, projectRemotes, representative, spaceName } from "./model";
-import { now } from "./util";
 import { query, searchOpen, setQuery, setSearchOpen } from "./overlay";
 import { option, organization, setOption } from "./prefs";
 import { ProjectAvatar } from "./Row";
+import "./sidebar.css";
+import { now } from "./util";
 
 function HeadButton(props: { label: string; icon: string; active?: boolean; onClick: () => void }) {
   return (
@@ -27,7 +29,7 @@ function HeadButton(props: { label: string; icon: string; active?: boolean; onCl
         type="button"
         class="sb-hbtn"
         aria-label={props.label}
-        aria-pressed={props.active === undefined ? undefined : props.active}
+        aria-pressed={(props.active === undefined ? undefined : props.active) == null ? undefined : (props.active === undefined ? undefined : props.active) ? "true" : "false"}
         data-active={props.active ? "true" : undefined}
         onClick={() => props.onClick()}
       >
@@ -128,7 +130,7 @@ function FilterMenu(props: { trigger: (triggerProps: Record<string, unknown>) =>
                       id={`sb-filter-${index()}`}
                       class="menu-item"
                       role="option"
-                      aria-selected={selected()}
+                      aria-selected={(selected()) ? "true" : "false"}
                       data-highlighted={active() === index() ? "" : undefined}
                       onPointerMove={() => setActive(index())}
                       onClick={() => choose(row)}
@@ -293,6 +295,7 @@ export function Sidebar() {
     <div class="sb">
       <TitleStrip />
       <Nav />
+      <ZapperSidebar />
       <Heading />
       <FilterChip />
       <Search />

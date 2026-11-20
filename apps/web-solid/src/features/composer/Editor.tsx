@@ -1,8 +1,8 @@
 // The prompt editor: an auto-growing textarea with `@` file and `/` command completion above the card.
-import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
 import { state } from "@/core/store";
 import { view } from "@/core/view";
 import { Icon } from "@/ui/Icon";
+import { createEffect, createMemo, createSignal, For, Match, onSettled, Show, Switch } from "solid-js";
 import { Glyph } from "./assets";
 import { draftSpace, resolve, targetDeviceId } from "./catalog";
 import { completionScope, searchFiles, slashCatalog, slashRows, tokenAt, type FileMatch, type SlashRow, type Token } from "./completion";
@@ -41,47 +41,48 @@ export function Editor(props: EditorProps) {
   const text = () => draftFor(props.draftKey).text;
   const listId = `composer-completion-${Math.random().toString(36).slice(2)}`;
 
-  onMount(() => props.ref?.({ focus: () => textarea?.focus(), textarea: () => textarea }));
+  onSettled(() => { void (props.ref?.({ focus: () => textarea?.focus(), textarea: () => textarea })); });
 
   const resize = () => {
     if (!textarea) return;
     textarea.style.height = "auto";
     textarea.style.height = `${Math.min(textarea.scrollHeight, 226)}px`;
   };
-  createEffect(on(text, () => queueMicrotask(resize)));
+  createEffect(text, () => queueMicrotask(resize));
 
   const token = createMemo(() => (focused() ? tokenAt(text(), caret()) : null));
   let seq = 0;
-  createEffect(
-    on(token, (t) => {
-      const id = ++seq;
-      if (!t || dismissed() === `${t.start}:${t.kind}`) return setCompletion(null);
-      setDismissed(null);
-      const scope = completionScope(view.selectedChatId, draftSpace()?.id);
-      const target = targetDeviceId();
-      if (t.kind === "mention") {
-        if (!scope) return setCompletion({ kind: "mention", token: t, loading: false, rows: [] });
-        setCompletion((prev) => ({ kind: "mention", token: t, loading: true, rows: prev?.kind === "mention" ? prev.rows : [] }));
-        const timer = setTimeout(() => {
-          searchFiles(t.query, scope, target).then(
-            (rows) => id === seq && setCompletion({ kind: "mention", token: t, loading: false, rows: rows.slice(0, 50) }),
-            (error) => id === seq && setCompletion({ kind: "mention", token: t, loading: false, rows: [], error: error instanceof Error ? error.message : "File search failed" }),
-          );
-        }, 60);
-        onCleanup(() => clearTimeout(timer));
-      } else {
-        const harness = resolve().harness;
-        const inChat = !!view.selectedChatId;
-        if (!harness) return setCompletion({ kind: "slash", token: t, loading: false, rows: slashRows([], [], inChat, t.query) });
-        setCompletion((prev) => ({ kind: "slash", token: t, loading: true, rows: prev?.kind === "slash" ? prev.rows : slashRows([], [], inChat, t.query) }));
-        slashCatalog(harness, scope, target).then((result) => {
-          if (id !== seq) return;
-          setCompletion({ kind: "slash", token: t, loading: false, error: result.error, rows: slashRows(result.commands, result.skills, inChat, t.query) });
-        });
-      }
-      setActive(0);
-    }),
-  );
+  createEffect(token, (t) => {
+    const cleanups: (() => void)[] = [];
+    const id = ++seq;
+    if (!t || dismissed() === `${t.start}:${t.kind}`) return void (setCompletion(null));
+    setDismissed(null);
+    const scope = completionScope(view.selectedChatId, draftSpace()?.id);
+    const target = targetDeviceId();
+    if (t.kind === "mention") {
+      if (!scope) return void (setCompletion({ kind: "mention", token: t, loading: false, rows: [] }));
+      setCompletion((prev) => ({ kind: "mention", token: t, loading: true, rows: prev?.kind === "mention" ? prev.rows : [] }));
+      const timer = setTimeout(() => {
+        searchFiles(t.query, scope, target).then(
+          (rows) => id === seq && setCompletion({ kind: "mention", token: t, loading: false, rows: rows.slice(0, 50) }),
+          (error) => id === seq && setCompletion({ kind: "mention", token: t, loading: false, rows: [], error: error instanceof Error ? error.message : "File search failed" }),
+        );
+      }, 60);
+      cleanups.push(() => clearTimeout(timer));
+    } else {
+      const harness = resolve().harness;
+      const inChat = !!view.selectedChatId;
+      if (!harness) return void (setCompletion({ kind: "slash", token: t, loading: false, rows: slashRows([], [], inChat, t.query) }));
+      setCompletion((prev) => ({ kind: "slash", token: t, loading: true, rows: prev?.kind === "slash" ? prev.rows : slashRows([], [], inChat, t.query) }));
+      slashCatalog(harness, scope, target).then((result) => {
+        if (id !== seq) return;
+        setCompletion({ kind: "slash", token: t, loading: false, error: result.error, rows: slashRows(result.commands, result.skills, inChat, t.query) });
+      });
+    }
+    setActive(0);
+
+    return () => cleanups.forEach(cleanup => cleanup());
+  });
 
   // Emoji suggestions when no `@` or `/` token owns the caret.
   const [emojiActive, setEmojiActive] = createSignal(0);
@@ -95,7 +96,7 @@ export function Editor(props: EditorProps) {
     const t = trigger();
     return t ? emojiSuggestions(t.query) : [];
   });
-  createEffect(on(emojiRows, () => setEmojiActive(0)));
+  createEffect(emojiRows, () => { void (setEmojiActive(0)); });
   const acceptEmoji = (index = emojiActive()) => {
     const t = trigger();
     const row = emojiRows()[index];
@@ -106,7 +107,7 @@ export function Editor(props: EditorProps) {
   };
 
   const rowCount = () => completion()?.rows.length ?? 0;
-  createEffect(on(active, (index) => listbox?.querySelector(`[data-index="${index}"]`)?.scrollIntoView({ block: "nearest" })));
+  createEffect(active, (index) => { void (listbox?.querySelector(`[data-index="${index}"]`)?.scrollIntoView({ block: "nearest" })); });
 
   const replaceRange = (start: number, end: number, insert: string) => {
     const value = text();
@@ -240,7 +241,7 @@ export function Editor(props: EditorProps) {
         placeholder={props.placeholder}
         aria-label={props.placeholder}
         aria-autocomplete="list"
-        aria-expanded={!!completion() || emojiRows().length > 0}
+        aria-expanded={(!!completion() || emojiRows().length > 0) ? "true" : "false"}
         aria-controls={emojiRows().length ? `${listId}-emoji` : completion() ? listId : undefined}
         aria-activedescendant={emojiRows().length ? `${listId}-emoji-${emojiActive()}` : completion() && rowCount() ? `${listId}-${active()}` : undefined}
         disabled={props.disabled}
@@ -278,7 +279,7 @@ export function Editor(props: EditorProps) {
                   id={`${listId}-emoji-${index()}`}
                   class="cmp-row cmp-list-row"
                   role="option"
-                  aria-selected={emojiActive() === index()}
+                  aria-selected={(emojiActive() === index()) ? "true" : "false"}
                   onMouseMove={() => setEmojiActive(index())}
                   onClick={() => acceptEmoji(index())}
                 >
@@ -330,7 +331,7 @@ export function Editor(props: EditorProps) {
                             class="cmp-row"
                             role="option"
                             data-index={index()}
-                            aria-selected={active() === index()}
+                            aria-selected={(active() === index()) ? "true" : "false"}
                             onMouseMove={() => setActive(index())}
                             onClick={() => accept(index())}
                           >
@@ -361,7 +362,7 @@ function SlashList(props: { rows: SlashRow[]; active: number; listId: string; on
           class="cmp-row cmp-slash-row"
           role="option"
           data-index={index()}
-          aria-selected={props.active === index()}
+          aria-selected={(props.active === index()) ? "true" : "false"}
           onMouseMove={() => props.onHover(index())}
           onClick={() => props.onPick(index())}
         >

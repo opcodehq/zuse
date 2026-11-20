@@ -1,7 +1,7 @@
 // Custom ACP agents and the public agent catalog (crates/protocol/src/custom_acp.rs, crates/viewport/src/custom_acp.rs).
-import { createStore } from "solid-js/store";
-import { M } from "@/core/methods";
 import { onConnected, refreshHarnesses, rpc } from "@/core/connection";
+import { M } from "@/core/methods";
+import { createStore } from "solid-js";
 import { type Catalog, type CustomAcpAgent, type CustomAcpAgents, data, loadCustomAgents, loadModels, message, type RegistryAgent, setData, uncertain } from "./data";
 
 export type Probe = { kind: "testing" } | { kind: "ready" } | { kind: "error"; message: string };
@@ -27,7 +27,7 @@ export const [custom, setCustom] = createStore<CustomState>({
   icons: {},
 });
 
-onConnected(() => setCustom({ busy: null, error: null, probes: {}, catalog: null, catalogError: null }));
+onConnected(() => setCustom(draft => { Object.assign(draft, { busy: null, error: null, probes: {}, catalog: null, catalogError: null }); }));
 
 const BUILT_IN: Record<string, string> = {
   "claude-acp": "claude-code",
@@ -191,19 +191,19 @@ function isSnapshot(value: unknown): value is CustomAcpAgents {
 
 async function mutate(label: string, method: string, params: Record<string, unknown>): Promise<boolean> {
   if (custom.busy) return false;
-  setCustom({ busy: label, error: null });
+  setCustom(draft => { Object.assign(draft, { busy: label, error: null }); });
   try {
     const reply = await rpc.call(method, params);
     if (!isSnapshot(reply)) throw new Error("Could not read custom agent configuration. Refresh before retrying.");
-    setData("custom", reply);
-    for (const id of Object.keys(custom.probes)) if (!reply.agents.some((a) => a.id === id)) setCustom("probes", id, undefined);
+    setData(draft => { draft["custom"] = reply; });
+    for (const id of Object.keys(custom.probes)) if (!reply.agents.some((a) => a.id === id)) setCustom(draft => { delete draft["probes"]![id]; });
     void refreshHarnesses();
     return true;
   } catch (error) {
-    setCustom({ error: failure(error) });
+    setCustom(draft => { Object.assign(draft, { error: failure(error) }); });
     return false;
   } finally {
-    setCustom({ busy: null });
+    setCustom(draft => { Object.assign(draft, { busy: null }); });
   }
 }
 
@@ -213,7 +213,7 @@ export async function saveAgent(agent: CustomAcpAgent): Promise<string | null> {
   if (revision === undefined) return "Custom agents are still loading. Try again in a moment.";
   const ok = await mutate("Saving…", M.SET_CUSTOM_ACP_AGENT, { agent, expectedRevision: revision });
   if (!ok) return custom.error;
-  setCustom("probes", agent.id, undefined);
+  setCustom(draft => { delete draft["probes"]![agent.id]; });
   void probe(agent.id);
   return null;
 }
@@ -234,33 +234,33 @@ export function removeAgent(id: string) {
 /** Starting the agent and listing its models proves the connection. */
 export async function probe(id: string) {
   if (custom.probes[id]?.kind === "testing") return;
-  setCustom("probes", id, { kind: "testing" });
+  setCustom(draft => { draft["probes"]![id] = { kind: "testing" }; });
   await loadModels(id, true);
   const error = data.modelErrors[id];
-  setCustom("probes", id, error ? { kind: "error", message: error } : { kind: "ready" });
+  setCustom(draft => { draft["probes"]![id] = error ? { kind: "error", message: error } : { kind: "ready" }; });
 }
 
 export async function loadCatalog() {
   if (custom.catalogLoading) return;
-  setCustom({ catalogLoading: true, catalogError: null });
+  setCustom(draft => { Object.assign(draft, { catalogLoading: true, catalogError: null }); });
   try {
     const catalog = await rpc.call<Catalog>(M.ACP_CATALOG_GET, {});
-    setCustom({ catalog });
+    setCustom(draft => { Object.assign(draft, { catalog }); });
     for (const entry of catalog.agents) if (entry.icon && custom.icons[entry.id] === undefined) void loadIcon(entry.id);
   } catch (error) {
-    setCustom({ catalogError: message(error) });
+    setCustom(draft => { Object.assign(draft, { catalogError: message(error) }); });
   } finally {
-    setCustom({ catalogLoading: false });
+    setCustom(draft => { Object.assign(draft, { catalogLoading: false }); });
   }
 }
 
 async function loadIcon(id: string) {
-  setCustom("icons", id, null);
+  setCustom(draft => { draft["icons"]![id] = null; });
   try {
     const svg = await rpc.call<string>(M.ACP_CATALOG_ICON, { id });
     // Drawn through <img>, so registry markup can never run script in the page.
     if (typeof svg === "string" && svg.trim().startsWith("<"))
-      setCustom("icons", id, `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg.replace(/currentColor/g, "#8a8a8a"))}`);
+      setCustom(draft => { draft["icons"]![id] = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg.replace(/currentColor/g, "#8a8a8a"))}`; });
   } catch {
     // The entry keeps its generic glyph.
   }

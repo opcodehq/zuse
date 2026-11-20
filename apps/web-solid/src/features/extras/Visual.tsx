@@ -1,24 +1,13 @@
 // Agent visuals (`show_visual`) rendered as real DOM controls, SVG charts and 2D canvases.
 // The host runs the script; this view renders its tree and sends handler calls against the revision shown.
 // 3D scenes and shaders need the desktop renderer and say so in place.
-import { createEffect, createSignal, For, Index, type JSX, Match, onCleanup, onMount, Show, Switch, untrack } from "solid-js";
 import { state } from "@/core/store";
 import { Button } from "@/ui/primitives";
+import { type JSX } from "@solidjs/web";
+import { createEffect, createSignal, For, Match, onSettled, Show, Switch, untrack } from "solid-js";
 import { chartLabels, chartSeries, hoveredCategory, nearestPoint, planChart, scatterPoint, seriesColor, seriesValue, TICK_SIZE } from "./visual-chart";
+import { type Argument, canvasInternals, control, isObject, type Json, type JsonObject, openVisual, trackMounted, variant, visualKey, visuals, } from "./visual-session";
 import { canvasColor, CHART_COLORS, cssColor, fontWeight, formatNumber, num, textSize } from "./visual-style";
-import {
-  type Argument,
-  canvasInternals,
-  control,
-  isObject,
-  type Json,
-  type JsonObject,
-  openVisual,
-  trackMounted,
-  variant,
-  visualKey,
-  visuals,
-} from "./visual-session";
 
 /** A transcript `visual` part. Like desktop, it loads as soon as it is shown; the button is the fallback when it can't. */
 export function VisualPart(props: { chatId: string; part: { id: string; title?: string } }) {
@@ -27,9 +16,9 @@ export function VisualPart(props: { chatId: string; part: { id: string; title?: 
   const [refused, setRefused] = createSignal(false);
   const open = () => setRefused(!openVisual(props.chatId, props.part.id));
   const title = () => props.part.title?.trim() || "Visual";
-  createEffect(() => onCleanup(trackMounted(key())));
+  createEffect(key, value => trackMounted(value));
   // Opens on mount and again after a reconnect retires the session; an error stays until the reader reopens.
-  createEffect(() => {
+  createEffect(() => [state.connection.kind, current(), refused()], () => {
     if (state.connection.kind === "connected" && !current() && !untrack(refused)) untrack(open);
   });
   return (
@@ -62,7 +51,7 @@ export function VisualPart(props: { chatId: string; part: { id: string; title?: 
               <p class="x-visual-note x-visual-loading" role="status">Loading visual…</p>
             </Match>
             <Match when={v().tree}>
-              <div class="x-visual-body" aria-busy={v().busy} data-offline={v().offline ? "true" : undefined}>
+              <div class="x-visual-body" aria-busy={(v().busy) ? "true" : "false"} data-offline={v().offline ? "true" : undefined}>
                 <VisualNode vkey={key()} path="" node={v().tree!} />
               </div>
               <Show when={v().offline}>
@@ -124,9 +113,9 @@ function VisualNode(props: NodeProps): JSX.Element {
                 class="x-vstack"
                 style={style()}
                 role={clickable() ? "button" : undefined}
-                tabIndex={clickable() && !busy() ? 0 : undefined}
+                tabindex={clickable() && !busy() ? 0 : undefined}
                 aria-label={clickable() ? "Interactive group" : undefined}
-                aria-disabled={clickable() ? busy() : undefined}
+                aria-disabled={(clickable() ? busy() : undefined) == null ? undefined : (clickable() ? busy() : undefined) ? "true" : "false"}
                 data-clickable={clickable() ? "true" : undefined}
                 onClick={(e) => {
                   if (!clickable()) return;
@@ -140,14 +129,14 @@ function VisualNode(props: NodeProps): JSX.Element {
                   }
                 }}
               >
-                <Index each={children(value())}>{(node, i) => <VisualNode vkey={props.vkey} path={child(i)} node={node()} />}</Index>
+                <For keyed={false} each={children(value())}>{(node, i) => <VisualNode vkey={props.vkey} path={child(i)} node={node()} />}</For>
               </div>
             );
           })()}
         </Match>
         <Match when={kind() === "Grid"}>
           <div class="x-vgrid" style={{ "grid-template-columns": `repeat(${Math.min(12, Math.max(1, num(value().columns, 1)))}, minmax(0, 1fr))`, gap: `${num(value().gap, 8)}px` }}>
-            <Index each={children(value())}>{(node, i) => <VisualNode vkey={props.vkey} path={child(i)} node={node()} />}</Index>
+            <For keyed={false} each={children(value())}>{(node, i) => <VisualNode vkey={props.vkey} path={child(i)} node={node()} />}</For>
           </div>
         </Match>
         <Match when={kind() === "Text"}>
@@ -199,7 +188,7 @@ function VisualNode(props: NodeProps): JSX.Element {
           <div style={{ height: `${Math.min(720, Math.max(0, num(found()?.[1], 8)))}px` }} />
         </Match>
         <Match when={kind() === "Button"}>
-          <button type="button" class="btn" data-variant={value().primary === true ? "primary" : "default"} aria-disabled={busy()} onClick={(e) => (e.stopPropagation(), run({ kind: "none" }))}>
+          <button type="button" class="btn" data-variant={value().primary === true ? "primary" : "default"} aria-disabled={(busy()) ? "true" : "false"} onClick={(e) => (e.stopPropagation(), run({ kind: "none" }))}>
             {label(value(), "Button")}
           </button>
         </Match>
@@ -209,9 +198,9 @@ function VisualNode(props: NodeProps): JSX.Element {
               type="button"
               role="switch"
               class="toggle"
-              aria-checked={value().value === true}
+              aria-checked={(value().value === true) ? "true" : "false"}
               aria-label={label(value(), "Toggle")}
-              aria-disabled={busy()}
+              aria-disabled={(busy()) ? "true" : "false"}
               onClick={(e) => (e.stopPropagation(), run({ kind: "bool", value: value().value !== true }))}
             />
             <span class="x-small">{label(value())}</span>
@@ -225,8 +214,8 @@ function VisualNode(props: NodeProps): JSX.Element {
                   type="button"
                   class="tab"
                   role="tab"
-                  aria-selected={value().value === option}
-                  aria-disabled={busy()}
+                  aria-selected={(value().value === option) ? "true" : "false"}
+                  aria-disabled={(busy()) ? "true" : "false"}
                   onClick={(e) => (e.stopPropagation(), run({ kind: "text", value: option }))}
                 >
                   {option}
@@ -336,7 +325,7 @@ function VisualTable(props: NodeProps & { value: JsonObject }) {
         </thead>
       </Show>
       <tbody>
-        <Index each={rows()}>
+        <For keyed={false} each={rows()}>
           {(cells, r) => (
             <tr>
               <For each={indices()}>
@@ -350,7 +339,7 @@ function VisualTable(props: NodeProps & { value: JsonObject }) {
               </For>
             </tr>
           )}
-        </Index>
+        </For>
       </tbody>
     </table>
   );
@@ -368,11 +357,14 @@ function VisualChart(props: { value: JsonObject }) {
   const [width, setWidth] = createSignal(0);
   const [pointer, setPointer] = createSignal<[number, number] | null>(null);
   let box!: HTMLDivElement;
-  onMount(() => {
+  onSettled(() => {
+    const cleanups: (() => void)[] = [];
     const observer = new ResizeObserver(() => setWidth(box.clientWidth));
     observer.observe(box);
     setWidth(box.clientWidth);
-    onCleanup(() => observer.disconnect());
+    cleanups.push(() => observer.disconnect());
+
+    return () => cleanups.forEach(cleanup => cleanup());
   });
   const height = () => Math.min(720, Math.max(40, num(props.value.height, 200)));
   const base = () => planChart(props.value, Math.max(1, width()), height(), measureTick, null, null);
@@ -484,25 +476,28 @@ function VisualCanvas(props: NodeProps & { value: JsonObject }) {
   const clickable = () => typeof props.value.on_click === "number";
   const internals = () => canvasInternals(props.vkey, props.path);
 
-  onMount(() => {
+  onSettled(() => {
+    const cleanups: (() => void)[] = [];
     const observer = new IntersectionObserver(([entry]) => setVisible(!!entry?.isIntersecting));
     observer.observe(area);
     const resize = new ResizeObserver(() => paint());
     resize.observe(area);
-    onCleanup(() => {
+    cleanups.push(() => {
       observer.disconnect();
       resize.disconnect();
     });
+
+    return () => cleanups.forEach(cleanup => cleanup());
   });
   // Internals are rebuilt per tree revision; keep them pointed at this element.
-  createEffect(() => {
+  createEffect(() => [visuals[props.vkey]?.revision, visible()], () => {
     void visuals[props.vkey]?.revision;
     const c = internals();
     if (!c) return;
     c.element = area;
     c.visible = visible();
   });
-  createEffect(() => {
+  createEffect(() => [data()?.commands, height()], () => {
     void data()?.commands;
     paint();
   });
@@ -538,7 +533,7 @@ function VisualCanvas(props: NodeProps & { value: JsonObject }) {
         style={{ height: `${height()}px` }}
         role={clickable() ? "button" : "img"}
         aria-label={clickable() ? "Interactive canvas" : "Canvas"}
-        tabIndex={clickable() ? 0 : undefined}
+        tabindex={clickable() ? 0 : undefined}
         data-clickable={clickable() ? "true" : undefined}
         onPointerMove={(e) => {
           const c = internals();

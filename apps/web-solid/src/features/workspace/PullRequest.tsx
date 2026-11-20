@@ -1,7 +1,6 @@
 // Pull requests for the chat's repository: the branch's own pull request when it has one, the
 // repository's list otherwise, and a detail view with checks, discussion, files, diff and status
 // actions. Reads follow crates/ui/src/pull_request_detail.rs; updates are explicit and never resent.
-import { batch, createEffect, createMemo, createSignal, For, Match, on, onCleanup, Show, Switch } from "solid-js";
 import { rpc } from "@/core/connection";
 import { M } from "@/core/methods";
 import { RpcError } from "@/core/rpc";
@@ -10,6 +9,7 @@ import { Icon } from "@/ui/Icon";
 import { TerminalSpinner } from "@/ui/loaders";
 import { providerMarkdownHtml } from "@/ui/markdown";
 import { Button, IconButton, Menu, Spinner, Tabs, type MenuItem } from "@/ui/primitives";
+import { createEffect, createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
 import { parsePatch } from "./diff";
 import { DiffView } from "./DiffView";
 import { Banner, DiffStat, Empty, PrStateIcon } from "./parts";
@@ -101,14 +101,14 @@ function PullRequestList(props: { target: Target; active: boolean; ownUrl: strin
       .then(
         (result) => {
           if (id !== seq) return;
-          batch(() => {
+          (() => {
             const seen = new Set(append ? items().map((i) => i.url) : []);
             setItems([...(append ? items() : []), ...result.items.filter((i) => !seen.has(i.url))]);
             setNext(result.nextCursor ?? null);
             setTotal(result.totalCount ?? null);
             setError(null);
             setLoaded(true);
-          });
+          })();
         },
         (e) => id === seq && setError(readErrorText(e, "Couldn't list pull requests.", true)),
       )
@@ -142,8 +142,8 @@ function PullRequestList(props: { target: Target; active: boolean; ownUrl: strin
     );
   };
 
-  createEffect(on([() => props.active, connected, () => state.epoch], ([active, live]) => active && live && refresh()));
-  createEffect(on(filter, () => page(false), { defer: true }));
+  createEffect(() => [(() => props.active)(), (connected)(), (() => state.epoch)()] as const, ([active, live]) => { void (active && live && refresh()); });
+  createEffect(filter, () => page(false), { defer: true });
 
   return (
     <>
@@ -261,37 +261,38 @@ function PullRequestDetail(props: { target: Target; url: string; own: boolean; o
   };
 
   // A live watch keeps the detail current; a first read seeds it quickly.
-  createEffect(
-    on([connected, () => state.epoch], ([live]) => {
-      if (!live) return;
-      read(false);
-      // Watch frames carry the summary, which has no inline review threads (desktop's
-      // pull_request_detail.rs): the first frame only seeds an empty view, and threads carry over.
-      let seen: string | null = null;
-      let seeded = false;
-      const sub = liveSubscribe<SourceControlFrame>(
-        M.WATCH_CHANGE_REQUEST,
-        host({ url: props.url }),
-        (frame) => {
-          if (frame.reset) batch(() => (setDetail(null), setPatch(null)));
-          if (frame.error) setError(frame.error);
-          const snapshot = frame.snapshot as unknown as ChangeRequestDetail | null | undefined;
-          if (frame.refreshing || !snapshot || typeof snapshot !== "object" || !("url" in snapshot)) return;
-          const key = JSON.stringify(snapshot);
-          if (key === seen) return void setError(null);
-          if (!seeded) {
-            seeded = true;
-            if (detail()) return;
-          }
-          seen = key;
-          const old = detail();
-          setDetail(old && old.headRefOid === snapshot.headRefOid ? { ...snapshot, reviewThreads: old.reviewThreads } : snapshot);
-          setError(null);
-        },
-      );
-      onCleanup(() => sub.cancel());
-    }),
-  );
+  createEffect(() => [(connected)(), (() => state.epoch)()] as const, ([live]) => {
+    const cleanups: (() => void)[] = [];
+    if (!live) return;
+    read(false);
+    // Watch frames carry the summary, which has no inline review threads (desktop's
+    // pull_request_detail.rs): the first frame only seeds an empty view, and threads carry over.
+    let seen: string | null = null;
+    let seeded = false;
+    const sub = liveSubscribe<SourceControlFrame>(
+      M.WATCH_CHANGE_REQUEST,
+      host({ url: props.url }),
+      (frame) => {
+        if (frame.reset) (() => (setDetail(null), setPatch(null)))();
+        if (frame.error) setError(frame.error);
+        const snapshot = frame.snapshot as unknown as ChangeRequestDetail | null | undefined;
+        if (frame.refreshing || !snapshot || typeof snapshot !== "object" || !("url" in snapshot)) return;
+        const key = JSON.stringify(snapshot);
+        if (key === seen) return void setError(null);
+        if (!seeded) {
+          seeded = true;
+          if (detail()) return;
+        }
+        seen = key;
+        const old = detail();
+        setDetail(old && old.headRefOid === snapshot.headRefOid ? { ...snapshot, reviewThreads: old.reviewThreads } : snapshot);
+        setError(null);
+      },
+    );
+    cleanups.push(() => sub.cancel());
+
+    return () => cleanups.forEach(cleanup => cleanup());
+  });
 
   const loadPatch = () => {
     const d = detail();
@@ -305,8 +306,8 @@ function PullRequestDetail(props: { target: Target; url: string; own: boolean; o
       (e) => setPatchError(readErrorText(e, "Couldn't read the diff.")),
     );
   };
-  createEffect(on([tab, () => detail()?.headRefOid], ([t, head]) => t === "files" && head && patch() === null && loadPatch()));
-  createEffect(on(() => detail()?.headRefOid, () => setPatch(null), { defer: true }));
+  createEffect(() => [(tab)(), (() => detail()?.headRefOid)()] as const, ([t, head]) => { void (t === "files" && head && patch() === null && loadPatch()); });
+  createEffect(() => detail()?.headRefOid, () => { void (setPatch(null)); }, { defer: true });
 
   const update = (change: ChangeRequestUpdate, label: string) => {
     const d = detail();
@@ -354,7 +355,7 @@ function PullRequestDetail(props: { target: Target; url: string; own: boolean; o
       .finally(() => setPosting(false));
   };
 
-  createEffect(() => {
+  createEffect(() => [comment(), props.url], () => {
     const text = comment();
     if (text) drafts.set(props.url, text);
     else drafts.delete(props.url);

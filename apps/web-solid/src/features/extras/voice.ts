@@ -1,12 +1,11 @@
 // Browser voice call: host signaling and call ownership (port of crates/viewport/src/voice.rs),
 // with media in VoiceMedia. Each step has a deadline; anything from an older attempt is ignored.
-import { createEffect, createRoot, on } from "solid-js";
-import { createStore, produce } from "solid-js/store";
 import { rpc } from "@/core/connection";
 import { M } from "@/core/methods";
 import type { Subscription } from "@/core/rpc";
 import { state } from "@/core/store";
 import { view } from "@/core/view";
+import { createEffect, createRoot, createStore } from "solid-js";
 import { playVoiceCue } from "./sounds";
 import { harnessName } from "./util";
 import { VoiceMedia, type MediaEvent } from "./voice-media";
@@ -106,7 +105,7 @@ const INVALID = "The host returned an invalid voice response.";
 function setStep(step: Step, seconds: number) {
   if (!call) return;
   call.deadline = Date.now() + seconds * 1000;
-  setVoice("view", "step", step);
+  setVoice(draft => { draft["view"]!["step"] = step; });
 }
 
 const expired = (c: Call) => (voice.view?.step !== "active" && Date.now() >= c.deadline) || (c.reportDeadline !== null && Date.now() >= c.reportDeadline);
@@ -147,10 +146,12 @@ export function startVoice() {
     lastLoud: 0,
     timer: setInterval(tick, 1000),
   };
-  setVoice({
-    notice: null,
-    stageOpen: true,
-    view: { step: "capabilities", phase: "checking", snapshot: null, muted: false, microphone: 0, speaker: 0, caption: "" },
+  setVoice(draft => {
+    Object.assign(draft, {
+      notice: null,
+      stageOpen: true,
+      view: { step: "capabilities", phase: "checking", snapshot: null, muted: false, microphone: 0, speaker: 0, caption: "" },
+    });
   });
   playVoiceCue(true);
   void request<{ protocol?: string; clientWebrtc?: boolean }>(M.VOICE_CAPABILITIES_V2, {}).then(({ current, value, error }) => {
@@ -180,22 +181,23 @@ export function endVoice(reason: string | null = null) {
   }
   // Desktop: a hang-up or a connected call ending sounds; a failure to connect only explains itself.
   if (reason === null || voice.view?.step === "active") playVoiceCue(false);
-  setVoice({ view: null, notice: reason, stageOpen: false });
+  setVoice(draft => { Object.assign(draft, { view: null, notice: reason, stageOpen: false }); });
 }
 
 export function toggleVoiceMute() {
   if (!call || !voice.view) return;
   const muted = !voice.view.muted;
-  setVoice("view", produce((v) => {
+  setVoice(draftState => {
+    const v = draftState["view"]!;
     if (!v) return;
     v.muted = muted;
     if (v.snapshot) v.snapshot.muted = muted;
-  }));
+  });
   call.media.setMuted(muted);
 }
 
-export const setVoiceStageOpen = (open: boolean) => setVoice("stageOpen", open);
-export const dismissVoiceNotice = () => setVoice({ notice: null, stageOpen: false });
+export const setVoiceStageOpen = (open: boolean) => setVoice(draft => { draft["stageOpen"] = open; });
+export const dismissVoiceNotice = () => setVoice(draft => { Object.assign(draft, { notice: null, stageOpen: false }); });
 
 function tick() {
   const c = call;
@@ -270,11 +272,12 @@ function receiveMedia(key: string, event: MediaEvent) {
       },
     );
   } else if (step === "activating" && event.kind === "active") {
-    setVoice("view", produce((v) => {
+    setVoice(draftState => {
+      const v = draftState["view"]!;
       if (!v) return;
       v.step = "active";
       v.phase = "active";
-    }));
+    });
   } else if (step === "active" && event.kind === "levels") {
     levels(c, event.microphone, event.speaker);
   }
@@ -331,11 +334,12 @@ function reduce(c: Call, event: VoiceEvent) {
       next.playing = v.snapshot.playing;
     }
     next.muted = v.muted;
-    setVoice("view", produce((view) => {
+    setVoice(draftState => {
+      const view = draftState["view"]!;
       if (!view) return;
       view.snapshot = next;
       view.phase = next.phase;
-    }));
+    });
   } else if (event.type === "partial") {
     const e = event as { generation: number; itemId?: string | null; text: string };
     if (!current(e.generation)) return;
@@ -347,7 +351,7 @@ function reduce(c: Call, event: VoiceEvent) {
   } else {
     return;
   }
-  setVoice("view", "caption", c.turns[c.turns.length - 1]?.text ?? "");
+  setVoice(draft => { draft["view"]!["caption"] = c.turns[c.turns.length - 1]?.text ?? ""; });
 }
 
 function pushTurn(c: Call, turn: CaptionTurn) {
@@ -398,12 +402,13 @@ function levels(c: Call, microphone: number, speaker: number) {
   } else if (now - c.lastLoud >= 250) {
     c.speakerPlaying = false;
   }
-  setVoice("view", produce((v) => {
+  setVoice(draftState => {
+    const v = draftState["view"]!;
     if (!v) return;
     v.microphone = microphone;
     v.speaker = speaker;
     if (v.snapshot) v.snapshot.playing = c.speakerPlaying;
-  }));
+  });
 }
 
 export function orbState(v: VoiceView): OrbState {
@@ -418,22 +423,10 @@ export function orbState(v: VoiceView): OrbState {
 
 // A dropped connection retires the call; ownership never silently resumes.
 createRoot(() => {
-  createEffect(
-    on(
-      () => state.epoch,
-      () => {
-        if (call) endVoice("Voice stopped after the connection changed. Start a fresh call to reconnect.");
-      },
-      { defer: true },
-    ),
-  );
-  createEffect(
-    on(
-      () => state.connection.kind,
-      (kind) => {
-        if (kind !== "connected" && call) endVoice("Voice stopped after the connection changed. Start a fresh call to reconnect.");
-      },
-      { defer: true },
-    ),
-  );
+  createEffect(() => state.epoch, () => {
+    if (call) endVoice("Voice stopped after the connection changed. Start a fresh call to reconnect.");
+  }, { defer: true });
+  createEffect(() => state.connection.kind, (kind) => {
+    if (kind !== "connected" && call) endVoice("Voice stopped after the connection changed. Start a fresh call to reconnect.");
+  }, { defer: true });
 });

@@ -1,11 +1,10 @@
 // Agent and model catalogs per execution device, and the run config a send would carry.
-import { batch, createRoot, createEffect, on, untrack } from "solid-js";
-import { createStore, reconcile } from "solid-js/store";
 import { refreshHarnesses, rpc } from "@/core/connection";
 import { M } from "@/core/methods";
 import type { Chat, Harness, Space } from "@/core/protocol";
 import { state } from "@/core/store";
 import { setView, view } from "@/core/view";
+import { createEffect, createRoot, createStore, reconcile, untrack } from "solid-js";
 
 export interface ModelOptionChoice { id: string; label: string }
 export interface ModelOption { id: string; label: string; choices: ModelOptionChoice[]; defaultChoice: string }
@@ -39,7 +38,7 @@ export function defaults(): ComposerDefaults {
 export function updateDefaults(change: (draft: ComposerDefaults) => void) {
   const next = JSON.parse(JSON.stringify(defaults())) as ComposerDefaults;
   change(next);
-  setView("preferences", "composerDefaults", next);
+  setView(draft => { draft["preferences"]!["composerDefaults"] = next; });
 }
 
 /** What the new-chat canvas has picked so far; existing chats read their saved config instead. */
@@ -64,7 +63,7 @@ interface CatalogState {
 }
 
 const [catalog, setCatalog] = createStore<CatalogState>({ harnesses: {}, models: {}, draft: { plan: false, noProject: false }, saving: {} });
-export { catalog, setCatalog };
+export { catalog,setCatalog };
 
 const isLocal = (deviceId: string | null | undefined) => !deviceId || deviceId === state.localDeviceId;
 const targetParams = (deviceId: string | null | undefined) => (isLocal(deviceId) ? {} : { targetDeviceId: deviceId });
@@ -78,26 +77,26 @@ function load<T>(domain: "harnesses" | "models", key: string, method: string, pa
   // Revalidation keeps loaded rows on screen until the fresh list lands.
   const stale = untrack(() => catalog[domain][key]?.status === "ready");
   queueMicrotask(() => {
-    if (!stale) setCatalog(domain, key, { status: "loading" });
+    if (!stale) setCatalog(draft => { draft[domain]![key] = { status: "loading" }; });
     rpc.call<T[]>(method, params).then(
       (rows) =>
         // Unchanged rows keep their identity so open lists and menus stay put.
         catalog[domain][key]?.status === "ready"
-          ? setCatalog(domain, key, "value" as never, reconcile(rows as never, { key: "id" }) as never)
-          : setCatalog(domain, key, { status: "ready", value: rows as never }),
-      (error) => setCatalog(domain, key, { status: "error", message: errorText(error) }),
+          ? setCatalog(draft => { { const next = rows as never; if (draft[domain]![key]!["value" as never] == null) draft[domain]![key]!["value" as never] = next; else reconcile(next, "id")(draft[domain]![key]!["value" as never]); } })
+          : setCatalog(draft => { draft[domain]![key] = { status: "ready", value: rows as never }; }),
+      (error) => setCatalog(draft => { draft[domain]![key] = { status: "error", message: errorText(error) }; }),
     );
   });
 }
 // One effect, request memory first: readers re-run as soon as the lists clear and must be able to load again.
 createRoot(() => {
-  createEffect(on(() => state.epoch, () => {
+  createEffect(() => state.epoch, () => {
     requested.clear();
-    batch(() => {
-      setCatalog("harnesses", reconcile<Record<string, Loadable<HarnessInfo[]>>, unknown>({}));
-      setCatalog("models", reconcile<Record<string, Loadable<Model[]>>, unknown>({}));
-    });
-  }, { defer: true }));
+    (() => {
+      setCatalog(draft => { { const next = {}; if (draft["harnesses"] == null) draft["harnesses"] = next; else reconcile(next)(draft["harnesses"]); } });
+      setCatalog(draft => { { const next = {}; if (draft["models"] == null) draft["models"] = next; else reconcile(next)(draft["models"]); } });
+    })();
+  }, { defer: true });
 });
 
 export function harnessList(deviceId: string | null | undefined, force = false): Loadable<HarnessInfo[]> {
@@ -271,16 +270,16 @@ export async function changeConfig(change: { harness?: string; model?: string; r
   const r = resolve();
   if (!chat) {
     const harness = change.harness ?? r.harness;
-    if (change.harness !== undefined && change.harness !== r.harness) setCatalog("draft", { harness: change.harness, model: undefined, reasoning: undefined });
+    if (change.harness !== undefined && change.harness !== r.harness) setCatalog(draft => { Object.assign(draft["draft"]!, { harness: change.harness, model: undefined, reasoning: undefined }); });
     if (change.harness) updateDefaults((d) => (d.harness = change.harness));
     if (change.model !== undefined && harness) {
       const models = modelList(targetDeviceId(), harness);
       const label = models.status === "ready" ? models.value.find((m) => m.id === change.model)?.label ?? change.model : change.model;
-      setCatalog("draft", { model: change.model, reasoning: undefined });
+      setCatalog(draft => { Object.assign(draft["draft"]!, { model: change.model, reasoning: undefined }); });
       updateDefaults((d) => (d.models[harness] = { id: change.model!, label }));
     }
     if (change.reasoning !== undefined && harness) {
-      setCatalog("draft", "reasoning", change.reasoning);
+      setCatalog(draft => { draft["draft"]!["reasoning"] = change.reasoning; });
       updateDefaults((d) => {
         d.reasoning[modelKey(harness, r.modelId)] = change.reasoning!;
         d.reasoning[harness] = change.reasoning!;
@@ -295,10 +294,10 @@ export async function changeConfig(change: { harness?: string; model?: string; r
       });
     }
     if (change.sandbox !== undefined) {
-      setCatalog("draft", "sandbox", change.sandbox);
+      setCatalog(draft => { draft["draft"]!["sandbox"] = change.sandbox; });
       updateDefaults((d) => (d.sandbox = change.sandbox));
     }
-    if (change.plan !== undefined) setCatalog("draft", "plan", change.plan);
+    if (change.plan !== undefined) setCatalog(draft => { draft["draft"]!["plan"] = change.plan!; });
     return;
   }
   const base = chatConfig(r);
@@ -317,7 +316,7 @@ export async function changeConfig(change: { harness?: string; model?: string; r
     else next.modelOptions[change.option.id] = change.option.value;
   }
   if (change.sandbox !== undefined) next.sandbox = change.sandbox;
-  if (change.plan !== undefined) next.plan = change.plan;
+  if (change.plan !== undefined) next.plan = change.plan!;
   const models = modelList(chat.deviceId, next.harness);
   const target = models.status === "ready" ? models.value.find((m) => m.id === next.model) : undefined;
   if (target) {
@@ -327,7 +326,7 @@ export async function changeConfig(change: { harness?: string; model?: string; r
     next.modelOptions = offeredOptions(target, next.modelOptions);
   }
   if (change.sandbox !== undefined) updateDefaults((d) => (d.sandbox = change.sandbox));
-  setCatalog("saving", chat.id, true);
+  setCatalog(draft => { draft["saving"]![chat.id] = true; });
   try {
     await rpc.call(M.MUTATE, {
       op: "setChatConfig",
@@ -337,7 +336,7 @@ export async function changeConfig(change: { harness?: string; model?: string; r
       expectedConfig: { deviceId: chat.deviceId, config: chat.config ?? null },
     });
   } finally {
-    setCatalog("saving", chat.id, false);
+    setCatalog(draft => { draft["saving"]![chat.id] = false; });
   }
 }
 

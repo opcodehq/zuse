@@ -1,23 +1,12 @@
 // Cloud Setup: image, repositories and GitHub (crates/viewport/src/cloud_repositories), plus retained image storage for Usage.
 import { writeClipboard } from "@/ui/clipboard";
-import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { Icon } from "@/ui/Icon";
 import { GlyphSpinner } from "@/ui/loaders";
 import { Dialog, IconButton, toast } from "@/ui/primitives";
+import { createMemo, createSignal, For, onCleanup, onSettled, Show } from "solid-js";
 import { Action, Badge, Group, Note, Row } from "../ui";
 import { usd } from "./money";
-import {
-  buildImage,
-  buildRetry,
-  canManageRepositories,
-  clearRepoNotice,
-  cloud,
-  connectRepositories,
-  deleteImage,
-  loadImage,
-  loadRepositories,
-  removeRepository,
-} from "./state";
+import { buildImage, buildRetry, canManageRepositories, clearRepoNotice, cloud, connectRepositories, deleteImage, loadImage, loadRepositories, removeRepository, } from "./state";
 import type { GithubRepository, ImageBuild } from "./types";
 
 const identity = (value: string) => value.replace(/^github\.com\//, "").toLowerCase();
@@ -38,7 +27,7 @@ export function Avatar(props: { name: string; url?: string | null; size: number 
 
 /** The Setup tab: image first, then GitHub before repositories until GitHub is connected. */
 export function Setup() {
-  onMount(() => {
+  onSettled(() => {
     if (!cloud.repos.loaded) void loadRepositories();
   });
   return (
@@ -186,7 +175,7 @@ function RepositoryPicker(props: { iconOnly?: boolean }) {
         aria-label="Add repository"
         title={props.iconOnly ? "Add repository" : undefined}
         aria-haspopup="dialog"
-        aria-expanded={open()}
+        aria-expanded={(open()) ? "true" : "false"}
         disabled={disabled()}
         onClick={toggle}
       >
@@ -214,7 +203,7 @@ function RepositoryPicker(props: { iconOnly?: boolean }) {
                   role="option"
                   class="pc-picker-choice"
                   aria-label={repo.isPrivate ? `${repo.nameWithOwner}, private` : repo.nameWithOwner}
-                  aria-selected={selected().includes(repo.nameWithOwner)}
+                  aria-selected={(selected().includes(repo.nameWithOwner)) ? "true" : "false"}
                   onClick={() => pick(repo.nameWithOwner)}
                 >
                   <Avatar name={repo.nameWithOwner} url={repo.ownerAvatarUrl} size={24} />
@@ -455,7 +444,7 @@ function BuildHistory(props: { open: boolean; onClose: () => void }) {
             {(first) => <Build build={first()} first initiallyOpen />}
           </Show>
           <Show when={builds().length > 1}>
-            <button type="button" class="pc-builds-previous" aria-expanded={previous()} onClick={() => setPrevious(!previous())}>
+            <button type="button" class="pc-builds-previous" aria-expanded={(previous()) ? "true" : "false"} onClick={() => setPrevious(!previous())}>
               <Icon name={previous() ? "alt-arrow-up" : "alt-arrow-down"} size={12} />
               Previous builds {builds().length - 1}
             </button>
@@ -487,7 +476,7 @@ function BuildHistory(props: { open: boolean; onClose: () => void }) {
 }
 
 function Build(props: { build: ImageBuild; first?: boolean; initiallyOpen?: boolean }) {
-  const [open, setOpen] = createSignal(!!props.initiallyOpen);
+  const [open, setOpen] = createSignal(() => !!props.initiallyOpen);
   const [settings, setSettings] = createSignal(false);
   const title = () => (props.build.mode === "rebuild" ? "Clean rebuild" : "Image update");
   const copy = async () => {
@@ -496,7 +485,7 @@ function Build(props: { build: ImageBuild; first?: boolean; initiallyOpen?: bool
   };
   return (
     <div class="pc-build" data-first={props.first ? "true" : undefined}>
-      <button type="button" class="pc-build-head" aria-expanded={open()} onClick={() => setOpen(!open())}>
+      <button type="button" class="pc-build-head" aria-expanded={(open()) ? "true" : "false"} onClick={() => setOpen(!open())}>
         <Show when={running(props.build.state)} fallback={<Icon name={props.build.state === "ready" ? "check-circle" : "close-circle"} size={14} />}>
           <GlyphSpinner decorative />
         </Show>
@@ -517,7 +506,7 @@ function Build(props: { build: ImageBuild; first?: boolean; initiallyOpen?: bool
             <pre>{logs(props.build)}</pre>
             <IconButton icon="copy" label="Copy build logs" size="sm" class="pc-build-copy" onClick={() => void copy()} />
           </div>
-          <button type="button" class="pc-link-button pc-build-settings" aria-expanded={settings()} onClick={() => setSettings(!settings())}>
+          <button type="button" class="pc-link-button pc-build-settings" aria-expanded={(settings()) ? "true" : "false"} onClick={() => setSettings(!settings())}>
             <Icon name={settings() ? "alt-arrow-down" : "alt-arrow-right"} size={12} />
             Build settings
           </button>
@@ -545,7 +534,7 @@ function Build(props: { build: ImageBuild; first?: boolean; initiallyOpen?: bool
 /** Usage tab: a retained image keeps billing storage until deleted. */
 export function ImageStorage() {
   const [confirm, setConfirm] = createSignal<string | null>(null);
-  onMount(() => {
+  onSettled(() => {
     if (!cloud.repos.loaded) void loadRepositories();
     else void loadImage();
   });

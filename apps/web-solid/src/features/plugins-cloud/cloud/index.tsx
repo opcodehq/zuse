@@ -1,7 +1,7 @@
 // Cloud workspaces page (crates/ui/src/settings/cloud_billing.rs): account gate, hosting, then Setup / Usage as on
 // desktop. Chats is web-only: desktop starts cloud chats from its composer and lists them in the sidebar.
-import { createEffect, createSignal, Match, on, Show, Switch } from "solid-js";
-import { accountError, accountSession, login, owner, ownerKey, signIn, signedIn } from "../account";
+import { createEffect, createSignal, Match, Show, Switch } from "solid-js";
+import { accountError, accountSession, login, owner, ownerKey, signedIn, signIn } from "../account";
 import { PageTitle, Segmented } from "../ui";
 import { Archives } from "./Archives";
 import { Hosting, Usage } from "./Billing";
@@ -17,17 +17,12 @@ export const selectCloudTab = (value: CloudTab) => setTab(value);
 let shownFor = "";
 
 export function CloudSettings() {
-  createEffect(
-    on(
-      () => ownerKey(owner()),
-      (key) => {
-        if (!key) return;
-        if (shownFor && shownFor !== key) setTab("setup");
-        shownFor = key;
-        if (!cloud.billing.loaded) void loadBilling();
-      },
-    ),
-  );
+  createEffect(() => ownerKey(owner()), (key) => {
+    if (!key) return;
+    if (shownFor && shownFor !== key) setTab("setup");
+    shownFor = key;
+    if (!cloud.billing.loaded) void loadBilling();
+  });
   const choose = (value: CloudTab) => {
     setTab(value);
     if (value === "usage") void loadBilling();

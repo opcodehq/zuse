@@ -1,9 +1,9 @@
 // Engine data that only Settings and Usage read. Engine replies land here; pages render from it.
-import { createStore, reconcile } from "solid-js/store";
-import { M } from "@/core/methods";
 import { onConnected, rpc } from "@/core/connection";
+import { M } from "@/core/methods";
 import { RpcError } from "@/core/rpc";
 import { setState, state } from "@/core/store";
+import { createStore, reconcile } from "solid-js";
 import type { HarnessDescriptor, HarnessUpdateStatus } from "./harness";
 
 export interface UsageWindow {
@@ -128,11 +128,11 @@ onConnected(() =>
     M.WATCH_HARNESS_UPDATES,
     {},
     (rows) => {
-      setData("updates", reconcile(Array.isArray(rows) ? rows : [], { key: "harness" }));
-      setData("updatesError", null);
+      setData(draft => { { const next = Array.isArray(rows) ? rows : []; if (draft["updates"] == null) draft["updates"] = next; else reconcile(next, "harness")(draft["updates"]); } });
+      setData(draft => { draft["updatesError"] = null; });
     },
     (error) => {
-      if (error) setData("updatesError", error.message);
+      if (error) setData(draft => { draft["updatesError"] = error.message; });
     },
   ),
 );
@@ -141,42 +141,42 @@ onConnected(() =>
   rpc.subscribe<AppUpdateStatus>(
     M.UPDATE_STATUS,
     {},
-    (status) => setData("appUpdate", status),
+    (status) => setData(draft => { draft["appUpdate"] = status; }),
     () => {},
   ),
 );
 
 // A new connection may be a different computer: forget what the last one said.
 onConnected(() => {
-  setData({ accounts: null, accountsError: null, custom: null, customError: null, models: {}, modelErrors: {} });
+  setData(draft => { Object.assign(draft, { accounts: null, accountsError: null, custom: null, customError: null, models: {}, modelErrors: {} }); });
 });
 
 export function setHarnesses(rows: unknown) {
-  if (Array.isArray(rows)) setState("harnesses", reconcile(rows as never[], { key: "id" }));
+  if (Array.isArray(rows)) setState(draft => { { const next = rows as never[]; if (draft["harnesses"] == null) draft["harnesses"] = next; else reconcile(next, "id")(draft["harnesses"]); } });
 }
 
 export const harnessList = () => state.harnesses as unknown as HarnessDescriptor[];
 
 export async function loadAccounts(forceUsage: boolean) {
-  setData("accountsLoading", true);
+  setData(draft => { draft["accountsLoading"] = true; });
   try {
     const snapshot = await rpc.call<AccountsSnapshot>(M.LIST_AGENT_ACCOUNTS, { forceUsage });
-    setData("accounts", reconcile(snapshot, { key: "id" }));
-    setData("accountsError", null);
+    setData(draft => { { const next = snapshot; if (draft["accounts"] == null) draft["accounts"] = next; else reconcile(next, "id")(draft["accounts"]); } });
+    setData(draft => { draft["accountsError"] = null; });
   } catch (error) {
-    setData("accountsError", message(error));
+    setData(draft => { draft["accountsError"] = message(error); });
   } finally {
-    setData("accountsLoading", false);
+    setData(draft => { draft["accountsLoading"] = false; });
   }
 }
 
 export async function loadCustomAgents() {
   try {
     const snapshot = await rpc.call<CustomAcpAgents>(M.GET_CUSTOM_ACP_AGENTS, {});
-    setData("custom", reconcile(snapshot, { key: "id" }));
-    setData("customError", null);
+    setData(draft => { { const next = snapshot; if (draft["custom"] == null) draft["custom"] = next; else reconcile(next, "id")(draft["custom"]); } });
+    setData(draft => { draft["customError"] = null; });
   } catch (error) {
-    setData("customError", message(error));
+    setData(draft => { draft["customError"] = message(error); });
   }
 }
 
@@ -187,11 +187,11 @@ export function loadModels(harness: string, force = false) {
     .call<Model[]>(M.LIST_MODELS, { harness, force })
     .then(
       (models) => {
-        setData("models", harness, Array.isArray(models) ? models : []);
-        setData("modelErrors", harness, undefined);
+        setData(draft => { draft["models"]![harness] = Array.isArray(models) ? models : []; });
+        setData(draft => { delete draft["modelErrors"]![harness]; });
       },
       (error) => {
-        setData("modelErrors", harness, message(error));
+        setData(draft => { draft["modelErrors"]![harness] = message(error); });
       },
     )
     .finally(() => modelRequests.delete(harness));

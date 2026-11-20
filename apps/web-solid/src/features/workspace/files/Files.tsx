@@ -1,7 +1,5 @@
 // The Files surface: a lazily listed, virtualized tree with Git decorations and search, beside a
 // CodeMirror editor that saves against the read snapshot. Mirrors crates/ui/src/files.
-import { createVirtualizer } from "@tanstack/solid-virtual";
-import { batch, createEffect, createMemo, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
 import { rpc } from "@/core/connection";
 import { M } from "@/core/methods";
 import { state } from "@/core/store";
@@ -9,28 +7,14 @@ import { narrowLayout, view } from "@/core/view";
 import { Icon } from "@/ui/Icon";
 import { imageMime, imageUrl, releaseImageUrl } from "@/ui/imageUrl";
 import { Button, Dialog, IconButton, Spinner } from "@/ui/primitives";
+import { createVirtualizer } from "@/ui/virtualizer";
+import { createEffect, createMemo, createSignal, For, Match, onCleanup, onSettled, Show, Switch } from "solid-js";
 import { Banner, Empty, FileIcon } from "../parts";
 import { keyedWatch, liveSubscribe, readErrorText, type Target } from "../store";
 import type { CheckoutGitStatus, GitFileState, WorkspaceEntry, WorkspaceFileChanges, WorkspaceFileSearchMatch, WorkspaceFileText } from "../types";
 import { basename, copyText, decodeBase64Bytes, dirname } from "../util";
 import { createEditor, type EditorHandle } from "./editor";
-import {
-  applyFileChanges,
-  canSave,
-  closeFile,
-  files,
-  loadDirectory,
-  pending,
-  readFile,
-  refreshBaseline,
-  reveal,
-  saveFile,
-  selectPath,
-  setFileDraft,
-  takePending,
-  toggleDirectory,
-  verifyOpenFile,
-} from "./model";
+import { applyFileChanges, canSave, closeFile, files, loadDirectory, pending, readFile, refreshBaseline, reveal, saveFile, selectPath, setFileDraft, takePending, toggleDirectory, verifyOpenFile, } from "./model";
 
 const ROW = 27;
 const INDENT = 14;
@@ -130,27 +114,25 @@ export function Files(props: { target: Target }) {
   // Search on the host's index, debounced.
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let searchSeq = 0;
-  createEffect(
-    on(query, (q) => {
-      clearTimeout(searchTimer);
-      if (!q.trim()) {
-        setResults(null);
-        setSearchError(null);
-        return;
-      }
-      searchTimer = setTimeout(() => {
-        const seq = ++searchSeq;
-        rpc.call<WorkspaceFileSearchMatch[] | { matches: WorkspaceFileSearchMatch[] }>(M.SEARCH_WORKSPACE_FILES, { chatId, targetDeviceId: props.target.deviceId, query: q.trim(), limit: 200 }).then(
-          (value) => {
-            if (seq !== searchSeq) return;
-            setResults(Array.isArray(value) ? value : value?.matches ?? []);
-            setSearchError(null);
-          },
-          (e) => seq === searchSeq && setSearchError(readErrorText(e, "Search failed.")),
-        );
-      }, 150);
-    }, { defer: true }),
-  );
+  createEffect(query, (q) => {
+    clearTimeout(searchTimer);
+    if (!q.trim()) {
+      setResults(null);
+      setSearchError(null);
+      return;
+    }
+    searchTimer = setTimeout(() => {
+      const seq = ++searchSeq;
+      rpc.call<WorkspaceFileSearchMatch[] | { matches: WorkspaceFileSearchMatch[] }>(M.SEARCH_WORKSPACE_FILES, { chatId, targetDeviceId: props.target.deviceId, query: q.trim(), limit: 200 }).then(
+        (value) => {
+          if (seq !== searchSeq) return;
+          setResults(Array.isArray(value) ? value : value?.matches ?? []);
+          setSearchError(null);
+        },
+        (e) => seq === searchSeq && setSearchError(readErrorText(e, "Search failed.")),
+      );
+    }, 150);
+  }, { defer: true });
   onCleanup(() => clearTimeout(searchTimer));
 
   const rows = createMemo<Row[]>(() => {
@@ -194,24 +176,19 @@ export function Files(props: { target: Target }) {
   };
   const close = () =>
     guard(() =>
-      batch(() => {
+      (() => {
         setDirty(false);
         closeFile(chatId);
-      }),
+      })(),
     );
 
   // Other surfaces (Changes, History) ask for a file through the pending slot.
-  createEffect(
-    on(
-      () => pending.seq,
-      () => {
-        const path = takePending();
-        if (!path) return;
-        reveal(chatId, path);
-        openPath(path);
-      },
-    ),
-  );
+  createEffect(() => pending.seq, () => {
+    const path = takePending();
+    if (!path) return;
+    reveal(chatId, path);
+    openPath(path);
+  });
 
   const open = () => tree()?.open ?? null;
   const editable = () => canSave(open()) || !!open()?.saving || !!open()?.verifying;
@@ -227,23 +204,18 @@ export function Files(props: { target: Target }) {
   };
 
   // Load read snapshots into the editor; a baseline change only replaces clean text.
-  createEffect(
-    on(
-      () => [open()?.path, open()?.file?.text, open()?.file?.contentHash] as const,
-      ([path, text]) => {
-        if (!editor || !path || typeof text !== "string") return;
-        const current = editor.text();
-        if (lastBaseline === null || current === lastBaseline || !dirty()) {
-          if (current !== text) editor.setText(text);
-          editor.setLanguage(path);
-        }
-        lastBaseline = text;
-        syncDirty();
-      },
-    ),
-  );
+  createEffect(() => [open()?.path, open()?.file?.text, open()?.file?.contentHash] as const, ([path, text]) => {
+    if (!editor || !path || typeof text !== "string") return;
+    const current = editor.text();
+    if (lastBaseline === null || current === lastBaseline || !dirty()) {
+      if (current !== text) editor.setText(text);
+      editor.setLanguage(path);
+    }
+    lastBaseline = text;
+    syncDirty();
+  });
   const [editorReady, setEditorReady] = createSignal(0);
-  createEffect(() => {
+  createEffect(() => [editable(), open()?.conflict, editorReady()], () => {
     const readOnly = !editable() || !!open()?.conflict;
     if (editorReady()) editor?.setReadOnly(readOnly);
   });
@@ -286,7 +258,7 @@ export function Files(props: { target: Target }) {
                 for (const dir of Object.keys(tree()?.dirs ?? { "": null })) loadDirectory(chatId, dir);
               }}
             />
-            <IconButton icon="magnifer" label="Search files" size="sm" iconSize={15} active={searchShown()} aria-expanded={searchShown()} onClick={toggleSearch} />
+            <IconButton icon="magnifer" label="Search files" size="sm" iconSize={15} active={searchShown()} aria-expanded={(searchShown()) ? "true" : "false"} onClick={toggleSearch} />
           </div>
           <Show when={searchShown()}>
             <div class="ws-files-search">
@@ -414,7 +386,8 @@ export function Files(props: { target: Target }) {
               class="ws-editor"
               hidden={!!file().file && typeof file().file?.text !== "string"}
               ref={(el) =>
-                onMount(() => {
+                onSettled(() => {
+                  const cleanups: (() => void)[] = [];
                   editor = createEditor(el, { label: `Editor, ${basename(file().path)}`, onChange: syncDirty, onSave: save });
                   lastBaseline = null;
                   const text = open()?.file?.text;
@@ -428,11 +401,13 @@ export function Files(props: { target: Target }) {
                   }
                   editor.setReadOnly(!editable());
                   setEditorReady((n) => n + 1);
-                  onCleanup(() => {
+                  cleanups.push(() => {
                     editor?.destroy();
                     editor = undefined;
                     setEditorReady(0);
                   });
+
+                  return () => cleanups.forEach(cleanup => cleanup());
                 })
               }
             />
@@ -476,42 +451,39 @@ function ImagePreview(props: { target: Target; file: WorkspaceFileText }) {
     cancelled = true;
     releaseImageUrl(url());
   });
-  createEffect(
-    on(
-      () => [props.file.path, props.file.contentHash] as const,
-      async ([path, hash]) => {
-        setError(null);
-        const parts: Uint8Array[] = [];
-        let offset = 0;
-        let mime = "";
-        try {
-          for (;;) {
-            const chunk = await rpc.call<{ mimeType: string; data: string; nextOffset: number; done: boolean; size: number }>(M.READ_WORKSPACE_IMAGE, {
-              chatId: props.target.chatId,
-              targetDeviceId: props.target.deviceId,
-              path,
-              expectedCheckoutId: props.file.checkoutId,
-              expectedContentHash: hash ?? null,
-              offset,
-            });
-            if (cancelled) return;
-            if (chunk.size > IMAGE_LIMIT) throw new Error("This image is too large to preview here.");
-            mime = chunk.mimeType || mime;
-            parts.push(decodeBase64Bytes(chunk.data));
-            if (chunk.done || chunk.nextOffset <= offset) break;
-            offset = chunk.nextOffset;
-          }
-          const next = await imageUrl(parts as BlobPart[], imageMime(path, mime));
-          if (cancelled) return releaseImageUrl(next);
-          const previous = url();
-          setUrl(next);
-          releaseImageUrl(previous);
-        } catch (e) {
-          if (!cancelled) setError(readErrorText(e, "Couldn't load this image."));
+  createEffect(() => [props.file.path, props.file.contentHash] as const, ([path, hash]) => {
+    let stale = false; void (async () => {
+      setError(null);
+      const parts: Uint8Array[] = [];
+      let offset = 0;
+      let mime = "";
+      try {
+        for (;;) {
+          const chunk = await rpc.call<{ mimeType: string; data: string; nextOffset: number; done: boolean; size: number }>(M.READ_WORKSPACE_IMAGE, {
+            chatId: props.target.chatId,
+            targetDeviceId: props.target.deviceId,
+            path,
+            expectedCheckoutId: props.file.checkoutId,
+            expectedContentHash: hash ?? null,
+            offset,
+          });
+          if (cancelled || stale) return;
+          if (chunk.size > IMAGE_LIMIT) throw new Error("This image is too large to preview here.");
+          mime = chunk.mimeType || mime;
+          parts.push(decodeBase64Bytes(chunk.data));
+          if (chunk.done || chunk.nextOffset <= offset) break;
+          offset = chunk.nextOffset;
         }
-      },
-    ),
-  );
+        const next = await imageUrl(parts as BlobPart[], imageMime(path, mime));
+        if (cancelled || stale) return void (releaseImageUrl(next));
+        const previous = url();
+        setUrl(next);
+        releaseImageUrl(previous);
+      } catch (e) {
+        if (!cancelled) setError(readErrorText(e, "Couldn't load this image."));
+      }
+    })(); return () => { stale = true; };
+  });
   return (
     <div class="ws-image-preview">
       <Show when={url()} fallback={<Show when={error()} fallback={<Spinner label="Loading image" />}><Empty icon="document" title="No preview" detail={error() ?? undefined} /></Show>}>
@@ -659,9 +631,9 @@ function Tree(props: {
                           class="ws-tree-row"
                           role="treeitem"
                           aria-level={value().depth + 1}
-                          aria-selected={props.selected === entry().path}
-                          aria-expanded={directory() ? !!props.expanded[entry().path] : undefined}
-                          tabIndex={props.selected === entry().path || (!props.selected && item.index === 0) ? 0 : -1}
+                          aria-selected={(props.selected === entry().path) ? "true" : "false"}
+                          aria-expanded={(directory() ? !!props.expanded[entry().path] : undefined) == null ? undefined : (directory() ? !!props.expanded[entry().path] : undefined) ? "true" : "false"}
+                          tabindex={props.selected === entry().path || (!props.selected && item.index === 0) ? 0 : -1}
                           data-path={entry().path}
                           data-ignored={entry().ignored ? "true" : undefined}
                           data-deco={deco() ?? undefined}

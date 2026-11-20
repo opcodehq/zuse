@@ -1,10 +1,13 @@
+import { omit } from "solid-js";
+// Settings building blocks, matching crates/ui/src/settings/widgets.rs: framed groups, bordered cards, compact rows.
 // Settings building blocks, matching crates/ui/src/settings/widgets.rs: framed groups, bordered cards, compact rows.
 import { writeClipboard } from "@/ui/clipboard";
-import { Dialog as KDialog } from "@kobalte/core/dialog";
-import { Select as KSelect } from "@kobalte/core/select";
-import { For, type JSX, Show, splitProps } from "solid-js";
 import { Icon } from "@/ui/Icon";
 import { GlyphSpinner } from "@/ui/loaders";
+import { Dialog as KDialog } from "@kobalte/core/dialog";
+import { Select as KSelect } from "@kobalte/core/select";
+import { type JSX } from "@solidjs/web";
+import { For, Show } from "solid-js";
 
 /** Page title with one muted line and a hairline underneath. */
 export function SectionTitle(props: { title: string; description: string; count?: number; action?: JSX.Element }) {
@@ -47,8 +50,8 @@ export function Group(props: { title: string; description?: string; action?: JSX
 }
 
 export function Card(props: JSX.HTMLAttributes<HTMLDivElement>) {
-  const [local, rest] = splitProps(props, ["class"]);
-  return <div {...rest} class={`st-card ${local.class ?? ""}`} />;
+  const rest = omit(props, "class");
+  return <div {...rest} class={`st-card ${props.class ?? ""}`} />;
 }
 
 /** Title and description on the left, the control on the right. */
@@ -77,7 +80,7 @@ export function Switch(props: { checked: boolean; label: string; onChange: (valu
       type="button"
       role="switch"
       class="toggle"
-      aria-checked={props.checked}
+      aria-checked={(props.checked) ? "true" : "false"}
       aria-label={props.label}
       aria-description={props.description}
       disabled={props.disabled}
@@ -163,7 +166,7 @@ export function Segmented<T extends string>(props: { value: T; options: Option<T
           <button
             type="button"
             role="radio"
-            aria-checked={props.value === option.value}
+            aria-checked={(props.value === option.value) ? "true" : "false"}
             disabled={option.disabled}
             class="st-segment"
             onClick={() => props.onChange(option.value)}
@@ -177,7 +180,7 @@ export function Segmented<T extends string>(props: { value: T; options: Option<T
               const buttons = (event.currentTarget.parentElement?.querySelectorAll("button") ?? []) as NodeListOf<HTMLButtonElement>;
               buttons[props.options.indexOf(next)]?.focus();
             }}
-            tabIndex={props.value === option.value ? 0 : -1}
+            tabindex={props.value === option.value ? 0 : -1}
           >
             {option.label}
           </button>
@@ -188,11 +191,11 @@ export function Segmented<T extends string>(props: { value: T; options: Option<T
 }
 
 export function ActionButton(props: JSX.ButtonHTMLAttributes<HTMLButtonElement> & { tone?: "outlined" | "quiet" | "filled" | "solid" | "danger"; icon?: string }) {
-  const [local, rest] = splitProps(props, ["tone", "icon", "children", "class"]);
+  const rest = omit(props, "tone", "icon", "children", "class");
   return (
-    <button type="button" {...rest} class={`st-action ${local.class ?? ""}`} data-tone={local.tone ?? "outlined"}>
-      <Show when={local.icon}>{(name) => <Icon name={name()} size={14} />}</Show>
-      {local.children}
+    <button type="button" {...rest} class={`st-action ${props.class ?? ""}`} data-tone={props.tone ?? "outlined"}>
+      <Show when={props.icon}>{(name) => <Icon name={name()} size={14} />}</Show>
+      {props.children}
     </button>
   );
 }

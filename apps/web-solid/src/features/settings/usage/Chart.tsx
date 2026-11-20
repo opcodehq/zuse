@@ -1,7 +1,7 @@
 // Daily usage plot: dithered series on 2px cells, the reference plot's margins, axes and hover/day selection
 // (crates/viewport/src/usage_dashboard/chart.rs). The raster redraws only when data, size or theme change.
-import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
 import { resolvedTheme } from "@/shell/theme";
+import { createEffect, createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { money, tokens } from "./format";
 import type { UsageGroup } from "./state";
 
@@ -64,10 +64,13 @@ export function Chart(props: { groups: UsageGroup[]; cost: boolean; hovered: num
   const count = () => groups().length;
   const fmt = (v: number) => (props.cost ? money(v) : tokens(Math.round(v)));
 
-  onMount(() => {
+  onSettled(() => {
+    const cleanups: (() => void)[] = [];
     const observer = new ResizeObserver(([entry]) => setWidth(Math.floor(entry!.contentRect.width)));
     observer.observe(host!);
-    onCleanup(() => observer.disconnect());
+    cleanups.push(() => observer.disconnect());
+
+    return () => cleanups.forEach(cleanup => cleanup());
   });
 
   const geometry = () => {
@@ -78,7 +81,7 @@ export function Chart(props: { groups: UsageGroup[]; cost: boolean; hovered: num
   };
 
   // Base raster: grid ticks plus dithered series. Theme is read so a switch repaints with the new surface.
-  createEffect(() => {
+  createEffect(() => [width(), resolvedTheme(), geometry(), scale(), values(), props.cost], () => {
     const canvas = base;
     if (!canvas || width() <= 0) return;
     resolvedTheme();
@@ -100,16 +103,16 @@ export function Chart(props: { groups: UsageGroup[]; cost: boolean; hovered: num
     ctx.fillStyle = border;
     for (const tick of ticks) {
       const y = Math.max(0, Math.round((1 - tick / max) * PLOT_H));
-      for (let x = 0; x < w; x += 6) ctx.fillRect(x, Math.min(y, PLOT_H - 1), 3, 1);
+      for (let x = 0;x < w;x += 6) ctx.fillRect(x, Math.min(y, PLOT_H - 1), 3, 1);
     }
     const data = values();
     const n = data.length;
     if (!n) return;
     const colors = props.cost ? COST_SERIES : SERIES;
-    for (let series = 0; series < (data[0]?.length ?? 0); series++) {
+    for (let series = 0;series < (data[0]?.length ?? 0);series++) {
       const dotted = !props.cost && series % 2 === 1;
       const [r, g, b] = colors[series]!.rgb;
-      for (let x = 0; x < cols; x++) {
+      for (let x = 0;x < cols;x++) {
         const position = cols > 1 ? (x / (cols - 1)) * Math.max(0, n - 1) : 0;
         const a = Math.min(Math.floor(position), n - 1);
         const bIndex = Math.min(a + 1, n - 1);
@@ -117,7 +120,7 @@ export function Chart(props: { groups: UsageGroup[]; cost: boolean; hovered: num
         const value = data[a]![series]! * (1 - t) + data[bIndex]![series]! * t;
         const start = Math.min(rows, Math.max(0, Math.round((1 - value / max) * rows)));
         const depth = rows - start;
-        for (let y = start; y < rows; y++) {
+        for (let y = start;y < rows;y++) {
           let alpha: number;
           if (y === start) alpha = 0.72;
           else if (y === start + 1) alpha = 0.36;
@@ -136,7 +139,7 @@ export function Chart(props: { groups: UsageGroup[]; cost: boolean; hovered: num
   });
 
   // The hover marker: a tinted column and a dot per series at the hovered day.
-  createEffect(() => {
+  createEffect(() => [width(), geometry(), props.hovered, count(), props.cost, groups(), scale(), values()], () => {
     const canvas = marker;
     if (!canvas || width() <= 0) return;
     const { w, cols, rows, cw, ch } = geometry();
@@ -166,7 +169,7 @@ export function Chart(props: { groups: UsageGroup[]; cost: boolean; hovered: num
   });
 
   // A new period or measure drops a hover that may point past the end.
-  createEffect(on([groups, () => props.cost], () => props.onHover(null), { defer: true }));
+  createEffect(() => [(groups)(), (() => props.cost)()] as const, () => props.onHover(null), { defer: true });
 
   const indexAt = (clientX: number) => {
     const rect = host!.getBoundingClientRect();
@@ -205,7 +208,7 @@ export function Chart(props: { groups: UsageGroup[]; cost: boolean; hovered: num
       ref={host}
       class="us-chart"
       role="img"
-      tabIndex={0}
+      tabindex={0}
       aria-roledescription="chart"
       aria-label={`Daily ${props.cost ? "estimated cost" : "tokens"} for ${count()} days. Use the arrow keys to move between days and Enter to view one.${props.hovered !== null ? ` ${describe(props.hovered)}` : ""}`}
       onPointerMove={(e) => {

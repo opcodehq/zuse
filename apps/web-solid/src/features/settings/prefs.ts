@@ -46,7 +46,7 @@ export function pref<K extends keyof SettingsPrefs>(key: K): SettingsPrefs[K] {
 }
 
 export function setPref<K extends keyof SettingsPrefs>(key: K, value: SettingsPrefs[K]) {
-  setView("preferences", key, value as never);
+  setView(draft => { draft["preferences"]![key] = value as never; });
 }
 
 export const PRESET_LABELS: Record<CompletionPreset, string> = {

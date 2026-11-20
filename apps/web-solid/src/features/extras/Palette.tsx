@@ -1,34 +1,24 @@
+import { isZapperChat } from "@/core/zappers";
 // Global search over commands, threads and the selected chat's workspace, grouped in sections.
 // Mirrors crates/ui/src/shell/command_palette.rs: tabs narrow to one kind, rows keep identity across refreshes.
-import { batch, createEffect, createMemo, createSignal, For, Index, type JSX, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
-import { createStore } from "solid-js/store";
-import { rpc } from "@/core/connection";
 import { chatRequest } from "@/core/chat";
+import { rpc } from "@/core/connection";
 import { formatKeys, listShortcuts } from "@/core/keys";
 import { M } from "@/core/methods";
 import { state } from "@/core/store";
 import { navigate, openChat, setView, view } from "@/core/view";
-import { resolvedTheme } from "@/shell/theme";
 import { FileIcon } from "@/features/workspace/parts";
+import { resolvedTheme } from "@/shell/theme";
 import { Icon } from "@/ui/Icon";
 import { TerminalSpinner } from "@/ui/loaders";
-import { archiveSelectedChat, archivableChat, openWorkspacePath } from "./actions";
+import { type JSX } from "@solidjs/web";
+import { createEffect, createMemo, createSignal, createStore, For, Match, onCleanup, onSettled, Show, Switch } from "solid-js";
+import { archivableChat, archiveSelectedChat, openWorkspacePath } from "./actions";
 import { EmptyState } from "./feedback";
 import { Highlight } from "./Highlight";
 import { closeOverlay, openOverlay, type PaletteTab, paletteTab } from "./overlay";
+import { activityAt, byteRangesToChars, chatLocation, chatTitle, effectiveIndicator, isTopLevel, matchRanges, spaceName, splitPath, timeAgo, } from "./util";
 import { endVoice, startVoice, voiceCall } from "./voice";
-import {
-  activityAt,
-  byteRangesToChars,
-  chatLocation,
-  chatTitle,
-  effectiveIndicator,
-  isTopLevel,
-  matchRanges,
-  spaceName,
-  splitPath,
-  timeAgo,
-} from "./util";
 
 const ALL_TAB_LIMIT = 5;
 const THREADS_TAB_LIMIT = 50;
@@ -144,8 +134,8 @@ export function Palette() {
   const [tab, setTab] = createSignal<Tab>(paletteTab());
   const [activeKey, setActiveKey] = createSignal<string | null>(null);
   const [activeIndex, setActiveIndex] = createSignal(0);
-  const [files, setFiles] = createStore<Query<FileMatch>>(idle());
-  const [content, setContent] = createStore<Query<ContentMatch>>(idle());
+  const [files, setFiles] = createStore<Query<FileMatch>>(idle<FileMatch>());
+  const [content, setContent] = createStore<Query<ContentMatch>>(idle<ContentMatch>());
   let input!: HTMLInputElement;
   let list!: HTMLDivElement;
   let disposed = false;
@@ -173,11 +163,15 @@ export function Palette() {
         label: isDark() ? "Switch to light theme" : "Switch to dark theme",
         icon: isDark() ? "sun" : "moon",
         stayOpen: true,
-        run: () => setView("preferences", "theme", isDark() ? "light" : "dark"),
+        run: () => setView(draft => { draft["preferences"]!["theme"] = isDark() ? "light" : "dark"; }),
       },
     ];
+    if (state.zappersSupported !== false) {
+      list.push({ id: "new-zapper", label: "New Zapper", icon: "plus", run: () => navigate({ kind: "newZapper" }) });
+      for (const zapper of state.zappers.filter(z => z.status !== "archived")) list.push({ id: `zapper-${zapper.id}`, label: `Open Zapper ${zapper.config.name}`, icon: "chat-round-line", run: () => openChat(zapper.coordinatorChatId) });
+    }
     if (view.preferences.theme !== "system")
-      list.push({ id: "theme-system", label: "Switch to system theme", icon: "monitor", stayOpen: true, run: () => setView("preferences", "theme", "system") });
+      list.push({ id: "theme-system", label: "Switch to system theme", icon: "monitor", stayOpen: true, run: () => setView(draft => { draft["preferences"]!["theme"] = "system"; }) });
     if (archivableChat())
       list.push({ id: "archive", label: "Archive thread", icon: "archive-minimalistic", run: () => void archiveSelectedChat() });
     list.push(
@@ -193,7 +187,7 @@ export function Palette() {
 
   const recentThreads = (limit: number) =>
     Object.values(state.chats)
-      .filter((chat) => isTopLevel(chat) && !chat.archived && chat.id !== view.selectedChatId)
+      .filter((chat) => isTopLevel(chat) && !isZapperChat(chat.id) && !chat.archived && chat.id !== view.selectedChatId)
       .sort((a, b) => activityAt(b) - activityAt(a))
       .slice(0, limit)
       .map((chat) => chat.id);
@@ -203,7 +197,7 @@ export function Palette() {
     const scored: [string, number, number][] = [];
     // Global history ignores the sidebar's filters; archived threads stay searchable.
     for (const chat of Object.values(state.chats)) {
-      if (!isTopLevel(chat)) continue;
+      if (!isTopLevel(chat) || isZapperChat(chat.id)) continue;
       const score = scoreThread(
         {
           title: chatTitle(chat),
@@ -282,19 +276,19 @@ export function Palette() {
   const rowId = (row: Row) => `x-palette-row-${encodeURIComponent(row.key).replace(/%/g, "_")}`;
 
   const resetActive = () => {
-    batch(() => {
+    (() => {
       setActiveKey(null);
       setActiveIndex(0);
-    });
+    })();
     if (list) list.scrollTop = 0;
   };
 
   function setActive(index: number, scroll: boolean) {
     const rows = flat();
-    batch(() => {
+    (() => {
       setActiveIndex(index);
       setActiveKey(rows[index]?.key ?? null);
-    });
+    })();
     if (!scroll) return;
     if (index === 0) {
       list.scrollTop = 0;
@@ -309,23 +303,23 @@ export function Palette() {
   }
 
   function searchWorkspace() {
-    const chatId = view.route.kind === "chat" ? view.selectedChatId : null;
+    const chatId = (view.route.kind === "chat" || view.route.kind === "zappers") ? view.selectedChatId : null;
     const text = query().trim();
     filesGeneration++;
     contentGeneration++;
     // An empty query lists the workspace's recently changed files; one character is too broad.
     if (!chatId || !state.chats[chatId] || !(text === "" || [...text].length >= MIN_WORKSPACE_QUERY_CHARS)) {
-      setFiles(idle());
-      setContent(idle());
+      setFiles(draft => { Object.assign(draft, idle()); });
+      setContent(draft => { Object.assign(draft, idle()); });
       return;
     }
     void searchFiles(chatId, text, filesGeneration);
-    if (text === "") setContent(idle());
+    if (text === "") setContent(draft => { Object.assign(draft, idle()); });
     else void searchContent(chatId, text, contentGeneration);
   }
 
   async function searchFiles(chatId: string, text: string, generation: number) {
-    setFiles({ loading: true });
+    setFiles(draft => { Object.assign(draft, { loading: true }); });
     let probe = text !== "" && filesReadyFor !== chatId;
     for (;;) {
       let indexing = false;
@@ -345,10 +339,10 @@ export function Palette() {
           filesReadyFor = chatId;
           probe = false;
         }
-        setFiles({ loading: false, indexing, error: null, results: Array.isArray(found) ? found : [] });
+        setFiles(draft => { Object.assign(draft, { loading: false, indexing, error: null, results: Array.isArray(found) ? found : [] }); });
       } catch (error) {
         if (disposed || generation !== filesGeneration) return;
-        setFiles({ loading: false, indexing: false, error: searchError(error, "file"), results: [] });
+        setFiles(draft => { Object.assign(draft, { loading: false, indexing: false, error: searchError(error, "file"), results: [] }); });
         return;
       }
       if (!indexing) return;
@@ -358,7 +352,7 @@ export function Palette() {
   }
 
   async function searchContent(chatId: string, text: string, generation: number) {
-    setContent({ loading: true });
+    setContent(draft => { Object.assign(draft, { loading: true }); });
     await sleep(CONTENT_DEBOUNCE);
     // Without a content index every refresh is a full grep, so retries back off.
     for (let delay = INDEX_RETRY; ; delay = Math.min(delay * 2, INDEX_RETRY_MAX)) {
@@ -369,25 +363,25 @@ export function Palette() {
           chatRequest(chatId, { query: text, limit: CONTENT_TAB_LIMIT, perFileLimit: CONTENT_MATCHES_PER_FILE }),
         );
         if (disposed || generation !== contentGeneration) return;
-        setContent({ loading: false, indexing: !!found?.indexing, error: null, results: found?.matches ?? [] });
+        setContent(draft => { Object.assign(draft, { loading: false, indexing: !!found?.indexing, error: null, results: found?.matches ?? [] }); });
         if (!found?.indexing) return;
       } catch (error) {
         if (disposed || generation !== contentGeneration) return;
-        setContent({ loading: false, indexing: false, error: searchError(error, "content"), results: [] });
+        setContent(draft => { Object.assign(draft, { loading: false, indexing: false, error: searchError(error, "content"), results: [] }); });
         return;
       }
       await sleep(delay);
     }
   }
 
-  onMount(() => {
+  onSettled(() => {
     input.focus();
     searchWorkspace();
   });
-  createEffect(on(query, () => {
+  createEffect(query, () => {
     resetActive();
     searchWorkspace();
-  }, { defer: true }));
+  }, { defer: true });
 
   function selectTab(next: Tab) {
     if (next === tab()) return;
@@ -395,7 +389,7 @@ export function Palette() {
     resetActive();
   }
   // Mod+P while the palette is open on another tab switches it in place.
-  createEffect(on(paletteTab, (next) => selectTab(next), { defer: true }));
+  createEffect(paletteTab, (next) => selectTab(next), { defer: true });
 
   function activate(row: Row | undefined) {
     if (!row) return;
@@ -476,7 +470,7 @@ export function Palette() {
             aria-activedescendant={activeRow() ? rowId(activeRow()!) : undefined}
             aria-label="Search threads, commands and files"
             placeholder="Search threads, commands and files…"
-            spellcheck={false}
+            spellcheck="false"
             autocomplete="off"
             value={query()}
             onInput={(e) => setQuery(e.currentTarget.value)}
@@ -491,8 +485,8 @@ export function Palette() {
                   type="button"
                   class="x-palette-tab"
                   role="tab"
-                  tabIndex={-1}
-                  aria-selected={tab() === item.id}
+                  tabindex={-1}
+                  aria-selected={(tab() === item.id) ? "true" : "false"}
                   aria-controls="x-palette-list"
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => {
@@ -511,7 +505,7 @@ export function Palette() {
               when={sections().length}
               fallback={<EmptyState title="No results" hint="Try a command, chat title, project, or device." />}
             >
-              <Index each={sections()}>
+              <For keyed={false} each={sections()}>
                 {(section, sectionIndex) => (
                   <div role="group" aria-label={SECTION_TITLES[section().id]} class="x-section">
                     <Show when={sectionIndex > 0}><div class="x-section-rule" role="presentation" /></Show>
@@ -525,7 +519,7 @@ export function Palette() {
                           id={rowId(row)}
                           class="x-row"
                           role="option"
-                          aria-selected={activeRow() === row}
+                          aria-selected={(activeRow() === row) ? "true" : "false"}
                           onMouseDown={(e) => e.preventDefault()}
                           onMouseMove={() => activeRow() !== row && setActive(flat().indexOf(row), false)}
                           onClick={() => activate(row)}
@@ -536,7 +530,7 @@ export function Palette() {
                     </For>
                   </div>
                 )}
-              </Index>
+              </For>
             </Show>
           </div>
         </div>

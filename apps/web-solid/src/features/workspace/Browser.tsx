@@ -1,10 +1,10 @@
 // The browser surface: the project's running previews and an embedded page. A web client can only
 // embed what the page allows, so this uses an isolated, credentialless iframe and says plainly when a
 // page can't be shown here. Rules follow apps/web/src/browser_frame.js.
-import { createMemo, createSignal, For, Show } from "solid-js";
 import { area } from "@/features/connection/status";
 import { Icon } from "@/ui/Icon";
 import { Button, IconButton, Spinner } from "@/ui/primitives";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import { Banner, Empty } from "./parts";
 import { workspace, type Target } from "./store";
 import type { PreviewService } from "./types";
@@ -90,7 +90,7 @@ export function Browser(props: { target: Target }) {
             class="ws-search-input"
             type="text"
             inputmode="url"
-            spellcheck={false}
+            spellcheck="false"
             autocomplete="off"
             placeholder="Enter a web address"
             aria-label="Web address"
@@ -171,7 +171,7 @@ export function Browser(props: { target: Target }) {
               }}
               class="ws-browser-frame"
               title="Web preview"
-              referrerPolicy="no-referrer"
+              referrerpolicy="no-referrer"
               sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads"
               allow="camera 'none'; microphone 'none'; geolocation 'none'"
               onLoad={(e) => e.currentTarget.getAttribute("src") && setLoading(false)}

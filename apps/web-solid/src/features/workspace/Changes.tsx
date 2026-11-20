@@ -1,18 +1,17 @@
 // Changes review: the checkout's diff for one scope (working tree, branch, latest turn), refreshed
 // whenever the engine reports a new working-tree checksum. Mirrors crates/ui/src/changes.rs.
-import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from "solid-js";
-import { createStore } from "solid-js/store";
 import { rpc } from "@/core/connection";
 import { M } from "@/core/methods";
 import { state } from "@/core/store";
-import { Button, Dialog, IconButton, Menu, toast } from "@/ui/primitives";
 import { Icon } from "@/ui/Icon";
+import { Button, Dialog, IconButton, Menu, toast } from "@/ui/primitives";
+import { createEffect, createMemo, createSignal, createStore, For, onCleanup, Show } from "solid-js";
 import { parsePatch } from "./diff";
 import { DiffView } from "./DiffView";
+import { openFileInPanel } from "./files/model";
 import { Banner, DiffStat, Empty, Loading } from "./parts";
 import { diffStatFor, errorText, openPanel, readErrorText, type Target } from "./store";
 import type { CheckoutDiff } from "./types";
-import { openFileInPanel } from "./files/model";
 import { copyText, plural } from "./util";
 
 type Scope = "workingTree" | "branch" | "turn" | "commit";
@@ -31,7 +30,7 @@ interface ReviewScope {
 const [scopes, setScopes] = createStore<Record<string, ReviewScope>>({});
 
 export function reviewCommit(chatId: string, sha: string, subject: string) {
-  setScopes(chatId, { scope: "commit", commit: { sha, subject } });
+  setScopes(draft => { draft[chatId] = { scope: "commit", commit: { sha, subject } }; });
   openPanel("changes");
 }
 
@@ -48,7 +47,7 @@ export function Changes(props: { target: Target }) {
   const chatId = props.target.chatId;
   const scope = () => scopes[chatId]?.scope ?? "workingTree";
   const commit = () => (scope() === "commit" ? scopes[chatId]?.commit ?? null : null);
-  const setScope = (next: Scope) => setScopes(chatId, { scope: next, commit: next === "commit" ? commit() : null });
+  const setScope = (next: Scope) => setScopes(draft => { draft[chatId] = { scope: next, commit: next === "commit" ? commit() : null }; });
   const [diff, setDiff] = createSignal<CheckoutDiff | null>(null);
   const [loading, setLoading] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
@@ -108,16 +107,14 @@ export function Changes(props: { target: Target }) {
   };
 
   // A different scope is a different diff: never show the previous one under the new label.
-  createEffect(on([scope, () => commit()?.sha, base], () => (setDiff(null), setError(null)), { defer: true }));
+  createEffect(() => [(scope)(), (() => commit()?.sha)(), (base)()] as const, () => { void ((setDiff(null), setError(null))); }, { defer: true });
   // Re-read when the scope, base or the checkout's checksum changes, and after reconnects.
   let timer: ReturnType<typeof setTimeout> | undefined;
-  createEffect(
-    on([scope, () => commit()?.sha, base, checksum, () => state.epoch, connected], () => {
-      clearTimeout(timer);
-      timer = setTimeout(refresh, diff() ? 250 : 0);
-    }),
-  );
-  createEffect(on(scope, (s) => s === "branch" && !branches().length && loadBranches()));
+  createEffect(() => [(scope)(), (() => commit()?.sha)(), (base)(), (checksum)(), (() => state.epoch)(), (connected)()] as const, () => {
+    clearTimeout(timer);
+    timer = setTimeout(refresh, diff() ? 250 : 0);
+  });
+  createEffect(scope, (s) => { void (s === "branch" && !branches().length && loadBranches()); });
   onCleanup(() => clearTimeout(timer));
 
   const label = () => {
@@ -202,7 +199,7 @@ export function Changes(props: { target: Target }) {
           disabled={!diff()?.patch}
           onClick={() => void copyText(diff()?.patch ?? "", "Patch copied")}
         />
-        <IconButton icon="wrap-text" label="Wrap long lines" size="sm" iconSize={14} active={wrap()} aria-pressed={wrap()} onClick={() => setWrap(!wrap())} />
+        <IconButton icon="wrap-text" label="Wrap long lines" size="sm" iconSize={14} active={wrap()} aria-pressed={(wrap()) ? "true" : "false"} onClick={() => setWrap(!wrap())} />
         <IconButton icon="refresh" label="Refresh" size="sm" iconSize={14} disabled={loading()} onClick={refresh} />
         <Show when={scope() === "workingTree" && !props.target.archived}>
           <IconButton icon="restore" label="Discard all changes" size="sm" iconSize={14} disabled={!files().length || discarding()} onClick={() => setConfirmDiscard(true)} />
@@ -243,7 +240,7 @@ function ChangedFiles(props: { files: ReturnType<typeof parsePatch> }) {
   const [open, setOpen] = createSignal(false);
   return (
     <div class="ws-changed-files">
-      <button type="button" class="ws-changed-toggle" aria-expanded={open()} onClick={() => setOpen(!open())}>
+      <button type="button" class="ws-changed-toggle" aria-expanded={(open()) ? "true" : "false"} onClick={() => setOpen(!open())}>
         <Icon name={open() ? "alt-arrow-down" : "alt-arrow-right"} size={11} class="ws-faint" />
         <span>{plural(props.files.length, "file")}</span>
       </button>

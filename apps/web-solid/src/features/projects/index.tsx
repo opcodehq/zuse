@@ -6,8 +6,8 @@ export { ProjectArchive } from "./ProjectArchive";
 
 // For other areas: the session info card mounts ProjectActions, the composer tray mounts
 // ProjectCreationNotice, project lists use CreationBadge. Worktree location lives in Settings → General.
-export { ProjectActions, ActionEditor } from "./ProjectActions";
-export { CreationBadge, ProjectCreationNotice } from "./CreationNotice";
+export { actionTerminals,claimActionTerminal,type ActionTerminal } from "./actions";
+export { CreationBadge,ProjectCreationNotice } from "./CreationNotice";
+export { creationBlocks,creationForSpace } from "./creations";
+export { ActionEditor,ProjectActions } from "./ProjectActions";
 export { openNewProject } from "./setup";
-export { creationBlocks, creationForSpace } from "./creations";
-export { actionTerminals, claimActionTerminal, type ActionTerminal } from "./actions";

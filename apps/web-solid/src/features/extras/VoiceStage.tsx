@@ -1,8 +1,8 @@
 // The voice call's stage (orb, live caption, call bar) and the compact pill while it is hidden.
-import { createEffect, Match, on, Switch } from "solid-js";
 import { narrowLayout, sidebarVisible, view } from "@/core/view";
 import { Icon } from "@/ui/Icon";
 import { Button, IconButton } from "@/ui/primitives";
+import { createEffect, Match, Switch } from "solid-js";
 import { dismissVoiceNotice, endVoice, orbState, setVoiceStageOpen, toggleVoiceMute, voice } from "./voice";
 
 const CAPTION_CHARS = 160;
@@ -21,24 +21,19 @@ function statusLabel() {
 export function VoiceStage() {
   let stage: HTMLDivElement | undefined;
   let returnFocus: HTMLElement | null = null;
-  createEffect(
-    on(
-      () => voice.stageOpen && !!voice.view,
-      (open, wasOpen) => {
-        if (open) {
-          // Read in the microtask: an overlay that launched the call returns its focus first.
-          queueMicrotask(() => {
-            const active = document.activeElement;
-            const outside = active instanceof HTMLElement && active !== document.body && !stage?.contains(active) && !active.closest(".x-voice-pill");
-            if (!wasOpen && outside && !returnFocus?.isConnected) returnFocus = active;
-            stage?.focus();
-          });
-        } else if (wasOpen) {
-          restoreFocus();
-        }
-      },
-    ),
-  );
+  createEffect(() => voice.stageOpen && !!voice.view, (open, wasOpen) => {
+    if (open) {
+      // Read in the microtask: an overlay that launched the call returns its focus first.
+      queueMicrotask(() => {
+        const active = document.activeElement;
+        const outside = active instanceof HTMLElement && active !== document.body && !stage?.contains(active) && !active.closest(".x-voice-pill");
+        if (!wasOpen && outside && !returnFocus?.isConnected) returnFocus = active;
+        stage?.focus();
+      });
+    } else if (wasOpen) {
+      restoreFocus();
+    }
+  });
   // The stage or pill held focus; give it back instead of dropping it on the body. Hiding keeps the origin for the call's end.
   function restoreFocus() {
     const target = returnFocus;
@@ -47,16 +42,11 @@ export function VoiceStage() {
       if (target?.isConnected) target.focus();
     });
   }
-  createEffect(
-    on(
-      () => !!voice.view,
-      (live, wasLive) => {
-        if (live || !wasLive) return;
-        restoreFocus();
-        returnFocus = null;
-      },
-    ),
-  );
+  createEffect(() => !!voice.view, (live, wasLive) => {
+    if (live || !wasLive) return;
+    restoreFocus();
+    returnFocus = null;
+  });
   // Desktop keeps the sidebar usable beside the stage; collapsed, the stage spans the window.
   const left = () => (sidebarVisible() && !narrowLayout() ? `${view.preferences.sidebarWidth}px` : "0px");
   // The pill centres over the main pane, not the whole window.
@@ -80,7 +70,7 @@ export function VoiceStage() {
           style={{ left: left() }}
           role="dialog"
           aria-label="Voice call"
-          tabIndex={-1}
+          tabindex={-1}
           onKeyDown={(e) => {
             if (e.key === "Escape") {
               e.preventDefault();
@@ -99,7 +89,7 @@ export function VoiceStage() {
               icon={voice.view!.muted ? "microphone-off" : "microphone"}
               label={voice.view!.muted ? "Unmute" : "Mute"}
               active={voice.view!.muted}
-              aria-pressed={voice.view!.muted}
+              aria-pressed={(voice.view!.muted) ? "true" : "false"}
               onClick={() => toggleVoiceMute()}
             />
             <IconButton class="x-voice-control" icon="alt-arrow-down" label="Hide voice call" onClick={() => setVoiceStageOpen(false)} />
@@ -113,7 +103,7 @@ export function VoiceStage() {
             <span class="x-orb-core" />
           </span>
           <span class="x-voice-pill-label">{statusLabel()}</span>
-          <IconButton size="sm" icon={voice.view!.muted ? "microphone-off" : "microphone"} label={voice.view!.muted ? "Unmute" : "Mute"} aria-pressed={voice.view!.muted} onClick={() => toggleVoiceMute()} />
+          <IconButton size="sm" icon={voice.view!.muted ? "microphone-off" : "microphone"} label={voice.view!.muted ? "Unmute" : "Mute"} aria-pressed={(voice.view!.muted) ? "true" : "false"} onClick={() => toggleVoiceMute()} />
           <IconButton size="sm" icon="alt-arrow-up" label="Show voice call" onClick={() => setVoiceStageOpen(true)} />
           <IconButton size="sm" icon="phone-hang-up" label="End call" onClick={() => endVoice()} />
         </div>

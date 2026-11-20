@@ -1,4 +1,4 @@
-# Zuse web client (Solid)
+# Zuse web client (Solid 2)
 
 A DOM client for the Zuse engine. Desktop (`crates/ui`) is the reference for behaviour and appearance. The engine owns all data; this app shows it and sends requests.
 
@@ -20,6 +20,7 @@ Area exports, mounted by `src/shell/App.tsx`:
 | `workspace` | `TopBar`, `RightPanel` | Above the chat; right column when `view.rightPanel` is set |
 | `transcript` | `Transcript` | Chat body (fills, scrolls) |
 | `composer` | `Composer` | Below the transcript. Also renders the landing heading when no chat is selected. |
+| `zappers` | `ZapperPage`, `ConfigPage`, `ZapperSidebar` | Dedicated coordinator/worker route, inspector and sidebar group |
 | `projects` | `NewProject`, `ProjectArchive` | Routes `newProject`, `archive` |
 | `settings` | `Settings`, `Usage` | Routes `settings`, `usage` |
 | `plugins-cloud` | `Plugins` | Route `plugins` |
@@ -44,8 +45,10 @@ Area exports, mounted by `src/shell/App.tsx`:
 ## Rules
 
 - Components read `state` and `view`; never copy server data into signals. Local UI state only (menus, hover, drafts in progress).
-- Solid: do not destructure props, use `For`/`Show`/`Index`, use `splitProps` to forward attributes.
-- Long lists are virtualized with `@tanstack/solid-virtual`.
+- Solid 2: do not destructure props. Use `For`/`Show`, `For keyed={false}` for indexed lists, and `omit(props, ...keys)` to forward attributes. DOM types and rendering come from `@solidjs/web`; stores come from `solid-js`. Effects use separate compute and apply callbacks; return cleanup from apply or `onSettled`.
+- Store setters mutate drafts. Writes commit on the next microtask; perform dependent reads after that commit, or use the draft inside the same setter. Use `flush` only at imperative boundaries that require committed state, never inside an effect. Reconcile existing subtrees; assign the initial value when the subtree is null.
+- Native `data-*`, ARIA and enumerated attributes use string tokens (`"true"` / `"false"`) where the text value matters; boolean false removes attributes in Solid 2.
+- Long lists use `ui/virtualizer.ts`, a Solid 2 adapter over `@tanstack/virtual-core`. It reconciles measured rows by index so measurements preserve mounted rows. Replace it with the upstream adapter once a Solid 2-compatible version is published.
 - Markdown and agent content are sanitized before reaching the DOM, through `ui/markdown.ts` (also for provider content such as PR descriptions and review comments). Only bundled SVG icons use `innerHTML`. Streaming markdown re-renders only the growing list item, table cell or tail block, and spaces out renders that cost more than a few ms; code is tokenized in a worker and long blocks colour only the lines near the viewport.
 - Never put engine or agent bytes behind a blob URL yourself: use `ui/imageUrl.ts`, since a blob URL opened as a page runs with this origin.
 - Every control is a labelled, keyboard-reachable element. Shortcuts go through `core/keys.ts`; a shortcut's `when` can hand the key back to the browser or the focused editor.
@@ -56,12 +59,13 @@ Area exports, mounted by `src/shell/App.tsx`:
 
 ## Commands
 
-Node 20.19+ is required (system Node 18 is too old; use `~/.config/nvm/versions/node/v24.18.1/bin`).
+Node 22.12+ is required (system Node 18 is too old; use `~/.config/nvm/versions/node/v24.18.1/bin`).
 
 ```sh
 bun install
 bun run typecheck && bun run lint
 ZUSE_WEB_OUT=/tmp/my-build bun run build   # private output; default is dist/web-solid
+node e2e/solid2.mjs                         # development runtime: frames, batching, cleanup, virtualization and Kobalte
 node e2e/smoke.mjs                          # real engine + headless Chromium
 node e2e/journey.mjs                        # full user journey, first-load and long-stream numbers
 node e2e/defects.mjs                        # regression checks for reviewed defects (lost answers, deleted chats, …)
@@ -72,3 +76,19 @@ zuse serve --assets dist/web-solid          # serve the production build
 ```
 
 `e2e/harness.mjs` provides `buildApp()`, `startEngine({ assets, agent: { reply, chunks } })` with a fixture agent and a disposable profile, and `openBrowser(url)` with `eval`, `waitFor`, `click`, `press`, `type`, `key` and `screenshot`. `window.__zuse` exposes `{ state, view }` read-only for tests.
+
+## Solid 2 dependency boundary
+
+`solid-js` and `@solidjs/web` move together; `@solidjs/vite-plugin` compiles JSX and owns the development checks. `tsconfig.json` points JSX types at `@solidjs/web`, and ESLint uses its Solid 2 configuration. `ZUSE_SOLID_DEV=1` also enables the development runtime and readable output in a production-style build for engine-backed diagnostics.
+
+Kobalte is pinned to `2.0.0-alpha.4`, its published Solid 2 line. Its peer ranges still pin an older Solid 2 RC, so the package overrides keep its primitives and the app on the same stable Solid 2 runtime. The dialog/menu regression checks exercise this boundary. Kobalte's alpha currently emits development relay diagnostics; those upstream warnings remain visible.
+
+## Zappers
+
+`WatchZots` is a standing connection watch. `core/zappers.ts` determines ownership, including previous coordinators and thread descendants. Owned threads are excluded from ordinary sidebar and search results; `openChat` routes them into the Zapper conversation and inspector. The regular list waits for the first ownership snapshot to avoid briefly leaking Zapper threads. Released workers return to their projects; archived workers remain accessible from the archive.
+
+The inspector mirrors desktop Overview, Issues, Threads, Drive and History. Commands carry an expected revision and stable command ID. A lost response preserves the exact command for an explicit idempotent retry. Delegated chat IDs derive from that command ID. Document edits/restores carry an expected file version. Display attribution parses the engine envelope without modifying the stored or submitted prompt. Pixel mascots are generated from the shared Rust presentation definitions using `scripts/gen-zapper-mascots.py`.
+
+Run `node e2e/zappers.mjs` for browser checks against a disposable engine and a scripted agent (creation, ownership, adoption, delegation, decisions, issues/comments, document versions/restores, reload and release).
+
+Zapper inspector tabs follow the desktop icon/label strip. Resource reads coalesce bursts of watch updates into one active request and a trailing refresh; late responses from another Zapper are ignored. Reconnect epochs refresh the inspector even when revisions do not change. Server snapshots reconcile into existing rows, and document drafts retain their DOM identity through updates. Composer and Zapper surfaces use spacing and background tones instead of decorative borders; the composer editor overrides the global focus ring while controls retain keyboard focus indicators.

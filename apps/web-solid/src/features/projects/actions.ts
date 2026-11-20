@@ -1,11 +1,10 @@
 // Host-owned project Actions for the selected chat's project (crates/ui/src/project_actions.rs, shell/actions_ui.rs).
-import { createEffect, createRoot, on } from "solid-js";
-import { createStore } from "solid-js/store";
 import { onConnected, rpc } from "@/core/connection";
 import { M } from "@/core/methods";
 import { RpcError } from "@/core/rpc";
 import { state } from "@/core/store";
 import { setView, view } from "@/core/view";
+import { createEffect, createRoot, createStore } from "solid-js";
 import { errorText, target, unknownMethod } from "./hosts";
 import type { ProjectAction, ProjectActionDraft, ProjectActionIcon, ProjectActionRun, ProjectActionsSnapshot } from "./types";
 
@@ -62,17 +61,17 @@ let activeKey: string | null = null;
 
 function markUnavailable(key: string, message: string) {
   if (unknownMethod(message)) {
-    setCache({ [key]: { state: "unsupported" } });
+    setCache(draft => { Object.assign(draft, { [key]: { state: "unsupported" } }); });
     return;
   }
-  setCache({ [key]: { state: "unavailable", snapshot: snapshotOf(cache[key]), message } });
+  setCache(draft => { Object.assign(draft, { [key]: { state: "unavailable", snapshot: snapshotOf(cache[key]), message } }); });
 }
 
 export async function loadActions(context: ActionsContext) {
   const generation = ++loadGeneration;
   const current = cache[context.key];
   // Revalidation keeps what is shown; only a first load shows the loading row.
-  if (current?.state !== "unsupported" && !snapshotOf(current)) setCache({ [context.key]: { state: "loading" } });
+  if (current?.state !== "unsupported" && !snapshotOf(current)) setCache(draft => { Object.assign(draft, { [context.key]: { state: "loading" } }); });
   if (!rpc.connected) {
     markUnavailable(context.key, "Engine not connected");
     return;
@@ -80,7 +79,7 @@ export async function loadActions(context: ActionsContext) {
   try {
     const snapshot = await rpc.call<ProjectActionsSnapshot>(M.LIST_PROJECT_ACTIONS, target(context.deviceId, { spaceId: context.spaceId }));
     if (generation !== loadGeneration || activeKey !== context.key) return;
-    setCache({ [context.key]: { state: "ready", snapshot } });
+    setCache(draft => { Object.assign(draft, { [context.key]: { state: "ready", snapshot } }); });
   } catch (error) {
     if (generation !== loadGeneration || activeKey !== context.key) return;
     markUnavailable(context.key, errorText(error));
@@ -91,25 +90,20 @@ export async function loadActions(context: ActionsContext) {
 const [editorState, setEditorState] = createStore<{ value: Editor | null }>({ value: null });
 export const editor = () => editorState.value;
 function setEditor(value: Editor | null) {
-  setEditorState("value", value);
+  setEditorState(draft => { draft["value"] = value; });
 }
 
 // Load when the selected project changes, and again on every reconnect.
 createRoot(() => {
-  createEffect(
-    on(
-      () => actionsContext(),
-      (context) => {
-        const changed = (context?.key ?? null) !== activeKey;
-        activeKey = context?.key ?? null;
-        if (changed) {
-          mutationGeneration++;
-          setEditor(null);
-        }
-        if (context && (changed || !cache[context.key])) void loadActions(context);
-      },
-    ),
-  );
+  createEffect(() => actionsContext(), (context) => {
+    const changed = (context?.key ?? null) !== activeKey;
+    activeKey = context?.key ?? null;
+    if (changed) {
+      mutationGeneration++;
+      setEditor(null);
+    }
+    if (context && (changed || !cache[context.key])) void loadActions(context);
+  });
 });
 
 onConnected(() => {
@@ -132,7 +126,7 @@ export interface Editor {
 }
 
 export function updateEditor(patch: Partial<Editor>) {
-  if (editorState.value) setEditorState("value", { ...patch });
+  if (editorState.value) setEditorState(draft => { Object.assign(draft["value"]!, { ...patch }); });
 }
 
 export function openEditor(action?: ProjectAction, draft?: ProjectActionDraft) {
@@ -185,7 +179,7 @@ export async function saveEditor() {
   const generation = ++mutationGeneration;
   updateEditor({ saving: true, error: null });
   const shown = snapshotOf(cache[context.key]);
-  if (shown) setCache({ [context.key]: { state: "saving", snapshot: shown } });
+  if (shown) setCache(draft => { Object.assign(draft, { [context.key]: { state: "saving", snapshot: shown } }); });
   const action: ProjectActionDraft = { name, command, icon: draft.icon, runOnWorktreeCreate: draft.runOnWorktreeCreate };
   try {
     const snapshot = await rpc.call<ProjectActionsSnapshot>(
@@ -193,7 +187,7 @@ export async function saveEditor() {
       target(context.deviceId, { spaceId: context.spaceId, actionId: draft.actionId, action }),
     );
     if (generation !== mutationGeneration) return;
-    setCache({ [context.key]: { state: "ready", snapshot } });
+    setCache(draft => { Object.assign(draft, { [context.key]: { state: "ready", snapshot } }); });
     if (editorState.value?.key === context.key) setEditor(null);
   } catch (error) {
     if (generation !== mutationGeneration) return;
@@ -220,7 +214,7 @@ export async function deleteEditorAction() {
       target(context.deviceId, { spaceId: context.spaceId, actionId }),
     );
     if (generation !== mutationGeneration) return;
-    setCache({ [context.key]: { state: "ready", snapshot } });
+    setCache(draft => { Object.assign(draft, { [context.key]: { state: "ready", snapshot } }); });
     forgetLastAction(context.spaceId, actionId);
     if (editorState.value?.key === context.key) setEditor(null);
   } catch (error) {
@@ -248,7 +242,7 @@ export const actionTerminals = () => terminals.list;
 
 /** The panel took ownership of this terminal. */
 export function claimActionTerminal(terminalId: string) {
-  setTerminals("list", (list) => list.filter((t) => t.terminalId !== terminalId));
+  setTerminals(draft => { draft["list"] = ((list) => list.filter((t) => t.terminalId !== terminalId))(draft["list"]); });
 }
 
 const LAST_ACTIONS = "projectActionBySpace";
@@ -261,7 +255,7 @@ function lastActions(): Record<string, string> {
 export const lastActionId = (spaceId: string) => lastActions()[spaceId] ?? null;
 
 function rememberLastAction(spaceId: string, actionId: string) {
-  setView("preferences", LAST_ACTIONS, { ...lastActions(), [spaceId]: actionId });
+  setView(draft => { draft["preferences"]![LAST_ACTIONS] = { ...lastActions(), [spaceId]: actionId }; });
 }
 
 function forgetLastAction(spaceId: string, actionId: string) {
@@ -269,7 +263,7 @@ function forgetLastAction(spaceId: string, actionId: string) {
   if (current[spaceId] !== actionId) return;
   const next = { ...current };
   delete next[spaceId];
-  setView("preferences", LAST_ACTIONS, next);
+  setView(draft => { draft["preferences"]![LAST_ACTIONS] = next; });
 }
 
 /** The action a single Run control would start: the last one used, else the first non-setup action. */
@@ -286,12 +280,14 @@ export async function runAction(action: ProjectAction): Promise<ProjectActionRun
       M.RUN_PROJECT_ACTION,
       target(context.deviceId, { spaceId: context.spaceId, chatId: context.chatId, actionId: action.id, cols: 80, rows: 24 }),
     );
-    setTerminals("list", (list) => [
-      ...list,
-      { chatId: context.chatId, deviceId: context.deviceId, terminalId: run.terminal.id, title: run.actionName, startedAt: Date.now() },
-    ]);
+    setTerminals(draft => {
+      draft["list"] = ((list) => [
+        ...list,
+        { chatId: context.chatId, deviceId: context.deviceId, terminalId: run.terminal.id, title: run.actionName, startedAt: Date.now() },
+      ])(draft["list"]);
+    });
     rememberLastAction(context.spaceId, action.id);
-    if (view.selectedChatId === context.chatId) setView("rightPanel", "terminal");
+    if (view.selectedChatId === context.chatId) setView(draft => { draft["rightPanel"] = "terminal"; });
     return run;
   } catch (error) {
     markUnavailable(context.key, mutationError(error));

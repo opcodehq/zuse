@@ -1,5 +1,5 @@
 // Applies host transcript frames in place, so a streamed token touches one text node.
-import { produce, reconcile, unwrap, type SetStoreFunction } from "solid-js/store";
+import { reconcile, snapshot as snapshotStore, type StoreSetter } from "solid-js";
 import type { MessagePart, SessionMessageEntry, TranscriptFrame } from "./protocol";
 
 export class TranscriptDesync extends Error {}
@@ -25,17 +25,17 @@ const findStreamPart = (entry: SessionMessageEntry | undefined, id: string) =>
  * inside a store write would leave Solid observers stale, freezing rows that later writes never repaint.
  */
 export function applyTranscriptFrame(
-  setMessages: SetStoreFunction<SessionMessageEntry[]>,
+  setMessages: StoreSetter<SessionMessageEntry[]>,
   current: readonly SessionMessageEntry[],
   frame: TranscriptFrame,
 ) {
   if ("reset" in frame) {
     partBytes.clear();
-    setMessages(reconcile(frame.reset, { key: "id" }));
+    setMessages(draft => { reconcile(frame.reset, "id")(draft); });
     return;
   }
   // Validate against raw rows: proxied reads over thousands of entries cost more than the token itself.
-  const raw = unwrap(current) as SessionMessageEntry[];
+  const raw = snapshotStore(current) as SessionMessageEntry[];
   const remove = new Set(frame.remove ?? []);
   const upserts = frame.upsert ?? [];
   const appends = frame.append ?? [];
@@ -72,24 +72,22 @@ export function applyTranscriptFrame(
     if (bytes !== append.len) throw new TranscriptDesync(`append length mismatch on ${append.part}`);
     totals.set(key, bytes);
   }
-  setMessages(
-    produce((messages) => {
-      const rows = unwrap(messages) as SessionMessageEntry[];
-      if (remove.size) {
-        for (let i = messages.length - 1; i >= 0; i--) if (remove.has(rows[i]!.id)) messages.splice(i, 1);
-      }
-      for (const { after, entry } of upserts) {
-        for (const part of entry.parts) partBytes.delete(`${entry.id}#${part.id}`);
-        const existing = lastIndex(rows, entry.id);
-        if (existing >= 0) messages.splice(existing, 1);
-        const at = after === null ? 0 : lastIndex(rows, after) + 1;
-        messages.splice(at, 0, entry);
-      }
-      for (const append of appends) {
-        const part = findStreamPart(messages[lastIndex(rows, append.entry)], append.part)!;
-        part.text += append.text;
-      }
-    }),
-  );
+  setMessages((messages) => {
+    const rows = messages;
+    if (remove.size) {
+      for (let i = messages.length - 1;i >= 0;i--) if (remove.has(rows[i]!.id)) messages.splice(i, 1);
+    }
+    for (const { after, entry } of upserts) {
+      for (const part of entry.parts) partBytes.delete(`${entry.id}#${part.id}`);
+      const existing = lastIndex(rows, entry.id);
+      if (existing >= 0) messages.splice(existing, 1);
+      const at = after === null ? 0 : lastIndex(rows, after) + 1;
+      messages.splice(at, 0, entry);
+    }
+    for (const append of appends) {
+      const part = findStreamPart(messages[lastIndex(rows, append.entry)], append.part)!;
+      part.text += append.text;
+    }
+  });
   for (const [key, bytes] of totals) partBytes.set(key, bytes);
 }

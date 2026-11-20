@@ -1,13 +1,13 @@
 // ACP agents: custom agents launched over the Agent Client Protocol, added from the public catalog or by hand
 // (crates/viewport/src/acp_rows.rs, acp_catalog.rs, acp_command.rs).
-import { createEffect, createMemo, createSignal, For, on, Show } from "solid-js";
 import { state } from "@/core/store";
 import { Icon } from "@/ui/Icon";
 import { Menu } from "@/ui/primitives";
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
+import { type AgentFields, custom, definition, duplicateAgent, fieldsFor, loadCatalog, matches, offer, probe, removeAgent, saveAgent } from "../custom";
 import { type CustomAcpAgent, data, type RegistryAgent } from "../data";
 import { descriptorEnabled, type HarnessDescriptor, harnessMark, harnessTint, providerName } from "../harness";
 import { t } from "../i18n";
-import { custom, definition, duplicateAgent, fieldsFor, loadCatalog, matches, offer, probe, removeAgent, saveAgent, type AgentFields } from "../custom";
 import { effectiveEnabled, setEnabled } from "../providers";
 import { ActionButton, Badge, Card, ErrorStrip, Group, InlineSpinner, Mark, SettingsDialog, Switch } from "../widgets";
 
@@ -178,7 +178,7 @@ function Catalog(props: { open: boolean; onClose: () => void; onCustom: (agent: 
         {(text) => <div class="st-dialog-error">{t("settings-acp_agents_registry_unavailable", "The registry is unavailable")}: {text()}</div>}
       </Show>
       <Show when={custom.error}>{(text) => <div class="st-dialog-error" role="alert">{text()}</div>}</Show>
-      <div class="st-catalog-list" role="list" aria-label="ACP registry" aria-busy={custom.catalogLoading}>
+      <div class="st-catalog-list" role="list" aria-label="ACP registry" aria-busy={(custom.catalogLoading) ? "true" : "false"}>
         <Show when={!custom.catalogLoading || custom.catalog} fallback={<div class="st-empty">Loading agents…</div>}>
           <For each={entries()} fallback={<div class="st-empty">{t("settings-acp_agents_no_matches", "No matching agents")}</div>}>
             {(entry) => <CatalogEntry entry={entry} installed={installed()} onManual={(agent) => props.onCustom(agent)} />}
@@ -281,18 +281,13 @@ function AgentForm(props: { form: Form | null; onClose: () => void }) {
   const [advanced, setAdvanced] = createSignal(false);
   const [clearEnv, setClearEnv] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
-  createEffect(
-    on(
-      () => props.form,
-      (form) => {
-        if (!form) return;
-        setFields(fieldsFor(form.agent));
-        setAdvanced(false);
-        setClearEnv(false);
-        setError(null);
-      },
-    ),
-  );
+  createEffect(() => props.form, (form) => {
+    if (!form) return;
+    setFields(fieldsFor(form.agent));
+    setAdvanced(false);
+    setClearEnv(false);
+    setError(null);
+  });
   const set = (key: keyof AgentFields) => (event: { currentTarget: { value: string } }) => setFields({ ...fields(), [key]: event.currentTarget.value });
   const saved = () => props.form?.agent?.env ?? {};
   const submit = async () => {
@@ -318,7 +313,7 @@ function AgentForm(props: { form: Form | null; onClose: () => void }) {
       description="The command starts an agent that speaks the Agent Client Protocol on standard input and output. Arguments are taken literally; nothing runs through a shell."
       footer={
         <>
-          <ActionButton tone="quiet" onClick={() => setAdvanced(!advanced())} aria-expanded={advanced()}>
+          <ActionButton tone="quiet" onClick={() => setAdvanced(!advanced())} aria-expanded={(advanced()) ? "true" : "false"}>
             {advanced() ? "Hide advanced" : "Advanced"}
           </ActionButton>
           <span style={{ flex: 1 }} />
@@ -344,11 +339,11 @@ function AgentForm(props: { form: Form | null; onClose: () => void }) {
         </label>
         <label>
           <span class="st-label">Executable</span>
-          <input class="st-field" data-mono="true" placeholder="my-agent" value={fields().command} onInput={set("command")} spellcheck={false} required />
+          <input class="st-field" data-mono="true" placeholder="my-agent" value={fields().command} onInput={set("command")} spellcheck="false" required />
         </label>
         <label>
           <span class="st-label">Arguments</span>
-          <input class="st-field" data-mono="true" placeholder="--acp" value={fields().args} onInput={set("args")} spellcheck={false} />
+          <input class="st-field" data-mono="true" placeholder="--acp" value={fields().args} onInput={set("args")} spellcheck="false" />
         </label>
         <label>
           <span class="st-label">Environment</span>
@@ -360,7 +355,7 @@ function AgentForm(props: { form: Form | null; onClose: () => void }) {
             placeholder="API_KEY=… OTHER=…"
             value={fields().env}
             onInput={set("env")}
-            spellcheck={false}
+            spellcheck="false"
           />
           <Show when={Object.keys(saved()).length && !clearEnv()}>
             <span class="st-desc" style={{ "font-size": "10px" }}>
@@ -386,12 +381,12 @@ function AgentForm(props: { form: Form | null; onClose: () => void }) {
               value={fields().id}
               onInput={set("id")}
               disabled={props.form?.existing}
-              spellcheck={false}
+              spellcheck="false"
             />
           </label>
           <label>
             <span class="st-label">Fallback model IDs</span>
-            <textarea class="st-field" placeholder="Fallback model IDs — one per line" value={fields().models} onInput={set("models")} rows={3} spellcheck={false} />
+            <textarea class="st-field" placeholder="Fallback model IDs — one per line" value={fields().models} onInput={set("models")} rows={3} spellcheck="false" />
           </label>
         </Show>
         <button type="submit" hidden />

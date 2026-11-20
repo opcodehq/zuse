@@ -1,12 +1,11 @@
 // The composer's own lists above the card: the draft stash (Ctrl+S) and sent-message search (Alt+R; Ctrl+R on macOS).
-import { createEffect, createSignal, For, on, Show } from "solid-js";
-import { createStore } from "solid-js/store";
 import { state } from "@/core/store";
+import { timeAgo } from "@/core/util";
 import { view } from "@/core/view";
 import { Icon } from "@/ui/Icon";
-import { attachmentsFor, draftFor, fail, setDraft } from "./drafts";
+import { createEffect, createSignal, createStore, For, Show } from "solid-js";
 import { readableDraft } from "./completion";
-import { timeAgo } from "@/core/util";
+import { attachmentsFor, draftFor, fail, setDraft } from "./drafts";
 
 export const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 export const stashKeys = mac ? "⌘S" : "Ctrl+S";
@@ -29,7 +28,7 @@ function loadStash(): Stashed[] {
 }
 const [stash, setStash] = createStore<{ items: Stashed[] }>({ items: loadStash() });
 const saveStash = (items: Stashed[]) => {
-  setStash("items", items);
+  setStash(draft => { draft["items"] = items; });
   try {
     localStorage.setItem(STASH, JSON.stringify(items));
   } catch {
@@ -192,13 +191,13 @@ export function ComposerList(props: { draftKey: string }) {
   let listbox: HTMLDivElement | undefined;
   const listId = `cmp-list-${Math.random().toString(36).slice(2)}`;
   // Typing puts the stash away; the search follows its query from the first match.
-  createEffect(on(() => draftFor(props.draftKey).text, (text) => {
+  createEffect(() => draftFor(props.draftKey).text, (text) => {
     const current = list();
     if (current?.kind === "stash" && current.opening !== text) setList(null);
     if (current?.kind === "history" && current.active !== 0) setList({ ...current, active: 0 });
-  }, { defer: true }));
-  createEffect(on(() => view.selectedChatId, () => setList(null), { defer: true }));
-  createEffect(on(() => list()?.active, (index) => listbox?.querySelector(`[data-index="${index}"]`)?.scrollIntoView({ block: "nearest" })));
+  }, { defer: true });
+  createEffect(() => view.selectedChatId, () => { void (setList(null)); }, { defer: true });
+  createEffect(() => list()?.active, (index) => { void (listbox?.querySelector(`[data-index="${index}"]`)?.scrollIntoView({ block: "nearest" })); });
   const items = () => rows(props.draftKey);
   return (
     <Show when={list()}>
@@ -245,7 +244,7 @@ export function ComposerList(props: { draftKey: string }) {
                     class="cmp-row cmp-list-row"
                     role="option"
                     data-index={index()}
-                    aria-selected={current().active === index()}
+                    aria-selected={(current().active === index()) ? "true" : "false"}
                     onMouseMove={() => current().active !== index() && setList({ ...current(), active: index() })}
                     onClick={() => {
                       setList({ ...current(), active: index() });
@@ -260,7 +259,7 @@ export function ComposerList(props: { draftKey: string }) {
                         class="cmp-list-delete"
                         aria-label="Delete stashed prompt"
                         title="Delete stashed prompt"
-                        tabIndex={-1}
+                        tabindex={-1}
                         onClick={(event) => {
                           event.stopPropagation();
                           remove(index());
@@ -287,9 +286,9 @@ export function StashButton(props: { draftKey: string }) {
       <button
         type="button"
         class="cmp-key cmp-stash"
-        data-open={list()?.kind === "stash"}
+        data-open={(list()?.kind === "stash") ? "true" : "false"}
         aria-label={`Stashed prompts: ${stashCount()}. Open stash.`}
-        aria-expanded={list()?.kind === "stash"}
+        aria-expanded={(list()?.kind === "stash") ? "true" : "false"}
         title={`Stashed prompts: ${stashCount()}. Open stash.`}
         onMouseDown={(event) => event.preventDefault()}
         onClick={() => toggleStash(props.draftKey)}

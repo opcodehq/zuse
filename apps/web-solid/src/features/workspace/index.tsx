@@ -1,13 +1,13 @@
 // Workspace area: the conversation top bar and the right panel's surfaces.
-import "./workspace.css";
 import { registerShortcut } from "@/core/keys";
 import { view } from "@/core/view";
 import { openPanel, toggleRightPanel } from "./store";
+import "./workspace.css";
 
-export { TopBar } from "./TopBar";
 export { RightPanel } from "./RightPanel";
+export { TopBar } from "./TopBar";
 
-const inChat = () => view.route.kind === "chat" && !!view.selectedChatId;
+const inChat = () => (view.route.kind === "chat" || view.route.kind === "zappers") && !!view.selectedChatId;
 
 // Desktop defaults (crates/protocol/src/keybindings.rs, crates/ui/src/settings.rs).
 registerShortcut({

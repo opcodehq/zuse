@@ -1,6 +1,6 @@
 // Test-only page: the shared states and toasts that no engine data reaches on demand (a crashed view,
 // an empty list, loading rows). Mounts the real components and styles. Never bundled into the app.
-import { render } from "solid-js/web";
+import { render } from "@solidjs/web";
 import { createSignal, Show } from "solid-js";
 import "@/ui/tokens.css";
 import "@/ui/primitives.css";

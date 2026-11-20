@@ -1,6 +1,6 @@
 // Appearance: theme cards and motion (crates/ui/src/settings/appearance.rs).
-import { For, Show } from "solid-js";
 import { setView, view } from "@/core/view";
+import { For, Show } from "solid-js";
 import { systemReducedMotion } from "../alerts";
 import { t } from "../i18n";
 import { pref, type ReduceMotion, setPref } from "../prefs";
@@ -53,10 +53,10 @@ export function Appearance() {
                     type="button"
                     role="radio"
                     class="st-option"
-                    aria-checked={view.preferences.theme === option.value}
-                    tabIndex={view.preferences.theme === option.value ? 0 : -1}
-                    onClick={() => setView("preferences", "theme", option.value)}
-                    onKeyDown={(e) => radioKeys(e, THEMES.map((o) => o.value), view.preferences.theme, (v) => setView("preferences", "theme", v))}
+                    aria-checked={(view.preferences.theme === option.value) ? "true" : "false"}
+                    tabindex={view.preferences.theme === option.value ? 0 : -1}
+                    onClick={() => setView(draft => { draft["preferences"]!["theme"] = option.value; })}
+                    onKeyDown={(e) => radioKeys(e, THEMES.map((o) => o.value), view.preferences.theme, (v) => setView(draft => { draft["preferences"]!["theme"] = v; }))}
                   >
                     <div class="st-option-preview">
                       <Show when={option.value === "system"} fallback={<Preview scheme={option.value === "light" ? "light" : "dark"} />}>

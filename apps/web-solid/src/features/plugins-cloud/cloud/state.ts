@@ -1,6 +1,5 @@
-// Cloud data for the signed-in account. Every request names its owner; replies for another owner are dropped.
-import { batch, createEffect, createRoot, on } from "solid-js";
-import { createStore, reconcile } from "solid-js/store";
+import { createEffect, createRoot } from "solid-js";
+import { createStore, reconcile } from "solid-js";
 import { onConnected, rpc } from "@/core/connection";
 import { M } from "@/core/methods";
 import { bound, boundReply, errorText, newId, openExternal, owner, ownerKey, type Owner } from "../account";
@@ -144,22 +143,22 @@ function reset() {
   capEdited = false;
   for (const timer of timers) clearTimeout(timer);
   timers.clear();
-  setCloud(reconcile(initial()));
+  setCloud(draft => { reconcile(initial())(draft); });
 }
 
 createRoot(() => {
-  createEffect(on(() => ownerKey(owner()), (key, previous) => key !== previous && reset()));
+  createEffect(() => ownerKey(owner()), (key, previous) => { if (key !== previous) reset(); });
 });
 onConnected(() => {
   // A dropped connection fails in-flight work; clear busy flags so the user can check and retry.
   generation++;
-  batch(() => {
-    setCloud("billing", { loading: false, subscriptionLoading: false, checkoutBusy: null, portalBusy: false, creditsBusy: false, capBusy: false });
-    setCloud("repos", { listing: false, githubLoading: false, connecting: [], removing: null });
-    setCloud("image", { loading: false, building: false, deleting: false });
-    setCloud("workspaces", { loading: false, pending: {} });
-    setCloud("context", "loading", false);
-    setCloud("history", "loading", false);
+  setCloud(draft => {
+    (() => { Object.assign(draft["billing"], { loading: false, subscriptionLoading: false, checkoutBusy: null, portalBusy: false, creditsBusy: false, capBusy: false }); })();
+    (() => { Object.assign(draft["repos"], { listing: false, githubLoading: false, connecting: [], removing: null }); })();
+    (() => { Object.assign(draft["image"], { loading: false, building: false, deleting: false }); })();
+    (() => { Object.assign(draft["workspaces"], { loading: false, pending: {} }); })();
+    (() => { draft["context"]["loading"] = false; })();
+    (() => { draft["history"]["loading"] = false; })();
   });
 });
 
@@ -189,48 +188,48 @@ export async function loadBilling(more = false) {
     void loadCredits(false);
     if (!who.organizationId) void loadWorkspaces();
   }
-  setCloud("billing", { loaded: true, loading: true, error: null });
+  setCloud(draft => { Object.assign(draft["billing"], { loaded: true, loading: true, error: null }); });
   const [summary, page] = await Promise.all([
     call<unknown>(M.CLOUD_BILLING_SUMMARY, {}, who),
     call<unknown>(M.CLOUD_BILLING_USAGE, { limit: 100, cursor: more ? cloud.billing.cursor : null }, who),
   ]);
   if (!summary || !page) return;
-  setCloud("billing", "loading", false);
+  setCloud(draft => { draft["billing"]["loading"] = false; });
   if ("error" in summary || "error" in page) {
     const message = "error" in summary ? summary.error : (page as { error: string }).error;
     // Unsubscribed accounts have no billing period; the hosting card already says so.
-    if (cloud.billing.subscribed !== false || message !== "An active cloud billing period is required.") setCloud("billing", "error", message);
+    if (cloud.billing.subscribed !== false || message !== "An active cloud billing period is required.") setCloud(draft => { draft["billing"]["error"] = message; });
     return;
   }
   const parsed = data<BillingSummary>(summary.value);
   const usage = data<{ items?: BillingUsageItem[]; nextCursor?: string | null }>(page.value);
   if (!parsed || typeof parsed.overageCapMicros !== "number" || !usage || !Array.isArray(usage.items)) {
-    setCloud("billing", "error", "Cloud billing returned an invalid response. Refresh to retry.");
+    setCloud(draft => { draft["billing"]["error"] = "Cloud billing returned an invalid response. Refresh to retry."; });
     return;
   }
-  batch(() => {
-    if (!more) setCloud("billing", capEdited ? { usage: [] } : { usage: [], capInput: capDollars(parsed.overageCapMicros) });
-    const seen = new Set(cloud.billing.usage.map((item) => item.entryId));
-    setCloud("billing", "usage", (list) => [...list, ...usage.items!.filter((item) => !seen.has(item.entryId))]);
-    setCloud("billing", { cursor: usage.nextCursor ?? null, summary: parsed });
+  setCloud(draft => {
+    if (!more) (() => { Object.assign(draft["billing"], capEdited ? { usage: [] } : { usage: [], capInput: capDollars(parsed.overageCapMicros) }); })();
+    const seen = new Set(draft.billing.usage.map((item) => item.entryId));
+    (() => { draft["billing"]["usage"] = ((list) => [...list, ...usage.items!.filter((item) => !seen.has(item.entryId))])(draft["billing"]["usage"]); })();
+    (() => { Object.assign(draft["billing"], { cursor: usage.nextCursor ?? null, summary: parsed }); })();
   });
 }
 
 async function loadSubscription() {
   const who = owner();
   if (!who || cloud.billing.subscriptionLoading) return;
-  setCloud("billing", "subscriptionLoading", true);
+  setCloud(draft => { draft["billing"]["subscriptionLoading"] = true; });
   const result = await call<unknown>(M.CLOUD_BILLING_ENTITLEMENTS, {}, who);
   if (!result) return;
-  setCloud("billing", "subscriptionLoading", false);
-  if ("error" in result) return setCloud("billing", "error", result.error);
+  setCloud(draft => { draft["billing"]["subscriptionLoading"] = false; });
+  if ("error" in result) return setCloud(draft => { draft["billing"]["error"] = result.error; });
   const value = data(result.value);
   const subscribed = cloudSubscribed(value, Date.now());
-  batch(() => {
-    setCloud("billing", "subscribed", subscribed);
-    setCloud("billing", "catalog", reconcile(readCatalog(value)));
-    if (subscribed === false && cloud.billing.error === "An active cloud billing period is required.") setCloud("billing", "error", null);
-    if (subscribed === null) setCloud("billing", "error", "Could not read the subscription. Refresh to retry.");
+  setCloud(draft => {
+    (() => { draft["billing"]["subscribed"] = subscribed; })();
+    (() => { (() => { const next = readCatalog(value); if (draft["billing"]["catalog"] == null) draft["billing"]["catalog"] = next; else reconcile(next)(draft["billing"]["catalog"]); })(); })();
+    if (subscribed === false && draft.billing.error === "An active cloud billing period is required.") (() => { draft["billing"]["error"] = null; })();
+    if (subscribed === null) (() => { draft["billing"]["error"] = "Could not read the subscription. Refresh to retry."; })();
   });
 }
 
@@ -238,14 +237,14 @@ async function loadSubscription() {
 export async function openBilling() {
   const who = owner();
   if (!who || cloud.billing.portalBusy) return;
-  setCloud("billing", { portalBusy: true, error: null });
+  setCloud(draft => { Object.assign(draft["billing"], { portalBusy: true, error: null }); });
   const result = await call<unknown>(M.CLOUD_BILLING_PORTAL, {}, who);
   if (!result) return;
-  setCloud("billing", "portalBusy", false);
-  if ("error" in result) return setCloud("billing", "error", result.error);
+  setCloud(draft => { draft["billing"]["portalBusy"] = false; });
+  if ("error" in result) return setCloud(draft => { draft["billing"]["error"] = result.error; });
   const url = data<{ portalUrl?: unknown }>(result.value)?.portalUrl;
   if (typeof url === "string" && url.startsWith("https://")) openExternal(url);
-  else setCloud("billing", "error", "The billing portal returned an invalid link.");
+  else setCloud(draft => { draft["billing"]["error"] = "The billing portal returned an invalid link."; });
 }
 
 /**
@@ -255,43 +254,43 @@ export async function openBilling() {
 export async function checkout(offerId: string) {
   const who = owner();
   if (!who || cloud.billing.checkoutBusy) return;
-  setCloud("billing", { checkoutBusy: offerId, error: null, notice: null });
+  setCloud(draft => { Object.assign(draft["billing"], { checkoutBusy: offerId, error: null, notice: null }); });
   const result = await call<unknown>(M.CLOUD_BILLING_CHECKOUT, { offerId }, who);
   if (!result) return;
-  setCloud("billing", "checkoutBusy", null);
-  if ("error" in result) return setCloud("billing", "error", result.error);
+  setCloud(draft => { draft["billing"]["checkoutBusy"] = null; });
+  if ("error" in result) return setCloud(draft => { draft["billing"]["error"] = result.error; });
   const reply = data<{ checkoutUrl?: unknown; trialConverted?: unknown }>(result.value);
   if (typeof reply?.checkoutUrl === "string" && reply.checkoutUrl.startsWith("https://")) openExternal(reply.checkoutUrl);
   else if (reply?.trialConverted === true) {
-    setCloud("billing", "notice", "Cloud has started.");
+    setCloud(draft => { draft["billing"]["notice"] = "Cloud has started."; });
     void loadBilling();
-  } else setCloud("billing", "error", "Checkout returned an invalid link. Try again.");
+  } else setCloud(draft => { draft["billing"]["error"] = "Checkout returned an invalid link. Try again."; });
 }
 
 export async function loadCredits(buy: boolean) {
   const who = owner();
   if (!who || cloud.billing.creditsBusy) return;
   if (buy && !cloud.billing.credits?.available) return;
-  setCloud("billing", { creditsBusy: true, creditError: null });
+  setCloud(draft => { Object.assign(draft["billing"], { creditsBusy: true, creditError: null }); });
   const result = await call<unknown>(buy ? M.CLOUD_PREPAID_CHECKOUT : M.CLOUD_PREPAID_BALANCE, buy ? { amountCents: cloud.billing.creditAmount } : {}, who);
   if (!result) return;
-  setCloud("billing", "creditsBusy", false);
-  if ("error" in result) return setCloud("billing", "creditError", result.error);
+  setCloud(draft => { draft["billing"]["creditsBusy"] = false; });
+  if ("error" in result) return setCloud(draft => { draft["billing"]["creditError"] = result.error; });
   if (buy) {
     const url = data<{ checkoutUrl?: unknown }>(result.value)?.checkoutUrl;
     if (typeof url === "string" && url.startsWith("https://")) openExternal(url);
-    else setCloud("billing", "creditError", "The provider returned an invalid credit checkout link.");
+    else setCloud(draft => { draft["billing"]["creditError"] = "The provider returned an invalid credit checkout link."; });
     return;
   }
   const balance = data<PrepaidBalance>(result.value);
-  if (balance && typeof balance.available === "boolean" && typeof balance.creditCents === "number") setCloud("billing", "credits", reconcile(balance));
-  else setCloud("billing", "creditError", "Could not read the prepaid balance. Refresh to retry.");
+  if (balance && typeof balance.available === "boolean" && typeof balance.creditCents === "number") setCloud(draft => { (() => { const next = balance; if (draft["billing"]["credits"] == null) draft["billing"]["credits"] = next; else reconcile(next)(draft["billing"]["credits"]); })(); });
+  else setCloud(draft => { draft["billing"]["creditError"] = "Could not read the prepaid balance. Refresh to retry."; });
 }
 
-export const selectCredit = (amount: number) => setCloud("billing", "creditAmount", amount);
+export const selectCredit = (amount: number) => setCloud(draft => { draft["billing"]["creditAmount"] = amount; });
 export const setCapInput = (value: string) => {
   capEdited = true;
-  setCloud("billing", "capInput", value);
+  setCloud(draft => { draft["billing"]["capInput"] = value; });
 };
 
 // The same idempotency key is reused while the requested amount is unchanged, so a retry is safe.
@@ -300,23 +299,23 @@ export async function saveCap() {
   const who = owner();
   if (!who || cloud.billing.capBusy || cloud.billing.loading) return;
   const amount = capMicros(cloud.billing.capInput);
-  if (amount === null) return setCloud("billing", "error", "Enter a nonnegative dollar amount with up to six decimal places.");
+  if (amount === null) return setCloud(draft => { draft["billing"]["error"] = "Enter a nonnegative dollar amount with up to six decimal places."; });
   if (capRequest?.amount !== amount) capRequest = { amount, key: newId() };
-  setCloud("billing", { capBusy: true, error: null, notice: null });
+  setCloud(draft => { Object.assign(draft["billing"], { capBusy: true, error: null, notice: null }); });
   const result = await call<unknown>(M.CLOUD_BILLING_CAP, { overageCapMicros: amount, idempotencyKey: capRequest.key }, who);
   if (!result) return;
-  setCloud("billing", "capBusy", false);
+  setCloud(draft => { draft["billing"]["capBusy"] = false; });
   if ("error" in result) {
-    setCloud("billing", "error", result.error);
+    setCloud(draft => { draft["billing"]["error"] = result.error; });
     return;
   }
   const summary = data<BillingSummary>(result.value);
   if (!summary || typeof summary.overageCapMicros !== "number") {
-    return setCloud("billing", "error", "Could not verify the saved cap. Refresh before changing it again.");
+    return setCloud(draft => { draft["billing"]["error"] = "Could not verify the saved cap. Refresh before changing it again."; });
   }
   capRequest = null;
   capEdited = false;
-  setCloud("billing", { summary, capInput: capDollars(summary.overageCapMicros), notice: "Monthly overage cap saved." });
+  setCloud(draft => { Object.assign(draft["billing"], { summary, capInput: capDollars(summary.overageCapMicros), notice: "Monthly overage cap saved." }); });
 }
 
 // Workspaces -------------------------------------------------------------------------------------
@@ -342,24 +341,24 @@ const needsPoll = (rows: Workspace[]) =>
 export async function loadWorkspaces() {
   const who = owner();
   if (!who || cloud.workspaces.loading) return;
-  setCloud("workspaces", { loaded: true, loading: true, error: null });
+  setCloud(draft => { Object.assign(draft["workspaces"], { loaded: true, loading: true, error: null }); });
   const result = await call<{ workspaces?: Workspace[] }>(M.CLOUD_WORKSPACES, {}, who, false);
   if (!result) return;
-  setCloud("workspaces", "loading", false);
-  if ("error" in result) return setCloud("workspaces", "error", result.error);
+  setCloud(draft => { draft["workspaces"]["loading"] = false; });
+  if ("error" in result) return setCloud(draft => { draft["workspaces"]["error"] = result.error; });
   const reply = result.value as { accountId?: string | null; workspaces?: Workspace[] };
   if (reply.accountId !== who.accountId || !Array.isArray(reply.workspaces)) {
-    return setCloud("workspaces", "error", "Could not load cloud workspaces. Refresh to retry.");
+    return setCloud(draft => { draft["workspaces"]["error"] = "Could not load cloud workspaces. Refresh to retry."; });
   }
   // Titles arrive with saved history; keep ones already read when the list omits them.
   const titles = new Map(cloud.workspaces.rows.map((row) => [row.workspaceId, row.title]));
   const rows = reply.workspaces.map((row) => (row.title == null && titles.get(row.workspaceId) ? { ...row, title: titles.get(row.workspaceId) } : row));
-  batch(() => {
-    setCloud("workspaces", "rows", reconcile(rows, { key: "workspaceId", merge: true }));
+  setCloud(draft => {
+    (() => { (() => { const next = rows; if (draft["workspaces"]["rows"] == null) draft["workspaces"]["rows"] = next; else reconcile(next, "workspaceId")(draft["workspaces"]["rows"]); })(); })();
     // An accepted first message leaves the queue once its workspace has started; the chats list carries it from there.
     const started = new Set(rows.filter((row) => !STARTING.has(row.state)).map((row) => row.workspaceId));
-    if (cloud.launches.some((item) => item.state === "accepted" && item.workspaceId && started.has(item.workspaceId))) {
-      setCloud("launches", (list) => list.filter((item) => !(item.state === "accepted" && item.workspaceId && started.has(item.workspaceId))));
+    if (draft.launches.some((item) => item.state === "accepted" && item.workspaceId && started.has(item.workspaceId))) {
+      (() => { draft["launches"] = ((list) => list.filter((item) => !(item.state === "accepted" && item.workspaceId && started.has(item.workspaceId))))(draft["launches"]); })();
     }
   });
   if (cloud.history.workspaceId && !rows.some((row) => row.workspaceId === cloud.history.workspaceId)) closeHistory();
@@ -370,13 +369,13 @@ export async function loadWorkspaces() {
 }
 
 function updateRow(row: Workspace) {
-  setCloud("workspaces", "rows", (rows) => {
+  setCloud(draft => { draft["workspaces"]["rows"] = ((rows) => {
     const index = rows.findIndex((old) => old.workspaceId === row.workspaceId);
     if (index < 0) return [row, ...rows];
     const next = rows.slice();
     next[index] = { ...row, title: row.title ?? rows[index]!.title };
     return next;
-  });
+  })(draft["workspaces"]["rows"]); });
 }
 
 // One command id per workspace action, kept until it resolves, so a retry repeats the same request.
@@ -390,14 +389,14 @@ async function workspaceAction(id: string, action: WorkspaceAction) {
   const commandKey = `${action}:${id}`;
   let command = commands.get(commandKey);
   if (!command) commands.set(commandKey, (command = newId()));
-  setCloud("workspaces", { rowError: null });
-  setCloud("workspaces", "pending", id, action);
+  setCloud(draft => { Object.assign(draft["workspaces"], { rowError: null }); });
+  setCloud(draft => { draft["workspaces"]["pending"][id] = action; });
   const params = action === "cleanup" ? { workspaceId: id } : { workspaceId: id, commandId: command };
   const result = await call<{ workspace?: Workspace }>(method, params, who, false);
   if (!result) return;
   // Store setters merge objects, so a removed key must be cleared explicitly.
-  setCloud("workspaces", "pending", id, undefined);
-  if ("error" in result) return setCloud("workspaces", "rowError", { id, message: result.error });
+  setCloud(draft => { draft["workspaces"]["pending"][id] = undefined; });
+  if ("error" in result) return setCloud(draft => { draft["workspaces"]["rowError"] = { id, message: result.error }; });
   commands.delete(commandKey);
   const workspace = (result.value as { workspace?: Workspace } | null)?.workspace;
   if (workspace && typeof workspace.workspaceId === "string") updateRow(workspace);
@@ -417,25 +416,25 @@ export async function openHistory(workspaceId: string, sessionId: string | null 
   const who = owner();
   if (!who) return;
   const mine = ++historyRevision;
-  setCloud("history", { workspaceId, sessionId, head: sessionId ? cloud.history.head : null, loading: true, error: null });
+  setCloud(draft => { Object.assign(draft["history"], { workspaceId, sessionId, head: sessionId ? cloud.history.head : null, loading: true, error: null }); });
   const result = await call<{ head?: Head; workspace?: Workspace }>(M.CLOUD_HISTORY, sessionId ? { workspaceId, sessionId } : { workspaceId }, who, false);
   if (!result || mine !== historyRevision) return;
-  setCloud("history", "loading", false);
-  if ("error" in result) return setCloud("history", "error", result.error);
+  setCloud(draft => { draft["history"]["loading"] = false; });
+  if ("error" in result) return setCloud(draft => { draft["history"]["error"] = result.error; });
   const head = result.value.head;
   if (!head || head.workspaceId !== workspaceId || !Array.isArray(head.transcript?.reset)) {
-    return setCloud("history", "error", "Saved cloud history is invalid.");
+    return setCloud(draft => { draft["history"]["error"] = "Saved cloud history is invalid."; });
   }
-  batch(() => {
-    setCloud("history", "head", reconcile(head));
-    setCloud("history", "sessionId", head.sessionId);
-    const row = cloud.workspaces.rows.find((r) => r.workspaceId === workspaceId);
+  setCloud(draft => {
+    (() => { (() => { const next = head; if (draft["history"]["head"] == null) draft["history"]["head"] = next; else reconcile(next)(draft["history"]["head"]); })(); })();
+    (() => { draft["history"]["sessionId"] = head.sessionId; })();
+    const row = draft.workspaces.rows.find((r) => r.workspaceId === workspaceId);
     if (row && head.chat?.title) updateRow({ ...row, title: head.chat.title });
   });
 }
 export function closeHistory() {
   historyRevision++;
-  setCloud("history", reconcile({ workspaceId: null, sessionId: null, head: null, loading: false, error: null }));
+  setCloud(draft => { (() => { const next = { workspaceId: null, sessionId: null, head: null, loading: false, error: null }; if (draft["history"] == null) draft["history"] = next; else reconcile(next)(draft["history"]); })(); });
 }
 
 // Launching cloud chats --------------------------------------------------------------------------
@@ -443,18 +442,18 @@ export function closeHistory() {
 export async function loadContext() {
   const who = owner();
   if (!who || cloud.context.loading) return;
-  setCloud("context", { loaded: true, loading: true, error: null });
+  setCloud(draft => { Object.assign(draft["context"], { loaded: true, loading: true, error: null }); });
   const result = await call<unknown>(M.CLOUD_CONTEXT, {}, who, false);
   if (!result) return;
-  setCloud("context", "loading", false);
-  if ("error" in result) return setCloud("context", "error", result.error);
+  setCloud(draft => { draft["context"]["loading"] = false; });
+  if ("error" in result) return setCloud(draft => { draft["context"]["error"] = result.error; });
   const value = result.value as { accountId?: string; projects?: CloudContextProject[]; agentCatalog?: { providers?: CloudAgent[] }; computerCapabilities?: CloudCapabilities | null };
-  if (value.accountId !== who.accountId) return setCloud("context", "error", "Your account changed. Reopen this view.");
-  setCloud("context", {
+  if (value.accountId !== who.accountId) return setCloud(draft => { draft["context"]["error"] = "Your account changed. Reopen this view."; });
+  setCloud(draft => { Object.assign(draft["context"], {
     projects: Array.isArray(value.projects) ? value.projects : [],
     agents: Array.isArray(value.agentCatalog?.providers) ? value.agentCatalog!.providers! : [],
     capabilities: value.computerCapabilities && typeof value.computerCapabilities === "object" ? value.computerCapabilities : null,
-  });
+  }); });
 }
 
 export interface LaunchDraft {
@@ -472,7 +471,7 @@ export async function launch(draft: LaunchDraft | null, retryKey?: string) {
   const who = owner();
   if (!who) return;
   if (who.organizationId) {
-    setCloud("context", "error", "Cloud chats start from your personal account.");
+    setCloud(draft => { draft["context"]["error"] = "Cloud chats start from your personal account."; });
     return;
   }
   let key = retryKey;
@@ -492,12 +491,12 @@ export async function launch(draft: LaunchDraft | null, retryKey?: string) {
       idempotencyKey: key,
       firstMessage: draft.text,
     });
-    setCloud("launches", (list) => [
+    setCloud(storeDraft => { storeDraft["launches"] = ((list) => [
       { key: key!, text: draft.text, repository: project.displayName ?? project.name ?? "Repository", state: "sending", message: "Accepting first message…", workspaceId: null },
       ...list,
-    ]);
+    ])(storeDraft["launches"]); });
   } else {
-    setCloud("launches", (row) => row.key === key, { state: "sending", message: "Accepting first message…" });
+    setCloud(draft => { for (const row of draft["launches"]) if (((row) => row.key === key)(row)) Object.assign(row, { state: "sending", message: "Accepting first message…" }); });
   }
   const body = drafts.get(key);
   if (!body) return;
@@ -509,22 +508,22 @@ export async function launch(draft: LaunchDraft | null, retryKey?: string) {
     const raw = reply.workspace as (Workspace & { workspace?: Workspace }) | undefined;
     const workspace = raw?.workspace ?? raw;
     drafts.delete(key);
-    setCloud("launches", (row) => row.key === key, { state: "accepted", message: "Preparing cloud workspace…", workspaceId: workspace?.workspaceId ?? null });
+    setCloud(draft => { for (const row of draft["launches"]) if (((row) => row.key === key)(row)) Object.assign(row, { state: "accepted", message: "Preparing cloud workspace…", workspaceId: workspace?.workspaceId ?? null }); });
     if (workspace?.workspaceId) updateRow(workspace as Workspace);
     void loadWorkspaces();
   } catch (error) {
     if (mine !== generation) return;
     const uncertain = (error as { outcomeUnknown?: boolean }).outcomeUnknown === true;
-    setCloud("launches", (row) => row.key === key, {
+    setCloud(draft => { for (const row of draft["launches"]) if (((row) => row.key === key)(row)) Object.assign(row, {
       state: uncertain ? "uncertain" : "failed",
       message: uncertain ? "The connection dropped before the cloud confirmed this chat. Retry sends the same request, so it cannot start twice." : cloudErrorText(errorText(error)),
-    });
+    }); });
   }
 }
 
 export function dismissLaunch(key: string) {
   drafts.delete(key);
-  setCloud("launches", (list) => list.filter((row) => row.key !== key));
+  setCloud(draft => { draft["launches"] = ((list) => list.filter((row) => row.key !== key))(draft["launches"]); });
 }
 
 // Repositories and image -------------------------------------------------------------------------
@@ -537,25 +536,25 @@ export function canManageRepositories() {
 export async function loadRepositories() {
   const who = owner();
   if (!who || cloud.repos.listing || cloud.repos.githubLoading) return;
-  setCloud("repos", { loaded: true, listing: true, githubLoading: true, error: null });
+  setCloud(draft => { Object.assign(draft["repos"], { loaded: true, listing: true, githubLoading: true, error: null }); });
   void loadImage();
   // Image builds send the provider new computers run on.
   if (!cloud.context.loaded) void loadContext();
   const [list, github] = await Promise.all([call<unknown>(M.CLOUD_PROJECTS, {}, who), call<unknown>(M.CLOUD_GITHUB, {}, who)]);
   if (!list || !github) return;
-  batch(() => {
-    setCloud("repos", { listing: false, githubLoading: false });
-    if ("error" in list) setCloud("repos", "error", list.error);
+  setCloud(draft => {
+    (() => { Object.assign(draft["repos"], { listing: false, githubLoading: false }); })();
+    if ("error" in list) (() => { draft["repos"]["error"] = list.error; })();
     else {
       const projects = data<{ projects?: CloudProject[] }>(list.value)?.projects;
-      if (Array.isArray(projects)) setCloud("repos", "projects", reconcile(projects, { key: "projectId" }));
-      else setCloud("repos", "error", "Repository list is unavailable. Refresh and try again.");
+      if (Array.isArray(projects)) (() => { (() => { const next = projects; if (draft["repos"]["projects"] == null) draft["repos"]["projects"] = next; else reconcile(next, "projectId")(draft["repos"]["projects"]); })(); })();
+      else (() => { draft["repos"]["error"] = "Repository list is unavailable. Refresh and try again."; })();
     }
-    if ("error" in github) setCloud("repos", "error", github.error);
+    if ("error" in github) (() => { draft["repos"]["error"] = github.error; })();
     else {
       const catalog = data<GithubCatalog>(github.value);
-      if (catalog && Array.isArray(catalog.installations) && Array.isArray(catalog.repositories)) setCloud("repos", "github", reconcile(catalog));
-      else setCloud("repos", "error", "GitHub repository list is unavailable. Refresh and try again.");
+      if (catalog && Array.isArray(catalog.installations) && Array.isArray(catalog.repositories)) (() => { (() => { const next = catalog; if (draft["repos"]["github"] == null) draft["repos"]["github"] = next; else reconcile(next)(draft["repos"]["github"]); })(); })();
+      else (() => { draft["repos"]["error"] = "GitHub repository list is unavailable. Refresh and try again."; })();
     }
   });
 }
@@ -565,7 +564,7 @@ const connectKeys = new Map<string, string>();
 export async function connectRepositories(repos: GithubRepository[]) {
   const who = owner();
   if (!who || cloud.repos.connecting.length || !canManageRepositories()) return;
-  setCloud("repos", { connecting: repos.map((r) => r.nameWithOwner), error: null, notice: null });
+  setCloud(draft => { Object.assign(draft["repos"], { connecting: repos.map((r) => r.nameWithOwner), error: null, notice: null }); });
   for (const repo of repos) {
     const name = repo.nameWithOwner.toLowerCase();
     let key = connectKeys.get(name);
@@ -577,19 +576,19 @@ export async function connectRepositories(repos: GithubRepository[]) {
     );
     if (!result) return;
     if ("error" in result) {
-      setCloud("repos", { connecting: [], error: result.error });
+      setCloud(draft => { Object.assign(draft["repos"], { connecting: [], error: result.error }); });
       return;
     }
     const project = data<CloudProject>(result.value);
     if (!project?.projectId) {
-      setCloud("repos", { connecting: [], error: "The repository result could not be verified. Refresh before retrying." });
+      setCloud(draft => { Object.assign(draft["repos"], { connecting: [], error: "The repository result could not be verified. Refresh before retrying." }); });
       return;
     }
     connectKeys.delete(name);
-    batch(() => {
-      setCloud("repos", "projects", (list) => [...list.filter((p) => p.projectId !== project.projectId), project]);
-      setCloud("repos", "connecting", (list) => list.filter((n) => n !== repo.nameWithOwner));
-      setCloud("repos", "notice", "Repository added.");
+    setCloud(draft => {
+      (() => { draft["repos"]["projects"] = ((list) => [...list.filter((p) => p.projectId !== project.projectId), project])(draft["repos"]["projects"]); })();
+      (() => { draft["repos"]["connecting"] = ((list) => list.filter((n) => n !== repo.nameWithOwner))(draft["repos"]["connecting"]); })();
+      (() => { draft["repos"]["notice"] = "Repository added."; })();
     });
   }
   void loadImage();
@@ -598,16 +597,16 @@ export async function connectRepositories(repos: GithubRepository[]) {
 export async function removeRepository(projectId: string) {
   const who = owner();
   if (!who || cloud.repos.removing || !canManageRepositories()) return;
-  setCloud("repos", { removing: projectId, error: null, notice: null });
+  setCloud(draft => { Object.assign(draft["repos"], { removing: projectId, error: null, notice: null }); });
   const result = await call<unknown>(M.CLOUD_PROJECT_REMOVE, { projectId }, who);
   if (!result) return;
-  setCloud("repos", "removing", null);
-  if ("error" in result) return setCloud("repos", "error", result.error);
+  setCloud(draft => { draft["repos"]["removing"] = null; });
+  if ("error" in result) return setCloud(draft => { draft["repos"]["error"] = result.error; });
   const project = data<CloudProject>(result.value);
-  if (!project?.projectId) return setCloud("repos", "error", "The repository result could not be verified. Refresh before retrying.");
-  batch(() => {
-    setCloud("repos", "projects", (list) => list.filter((p) => p.projectId !== project.projectId));
-    setCloud("repos", "notice", "Repository removed. Existing chats are preserved.");
+  if (!project?.projectId) return setCloud(draft => { draft["repos"]["error"] = "The repository result could not be verified. Refresh before retrying."; });
+  setCloud(draft => {
+    (() => { draft["repos"]["projects"] = ((list) => list.filter((p) => p.projectId !== project.projectId))(draft["repos"]["projects"]); })();
+    (() => { draft["repos"]["notice"] = "Repository removed. Existing chats are preserved."; })();
   });
   void loadImage();
 }
@@ -616,31 +615,31 @@ let imageFailures = 0;
 export async function loadImage() {
   const who = owner();
   if (!who || cloud.image.loading || cloud.image.building || cloud.image.deleting) return;
-  setCloud("image", "loading", true);
+  setCloud(draft => { draft["image"]["loading"] = true; });
   receiveImage(await call<unknown>(M.CLOUD_IMAGE, {}, who), "image");
 }
 
 function receiveImage(result: { value: unknown } | { error: string } | null, kind: "image" | "build" | "delete") {
   if (!result) return;
-  setCloud("image", { loading: false, building: false, deleting: false });
+  setCloud(draft => { Object.assign(draft["image"], { loading: false, building: false, deleting: false }); });
   if ("error" in result) {
     imageFailures++;
-    setCloud("image", "error", result.error);
+    setCloud(draft => { draft["image"]["error"] = result.error; });
   } else {
     const image = data<AccountImage>(result.value);
     if (!image || typeof image.state !== "string" || !Array.isArray(image.builds)) {
       imageFailures++;
-      setCloud("image", "error", "Image status could not be verified. Refresh and try again.");
+      setCloud(draft => { draft["image"]["error"] = "Image status could not be verified. Refresh and try again."; });
     } else {
       imageFailures = 0;
       if (kind === "build") buildKey = null;
-      batch(() => {
-        setCloud("image", "value", reconcile(image));
-        setCloud("image", "error", null);
+      setCloud(draft => {
+        (() => { (() => { const next = image; if (draft["image"]["value"] == null) draft["image"]["value"] = next; else reconcile(next)(draft["image"]["value"]); })(); })();
+        (() => { draft["image"]["error"] = null; })();
       });
     }
   }
-  const value = cloud.image.value;
+  const value = result && "value" in result ? data<AccountImage>(result.value) : cloud.image.value;
   if (value && (value.state === "building" || value.storage?.state === "deleting") && imageFailures < 3) {
     const mine = generation;
     later(2000, () => mine === generation && void loadImage());
@@ -655,7 +654,7 @@ export async function buildImage(mode: "update" | "rebuild") {
   if (!who || cloud.image.loading || cloud.image.building || cloud.image.deleting || !canManageRepositories() || !cloud.repos.projects.length) return;
   if (!value || value.state === "building" || value.state === "auth-broken") return;
   if (!buildKey) buildKey = { mode, key: newId() };
-  setCloud("image", { building: true, error: null });
+  setCloud(draft => { Object.assign(draft["image"], { building: true, error: null }); });
   // Without a known provider the server builds for its default.
   const providerId = defaultProvider(cloud.context.capabilities) ?? value.providerId ?? null;
   receiveImage(
@@ -668,9 +667,9 @@ export async function deleteImage(snapshotId: string) {
   const who = owner();
   if (!who || cloud.image.loading || cloud.image.building || cloud.image.deleting || !canManageRepositories()) return;
   if (cloud.image.value?.storage?.snapshotId !== snapshotId) return;
-  setCloud("image", { deleting: true, error: null });
+  setCloud(draft => { Object.assign(draft["image"], { deleting: true, error: null }); });
   receiveImage(await call<unknown>(M.CLOUD_IMAGE_DELETE, { snapshotId }, who), "delete");
 }
 
-export const clearRepoNotice = () => setCloud("repos", { notice: null, error: null });
-export const clearBillingNotice = () => setCloud("billing", { notice: null, error: null });
+export const clearRepoNotice = () => setCloud(draft => { Object.assign(draft["repos"], { notice: null, error: null }); });
+export const clearBillingNotice = () => setCloud(draft => { Object.assign(draft["billing"], { notice: null, error: null }); });

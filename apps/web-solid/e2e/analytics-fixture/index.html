@@ -14,13 +14,12 @@
   };
   window.analyticsTest = {
     ...analytics,
-    account: (id) => setState("account", id ? { user: { id } } : null),
+    account: (id) => setState(draft => { draft.account = id ? { user: { id } } : null; }),
     chat: (id) => {
-      setState("connection", {kind: "connected"});
-      setState("workspaceSynced", true);
-      setView("selectedChatId", id);
+      setState(draft => { draft.connection = {kind: "connected"}; draft.workspaceSynced = true; });
+      setView(draft => { draft.selectedChatId = id; });
     },
-    reconnect: () => setState("epoch", value => value + 1),
+    reconnect: () => setState(draft => { draft.epoch++; }),
   };
   analytics.startAnalytics();
 </script>

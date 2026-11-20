@@ -1,24 +1,13 @@
 // Status, setup and removal surfaces shared by the browse page, the detail page and the installed list.
-import { createSignal, Show } from "solid-js";
 import { Icon } from "@/ui/Icon";
 import { GlyphSpinner } from "@/ui/loaders";
 import { Button, Dialog, IconButton } from "@/ui/primitives";
-import { accountError, accountSession, login, signIn, signedIn } from "../account";
+import { createSignal, Show } from "solid-js";
+import { accountError, accountSession, login, signedIn, signIn } from "../account";
 import { ErrorStrip, Segmented } from "../ui";
 import { catalog, type PluginDefinition } from "./catalog";
-import { LOCAL_CONFIG_TEMPLATE, connectRequest, localRequest, serverRequest, type ServerAuth } from "./setup";
-import {
-  activeAttempt,
-  cancelAttempt,
-  canManage,
-  clearError,
-  closeSetup,
-  confirmRemoval,
-  dismissRemoval,
-  plugins,
-  submitSetup,
-  tenant,
-} from "./state";
+import { connectRequest, LOCAL_CONFIG_TEMPLATE, localRequest, serverRequest, type ServerAuth } from "./setup";
+import { activeAttempt, cancelAttempt, canManage, clearError, closeSetup, confirmRemoval, dismissRemoval, plugins, submitSetup, tenant, } from "./state";
 
 export function LoginPrompt() {
   return (
@@ -159,14 +148,14 @@ function ServerForm() {
         </Show>
         <label class="pc-field">
           <span>Name</span>
-          <input class="field" value={name()} placeholder="Internal tools" maxLength={120} onInput={(e) => edited(setName)(e.currentTarget.value)} autofocus />
+          <input class="field" value={name()} placeholder="Internal tools" maxlength={120} onInput={(e) => edited(setName)(e.currentTarget.value)} autofocus />
         </label>
         <Show
           when={local() === "remote"}
           fallback={
             <label class="pc-field">
               <span>MCP configuration (JSON)</span>
-              <textarea class="field pc-textarea" rows={8} spellcheck={false} value={config()} onInput={(e) => edited(setConfig)(e.currentTarget.value)} />
+              <textarea class="field pc-textarea" rows={8} spellcheck="false" value={config()} onInput={(e) => edited(setConfig)(e.currentTarget.value)} />
               <small>
                 Runs on the computer hosting this Zuse engine, in your personal workspace. Paste one stdio server configuration, including command, args, and optional env. Desktop apps a server
                 depends on must be installed there.
@@ -176,7 +165,7 @@ function ServerForm() {
         >
           <label class="pc-field">
             <span>Server URL</span>
-            <input class="field pc-mono" type="url" inputMode="url" value={url()} placeholder="https://mcp.example.com/mcp" onInput={(e) => edited(setUrl)(e.currentTarget.value)} />
+            <input class="field pc-mono" type="url" inputmode="url" value={url()} placeholder="https://mcp.example.com/mcp" onInput={(e) => edited(setUrl)(e.currentTarget.value)} />
           </label>
           <div class="pc-field">
             <span id="plugin-auth-label">Authentication</span>
@@ -237,8 +226,8 @@ export function InlineKey(props: { plugin: PluginDefinition; label: string }) {
         <Icon name="plus" size={12} />
       </span>
       <input
-        class="pc-inline-input"
-        classList={{ "pc-mono": secret().length > 0 }}
+        class={["pc-inline-input", { "pc-mono": secret().length > 0 }]}
+
         type="password"
         autocomplete="new-password"
         aria-label="API key"

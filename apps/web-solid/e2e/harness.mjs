@@ -158,7 +158,19 @@ export async function openBrowser(url, { width = 1440, height = 900, port = 2900
     },
     async type(text) { await call("Input.insertText", { text }); },
     async key(key, code = key, keyCode = 13, modifiers = 0) {
+      // Solid 2's keyboard primitives track physical modifier releases. A CDP
+      // modifier bit alone leaves those keys held after shortcuts such as Shift+F10.
+      const held = [[1, "Alt", "AltLeft", 18], [2, "Control", "ControlLeft", 17], [4, "Meta", "MetaLeft", 91], [8, "Shift", "ShiftLeft", 16]].filter(([bit, name]) => modifiers & bit && name !== key);
+      let mask = 0;
+      for (const [bit, name, modifierCode, virtualKey] of held) {
+        mask |= bit;
+        await call("Input.dispatchKeyEvent", { type: "keyDown", key: name, code: modifierCode, windowsVirtualKeyCode: virtualKey, modifiers: mask });
+      }
       for (const type of ["keyDown", "keyUp"]) await call("Input.dispatchKeyEvent", { type, key, code, windowsVirtualKeyCode: keyCode, modifiers });
+      for (const [bit, name, modifierCode, virtualKey] of held.reverse()) {
+        mask &= ~bit;
+        await call("Input.dispatchKeyEvent", { type: "keyUp", key: name, code: modifierCode, windowsVirtualKeyCode: virtualKey, modifiers: mask });
+      }
     },
     async screenshot(path) { const r = await call("Page.captureScreenshot", { format: "png" }); writeFileSync(path, Buffer.from(r.result.data, "base64")); return path; },
     async close() { ws.close(); try { process.kill(-chrome.pid); } catch {} await sleep(200); rmSync(profile, { recursive: true, force: true }); },

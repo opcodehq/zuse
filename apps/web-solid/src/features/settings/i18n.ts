@@ -1,6 +1,6 @@
 // Translations from crates/i18n, loaded per locale on demand. English copy is inline at each call site.
-import { createEffect, createRoot, createSignal } from "solid-js";
 import { view } from "@/core/view";
+import { createEffect, createRoot, createSignal } from "solid-js";
 
 export const LOCALES = [
   { code: "en", name: "English" },
@@ -67,8 +67,7 @@ function load(locale: LocaleCode): Promise<Bundle> {
 }
 
 createRoot(() =>
-  createEffect(() => {
-    const locale = activeLocale();
+  createEffect(activeLocale, (locale) => {
     document.documentElement.lang = locale;
     if (locale === "en") {
       setBundle(null);

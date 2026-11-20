@@ -1,5 +1,4 @@
 // User actions from the sidebar. Each is one engine request; the watches bring the result back.
-import { createEffect, createRoot } from "solid-js";
 import { chatRequest } from "@/core/chat";
 import { rpc } from "@/core/connection";
 import { M } from "@/core/methods";
@@ -7,8 +6,9 @@ import type { Chat } from "@/core/protocol";
 import { state } from "@/core/store";
 import { navigate, openChat, setView, view } from "@/core/view";
 import { toast } from "@/ui/primitives";
-import { isArchived, overlayArchived, overlayTitle } from "./overlay";
+import { createEffect, createRoot } from "solid-js";
 import { projectMembers, unseen } from "./model";
+import { isArchived, overlayArchived, overlayTitle } from "./overlay";
 import { reportError, uuid } from "./util";
 
 function connected() {
@@ -36,8 +36,8 @@ export function selectChat(chatId: string) {
 
 // The open chat stays seen while new replies land in it, as desktop's does.
 createRoot(() => {
-  createEffect(() => {
-    const id = view.route.kind === "chat" ? view.selectedChatId : null;
+  createEffect(() => { const id = (view.route.kind === "chat" || view.route.kind === "zappers") ? view.selectedChatId : null; const chat = id ? state.chats[id] : undefined; return chat && unseen(chat); }, () => {
+    const id = (view.route.kind === "chat" || view.route.kind === "zappers") ? view.selectedChatId : null;
     const chat = id ? state.chats[id] : undefined;
     if (chat && unseen(chat)) markSeen(chat.id);
   });
@@ -46,7 +46,7 @@ createRoot(() => {
 export function newChat(projectKey?: string) {
   if (projectKey) {
     const space = projectMembers(projectKey)[0];
-    setView({ selectedChatId: null, route: { kind: "chat" }, draftProjectPath: space?.path ?? null });
+    setView(draft => { Object.assign(draft, { selectedChatId: null, route: { kind: "chat" }, draftProjectPath: space?.path ?? null }); });
   } else openChat(null);
 }
 
@@ -150,7 +150,8 @@ export function openProjectArchive(projectKey: string) {
 }
 
 export function toggleRightPanel(panel: "git") {
-  const open = view.route.kind === "chat" && view.rightPanel === panel;
-  setView({ route: { kind: "chat" }, rightPanel: open ? null : panel });
+  const open = (view.route.kind === "chat" || view.route.kind === "zappers") && view.rightPanel === panel;
+  navigate({ kind: "chat" });
+  setView(draft => { draft.rightPanel = open ? null : panel; });
 }
 

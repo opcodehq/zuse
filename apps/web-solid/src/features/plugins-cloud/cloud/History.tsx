@@ -1,9 +1,9 @@
 // Saved cloud history, read without opening an execution channel (crates/viewport/src/cloud_history.rs).
-import { createVirtualizer } from "@tanstack/solid-virtual";
-import { createMemo, For, Match, Show, Switch } from "solid-js";
 import type { MessagePart, SessionMessageEntry } from "@/core/protocol";
 import { Markdown } from "@/features/transcript/Markdown";
 import { Icon } from "@/ui/Icon";
+import { createVirtualizer } from "@/ui/virtualizer";
+import { createMemo, For, Match, Show, Switch } from "solid-js";
 import { Action } from "../ui";
 import { closeHistory, cloud, isArchived, openHistory, pauseWorkspace, restoreWorkspace, workspaceLabel } from "./state";
 
@@ -44,7 +44,7 @@ export function History() {
                 type="button"
                 role="tab"
                 class="pc-history-session"
-                aria-selected={chat.id === head()?.sessionId}
+                aria-selected={(chat.id === head()?.sessionId) ? "true" : "false"}
                 disabled={busy()}
                 onClick={() => chat.id !== head()?.sessionId && cloud.history.workspaceId && void openHistory(cloud.history.workspaceId, chat.id)}
               >
@@ -54,7 +54,7 @@ export function History() {
           </For>
         </div>
       </Show>
-      <div class="pc-history-scroll" ref={scroller} aria-busy={cloud.history.loading}>
+      <div class="pc-history-scroll" ref={scroller} aria-busy={(cloud.history.loading) ? "true" : "false"}>
         <Switch>
           <Match when={cloud.history.loading && !head()}>
             <p class="pc-history-empty">Loading saved conversation…</p>

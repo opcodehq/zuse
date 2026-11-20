@@ -1,8 +1,9 @@
 // Composer-local state: drafts per chat (persisted), staged attachments, failures and in-flight work.
-import { batch } from "solid-js";
-import { createStore, unwrap } from "solid-js/store";
+
+// Composer-local state: drafts per chat (persisted), staged attachments, failures and in-flight work.
 import { view } from "@/core/view";
 import { releaseImageUrl } from "@/ui/imageUrl";
+import { createStore, snapshot as snapshotStore } from "solid-js";
 import type { Skill } from "./completion";
 
 /** A completed `@` pick, kept so the visible `@path` becomes a canonical file link at send. */
@@ -57,7 +58,7 @@ const [composer, setComposer] = createStore<ComposerState>({
   sending: false,
   dismissedErrors: {},
 });
-export { composer, setComposer };
+export { composer,setComposer };
 
 // Tabs share one storage key, so each tab writes only the drafts it changed and merges the others' changes.
 const touched = new Set<string>();
@@ -75,7 +76,7 @@ function flush() {
   const stored = loadDrafts();
   for (const key of touched) {
     const draft = held.get(key) ?? composer.drafts[key];
-    if (draft?.text.trim()) stored[key] = unwrap(draft);
+    if (draft?.text.trim()) stored[key] = snapshotStore(draft);
     else delete stored[key];
   }
   touched.clear();
@@ -95,23 +96,23 @@ window.addEventListener("storage", (event) => {
     return;
   }
   const editing = view.selectedChatId ?? "";
-  batch(() => {
+  (() => {
     for (const key of new Set([...Object.keys(incoming), ...Object.keys(composer.drafts)])) {
       if (key === editing || touched.has(key)) continue;
       const next = incoming[key];
       if (next) {
-        if (JSON.stringify(unwrap(composer.drafts[key])) !== JSON.stringify(next)) setComposer("drafts", key, next);
-      } else if (composer.drafts[key]?.text.trim()) setComposer("drafts", key, emptyDraft());
+        if (JSON.stringify(snapshotStore(composer.drafts[key])) !== JSON.stringify(next)) setComposer(draft => { draft["drafts"]![key] = next; });
+      } else if (composer.drafts[key]?.text.trim()) setComposer(draft => { draft["drafts"]![key] = emptyDraft(); });
     }
-  });
+  })();
 });
 
 export const draftFor = (key: string): Draft => composer.drafts[key] ?? emptyDraft();
 /** A detached copy: store setters merge into the live draft, so anything kept across a clear must copy. */
-export const snapshotDraft = (key: string): Draft => structuredClone(unwrap(draftFor(key)));
+export const snapshotDraft = (key: string): Draft => structuredClone(snapshotStore(draftFor(key)));
 
 export function setDraft(key: string, draft: Partial<Draft>) {
-  setComposer("drafts", key, (current) => ({ ...(current ?? emptyDraft()), ...draft }));
+  setComposer(state => { state.drafts[key] = { ...(state.drafts[key] ?? emptyDraft()), ...draft }; });
   persist(key);
 }
 
@@ -124,38 +125,38 @@ export function holdPersistedDraft(key: string, draft: Draft | null) {
 }
 
 export function clearDraft(key: string) {
-  setComposer("drafts", key, emptyDraft());
+  setComposer(draft => { draft["drafts"]![key] = emptyDraft(); });
   persist(key);
 }
 
 export const attachmentsFor = (key: string) => composer.attachments[key] ?? [];
 
 export function addAttachment(key: string, attachment: Attachment) {
-  setComposer("attachments", key, (list) => [...(list ?? []), attachment]);
+  setComposer(draft => { draft["attachments"]![key] = ((list) => [...(list ?? []), attachment])(draft["attachments"]![key]); });
 }
 export function updateAttachment(key: string, id: string, patch: Partial<Attachment>) {
   const index = attachmentsFor(key).findIndex((a) => a.id === id);
-  if (index >= 0) setComposer("attachments", key, index, patch);
+  if (index >= 0) setComposer(draft => { Object.assign(draft.attachments[key]![index]!, patch); });
 }
 export function removeAttachment(key: string, id: string) {
   const row = attachmentsFor(key).find((a) => a.id === id);
   releaseImageUrl(row?.preview);
-  setComposer("attachments", key, (list) => (list ?? []).filter((a) => a.id !== id));
+  setComposer(draft => { draft["attachments"]![key] = ((list) => (list ?? []).filter((a) => a.id !== id))(draft["attachments"]![key]); });
 }
 export function takeAttachments(key: string): Attachment[] {
-  const list = [...unwrap(attachmentsFor(key))];
-  setComposer("attachments", key, []);
+  const list = [...snapshotStore(attachmentsFor(key))];
+  setComposer(draft => { draft["attachments"]![key] = []; });
   return list;
 }
 export function restoreAttachments(key: string, list: Attachment[]) {
-  setComposer("attachments", key, (current) => [...list, ...(current ?? []).filter((a) => !list.some((b) => b.id === a.id))]);
+  setComposer(draft => { draft["attachments"]![key] = ((current) => [...list, ...(current ?? []).filter((a) => !list.some((b) => b.id === a.id))])(draft["attachments"]![key]); });
 }
 
 export function fail(key: string, message: string) {
-  setComposer("failure", { key, message });
+  setComposer(draft => { draft["failure"] = { key, message }; });
 }
 export function clearFailure() {
-  setComposer("failure", null);
+  setComposer(draft => { draft["failure"] = null; });
 }
 
 /** Put the caret back in the prompt after a tray, menu or landing choice. */

@@ -1,9 +1,9 @@
 // Agent account sign-in and account actions (crates/ui/src/settings/accounts.rs): one flow at a time,
 // started, then waiting on the browser (or a pasted code) until it lands or fails.
-import { createStore, produce, reconcile, unwrap } from "solid-js/store";
-import { M } from "@/core/methods";
 import { onConnected, refreshHarnesses, rpc } from "@/core/connection";
+import { M } from "@/core/methods";
 import { toast } from "@/ui/primitives";
+import { createStore, reconcile, snapshot as snapshotStore } from "solid-js";
 import { type AccountsSnapshot, type AgentAccount, data, loadAccounts, message, setData, uncertain } from "./data";
 import { isOpenableLoginUrl, loginOptions, providerName } from "./harness";
 
@@ -49,7 +49,7 @@ let pollTimer: ReturnType<typeof setTimeout> | undefined;
 
 onConnected(() => {
   clearTimeout(pollTimer);
-  setLogin({ flow: null, busyAccount: null, actionError: null });
+  setLogin(draft => { Object.assign(draft, { flow: null, busyAccount: null, actionError: null }); });
 });
 
 export function loginTitle(flow: LoginFlow) {
@@ -82,7 +82,7 @@ export async function startLogin(harness: string, provider?: string) {
   if (loginActive() || login.busyAccount) return;
   clearTimeout(pollTimer);
   const attempt = ++attempts;
-  setLogin("flow", { harness, provider, attempt, loginId: null, url: null, callbackPort: null, step: { kind: "browser", message: null } });
+  setLogin(draft => { draft["flow"] = { harness, provider, attempt, loginId: null, url: null, callbackPort: null, step: { kind: "browser", message: null } }; });
   // Opened inside the click so pop-up blockers allow it; pointed at the sign-in page once known.
   const pending = window.open("about:blank", "_blank");
   let start: LoginStart;
@@ -90,7 +90,7 @@ export async function startLogin(harness: string, provider?: string) {
     start = await rpc.call<LoginStart>(M.START_AGENT_LOGIN, provider ? { harness, provider } : { harness });
   } catch (error) {
     pending?.close();
-    if (current(attempt)) setLogin("flow", "step", { kind: "failed", message: `Couldn't start the sign-in: ${message(error)}` });
+    if (current(attempt)) setLogin(draft => { draft["flow"]!["step"] = { kind: "failed", message: `Couldn't start the sign-in: ${message(error)}` }; });
     return;
   }
   if (!current(attempt)) {
@@ -101,16 +101,14 @@ export async function startLogin(harness: string, provider?: string) {
   const url = start.url || null;
   if (url) openUrl(url, pending);
   else if (start.mode === "paste-code") pending?.close();
-  setLogin(
-    "flow",
-    produce((flow) => {
-      if (!flow) return;
-      flow.loginId = start.loginId;
-      flow.url = url && isOpenableLoginUrl(url) ? url : null;
-      flow.callbackPort = start.callbackPort ?? null;
-      flow.step = start.mode === "paste-code" ? { kind: "paste", submitting: false, error: null } : { kind: "browser", message: null };
-    }),
-  );
+  setLogin(draftState => {
+    const flow = draftState["flow"]!;
+    if (!flow) return;
+    flow.loginId = start.loginId;
+    flow.url = url && isOpenableLoginUrl(url) ? url : null;
+    flow.callbackPort = start.callbackPort ?? null;
+    flow.step = start.mode === "paste-code" ? { kind: "paste", submitting: false, error: null } : { kind: "browser", message: null };
+  });
   // A page that only becomes known in a later poll keeps the blank window for it.
   if (start.mode === "browser") schedulePoll(attempt, start.loginId, url ? null : pending);
 }
@@ -123,14 +121,14 @@ function schedulePoll(attempt: number, loginId: string, pending: Window | null) 
       poll = await rpc.call<LoginPoll>(M.POLL_AGENT_LOGIN, { loginId });
     } catch (error) {
       pending?.close();
-      if (current(attempt)) setLogin("flow", "step", { kind: "failed", message: `Lost track of the sign-in: ${message(error)}` });
+      if (current(attempt)) setLogin(draft => { draft["flow"]!["step"] = { kind: "failed", message: `Lost track of the sign-in: ${message(error)}` }; });
       return;
     }
     if (!current(attempt)) return pending?.close();
     if (poll.url && poll.url !== login.flow?.url && isOpenableLoginUrl(poll.url)) {
       openUrl(poll.url, pending);
       pending = null;
-      setLogin("flow", { url: poll.url, callbackPort: poll.callbackPort ?? login.flow?.callbackPort ?? null });
+      setLogin(draft => { Object.assign(draft["flow"]!, { url: poll.url, callbackPort: poll.callbackPort ?? login.flow?.callbackPort ?? null }); });
     }
     if (poll.status === "done") {
       pending?.close();
@@ -139,17 +137,17 @@ function schedulePoll(attempt: number, loginId: string, pending: Window | null) 
     }
     if (poll.status === "error") {
       pending?.close();
-      setLogin("flow", "step", { kind: "failed", message: poll.message || "The sign-in failed." });
+      setLogin(draft => { draft["flow"]!["step"] = { kind: "failed", message: poll.message || "The sign-in failed." }; });
       return;
     }
-    setLogin("flow", "step", { kind: "browser", message: poll.message ?? null });
+    setLogin(draft => { draft["flow"]!["step"] = { kind: "browser", message: poll.message ?? null }; });
     schedulePoll(attempt, loginId, pending);
   }, 1500);
 }
 
 function finish() {
   const name = login.flow ? providerName(login.flow.harness) : "";
-  setLogin("flow", null);
+  setLogin(draft => { draft["flow"] = null; });
   toast(`Signed in to ${name}`);
   void loadAccounts(true);
   void refreshHarnesses();
@@ -159,12 +157,12 @@ export async function submitCode(code: string) {
   const flow = login.flow;
   if (!flow?.loginId || flow.step.kind !== "paste" || flow.step.submitting || !code.trim()) return;
   const attempt = flow.attempt;
-  setLogin("flow", "step", { kind: "paste", submitting: true, error: null });
+  setLogin(draft => { draft["flow"]!["step"] = { kind: "paste", submitting: true, error: null }; });
   try {
     await rpc.call(M.COMPLETE_AGENT_LOGIN, { loginId: flow.loginId, code: code.trim() });
     if (current(attempt)) finish();
   } catch (error) {
-    if (current(attempt)) setLogin("flow", "step", { kind: "paste", submitting: false, error: message(error) });
+    if (current(attempt)) setLogin(draft => { draft["flow"]!["step"] = { kind: "paste", submitting: false, error: message(error) }; });
   }
 }
 
@@ -172,7 +170,7 @@ export function cancelLogin() {
   const flow = login.flow;
   if (!flow) return;
   clearTimeout(pollTimer);
-  setLogin("flow", null);
+  setLogin(draft => { draft["flow"] = null; });
   if (flow.loginId) void rpc.call(M.CANCEL_AGENT_LOGIN, { loginId: flow.loginId }).catch(() => {});
   void loadAccounts(false);
 }
@@ -180,7 +178,7 @@ export function cancelLogin() {
 export function retryLogin() {
   const flow = login.flow;
   if (!flow) return;
-  setLogin("flow", null);
+  setLogin(draft => { draft["flow"] = null; });
   void startLogin(flow.harness, flow.provider);
 }
 
@@ -195,20 +193,18 @@ function isSnapshot(value: unknown): value is AccountsSnapshot {
 
 /** The optimistic half of a switch: the account becomes the live login of its group. */
 function markSwitched(account: AgentAccount) {
-  setData(
-    "accounts",
-    produce((snapshot) => {
-      for (const row of snapshot?.accounts ?? [])
-        if (row.harness === account.harness && (row.provider ?? null) === (account.provider ?? null)) row.active = row.id === account.id;
-    }),
-  );
+  setData(draftState => {
+    const snapshot = draftState["accounts"]!;
+    for (const row of snapshot?.accounts ?? [])
+      if (row.harness === account.harness && (row.provider ?? null) === (account.provider ?? null)) row.active = row.id === account.id;
+  });
 }
 
 export async function accountAction(account: AgentAccount, action: "switch" | "remove") {
   if (login.busyAccount || loginActive() || !account.switchable) return;
   // Store proxies can't be cloned; copy the plain snapshot underneath.
-  const previous = data.accounts ? structuredClone(unwrap(data.accounts)) : null;
-  setLogin({ busyAccount: account.id, actionError: null });
+  const previous = data.accounts ? structuredClone(snapshotStore(data.accounts)) : null;
+  setLogin(draft => { Object.assign(draft, { busyAccount: account.id, actionError: null }); });
   if (action === "switch") markSwitched(account);
   try {
     const reply = await rpc.call(action === "switch" ? M.ACTIVATE_AGENT_ACCOUNT : M.FORGET_AGENT_ACCOUNT, {
@@ -216,15 +212,12 @@ export async function accountAction(account: AgentAccount, action: "switch" | "r
       accountId: account.id,
       harness: account.harness,
     });
-    if (isSnapshot(reply)) setData("accounts", reconcile(reply, { key: "id" }));
+    if (isSnapshot(reply)) setData(draft => { { const next = reply; if (draft["accounts"] == null) draft["accounts"] = next; else reconcile(next, "id")(draft["accounts"]); } });
     else void loadAccounts(false);
   } catch (error) {
-    if (previous) setData("accounts", reconcile(previous, { key: "id" }));
-    setLogin(
-      "actionError",
-      uncertain(error) ? "The connection dropped before the engine answered. Refresh accounts before trying again." : message(error),
-    );
+    if (previous) setData(draft => { { const next = previous; if (draft["accounts"] == null) draft["accounts"] = next; else reconcile(next, "id")(draft["accounts"]); } });
+    setLogin(draft => { draft["actionError"] = uncertain(error) ? "The connection dropped before the engine answered. Refresh accounts before trying again." : message(error); });
   } finally {
-    setLogin("busyAccount", null);
+    setLogin(draft => { draft["busyAccount"] = null; });
   }
 }

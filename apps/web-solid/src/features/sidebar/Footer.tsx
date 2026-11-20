@@ -1,11 +1,11 @@
 // The footer (crates/viewport sidebar_controls.rs plus crates/ui's settings trigger): General-account
 // plan, provider usage limits, the running-agent count, Git and Settings.
-import { For, Match, Show, Switch } from "solid-js";
 import { formatKeys } from "@/core/keys";
 import { navigate, view } from "@/core/view";
 import { Icon } from "@/ui/Icon";
 import { Tooltip } from "@/ui/primitives";
-import { account, accountAction, accountDisabled, type AgentAccount, available, loadUsage, percentLeft, planLabel, PROVIDERS, providerAccount, resetLabel, signedIn } from "./account";
+import { For, Match, Show, Switch } from "solid-js";
+import { account, accountAction, accountDisabled, type AgentAccount, available, loadUsage, percentLeft, planLabel, providerAccount, PROVIDERS, resetLabel, signedIn } from "./account";
 import { toggleRightPanel, toggleSettings } from "./actions";
 import { EntriesMenu, type Entry } from "./menus";
 import { workingThreads } from "./model";
@@ -108,7 +108,7 @@ function usageEntries(): Entry[] {
 export function Footer() {
   const working = () => workingThreads(now());
   const settingsOpen = () => view.route.kind === "settings";
-  const gitOpen = () => view.route.kind === "chat" && view.rightPanel === "git";
+  const gitOpen = () => (view.route.kind === "chat" || view.route.kind === "zappers") && view.rightPanel === "git";
   return (
     <div class="sb-foot">
       <Show when={!(signedIn() && account.subscribed === null && !account.planError)}>
@@ -143,7 +143,7 @@ export function Footer() {
           type="button"
           class="sb-fbtn"
           aria-label="Git"
-          aria-pressed={gitOpen()}
+          aria-pressed={(gitOpen()) ? "true" : "false"}
           disabled={!view.selectedChatId}
           onClick={() => toggleRightPanel("git")}
         >
@@ -151,7 +151,7 @@ export function Footer() {
         </button>
       </Tooltip>
       <Tooltip content={`${settingsOpen() ? "Close settings" : "Settings"} · ${formatKeys("mod+,")}`}>
-        <button type="button" class="sb-fbtn" aria-label={settingsOpen() ? "Close settings" : "Settings"} aria-pressed={settingsOpen()} onClick={toggleSettings}>
+        <button type="button" class="sb-fbtn" aria-label={settingsOpen() ? "Close settings" : "Settings"} aria-pressed={(settingsOpen()) ? "true" : "false"} onClick={toggleSettings}>
           <Icon name="dither-gear" size={14} />
         </button>
       </Tooltip>

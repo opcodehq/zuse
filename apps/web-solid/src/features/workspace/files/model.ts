@@ -1,12 +1,14 @@
 // File tree and open-file state per chat. The engine owns the files; this is the projection
 // the Files surface reads, plus the save/conflict/reconnect protocol from crates/viewport/src/workspace.rs.
-import { batch } from "solid-js";
-import { createStore, produce, reconcile } from "solid-js/store";
+
+// File tree and open-file state per chat. The engine owns the files; this is the projection
+// the Files surface reads, plus the save/conflict/reconnect protocol from crates/viewport/src/workspace.rs.
 import { rpc } from "@/core/connection";
 import { M } from "@/core/methods";
 import { RpcError } from "@/core/rpc";
 import { state } from "@/core/store";
-import { openPanel, errorText } from "../store";
+import { createStore, reconcile } from "solid-js";
+import { errorText, openPanel } from "../store";
 import type { WorkspaceDirectoryPage, WorkspaceEntry, WorkspaceFileChanges, WorkspaceFileText, WriteOutcome } from "../types";
 
 export interface DirState {
@@ -53,18 +55,21 @@ const [pending, setPending] = createStore<{ path: string | null; seq: number }>(
 export { pending };
 
 export function openFileInPanel(path: string) {
-  setPending({ path, seq: pending.seq + 1 });
+  setPending(draft => { Object.assign(draft, { path, seq: pending.seq + 1 }); });
   openPanel("files");
 }
 export function takePending() {
   const path = pending.path;
-  setPending("path", null);
+  setPending(draft => { draft["path"] = null; });
   return path;
 }
 
 function chatFiles(chatId: string): ChatFiles {
-  if (!files[chatId]) setFiles(chatId, { dirs: {}, expanded: {}, selected: null, checkoutId: null, open: null });
-  return files[chatId]!;
+  const current = files[chatId];
+  if (current) return current;
+  const initial: ChatFiles = { dirs: {}, expanded: {}, selected: null, checkoutId: null, open: null };
+  setFiles(draft => { draft[chatId] ??= initial; });
+  return initial;
 }
 
 function target(chatId: string) {
@@ -76,17 +81,17 @@ export function loadDirectory(chatId: string, directory: string, more = false) {
   const current = chatFiles(chatId).dirs[directory];
   if (current?.loading) return;
   const cursor = more ? current?.nextCursor : null;
-  setFiles(chatId, "dirs", directory, (prev) => ({ entries: prev?.entries ?? [], nextCursor: prev?.nextCursor ?? null, truncated: prev?.truncated ?? false, loading: true, error: null }));
+  setFiles(draft => { draft[chatId]!["dirs"]![directory] = ((prev) => ({ entries: prev?.entries ?? [], nextCursor: prev?.nextCursor ?? null, truncated: prev?.truncated ?? false, loading: true, error: null }))(draft[chatId]!["dirs"]![directory]); });
   rpc
     .call<WorkspaceDirectoryPage>(M.LIST_WORKSPACE_DIRECTORY, { ...target(chatId), directory, ...(cursor ? { cursor } : {}) })
     .then(
       (page) =>
-        batch(() => {
-          if (page.checkoutId) setFiles(chatId, "checkoutId", page.checkoutId);
+        (() => {
+          if (page.checkoutId) setFiles(draft => { draft[chatId]!["checkoutId"] = page.checkoutId!; });
           const entries = cursor ? [...(files[chatId]?.dirs[directory]?.entries ?? []), ...page.entries] : page.entries;
-          setFiles(chatId, "dirs", directory, reconcile({ entries: sortEntries(entries), loading: false, error: null, nextCursor: page.nextCursor ?? null, truncated: page.truncated }, { key: "path" }));
-        }),
-      (error) => setFiles(chatId, "dirs", directory, (prev) => ({ ...prev!, loading: false, error: errorText(error, "Couldn't list this folder.") })),
+          setFiles(draft => { { const next = { entries: sortEntries(entries), loading: false, error: null, nextCursor: page.nextCursor ?? null, truncated: page.truncated }; if (draft[chatId]!["dirs"]![directory] == null) draft[chatId]!["dirs"]![directory] = next; else reconcile(next, "path")(draft[chatId]!["dirs"]![directory]); } });
+        })(),
+      (error) => setFiles(draft => { draft[chatId]!["dirs"]![directory] = ((prev) => ({ ...prev!, loading: false, error: errorText(error, "Couldn't list this folder.") }))(draft[chatId]!["dirs"]![directory]); }),
     );
 }
 
@@ -100,13 +105,13 @@ function sortEntries(entries: WorkspaceEntry[]) {
 
 export function toggleDirectory(chatId: string, path: string, open?: boolean) {
   const next = open ?? !chatFiles(chatId).expanded[path];
-  setFiles(chatId, "expanded", path, next);
-  if (next && !files[chatId]!.dirs[path]) loadDirectory(chatId, path);
+  setFiles(draft => { draft[chatId]!["expanded"]![path] = next; });
+  if (next && !chatFiles(chatId).dirs[path]) loadDirectory(chatId, path);
 }
 
 export function selectPath(chatId: string, path: string | null) {
   chatFiles(chatId);
-  setFiles(chatId, "selected", path);
+  setFiles(draft => { draft[chatId]!["selected"] = path; });
 }
 
 /** Expand every ancestor of `path` so it shows in the tree. */
@@ -145,25 +150,27 @@ export function applyFileChanges(chatId: string, frame: WorkspaceFileChanges, is
 export function readFile(chatId: string, path: string) {
   const tree = chatFiles(chatId);
   if (tree.open?.saving || tree.open?.verifying) return;
-  setFiles(chatId, "open", {
-    path,
-    file: tree.open?.path === path ? tree.open.file : null,
-    loading: true,
-    error: null,
-    saving: false,
-    verifying: false,
-    conflict: null,
-    dirty: false,
+  setFiles(draft => {
+    draft[chatId]!["open"] = {
+      path,
+      file: tree.open?.path === path ? tree.open.file : null,
+      loading: true,
+      error: null,
+      saving: false,
+      verifying: false,
+      conflict: null,
+      dirty: false,
+    };
   });
-  setFiles(chatId, "selected", path);
+  setFiles(draft => { draft[chatId]!["selected"] = path; });
   rpc.call<WorkspaceFileText>(M.READ_WORKSPACE_FILE, { ...target(chatId), path }).then(
     (file) => {
       if (files[chatId]?.open?.path !== path) return;
-      setFiles(chatId, "open", (prev) => ({ ...prev!, file, loading: false, error: null }));
+      setFiles(draft => { draft[chatId]!["open"] = ((prev) => ({ ...prev!, file, loading: false, error: null }))(draft[chatId]!["open"]); });
     },
     (error) => {
       if (files[chatId]?.open?.path !== path) return;
-      setFiles(chatId, "open", (prev) => ({ ...prev!, loading: false, error: errorText(error, "Couldn't open this file.") }));
+      setFiles(draft => { draft[chatId]!["open"] = ((prev) => ({ ...prev!, loading: false, error: errorText(error, "Couldn't open this file.") }))(draft[chatId]!["open"]); });
     },
   );
 }
@@ -172,7 +179,7 @@ export function readFile(chatId: string, path: string) {
 export function setFileDraft(chatId: string, path: string, text: string | null) {
   const open = files[chatId]?.open;
   if (open?.path !== path || (open.draftText ?? null) === text) return;
-  setFiles(chatId, "open", "draftText", text);
+  setFiles(draft => { draft[chatId]!["open"]!["draftText"] = text; });
 }
 
 export const hasUnsavedFiles = () => Object.values(files).some((tree) => tree.open?.draftText != null);
@@ -182,7 +189,7 @@ window.addEventListener("beforeunload", (event) => {
 });
 
 export function closeFile(chatId: string) {
-  setFiles(chatId, "open", null);
+  setFiles(draft => { draft[chatId]!["open"] = null; });
 }
 
 export function canSave(open: OpenFile | null | undefined) {
@@ -196,7 +203,7 @@ export function saveFile(chatId: string, text: string, force = false): Promise<v
   if (open.conflict && !force) return Promise.resolve();
   const file = open.file;
   const path = open.path;
-  setFiles(chatId, "open", (prev) => ({ ...prev!, saving: true, error: null }));
+  setFiles(draft => { draft[chatId]!["open"] = ((prev) => ({ ...prev!, saving: true, error: null }))(draft[chatId]!["open"]); });
   return rpc
     .call<WriteOutcome>(M.WRITE_WORKSPACE_FILE, {
       ...target(chatId),
@@ -211,24 +218,26 @@ export function saveFile(chatId: string, text: string, force = false): Promise<v
       (outcome) => {
         if (files[chatId]?.open?.path !== path) return;
         if (outcome.status === "written") {
-          setFiles(chatId, "open", (prev) => ({
-            ...prev!,
-            saving: false,
-            conflict: null,
-            file: { ...file, text, contentHash: outcome.file.contentHash, size: outcome.file.size, modifiedAt: outcome.file.modifiedAt ?? file.modifiedAt },
-          }));
+          setFiles(draft => {
+            draft[chatId]!["open"] = ((prev) => ({
+              ...prev!,
+              saving: false,
+              conflict: null,
+              file: { ...file, text, contentHash: outcome.file.contentHash, size: outcome.file.size, modifiedAt: outcome.file.modifiedAt ?? file.modifiedAt },
+            }))(draft[chatId]!["open"]);
+          });
         } else {
-          setFiles(chatId, "open", (prev) => ({ ...prev!, saving: false, conflict: { kind: outcome.reason, message: conflictMessage(outcome.reason) } }));
+          setFiles(draft => { draft[chatId]!["open"] = ((prev) => ({ ...prev!, saving: false, conflict: { kind: outcome.reason, message: conflictMessage(outcome.reason) } }))(draft[chatId]!["open"]); });
         }
       },
       (error) => {
         if (files[chatId]?.open?.path !== path) return;
-        setFiles(chatId, "open", (prev) => ({ ...prev!, saving: false }));
+        setFiles(draft => { draft[chatId]!["open"] = ((prev) => ({ ...prev!, saving: false }))(draft[chatId]!["open"]); });
         if (error instanceof RpcError && error.outcomeUnknown) {
           // The write may have landed. Read back and compare instead of resending.
-          setFiles(chatId, "open", "error", "The connection dropped during the save. Checking whether it was written…");
+          setFiles(draft => { draft[chatId]!["open"]!["error"] = "The connection dropped during the save. Checking whether it was written…"; });
           pendingVerify.set(chatId, text);
-        } else setFiles(chatId, "open", "error", errorText(error, "Couldn't save this file."));
+        } else setFiles(draft => { draft[chatId]!["open"]!["error"] = errorText(error, "Couldn't save this file."); });
       },
     );
 }
@@ -259,46 +268,44 @@ export function verifyOpenFile(chatId: string, isDirty: () => boolean, reason: "
   const path = open.path;
   const held = open.file;
   const saved = pendingVerify.get(chatId);
-  setFiles(chatId, "open", "verifying", true);
+  setFiles(draft => { draft[chatId]!["open"]!["verifying"] = true; });
   rpc.call<WorkspaceFileText>(M.READ_WORKSPACE_FILE, { ...target(chatId), path }).then(
     (fresh) => {
       if (files[chatId]?.open?.path !== path) return;
       pendingVerify.delete(chatId);
-      setFiles(
-        chatId,
-        "open",
-        produce((o) => {
-          if (!o) return;
-          o.verifying = false;
-          if (saved !== undefined) {
-            o.error = null;
-            if (fresh.text === saved) {
-              o.file = fresh;
-              return;
-            }
-            o.error = "The save was not written. Your edits are still here; save again.";
-          }
-          if (fresh.contentHash === held.contentHash && fresh.checkoutId === held.checkoutId) return;
-          if (!isDirty()) {
+      setFiles(draftState => {
+        const o = draftState[chatId]!["open"]!;
+        if (!o) return;
+        o.verifying = false;
+        if (saved !== undefined) {
+          o.error = null;
+          if (fresh.text === saved) {
             o.file = fresh;
             return;
           }
-          o.conflict = {
-            kind: reason === "external" ? "external" : "changed",
-            message: reason === "external" ? "This file changed on disk while you were editing it." : "This file changed on disk while the connection was down.",
-          };
-        }),
-      );
+          o.error = "The save was not written. Your edits are still here; save again.";
+        }
+        if (fresh.contentHash === held.contentHash && fresh.checkoutId === held.checkoutId) return;
+        if (!isDirty()) {
+          o.file = fresh;
+          return;
+        }
+        o.conflict = {
+          kind: reason === "external" ? "external" : "changed",
+          message: reason === "external" ? "This file changed on disk while you were editing it." : "This file changed on disk while the connection was down.",
+        };
+      });
     },
     (error) => {
       if (files[chatId]?.open?.path !== path) return;
       const text = errorText(error);
-      setFiles(chatId, "open", produce((o) => {
+      setFiles(draftState => {
+        const o = draftState[chatId]!["open"]!;
         if (!o) return;
         o.verifying = false;
         if (/not found|no such file|does not exist/i.test(text)) o.conflict = { kind: "deleted", message: conflictMessage("deleted") };
         else o.error = `Couldn't verify the file: ${text}`;
-      }));
+      });
     },
   );
 }
@@ -311,16 +318,16 @@ export function refreshBaseline(chatId: string): Promise<WorkspaceFileText | nul
   return rpc.call<WorkspaceFileText>(M.READ_WORKSPACE_FILE, { ...target(chatId), path }).then(
     (fresh) => {
       if (files[chatId]?.open?.path !== path) return null;
-      setFiles(chatId, "open", (prev) => ({ ...prev!, file: fresh, conflict: null, error: null }));
+      setFiles(draft => { draft[chatId]!["open"] = ((prev) => ({ ...prev!, file: fresh, conflict: null, error: null }))(draft[chatId]!["open"]); });
       return fresh;
     },
     (error) => {
-      setFiles(chatId, "open", "error", errorText(error));
+      setFiles(draft => { draft[chatId]!["open"]!["error"] = errorText(error); });
       return null;
     },
   );
 }
 
 export function resetChatFiles(chatId: string) {
-  setFiles(chatId, reconcile({ dirs: {}, expanded: {}, selected: null, checkoutId: null, open: files[chatId]?.open ?? null }));
+  setFiles(draft => { { const next = { dirs: {}, expanded: {}, selected: null, checkoutId: null, open: files[chatId]?.open ?? null }; if (draft[chatId] == null) draft[chatId] = next; else reconcile(next)(draft[chatId]); } });
 }

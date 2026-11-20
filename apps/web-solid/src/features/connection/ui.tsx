@@ -1,10 +1,13 @@
+import { omit } from "solid-js";
 // Compact remote access building blocks, matching crates/viewport remote_access_style.
+// Compact remote access building blocks, matching crates/viewport remote_access_style.
+import { Icon } from "@/ui/Icon";
 import { Dialog as KDialog } from "@kobalte/core/dialog";
 import { Tooltip as KTooltip } from "@kobalte/core/tooltip";
-import { type JSX, Show, splitProps } from "solid-js";
-import { Icon } from "@/ui/Icon";
-import wifi from "@repo/crates/icons/assets/free/wifi.svg?raw";
 import link from "@repo/crates/icons/assets/free/link.svg?raw";
+import wifi from "@repo/crates/icons/assets/free/wifi.svg?raw";
+import { type JSX } from "@solidjs/web";
+import { Show } from "solid-js";
 
 // Two glyphs desktop takes from crates/icons; the shared set has the rest.
 const extra: Record<string, string> = { wifi, link };
@@ -32,10 +35,10 @@ type ButtonProps = JSX.ButtonHTMLAttributes<HTMLButtonElement> & {
 
 /** Disabled buttons stay focusable, as on desktop, so focus is never dropped while an action runs. */
 export function Btn(props: ButtonProps) {
-  const [local, rest] = splitProps(props, ["size", "tone", "class", "children", "disabled", "onClick"]);
+  const rest = omit(props, "size", "tone", "class", "children", "disabled", "onClick");
   const click = (event: MouseEvent & { currentTarget: HTMLButtonElement; target: Element }) => {
-    if (local.disabled) return event.preventDefault();
-    const handler = local.onClick;
+    if (props.disabled) return event.preventDefault();
+    const handler = props.onClick;
     if (typeof handler === "function") handler(event);
     else if (handler) handler[0](handler[1], event);
   };
@@ -43,13 +46,13 @@ export function Btn(props: ButtonProps) {
     <button
       type="button"
       {...rest}
-      aria-disabled={local.disabled ? "true" : rest["aria-disabled"]}
+      aria-disabled={(props.disabled ? "true" : rest["aria-disabled"]) == null ? undefined : (props.disabled ? "true" : rest["aria-disabled"]) ? "true" : "false"}
       onClick={click}
-      class={`cx-btn ${local.class ?? ""}`}
-      data-size={local.size ?? "md"}
-      data-tone={local.tone ?? "default"}
+      class={`cx-btn ${props.class ?? ""}`}
+      data-size={props.size ?? "md"}
+      data-tone={props.tone ?? "default"}
     >
-      {local.children}
+      {props.children}
     </button>
   );
 }

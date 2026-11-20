@@ -19,9 +19,9 @@ export function onNextFrame(job: () => void) {
 
 /** Mirrors `source` but publishes at most once per frame while `live()` is true; otherwise immediately. */
 export function frameThrottled<T>(source: Accessor<T>, live: Accessor<boolean>): Accessor<T> {
-  const [value, setValue] = createSignal<T>(untrack(source), { equals: false });
+  const [value, setValue] = createSignal<T>(() => source(), { equals: false });
   const publish = () => setValue(() => untrack(source));
-  createEffect(() => {
+  createEffect(() => [source(), live()], () => {
     source();
     if (live()) onNextFrame(publish);
     else {

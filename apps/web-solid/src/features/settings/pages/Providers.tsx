@@ -1,52 +1,14 @@
 // Providers: which agents the composer offers, their setup, accounts, updates and custom ACP agents
 // (crates/ui/src/settings/harnesses.rs, accounts.rs, custom_acp.rs).
-import { createEffect, createMemo, createSignal, For, on, onMount, Show } from "solid-js";
 import { state } from "@/core/store";
 import { Icon } from "@/ui/Icon";
 import { Menu } from "@/ui/primitives";
+import { createEffect, createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { type AgentAccount, data, loadAccounts, loadCustomAgents } from "../data";
-import {
-  addOptionLabel,
-  canStartUpdate,
-  checkedLabel,
-  cliName,
-  harnessMark,
-  harnessTint,
-  type HarnessDescriptor,
-  type HarnessUpdateStatus,
-  installCommand,
-  installHint,
-  isCustomAcp,
-  keepsOneLogin,
-  loginCommand,
-  loginOptions,
-  maskedEmail,
-  providerNote,
-  reportsUsage,
-  signsIn,
-  switchesAccounts,
-  UPDATE_POLICIES,
-  type UpdatePolicy,
-  updateDetail,
-  updateInProgress,
-} from "../harness";
+import { addOptionLabel, canStartUpdate, checkedLabel, cliName, type HarnessDescriptor, harnessMark, harnessTint, type HarnessUpdateStatus, installCommand, installHint, isCustomAcp, keepsOneLogin, loginCommand, loginOptions, maskedEmail, providerNote, reportsUsage, signsIn, switchesAccounts, UPDATE_POLICIES, updateDetail, updateInProgress, type UpdatePolicy, } from "../harness";
 import { t } from "../i18n";
 import { accountAction, cancelLogin, login, loginActive, loginStatus, reopenLoginPage, retryLogin, startLogin, submitCode } from "../login";
-import {
-  applyUpdate,
-  cancelInstall,
-  cancelUpdate,
-  checkUpdates,
-  effectiveEnabled,
-  install,
-  loadHarnesses,
-  newestCheck,
-  providers,
-  setEnabled,
-  setPolicy,
-  updateFor,
-  visibleHarnesses,
-} from "../providers";
+import { applyUpdate, cancelInstall, cancelUpdate, checkUpdates, effectiveEnabled, install, loadHarnesses, newestCheck, providers, setEnabled, setPolicy, updateFor, visibleHarnesses, } from "../providers";
 import { ActionButton, Badge, Card, CopyField, ErrorStrip, Group, InlineSpinner, Mark, Meta, SectionTitle, Select, SettingsDialog, Switch, WarningStrip } from "../widgets";
 import { CustomAgents } from "./CustomAgents";
 
@@ -68,16 +30,16 @@ export function Providers() {
     void loadAccounts(true);
     void loadCustomAgents();
   };
-  onMount(() => {
+  onSettled(() => {
     void loadHarnesses();
     void loadAccounts(true);
     void loadCustomAgents();
   });
-  createEffect(on(() => state.epoch, () => {
+  createEffect(() => state.epoch, () => {
     void loadHarnesses();
     void loadAccounts(true);
     void loadCustomAgents();
-  }, { defer: true }));
+  }, { defer: true });
 
   // Custom agents have their own card.
   const rows = createMemo(() => visibleHarnesses().filter((d) => !isCustomAcp(d.id)));
@@ -261,7 +223,7 @@ function ProviderRow(props: { descriptor: HarnessDescriptor; enabledCount: numbe
           class="st-icon-action"
           data-size="md"
           aria-label={`${name()} preferences`}
-          aria-expanded={canExpand() ? open() : undefined}
+          aria-expanded={(canExpand() ? open() : undefined) == null ? undefined : (canExpand() ? open() : undefined) ? "true" : "false"}
           disabled={!canExpand()}
           onClick={() => props.onToggleDetails()}
         >
@@ -337,7 +299,7 @@ function AgentOptions(props: { harness: string }) {
     <Show when={update()}>
       {(u) => (
         <div style={{ display: "flex", "flex-direction": "column", gap: "8px" }}>
-          <button type="button" class="st-options-toggle" aria-expanded={open()} aria-label={t("native-agent_options", "Agent options")} onClick={() => setOpen(!open())}>
+          <button type="button" class="st-options-toggle" aria-expanded={(open()) ? "true" : "false"} aria-label={t("native-agent_options", "Agent options")} onClick={() => setOpen(!open())}>
             <Icon name={open() ? "alt-arrow-down" : "alt-arrow-right"} size={14} />
             <span class="st-row-text">
               <span class="st-row-title">Agent options</span>
@@ -521,7 +483,7 @@ function AccountRow(props: { account: AgentAccount; blocked: boolean; onRemove: 
       data-active={a().active ? "true" : undefined}
       data-switchable={canSwitch() ? "true" : undefined}
       title={canSwitch() ? "Switch to this account" : undefined}
-      aria-busy={busy()}
+      aria-busy={(busy()) ? "true" : "false"}
       onClick={(event) => {
         if (canSwitch() && !(event.target as HTMLElement).closest("button")) void accountAction(a(), "switch");
       }}
@@ -588,7 +550,7 @@ function AccountRow(props: { account: AgentAccount; blocked: boolean; onRemove: 
 
 function RemoveDialog(props: { account: AgentAccount | null; onClose: () => void }) {
   const [last, setLast] = createSignal<AgentAccount | null>(null);
-  createEffect(() => props.account && setLast(props.account));
+  createEffect(() => props.account, () => { void (props.account && setLast(props.account)); });
   const account = () => props.account ?? last();
   return (
     <SettingsDialog

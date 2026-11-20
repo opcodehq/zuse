@@ -1,11 +1,10 @@
 // Remote access data for Settings → Devices. Area-only: read from the engine on demand, never cached
 // across connections, and refreshed after every action instead of being patched locally.
-import { createRoot, createEffect, on } from "solid-js";
-import { createStore, reconcile } from "solid-js/store";
 import { onConnected, rpc } from "@/core/connection";
 import { M } from "@/core/methods";
 import { RpcError } from "@/core/rpc";
 import { state } from "@/core/store";
+import { createEffect, createRoot, createStore, reconcile } from "solid-js";
 
 export interface Peer {
   id: string;
@@ -73,7 +72,7 @@ export async function refresh() {
   const mine = ++generation;
   const epoch = state.epoch;
   const current = () => mine === generation && epoch === state.epoch;
-  setRemote("loading", true);
+  setRemote(draft => { draft["loading"] = true; });
   const settle = <T,>(promise: Promise<T>) => promise.then((value) => ({ ok: true as const, value }), (error: unknown) => ({ ok: false as const, error }));
   const [network, peers, relay, direct] = await Promise.all([
     settle(rpc.call<Json>(M.BROWSER_ACCESS_STATUS)),
@@ -83,15 +82,15 @@ export async function refresh() {
   ]);
   if (!current()) return;
   const errors: string[] = [];
-  if (network.ok) setRemote({ network: network.value, networkKnown: true });
+  if (network.ok) setRemote(draft => { Object.assign(draft, { network: network.value, networkKnown: true }); });
   else {
-    setRemote("networkKnown", false);
+    setRemote(draft => { draft["networkKnown"] = false; });
     errors.push(message(network.error));
   }
-  if (peers.ok) setRemote("peers", reconcile(Array.isArray(peers.value) ? peers.value : [], { key: "id" }));
+  if (peers.ok) setRemote(draft => { { const next = Array.isArray(peers.value) ? peers.value : []; if (draft["peers"] == null) draft["peers"] = next; else reconcile(next, "id")(draft["peers"]); } });
   else errors.push(message(peers.error));
-  if (relay.ok) setRemote("relay", relay.value);
-  if (direct.ok) setRemote("direct", direct.value);
+  if (relay.ok) setRemote(draft => { draft["relay"] = relay.value; });
+  if (direct.ok) setRemote(draft => { draft["direct"] = direct.value; });
   if (signedIn()) {
     const [environments, saved, devices] = await Promise.all([
       settle(rpc.call<{ environments?: Json[] }>(M.LIST_ACCOUNT_ENVIRONMENTS)),
@@ -99,16 +98,16 @@ export async function refresh() {
       settle(rpc.call<{ clients?: Json[] }>(M.LIST_ACCOUNT_DEVICES)),
     ]);
     if (!current()) return;
-    if (environments.ok) setRemote("environments", reconcile(environments.value.environments ?? []));
+    if (environments.ok) setRemote(draft => { { const next = environments.value.environments ?? []; if (draft["environments"] == null) draft["environments"] = next; else reconcile(next)(draft["environments"]); } });
     else errors.push(message(environments.error));
-    if (saved.ok) setRemote("saved", reconcile(saved.value.computers ?? []));
+    if (saved.ok) setRemote(draft => { { const next = saved.value.computers ?? []; if (draft["saved"] == null) draft["saved"] = next; else reconcile(next)(draft["saved"]); } });
     else errors.push(message(saved.error));
-    if (devices.ok) setRemote("accountDevices", reconcile(devices.value.clients ?? []));
+    if (devices.ok) setRemote(draft => { { const next = devices.value.clients ?? []; if (draft["accountDevices"] == null) draft["accountDevices"] = next; else reconcile(next)(draft["accountDevices"]); } });
     else errors.push(message(devices.error));
   } else {
-    setRemote({ environments: [], saved: [], accountDevices: [] });
+    setRemote(draft => { Object.assign(draft, { environments: [], saved: [], accountDevices: [] }); });
   }
-  setRemote({ loading: false, loadError: errors[0] ?? null });
+  setRemote(draft => { Object.assign(draft, { loading: false, loadError: errors[0] ?? null }); });
 }
 
 /**
@@ -118,20 +117,19 @@ export async function refresh() {
 export async function act<T = Json>(method: string, params: Json = {}): Promise<T | undefined> {
   if (remote.busy || state.connection.kind !== "connected") return undefined;
   generation++;
-  setRemote({ busy: method, error: null });
+  setRemote(draft => { Object.assign(draft, { busy: method, error: null }); });
   try {
     const value = await rpc.call<T>(method, params);
     return value;
   } catch (error) {
-    setRemote(
-      "error",
-      error instanceof RpcError && error.outcomeUnknown
+    setRemote(draft => {
+      draft["error"] = error instanceof RpcError && error.outcomeUnknown
         ? "The change may have completed before the connection closed. Check its current state before trying again."
-        : message(error),
-    );
+        : message(error);
+    });
     return undefined;
   } finally {
-    setRemote("busy", null);
+    setRemote(draft => { draft["busy"] = null; });
     void refresh();
   }
 }
@@ -152,32 +150,28 @@ export async function createInvitation(label: string) {
   // Browsers pair only over HTTPS or on the computer itself; plain LAN routes suit apps.
   const browser = reply.browserOrigin ?? (app && (app.startsWith("https:") || loopback(app)) ? app : null);
   if (!browser && !app) {
-    setRemote("error", "The invitation was created, but its connection URL is unavailable. Turn on one of the connections above before sharing it.");
+    setRemote(draft => { draft["error"] = "The invitation was created, but its connection URL is unavailable. Turn on one of the connections above before sharing it."; });
     return;
   }
-  setRemote("invitation", {
-    browserLink: browser ? join(browser) : null,
-    appLink: app && app !== browser ? join(app) : null,
-    selfSigned: reply.browserOrigin ? reply.browserSelfSigned === true : false,
+  setRemote(draft => {
+    draft["invitation"] = {
+      browserLink: browser ? join(browser) : null,
+      appLink: app && app !== browser ? join(app) : null,
+      selfSigned: reply.browserOrigin ? reply.browserSelfSigned === true : false,
+    };
   });
 }
 
 export function clearInvitation() {
-  setRemote("invitation", null);
+  setRemote(draft => { draft["invitation"] = null; });
 }
 
 createRoot(() => {
   // A new connection or account invalidates everything shown; nothing carries over.
-  createEffect(
-    on(
-      () => [state.epoch, accountUser()?.id] as const,
-      () => {
-        generation++;
-        setRemote({ environments: [], saved: [], accountDevices: [], invitation: null, busy: null, error: null, loadError: null });
-      },
-      { defer: true },
-    ),
-  );
+  createEffect(() => [state.epoch, accountUser()?.id] as const, () => {
+    generation++;
+    setRemote(draft => { Object.assign(draft, { environments: [], saved: [], accountDevices: [], invitation: null, busy: null, error: null, loadError: null }); });
+  }, { defer: true });
 });
 
-onConnected(() => rpc.subscribe<Json>(M.WATCH_MANAGED_HOST, {}, (host) => setRemote("host", host), () => setRemote("host", null)));
+onConnected(() => rpc.subscribe<Json>(M.WATCH_MANAGED_HOST, {}, (host) => setRemote(draft => { draft["host"] = host; }), () => setRemote(draft => { draft["host"] = null; })));

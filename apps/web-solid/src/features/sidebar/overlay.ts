@@ -1,10 +1,9 @@
 // Pending user intents shown before the engine's watch confirms them, plus the sidebar's small UI
 // state. Never a copy of server data: each intent clears once the watched row agrees, or reverts
 // when the request fails.
-import { createEffect, createRoot, createSignal } from "solid-js";
-import { createStore } from "solid-js/store";
 import type { Chat } from "@/core/protocol";
 import { state } from "@/core/store";
+import { createEffect, createRoot, createSignal, createStore } from "solid-js";
 
 const [archived, setArchived] = createStore<Record<string, boolean | undefined>>({});
 const [titles, setTitles] = createStore<Record<string, string | undefined>>({});
@@ -19,29 +18,23 @@ export function titleOf(chat: Chat) {
 }
 
 export function overlayArchived(chatId: string, value: boolean | undefined) {
-  setArchived(chatId, value);
+  setArchived(draft => { draft[chatId] = value; });
 }
 
 export function overlayTitle(chatId: string, value: string | undefined) {
-  setTitles(chatId, value);
+  setTitles(draft => { draft[chatId] = value; });
 }
 
 // Drop intents the watch already reflects. Reads only the rows that carry an intent.
 createRoot(() => {
-  createEffect(() => {
-    for (const [id, value] of Object.entries(archived)) {
-      if (value === undefined) continue;
-      const chat = state.chats[id];
-      if (!chat || chat.archived === value) setArchived(id, undefined);
-    }
-  });
-  createEffect(() => {
-    for (const [id, value] of Object.entries(titles)) {
-      if (value === undefined) continue;
-      const chat = state.chats[id];
-      if (!chat || chat.title === value) setTitles(id, undefined);
-    }
-  });
+  createEffect(
+    () => Object.entries(archived).filter(([id, value]) => value !== undefined && (!state.chats[id] || state.chats[id]!.archived === value)).map(([id]) => id),
+    ids => { setArchived(draft => { for (const id of ids) delete draft[id]; }); },
+  );
+  createEffect(
+    () => Object.entries(titles).filter(([id, value]) => value !== undefined && (!state.chats[id] || state.chats[id]!.title === value)).map(([id]) => id),
+    ids => { setTitles(draft => { for (const id of ids) delete draft[id]; }); },
+  );
 });
 
 /** The chat being renamed in place, if any. */

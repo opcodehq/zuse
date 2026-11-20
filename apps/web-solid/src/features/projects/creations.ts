@@ -1,11 +1,10 @@
 // Host-owned project creations, watched per computer like desktop's AppState::watch_project_creations.
-import { createEffect, createRoot, on } from "solid-js";
-import { createStore, reconcile } from "solid-js/store";
 import { onConnected, rpc } from "@/core/connection";
 import { M } from "@/core/methods";
 import type { Subscription } from "@/core/rpc";
 import { state } from "@/core/store";
 import { view } from "@/core/view";
+import { createEffect, createRoot, createStore, reconcile } from "solid-js";
 import { target, unknownMethod } from "./hosts";
 import { samePath } from "./paths";
 import type { ProjectCreation } from "./types";
@@ -27,7 +26,7 @@ function open(key: string) {
   const sub = rpc.subscribe<ProjectCreation[]>(
     M.PROJECT_WATCH,
     params,
-    (rows) => setOperations(key, reconcile(Array.isArray(rows) ? rows : [], { key: "id" })),
+    (rows) => setOperations(draft => { { const next = Array.isArray(rows) ? rows : []; if (draft[key] == null) draft[key] = next; else reconcile(next, "id")(draft[key]); } }),
     (error) => {
       if (live.get(key) !== sub) return;
       live.delete(key);
@@ -63,15 +62,10 @@ export function watchCreations(deviceId: string | null | undefined) {
 
 // Desktop watches the host of whatever is selected.
 createRoot(() => {
-  createEffect(
-    on(
-      () => {
-        const chat = view.selectedChatId ? state.chats[view.selectedChatId] : undefined;
-        return chat?.deviceId ?? draftSpace()?.deviceId;
-      },
-      (deviceId) => deviceId && watchCreations(deviceId),
-    ),
-  );
+  createEffect(() => {
+    const chat = view.selectedChatId ? state.chats[view.selectedChatId] : undefined;
+    return chat?.deviceId ?? draftSpace()?.deviceId;
+  }, (deviceId) => { void (deviceId && watchCreations(deviceId)); });
 });
 
 function draftSpace() {
@@ -115,7 +109,7 @@ export function noteCreation(op: ProjectCreation) {
   const key = keyFor(op.deviceId);
   watchCreations(op.deviceId);
   if (!(operations[key] ?? []).some((existing) => existing.id === op.id))
-    setOperations(key, (rows) => [...(rows ?? []), op]);
+    setOperations(draft => { draft[key] = ((rows) => [...(rows ?? []), op])(draft[key]); });
 }
 
 /** Status line for a creation, as desktop's composer tray words it. */

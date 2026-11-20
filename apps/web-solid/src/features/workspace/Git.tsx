@@ -1,12 +1,12 @@
 // Git controls: stage, commit, push/pull/fetch, branches and pull request creation.
 // Same behaviour as crates/viewport/src/git_controls.rs (rendered by desktop's GitPanel); actions never replay.
-import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { rpc } from "@/core/connection";
 import { M } from "@/core/methods";
 import { RpcError } from "@/core/rpc";
 import { state } from "@/core/store";
 import { Icon } from "@/ui/Icon";
 import { Button, Menu, TextField, Toggle } from "@/ui/primitives";
+import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { Banner, Empty, Loading, statusLetter, statusTone } from "./parts";
 import { emptyGit, errorText, gitPending, setGitSnapshot, setWorkspace, workspace, type Target } from "./store";
 import type { GitFileStatus, GitOperation, GitWorkspace } from "./types";
@@ -80,7 +80,7 @@ export function GitPanel(props: { target: Target }) {
         setPending(null);
         const text = mutation ? "Couldn't confirm the Git action. Check the current status before repeating it." : "Git status timed out. Check your device connection and refresh.";
         if (mutation) setNotice(text);
-        else setWorkspace("git", chatId, (prev) => ({ ...emptyGit(), ...prev, error: text }));
+        else setWorkspace(draft => { draft["git"]![chatId] = ((prev) => ({ ...emptyGit(), ...prev, error: text }))(draft["git"]![chatId]); });
       },
       mutation ? 150_000 : 30_000,
     );
@@ -90,11 +90,11 @@ export function GitPanel(props: { target: Target }) {
         (value) => {
           if (settled) return;
           if (value?.chatId !== chatId) {
-            setWorkspace("git", chatId, (prev) => ({ ...emptyGit(), ...prev, error: "The Git response belongs to another thread." }));
+            setWorkspace(draft => { draft["git"]![chatId] = ((prev) => ({ ...emptyGit(), ...prev, error: "The Git response belongs to another thread." }))(draft["git"]![chatId]); });
             return;
           }
           setGitSnapshot(chatId, value);
-          setWorkspace("git", chatId, "error", null);
+          setWorkspace(draft => { draft["git"]![chatId]!["error"] = null; });
           if (value.createdPullRequestUrl) {
             setCreated(value.createdPullRequestUrl);
             setForm(null);
@@ -109,8 +109,8 @@ export function GitPanel(props: { target: Target }) {
           if (mutation) {
             setNotice(operation?.action === "createPullRequest" ? `${text} Check pull requests before trying Create again.` : text);
             // Like desktop: the pre-action snapshot may be wrong now, so nothing acts on it until Git reports again.
-            setWorkspace("git", chatId, (prev) => ({ ...emptyGit(), ...prev, snapshot: null }));
-          } else setWorkspace("git", chatId, (prev) => ({ ...emptyGit(), ...prev, error: text }));
+            setWorkspace(draft => { draft["git"]![chatId] = ((prev) => ({ ...emptyGit(), ...prev, snapshot: null }))(draft["git"]![chatId]); });
+          } else setWorkspace(draft => { draft["git"]![chatId] = ((prev) => ({ ...emptyGit(), ...prev, error: text }))(draft["git"]![chatId]); });
         },
       )
       .finally(() => {

@@ -1,8 +1,8 @@
 // Small pure helpers shared by the sidebar modules.
-import { createSignal } from "solid-js";
-import { toast } from "@/ui/primitives";
-import { writeClipboard } from "@/ui/clipboard";
 import { RpcError } from "@/core/rpc";
+import { writeClipboard } from "@/ui/clipboard";
+import { toast } from "@/ui/primitives";
+import { createSignal } from "solid-js";
 
 // Reads are exact; the tick only re-runs readers so ages advance while nothing else changes.
 const [tick, setTick] = createSignal(0);
@@ -16,8 +16,8 @@ export const time = (iso: string | null | undefined) => {
   return Number.isNaN(value) ? 0 : value;
 };
 
-export { timeAgo, uuid } from "@/core/util";
-export { harnessIcon, harnessTint } from "@/ui/harness";
+export { timeAgo,uuid } from "@/core/util";
+export { harnessIcon,harnessTint } from "@/ui/harness";
 
 /** "+1.2K" style line counts. */
 export function compactCount(count: number) {

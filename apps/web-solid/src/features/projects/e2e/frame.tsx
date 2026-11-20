@@ -1,18 +1,18 @@
 // Test-only frame for projects.e2e.mjs: the core plus this area, so other areas cannot interfere.
-import { render } from "solid-js/web";
-import { Match, Switch } from "solid-js";
-import "@/ui/tokens.css";
-import "@/ui/primitives.css";
-import "@/features/settings/settings.css";
-import "@/shell/theme";
 import "@/core/chat";
 import { start } from "@/core/connection";
 import { state } from "@/core/store";
 import * as viewModule from "@/core/view";
-import { NewProject, ProjectArchive, ProjectActions, ProjectCreationNotice } from "@/features/projects";
-import { ToastRegion } from "@/ui/primitives";
+import { NewProject, ProjectActions, ProjectArchive, ProjectCreationNotice } from "@/features/projects";
 import * as actions from "@/features/projects/actions";
 import * as setupModule from "@/features/projects/setup";
+import "@/features/settings/settings.css";
+import "@/shell/theme";
+import { ToastRegion } from "@/ui/primitives";
+import "@/ui/primitives.css";
+import "@/ui/tokens.css";
+import { render } from "@solidjs/web";
+import { Match, Switch } from "solid-js";
 
 const { view } = viewModule;
 (window as unknown as { __zuse: unknown }).__zuse = { state, view, viewModule, actions, setupModule };

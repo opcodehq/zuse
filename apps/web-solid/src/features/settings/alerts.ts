@@ -1,12 +1,12 @@
 // App-wide effects of Settings: session sounds, browser notifications, agent update notices and reduced motion.
-import { createEffect, createRoot, createSignal, on } from "solid-js";
 import { state } from "@/core/store";
 import { openChat } from "@/core/view";
 import { toast } from "@/ui/primitives";
+import { createEffect, createRoot, createSignal } from "solid-js";
 import { data } from "./data";
+import { cliName } from "./harness";
 import { pref } from "./prefs";
 import { playAttention, playCompletion, playRequest } from "./sound";
-import { cliName } from "./harness";
 
 const STALE_MS = 45_000;
 type Indicator = "none" | "working" | "awaitingInput" | "errored";
@@ -36,10 +36,10 @@ function cueSince(next: Baseline, prev: Baseline): Cue | null {
 const COPY: Record<Cue, string> = { attention: "Run failed", request: "Needs your input", done: "Finished" };
 const RANK: Record<Cue, number> = { attention: 3, request: 2, done: 1 };
 
-function notify(cue: Cue, chatId: string) {
-  if (!pref("browserNotifications") || typeof Notification === "undefined" || Notification.permission !== "granted") return;
-  if (pref("notifyInBackgroundOnly") && document.visibilityState === "visible" && document.hasFocus()) return;
-  const title = state.chats[chatId]?.title?.trim() || "Untitled chat";
+function notify(cue: Cue, chatId: string, browser: boolean, background: boolean, chatTitle?: string | null) {
+  if (!browser || typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  if (background && document.visibilityState === "visible" && document.hasFocus()) return;
+  const title = chatTitle?.trim() || "Untitled chat";
   try {
     const note = new Notification(title, { body: COPY[cue], tag: `zuse-${chatId}`, silent: true });
     note.onclick = () => {
@@ -75,59 +75,57 @@ export const systemReducedMotion = systemReduced;
 createRoot(() => {
   const baselines = new Map<string, Baseline>();
   let epoch = -1;
-  createEffect(() => {
-    const now = Date.now();
-    const sessions = Object.values(state.sessions) as unknown as Record<string, unknown>[];
+  createEffect(() => ({
+    epoch: state.epoch,
+    sessions: Object.values(state.sessions).map(session => ({ id: session.chatId, next: baseline(session as unknown as Record<string, unknown>, Date.now()), child: !!state.chats[session.chatId]?.parentChatId })),
+    sounds: pref("sessionSounds"), completion: pref("completionSound"), preset: pref("completionPreset"), input: pref("inputSound"), attention: pref("attentionSound"),
+    browser: pref("browserNotifications"), background: pref("notifyInBackgroundOnly"),
+    titles: Object.fromEntries(Object.values(state.chats).map(chat => [chat.id, chat.title])),
+  }), (value) => {
     // A reconnect replays every row; treat it as a new baseline, never as fresh events.
-    const replay = epoch !== state.epoch;
-    epoch = state.epoch;
+    const replay = epoch !== value.epoch;
+    epoch = value.epoch;
     let strongest: Cue | null = null;
     const seen = new Set<string>();
-    for (const session of sessions) {
-      const chatId = String(session.chatId);
+    for (const session of value.sessions) {
+      const chatId = session.id;
       seen.add(chatId);
-      const next = baseline(session, now);
+      const next = session.next;
       const prev = baselines.get(chatId);
       baselines.set(chatId, next);
       if (replay || !prev) continue;
       let cue = cueSince(next, prev);
-      if (cue === "done" && state.chats[chatId]?.parentChatId) cue = null;
+      if (cue === "done" && session.child) cue = null;
       if (!cue) continue;
-      notify(cue, chatId);
+      notify(cue, chatId, value.browser, value.background, value.titles[chatId]);
       if (!strongest || RANK[cue] > RANK[strongest]) strongest = cue;
     }
     for (const chatId of [...baselines.keys()]) if (!seen.has(chatId)) baselines.delete(chatId);
     // One cue per snapshot, however many chats changed together.
-    if (!strongest || !pref("sessionSounds")) return;
-    if (strongest === "done" && pref("completionSound")) playCompletion(pref("completionPreset"));
-    if (strongest === "request" && pref("inputSound")) playRequest();
-    if (strongest === "attention" && pref("attentionSound") && Date.now() - lastAttention >= ATTENTION_GAP_MS) {
+    if (!strongest || !value.sounds) return;
+    if (strongest === "done" && value.completion) playCompletion(value.preset);
+    if (strongest === "request" && value.input) playRequest();
+    if (strongest === "attention" && value.attention && Date.now() - lastAttention >= ATTENTION_GAP_MS) {
       lastAttention = Date.now();
       playAttention();
     }
   });
 
   const announced = new Set<string>();
-  createEffect(
-    on(
-      () => data.updates,
-      (rows) => {
-        for (const row of rows ?? []) {
-          const key = `${row.harness}@${row.latestVersion ?? ""}`;
-          if (row.phase !== "available" || announced.has(key)) continue;
-          announced.add(key);
-          if (pref("providerUpdateNotifications")) {
-            const name = (state.harnesses.find((h) => h.id === row.harness)?.name as string | undefined) ?? cliName(row.harness);
-            toast(`${name} ${row.latestVersion ? `v${row.latestVersion}` : "update"} is available. Update it in Settings → Providers.`);
-          }
-        }
-      },
-    ),
-  );
+  createEffect(() => data.updates, (rows) => {
+    for (const row of rows ?? []) {
+      const key = `${row.harness}@${row.latestVersion ?? ""}`;
+      if (row.phase !== "available" || announced.has(key)) continue;
+      announced.add(key);
+      if (pref("providerUpdateNotifications")) {
+        const name = (state.harnesses.find((h) => h.id === row.harness)?.name as string | undefined) ?? cliName(row.harness);
+        toast(`${name} ${row.latestVersion ? `v${row.latestVersion}` : "update"} is available. Update it in Settings → Providers.`);
+      }
+    }
+  });
 
-  createEffect(() => {
-    const choice = pref("reduceMotion");
-    if (choice === "on" || (choice === "system" && systemReduced())) document.documentElement.dataset.reduceMotion = "on";
+  createEffect(() => [pref("reduceMotion"), systemReduced()] as const, ([choice, system]) => {
+    if (choice === "on" || (choice === "system" && system)) document.documentElement.dataset.reduceMotion = "on";
     else delete document.documentElement.dataset.reduceMotion;
   });
 });

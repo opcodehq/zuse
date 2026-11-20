@@ -51,19 +51,19 @@ function controllerFactory(choice: Choice): () => Transport | Promise<Transport>
 }
 
 function usePaired(link: string) {
-  setArea({ mode: "paired", origin: describeLink(link)?.origin ?? location.origin });
+  setArea(draft => { Object.assign(draft, { mode: "paired", origin: describeLink(link)?.origin ?? location.origin }); });
   setTransportFactory(() => new PairedTransport(link), { ownerSession: false });
 }
 
 function useAccount(target: AccountTarget, controller: () => Transport | Promise<Transport>) {
-  setArea({ mode: "account", account: target, origin: "" });
+  setArea(draft => { Object.assign(draft, { mode: "account", account: target, origin: "" }); });
   setTransportFactory(
     () => {
       const transport = new AccountTransport(target, controller);
       const open = transport.open.bind(transport);
       transport.open = async () => {
         await open();
-        setArea("origin", transport.origin);
+        setArea(draft => { draft["origin"] = transport.origin; });
       };
       return transport;
     },
@@ -82,7 +82,7 @@ function install() {
       error instanceof Error && error.message.startsWith("Return to the controller")
         ? error.message
         : "This computer link is invalid. Open the computer again from your controller.";
-    setArea({ mode: "account" });
+    setArea(draft => { Object.assign(draft, { mode: "account" }); });
     setTransportFactory(() => Promise.reject(new ConnectionBlocked({ kind: "accountRequired", message })), { ownerSession: false });
     return;
   }
@@ -96,11 +96,11 @@ function install() {
     case "paired":
       return usePaired(choice.link);
     case "invalid":
-      setArea({ mode: "paired" });
+      setArea(draft => { Object.assign(draft, { mode: "paired" }); });
       setTransportFactory(() => Promise.reject(new ConnectionBlocked(choice.status)), { ownerSession: false });
       return;
     case "fragment": {
-      setArea({ mode: "paired", origin: choice.origin });
+      setArea(draft => { Object.assign(draft, { mode: "paired", origin: choice.origin }); });
       let link: string | null = null;
       setTransportFactory(
         async () => {

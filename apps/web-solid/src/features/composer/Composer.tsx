@@ -1,5 +1,4 @@
 // The chat composer: landing heading, context and queue trays, the editor card and its toolbar.
-import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show } from "solid-js";
 import { rpc } from "@/core/connection";
 import { registerShortcut } from "@/core/keys";
 import { M } from "@/core/methods";
@@ -7,19 +6,19 @@ import { state } from "@/core/store";
 import { navigate, view } from "@/core/view";
 import { openShortcuts } from "@/features/extras/overlay";
 import { Icon } from "@/ui/Icon";
+import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
 import { catalog, draftSpace, resolve, selectedChat, setCatalog, spaceName } from "./catalog";
 import { readableDraft } from "./completion";
+import "./composer.css";
 import { AccessPicker, AddMenu, ContextRing, PlanChip, PluginsButton, SendKey, type SendMode } from "./Controls";
-import { draftFor, focusComposer, setDraft } from "./drafts";
+import { composer, draftFor, focusComposer, setDraft } from "./drafts";
 import { Editor, type EditorApi } from "./Editor";
+import { composerFlash, ComposerList, composerList, listKeyDown, mac, searchHistory, showFlash, StashButton, stashDraft, stashKeys } from "./Lists";
 import { cycleReasoning, ModelPill, openModelPicker, toggleFastMode } from "./ModelPicker";
 import { cancelQueueEdit, commitQueueEdit, queueEdit } from "./queueEdit";
 import { draftKey, hasContent, interrupt, runLive, runWorkspaceCommand, sendBlocked, stageFiles, submit } from "./send";
 import { ContextRow } from "./Targets";
 import { activateFirstQueued, TrayPill, TrayRows } from "./Tray";
-import { composer } from "./drafts";
-import { ComposerList, composerFlash, composerList, listKeyDown, mac, searchHistory, showFlash, stashDraft, StashButton, stashKeys } from "./Lists";
-import "./composer.css";
 
 const NARROW = 440;
 const ATTACHMENT_TRAILER = /\n\nAttached images \(local files[^\n]*\):\n[\s\S]*$/;
@@ -38,7 +37,7 @@ function sentPrompts(): string[] {
 export function Composer() {
   const landing = () => !view.selectedChatId;
   return (
-    <div class="cmp-root" data-landing={landing()}>
+    <div class="cmp-root" data-landing={(landing()) ? "true" : "false"}>
       <Show when={selectedChat()?.archived} fallback={<Live />}>
         <ArchivedFooter />
       </Show>
@@ -47,7 +46,7 @@ export function Composer() {
 }
 
 const startWithoutProject = () => {
-  setCatalog("draft", "noProject", true);
+  setCatalog(draft => { draft["draft"]!["noProject"] = true; });
   focusComposer();
 };
 
@@ -92,7 +91,7 @@ function Live() {
 
   // Up/Down recall of sent prompts while the draft is empty or still a recalled prompt.
   let recall: { index: number; text: string } | null = null;
-  createEffect(on(() => view.selectedChatId, () => (recall = null)));
+  createEffect(() => view.selectedChatId, () => { void ((recall = null)); });
 
   const send = (steer = false) => {
     // An open stash or search owns Enter; the send key must not send its query.
@@ -195,21 +194,24 @@ function Live() {
     else activateFirstQueued();
   };
 
-  onMount(() => {
+  onSettled(() => {
+    const cleanups: (() => void)[] = [];
     const disposers = [
       registerShortcut({ keys: "alt+p", label: "Switch model", inInputs: true, run: openModelPicker }),
       registerShortcut({ keys: "alt+t", label: "Change reasoning effort", inInputs: true, run: cycleReasoning }),
       registerShortcut({ keys: "alt+o", label: "Toggle fast mode", inInputs: true, run: toggleFastMode }),
     ];
-    onCleanup(() => disposers.forEach((dispose) => dispose()));
+    cleanups.push(() => disposers.forEach((dispose) => dispose()));
     if (card) {
       const observer = new ResizeObserver(([entry]) => setNarrow((entry?.contentRect.width ?? NARROW) < NARROW));
       observer.observe(card);
-      onCleanup(() => observer.disconnect());
+      cleanups.push(() => observer.disconnect());
     }
+
+    return () => cleanups.forEach(cleanup => cleanup());
   });
   // Opening a chat or the new-chat canvas puts the caret in the composer.
-  createEffect(on(() => view.selectedChatId, () => queueMicrotask(() => editor?.focus())));
+  createEffect(() => view.selectedChatId, () => queueMicrotask(() => editor?.focus()));
 
   const hasFiles = (event: DragEvent) => Array.from(event.dataTransfer?.types ?? []).includes("Files");
   let dragDepth = 0;
@@ -285,7 +287,7 @@ function Live() {
           <div
             ref={card}
             class="cmp-card"
-            data-drop={dragging()}
+            data-drop={(dragging()) ? "true" : "false"}
             data-drop-label="Drop files to attach"
             onMouseDown={(event) => {
               // Padding and the toolbar's empty space belong to the text field.
@@ -339,7 +341,7 @@ function Live() {
           multiple
           hidden
           aria-hidden="true"
-          tabIndex={-1}
+          tabindex={-1}
           onChange={(event) => {
             const files = Array.from(event.currentTarget.files ?? []);
             event.currentTarget.value = "";

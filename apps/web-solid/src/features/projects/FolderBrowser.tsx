@@ -1,37 +1,13 @@
 // Browse a computer's folders: devices, then locations, then folders, with Home-wide search.
-import { createEffect, createMemo, For, Match, on, Show, Switch } from "solid-js";
-import { state } from "@/core/store";
 import type { Device } from "@/core/protocol";
+import { state } from "@/core/store";
 import { Icon } from "@/ui/Icon";
 import { Menu } from "@/ui/primitives";
+import { createEffect, createMemo, For, Match, Show, Switch } from "solid-js";
 import { deviceGlyph, deviceOnline } from "./hosts";
 import { GroupLabel, Highlight, KeyCaps, KeyHint, Row, VirtualList } from "./Palette";
 import { breadcrumbs, pathUnder, samePath } from "./paths";
-import {
-  acceptCompletion,
-  backTo,
-  browserDevices,
-  browserLocations,
-  cancelNewFolder,
-  closeBrowser,
-  closeSetup,
-  completion,
-  createFolder,
-  descend,
-  type FolderRow,
-  folderRows,
-  goUp,
-  gotoLocation,
-  loadFolders,
-  openActive,
-  pickDevice,
-  setBrowserActive,
-  setBrowserQuery,
-  setNewFolderName,
-  setup,
-  startNewFolder,
-  submitBrowser,
-} from "./setup";
+import { acceptCompletion, backTo, browserDevices, browserLocations, cancelNewFolder, closeBrowser, closeSetup, completion, createFolder, descend, type FolderRow, folderRows, gotoLocation, goUp, loadFolders, openActive, pickDevice, setBrowserActive, setBrowserQuery, setNewFolderName, setup, startNewFolder, submitBrowser, } from "./setup";
 import { readyValue } from "./types";
 
 type Entry =
@@ -73,12 +49,7 @@ export function FolderBrowser() {
   });
   const placeholder = () => (b().step === "devices" ? "Search devices…" : b().step === "locations" ? "Search locations…" : "Search folders…");
 
-  createEffect(
-    on(
-      () => [b().step, b().browserPath, b().newFolder === null] as const,
-      () => queueMicrotask(() => !setup.browser?.newFolder && input?.focus()),
-    ),
-  );
+  createEffect(() => [b().step, b().browserPath, b().newFolder === null] as const, () => queueMicrotask(() => !setup.browser?.newFolder && input?.focus()));
 
   const onKeyDown = (event: KeyboardEvent) => {
     const el = event.currentTarget as HTMLInputElement;
@@ -161,7 +132,7 @@ export function FolderBrowser() {
             aria-controls="pj-browser-list"
             aria-activedescendant={activeEntry() !== undefined ? `pj-browser-${activeEntry()}` : undefined}
             autocomplete="off"
-            spellcheck={false}
+            spellcheck="false"
             onInput={(e) => setBrowserQuery(e.currentTarget.value)}
             onKeyDown={onKeyDown}
           />
@@ -455,12 +426,7 @@ function Crumbs() {
     }
     return out;
   });
-  createEffect(
-    on(
-      () => crumbs().map((c) => c.name).join("/"),
-      () => queueMicrotask(() => strip && (strip.scrollLeft = strip.scrollWidth)),
-    ),
-  );
+  createEffect(() => crumbs().map((c) => c.name).join("/"), () => queueMicrotask(() => strip && (strip.scrollLeft = strip.scrollWidth)));
   const backLabel = () => (b().step === "devices" ? (b().purpose === "parent" ? "Back to project" : "Back to New project") : "Back");
   return (
     <div class="pj-crumbs">

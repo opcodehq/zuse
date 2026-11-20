@@ -1,16 +1,16 @@
 // Settings → Devices: remote access to this computer, connect links, other computers, connected
 // and account devices, direct and relay routes, and the device registry. Mirrors crates/ui
 // settings/devices.rs, pairing.rs and managed_access.rs; browser-only rows come from the web client.
-import { createEffect, createSignal, For, on, onCleanup, Show } from "solid-js";
-import { M } from "@/core/methods";
 import { rpc } from "@/core/connection";
-import { state } from "@/core/store";
+import { M } from "@/core/methods";
 import type { Device } from "@/core/protocol";
+import { state } from "@/core/store";
 import { Icon } from "@/ui/Icon";
-import { Toggle, toast } from "@/ui/primitives";
+import { toast, Toggle } from "@/ui/primitives";
+import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { openAccountComputer, returnToController } from "./account";
-import { forget, forgetCurrent, linkFor, openInThisTab, savedComputers } from "./computers";
 import { addComputer } from "./add";
+import { forget, forgetCurrent, linkFor, openInThisTab, savedComputers } from "./computers";
 import { accountUser, act, clearInvitation, createInvitation, refresh, remote, setRemote, type Peer } from "./remote";
 import { AccountSignIn } from "./signin";
 import { area, routeLine } from "./status";
@@ -24,11 +24,11 @@ const nowSeconds = () => Math.floor(Date.now() / 1000);
 export function DevicesSettings() {
   const [dialog, setDialog] = createSignal<DialogKind | null>(null);
   const [advanced, setAdvanced] = createSignal(false);
-  createEffect(on(() => [state.epoch, state.connection.kind === "connected", accountUser()?.id] as const, () => void refresh()));
+  createEffect(() => [state.epoch, state.connection.kind === "connected", accountUser()?.id] as const, () => { void (void refresh()); });
   const busy = () => remote.busy !== null;
   const open = (kind: DialogKind) => {
     if (busy()) return;
-    setRemote("error", null);
+    setRemote(draft => { draft["error"] = null; });
     setDialog(kind);
   };
   const close = () => {
@@ -37,7 +37,7 @@ export function DevicesSettings() {
     clearInvitation();
   };
   // A new connection may reach a different engine state; desktop drops open remote dialogs too.
-  createEffect(on(() => state.epoch, () => setDialog(null), { defer: true }));
+  createEffect(() => state.epoch, () => { void (setDialog(null)); }, { defer: true });
 
   return (
     <div class="cx cx-page">
@@ -58,7 +58,7 @@ export function DevicesSettings() {
           <DirectRows />
         </Frame>
         <div class="cx-more">
-          <Btn aria-expanded={advanced()} onClick={() => setAdvanced(!advanced())}>
+          <Btn aria-expanded={(advanced()) ? "true" : "false"} onClick={() => setAdvanced(!advanced())}>
             {advanced() ? "Hide advanced" : "Advanced connection settings"}
           </Btn>
         </div>
@@ -93,7 +93,7 @@ function ServeMethod(props: { open: (kind: DialogKind) => void }) {
   };
   return (
     <MethodRow glyph="remote-server" title="Zuse Serve" text={text()}>
-      <Btn size="method" aria-disabled={remote.busy !== null} onClick={() => props.open(configured() ? "unlink" : "setup")}>
+      <Btn size="method" aria-disabled={(remote.busy !== null) ? "true" : "false"} onClick={() => props.open(configured() ? "unlink" : "setup")}>
         {remote.busy === M.LINK_MANAGED_HOST || remote.busy === M.UNLINK_MANAGED_HOST ? "Updating…" : configured() ? "Turn off" : "Set up"}
       </Btn>
     </MethodRow>
@@ -181,7 +181,7 @@ function ComputersCard(props: { open: (kind: DialogKind) => void }) {
               try {
                 openAccountComputer({ environmentId: id(), expectedSubject: subject, label: label() });
               } catch (error) {
-                setRemote("error", error instanceof Error ? error.message : "Could not open computer tab");
+                setRemote(draft => { draft["error"] = error instanceof Error ? error.message : "Could not open computer tab"; });
               }
             };
             return (
@@ -213,7 +213,7 @@ function ComputersCard(props: { open: (kind: DialogKind) => void }) {
 
 async function forgetSaved(environmentId: string) {
   const reply = await act<{ computers?: Record<string, unknown>[] }>(M.FORGET_ACCOUNT_ROUTE, { environmentId, expectedSubject: accountUser()?.id ?? "" });
-  if (reply?.computers) setRemote("saved", reply.computers);
+  if (reply?.computers) setRemote(draft => { draft["saved"] = reply.computers!; });
 }
 
 /* Devices that paired with this computer. */
@@ -506,10 +506,10 @@ function RenameDialog(props: { device: Device | null; onClose: () => void }) {
   const [name, setName] = createSignal("");
   const [error, setError] = createSignal<string | null>(null);
   const [busy, setBusy] = createSignal(false);
-  createEffect(on(() => props.device, (device) => {
+  createEffect(() => props.device, (device) => {
     setName(device?.name ?? "");
     setError(null);
-  }));
+  });
   const save = async (event?: Event) => {
     event?.preventDefault();
     const device = props.device;
@@ -601,7 +601,7 @@ function NetworkDialog(props: { open: boolean; onClose: () => void }) {
 function InvitationDialog(props: { open: boolean; onClose: () => void }) {
   const [name, setName] = createSignal("");
   const [error, setError] = createSignal<string | null>(null);
-  createEffect(on(() => props.open, (open) => open && (setName(""), setError(null))));
+  createEffect(() => props.open, (open) => { void (open && (setName(""), setError(null))); });
   const create = async (event?: Event) => {
     event?.preventDefault();
     if (!name().trim()) return setError("Enter a name for the device you want to pair.");
@@ -666,7 +666,7 @@ function ComputerDialog(props: { open: boolean; onClose: () => void }) {
   const [value, setValue] = createSignal("");
   const [error, setError] = createSignal<string | null>(null);
   const [busy, setBusy] = createSignal(false);
-  createEffect(on(() => props.open, (open) => open && (setValue(""), setError(null))));
+  createEffect(() => props.open, (open) => { void (open && (setValue(""), setError(null))); });
   const connect = async (event?: Event) => {
     event?.preventDefault();
     if (busy()) return;
@@ -704,7 +704,7 @@ function ComputerDialog(props: { open: boolean; onClose: () => void }) {
           aria-invalid={error() ? "true" : undefined}
           placeholder="Paste a private connection link"
           autocomplete="off"
-          spellcheck={false}
+          spellcheck="false"
           value={value()}
           onInput={(e) => setValue(e.currentTarget.value)}
           autofocus

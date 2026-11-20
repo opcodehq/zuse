@@ -1,10 +1,14 @@
+import { flush } from "solid-js";
 // Connection lifecycle: authenticate, open a transport, start the standing watches, reconnect.
-import { batch } from "solid-js";
+
+// Connection lifecycle: authenticate, open a transport, start the standing watches, reconnect.
 import { checkSession, unlockFromLink } from "./auth";
 import { M } from "./methods";
 import { RpcClient, type Subscription } from "./rpc";
 import { applySnapshot, setState, state, type ConnectionStatus } from "./store";
 import { OwnerTransport, type Transport } from "./transport";
+import type { Zapper } from "./zapper-types";
+import { reconcile } from "solid-js";
 
 export const rpc = new RpcClient();
 
@@ -62,14 +66,14 @@ export async function start() {
   if (started) return;
   started = true;
   const unlocked = await unlockFromLink().catch(() => false);
-  if (!unlocked) setState("connection", { kind: "authRequired", message: "This access link is no longer valid." });
+  if (!unlocked) setState(draft => { draft["connection"] = { kind: "authRequired", message: "This access link is no longer valid." }; });
   void loop();
 }
 
 async function loop() {
   for (let attempt = 0; ; attempt++) {
     if (ownerSession && (await checkSession()) === "signedOut") {
-      setState("connection", { kind: "authRequired", message: "Open the access link printed by zuse serve." });
+      setState(draft => { draft["connection"] = { kind: "authRequired", message: "Open the access link printed by zuse serve." }; });
       await sleep(8000);
       continue;
     }
@@ -79,32 +83,36 @@ async function loop() {
       const lost = new Promise<string>((resolve) => (transport.onClose = resolve));
       rpc.attach(transport);
       attempt = 0;
-      batch(() => {
-        setState("epoch", (epoch) => epoch + 1);
-        setState("connection", { kind: "connected" });
-      });
+      (() => {
+        setState(draft => { draft["epoch"] = ((epoch) => epoch + 1)(draft["epoch"]); });
+        setState(draft => { draft["connection"] = { kind: "connected" }; });
+      })();
+      // Watches receive the committed connection epoch and may read connection state.
+      flush();
       active = [];
       for (const watch of [...watches]) run(watch, state.epoch);
       const reason = await lost;
       for (const sub of active) sub.cancel();
       active = [];
       const uncertain = rpc.detach(reason);
-      batch(() => {
-        if (uncertain > 0) setState("uncertainMutation", true);
-        setState("connection", { kind: "reconnecting", attempt: 0, message: reason });
-      });
+      (() => {
+        if (uncertain > 0) setState(draft => { draft["uncertainMutation"] = true; });
+        setState(draft => { draft["connection"] = { kind: "reconnecting", attempt: 0, message: reason }; });
+      })();
     } catch (error) {
       if (error instanceof ConnectionBlocked) {
-        setState("connection", error.status);
+        setState(draft => { draft["connection"] = error.status; });
         await new Promise<void>((resolve) => (unblock = resolve));
         unblock = null;
         attempt = -1;
         continue;
       }
-      setState("connection", {
-        kind: "reconnecting",
-        attempt,
-        message: error instanceof Error ? error.message : "Could not reach the engine",
+      setState(draft => {
+        draft["connection"] = {
+          kind: "reconnecting",
+          attempt,
+          message: error instanceof Error ? error.message : "Could not reach the engine",
+        };
       });
       await sleep(delays[Math.min(attempt, delays.length - 1)]!);
     }
@@ -124,25 +132,46 @@ const sleep = (ms: number) =>
 
 // Standing workspace watches, matching what desktop keeps open.
 onConnected(() => rpc.subscribe(M.WATCH_CHATS, {}, (rows) => {
-  batch(() => {
+  (() => {
     applySnapshot("chats", rows);
-    setState("workspaceSynced", true);
-  });
+    setState(draft => { draft["workspaceSynced"] = true; });
+  })();
 }));
 onConnected(() => rpc.subscribe(M.WATCH_SESSIONS, {}, (rows) => applySnapshot("sessions", rows)));
+onConnected(() => {
+  setState(draft => { draft.zappersReady = false; draft.zappersError = null; });
+  return rpc.subscribe<Zapper[]>(M.CONTROL_WATCH_ZOTS, {}, rows => {
+    setState(draft => {
+      reconcile(rows, "id")(draft.zappers);
+      draft.zappersReady = true;
+      draft.zappersSupported = true;
+      draft.zappersError = null;
+    });
+  }, error => {
+    setState(draft => {
+      draft.zappersReady = true;
+      if (error) {
+        const unsupported = /capability|unknown method|not supported/i.test(error.message);
+        draft.zappersSupported = !unsupported;
+        if (unsupported) draft.zappers = [];
+        draft.zappersError = unsupported ? null : error.message;
+      }
+    });
+  });
+});
 onConnected(() => rpc.subscribe(M.WATCH_SPACES, {}, (rows) => applySnapshot("spaces", rows)));
 onConnected(() => rpc.subscribe(M.WATCH_DEVICES, {}, (rows) => applySnapshot("devices", rows)));
-onConnected(() => rpc.subscribe(M.CLOUD_ACCOUNT_STATUS, {}, (status) => setState("account", status as Record<string, unknown>)));
+onConnected(() => rpc.subscribe(M.CLOUD_ACCOUNT_STATUS, {}, (status) => setState(draft => { draft["account"] = status as Record<string, unknown>; })));
 onConnected(() => {
-  void rpc.call<{ deviceId: string }>(M.LOCAL_DEVICE).then((value) => setState("localDeviceId", value.deviceId), () => {});
-  void rpc.call(M.AUTH_STATUS).then((value) => setState("auth", value), () => {});
+  void rpc.call<{ deviceId: string }>(M.LOCAL_DEVICE).then((value) => setState(draft => { draft["localDeviceId"] = value.deviceId; }), () => {});
+  void rpc.call(M.AUTH_STATUS).then((value) => setState(draft => { draft["auth"] = value; }), () => {});
   void refreshRepos();
   void refreshHarnesses();
 });
 
 export function refreshRepos() {
-  return rpc.call<unknown[]>(M.LIST_REPOS).then((repos) => setState("repos", repos as never), () => {});
+  return rpc.call<unknown[]>(M.LIST_REPOS).then((repos) => setState(draft => { draft["repos"] = repos as never; }), () => {});
 }
 export function refreshHarnesses() {
-  return rpc.call<unknown[]>(M.LIST_HARNESSES).then((rows) => setState("harnesses", rows as never), () => {});
+  return rpc.call<unknown[]>(M.LIST_HARNESSES).then((rows) => setState(draft => { draft["harnesses"] = rows as never; }), () => {});
 }

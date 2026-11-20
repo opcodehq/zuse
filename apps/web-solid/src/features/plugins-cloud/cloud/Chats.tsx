@@ -1,8 +1,8 @@
 // Starting cloud chats, their first-message queue, and the account's live workspaces (crates/viewport/src/cloud.rs, cloud_queue.rs).
-import { createEffect, createMemo, createSignal, For, onMount, Show } from "solid-js";
 import { view } from "@/core/view";
 import { Icon } from "@/ui/Icon";
 import { GlyphSpinner } from "@/ui/loaders";
+import { createEffect, createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { owner } from "../account";
 import { Action, Badge, Group, Row, type BadgeTone } from "../ui";
 import { archiveVisible } from "./Archives";
@@ -16,7 +16,7 @@ const MODES: { value: LaunchDraft["runtimeMode"]; label: string }[] = [
 ];
 
 export function Chats() {
-  onMount(() => {
+  onSettled(() => {
     if (!cloud.context.loaded) void loadContext();
     if (!cloud.workspaces.loaded) void loadWorkspaces();
   });
@@ -46,7 +46,7 @@ function NewChat() {
   const projects = () => cloud.context.projects;
   const project = createMemo(() => projects().find((p) => p.projectId === projectId()) ?? null);
   // Pick the first usable choices once the context arrives; the user's picks are kept after that.
-  createEffect(() => {
+  createEffect(() => [project(), projects().find(prepared), modelKey(), cloud.context.agents[0]?.id, cloud.context.agents[0]?.defaultModel, cloud.context.agents[0]?.models[0]?.id], () => {
     if (!project()) {
       const first = projects().find(prepared);
       if (first) setProjectId(first.projectId);

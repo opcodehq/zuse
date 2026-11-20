@@ -1,11 +1,13 @@
 // Pins and custom sections. The engine's WatchSidebarPreferences row is the truth; queued
 // intents are an overlay projected onto it until the engine acknowledges them, in order.
-import { batch } from "solid-js";
-import { createStore, reconcile } from "solid-js/store";
+
+// Pins and custom sections. The engine's WatchSidebarPreferences row is the truth; queued
+// intents are an overlay projected onto it until the engine acknowledges them, in order.
 import { onConnected, rpc } from "@/core/connection";
 import { M } from "@/core/methods";
 import { RpcError } from "@/core/rpc";
 import { toast } from "@/ui/primitives";
+import { createStore, reconcile } from "solid-js";
 
 export interface SidebarSection {
   id: string;
@@ -67,14 +69,14 @@ function accept(value: unknown) {
   if (!next) return;
   if (!fresh && store.confirmed && next.revision < store.confirmed.revision) return;
   fresh = false;
-  setStore("confirmed", reconcile(next));
+  setStore(draft => { if (draft.confirmed) reconcile(next)(draft.confirmed); else draft.confirmed = next; });
 }
 
 onConnected((current) => {
   epoch = current;
   sending = false;
   fresh = true;
-  setStore("queue", []);
+  setStore(draft => { draft["queue"] = []; });
   return rpc.subscribe(M.WATCH_SIDEBAR_PREFERENCES, {}, accept);
 });
 
@@ -153,19 +155,19 @@ function pump() {
     .then(
       (reply) => {
         if (started !== epoch) return;
-        batch(() => {
+        (() => {
           accept(reply?.sidebarPreferences);
-          setStore("queue", (queue) => queue.slice(1));
-        });
+          setStore(draft => { draft["queue"] = ((queue) => queue.slice(1))(draft["queue"]); });
+        })();
       },
       (error: unknown) => {
         if (started !== epoch) return;
         if (error instanceof RpcError && error.outcomeUnknown) {
           // Its order relative to later intents is unknown; drop them rather than guess.
-          setStore("queue", []);
+          setStore(draft => { draft["queue"] = []; });
           toast("Couldn't confirm sidebar changes. Queued edits were cancelled.", "danger");
         } else {
-          setStore("queue", (queue) => queue.slice(1));
+          setStore(draft => { draft["queue"] = ((queue) => queue.slice(1))(draft["queue"]); });
           toast(`Couldn't save sidebar changes: ${error instanceof Error ? error.message : String(error)}`, "danger");
         }
       },
@@ -182,7 +184,7 @@ export function changePins(change: PinChange) {
     toast("Engine not connected. Sidebar was not changed.", "danger");
     return;
   }
-  setStore("queue", (queue) => [...queue, change]);
+  setStore(draft => { draft["queue"] = ((queue) => [...queue, change])(draft["queue"]); });
   pump();
 }
 

@@ -1,23 +1,24 @@
 // Connection gate: chooses the transport (owner, paired, account), shows connecting, authentication,
 // pairing and reconnect states, and keeps the workspace visible with a banner once it has loaded.
-import "./connection.css";
-import "./target";
-import { For, type JSX, lazy, Match, Show, Switch } from "solid-js";
 import { retryConnection } from "@/core/connection";
 import { setState, state } from "@/core/store";
 import { Icon } from "@/ui/Icon";
 import { Spinner } from "@/ui/primitives";
+import { type JSX } from "@solidjs/web";
+import { For, lazy, Match, Show, Switch } from "solid-js";
 import { returnToController } from "./account";
-import { forgetCurrent, linkFor, openInThisTab, savedComputers, selectedLink } from "./computers";
 import { AddComputer } from "./add";
+import { forgetCurrent, linkFor, openInThisTab, savedComputers, selectedLink } from "./computers";
+import "./connection.css";
 import { retryPaired } from "./paired";
 import { area } from "./status";
+import "./target";
 import { Btn } from "./ui";
 
 // Only Settings → Remote access shows it, so it loads with that page.
 export const DevicesSettings = lazy(() => import("./devices").then((m) => ({ default: m.DevicesSettings })));
-export { AccountSignIn, signInToAccount, signOutOfAccount } from "./signin";
-export { AddComputer, addComputer } from "./add";
+export { AddComputer,addComputer } from "./add";
+export { AccountSignIn,signInToAccount,signOutOfAccount } from "./signin";
 
 const reconnectingText = () =>
   area.mode === "paired" ? "Reconnecting to paired computer…" : area.mode === "account" ? "Reconnecting to account computer…" : "Reconnecting to your engine…";
@@ -72,7 +73,7 @@ function Banners() {
           <div class="cx-banner" data-tone="warning" role="alert">
             <Icon name="danger-triangle" size={14} />
             <span class="cx-banner-text">An action may have completed before the connection closed. Check its current state before trying it again.</span>
-            <Btn size="sm" tone="quiet" onClick={() => setState("uncertainMutation", false)}>Dismiss</Btn>
+            <Btn size="sm" tone="quiet" onClick={() => setState(draft => { draft["uncertainMutation"] = false; })}>Dismiss</Btn>
           </div>
         </Show>
       </div>

@@ -1,19 +1,17 @@
 // Agent, model and effort picker: the toolbar's model pill and its popover.
 // The popover mirrors crates/ui/src/pickers/model_menu.rs with crates/viewport/src/model_picker_style.rs (provider rail,
 // search, grouped rows) and the Advanced footer of crates/ui/src/pickers/compact.rs (fast mode, effort slider).
-import { DropdownMenu } from "@kobalte/core/dropdown-menu";
-import { Popover } from "@kobalte/core/popover";
-import { Tooltip as KTooltip } from "@kobalte/core/tooltip";
-import { createEffect, createMemo, createSignal, For, Index, type JSX, on, Show, untrack } from "solid-js";
 import { navigate } from "@/core/view";
 import { Icon } from "@/ui/Icon";
 import { Spinner, toast } from "@/ui/primitives";
-import { BrandMark, brandIcon } from "./assets";
+import { DropdownMenu } from "@kobalte/core/dropdown-menu";
+import { Popover } from "@kobalte/core/popover";
+import { Tooltip as KTooltip } from "@kobalte/core/tooltip";
+import { type JSX } from "@solidjs/web";
+import { createEffect, createMemo, createSignal, For, onSettled, Show, untrack } from "solid-js";
+import { brandIcon, BrandMark } from "./assets";
+import { catalog, changeConfig, defaults, effortOption, fastModeValues, harnessList, modelList, offeredHarnesses, reasoningLabel, resolve, revalidateCatalog, selectedChat, setCatalog, targetDeviceId, updateDefaults, type HarnessInfo, type Model, type ModelOption, type Resolved, } from "./catalog";
 import { focusComposer } from "./drafts";
-import {
-  catalog, changeConfig, defaults, effortOption, fastModeValues, harnessList, modelList, offeredHarnesses, reasoningLabel, resolve,
-  revalidateCatalog, selectedChat, setCatalog, targetDeviceId, updateDefaults, type HarnessInfo, type Model, type ModelOption, type Resolved,
-} from "./catalog";
 
 const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -27,7 +25,7 @@ let focusModelSearch = () => {};
 // A pick or Escape hands the caret back to the prompt; clicking elsewhere leaves focus there.
 let returnFocus = false;
 /** Open the picker from a shortcut, a slash command or the palette. */
-export const openModelPicker = () => setOpen(true);
+export const openModelPicker = () => { returnFocus = false; setOpen(true); };
 
 function apply(change: Parameters<typeof changeConfig>[0]) {
   changeConfig(change).catch((error) => toast(`Couldn't change chat settings: ${errorText(error)}`, "danger"));
@@ -85,7 +83,7 @@ export function ModelPill() {
   const fast = () => !!fastOf(r())?.on;
   const label = () => r().modelLabel ?? r().harnessInfo?.name ?? (r().noAgents ? "No agents available" : undefined);
   return (
-    <Popover open={open()} onOpenChange={setOpen} placement="top-end" gutter={8}>
+    <Popover open={open()} onOpenChange={next => { if (next) returnFocus = false; setOpen(next); }} placement="top-end" gutter={8}>
       <Popover.Trigger
         class="cmp-model"
         aria-label={label() ? `Model: ${label()}${r().reasoning ? `, ${reasoningLabel(r().reasoning!)} reasoning` : ""}` : "Choose a model"}
@@ -110,12 +108,11 @@ export function ModelPill() {
           aria-label="Model picker"
           onOpenAutoFocus={(event) => {
             event.preventDefault();
-            returnFocus = false;
             focusModelSearch();
             // Untracked: this runs inside the focus scope's effect, which would remount on every catalog change.
             untrack(revalidateCatalog);
           }}
-          onEscapeKeyDown={() => (returnFocus = true)}
+          onEscapeKeyDown={() => { returnFocus = true; setOpen(false); requestAnimationFrame(focusComposer); }}
           onCloseAutoFocus={(event) => {
             if (!returnFocus) return;
             event.preventDefault();
@@ -134,7 +131,7 @@ const isDefaultModel = (harness: string, model: string) => defaults().harness ==
 function makeDefault(row: Row) {
   const r = resolve();
   // On the new-chat canvas the current pick stays put while the default moves.
-  if (!selectedChat() && r.harness) setCatalog("draft", { harness: r.harness, model: r.modelId });
+  if (!selectedChat() && r.harness) setCatalog(draft => { Object.assign(draft["draft"]!, { harness: r.harness, model: r.modelId }); });
   updateDefaults((d) => {
     d.harness = row.harness.id;
     d.models[row.harness.id] = { id: row.model.id, label: row.model.label };
@@ -205,8 +202,8 @@ function PickerBody(props: { close: () => void }) {
     return `${n} ${scope() === null ? (n === 1 ? "MATCH" : "MATCHES") : n === 1 ? "MODEL" : "MODELS"}`;
   };
 
-  createEffect(on(rows, (list) => setActive(Math.max(0, list.findIndex(isSelected)))));
-  createEffect(on(active, (index) => keyboard() && listEl?.querySelector(`[data-index="${index}"]`)?.scrollIntoView({ block: "nearest" })));
+  createEffect(rows, (list) => { void (setActive(Math.max(0, list.findIndex(isSelected)))); });
+  createEffect(active, (index) => { void (keyboard() && listEl?.querySelector(`[data-index="${index}"]`)?.scrollIntoView({ block: "nearest" })); });
   focusModelSearch = () => search?.focus();
   queueMicrotask(() => search?.focus());
 
@@ -216,6 +213,7 @@ function PickerBody(props: { close: () => void }) {
     apply(row.harness.id !== r().harness ? { harness: row.harness.id, model: row.model.id } : { model: row.model.id });
     returnFocus = true;
     props.close();
+    requestAnimationFrame(focusComposer);
   };
   const chooseScope = (next: string | null) => {
     setScope(next);
@@ -229,7 +227,7 @@ function PickerBody(props: { close: () => void }) {
       event.preventDefault();
       setKeyboard(true);
       if (total) setActive((i) => (i + (event.key === "ArrowDown" ? 1 : -1) + total) % total);
-    } else if (event.key === "Enter" && event.target === search) {
+    } else if (event.key === "Enter" && (event.target === search || event.target === document.body)) {
       event.preventDefault();
       pick(rows()[active()]);
     } else if ((mac ? event.metaKey : event.ctrlKey) && /^[1-9]$/.test(event.key)) {
@@ -238,6 +236,23 @@ function PickerBody(props: { close: () => void }) {
     }
   };
 
+  // Catalog refreshes can replace the focused field while the popover is
+  // opening. Keep keyboard actions with this picker during that brief gap.
+  onSettled(() => {
+    const recover = (event: KeyboardEvent) => {
+      if (event.target !== document.body) return;
+      if (event.key === "Escape") {
+        returnFocus = true;
+        props.close();
+        requestAnimationFrame(focusComposer);
+      } else {
+        search?.focus();
+        onKeyDown(event);
+      }
+    };
+    window.addEventListener("keydown", recover);
+    return () => window.removeEventListener("keydown", recover);
+  });
   return (
     <div class="cmp-models-frame" onKeyDown={onKeyDown}>
       <Show
@@ -250,7 +265,7 @@ function PickerBody(props: { close: () => void }) {
       >
         <Show when={list().status === "loading" || providers().length} fallback={<NoAgents close={props.close} />}>
           <div class="cmp-models-rail" role="tablist" aria-label="Agents" aria-orientation="vertical">
-            <button type="button" role="tab" class="cmp-rail-tab" aria-label="All models" aria-selected={scope() === null} onClick={() => chooseScope(null)}>
+            <button type="button" role="tab" class="cmp-rail-tab" aria-label="All models" aria-selected={(scope() === null) ? "true" : "false"} onClick={() => chooseScope(null)}>
               All
             </button>
             <For each={providers()}>
@@ -259,7 +274,7 @@ function PickerBody(props: { close: () => void }) {
                   type="button"
                   role="tab"
                   class="cmp-rail-tab"
-                  aria-selected={scope() === h.id}
+                  aria-selected={(scope() === h.id) ? "true" : "false"}
                   aria-label={`${harnessName(h)} models`}
                   title={harnessName(h)}
                   onClick={() => chooseScope(h.id)}
@@ -275,7 +290,7 @@ function PickerBody(props: { close: () => void }) {
               <label class="cmp-models-field">
                 <Icon name="magnifer" size={14} />
                 <input
-                  ref={search}
+                  ref={element => { search = element; queueMicrotask(() => element.focus()); }}
                   value={query()}
                   placeholder="Search models…"
                   aria-label="Search models"
@@ -285,6 +300,7 @@ function PickerBody(props: { close: () => void }) {
                     setQuery(event.currentTarget.value);
                     // A query shows which row Enter will pick.
                     setKeyboard(!!event.currentTarget.value.trim());
+                    queueMicrotask(() => search?.focus());
                   }}
                 />
               </label>
@@ -321,9 +337,9 @@ function PickerBody(props: { close: () => void }) {
                           class="cmp-model-row"
                           data-index={index()}
                           data-gap={last() ? (grouped() ? "group" : "end") : undefined}
-                          aria-selected={isSelected(row)}
-                          aria-disabled={row.selectedOnly || undefined}
-                          data-active={keyboard() && active() === index()}
+                          aria-selected={(isSelected(row)) ? "true" : "false"}
+                          aria-disabled={(row.selectedOnly || undefined) == null ? undefined : (row.selectedOnly || undefined) ? "true" : "false"}
+                          data-active={(keyboard() && active() === index()) ? "true" : "false"}
                           title={row.selectedOnly ? "Selected in this chat; absent from the current model list" : undefined}
                           onMouseMove={() => {
                             setKeyboard(false);
@@ -343,9 +359,9 @@ function PickerBody(props: { close: () => void }) {
                               type="button"
                               class="cmp-star"
                               aria-label={isDefault() ? "Default model" : "Make default model"}
-                              aria-pressed={isDefault()}
+                              aria-pressed={(isDefault()) ? "true" : "false"}
                               title={isDefault() ? "Default model" : "Make default model"}
-                              tabIndex={-1}
+                              tabindex={-1}
                               onClick={(event) => {
                                 event.stopPropagation();
                                 makeDefault(row);
@@ -454,9 +470,9 @@ function Settings() {
   const valueLabel = (group: Group) => group.choices.find((c) => c.id === group.selected)?.label ?? "Agent default";
   return (
     <Show when={groups().length}>
-      <div class="cmp-models-tray" aria-busy={saving()}>
+      <div class="cmp-models-tray" aria-busy={(saving()) ? "true" : "false"}>
         {/* By position, so a revalidated catalog updates rows in place instead of remounting an open menu. */}
-        <Index each={groups()}>
+        <For keyed={false} each={groups()}>
           {(group) => (
             <Show
               when={group().toggle}
@@ -493,17 +509,17 @@ function Settings() {
                   role="switch"
                   class="cmp-setting-row"
                   aria-label={group().option.label}
-                  aria-checked={group().selected === values().on}
+                  aria-checked={(group().selected === values().on) ? "true" : "false"}
                   onClick={() => choose(group(), group().selected === values().on ? values().off : values().on)}
                 >
                   <span class="cmp-setting-label">{group().option.label}</span>
                   <span class="cmp-setting-value">{valueLabel(group())}</span>
-                  <span class="toggle" data-on={group().selected === values().on} aria-hidden="true" />
+                  <span class="toggle" data-on={(group().selected === values().on) ? "true" : "false"} aria-hidden="true" />
                 </button>
               )}
             </Show>
           )}
-        </Index>
+        </For>
       </div>
     </Show>
   );
@@ -528,7 +544,7 @@ function Advanced() {
   const fast = createMemo(() => fastOf(r()));
   return (
     <Show when={effort() || fast()}>
-      <div class="cmp-advanced" data-slider={!!effort()}>
+      <div class="cmp-advanced" data-slider={(!!effort()) ? "true" : "false"}>
         <div class="cmp-advanced-head">
           <span>Advanced</span>
           <Show when={fast()}>
@@ -538,7 +554,7 @@ function Advanced() {
                   type="button"
                   class="cmp-fast"
                   aria-label={f().on ? "Turn off fast mode" : "Turn on fast mode"}
-                  aria-pressed={f().on}
+                  aria-pressed={(f().on) ? "true" : "false"}
                   aria-keyshortcuts="Alt+O"
                   onClick={() => f().flip()}
                 >
@@ -587,13 +603,13 @@ function EffortSlider(props: { effort: Effort }) {
         ref={el}
         class="cmp-effort"
         role="slider"
-        tabIndex={0}
+        tabindex={0}
         aria-label={`Reasoning effort: ${current()}`}
         aria-valuemin={0}
         aria-valuemax={count() - 1}
         aria-valuenow={props.effort.selected}
         aria-valuetext={current()}
-        data-dragging={drag() !== null}
+        data-dragging={(drag() !== null) ? "true" : "false"}
         style={{ "--f": String(fraction()) }}
         onKeyDown={onKeyDown}
         onPointerDown={(event) => {
@@ -611,7 +627,7 @@ function EffortSlider(props: { effort: Effort }) {
         <span class="cmp-effort-track" />
         <span class="cmp-effort-fill" />
         <span class="cmp-effort-stops">
-          <Index each={props.effort.labels}>{() => <span />}</Index>
+          <For keyed={false} each={props.effort.labels}>{() => <span />}</For>
         </span>
         <span class="cmp-effort-rail">
           <span class="cmp-effort-thumb" />

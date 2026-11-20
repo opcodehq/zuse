@@ -1,7 +1,7 @@
 // The transcript outline (desktop `rail.rs`): a fixed stack of prompt marks at the top right; hovering or
 // clicking opens every prompt as a list, and picking one scrolls the transcript there.
-import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import type { SessionMessageEntry } from "@/core/protocol";
+import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { parseAttachments, singleLine, userRawText } from "./model";
 
 const MAX_TICKS = 12;
@@ -135,7 +135,7 @@ export function Rail(props: { ticks: Tick[]; topIndex: number; height: number; o
         type="button"
         class="t-rail-trigger"
         aria-label="Navigate conversation"
-        aria-expanded={open()}
+        aria-expanded={(open()) ? "true" : "false"}
         aria-haspopup="listbox"
         data-open={open() ? "true" : undefined}
         onClick={() => {
@@ -158,7 +158,7 @@ export function Rail(props: { ticks: Tick[]; topIndex: number; height: number; o
           class="t-rail-list"
           role="listbox"
           aria-label="Conversation turns"
-          tabIndex={0}
+          tabindex={0}
           aria-activedescendant={highlight() !== null ? `rail-turn-${highlight()}` : undefined}
           onKeyDown={onKey}
           onScroll={(e) => setListTop(e.currentTarget.scrollTop)}
@@ -175,7 +175,7 @@ export function Rail(props: { ticks: Tick[]; topIndex: number; height: number; o
                     id={`rail-turn-${ix}`}
                     class="t-rail-row"
                     role="option"
-                    aria-selected={active() === ix}
+                    aria-selected={(active() === ix) ? "true" : "false"}
                     aria-posinset={ix + 1}
                     aria-setsize={props.ticks.length}
                     data-highlight={highlight() === ix ? "true" : undefined}

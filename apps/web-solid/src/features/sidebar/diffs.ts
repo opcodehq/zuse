@@ -1,8 +1,8 @@
 // Checkout diff sizes for the sidebar's "+N −N". Summary-only frames: no patches cross the wire.
-import { createStore, reconcile } from "solid-js/store";
 import { onConnected, rpc } from "@/core/connection";
 import { M } from "@/core/methods";
 import type { Chat } from "@/core/protocol";
+import { createStore, reconcile } from "solid-js";
 
 interface DiffStat {
   checkoutId: string;
@@ -29,7 +29,7 @@ onConnected(() =>
         deletions: raw.deletions ?? 0,
       };
     }
-    setStats(reconcile({ ...stats, ...next }));
+    setStats(draft => { reconcile({ ...stats, ...next })(draft); });
   }),
 );
 

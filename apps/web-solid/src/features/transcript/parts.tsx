@@ -1,12 +1,12 @@
 // Small transcript rows: notices, attachments, generated images, UI blocks, the working trailer.
-import { createEffect, createSignal, For, on, onCleanup, Show } from "solid-js";
 import type { MessagePart } from "@/core/protocol";
 import { state } from "@/core/store";
 import { Icon } from "@/ui/Icon";
 import { DitherRing } from "@/ui/loaders";
 import { Dialog } from "@/ui/primitives";
+import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { copyText } from "./clipboard";
-import { agentBrand, agentLabel, type AgentIdentity, fileBadgeName, fileIcon, formatElapsed, harnessIcon, harnessName, isImagePath, type MessageAttachment } from "./model";
+import { agentBrand, agentLabel, fileBadgeName, fileIcon, formatElapsed, harnessIcon, harnessName, isImagePath, type AgentIdentity, type MessageAttachment } from "./model";
 import { imageState, loadImage } from "./resources";
 
 type Part<K extends MessagePart["kind"]> = Extract<MessagePart, { kind: K }>;
@@ -103,7 +103,7 @@ function FilePill(props: { name: string; path: string }) {
 function ImageThumb(props: { path: string; name: string; device: string | null }) {
   const [open, setOpen] = createSignal(false);
   let button!: HTMLButtonElement;
-  createEffect(() => void loadImage(props.device, props.path));
+  createEffect(() => [props.device, props.path], () => { void (void loadImage(props.device, props.path)); });
   const image = () => imageState(props.device, props.path);
   return (
     <>
@@ -144,7 +144,7 @@ function Lightbox(props: { open: boolean; onClose: () => void; opener: () => HTM
 export function GeneratedImage(props: { part: Part<"image">; device: string | null }) {
   const [open, setOpen] = createSignal(false);
   let button: HTMLButtonElement | undefined;
-  createEffect(() => void loadImage(props.device, props.part.path, props.part.mimeType));
+  createEffect(() => [props.device, props.part.path, props.part.mimeType], () => { void (void loadImage(props.device, props.part.path, props.part.mimeType)); });
   const image = () => imageState(props.device, props.part.path);
   return (
     <figure class="t-image">
@@ -180,12 +180,12 @@ export function UiBlockNotice(props: { part: Part<"uiBlock"> }) {
         <span class="t-notice-tile"><Icon name="widget" size={12} /></span>
         <span class="t-notice-label">Interactive block</span>
         <span class="t-notice-value">Not supported in the web app yet. Open this chat in the desktop app to use it.</span>
-        <button type="button" class="t-notice-action" aria-expanded={open()} onClick={() => setOpen(!open())}>
+        <button type="button" class="t-notice-action" aria-expanded={(open()) ? "true" : "false"} onClick={() => setOpen(!open())}>
           {open() ? "Hide source" : "Show source"}
         </button>
       </div>
       <Show when={open()}>
-        <pre class="t-uiblock-source" tabIndex={0}>{props.part.spec}</pre>
+        <pre class="t-uiblock-source" tabindex={0}>{props.part.spec}</pre>
       </Show>
     </div>
   );
@@ -234,23 +234,18 @@ export function WorkingTrailer(props: { chatId: string }) {
 /** The turn's state for assistive tech: working, waiting, done. Streamed text and the clock are never announced. */
 export function TurnStatus(props: { chatId: string }) {
   const [said, setSaid] = createSignal("");
-  createEffect(
-    on(
-      () => {
-        const session = state.sessions[props.chatId];
-        const waiting = session?.status === "working" ? 0 : Number(session?.runningSubagents ?? 0);
-        return session?.status === "working" ? "working" : waiting > 0 ? `waiting:${waiting}` : "idle";
-      },
-      (status, previous) => {
-        const agent = harnessName(state.chats[props.chatId]?.config?.harness);
-        if (status === "working") setSaid(`${agent} is working`);
-        else if (status.startsWith("waiting:")) {
-          const n = Number(status.slice(8));
-          setSaid(n === 1 ? "Waiting for 1 agent" : `Waiting for ${n} agents`);
-        } else setSaid(previous && previous !== "idle" ? `${agent} finished` : "");
-      },
-    ),
-  );
+  createEffect(() => {
+    const session = state.sessions[props.chatId];
+    const waiting = session?.status === "working" ? 0 : Number(session?.runningSubagents ?? 0);
+    return session?.status === "working" ? "working" : waiting > 0 ? `waiting:${waiting}` : "idle";
+  }, (status, previous) => {
+    const agent = harnessName(state.chats[props.chatId]?.config?.harness);
+    if (status === "working") setSaid(`${agent} is working`);
+    else if (status.startsWith("waiting:")) {
+      const n = Number(status.slice(8));
+      setSaid(n === 1 ? "Waiting for 1 agent" : `Waiting for ${n} agents`);
+    } else setSaid(previous && previous !== "idle" ? `${agent} finished` : "");
+  });
   return <div class="t-sr" role="status">{said()}</div>;
 }
 

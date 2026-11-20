@@ -145,16 +145,16 @@ await scenario("signed-out", {}, async (t) => {
     await t.waitText("Sign in to connect your tools and use them across your agents.");
     await t.shot("plugins");
   });
-  await t.step("sign-in reports the unreachable account service", async () => {
+  await t.step("sign-in reports why the engine cannot start it", async () => {
     await t.click("Sign in", ".app-pane");
-    await t.wait(`__t.has("Account service is unavailable")`, 30000);
+    await t.wait(`__t.has("Account service is unavailable") || __t.has("Sign in from Zuse on the computer that runs this engine.")`, 30000);
     await t.shot("plugins-sign-in-failed");
   });
   await t.step("Cloud shows the account gate with the same failure", async () => {
     await t.nav({ kind: "settings", section: "cloud" });
     await t.waitText("Sign in to set up cloud workspaces");
     await t.click("Sign in", ".app-pane");
-    await t.wait(`__t.has("Account service is unavailable")`, 30000);
+    await t.wait(`__t.has("Account service is unavailable") || __t.has("Sign in from Zuse on the computer that runs this engine.")`, 30000);
     await t.shot("cloud-gate");
   });
   await t.step("Settings → Plugins offers Browse and Sign in", async () => {

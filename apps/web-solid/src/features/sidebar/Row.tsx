@@ -1,15 +1,16 @@
 // One session row (crates/ui shell.rs render_chat_row, sidebar branch): one line under a project
 // heading, or the two-line card with avatar, title, age, location and diff size.
-import { ContextMenu } from "@kobalte/core/context-menu";
-import { createMemo, createSignal, type JSX, Match, onMount, Show, Switch, untrack } from "solid-js";
 import type { Chat } from "@/core/protocol";
 import { state } from "@/core/store";
 import { view } from "@/core/view";
 import { Icon } from "@/ui/Icon";
 import { TerminalSpinner } from "@/ui/loaders";
+import { ContextMenu } from "@kobalte/core/context-menu";
+import { type JSX } from "@solidjs/web";
+import { createMemo, createSignal, Match, onSettled, Show, Switch, untrack } from "solid-js";
 import { renameChat, selectChat, setArchived } from "./actions";
 import { diffFor } from "./diffs";
-import { dropHandlers, startDrag, endDrag } from "./drag";
+import { dropHandlers, endDrag, startDrag } from "./drag";
 import { chatEntries, MenuEntries } from "./menus";
 import { avatarSpace, awaitingKind, branchOf, deviceName, harnessOf, locationLabel, projectRemotes, spaceName, type Indicator, type RowItem } from "./model";
 import { dragging, isArchived, renaming, setRenaming, titleOf } from "./overlay";
@@ -85,7 +86,7 @@ export function ProjectAvatar(props: { name: string; remotes: (string | null | u
     <span class="sb-avatar" title={props.title} aria-hidden="true">
       <span class="sb-mono">{initials(props.name)}</span>
       <Show when={url() && failed() !== url() && url()}>
-        {(src) => <img src={src()} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(src())} />}
+        {(src) => <img src={src()} alt="" loading="lazy" referrerpolicy="no-referrer" onError={() => setFailed(src())} />}
       </Show>
     </span>
   );
@@ -104,7 +105,7 @@ function RenameField(props: { chat: Chat }) {
     if (refocus)
       requestAnimationFrame(() => document.querySelector<HTMLElement>(`.sb-row[data-chat-id="${CSS.escape(id)}"] .sb-row-open`)?.focus({ preventScroll: true }));
   };
-  onMount(() => {
+  onSettled(() => {
     // Opened from the row menu, the menu's close hands focus over instead (Row's onCloseAutoFocus).
     input.focus();
     input.select();
@@ -221,7 +222,7 @@ function RowBody(props: { chat: Chat; item: RowItem; search: boolean }) {
         data-archived={archived() ? "true" : undefined}
         data-dragging={dragging() === id() ? "true" : undefined}
         data-chat-id={id()}
-        draggable={!props.search && !archived() && renaming() !== id()}
+        draggable={(!props.search && !archived() && renaming() !== id()) ? "true" : "false"}
         onDragStart={(e: DragEvent) => startDrag(e, id())}
         onDragEnd={endDrag}
         {...dropHandlers(() => ({ kind: "row", chatId: id(), zone: props.item.zone }))}

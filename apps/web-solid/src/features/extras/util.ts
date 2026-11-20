@@ -1,8 +1,8 @@
 // Small pure helpers shared by the extras surfaces. Derived from store data; never stored.
-import { harnessIcon as sharedHarnessIcon } from "@/ui/harness";
-export { timeAgo, errorText } from "@/core/util";
-import { state } from "@/core/store";
 import type { Chat } from "@/core/protocol";
+import { state } from "@/core/store";
+import { harnessIcon as sharedHarnessIcon } from "@/ui/harness";
+export { errorText,timeAgo } from "@/core/util";
 
 
 const ORCHESTRATOR_PREFIX = "voice-orchestrator-";

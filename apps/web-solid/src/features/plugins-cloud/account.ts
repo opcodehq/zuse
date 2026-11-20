@@ -1,9 +1,9 @@
 // The Zuse account behind plugins and Cloud. The engine streams its status into state.account.
-import { createStore } from "solid-js/store";
 import { rpc } from "@/core/connection";
 import { M } from "@/core/methods";
 import { RpcError } from "@/core/rpc";
 import { state } from "@/core/store";
+import { createStore } from "solid-js";
 
 export interface AccountUser {
   id: string;
@@ -72,26 +72,26 @@ export async function signIn() {
     window.open(pending.url, "_blank", "noopener");
     return;
   }
-  setSession({ busy: true, error: null });
+  setSession(draft => { Object.assign(draft, { busy: true, error: null }); });
   try {
     const progress = await rpc.call<LoginProgress>(M.CLOUD_ACCOUNT_SIGN_IN, {});
     if (progress?.url?.startsWith("https://")) window.open(progress.url, "_blank", "noopener");
   } catch (error) {
-    setSession("error", errorText(error, "Could not start sign-in. Try again."));
+    setSession(draft => { draft["error"] = errorText(error, "Could not start sign-in. Try again."); });
   } finally {
-    setSession("busy", false);
+    setSession(draft => { draft["busy"] = false; });
   }
 }
 
 export async function signOut() {
   if (session.busy) return;
-  setSession({ busy: true, error: null });
+  setSession(draft => { Object.assign(draft, { busy: true, error: null }); });
   try {
     await rpc.call(M.CLOUD_ACCOUNT_SIGN_OUT, {});
   } catch (error) {
-    setSession("error", errorText(error, "Could not sign out. Try again."));
+    setSession(draft => { draft["error"] = errorText(error, "Could not sign out. Try again."); });
   } finally {
-    setSession("busy", false);
+    setSession(draft => { draft["busy"] = false; });
   }
 }
 

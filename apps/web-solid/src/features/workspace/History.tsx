@@ -1,12 +1,12 @@
 // Git history: a virtualized commit list with the lane graph, refs, search and paging.
 // Rows, graph metrics and colours follow crates/ui/src/history.rs; a commit opens its own diff in Changes.
-import { createVirtualizer } from "@tanstack/solid-virtual";
-import { batch, createEffect, createMemo, createSignal, For, Index, on, onCleanup, Show } from "solid-js";
 import { rpc } from "@/core/connection";
 import { M } from "@/core/methods";
 import { state } from "@/core/store";
 import { Icon } from "@/ui/Icon";
 import { Button, IconButton, Menu, Spinner } from "@/ui/primitives";
+import { createVirtualizer } from "@/ui/virtualizer";
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { reviewCommit } from "./Changes";
 import { layoutGraph, type GraphRow } from "./graph";
 import { Banner, Empty } from "./parts";
@@ -72,7 +72,7 @@ export function History(props: { target: Target; active: boolean }) {
             queueMicrotask(() => load(false));
             return;
           }
-          batch(() => {
+          (() => {
             const seen = new Set(append ? commits().map((c) => c.sha) : []);
             const fresh = page.commits.filter((c) => !seen.has(c.sha) && (seen.add(c.sha), true));
             setCommits(append ? [...commits(), ...fresh] : fresh);
@@ -82,7 +82,7 @@ export function History(props: { target: Target; active: boolean }) {
               totalCount: page.totalCount ?? (append ? previous?.totalCount ?? null : null),
               comparison: page.comparison ?? (append ? previous?.comparison : null) ?? null,
             });
-          });
+          })();
         },
         (e) => id === seq && setError(readErrorText(e, "Couldn't read Git history.", true)),
       )
@@ -90,26 +90,18 @@ export function History(props: { target: Target; active: boolean }) {
   };
 
   // Reload on open, on a new search, and when the connection returns.
-  createEffect(
-    on([() => props.active, applied, () => state.epoch, connected, () => props.target.cwd], ([active, , , live]) => {
-      if (active && live) load(false);
-    }),
-  );
+  createEffect(() => [(() => props.active)(), (applied)(), (() => state.epoch)(), (connected)(), (() => props.target.cwd)()] as const, ([active, , , live]) => {
+    if (active && live) load(false);
+  });
 
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
-  createEffect(
-    on(
-      query,
-      (q) => {
-        clearTimeout(searchTimer);
-        searchTimer = setTimeout(() => setApplied(q.trim()), SEARCH_DEBOUNCE);
-      },
-      { defer: true },
-    ),
-  );
+  createEffect(query, (q) => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => setApplied(q.trim()), SEARCH_DEBOUNCE);
+  }, { defer: true });
   onCleanup(() => clearTimeout(searchTimer));
   // A new search starts from its first match, not wherever the old list was scrolled.
-  createEffect(on(applied, () => scroller?.scrollTo({ top: 0 }), { defer: true }));
+  createEffect(applied, () => scroller?.scrollTo({ top: 0 }), { defer: true });
 
   const virtualizer = createVirtualizer({
     get count() {
@@ -122,7 +114,7 @@ export function History(props: { target: Target; active: boolean }) {
   });
 
   // Page in as the list nears its end.
-  createEffect(() => {
+  createEffect(() => [virtualizer.getVirtualItems(), commits().length, meta()?.nextCursor, loading()], () => {
     const items = virtualizer.getVirtualItems();
     const last = items[items.length - 1];
     if (last && last.index >= commits().length - 20 && meta()?.nextCursor != null && !loading()) load(true);
@@ -195,7 +187,7 @@ export function History(props: { target: Target; active: boolean }) {
       </Show>
       <Show when={props.target.cwd} fallback={<Empty icon="history" title="No checkout" detail="Open a project or thread to see its history." />}>
         <Show when={commits().length || loading()} fallback={<Show when={meta()}><Empty icon="history" title={applied() ? "No matching commits" : "No commits to show"} /></Show>}>
-          <div class="ws-history-list" ref={scroller} role="listbox" aria-label="Commits" tabIndex={-1} onKeyDown={onKeyDown}>
+          <div class="ws-history-list" ref={scroller} role="listbox" aria-label="Commits" tabindex={-1} onKeyDown={onKeyDown}>
             <div class="ws-tree-sizer" style={{ height: `${virtualizer.getTotalSize()}px` }}>
               <For each={virtualizer.getVirtualItems()}>
                 {(item) => {
@@ -238,8 +230,8 @@ function CommitRow(props: { commit: GitHistoryCommit; row: GraphRow | undefined;
     <div
       class="ws-commit"
       role="option"
-      aria-selected={props.selected}
-      tabIndex={props.focusable ? 0 : -1}
+      aria-selected={(props.selected) ? "true" : "false"}
+      tabindex={props.focusable ? 0 : -1}
       data-sha={props.commit.sha}
       aria-label={`${props.commit.subject}, ${props.commit.authorName}, ${timeAgo(props.commit.authoredAt)}`}
       onClick={() => props.onOpen()}
@@ -264,7 +256,7 @@ function CommitRow(props: { commit: GitHistoryCommit; row: GraphRow | undefined;
         <Menu
           placement="bottom-end"
           trigger={(p) => (
-            <button {...p} type="button" class="icon-btn" data-size="sm" aria-label={`Actions for ${short()}`} title="Commit actions" tabIndex={-1}>
+            <button {...p} type="button" class="icon-btn" data-size="sm" aria-label={`Actions for ${short()}`} title="Commit actions" tabindex={-1}>
               <Icon name="more-horizontal" size={14} />
             </button>
           )}
@@ -305,7 +297,7 @@ function GraphCell(props: { row: GraphRow | undefined; width: number }) {
       <Show when={props.row}>
         {(row) => (
           <>
-            <Index each={row().segments}>
+            <For keyed={false} each={row().segments}>
               {(segment) => {
                 const d = () => {
                   const s = segment();
@@ -315,7 +307,7 @@ function GraphCell(props: { row: GraphRow | undefined; width: number }) {
                 };
                 return <path d={d()} fill="none" stroke-width={STROKE} stroke-linecap="round" class="ws-graph-line" data-color={segment().colorId % 6} />;
               }}
-            </Index>
+            </For>
             <Show when={row().isHead}>
               <circle cx={laneX(row().nodeLane)} cy={mid} r={NODE_RADIUS + HEAD_RING} fill="none" stroke-width={STROKE} class="ws-graph-line" data-color={row().nodeColorId % 6} />
             </Show>

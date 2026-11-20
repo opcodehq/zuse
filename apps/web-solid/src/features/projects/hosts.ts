@@ -1,9 +1,9 @@
 // Devices and spaces as the projects area needs them: routing, presence, names.
-import { createRoot, createSignal, onCleanup } from "solid-js";
-import { state } from "@/core/store";
 import type { Device, Space } from "@/core/protocol";
-import { folderName } from "./paths";
+import { state } from "@/core/store";
 import { deviceOnline as onlineAt } from "@/core/util";
+import { createRoot, createSignal, onCleanup } from "solid-js";
+import { folderName } from "./paths";
 
 /** `targetDeviceId` only for another computer; local calls skip the relay. */
 export function target(deviceId: string | null | undefined, params: Record<string, unknown> = {}) {
@@ -12,7 +12,7 @@ export function target(deviceId: string | null | undefined, params: Record<strin
 
 export const unknownMethod = (error: unknown) => /unknown ?method/i.test(error instanceof Error ? error.message : String(error));
 
-export { errorText, uuid } from "@/core/util";
+export { errorText,uuid } from "@/core/util";
 
 // Presence decays with time even when no data changes.
 const now = createRoot(() => {

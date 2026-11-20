@@ -1,25 +1,23 @@
 // Dithered meters and columns on 2px cells, the desktop usage meter's look (crates/ui/src/dither_bar.rs).
 // Colors come from theme variables, so both themes repaint from the same tones.
-import { createEffect, createSignal, For, type JSX, onCleanup, onMount } from "solid-js";
+import { createEffect, createSignal, For, onSettled } from "solid-js";
+import type { JSX } from "@solidjs/web";
 import { resolvedTheme } from "@/shell/theme";
 import { CELL, columnCell, filledRows, litColumns, meterCell, type Cell } from "./ditherCells";
 
 const ALPHA: Record<Cell, number> = { on: 1, faint: 0.25, track: 1, empty: 0 };
 
 /** Sizes a canvas to its host on device pixels and repaints when the size, theme or inputs change. */
-function useCanvas(paint: (ctx: CanvasRenderingContext2D, width: number, height: number, color: (css: string) => string) => void, height: () => number) {
+function useCanvas(paint: (ctx: CanvasRenderingContext2D, width: number, height: number, color: (css: string) => string) => void, height: () => number, inputs: () => unknown) {
   let host: HTMLDivElement | undefined;
   let canvas: HTMLCanvasElement | undefined;
   const [width, setWidth] = createSignal(0);
-  onMount(() => {
+  onSettled(() => {
     const observer = new ResizeObserver(([entry]) => setWidth(Math.floor(entry?.contentRect.width ?? 0)));
     observer.observe(host!);
-    onCleanup(() => observer.disconnect());
+    return () => observer.disconnect();
   });
-  createEffect(() => {
-    const w = width();
-    const h = height();
-    resolvedTheme();
+  createEffect(() => [width(), height(), resolvedTheme(), inputs()] as const, ([w, h]) => {
     if (!canvas || w <= 0) return;
     const dpr = Math.max(1, window.devicePixelRatio || 1);
     canvas.width = Math.round(w * dpr);
@@ -65,7 +63,7 @@ export function DitherMeter(props: { fraction: number; tone?: string; height?: n
         cell(ctx, x, y, kind === "track" ? track : on, kind === "track" ? 0.3 : ALPHA[kind]);
       }
     }
-  }, height);
+  }, height, () => [props.fraction, props.tone]);
   return (
     <div
       ref={refs.host}
@@ -124,7 +122,7 @@ export function DitherColumns(props: { columns: Column[]; label: string; idle: s
         }
       }
     });
-  }, height);
+  }, height, () => [props.columns.map(column => column.value), props.tone]);
   const ticks = () => {
     const list = props.columns;
     if (list.length < 2) return list.map((c) => c.label);

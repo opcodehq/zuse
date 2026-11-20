@@ -27,7 +27,7 @@ const STREAM = `async (kind, n) => {
   const f = window.__fixture;
   const entry = "bench-" + Math.random(), part = "bp-" + Math.random();
   f.upsert({ id: entry, role: "assistant", createdAt: Date.now(), deviceId: "fixture-device", status: "streaming", parts: [{ kind: "text", id: part, text: "" }] });
-  f.setState("sessions", "fixture-chat", { chatId: "fixture-chat", status: "working", startedAt: new Date().toISOString() });
+  f.setState(draft => { draft.sessions["fixture-chat"] = { chatId: "fixture-chat", status: "working", startedAt: new Date().toISOString() }; });
   let len = 0;
   const send = (text) => { len += text.length; f.apply({ append: [{ entry, part, text, len }], count: f.count() }); };
   const raf = () => new Promise((r) => requestAnimationFrame(r));
@@ -52,7 +52,7 @@ const STREAM = `async (kind, n) => {
   }
   const elapsed = performance.now() - started;
   obs.disconnect();
-  f.setState("sessions", "fixture-chat", { chatId: "fixture-chat", status: "idle" });
+  f.setState(draft => { draft.sessions["fixture-chat"] = { chatId: "fixture-chat", status: "idle" }; });
   const tail = loaf.slice(-Math.ceil(loaf.length / 4));
   const mean = (a) => (a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length) : 0);
   return { kind, n, kb: Math.round(len / 1024), msPerUpdate: Math.round(elapsed / n), longFrames: loaf.length, meanLongFrame: mean(loaf), meanLastQuarter: mean(tail), maxLongFrame: Math.round(Math.max(0, ...loaf)), replaced: samples ? replaced + "/" + samples : "n/a" };

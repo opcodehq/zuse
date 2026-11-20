@@ -1,11 +1,11 @@
 // Find in chat (desktop transcript/find.rs): "n of m" over the store's messages, since rows outside the
 // virtualized window are not in the page. Highlights use the CSS highlight registry, so no row DOM changes.
-import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show } from "solid-js";
-import type { MessagePart, SessionMessageEntry } from "@/core/protocol";
 import { registerShortcut } from "@/core/keys";
+import type { MessagePart, SessionMessageEntry } from "@/core/protocol";
 import { state } from "@/core/store";
 import { view } from "@/core/view";
 import { Icon } from "@/ui/Icon";
+import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
 import { parseAttachments, userRawText } from "./model";
 
 /** Desktop chat_find QUERY_MAX_CHARS. */
@@ -17,7 +17,7 @@ registerShortcut({
   label: "Find in chat",
   inInputs: true,
   // Editors and the terminal keep their own find; elsewhere there is no transcript to search.
-  when: (event) => view.route.kind === "chat" && !!state.transcript?.chatId && !(event.target as HTMLElement | null)?.closest(".cm-editor, .xterm"),
+  when: (event) => (view.route.kind === "chat" || view.route.kind === "zappers") && !!state.transcript?.chatId && !(event.target as HTMLElement | null)?.closest(".cm-editor, .xterm"),
   run: () => setRequests((n) => n + 1),
 });
 
@@ -126,15 +126,13 @@ export function FindBar(props: { host: FindHost }) {
   };
 
   // A new query lands on the first match at or below what the reader is looking at.
-  createEffect(
-    on(needle, () => {
-      const list = matches();
-      if (!list.length) return setActive(null);
-      const from = props.host.topIndex();
-      const at = list.findIndex((m) => m.index >= from);
-      select(at < 0 ? 0 : at);
-    }, { defer: true }),
-  );
+  createEffect(needle, () => {
+    const list = matches();
+    if (!list.length) return void (setActive(null));
+    const from = props.host.topIndex();
+    const at = list.findIndex((m) => m.index >= from);
+    select(at < 0 ? 0 : at);
+  }, { defer: true });
 
   const openBar = () => {
     if (!open()) {
@@ -147,7 +145,7 @@ export function FindBar(props: { host: FindHost }) {
       input?.select();
     });
   };
-  createEffect(on(requests, openBar, { defer: true }));
+  createEffect(requests, openBar, { defer: true });
 
   const close = () => {
     clear();
@@ -238,11 +236,14 @@ export function FindBar(props: { host: FindHost }) {
     requestAnimationFrame(() => requestAnimationFrame(schedule));
   };
 
-  createEffect(on([open, needle, matches, activeIndex, () => props.host.mounted()], schedule));
-  onMount(() => {
+  createEffect(() => [(open)(), (needle)(), (matches)(), (activeIndex)(), (() => props.host.mounted())()] as const, schedule);
+  onSettled(() => {
+    const cleanups: (() => void)[] = [];
     const observer = new MutationObserver(() => open() && needle() && schedule());
     observer.observe(props.host.inner(), { childList: true, characterData: true, subtree: true });
-    onCleanup(() => observer.disconnect());
+    cleanups.push(() => observer.disconnect());
+
+    return () => cleanups.forEach(cleanup => cleanup());
   });
   onCleanup(() => {
     cancelAnimationFrame(frame);
@@ -273,7 +274,7 @@ export function FindBar(props: { host: FindHost }) {
             type="text"
             placeholder="Find in chat"
             aria-label="Find in chat"
-            spellcheck={false}
+            spellcheck="false"
             autocomplete="off"
             value={query()}
             onInput={(e) => setQuery(e.currentTarget.value)}

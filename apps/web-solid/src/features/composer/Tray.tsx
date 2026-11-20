@@ -1,13 +1,14 @@
 // The attached tray: notices, staged attachments, sign-in and error rows, and the message queue.
-import { writeClipboard } from "@/ui/clipboard";
-import { createEffect, createMemo, createSignal, For, type JSX, Match, on, Show, Switch } from "solid-js";
 import type { MessagePart } from "@/core/protocol";
 import { state } from "@/core/store";
 import { navigate, view } from "@/core/view";
 import { ProjectCreationNotice } from "@/features/projects/CreationNotice";
-import { Dialog } from "@kobalte/core/dialog";
+import { writeClipboard } from "@/ui/clipboard";
 import { Icon } from "@/ui/Icon";
 import { Spinner, toast } from "@/ui/primitives";
+import { Dialog } from "@kobalte/core/dialog";
+import { type JSX } from "@solidjs/web";
+import { createEffect, createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
 import { deviceOnline, draftSpace, resolve, selectedChat } from "./catalog";
 import { attachmentsFor, clearFailure, composer, focusComposer, removeAttachment, setComposer } from "./drafts";
 import { cancelLogin, login, providerName, reopenLoginPage, signsIn, startLogin } from "./login";
@@ -46,7 +47,7 @@ export function TrayPill(props: {
           <button
             type="button"
             class="cmp-pill-body"
-            aria-expanded={expanded()}
+            aria-expanded={(expanded()) ? "true" : "false"}
             aria-label={`${expanded() ? "Collapse" : "Expand"} ${props.title}`}
             onClick={() => setExpanded((v) => !v)}
           >
@@ -180,7 +181,7 @@ function ProviderRows() {
   const kind = () => (error() ? classifyError(error()!.message) : null);
   const dismiss = (id: string) => {
     const chat = chatId();
-    if (chat) setComposer("dismissedErrors", chat, id);
+    if (chat) setComposer(draft => { draft["dismissedErrors"]![chat] = id; });
   };
   const activeLogin = () => (login()?.chatId === chatId() ? login() : null);
   const showSignIn = () => signsIn(harness()) && (activeLogin() || kind() === "signIn");
@@ -293,7 +294,7 @@ function AttachmentsRow() {
             const [broken, setBroken] = createSignal(false);
             const preview = () => (item.error || broken() ? undefined : item.preview);
             return (
-              <div class="cmp-thumb" classList={{ "cmp-thumb-file": !preview() }} data-state={state()} role="listitem" title={item.error ?? item.name} aria-label={label()}>
+              <div class={["cmp-thumb", { "cmp-thumb-file": !preview() }]}  data-state={state()} role="listitem" title={item.error ?? item.name} aria-label={label()}>
                 <Show when={preview()} fallback={<><Icon name="document" size={14} /><span class="cmp-truncate">{item.name}</span></>}>
                   {(src) => (
                     <button type="button" class="cmp-thumb-open" aria-label={`Preview ${item.name}`} onClick={() => setLightbox({ src: src(), name: item.name })}>
@@ -360,14 +361,14 @@ function QueuePanel() {
   // Keyboard reorders re-render the rows; keep the caret on the moved row's handle.
   let refocus: string | null = null;
   let list: HTMLDivElement | undefined;
-  createEffect(on(rows, () => {
+  createEffect(rows, () => {
     if (!refocus || !list) return;
     const handle = list.querySelector<HTMLElement>(`[data-queue-id="${CSS.escape(refocus)}"] .cmp-queue-handle`);
     if (handle) {
       handle.focus();
       refocus = null;
     }
-  }));
+  });
   const move = (from: number, to: number, keyboard = false) => {
     const id = rows()[from]?.id;
     const chat = chatId();
@@ -408,10 +409,10 @@ function QueuePanel() {
                 <div
                   class="cmp-queue-row"
                   data-queue-id={row.id}
-                  data-editing={editing()}
-                  data-removing={!!removing()[row.id]}
-                  data-dragging={drag()?.from === index()}
-                  data-drop={!!drag() && drag()!.over === index() && drag()!.from !== index()}
+                  data-editing={(editing()) ? "true" : "false"}
+                  data-removing={(!!removing()[row.id]) ? "true" : "false"}
+                  data-dragging={(drag()?.from === index()) ? "true" : "false"}
+                  data-drop={(!!drag() && drag()!.over === index() && drag()!.from !== index()) ? "true" : "false"}
                   onDragOver={(event) => {
                     if (!drag()) return;
                     event.preventDefault();
@@ -427,8 +428,8 @@ function QueuePanel() {
                   <Show when={!editing()} fallback={<span style={{ width: "14px", "flex-shrink": 0 }} />}>
                     <span
                       class="cmp-queue-handle"
-                      draggable={rows().length > 1}
-                      tabIndex={rows().length > 1 ? 0 : -1}
+                      draggable={rows().length > 1 ? "true" : "false"}
+                      tabindex={rows().length > 1 ? 0 : -1}
                       role="button"
                       aria-label={`Reorder: ${queueTitle(row)}. Use Alt+Up and Alt+Down to move.`}
                       onDragStart={(event) => {
@@ -446,7 +447,7 @@ function QueuePanel() {
                       <Icon name="queue-drag-handle" size={13} />
                     </span>
                   </Show>
-                  <span class="cmp-queue-text" data-muted={editing()} title={editing() ? undefined : queueTitle(row)}>
+                  <span class="cmp-queue-text" data-muted={(editing()) ? "true" : "false"} title={editing() ? undefined : queueTitle(row)}>
                     {editing() ? (queueEdit()?.finishing ? "Saving…" : "Editing in composer") : queueTitle(row)}
                   </span>
                   <Show when={row.attachments?.length && !editing()}>

@@ -1,13 +1,14 @@
 // Menu contents for rows, project headings, sections and view options. Kobalte's menu parts are
 // shared by dropdown and context menus, so one renderer serves both.
-import { DropdownMenu } from "@kobalte/core/dropdown-menu";
-import { For, type JSX, Match, Show, Switch, untrack } from "solid-js";
 import { state } from "@/core/store";
 import { navigate } from "@/core/view";
 import { Icon } from "@/ui/Icon";
+import { DropdownMenu } from "@kobalte/core/dropdown-menu";
+import { type JSX } from "@solidjs/web";
+import { For, Match, Show, Switch, untrack } from "solid-js";
 import { forkChat, openProjectArchive, setArchived } from "./actions";
-import { isArchived, setDialog, setRenaming } from "./overlay";
 import { projectKey } from "./model";
+import { isArchived, setDialog, setRenaming } from "./overlay";
 import { changeSection, pinnedIds, sections, setPinned } from "./pins";
 import { option, organization, setOption, setOrganization } from "./prefs";
 import { copyText } from "./util";

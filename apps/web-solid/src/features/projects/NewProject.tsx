@@ -1,44 +1,19 @@
 // New project: actions and existing projects, then the create and clone forms, as on desktop.
-import { createEffect, createMemo, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
-import { state } from "@/core/store";
 import type { Device } from "@/core/protocol";
+import { state } from "@/core/store";
 import { Icon } from "@/ui/Icon";
 import { GlyphSpinner } from "@/ui/loaders";
+import { createEffect, createMemo, Match, onCleanup, onSettled, Show, Switch } from "solid-js";
 import { CreationBadge } from "./CreationNotice";
 import { creationAt } from "./creations";
 import { FolderBrowser } from "./FolderBrowser";
 import { deviceGlyph, deviceLabel, spaceName } from "./hosts";
-import { GroupLabel, Highlight, KeyHint, KeyCaps, Radio, Row, VirtualList } from "./Palette";
+import { GroupLabel, Highlight, KeyCaps, KeyHint, Radio, Row, VirtualList } from "./Palette";
 import { repositoryLabel } from "./paths";
-import {
-  ACTIONS,
-  type ActionRow,
-  activateFormRow,
-  actionRows,
-  back,
-  canSubmit,
-  closeSetup,
-  cloneUrl,
-  destination,
-  endSetup,
-  type FormRow,
-  formGroup,
-  formRows,
-  githubReady,
-  loadGithub,
-  pickAction,
-  primary,
-  searching,
-  setName,
-  setQuery,
-  setSetup,
-  setup,
-  startSetup,
-  TEMPLATES,
-} from "./setup";
+import { actionRows, ACTIONS, activateFormRow, back, canSubmit, cloneUrl, closeSetup, destination, endSetup, formGroup, formRows, githubReady, loadGithub, pickAction, primary, searching, setName, setQuery, setSetup, setup, startSetup, TEMPLATES, type ActionRow, type FormRow, } from "./setup";
 
 export function NewProject() {
-  onMount(() => {
+  onSettled(() => {
     if (!setup.started) startSetup();
   });
   onCleanup(endSetup);
@@ -128,12 +103,7 @@ function SetupCard() {
     return at >= 0 ? at : undefined;
   });
 
-  createEffect(
-    on(
-      () => [setup.mode, setup.cloneConfirm] as const,
-      () => queueMicrotask(() => input?.focus()),
-    ),
-  );
+  createEffect(() => [setup.mode, setup.cloneConfirm] as const, () => queueMicrotask(() => input?.focus()));
 
   const onKeyDown = (event: KeyboardEvent) => {
     let key = event.key;
@@ -154,7 +124,7 @@ function SetupCard() {
       const list = actions();
       if (delta) {
         event.preventDefault();
-        setSetup("active", step(setup.active, list.length, delta));
+        setSetup(draft => { draft["active"] = step(setup.active, list.length, delta); });
       } else if (key === "Enter") {
         event.preventDefault();
         const row = list[setup.active];
@@ -165,7 +135,7 @@ function SetupCard() {
     const list = rows();
     if (delta) {
       event.preventDefault();
-      setSetup({ active: step(setup.navigating ? setup.active : null, list.length, delta), navigating: list.length > 0 });
+      setSetup(draft => { Object.assign(draft, { active: step(setup.navigating ? setup.active : null, list.length, delta), navigating: list.length > 0 }); });
     } else if (key === "Enter") {
       event.preventDefault();
       const row = list[setup.active];
@@ -205,7 +175,7 @@ function SetupCard() {
           aria-controls="pj-setup-list"
           aria-activedescendant={activeEntry() !== undefined ? `pj-setup-${activeEntry()}` : undefined}
           autocomplete="off"
-          spellcheck={false}
+          spellcheck="false"
           onInput={(e) => onInput(e.currentTarget.value)}
           onKeyDown={onKeyDown}
         />
@@ -303,7 +273,7 @@ function EntryView(props: { entry: Entry; id: string }) {
 
 function ActionRowView(props: { row: ActionRow; index: number; id: string }) {
   const highlighted = () => setup.active === props.index;
-  const hover = () => setup.active !== props.index && setSetup("active", props.index);
+  const hover = () => setup.active !== props.index && setSetup(draft => { draft["active"] = props.index; });
   return (
     <Switch>
       <Match when={props.row.kind === "project" && props.row}>
@@ -338,7 +308,7 @@ function ActionRowView(props: { row: ActionRow; index: number; id: string }) {
             highlighted={highlighted()}
             onPointerMove={hover}
             onClick={() => pickAction(props.row)}
-            aria-checked={setup.deviceId === device().id}
+            aria-checked={(setup.deviceId === device().id) ? "true" : "false"}
           >
             <span class="pj-title pj-grow">{deviceLabel(device().id)}</span>
             <Radio on={setup.deviceId === device().id} />
@@ -362,14 +332,14 @@ function ActionRowView(props: { row: ActionRow; index: number; id: string }) {
 function FormRowView(props: { row: FormRow; index: number; id: string }) {
   const highlighted = () => setup.navigating && setup.active === props.index;
   const hover = () => {
-    if (setup.active !== props.index || !setup.navigating) setSetup({ active: props.index, navigating: true });
+    if (setup.active !== props.index || !setup.navigating) setSetup(draft => { Object.assign(draft, { active: props.index, navigating: true }); });
   };
   const common = () => ({ id: props.id, highlighted: highlighted(), onPointerMove: hover, onClick: () => activateFormRow(props.row) });
   return (
     <Switch>
       <Match when={props.row.kind === "template" && TEMPLATES.find((t) => t.template === (props.row as { template: string }).template)}>
         {(t) => (
-          <Row {...common()} glyph={t().glyph} aria-checked={setup.template === t().template}>
+          <Row {...common()} glyph={t().glyph} aria-checked={(setup.template === t().template) ? "true" : "false"}>
             <span class="pj-title pj-title-fixed">{t().label}</span>
             <span class="pj-detail">{t().hint}</span>
             <Radio on={setup.template === t().template} />
@@ -377,7 +347,7 @@ function FormRowView(props: { row: FormRow; index: number; id: string }) {
         )}
       </Match>
       <Match when={props.row.kind === "publish"}>
-        <Row {...common()} glyph="site-github" aria-checked={setup.publish && githubReady()} aria-disabled={!githubReady()}>
+        <Row {...common()} glyph="site-github" aria-checked={(setup.publish && githubReady()) ? "true" : "false"} aria-disabled={(!githubReady()) ? "true" : "false"}>
           <span class="pj-title pj-title-fixed" data-muted={githubReady() ? undefined : "true"}>
             Create private GitHub repository
           </span>
@@ -393,7 +363,7 @@ function FormRowView(props: { row: FormRow; index: number; id: string }) {
       </Match>
       <Match when={props.row.kind === "computer" && (props.row as { device: Device }).device}>
         {(device) => (
-          <Row {...common()} glyph={deviceGlyph(device().platform)} aria-checked={setup.deviceId === device().id}>
+          <Row {...common()} glyph={deviceGlyph(device().platform)} aria-checked={(setup.deviceId === device().id) ? "true" : "false"}>
             <span class="pj-title pj-grow">{deviceLabel(device().id)}</span>
             <Radio on={setup.deviceId === device().id} />
           </Row>
