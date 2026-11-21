@@ -188,13 +188,50 @@ fn paint_adjusted_with_mask(
     corner_radii: Corners<Pixels>,
     mask: Option<ImageAlphaMask>,
     window: &mut Window,
+    cx: &gpui::App,
 ) {
     let Some((visible, fitted, corner_radii)) =
         adjusted_image_paint(&source, bounds, adjustment, corner_radii)
     else {
         return;
     };
-    let _ = window.paint_image_fitted_masked(visible, fitted, corner_radii, source, 0, false, mask);
+    let frame = animation_frame(&source, !cx.reduce_motion(), window);
+    let _ =
+        window.paint_image_fitted_masked(visible, fitted, corner_radii, source, frame, false, mask);
+}
+
+/// The frame of an animated wallpaper due now, on one clock shared by every
+/// painter so the hero and its previews stay in step. Stills, and reduced
+/// motion, always show the first frame.
+fn animation_frame(source: &RenderImage, animate: bool, window: &mut Window) -> usize {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let count = source.frame_count();
+    if count <= 1 || !animate {
+        return 0;
+    }
+    window.request_animation_frame();
+    let delays = (0..count).map(|index| {
+        let (numer, denom) = source.delay(index).numer_denom_ms();
+        u64::from(numer) / u64::from(denom.max(1))
+    });
+    let elapsed = START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis() as u64;
+    frame_at(delays, elapsed)
+}
+
+/// Which frame of a looping animation shows `elapsed_ms` after it started.
+fn frame_at(delays_ms: impl Iterator<Item = u64> + Clone, elapsed_ms: u64) -> usize {
+    let total = delays_ms.clone().sum::<u64>().max(1);
+    let mut at = elapsed_ms % total;
+    for (index, delay) in delays_ms.enumerate() {
+        if at < delay {
+            return index;
+        }
+        at -= delay;
+    }
+    0
 }
 
 /// Paint the exact responsive crop used by the new-thread hero, without its
@@ -205,13 +242,15 @@ pub(crate) fn paint_adjusted(
     adjustment: NewThreadBackgroundAdjustment,
     corner_radii: Corners<Pixels>,
     window: &mut Window,
+    cx: &gpui::App,
 ) {
-    paint_adjusted_with_mask(source, bounds, adjustment, corner_radii, None, window);
+    paint_adjusted_with_mask(source, bounds, adjustment, corner_radii, None, window, cx);
 }
 
 /// All elements have finished prepaint before this reads the measured surface,
 /// so the first visible frame uses the current composer, including on sidebar
 /// resize and right-panel handoffs. Object-fit cropping is independent.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn paint(
     source: Arc<RenderImage>,
     bounds: Bounds<Pixels>,
@@ -220,6 +259,7 @@ pub(crate) fn paint(
     cutout: bool,
     look: WallpaperLook,
     window: &mut Window,
+    cx: &gpui::App,
 ) {
     paint_adjusted_with_mask(
         source,
@@ -228,6 +268,7 @@ pub(crate) fn paint(
         Default::default(),
         Some(mask(bounds, composer, cutout, look)),
         window,
+        cx,
     );
 }
 
@@ -252,7 +293,7 @@ pub(crate) fn artwork(
                 .child(
                     gpui::canvas(
                         |_, _, _| {},
-                        move |bounds, _, window, _| {
+                        move |bounds, _, window, cx| {
                             let composer = composer_bounds.get().unwrap_or_else(|| {
                                 Bounds::new(
                                     point(bounds.left(), bounds.bottom() + px(200.0)),
@@ -267,6 +308,7 @@ pub(crate) fn artwork(
                                 cutout,
                                 look,
                                 window,
+                                cx,
                             );
                         },
                     )
@@ -279,6 +321,17 @@ pub(crate) fn artwork(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn animation_loops_through_frames_by_their_delays() {
+        let delays = [100u64, 50, 200].into_iter();
+        assert_eq!(frame_at(delays.clone(), 0), 0);
+        assert_eq!(frame_at(delays.clone(), 99), 0);
+        assert_eq!(frame_at(delays.clone(), 100), 1);
+        assert_eq!(frame_at(delays.clone(), 151), 2);
+        assert_eq!(frame_at(delays.clone(), 350), 0);
+        assert_eq!(frame_at(delays, 350 * 7 + 120), 1);
+    }
     use gpui::{Context, Render, canvas, div};
 
     fn hero(width: f32, height: f32) -> Bounds<Pixels> {
@@ -519,7 +572,7 @@ mod tests {
                     .child(
                         canvas(
                             |_, _, _| {},
-                            move |bounds, _, window, _| {
+                            move |bounds, _, window, cx| {
                                 painted.set(surface.get());
                                 if let Some(composer) = surface.get() {
                                     paint(
@@ -530,6 +583,7 @@ mod tests {
                                         true,
                                         WallpaperLook::default(),
                                         window,
+                                        cx,
                                     );
                                 }
                             },

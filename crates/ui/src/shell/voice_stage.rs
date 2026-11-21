@@ -255,7 +255,7 @@ impl Shell {
                 .child(
                     gpui::canvas(
                         |_, _, _| {},
-                        move |bounds, _, window, _| {
+                        move |bounds, _, window, cx| {
                             crate::new_thread_background_mask::paint(
                                 artwork.clone(),
                                 bounds,
@@ -264,6 +264,7 @@ impl Shell {
                                 false,
                                 look,
                                 window,
+                                cx,
                             );
                         },
                     )

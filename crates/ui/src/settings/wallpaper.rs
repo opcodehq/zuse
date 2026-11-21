@@ -120,7 +120,10 @@ impl Candidate {
             .ok_or_else(|| "Choose a wallpaper folder in Appearance first.".to_string())?;
         let (source, staged, image) = choose(folder, history)?;
         let artwork = crate::new_thread_background_effects::PreloadedArtwork::load(
-            &image, key.effect, key.light,
+            staged.bytes(),
+            &image,
+            key.effect,
+            key.light,
         );
         drop(image);
         let color = artwork.color();

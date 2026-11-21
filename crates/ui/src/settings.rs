@@ -520,7 +520,7 @@ pub fn install_new_thread_composer_background(source: &Path, cx: &mut App) -> Re
     // Do not persist the candidate or retire the old managed file until the
     // renderer's decoder has accepted the exact bytes we are about to save.
     let image = crate::new_thread_background_image::decode(staged.bytes()).map_err(|_| {
-        "This background image is unsupported or damaged. Choose a valid image such as PNG or JPEG.".to_string()
+        "This background image is unsupported or damaged. Choose a valid image such as PNG, JPEG, or GIF.".to_string()
     })?;
     let proxy = image.thumbnail(64, 64).to_rgba8();
     let color = wallpaper_colors::extract(proxy.pixels().map(|pixel| pixel.0));

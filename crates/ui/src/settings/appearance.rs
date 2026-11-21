@@ -1873,114 +1873,162 @@ fn icon_action(
     label: &str,
     id: impl Into<SharedString>,
 ) -> gpui::Stateful<gpui::Div> {
+    tinted_action(theme, glyph, label, id, theme.text_muted)
+}
+
+/// [`icon_action`] with the glyph and label in `ink` (e.g. danger red).
+fn tinted_action(
+    theme: &Theme,
+    glyph: &'static str,
+    label: &str,
+    id: impl Into<SharedString>,
+    ink: gpui::Hsla,
+) -> gpui::Stateful<gpui::Div> {
     // gpui's svg paints only its own text color; it never inherits the
     // button's, so an uncolored glyph renders as an empty gap.
     widgets::action_button(theme, widgets::ActionTone::Outlined)
         .px(px(11.0))
         .id(id.into())
-        .child(
-            icons::icon(glyph)
-                .size(px(13.0))
-                .text_color(theme.text_muted),
-        )
+        .when(ink != theme.text_muted, |button| button.text_color(ink))
+        .child(icons::icon(glyph).size(px(13.0)).text_color(ink))
         .child(SharedString::from(label.to_owned()))
 }
 
-fn import_scene_preview(variant: &zuse_theme::ThemeVariant) -> AnyElement {
+/// A variant at a glance: workspace thumbnail, a highlighted code sample,
+/// and its key roles as labelled chips. `ui` styles the dialog chrome; the
+/// sample itself is painted in the variant's own colors.
+fn import_scene_preview(ui: &Theme, variant: &zuse_theme::ThemeVariant) -> AnyElement {
     let theme = Theme::from_variant(
         variant,
         AccentSelection::ThemeDefault,
         SurfacePreference::ThemeDefault,
     );
+    let syntax = &theme.syntax;
+    let token = |color: gpui::Hsla, text: &'static str| div().text_color(color).child(text);
+    let code_lines: [Vec<gpui::Div>; 5] = [
+        vec![
+            token(syntax.keyword, "fn "),
+            token(syntax.function, "preview"),
+            token(syntax.punctuation, "("),
+            token(syntax.parameter, "theme"),
+            token(syntax.punctuation, ": "),
+            token(syntax.type_name, "&Theme"),
+            token(syntax.punctuation, ") {"),
+        ],
+        vec![
+            token(syntax.keyword, "    let "),
+            token(syntax.variable, "accent"),
+            token(syntax.operator, " = "),
+            token(syntax.number, "0.86"),
+            token(syntax.punctuation, ";"),
+        ],
+        vec![token(syntax.comment, "    // every role, mapped")],
+        vec![
+            token(syntax.function, "    render"),
+            token(syntax.punctuation, "("),
+            token(syntax.string, "\"zuse\""),
+            token(syntax.punctuation, ")"),
+        ],
+        vec![token(syntax.punctuation, "}")],
+    ];
+    let code = div()
+        .flex_1()
+        .min_w_0()
+        .h_full()
+        .overflow_hidden()
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.bg)
+        .px(px(10.0))
+        .py(px(9.0))
+        .flex()
+        .flex_col()
+        .gap(px(3.0))
+        .text_size(crate::typography::text_xs())
+        .font_family(theme.font_mono.clone())
+        .children(code_lines.into_iter().enumerate().map(|(index, spans)| {
+            div()
+                .flex()
+                .gap(px(10.0))
+                .whitespace_nowrap()
+                .child(
+                    div()
+                        .w(px(12.0))
+                        .flex_none()
+                        .text_right()
+                        .text_color(theme.text_faint)
+                        .child(SharedString::from((index + 1).to_string())),
+                )
+                .child(div().flex().children(spans))
+        }));
+    let chip = |name: &'static str, color: gpui::Hsla| {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .px(px(8.0))
+            .py(px(4.0))
+            .rounded(px(6.0))
+            .border_1()
+            .border_color(ui.border)
+            .text_size(crate::typography::text_xs())
+            .text_color(ui.text_muted)
+            .child(
+                div()
+                    .size(px(11.0))
+                    .rounded(px(3.0))
+                    .border_1()
+                    .border_color(ui.border)
+                    .bg(color),
+            )
+            .child(name)
+    };
     div()
         .w_full()
-        .h(px(86.0))
         .flex()
+        .flex_col()
         .gap(px(8.0))
         .child(
             div()
-                .w(px(152.0))
-                .h_full()
-                .overflow_hidden()
-                .rounded(px(8.0))
-                .border_1()
-                .border_color(theme.border)
-                .child(miniature(&theme, Corners::All)),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .h_full()
-                .rounded(px(8.0))
-                .border_1()
-                .border_color(theme.border)
-                .bg(theme.bg)
-                .p(px(9.0))
+                .w_full()
+                .h(px(112.0))
                 .flex()
-                .flex_col()
-                .gap(px(6.0))
+                .gap(px(8.0))
                 .child(
                     div()
-                        .text_size(crate::typography::text_xs())
-                        .font_family(theme.font_mono.clone())
-                        .child(
-                            div()
-                                .text_color(theme.syntax.keyword)
-                                .child("fn ")
-                                .child(div().text_color(theme.syntax.function).child("preview"))
-                                .child(div().text_color(theme.syntax.punctuation).child("() {")),
-                        ),
-                )
-                .child(
-                    div()
-                        .text_size(crate::typography::text_xs())
-                        .font_family(theme.font_mono.clone())
-                        .text_color(theme.syntax.string)
-                        .child("  \"Theme mapping\""),
-                )
-                .child(
-                    div()
-                        .mt_auto()
-                        .h(px(12.0))
-                        .flex()
-                        .rounded(px(3.0))
+                        .w(px(150.0))
+                        .flex_none()
+                        .h_full()
                         .overflow_hidden()
-                        .children(
-                            theme
-                                .terminal
-                                .ansi
-                                .iter()
-                                .take(8)
-                                .map(|color| div().flex_1().h_full().bg(*color)),
-                        ),
-                ),
+                        .rounded(px(8.0))
+                        .border_1()
+                        .border_color(theme.border)
+                        .child(miniature(&theme, Corners::All)),
+                )
+                .child(code),
         )
+        .child(div().flex().flex_wrap().gap(px(6.0)).children([
+            chip("Canvas", theme.bg),
+            chip("Surface", theme.surface),
+            chip("Text", theme.text),
+            chip("Accent", theme.accent),
+            chip("Added", theme.diff_add),
+            chip("Removed", theme.diff_del),
+        ]))
         .child(
             div()
-                .w(px(84.0))
-                .h_full()
-                .rounded(px(8.0))
-                .border_1()
-                .border_color(theme.border)
-                .bg(theme.surface)
-                .p(px(8.0))
+                .h(px(8.0))
                 .flex()
-                .flex_col()
-                .gap(px(6.0))
-                .child(
-                    div()
-                        .h(px(12.0))
-                        .rounded(px(3.0))
-                        .bg(theme.diff_add.opacity(0.35)),
-                )
-                .child(
-                    div()
-                        .h(px(12.0))
-                        .rounded(px(3.0))
-                        .bg(theme.diff_del.opacity(0.35)),
-                )
-                .child(div().h(px(12.0)).rounded(px(3.0)).bg(theme.accent_wash)),
+                .rounded(px(3.0))
+                .overflow_hidden()
+                .children(
+                    theme
+                        .terminal
+                        .ansi
+                        .iter()
+                        .map(|color| div().flex_1().h_full().bg(*color)),
+                ),
         )
         .into_any_element()
 }
@@ -3050,7 +3098,7 @@ impl AppearancePage {
                                     .pt(px(10.0))
                                     .border_t_1()
                                     .border_color(hairline)
-                                    .child(import_scene_preview(variant)),
+                                    .child(import_scene_preview(theme, variant)),
                             )
                             .when_some(report, |row, report| row.child(report_panel(theme, report)))
                         }),
@@ -3356,7 +3404,7 @@ impl AppearancePage {
             .child(
                 gpui::canvas(
                     move |bounds, _, _| measured_bounds.set(Some(bounds)),
-                    move |bounds, _, window, _| {
+                    move |bounds, _, window, cx| {
                         if let Some(source) = paint_source.clone() {
                             crate::new_thread_background_mask::paint_adjusted(
                                 source,
@@ -3366,6 +3414,7 @@ impl AppearancePage {
                                 // itself to the frame's 12px radius inside its 1px border.
                                 gpui::Corners::all(px(11.0)),
                                 window,
+                                cx,
                             );
                         }
                     },
@@ -3773,19 +3822,49 @@ impl AppearancePage {
                 popover::dialog_body(theme, format!("{} · {}", entry.name, entry.source.label()))
                     .mt(px(6.0)),
             );
-        for variant in &entry.family.variants {
-            card = card
+        for (index, variant) in entry.family.variants.iter().enumerate() {
+            let mut section = div()
+                .mt(px(16.0))
+                .when(index > 0, |section| {
+                    section
+                        .pt(px(16.0))
+                        .border_t_1()
+                        .border_color(widgets::row_divider(theme))
+                })
+                .flex()
+                .flex_col()
+                .gap(px(10.0))
                 .child(
                     div()
-                        .mt(px(14.0))
-                        .text_size(crate::typography::text_sm())
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .child(SharedString::from(variant.name.clone())),
+                        .flex()
+                        .items_baseline()
+                        .justify_between()
+                        .gap(px(12.0))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(crate::typography::text_sm())
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .child(SharedString::from(variant.name.clone())),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_size(crate::typography::text_xs())
+                                .text_color(theme.text_muted)
+                                .child(if variant.appearance.is_dark() {
+                                    "Dark"
+                                } else {
+                                    "Light"
+                                }),
+                        ),
                 )
-                .child(import_scene_preview(variant));
+                .child(import_scene_preview(theme, variant));
             if let Some(report) = entry.reports.get(&variant.id) {
-                card = card.child(report_panel(theme, report));
+                section = section.child(report_panel(theme, report));
             }
+            card = card.child(section);
         }
         card = card.child(
             popover::dialog_footer(&theme).child(
@@ -4000,6 +4079,8 @@ impl AppearancePage {
         // A Finder-launched app's working directory is `/`; start somewhere
         // the user can write.
         let directory = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .filter(|home| !home.is_empty())
             .map(PathBuf::from)
             .map(|home| {
                 let downloads = home.join("Downloads");
@@ -4279,13 +4360,13 @@ impl Render for AppearancePage {
                                     )),
                                 )
                                 .child(
-                                    icon_action(
+                                    tinted_action(
                                         &theme,
                                         icons::TRASH_BIN_MINIMALISTIC,
                                         "Remove",
                                         "new-thread-background-remove",
+                                        theme.danger,
                                     )
-                                    .text_color(theme.danger)
                                     .tab_index(0)
                                     .role(gpui::Role::Button)
                                     .focus_visible(|s| {

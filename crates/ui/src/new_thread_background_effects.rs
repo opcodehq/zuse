@@ -1,7 +1,6 @@
 //! Effects remain cached source-space images; a separate alpha mask follows layout.
 use crate::settings::{NewThreadBackgroundAdjustment, NewThreadBackgroundEffect};
 use crate::theme::Theme;
-use gpui::{Pixels, px};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
@@ -99,16 +98,32 @@ struct PhotoRaster {
     ready: Option<(PhotoKey, Arc<gpui::RenderImage>)>,
 }
 
+/// One decoded frame at raster resolution: color and luma per pixel.
 #[derive(Debug)]
-struct BackgroundLuminance {
+struct FrameData {
     width: u32,
     height: u32,
     pixels: Box<[u8]>,
     colors: Box<[[u8; 4]]>,
+}
+
+#[derive(Debug)]
+struct BackgroundLuminance {
+    /// Every frame with its display time; a still image has exactly one.
+    frames: Vec<(FrameData, image::Delay)>,
     /// Mean luma (0–255) of the band the new-thread heading sits over.
     heading_luma: u8,
     effects: Mutex<Vec<EffectEntry>>,
     photo: Mutex<PhotoRaster>,
+}
+
+/// Effects and color sampling read the first frame unless they iterate.
+impl std::ops::Deref for BackgroundLuminance {
+    type Target = FrameData;
+
+    fn deref(&self) -> &FrameData {
+        &self.frames[0].0
+    }
 }
 impl BackgroundLuminance {
     fn raster_image(
@@ -142,14 +157,26 @@ impl BackgroundLuminance {
                 .spawn(async move { worker.render_image(effect, light) })
                 .await;
             cx.update(|cx| {
-                if let Some((_, ready)) = source
-                    .effects
-                    .lock()
-                    .unwrap()
-                    .iter_mut()
-                    .find(|(cached, _)| *cached == key)
-                {
-                    *ready = Some(image);
+                let evicted = {
+                    let mut effects = source.effects.lock().unwrap();
+                    if let Some((_, ready)) = effects.iter_mut().find(|(cached, _)| *cached == key)
+                    {
+                        *ready = Some(image);
+                    }
+                    // An animation's raster holds every frame; keep only the
+                    // one in use rather than one per effect ever tried.
+                    if source.frames.len() > 1 {
+                        let (kept, evicted): (Vec<_>, Vec<_>) = effects
+                            .drain(..)
+                            .partition(|(cached, ready)| *cached == key || ready.is_none());
+                        *effects = kept;
+                        evicted.into_iter().filter_map(|(_, image)| image).collect()
+                    } else {
+                        Vec::new()
+                    }
+                };
+                for image in evicted {
+                    cx.drop_image(image, None);
                 }
                 cx.refresh_windows();
             });
@@ -157,38 +184,78 @@ impl BackgroundLuminance {
         .detach();
         None
     }
+    /// The effect raster, or the plain image while the effect is still being
+    /// computed, so switching effects never blanks the backdrop.
+    fn effect_or_plain(
+        self: &Arc<Self>,
+        effect: NewThreadBackgroundEffect,
+        light: bool,
+        cx: &mut gpui::App,
+    ) -> Option<Arc<gpui::RenderImage>> {
+        self.raster_image(effect, light, cx)
+            .or_else(|| self.raster_image(NewThreadBackgroundEffect::None, light, cx))
+    }
+
     fn render_image(
         &self,
         effect: NewThreadBackgroundEffect,
         light: bool,
     ) -> Arc<gpui::RenderImage> {
-        let pixels = match effect {
+        let frames = self
+            .frames
+            .iter()
+            .map(|(frame, delay)| {
+                image::Frame::from_parts(frame.effect_pixels(effect, light), 0, 0, *delay)
+            })
+            .collect::<Vec<_>>();
+        Arc::new(gpui::RenderImage::new(frames))
+    }
+}
+
+impl FrameData {
+    /// This frame through `effect`, as the BGRA bytes `RenderImage` consumes.
+    fn effect_pixels(&self, effect: NewThreadBackgroundEffect, light: bool) -> image::RgbaImage {
+        match effect {
             NewThreadBackgroundEffect::None => {
                 image::RgbaImage::from_fn(self.width, self.height, |x, y| {
-                    let [r, g, b, a] = self.colors[(y * self.width + x) as usize];
+                    let [r, g, b, a] = self.rgba(x, y);
                     image::Rgba([b, g, r, a])
                 })
             }
-            NewThreadBackgroundEffect::Dither => self.dither_pixels(self.width, self.height),
+            NewThreadBackgroundEffect::Dither => self.dither_pixels(),
             NewThreadBackgroundEffect::Grain => self.grain_pixels(),
             NewThreadBackgroundEffect::Vignette => self.vignette_pixels(light),
-            NewThreadBackgroundEffect::Halftone => {
-                self.halftone_pixels(self.width, self.height, light)
-            }
+            NewThreadBackgroundEffect::Halftone => self.halftone_pixels(light),
             NewThreadBackgroundEffect::Ascii => self.ascii_pixels(light),
             NewThreadBackgroundEffect::Scanlines => self.scanline_pixels(light),
-        };
-        Arc::new(gpui::RenderImage::new([image::Frame::new(pixels)]))
+        }
     }
 
+    /// Source pixels per effect "dot". Rasters are drawn at source resolution
+    /// (up to 2048px) and scaled to the window, so a fixed 1–2px pattern
+    /// vanishes or turns to moiré on screen; scale it with the image instead.
+    fn unit(&self) -> u32 {
+        (self.width.max(self.height) / 680).max(1)
+    }
+
+    fn rgba(&self, x: u32, y: u32) -> [u8; 4] {
+        self.colors[(y.min(self.height - 1) * self.width + x.min(self.width - 1)) as usize]
+    }
+
+    fn luma(&self, x: u32, y: u32) -> u8 {
+        self.pixels[(y.min(self.height - 1) * self.width + x.min(self.width - 1)) as usize]
+    }
+
+    /// Film grain: clustered monochrome noise, strongest in the midtones
+    /// where real grain reads, gentle in deep shadows and highlights.
     fn grain_pixels(&self) -> image::RgbaImage {
+        let size = (self.unit() / 2).max(1);
         image::RgbaImage::from_fn(self.width, self.height, |x, y| {
-            let [red, green, blue, alpha] = self.colors[(y * self.width + x) as usize];
-            let mut seed = x.wrapping_mul(0x9e37_79b1) ^ y.wrapping_mul(0x85eb_ca77);
-            seed = (seed ^ (seed >> 16)).wrapping_mul(0x7feb_352d);
-            seed = (seed ^ (seed >> 15)).wrapping_mul(0x846c_a68b);
-            let offset = (((seed ^ (seed >> 16)) >> 24) as i16 - 128) / 11;
-            let grain = |channel: u8| (i16::from(channel) + offset).clamp(0, 255) as u8;
+            let [red, green, blue, alpha] = self.rgba(x, y);
+            let noise = hash_unit(x / size, y / size) * 2.0 - 1.0;
+            let tone = f32::from(self.luma(x, y)) / 255.0;
+            let amount = 34.0 * (0.35 + 0.65 * (1.0 - (2.0 * tone - 1.0).abs()));
+            let grain = |channel: u8| (f32::from(channel) + noise * amount).clamp(0.0, 255.0) as u8;
             image::Rgba([grain(blue), grain(green), grain(red), alpha])
         })
     }
@@ -210,23 +277,36 @@ impl BackgroundLuminance {
         })
     }
 
+    /// CRT scanlines: a dark line every few screen pixels, with a slight
+    /// bloom on the lit rows so the image keeps its brightness.
     fn scanline_pixels(&self, light: bool) -> image::RgbaImage {
+        let line = self.unit().max(2);
+        let period = line * 3;
         image::RgbaImage::from_fn(self.width, self.height, |x, y| {
-            let [r, g, b, a] = self.colors[(y * self.width + x) as usize];
-            let gain = if y % 3 == 0 { 0.52 } else { 1.0 };
+            let [r, g, b, a] = self.rgba(x, y);
+            let dark = y % period < line;
             let channel = |value: u8| {
-                if light {
-                    (value as f32 + (255.0 - value as f32) * (1.0 - gain)) as u8
+                let value = f32::from(value);
+                (if light {
+                    if dark {
+                        value + (255.0 - value) * 0.42
+                    } else {
+                        value
+                    }
+                } else if dark {
+                    value * 0.38
                 } else {
-                    (value as f32 * gain) as u8
-                }
+                    value * 1.08
+                })
+                .clamp(0.0, 255.0) as u8
             };
             image::Rgba([channel(b), channel(g), channel(r), a])
         })
     }
+
+    /// ASCII art: a 5×7 bitmap ramp from " " to "@", one glyph per cell,
+    /// inked in the cell's (brightened) color over plain paper.
     fn ascii_pixels(&self, light: bool) -> image::RgbaImage {
-        // Five-column bitmap glyphs, one column/row of spacing. These are
-        // artwork pixels rather than thousands of shaped UI text runs.
         const GLYPHS: [[u8; 7]; 10] = [
             [0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 4, 0],
@@ -239,108 +319,79 @@ impl BackgroundLuminance {
             [17, 2, 4, 4, 8, 16, 17],
             [14, 17, 23, 21, 23, 16, 14],
         ];
+        let scale = (self.unit() * 2 / 3).max(1);
+        let (cell_w, cell_h) = (6 * scale, 8 * scale);
+        let paper = if light { 255.0 } else { 0.0 };
         image::RgbaImage::from_fn(self.width, self.height, |x, y| {
-            let sx = (x / 6 * 6 + 3).min(self.width - 1);
-            let sy = (y / 8 * 8 + 4).min(self.height - 1);
-            let sample = (sy * self.width + sx) as usize;
-            let ink_density = if light {
-                255 - self.pixels[sample]
-            } else {
-                self.pixels[sample]
+            let (cx, cy) = (
+                x / cell_w * cell_w + cell_w / 2,
+                y / cell_h * cell_h + cell_h / 2,
+            );
+            let tone = self.luma(cx, cy);
+            let density = if light { 255 - tone } else { tone };
+            let glyph = &GLYPHS[((f32::from(density) / 255.0).sqrt() * 9.0) as usize];
+            let (gx, gy) = (x % cell_w / scale, y % cell_h / scale);
+            let ink = gx < 5 && gy < 7 && glyph[gy as usize] & (1 << (4 - gx)) != 0;
+            let [r, g, b, _] = self.rgba(x, y);
+            let [ir, ig, ib, _] = vivid(self.rgba(cx, cy), light);
+            let alpha = self.rgba(x, y)[3];
+            // A faint underlay keeps the picture legible between glyphs.
+            let mix = |source: u8, glyph: u8| {
+                if ink {
+                    glyph
+                } else {
+                    (paper * 0.86 + f32::from(source) * 0.14) as u8
+                }
             };
-            let index = ((ink_density as f32 / 255.0).sqrt() * 9.0) as usize;
-            let ink =
-                x % 6 < 5 && y % 8 < 7 && GLYPHS[index][y as usize % 8] & (1 << (4 - x % 6)) != 0;
-            let [r, g, b, a] = self.colors[(y * self.width + x) as usize];
-            let [cr, cg, cb, _] = self.colors[sample];
-            let mix = |base: u8, glyph: u8| {
-                let paper = if light { 255.0 } else { 0.0 };
-                // Keep a colored image beneath the glyph texture in both themes.
-                (base as f32 * 0.60
-                    + if ink {
-                        glyph as f32 * 0.40
-                    } else {
-                        paper * 0.40
-                    }) as u8
-            };
-            image::Rgba([mix(b, cb), mix(g, cg), mix(r, cr), a])
+            image::Rgba([mix(b, ib), mix(g, ig), mix(r, ir), alpha])
         })
     }
-    fn halftone_pixels(&self, width: u32, height: u32, light: bool) -> image::RgbaImage {
-        let bounds = gpui::size(px(width as f32), px(height as f32));
-        let paper = if light { 255 } else { 0 };
-        let mut pixels =
-            image::RgbaImage::from_pixel(width, height, image::Rgba([paper, paper, paper, 255]));
-        for y in (0..height).step_by(4) {
-            for x in (0..width).step_by(4) {
-                let luma = self.sample_cover(bounds, x as f32, y as f32);
-                let luma = if light { 255 - luma } else { luma };
-                let radius = 2.0 * (0.3 + 0.7 * (luma as f32 / 255.0).sqrt());
-                let [r, g, b, a] =
-                    self.colors[self.cover_index(bounds, x as f32 + 2.0, y as f32 + 2.0)];
-                for dy in 0..4.min(height - y) {
-                    for dx in 0..4.min(width - x) {
-                        let distance =
-                            ((dx as f32 - 1.5).powi(2) + (dy as f32 - 1.5).powi(2)).sqrt();
-                        let coverage = (radius + 0.5 - distance).clamp(0.0, 1.0) * a as f32 / 255.0;
-                        let [sr, sg, sb, sa] = self.colors[((y + dy) * width + x + dx) as usize];
-                        let blend = |source: u8, dot: u8| {
-                            (source as f32 * 0.60
-                                + (dot as f32 * coverage + paper as f32 * (1.0 - coverage)) * 0.40)
-                                as u8
-                        };
-                        pixels.put_pixel(
-                            x + dx,
-                            y + dy,
-                            image::Rgba([blend(sb, b), blend(sg, g), blend(sr, r), sa]),
-                        );
-                    }
-                }
-            }
-        }
-        pixels
+
+    /// Print halftone: round dots on a 45° screen, each sized by the tone
+    /// under it and inked in that area's color, on plain paper.
+    fn halftone_pixels(&self, light: bool) -> image::RgbaImage {
+        let cell = (self.unit() * 5).max(4) as f32;
+        let paper = if light { 255.0 } else { 0.0 };
+        let (sin, cos) = std::f32::consts::FRAC_PI_4.sin_cos();
+        image::RgbaImage::from_fn(self.width, self.height, |x, y| {
+            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+            // Into the rotated screen, snap to the cell center, and back.
+            let (u, v) = (px * cos + py * sin, -px * sin + py * cos);
+            let (cu, cv) = (
+                (u / cell).floor() * cell + cell / 2.0,
+                (v / cell).floor() * cell + cell / 2.0,
+            );
+            let (sx, sy) = (cu * cos - cv * sin, cu * sin + cv * cos);
+            let (sx, sy) = (
+                sx.clamp(0.0, self.width as f32 - 1.0) as u32,
+                sy.clamp(0.0, self.height as f32 - 1.0) as u32,
+            );
+            let tone = f32::from(self.luma(sx, sy)) / 255.0;
+            let density = if light { 1.0 - tone } else { tone };
+            let radius = cell * 0.5 * std::f32::consts::SQRT_2 * density.sqrt();
+            let distance = ((u - cu).powi(2) + (v - cv).powi(2)).sqrt();
+            let coverage = (radius - distance + 0.5).clamp(0.0, 1.0);
+            let [r, g, b, _] = vivid(self.rgba(sx, sy), light);
+            let alpha = self.rgba(x, y)[3];
+            let ink = |dot: u8| (f32::from(dot) * coverage + paper * (1.0 - coverage)) as u8;
+            image::Rgba([ink(b), ink(g), ink(r), alpha])
+        })
     }
 
-    fn dither_pixels(&self, width: u32, height: u32) -> image::RgbaImage {
+    /// Ordered (Bayer) dither: each chunky dot is either its color at full
+    /// strength or near-black, so gradients turn into a dot pattern.
+    fn dither_pixels(&self) -> image::RgbaImage {
         const BAYER: [[u8; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
-        let bounds = gpui::size(px(width as f32), px(height as f32));
-        let mut pixels = image::RgbaImage::new(width, height);
-        for y in (0..height).step_by(2) {
-            for x in (0..width).step_by(2) {
-                // Sample/quantize once per dot, not four times per 2x2 cell.
-                let index = self.cover_index(bounds, (x + 1) as f32, (y + 1) as f32);
-                let [r, g, b, a] = dither_color(
-                    self.colors[index],
-                    BAYER[y as usize / 2 % 4][x as usize / 2 % 4],
-                );
-                for dy in 0..2.min(height - y) {
-                    for dx in 0..2.min(width - x) {
-                        // RenderImage consumes BGRA.
-                        pixels.put_pixel(x + dx, y + dy, image::Rgba([b, g, r, a]));
-                    }
-                }
-            }
-        }
-        pixels
-    }
-
-    fn sample_cover(&self, bounds: gpui::Size<Pixels>, x: f32, y: f32) -> u8 {
-        self.pixels[self.cover_index(bounds, x, y)]
-    }
-
-    fn cover_index(&self, bounds: gpui::Size<Pixels>, x: f32, y: f32) -> usize {
-        let width = f32::from(bounds.width).max(1.0);
-        let height = f32::from(bounds.height).max(1.0);
-        let source_width = self.width as f32;
-        let source_height = self.height as f32;
-        let scale = (width / source_width).max(height / source_height);
-        let visible_width = width / scale;
-        let visible_height = height / scale;
-        let source_x = ((source_width - visible_width) * 0.5 + x / scale)
-            .clamp(0.0, source_width - 1.0) as u32;
-        let source_y = ((source_height - visible_height) * 0.5 + y / scale)
-            .clamp(0.0, source_height - 1.0) as u32;
-        (source_y * self.width + source_x) as usize
+        let dot = self.unit().max(2);
+        image::RgbaImage::from_fn(self.width, self.height, |x, y| {
+            let (dx, dy) = (x / dot, y / dot);
+            let [r, g, b, _] = dither_color(
+                self.rgba(dx * dot + dot / 2, dy * dot + dot / 2),
+                BAYER[dy as usize % 4][dx as usize % 4],
+            );
+            // RenderImage consumes BGRA.
+            image::Rgba([b, g, r, self.rgba(x, y)[3]])
+        })
     }
 }
 
@@ -349,24 +400,101 @@ type Cache = Vec<(PathBuf, Source)>;
 static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
 
 fn decode_source(bytes: &[u8]) -> Option<Arc<BackgroundLuminance>> {
-    Some(source_from_image(
-        &crate::new_thread_background_image::decode(bytes).ok()?,
-    ))
+    let image = crate::new_thread_background_image::decode(bytes).ok()?;
+    Some(source_from_bytes(bytes, &image))
+}
+
+/// Animated GIF/WebP sources keep their frames; anything else is a still.
+fn source_from_bytes(bytes: &[u8], first: &image::DynamicImage) -> Arc<BackgroundLuminance> {
+    match animation_frames(bytes) {
+        Some(frames) => source_from_frames(frames),
+        None => source_from_image(first),
+    }
 }
 
 fn source_from_image(image: &image::DynamicImage) -> Arc<BackgroundLuminance> {
-    let proxy = image.thumbnail(2048, 2048);
-    let gray = proxy.to_luma8();
-    let heading_luma = band_luma(&gray);
+    source_from_frames(vec![(
+        frame_data(image, STILL_MAX_SIDE),
+        image::Delay::from_numer_denom_ms(0, 1),
+    )])
+}
+
+fn source_from_frames(frames: Vec<(FrameData, image::Delay)>) -> Arc<BackgroundLuminance> {
+    let first = &frames[0].0;
+    let heading_luma = band_luma(first.width, first.height, &first.pixels);
     Arc::new(BackgroundLuminance {
-        width: gray.width(),
-        height: gray.height(),
-        pixels: gray.into_raw().into_boxed_slice(),
-        colors: proxy.to_rgba8().pixels().map(|pixel| pixel.0).collect(),
+        frames,
         heading_luma,
         effects: Mutex::new(Vec::new()),
         photo: Mutex::default(),
     })
+}
+
+fn frame_data(image: &image::DynamicImage, max_side: u32) -> FrameData {
+    let proxy = image.thumbnail(max_side, max_side);
+    let gray = proxy.to_luma8();
+    FrameData {
+        width: gray.width(),
+        height: gray.height(),
+        pixels: gray.into_raw().into_boxed_slice(),
+        colors: proxy.to_rgba8().pixels().map(|pixel| pixel.0).collect(),
+    }
+}
+
+const STILL_MAX_SIDE: u32 = 2048;
+/// Animated frames are smaller: every frame is held decoded, and again per
+/// effect raster, so the whole animation shares a pixel budget.
+const ANIMATION_MAX_SIDE: u32 = 960;
+const ANIMATION_PIXEL_BUDGET: u64 = 24_000_000;
+const ANIMATION_MAX_FRAMES: usize = 240;
+
+/// Decode an animated GIF or WebP frame by frame, shrinking each as it
+/// arrives so a long, large animation never sits in memory at full size.
+/// Stops at the frame or pixel budget; returns `None` for stills.
+fn animation_frames(bytes: &[u8]) -> Option<Vec<(FrameData, image::Delay)>> {
+    use image::AnimationDecoder as _;
+    let cursor = std::io::Cursor::new(bytes);
+    let frames = match image::guess_format(bytes).ok()? {
+        image::ImageFormat::Gif => image::codecs::gif::GifDecoder::new(cursor)
+            .ok()?
+            .into_frames(),
+        image::ImageFormat::WebP => {
+            let decoder = image::codecs::webp::WebPDecoder::new(cursor).ok()?;
+            if !decoder.has_animation() {
+                return None;
+            }
+            decoder.into_frames()
+        }
+        _ => return None,
+    };
+    let mut decoded = Vec::new();
+    let mut budget = ANIMATION_PIXEL_BUDGET;
+    for frame in frames.take(ANIMATION_MAX_FRAMES) {
+        let frame = frame.ok()?;
+        let delay = playable_delay(frame.delay());
+        let data = frame_data(
+            &image::DynamicImage::ImageRgba8(frame.into_buffer()),
+            ANIMATION_MAX_SIDE,
+        );
+        let pixels = u64::from(data.width) * u64::from(data.height);
+        if pixels > budget {
+            break;
+        }
+        budget -= pixels;
+        decoded.push((data, delay));
+    }
+    (decoded.len() > 1).then_some(decoded)
+}
+
+/// Browsers treat GIF delays under 20ms as 100ms; so do we, so "as fast as
+/// possible" animations don't spin the renderer.
+fn playable_delay(delay: image::Delay) -> image::Delay {
+    let (numer, denom) = delay.numer_denom_ms();
+    if numer < denom.saturating_mul(20) {
+        image::Delay::from_numer_denom_ms(100, 1)
+    } else {
+        delay
+    }
 }
 
 /// Fully decoded source and selected effect, built on the background executor.
@@ -376,11 +504,12 @@ impl PreloadedArtwork {
     /// Takes the image the caller already decoded to validate the candidate,
     /// so a full-resolution wallpaper is decoded once per preload.
     pub fn load(
+        bytes: &[u8],
         image: &image::DynamicImage,
         effect: NewThreadBackgroundEffect,
         light: bool,
     ) -> Self {
-        let source = source_from_image(image);
+        let source = source_from_bytes(bytes, image);
         let light = light
             && !matches!(
                 effect,
@@ -449,13 +578,12 @@ fn background_luminance(path: &Path, cx: &mut gpui::App) -> Option<Arc<Backgroun
 }
 
 /// The heading sits in the hero's upper-middle; average that band.
-fn band_luma(gray: &image::GrayImage) -> u8 {
-    let (width, height) = gray.dimensions();
+fn band_luma(width: u32, height: u32, luma: &[u8]) -> u8 {
     let rows = height / 5..(height * 3 / 5).max(height / 5 + 1);
     let (mut sum, mut count) = (0u64, 0u64);
     for y in rows.step_by(4) {
         for x in (0..width).step_by(4) {
-            sum += u64::from(gray.get_pixel(x, y.min(height - 1)).0[0]);
+            sum += u64::from(luma[(y.min(height - 1) * width + x) as usize]);
             count += 1;
         }
     }
@@ -496,7 +624,8 @@ pub(super) fn prepare(
     cx: &mut gpui::App,
 ) -> Option<Arc<gpui::RenderImage>> {
     let light = matches!(theme.appearance, crate::theme::Appearance::Light);
-    background_luminance(path, cx).and_then(|source| source.raster_image(effect, light, cx))
+    let source = background_luminance(path, cx)?;
+    source.effect_or_plain(effect, light, cx)
 }
 
 pub(crate) fn prepare_look(
@@ -510,7 +639,7 @@ pub(crate) fn prepare_look(
         return prepare(effect, theme, path, cx);
     }
     let source = background_luminance(path, cx)?;
-    let base = source.raster_image(effect, theme.appearance.is_light(), cx)?;
+    let base = source.effect_or_plain(effect, theme.appearance.is_light(), cx)?;
     let key = (base.id, look.brightness, look.blur);
     let mut cache = source.photo.lock().unwrap();
     let ready = cache.ready.as_ref().filter(|(cached, _)| cached.0 == key.0);
@@ -526,10 +655,17 @@ pub(crate) fn prepare_look(
                 .background_executor()
                 .spawn(async move { photo_raster(base, look.brightness, look.blur) })
                 .await;
-            let _ = cx.update(|cx| {
-                let mut cache = source.photo.lock().unwrap();
-                cache.pending = false;
-                cache.ready = Some((key, image));
+            cx.update(|cx| {
+                let replaced = {
+                    let mut cache = source.photo.lock().unwrap();
+                    cache.pending = false;
+                    cache.ready.replace((key, image))
+                };
+                // Each slider step makes a full-size raster; release the last
+                // one's GPU texture instead of letting the atlas grow.
+                if let Some((_, old)) = replaced {
+                    cx.drop_image(old, None);
+                }
                 cx.refresh_windows();
             });
         })
@@ -539,12 +675,31 @@ pub(crate) fn prepare_look(
 }
 
 fn photo_raster(base: Arc<gpui::RenderImage>, brightness: u8, blur: u8) -> Arc<gpui::RenderImage> {
-    let size = base.size(0);
-    let Some(mut pixels) = base.as_bytes(0).and_then(|bytes| {
-        image::RgbaImage::from_raw(size.width.0 as u32, size.height.0 as u32, bytes.to_vec())
-    }) else {
-        return base;
-    };
+    let frames = (0..base.frame_count())
+        .map(|index| {
+            let size = base.size(index);
+            let pixels = base.as_bytes(index).and_then(|bytes| {
+                image::RgbaImage::from_raw(
+                    size.width.0 as u32,
+                    size.height.0 as u32,
+                    bytes.to_vec(),
+                )
+            })?;
+            Some(image::Frame::from_parts(
+                adjust_photo(pixels, brightness, blur),
+                0,
+                0,
+                base.delay(index),
+            ))
+        })
+        .collect::<Option<Vec<_>>>();
+    match frames {
+        Some(frames) => Arc::new(gpui::RenderImage::new(frames)),
+        None => base,
+    }
+}
+
+fn adjust_photo(mut pixels: image::RgbaImage, brightness: u8, blur: u8) -> image::RgbaImage {
     if brightness != 100 {
         let gain = f32::from(brightness) / 100.0;
         for pixel in pixels.pixels_mut() {
@@ -554,10 +709,45 @@ fn photo_raster(base: Arc<gpui::RenderImage>, brightness: u8, blur: u8) -> Arc<g
         }
     }
     if blur > 0 {
-        pixels = image::imageops::blur(&pixels, f32::from(blur) * pixels.height() as f32 / 650.0);
+        // A wide Gaussian at full resolution takes seconds and makes the
+        // sliders lag. Blur has no fine detail to keep: shrink until the radius
+        // is a few pixels, blur there, and let the GPU scale it back up.
+        let sigma = f32::from(blur) * pixels.height() as f32 / 650.0;
+        let shrink = (sigma / 3.0).max(1.0);
+        if shrink > 1.0 {
+            pixels = image::imageops::resize(
+                &pixels,
+                ((pixels.width() as f32 / shrink).round() as u32).max(1),
+                ((pixels.height() as f32 / shrink).round() as u32).max(1),
+                image::imageops::FilterType::Triangle,
+            );
+        }
+        pixels = image::imageops::fast_blur(&pixels, sigma / shrink);
     }
-    Arc::new(gpui::RenderImage::new([image::Frame::new(pixels)]))
+    pixels
 }
+/// A stable pseudo-random value in [0, 1) per cell.
+fn hash_unit(x: u32, y: u32) -> f32 {
+    let mut seed = x.wrapping_mul(0x9e37_79b1) ^ y.wrapping_mul(0x85eb_ca77);
+    seed = (seed ^ (seed >> 16)).wrapping_mul(0x7feb_352d);
+    seed = (seed ^ (seed >> 15)).wrapping_mul(0x846c_a68b);
+    (seed ^ (seed >> 16)) as f32 / u32::MAX as f32
+}
+
+/// The color pushed toward a readable ink: brightened (at most 3×) on dark
+/// paper, never lighter than a deep tone on light paper. Bounded gains keep
+/// near-black pixels from blowing up into noisy, random hues.
+fn vivid([r, g, b, a]: [u8; 4], light: bool) -> [u8; 4] {
+    let peak = f32::from(r.max(g).max(b)).max(1.0);
+    let gain = if light {
+        (150.0 / peak).min(1.0)
+    } else {
+        (255.0 / peak).min(3.0)
+    };
+    let ink = |channel: u8| (f32::from(channel) * gain).min(255.0) as u8;
+    [ink(r), ink(g), ink(b), a]
+}
+
 fn dither_color([r, g, b, a]: [u8; 4], threshold: u8) -> [u8; 4] {
     let peak = r.max(g).max(b) as f32;
     let bright = peak / 255.0 > (threshold as f32 + 0.5) / 16.0;
@@ -573,6 +763,47 @@ fn dither_color([r, g, b, a]: [u8; 4], threshold: u8) -> [u8; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn animated_gifs_keep_every_frame_through_effects(cx: &mut gpui::TestAppContext) {
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = image::codecs::gif::GifEncoder::new(&mut bytes);
+            for shade in [40u8, 140, 240] {
+                encoder
+                    .encode_frame(image::Frame::from_parts(
+                        image::RgbaImage::from_pixel(32, 24, image::Rgba([shade, 20, 20, 255])),
+                        0,
+                        0,
+                        // Zero delay: played at the browsers' 100ms instead.
+                        image::Delay::from_numer_denom_ms(0, 1),
+                    ))
+                    .unwrap();
+            }
+        }
+        let source = decode_source(&bytes).unwrap();
+        assert_eq!(source.frames.len(), 3);
+        assert!(
+            source
+                .frames
+                .iter()
+                .all(|(_, delay)| delay.numer_denom_ms() == (100, 1))
+        );
+        cx.update(|cx| source.raster_image(NewThreadBackgroundEffect::Grain, false, cx));
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let raster = source
+                .raster_image(NewThreadBackgroundEffect::Grain, false, cx)
+                .unwrap();
+            assert_eq!(raster.frame_count(), 3);
+        });
+        // A still image stays a single frame.
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([9, 9, 9, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        assert_eq!(decode_source(&png).unwrap().frames.len(), 1);
+    }
 
     #[test]
     fn heading_band_tracks_wallpaper_darkness() {
@@ -740,15 +971,15 @@ mod tests {
         });
     }
     fn fixture() -> Arc<BackgroundLuminance> {
-        Arc::new(BackgroundLuminance {
-            width: 60,
-            height: 32,
-            pixels: vec![128; 1920].into_boxed_slice(),
-            colors: vec![[128, 64, 32, 200]; 1920].into_boxed_slice(),
-            heading_luma: 0,
-            effects: Mutex::new(Vec::new()),
-            photo: Mutex::default(),
-        })
+        source_from_frames(vec![(
+            FrameData {
+                width: 60,
+                height: 32,
+                pixels: vec![128; 1920].into_boxed_slice(),
+                colors: vec![[128, 64, 32, 200]; 1920].into_boxed_slice(),
+            },
+            image::Delay::from_numer_denom_ms(0, 1),
+        )])
     }
     #[gpui::test]
     fn every_effect_is_generated_once_independently_of_viewport(cx: &mut gpui::TestAppContext) {
@@ -790,10 +1021,7 @@ mod tests {
             (source.ascii_pixels(true), source.ascii_pixels(false)),
             (source.scanline_pixels(true), source.scanline_pixels(false)),
             (source.vignette_pixels(true), source.vignette_pixels(false)),
-            (
-                source.halftone_pixels(60, 32, true),
-                source.halftone_pixels(60, 32, false),
-            ),
+            (source.halftone_pixels(true), source.halftone_pixels(false)),
         ] {
             let brightness = |image: &image::RgbaImage| -> u64 {
                 image
@@ -855,7 +1083,7 @@ mod tests {
     fn raster_treatments_preserve_source_dimensions_and_alpha() {
         let source = fixture();
         for image in [
-            source.dither_pixels(60, 32),
+            source.dither_pixels(),
             source.grain_pixels(),
             source.vignette_pixels(false),
             source.ascii_pixels(false),
@@ -866,6 +1094,6 @@ mod tests {
             assert_eq!(image.dimensions(), (60, 32));
             assert!(image.pixels().all(|pixel| pixel.0[3] == 200));
         }
-        assert_eq!(source.halftone_pixels(60, 32, false).dimensions(), (60, 32));
+        assert_eq!(source.halftone_pixels(false).dimensions(), (60, 32));
     }
 }
