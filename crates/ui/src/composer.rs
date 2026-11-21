@@ -13319,9 +13319,6 @@ pub(crate) fn send_circle(
     blocked: bool,
     theme: &Theme,
 ) -> gpui::Stateful<gpui::Div> {
-    // An olive `rounded-md` key with the ordered-dither fill and a white
-    // paper plane; an empty or blocked draft rests on the muted fill with no
-    // texture.
     div()
         .id(id)
         .debug_selector(move || id.into())
@@ -13334,19 +13331,14 @@ pub(crate) fn send_circle(
         .justify_center()
         .when(blocked, |el| el.bg(theme.muted_fill()))
         .when(!blocked, |el| {
-            // The texture is tuned for a dark plate; a light card gets a
-            // deep olive base so the white glyph keeps its contrast.
-            el.when(theme.appearance == crate::theme::Appearance::Light, |el| {
-                el.bg(gpui::hsla(80.0 / 360.0, 0.28, 0.2, 1.0))
-            })
-            .border_1()
-            .border_color(theme.accent.opacity(0.4))
-            .cursor_pointer()
-            .hover(|s| s.opacity(0.88))
-            .child(zuse_viewport::dither::fill(
-                SEND_DITHER_RGB,
-                SEND_BUTTON_RADIUS,
-            ))
+            // An ordered-dither key in the theme's accent with a white plane.
+            let ink = crate::popover::dither_ink(theme);
+            el.bg(crate::popover::dither_plate(theme, ink))
+                .border_1()
+                .border_color(theme.accent.opacity(0.4))
+                .cursor_pointer()
+                .hover(|s| s.opacity(0.88))
+                .child(zuse_viewport::dither::fill_color(ink, SEND_BUTTON_RADIUS))
         })
         .child(
             crate::icons::icon(crate::icons::DITHER_SEND)
@@ -13395,8 +13387,6 @@ pub(crate) fn dither_key(
         .debug_selector(move || id.into())
 }
 
-/// The send key's dither ink, shared with every primary button.
-const SEND_DITHER_RGB: [u8; 3] = crate::popover::DITHER_KEY_RGB;
 const SEND_BUTTON_RADIUS: f32 = crate::popover::DITHER_KEY_RADIUS;
 /// The Send / Stop key: a 28px square, matching the attach button.
 const SEND_BUTTON_SIZE: f32 = 28.0;
@@ -13941,6 +13931,12 @@ impl Render for Composer {
         let image_strip = self.render_image_strip(&theme, cx);
 
         let pill_border = theme.composer_glass_border();
+        let wallpaper_opacity =
+            if self.state.read(cx).selected_chat.is_none() && !self.cloud_launch_pending(cx) {
+                crate::settings::wallpaper_input_opacity(cx)
+            } else {
+                None
+            };
         // The glass card: a near-opaque tint over the blurred transcript.
         let pill = div()
             .on_mouse_down(
@@ -13960,7 +13956,10 @@ impl Render for Composer {
             .rounded(px(surface_radius))
             .border_1()
             .border_color(pill_border)
-            .bg(theme.composer_glass_bg());
+            .bg(wallpaper_opacity.map_or_else(
+                || theme.composer_glass_bg(),
+                |opacity| theme.wallpaper_composer_fill(opacity),
+            ));
         // The pill's bottom edge is stationary on screen (the composer sits at
         // the bottom of the shell column; growth moves the TOP edge), so the
         // toolbar pins to the bottom and only the editor grows.

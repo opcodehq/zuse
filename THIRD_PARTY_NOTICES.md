@@ -52,8 +52,9 @@ by Zeron. Their names identify the corresponding palette adaptations.
 
 | Theme project | Audited revision | License and upstream notice |
 | --- | --- | --- |
-| Visual Studio Code Dark+/Light+ | `e33d147d4c0fa65ce17cb73ec9d798f064b4bf1f` | [MIT](https://github.com/microsoft/vscode/blob/e33d147d4c0fa65ce17cb73ec9d798f064b4bf1f/LICENSE.txt) |
 | Catppuccin for VS Code | `befc9e6fc41980f4241408f7049755d47c06ff45` | [MIT](https://github.com/catppuccin/vscode/blob/befc9e6fc41980f4241408f7049755d47c06ff45/LICENSE) |
+| Flexoki | `8d723bac4a9ac46adfdf99d42155286977aac72a` | [MIT](https://github.com/kepano/flexoki/blob/8d723bac4a9ac46adfdf99d42155286977aac72a/LICENSE) |
+| Everforest | `85a86eb62409e3ec88713bff3d1b9d7374e112e4` | [MIT](https://github.com/sainnhe/everforest/blob/85a86eb62409e3ec88713bff3d1b9d7374e112e4/LICENSE) |
 | Tokyo Night VS Code Theme | `7c0f11eaef322f293621ca7befe462214b7ea468` | [MIT](https://github.com/tokyo-night/tokyo-night-vscode-theme/blob/7c0f11eaef322f293621ca7befe462214b7ea468/LICENSE.txt) |
 | Dracula for Visual Studio Code | `1b9ecf4d7e0c8cc2e2e890a7a41ad1db5fff1e6c` | [MIT](https://github.com/dracula/visual-studio-code/blob/1b9ecf4d7e0c8cc2e2e890a7a41ad1db5fff1e6c/LICENSE) |
 | GitHub VS Code Theme | `cd78e5e4e7bcf132a6f428ae0f32264bb1b729cf` | [MIT](https://github.com/primer/github-vscode-theme/blob/cd78e5e4e7bcf132a6f428ae0f32264bb1b729cf/LICENSE) |
@@ -62,13 +63,6 @@ by Zeron. Their names identify the corresponding palette adaptations.
 | Rosé Pine for VS Code | `d8f5ebe8e096fa833e997c07eb7685ee1677a4ba` | [MIT](https://github.com/rose-pine/vscode/blob/d8f5ebe8e096fa833e997c07eb7685ee1677a4ba/LICENSE) |
 | Nord Visual Studio Code | `8ead09822c02d0d49d0f764104505e5a34d3689f` | [MIT](https://github.com/nordtheme/visual-studio-code/blob/8ead09822c02d0d49d0f764104505e5a34d3689f/license) |
 | One Dark Pro | `e6ccf638d5b69aa38cd1005edb0ee7ba7ef6fedc` | [MIT](https://github.com/Binaryify/OneDark-Pro/blob/e6ccf638d5b69aa38cd1005edb0ee7ba7ef6fedc/LICENSE.txt) |
-| Atom One Dark Theme | `a8be970644982221f9b61fb1c4b3da74b4beab79` | [MIT](https://github.com/akamud/vscode-theme-onedark/blob/a8be970644982221f9b61fb1c4b3da74b4beab79/LICENSE) |
-| Night Owl | `cc291eba7976b20d7c66bde6883c27b902196b07` | [MIT](https://github.com/sdras/night-owl-vscode-theme/blob/cc291eba7976b20d7c66bde6883c27b902196b07/LICENSE.md) |
-| Winter is Coming | `260547834cb6ac37dd5b8bb5842cc1c8d3164946` | [MIT](https://github.com/johnpapa/vscode-winteriscoming/blob/260547834cb6ac37dd5b8bb5842cc1c8d3164946/LICENSE.md) |
-| Palenight Theme | `6291efaace90855abe3d79025327ca41b9a3138c` | [MIT](https://github.com/whizkydee/vscode-palenight-theme/blob/6291efaace90855abe3d79025327ca41b9a3138c/license.md) |
-| SynthWave '84 | `ecfa2fe1279f7233663fa3f98a96e6756000567b` | [MIT](https://github.com/robb0wen/synthwave-vscode/blob/ecfa2fe1279f7233663fa3f98a96e6756000567b/LICENSE) |
-| Cobalt2 | `c4e9574372b85afad1682ed0fdd1ac0411c62512` | [MIT](https://github.com/wesbos/cobalt2-vscode/blob/c4e9574372b85afad1682ed0fdd1ac0411c62512/LICENSE) |
-| Andromeda | `d1abb48c69493000aa0133a32d594eb25e523d4f` | [MIT](https://github.com/EliverLara/Andromeda/blob/d1abb48c69493000aa0133a32d594eb25e523d4f/LICENSE.md) |
 
 The palette values are adapted under the corresponding upstream license. The
 linked license pages contain each project's copyright and permission notice and
@@ -78,6 +72,8 @@ Copyright notices retained from those pinned upstream licenses:
 
 - Copyright (c) 2015 - present Microsoft Corporation
 - Copyright (c) 2021 Catppuccin
+- Copyright (c) 2023 Steph Ango
+- Copyright (c) 2019 sainnhe
 - Copyright (c) 2018-present Enkia
 - Copyright (c) 2016 Dracula Theme
 - Copyright (c) 2020 Primer

@@ -26,6 +26,14 @@ pub enum Event {
     FullUsage,
 }
 type Owner = (String, Option<String>);
+/// The Upgrade key's dither ink, following the active theme's accent.
+struct PlanInk(Hsla);
+impl Global for PlanInk {}
+
+pub fn set_plan_ink(ink: Hsla, cx: &mut App) {
+    cx.set_global(PlanInk(ink));
+}
+
 pub struct SidebarControls {
     properties: Properties,
     owner: Option<Owner>,
@@ -381,7 +389,7 @@ impl SidebarControls {
                                 .child(name),
                         )
                         .child(
-                            ui::meta(
+                            usage_meta(
                                 account
                                     .and_then(|a| a.plan_label.clone())
                                     .unwrap_or_else(|| "Usage limits".into()),
@@ -431,13 +439,13 @@ impl SidebarControls {
                                         .child(window.label.clone()),
                                 )
                                 .child(
-                                    ui::meta(format!("{left}% left"))
+                                    usage_meta(format!("{left}% left"))
                                         .text_size(px(12.))
                                         .line_height(px(16.)),
                                 ),
                         )
                         .child(dither_meter(left as f32, used >= 0.8))
-                        .child(ui::meta(reset).text_size(px(11.)).line_height(px(14.85))),
+                        .child(usage_meta(reset).text_size(px(11.)).line_height(px(14.85))),
                 );
             }
         } else {
@@ -446,7 +454,7 @@ impl SidebarControls {
                     .py(px(24.))
                     .text_size(px(12.))
                     .text_center()
-                    .text_color(palette::rgb(crate::shell::MUTED))
+                    .text_color(usage_muted())
                     .child(if self.pending("usage") {
                         "Loading usage…"
                     } else if account.is_some() {
@@ -512,7 +520,7 @@ impl SidebarControls {
         }
         if self.pending("usage") {
             menu = menu.child(
-                ui::meta("Loading usage…")
+                usage_meta("Loading usage…")
                     .px(px(8.))
                     .py(px(4.))
                     .text_size(px(12.)),
@@ -542,14 +550,14 @@ impl SidebarControls {
                 .rounded(px(10.))
                 .text_size(px(14.))
                 .line_height(px(20.))
-                .text_color(palette::rgb(crate::shell::TEXT))
+                .text_color(usage_text())
                 .cursor_pointer()
-                .hover(|v| v.bg(s::frame_bg()))
+                .hover(|v| v.bg(usage_hover()))
                 .child(icon(glyph).size(px(14.)).mx(px(-2.)))
                 .child(div().flex_1().min_w_0().truncate().child(name))
-                .when(self.active == i, |v| v.bg(s::frame_bg().opacity(0.6)))
+                .when(self.active == i, |v| v.bg(usage_active()))
                 .when_some(summary, |v, label| {
-                    v.child(ui::meta(label).text_size(px(11.)))
+                    v.child(usage_meta(label).text_size(px(11.)))
                 })
                 .child(
                     icon("alt-arrow-right")
@@ -582,21 +590,19 @@ impl SidebarControls {
             menu = menu.child(option);
         }
         crate::glass::menu(
-            menu.child(ui::separator())
+            menu.child(ui::separator().bg(usage_border()))
                 .child(
-                    ui::option("sidebar-usage-refresh", "Refresh usage", "", false)
+                    usage_option("sidebar-usage-refresh", "Refresh usage", "refresh")
                         .role(Role::MenuItem)
-                        .when(self.active == providers().len(), |v| {
-                            v.bg(s::frame_bg().opacity(0.6))
-                        })
+                        .when(self.active == providers().len(), |v| v.bg(usage_active()))
                         .when(self.pending("usage"), |v| v.opacity(0.5))
                         .on_click(cx.listener(|this, _, _, cx| this.load_usage(true, cx))),
                 )
                 .child(
-                    ui::option("sidebar-usage-accounts", "Full usage", "analytics", false)
+                    usage_option("sidebar-usage-accounts", "Full usage", "analytics")
                         .role(Role::MenuItem)
                         .when(self.active == providers().len() + 1, |v| {
-                            v.bg(s::frame_bg().opacity(0.6))
+                            v.bg(usage_active())
                         })
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.close(window, cx);
@@ -660,7 +666,11 @@ impl Render for SidebarControls {
             .when(upgrade, |v| {
                 v.relative()
                     .overflow_hidden()
-                    .child(crate::dither::fill([151, 183, 76], 7.))
+                    .child(crate::dither::fill_color(
+                        cx.try_global::<PlanInk>()
+                            .map_or_else(|| palette::rgb(0x97b74c).into(), |ink| ink.0),
+                        7.,
+                    ))
                     .text_color(white())
                     .px(px(10.))
                     .text_size(px(11.))
@@ -817,11 +827,41 @@ fn dither_meter(left: f32, warning: bool) -> Div {
         .child(crate::dither::meter(
             left / 100.,
             palette::rgb(if warning { 0xfcd34d } else { 0x89ca21 }).into(),
-            gpui::Hsla::from(palette::rgb(crate::shell::MUTED)).opacity(0.3),
+            usage_muted().opacity(0.3),
         ))
 }
 
+fn usage_text() -> Hsla {
+    palette::usage_menu().map_or_else(|| palette::rgb(crate::shell::TEXT).into(), |c| c.text)
+}
+fn usage_muted() -> Hsla {
+    palette::usage_menu().map_or_else(|| palette::rgb(crate::shell::MUTED).into(), |c| c.muted)
+}
+fn usage_border() -> Hsla {
+    palette::usage_menu().map_or_else(|| palette::rgb(crate::shell::BORDER).into(), |c| c.border)
+}
+fn usage_hover() -> Hsla {
+    palette::usage_menu().map_or_else(s::frame_bg, |c| c.hover)
+}
+fn usage_active() -> Hsla {
+    palette::usage_menu().map_or_else(|| s::frame_bg().opacity(0.6), |c| c.active)
+}
+fn usage_meta(label: impl Into<SharedString>) -> Div {
+    ui::meta(label).text_color(usage_muted())
+}
+fn usage_option(id: &'static str, label: &'static str, glyph: &str) -> Stateful<Div> {
+    let hover = palette::usage_menu().map_or_else(|| s::frame_bg().opacity(0.6), |c| c.hover);
+    ui::option_with_colors(id, label, glyph, false, usage_text(), hover, usage_hover())
+}
+
 fn menu_surface(width: f32) -> Div {
+    if let Some(colors) = palette::usage_menu() {
+        return ui::menu(width)
+            .relative()
+            .bg(colors.surface)
+            .border_color(colors.border)
+            .text_color(colors.text);
+    }
     let dark = !palette::is_light();
     ui::menu(width)
         .relative()
@@ -874,7 +914,12 @@ fn account_plan_label(signed_in: bool, subscribed: Option<bool>, failed: bool) -
 }
 #[cfg(test)]
 mod account_label_tests {
-    use super::account_plan_label;
+    use super::{account_plan_label, usage_option};
+    #[test]
+    fn usage_actions_construct_without_duplicate_interaction_styles() {
+        let _refresh = usage_option("sidebar-usage-refresh", "Refresh usage", "refresh");
+        let _accounts = usage_option("sidebar-usage-accounts", "Full usage", "analytics");
+    }
     #[test]
     fn cloud_badge_requires_a_current_account_and_verified_entitlement() {
         assert_eq!(account_plan_label(false, Some(true), false), "Sign in");

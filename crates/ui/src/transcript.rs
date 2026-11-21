@@ -2773,9 +2773,10 @@ pub fn chips_height(count: usize) -> f32 {
 
 /// Analytic height an open detail adds to its chip's card (separator + body)
 /// — output blocks by line count, diff blocks via the changes pane's own
-/// [`crate::changes::body_height`]. The chip's own [`CHIP_HEIGHT`] is already
-/// counted by [`chips_height`].
-pub fn detail_height(detail: &ToolDetail) -> f32 {
+/// [`crate::changes::body_height_with`] in the diff `mode` shown, since a
+/// split diff pairs lines and needs fewer rows than unified. The chip's own
+/// [`CHIP_HEIGHT`] is already counted by [`chips_height`].
+pub fn detail_height(detail: &ToolDetail, mode: crate::changes::DiffMode) -> f32 {
     let body = match detail {
         ToolDetail::Output {
             lines,
@@ -2791,7 +2792,13 @@ pub fn detail_height(detail: &ToolDetail) -> f32 {
             let rows = lines.len() + usize::from(*truncated_by > 0);
             rows as f32 * OUTPUT_LINE_HEIGHT + OUTPUT_BODY_PAD
         }
-        ToolDetail::Diff { file, .. } => crate::changes::body_height(file),
+        ToolDetail::Diff { file, .. } => crate::changes::body_height_with(
+            file,
+            &[],
+            None,
+            mode,
+            crate::changes::DIFF_LINE_HEIGHT,
+        ),
         ToolDetail::Stats { stats } => stats.len() as f32 * OUTPUT_LINE_HEIGHT + OUTPUT_BODY_PAD,
     };
     DETAIL_SEPARATOR + body
@@ -3811,6 +3818,7 @@ pub struct Transcript {
     /// Each instance owns separate scroll handles and list measurements, so
     /// every one must reset itself after a global Fit-mode transition.
     code_fences_generation: u64,
+    split_diffs: bool,
     /// Compact mode as last applied to this instance's row split. Render
     /// polls the setting each frame; a flip rebuilds every row.
     compact_mode: bool,
@@ -4253,6 +4261,7 @@ impl Transcript {
             #[cfg(feature = "browser-fixture")]
             fixture_open_groups: false,
             code_fences_generation: crate::settings::code_fences_generation(cx),
+            split_diffs: crate::settings::split_diffs(cx),
             compact_mode: crate::settings::transcript_compact_mode(cx),
             compact_last_elapsed: HashMap::new(),
             compact_fold_heights: HashMap::new(),
@@ -9968,6 +9977,7 @@ impl Transcript {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let diff_mode = crate::changes::DiffMode::from_split(self.split_diffs);
         let mut fold = self.folds.get(row_id).copied().unwrap_or_default();
         let file_opener = self.tool_file_opener(cx);
         // Agent/spawn chips never fold: they are their own row, always open,
@@ -10199,13 +10209,17 @@ impl Transcript {
                 |(((((detail, invocation), affordance), open), fold), tool)| {
                     let target = if *open {
                         base_row_height
-                            + invocation.as_deref().map_or(0.0, detail_height)
+                            + invocation
+                                .as_deref()
+                                .map_or(0.0, |detail| detail_height(detail, diff_mode))
                             + if chip_has_images(tool) {
                                 TOOL_IMAGE_STRIP_HEIGHT
                             } else {
                                 0.0
                             }
-                            + detail.as_deref().map_or(0.0, detail_height)
+                            + detail
+                                .as_deref()
+                                .map_or(0.0, |detail| detail_height(detail, diff_mode))
                             + if affordance.is_some() {
                                 BLOB_AFFORDANCE_HEIGHT
                             } else {
@@ -10547,7 +10561,13 @@ impl Transcript {
                                         line.bg(crate::theme::hairline(0.06))
                                     }),
                             )
-                            .child(detail_body(invocation, None, &format!("{key}-call"), theme));
+                            .child(detail_body(
+                                invocation,
+                                None,
+                                &format!("{key}-call"),
+                                theme,
+                                diff_mode,
+                            ));
                     }
                     if let Some(images) = chip_images[ix].clone() {
                         panel = panel.child(
@@ -10571,6 +10591,7 @@ impl Transcript {
                                     detail_highlights[ix].clone(),
                                     &format!("{key}-out"),
                                     theme,
+                                    diff_mode,
                                 ));
                     }
                     if let Some(ChipAffordance { blob_ref, label }) = affordance {
@@ -11371,6 +11392,7 @@ fn detail_body(
     diff_highlights: Option<Arc<crate::changes::DiffHighlights>>,
     selection_key: &str,
     theme: &Theme,
+    diff_mode: crate::changes::DiffMode,
 ) -> AnyElement {
     let body = div().w_full().min_w_0().flex().flex_col().overflow_hidden();
     // Every line joins the transcript's selection, so paths, commands and
@@ -11407,6 +11429,7 @@ fn detail_body(
                 file,
                 diff_highlights,
                 theme,
+                diff_mode,
             ))
             .into_any_element(),
         ToolDetail::Stats { stats } => body
@@ -12671,8 +12694,10 @@ impl Render for Transcript {
             }
         }
         let content_width = crate::settings::transcript_width(cx);
-        if self.content_width != content_width {
+        let split_diffs = crate::settings::split_diffs(cx);
+        if self.content_width != content_width || self.split_diffs != split_diffs {
             self.content_width = content_width;
+            self.split_diffs = split_diffs;
             // The outer list viewport may not resize when only max-width
             // changes. Invalidate virtual row heights explicitly, retaining
             // their anchors and all live animation/provenance state.
@@ -14538,6 +14563,7 @@ mod tests {
                         None,
                         "probe",
                         &theme,
+                        crate::changes::DiffMode::Unified,
                     ))
             }
         }
