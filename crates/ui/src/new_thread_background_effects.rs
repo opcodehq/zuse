@@ -105,14 +105,67 @@ struct FrameData {
     height: u32,
     pixels: Box<[u8]>,
     colors: Box<[[u8; 4]]>,
+    /// Mean luma and alpha per cell of a coarse `GRID`×`GRID` grid, so the
+    /// heading's backdrop can be measured for any crop without a pixel scan.
+    grid: Box<[[u8; 2]]>,
+}
+
+const GRID: u32 = 32;
+
+impl FrameData {
+    fn new(width: u32, height: u32, pixels: Box<[u8]>, colors: Box<[[u8; 4]]>) -> Self {
+        let mut sums = vec![[0u64; 3]; (GRID * GRID) as usize];
+        for y in 0..height {
+            for x in 0..width {
+                let cell = (y * GRID / height.max(1) * GRID + x * GRID / width.max(1)) as usize;
+                let index = (y * width + x) as usize;
+                sums[cell][0] += u64::from(pixels[index]);
+                sums[cell][1] += u64::from(colors[index][3]);
+                sums[cell][2] += 1;
+            }
+        }
+        let grid = sums
+            .iter()
+            .map(|[luma, alpha, count]| {
+                let count = (*count).max(1);
+                [(luma / count) as u8, (alpha / count) as u8]
+            })
+            .collect();
+        Self {
+            width,
+            height,
+            pixels,
+            colors,
+            grid,
+        }
+    }
+
+    /// The luma (0–255) seen across the normalized `[x0, y0, x1, y1]`
+    /// region, each cell composited over `canvas` by its own alpha and the
+    /// image brightened by `gain`.
+    fn region_luma(&self, [x0, y0, x1, y1]: [f32; 4], canvas: f32, gain: f32) -> f32 {
+        let span = |from: f32, to: f32| {
+            let first = ((from * GRID as f32).floor().max(0.0) as u32).min(GRID - 1);
+            let last = ((to * GRID as f32).ceil() as u32).clamp(first + 1, GRID);
+            first..last
+        };
+        let (mut sum, mut count) = (0.0_f32, 0.0_f32);
+        for row in span(y0, y1) {
+            for column in span(x0, x1) {
+                let [luma, alpha] = self.grid[(row * GRID + column) as usize];
+                let alpha = f32::from(alpha) / 255.0;
+                sum += (f32::from(luma) * gain).min(255.0) * alpha + canvas * (1.0 - alpha);
+                count += 1.0;
+            }
+        }
+        sum / count.max(1.0)
+    }
 }
 
 #[derive(Debug)]
 struct BackgroundLuminance {
     /// Every frame with its display time; a still image has exactly one.
     frames: Vec<(FrameData, image::Delay)>,
-    /// Mean luma (0–255) of the band the new-thread heading sits over.
-    heading_luma: u8,
     effects: Mutex<Vec<EffectEntry>>,
     photo: Mutex<PhotoRaster>,
 }
@@ -163,17 +216,26 @@ impl BackgroundLuminance {
                     {
                         *ready = Some(image);
                     }
-                    // An animation's raster holds every frame; keep only the
-                    // one in use rather than one per effect ever tried.
+                    // An animation's raster holds every frame, so keep only
+                    // a few. Evict the oldest finished ones beyond that cap,
+                    // never the one just made: views showing different
+                    // effects at once (hero and Compare original) both keep
+                    // theirs instead of evicting each other in a loop.
+                    let mut evicted = Vec::new();
                     if source.frames.len() > 1 {
-                        let (kept, evicted): (Vec<_>, Vec<_>) = effects
-                            .drain(..)
-                            .partition(|(cached, ready)| *cached == key || ready.is_none());
-                        *effects = kept;
-                        evicted.into_iter().filter_map(|(_, image)| image).collect()
-                    } else {
-                        Vec::new()
+                        let ready = effects.iter().filter(|(_, image)| image.is_some()).count();
+                        let mut excess = ready.saturating_sub(MAX_ANIMATED_RASTERS);
+                        effects.retain_mut(|(cached, image)| {
+                            if excess > 0 && *cached != key && image.is_some() {
+                                excess -= 1;
+                                evicted.extend(image.take());
+                                false
+                            } else {
+                                true
+                            }
+                        });
                     }
+                    evicted
                 };
                 for image in evicted {
                     cx.drop_image(image, None);
@@ -344,11 +406,8 @@ fn source_from_image(image: &image::DynamicImage) -> Arc<BackgroundLuminance> {
 }
 
 fn source_from_frames(frames: Vec<(FrameData, image::Delay)>) -> Arc<BackgroundLuminance> {
-    let first = &frames[0].0;
-    let heading_luma = band_luma(first.width, first.height, &first.pixels);
     Arc::new(BackgroundLuminance {
         frames,
-        heading_luma,
         effects: Mutex::new(Vec::new()),
         photo: Mutex::default(),
     })
@@ -357,15 +416,18 @@ fn source_from_frames(frames: Vec<(FrameData, image::Delay)>) -> Arc<BackgroundL
 fn frame_data(image: &image::DynamicImage, max_side: u32) -> FrameData {
     let proxy = image.thumbnail(max_side, max_side);
     let gray = proxy.to_luma8();
-    FrameData {
-        width: gray.width(),
-        height: gray.height(),
-        pixels: gray.into_raw().into_boxed_slice(),
-        colors: proxy.to_rgba8().pixels().map(|pixel| pixel.0).collect(),
-    }
+    let (width, height) = gray.dimensions();
+    FrameData::new(
+        width,
+        height,
+        gray.into_raw().into_boxed_slice(),
+        proxy.to_rgba8().pixels().map(|pixel| pixel.0).collect(),
+    )
 }
 
 const STILL_MAX_SIDE: u32 = 2048;
+/// Finished effect rasters kept per animated source.
+const MAX_ANIMATED_RASTERS: usize = 3;
 /// Animated frames are smaller: every frame is held decoded, and again per
 /// effect raster, so the whole animation shares a pixel budget.
 const ANIMATION_MAX_SIDE: u32 = 960;
@@ -465,6 +527,18 @@ impl PreloadedArtwork {
     }
 }
 
+/// Whether the wallpaper at `path` has decoded into drawable artwork. A file
+/// that exists but cannot be read never becomes ready.
+pub(crate) fn artwork_ready(path: &Path) -> bool {
+    CACHE.get().is_some_and(|cache| {
+        cache.lock().is_ok_and(|cache| {
+            cache.iter().any(|(key, source)| {
+                key == path && source.lock().is_ok_and(|source| source.is_some())
+            })
+        })
+    })
+}
+
 fn background_luminance(path: &Path, cx: &mut gpui::App) -> Option<Arc<BackgroundLuminance>> {
     let cache = CACHE.get_or_init(|| Mutex::new(Vec::new()));
     if let Some(source) = cache
@@ -501,34 +575,42 @@ fn background_luminance(path: &Path, cx: &mut gpui::App) -> Option<Arc<Backgroun
     None
 }
 
-/// The heading sits in the hero's upper-middle; average that band.
-fn band_luma(width: u32, height: u32, luma: &[u8]) -> u8 {
-    let rows = height / 5..(height * 3 / 5).max(height / 5 + 1);
-    let (mut sum, mut count) = (0u64, 0u64);
-    for y in rows.step_by(4) {
-        for x in (0..width).step_by(4) {
-            sum += u64::from(luma[(y.min(height - 1) * width + x) as usize]);
-            count += 1;
-        }
-    }
-    (sum / count.max(1)) as u8
-}
-
-/// Whether the wallpaper behind the new-thread heading reads as dark, as
-/// drawn: brightness applied, then blended over `canvas` at `opacity`.
-/// `None` until the image decodes.
+/// Whether the wallpaper behind the new-thread heading reads as dark, as it
+/// is drawn: the crop `adjustment` frames for a `hero`-sized area, the
+/// frame on screen now (the first under reduced motion), each pixel's alpha
+/// and the brightness setting, then the whole blended over `canvas` at
+/// `opacity`. `None` until the image decodes.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn backdrop_is_dark(
     path: &Path,
+    adjustment: NewThreadBackgroundAdjustment,
+    hero: (f32, f32),
     look: crate::settings::WallpaperLook,
     canvas: gpui::Hsla,
     opacity: f32,
+    animate: bool,
     cx: &mut gpui::App,
 ) -> Option<bool> {
+    use crate::new_thread_background_mask::{clock_ms, crop_for_adjustment, frame_at};
     let source = background_luminance(path, cx)?;
-    let image = (f32::from(source.heading_luma) * f32::from(look.brightness) / 100.0).min(255.0);
+    let frame = if animate && source.frames.len() > 1 {
+        let delays = source.frames.iter().map(|(_, delay)| {
+            let (numer, denom) = delay.numer_denom_ms();
+            u64::from(numer) / u64::from(denom.max(1))
+        });
+        frame_at(delays, clock_ms())
+    } else {
+        0
+    };
+    let frame = &source.frames[frame].0;
+    let [x, y, width, height] =
+        crop_for_adjustment((frame.width as f32, frame.height as f32), hero, adjustment);
+    // The heading sits in the hero's upper-middle band.
+    let band = [x, y + height * 0.2, x + width, y + height * 0.6];
+    let canvas = canvas.l * 255.0;
+    let image = frame.region_luma(band, canvas, f32::from(look.brightness) / 100.0);
     let alpha = (opacity * f32::from(look.opacity) / 100.0).clamp(0.0, 1.0);
-    let luma = image * alpha + canvas.l * 255.0 * (1.0 - alpha);
-    Some(luma < 140.0)
+    Some(image * alpha + canvas * (1.0 - alpha) < 140.0)
 }
 
 /// Safe to call on both routes: loading/decoding/effects happen once off-thread,
@@ -716,8 +798,24 @@ mod tests {
                 image::Rgba([value, value, value, 255]),
             ))
         };
-        assert!(source_from_image(&flat(20)).heading_luma < 140);
-        assert!(source_from_image(&flat(230)).heading_luma >= 140);
+        let band = [0.0, 0.2, 1.0, 0.6];
+        assert!(source_from_image(&flat(20)).region_luma(band, 255.0, 1.0) < 140.0);
+        assert!(source_from_image(&flat(230)).region_luma(band, 0.0, 1.0) >= 140.0);
+        // Transparent black over a light canvas reads light, not dark.
+        let clear = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            64,
+            48,
+            image::Rgba([0, 0, 0, 0]),
+        ));
+        assert!(source_from_image(&clear).region_luma(band, 240.0, 1.0) > 200.0);
+        // Only the cropped region counts: black top half, white bottom half.
+        let split = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(64, 64, |_, y| {
+            let value = if y < 32 { 0 } else { 255 };
+            image::Rgba([value, value, value, 255])
+        }));
+        let split = source_from_image(&split);
+        assert!(split.region_luma([0.0, 0.6, 1.0, 0.9], 0.0, 1.0) > 200.0);
+        assert!(split.region_luma([0.0, 0.1, 1.0, 0.4], 255.0, 1.0) < 50.0);
     }
 
     fn artwork() -> Arc<gpui::RenderImage> {
@@ -874,12 +972,12 @@ mod tests {
     }
     fn fixture() -> Arc<BackgroundLuminance> {
         source_from_frames(vec![(
-            FrameData {
-                width: 60,
-                height: 32,
-                pixels: vec![128; 1920].into_boxed_slice(),
-                colors: vec![[128, 64, 32, 200]; 1920].into_boxed_slice(),
-            },
+            FrameData::new(
+                60,
+                32,
+                vec![128; 1920].into_boxed_slice(),
+                vec![[128, 64, 32, 200]; 1920].into_boxed_slice(),
+            ),
             image::Delay::from_numer_denom_ms(0, 1),
         )])
     }

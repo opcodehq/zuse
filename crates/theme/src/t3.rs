@@ -12,6 +12,15 @@ pub(super) fn compile(value: &Value, path: &Path, id: &str) -> Result<Option<Sou
     if value.get("version").is_none() || value.get("appearance").is_none() {
         return Ok(None);
     }
+    // VS Code themes may carry `version`/`appearance` metadata too; their
+    // dotted workbench keys and token rules mark them as not T3.
+    let workbench = value
+        .get("colors")
+        .and_then(Value::as_object)
+        .is_some_and(|colors| colors.keys().any(|key| key.contains('.')));
+    if workbench || value.get("tokenColors").is_some() {
+        return Ok(None);
+    }
     if value["version"].as_u64() != Some(1) {
         bail!("unsupported T3 Code theme version; expected version 1");
     }
@@ -142,12 +151,23 @@ fn variant(
         (&mut palette.text_faint, "placeholder"),
         (&mut palette.danger, "error"),
         (&mut palette.warning, "warning"),
-        (&mut variant.terminal.background, "terminalBackground"),
+    ] {
+        if let Some(value) = tone(role)? {
+            *color = value.blend_over(background);
+        }
+    }
+    // Terminal colors sit on the terminal's own background, not the canvas:
+    // resolve it first, then composite translucent text and selection on it.
+    if let Some(value) = tone("terminalBackground")? {
+        variant.terminal.background = value.blend_over(background);
+    }
+    let terminal = variant.terminal.background;
+    for (color, role) in [
         (&mut variant.terminal.foreground, "terminalForeground"),
         (&mut variant.terminal.selection, "terminalSelection"),
     ] {
         if let Some(value) = tone(role)? {
-            *color = value.blend_over(background);
+            *color = value.blend_over(terminal);
         }
     }
     palette.text = palette.text.ensure_contrast(background, 4.5);

@@ -46,6 +46,8 @@ struct ImportDialog {
     json_input: Entity<ComposerInput>,
     _events: [Subscription; 2],
     focus: FocusHandle,
+    /// The Choose file button: the control the File view keeps mounted.
+    file_focus: FocusHandle,
     focus_pending: bool,
     source: ImportSource,
     creating: bool,
@@ -1065,6 +1067,7 @@ impl AppearancePage {
             json_input,
             _events: events,
             focus: cx.focus_handle(),
+            file_focus: cx.focus_handle(),
             focus_pending: true,
             source: ImportSource::Json,
             creating: false,
@@ -1085,6 +1088,12 @@ impl AppearancePage {
         };
         if dialog.source == source && !dialog.creating {
             return;
+        }
+        if dialog.creating {
+            // Leaving "start from current theme" drops its copied JSON.
+            dialog
+                .json_input
+                .update(cx, |field, cx| field.set_text("", cx));
         }
         dialog.source = source;
         dialog.creating = false;
@@ -1301,6 +1310,7 @@ impl AppearancePage {
                         } else {
                             ImportSource::Json
                         };
+                        dialog.focus_pending = true;
                         dialog.mode = InstallMode::Snapshot;
                         page.set_import_preview(result, cx);
                     }
@@ -2807,7 +2817,10 @@ impl AppearancePage {
             if std::mem::take(&mut dialog.focus_pending) {
                 let input_focus = match dialog.source {
                     ImportSource::Json => dialog.json_input.focus_handle(cx),
-                    _ => dialog.input.focus_handle(cx),
+                    ImportSource::Community => dialog.input.focus_handle(cx),
+                    // The JSON editor unmounts in the File view; focus a
+                    // control that stays, so Enter still submits.
+                    ImportSource::File => dialog.file_focus.clone(),
                 };
                 window.focus(&input_focus, cx);
             }
@@ -2818,6 +2831,7 @@ impl AppearancePage {
         let json_input = dialog.json_input.clone();
         let source = dialog.source;
         let creating = dialog.creating;
+        let file_focus = dialog.file_focus.clone();
         let results = dialog.results.clone();
         let pending = dialog.pending.is_some();
         let focus = dialog.focus.clone();
@@ -2888,7 +2902,9 @@ impl AppearancePage {
                                         style.border_1().border_color(focus_color)
                                     })
                                     .on_click(cx.listener(move |page, _, _, cx| {
-                                        if !active || source == ImportSource::File {
+                                        // Import also leaves "start from
+                                        // current theme" for the file form.
+                                        if !active || source == ImportSource::File || creating {
                                             page.switch_import_source(choice, cx);
                                         }
                                     }))
@@ -2965,6 +2981,7 @@ impl AppearancePage {
                         )
                         .child(
                             icon_action(theme, icons::UPLOAD, "Choose file", "theme-import-browse")
+                                .track_focus(&file_focus)
                                 .flex_none()
                                 .tab_index(0)
                                 .role(gpui::Role::Button)

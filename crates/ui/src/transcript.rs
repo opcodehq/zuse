@@ -2773,9 +2773,10 @@ pub fn chips_height(count: usize) -> f32 {
 
 /// Analytic height an open detail adds to its chip's card (separator + body)
 /// — output blocks by line count, diff blocks via the changes pane's own
-/// [`crate::changes::body_height`]. The chip's own [`CHIP_HEIGHT`] is already
-/// counted by [`chips_height`].
-pub fn detail_height(detail: &ToolDetail) -> f32 {
+/// [`crate::changes::body_height_with`] in the diff `mode` shown, since a
+/// split diff pairs lines and needs fewer rows than unified. The chip's own
+/// [`CHIP_HEIGHT`] is already counted by [`chips_height`].
+pub fn detail_height(detail: &ToolDetail, mode: crate::changes::DiffMode) -> f32 {
     let body = match detail {
         ToolDetail::Output {
             lines,
@@ -2791,7 +2792,13 @@ pub fn detail_height(detail: &ToolDetail) -> f32 {
             let rows = lines.len() + usize::from(*truncated_by > 0);
             rows as f32 * OUTPUT_LINE_HEIGHT + OUTPUT_BODY_PAD
         }
-        ToolDetail::Diff { file, .. } => crate::changes::body_height(file),
+        ToolDetail::Diff { file, .. } => crate::changes::body_height_with(
+            file,
+            &[],
+            None,
+            mode,
+            crate::changes::DIFF_LINE_HEIGHT,
+        ),
         ToolDetail::Stats { stats } => stats.len() as f32 * OUTPUT_LINE_HEIGHT + OUTPUT_BODY_PAD,
     };
     DETAIL_SEPARATOR + body
@@ -10202,13 +10209,17 @@ impl Transcript {
                 |(((((detail, invocation), affordance), open), fold), tool)| {
                     let target = if *open {
                         base_row_height
-                            + invocation.as_deref().map_or(0.0, detail_height)
+                            + invocation
+                                .as_deref()
+                                .map_or(0.0, |detail| detail_height(detail, diff_mode))
                             + if chip_has_images(tool) {
                                 TOOL_IMAGE_STRIP_HEIGHT
                             } else {
                                 0.0
                             }
-                            + detail.as_deref().map_or(0.0, detail_height)
+                            + detail
+                                .as_deref()
+                                .map_or(0.0, |detail| detail_height(detail, diff_mode))
                             + if affordance.is_some() {
                                 BLOB_AFFORDANCE_HEIGHT
                             } else {

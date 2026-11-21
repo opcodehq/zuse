@@ -13233,9 +13233,15 @@ impl Shell {
             .and_then(|background| {
                 crate::new_thread_background_effects::backdrop_is_dark(
                     std::path::Path::new(&background.path),
+                    new_thread_background_adjustment,
+                    (
+                        (self.viewport_width - self.sidebar_now()).max(1.0),
+                        new_thread_background_height(self.viewport_height),
+                    ),
                     wallpaper_look,
                     theme.bg,
                     new_thread_background_opacity(theme.is_frost()),
+                    !cx.reduce_motion(),
                     cx,
                 )
             })

@@ -2,7 +2,8 @@
 //! the image identity, pixels, atlas entry, or an asynchronous raster job.
 use crate::settings::{NewThreadBackgroundAdjustment, WallpaperLook};
 use gpui::{
-    Bounds, Corners, ImageAlphaMask, Pixels, RenderImage, Window, div, point, prelude::*, px, size,
+    App, Bounds, Corners, ImageAlphaMask, Pixels, RenderImage, Window, div, point, prelude::*, px,
+    size,
 };
 use std::{cell::Cell, rc::Rc, sync::Arc};
 
@@ -209,7 +210,7 @@ fn paint_adjusted_with_mask(
     else {
         return;
     };
-    let frame = animation_frame(&source, !cx.reduce_motion(), window);
+    let frame = animation_frame(&source, !cx.reduce_motion(), window, cx);
     let _ =
         window.paint_image_fitted_masked(visible, fitted, corner_radii, source, frame, false, mask);
 }
@@ -217,35 +218,80 @@ fn paint_adjusted_with_mask(
 /// The frame of an animated wallpaper due now, on one clock shared by every
 /// painter so the hero and its previews stay in step. Stills, and reduced
 /// motion, always show the first frame.
-fn animation_frame(source: &RenderImage, animate: bool, window: &mut Window) -> usize {
-    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+fn animation_frame(source: &RenderImage, animate: bool, window: &mut Window, cx: &App) -> usize {
     let count = source.frame_count();
     if count <= 1 || !animate {
         return 0;
     }
-    window.request_animation_frame();
-    let delays = (0..count).map(|index| {
+    let (frame, wait) = frame_and_wait(frame_delays(source), clock_ms());
+    wake_at_next_frame(window, cx, wait);
+    frame
+}
+
+/// Each frame's display time in milliseconds.
+pub(crate) fn frame_delays(source: &RenderImage) -> impl Iterator<Item = u64> + Clone + '_ {
+    (0..source.frame_count()).map(|index| {
         let (numer, denom) = source.delay(index).numer_denom_ms();
         u64::from(numer) / u64::from(denom.max(1))
-    });
-    let elapsed = START
+    })
+}
+
+/// Milliseconds on the clock every wallpaper animation shares.
+pub(crate) fn clock_ms() -> u64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START
         .get_or_init(std::time::Instant::now)
         .elapsed()
-        .as_millis() as u64;
-    frame_at(delays, elapsed)
+        .as_millis() as u64
+}
+
+/// Redraw `window` once when the next frame is due, rather than every
+/// display frame: a GIF frame often holds for 100ms or more. Several
+/// painters in one window share a single pending wake-up.
+fn wake_at_next_frame(window: &mut Window, cx: &App, wait_ms: u64) {
+    use std::{cell::RefCell, collections::HashMap, time::Duration, time::Instant};
+    thread_local! {
+        static PENDING: RefCell<HashMap<gpui::WindowId, Instant>> = RefCell::default();
+    }
+    let id = window.window_handle().window_id();
+    let now = Instant::now();
+    let due = now + Duration::from_millis(wait_ms.max(1));
+    let scheduled = PENDING.with_borrow_mut(|pending| {
+        let earlier = pending.get(&id).is_some_and(|at| *at > now && *at <= due);
+        if !earlier {
+            pending.insert(id, due);
+        }
+        earlier
+    });
+    if scheduled {
+        return;
+    }
+    window
+        .spawn(cx, async move |cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(wait_ms.max(1)))
+                .await;
+            let _ = cx.update(|window, _| window.refresh());
+        })
+        .detach();
 }
 
 /// Which frame of a looping animation shows `elapsed_ms` after it started.
-fn frame_at(delays_ms: impl Iterator<Item = u64> + Clone, elapsed_ms: u64) -> usize {
+pub(crate) fn frame_at(delays_ms: impl Iterator<Item = u64> + Clone, elapsed_ms: u64) -> usize {
+    frame_and_wait(delays_ms, elapsed_ms).0
+}
+
+/// The frame showing at `elapsed_ms`, and how long until the next one.
+fn frame_and_wait(delays_ms: impl Iterator<Item = u64> + Clone, elapsed_ms: u64) -> (usize, u64) {
     let total = delays_ms.clone().sum::<u64>().max(1);
     let mut at = elapsed_ms % total;
     for (index, delay) in delays_ms.enumerate() {
         if at < delay {
-            return index;
+            return (index, delay - at);
         }
         at -= delay;
     }
-    0
+    (0, 1)
 }
 
 /// Paint the exact responsive crop used by the new-thread hero, without its
@@ -380,7 +426,10 @@ mod tests {
         assert_eq!(frame_at(delays.clone(), 100), 1);
         assert_eq!(frame_at(delays.clone(), 151), 2);
         assert_eq!(frame_at(delays.clone(), 350), 0);
-        assert_eq!(frame_at(delays, 350 * 7 + 120), 1);
+        assert_eq!(frame_at(delays.clone(), 350 * 7 + 120), 1);
+        // The wake-up lands on the next frame boundary, not every display frame.
+        assert_eq!(frame_and_wait(delays.clone(), 30), (0, 70));
+        assert_eq!(frame_and_wait(delays, 160), (2, 190));
     }
     use gpui::{Context, Render, canvas, div};
 

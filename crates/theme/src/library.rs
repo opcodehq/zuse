@@ -181,11 +181,7 @@ impl CustomThemeLibrary {
             bail!("theme JSON exceeds the {MAX_THEME_JSON_BYTES}-byte limit");
         }
         let source = source.trim().trim_start_matches('\u{feff}').trim();
-        let source = source
-            .strip_prefix("```")
-            .and_then(|fenced| fenced.split_once('\n'))
-            .and_then(|(_, body)| body.strip_suffix("```"))
-            .map_or(source, str::trim);
+        let source = strip_code_fence(source).unwrap_or(source);
         let value: serde_json::Value = json5::from_str(source).context("invalid theme JSON")?;
         if let Some(compilation) = compile_own_format(&value, Path::new(""), "custom-theme")? {
             return Ok(compilation);
@@ -232,70 +228,84 @@ impl CustomThemeLibrary {
         if archive.len() > MAX_PACKAGE_ENTRIES {
             bail!("theme package contains too many files");
         }
-        let theme_dirs = declared_theme_dirs(&mut archive);
-        let scratch = tempfile::tempdir()?;
-        let root = scratch.path().canonicalize()?;
-        let mut available = MAX_PACKAGE_BYTES;
-        let mut paths = HashSet::new();
-        for index in 0..archive.len() {
-            let entry = archive.by_index(index)?;
+        // Index every extractable theme-format file under `extension/`;
+        // nothing outside it, nothing in `node_modules`, no traversal.
+        let mut index = BTreeMap::new();
+        let mut seen = HashSet::new();
+        for position in 0..archive.len() {
+            let entry = archive.by_index(position)?;
             if !entry.is_file() || entry.is_symlink() {
                 continue;
             }
-            let Some(path) = entry.enclosed_name() else {
+            let Some(relative) = entry
+                .enclosed_name()
+                .and_then(|path| path.strip_prefix("extension").ok().map(Path::to_path_buf))
+            else {
                 continue;
             };
-            let Ok(relative) = path.strip_prefix("extension") else {
-                continue;
-            };
-            if !relative
+            let normal = relative
                 .components()
-                .all(|component| matches!(component, std::path::Component::Normal(_)))
-                || relative
-                    .components()
-                    .any(|part| part.as_os_str() == "node_modules")
-            {
-                continue;
-            }
-            // Only the manifest and the folders its themes live in (which
-            // covers their `include` siblings) count against the limits.
-            let wanted = relative == Path::new("package.json")
-                || theme_dirs.as_ref().is_none_or(|dirs| {
-                    relative
-                        .parent()
-                        .is_some_and(|parent| dirs.iter().any(|dir| parent.starts_with(dir)))
-                });
-            if !wanted {
-                continue;
-            }
+                .all(|component| matches!(component, std::path::Component::Normal(_)));
+            let vendored = relative
+                .components()
+                .any(|part| part.as_os_str() == "node_modules");
             let extension = relative
                 .extension()
                 .and_then(|ext| ext.to_str())
                 .unwrap_or_default();
-            if !["json", "jsonc", "tmTheme", "plist"]
-                .iter()
-                .any(|ext| ext.eq_ignore_ascii_case(extension))
+            if !normal
+                || vendored
+                || !["json", "jsonc", "tmTheme", "plist"]
+                    .iter()
+                    .any(|ext| ext.eq_ignore_ascii_case(extension))
             {
                 continue;
             }
-            if !paths.insert(relative.to_string_lossy().to_lowercase()) {
+            if !seen.insert(relative.to_string_lossy().to_lowercase()) {
                 bail!("theme package contains duplicate paths");
             }
+            index.insert(relative, position);
+        }
+        // Extract the manifest, the themes it declares, and whatever those
+        // files `include` or load `tokenColors` from, wherever they sit in the
+        // package. Unrelated data never counts against the limits. Without a
+        // readable manifest, fall back to every indexed file.
+        let mut queue = std::collections::VecDeque::from(
+            declared_theme_paths(&mut archive).unwrap_or_else(|| index.keys().cloned().collect()),
+        );
+        queue.push_front(PathBuf::from("package.json"));
+        let scratch = tempfile::tempdir()?;
+        let root = scratch.path().canonicalize()?;
+        let mut extracted = HashSet::new();
+        let mut available = MAX_PACKAGE_BYTES;
+        while let Some(relative) = queue.pop_front() {
+            let Some(&position) = index.get(&relative) else {
+                continue;
+            };
+            if !extracted.insert(relative.clone()) {
+                continue;
+            }
             let limit = available.min(MAX_THEME_JSON_BYTES);
+            let entry = archive.by_index(position)?;
             if entry.size() > limit {
                 bail!("theme package exceeds the extracted data limit");
             }
-            let destination = root.join(relative);
-            fs::create_dir_all(destination.parent().context("theme file has no parent")?)?;
-            let mut output = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&destination)?;
-            let size = io::copy(&mut entry.take(limit + 1), &mut output)?;
-            if size > limit {
+            let mut contents = Vec::new();
+            entry.take(limit + 1).read_to_end(&mut contents)?;
+            if contents.len() as u64 > limit {
                 bail!("theme package exceeds the extracted data limit");
             }
-            available -= size;
+            available -= contents.len() as u64;
+            let destination = root.join(&relative);
+            fs::create_dir_all(destination.parent().context("theme file has no parent")?)?;
+            fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&destination)?
+                .write_all(&contents)?;
+            if relative != Path::new("package.json") {
+                queue.extend(theme_dependencies(&relative, &contents));
+            }
         }
         let manifest = root.join("package.json");
         if !manifest.is_file() {
@@ -655,9 +665,9 @@ impl CustomThemeLibrary {
     }
 }
 
-/// The folders holding the themes `extension/package.json` contributes, or
-/// `None` when the manifest is missing or unreadable (extract everything).
-fn declared_theme_dirs<R: io::Read + io::Seek>(
+/// The theme files `extension/package.json` contributes, relative to the
+/// extension root, or `None` when the manifest is missing or unreadable.
+fn declared_theme_paths<R: io::Read + io::Seek>(
     archive: &mut zip::ZipArchive<R>,
 ) -> Option<Vec<PathBuf>> {
     let entry = archive.by_name("extension/package.json").ok()?;
@@ -667,18 +677,67 @@ fn declared_theme_dirs<R: io::Read + io::Seek>(
         .read_to_string(&mut manifest)
         .ok()?;
     let manifest: serde_json::Value = json5::from_str(&manifest).ok()?;
-    let dirs = manifest["contributes"]["themes"]
+    let paths = manifest["contributes"]["themes"]
         .as_array()?
         .iter()
-        .filter_map(|theme| theme["path"].as_str())
-        .map(|path| {
-            Path::new(path.trim_start_matches("./"))
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_default()
-        })
+        .filter_map(|theme| package_relative(Path::new(""), theme["path"].as_str()?))
         .collect::<Vec<_>>();
-    (!dirs.is_empty()).then_some(dirs)
+    (!paths.is_empty()).then_some(paths)
+}
+
+/// Files a theme loads by relative path: its `include` parent and a
+/// `tokenColors` file reference.
+fn theme_dependencies(theme: &Path, contents: &[u8]) -> Vec<PathBuf> {
+    let Ok(text) = std::str::from_utf8(contents) else {
+        return Vec::new();
+    };
+    let Ok(value) = json5::from_str::<serde_json::Value>(text) else {
+        return Vec::new();
+    };
+    let base = theme.parent().unwrap_or(Path::new(""));
+    ["include", "tokenColors"]
+        .into_iter()
+        .filter_map(|key| package_relative(base, value.get(key)?.as_str()?))
+        .collect()
+}
+
+/// `reference` resolved against `base` inside the package; `None` if it
+/// climbs out of the extension root or is absolute.
+fn package_relative(base: &Path, reference: &str) -> Option<PathBuf> {
+    let mut resolved = PathBuf::new();
+    for component in base.join(reference).components() {
+        match component {
+            std::path::Component::Normal(part) => resolved.push(part),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !resolved.pop() {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    (!resolved.as_os_str().is_empty()).then_some(resolved)
+}
+
+/// The body of a Markdown code fence (``` or ~~~, any length of at least
+/// three, optional info string), when the whole input is one. The closing
+/// fence must use the opener's character, at least as many times, with only
+/// whitespace after it.
+fn strip_code_fence(source: &str) -> Option<&str> {
+    let marker = source.chars().next().filter(|c| *c == '`' || *c == '~')?;
+    let opener = source.chars().take_while(|c| *c == marker).count();
+    if opener < 3 {
+        return None;
+    }
+    let (_, rest) = source.split_once('\n')?;
+    let (body, closing) = rest
+        .trim_end()
+        .rsplit_once('\n')
+        .unwrap_or(("", rest.trim_end()));
+    let closing = closing.trim();
+    let closes = closing.chars().all(|c| c == marker) && closing.chars().count() >= opener;
+    closes.then(|| body.trim())
 }
 
 /// A Zuse export or a T3 Code palette, parsed leniently (comments and
@@ -872,6 +931,107 @@ mod tests {
         assert_eq!(
             local.family.variants[0].accent,
             pasted.family.variants[0].accent
+        );
+    }
+
+    #[test]
+    fn community_packages_follow_includes_and_ignore_unrelated_files() {
+        let options = || CompileOptions {
+            family_id: "custom-shared".into(),
+            family_name: "Shared".into(),
+            source_url: "https://open-vsx.org/extension/sample/shared".into(),
+            revision: "1.0.0".into(),
+            license: "MIT".into(),
+        };
+        let package = |files: &[(&str, &[u8])]| {
+            let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
+            for (name, contents) in files {
+                archive
+                    .start_file(*name, zip::write::SimpleFileOptions::default())
+                    .unwrap();
+                archive.write_all(contents).unwrap();
+            }
+            archive.finish().unwrap().into_inner()
+        };
+        let huge = vec![b' '; MAX_THEME_JSON_BYTES as usize + 1];
+        // A theme including a file from a sibling folder.
+        let included = package(&[
+            (
+                "extension/package.json",
+                br#"{"contributes":{"themes":[{"label":"Shared Dark","uiTheme":"vs-dark","path":"./themes/dark.json"}]}}"#,
+            ),
+            (
+                "extension/themes/dark.json",
+                br##"{"include":"../shared/base.json","colors":{"editor.foreground":"#e2e2f0"}}"##,
+            ),
+            (
+                "extension/shared/base.json",
+                br##"{"colors":{"editor.background":"#202030"}}"##,
+            ),
+            ("extension/i18n/huge.json", &huge),
+        ]);
+        let compiled = CustomThemeLibrary::compile_community_package(&included, options()).unwrap();
+        assert_eq!(
+            compiled.family.variants[0].colors.background,
+            "#202030".parse().unwrap()
+        );
+        // A root-level theme does not admit every other folder.
+        let root_level = package(&[
+            (
+                "extension/package.json",
+                br#"{"contributes":{"themes":[{"label":"Root Dark","uiTheme":"vs-dark","path":"dark.json"}]}}"#,
+            ),
+            (
+                "extension/dark.json",
+                br##"{"colors":{"editor.background":"#101010","editor.foreground":"#eeeeee"}}"##,
+            ),
+            ("extension/i18n/huge.json", &huge),
+        ]);
+        assert!(CustomThemeLibrary::compile_community_package(&root_level, options()).is_ok());
+        // Includes cannot climb out of the extension.
+        assert_eq!(
+            package_relative(Path::new("themes"), "../../etc/passwd"),
+            None
+        );
+    }
+
+    #[test]
+    fn pasted_json_accepts_long_and_tilde_code_fences() {
+        let json =
+            r##"{"version":1,"name":"Fenced","appearance":"dark","colors":{"canvas":"#101823"}}"##;
+        for fenced in [
+            format!("````json\n{json}\n````"),
+            format!("~~~\n{json}\n~~~~"),
+            format!("```\n{json}\n```  "),
+        ] {
+            let compiled = CustomThemeLibrary::compile_pasted(&fenced).unwrap();
+            assert_eq!(compiled.family.name, "Fenced");
+        }
+        // A closing fence shorter than the opener does not close it.
+        assert!(strip_code_fence(&format!("````\n{json}\n```")).is_none());
+    }
+
+    #[test]
+    fn t3_terminal_selection_blends_over_the_terminal_background() {
+        let json = r##"{"version":1,"name":"Term","appearance":"light","colors":{
+          "canvas":"#ffffff","terminalBackground":"#000000",
+          "terminalForeground":"#ffffff","terminalSelection":"#ffffff80"}}"##;
+        let compiled = CustomThemeLibrary::compile_pasted(json).unwrap();
+        let terminal = &compiled.family.variants[0].terminal;
+        // Half-white over black is mid-grey, not the canvas-blended white
+        // that would hide white terminal text.
+        let selection = terminal.selection;
+        assert!((100..=156).contains(&selection.r), "{selection:?}");
+    }
+
+    #[test]
+    fn vscode_themes_with_version_metadata_are_not_t3() {
+        let json = r##"{"name":"Meta","version":"1.0.0","appearance":"dark",
+          "colors":{"editor.background":"#161625","editor.foreground":"#e2e2f0"}}"##;
+        let compiled = CustomThemeLibrary::compile_pasted(json).unwrap();
+        assert_eq!(
+            compiled.family.variants[0].colors.background,
+            "#161625".parse().unwrap()
         );
     }
 

@@ -109,6 +109,19 @@ pub fn init(
 ) {
     let system = Appearance::from_window(cx.window_appearance());
     tracing::debug!(?mode, ?system, "appearance: initial");
+    // Saved retired built-ins become their successor, so Settings shows the
+    // theme that is actually installed.
+    let mut themes = themes;
+    let registry = zuse_theme::ThemeRegistry::active();
+    for scheme in [zuse_theme::Appearance::Light, zuse_theme::Appearance::Dark] {
+        let saved = themes.variant_id(scheme).to_owned();
+        if let Some(successor) = registry
+            .variant_for(&saved, scheme)
+            .filter(|variant| variant.id != saved)
+        {
+            themes.set_variant(scheme, successor.id.clone());
+        }
+    }
     cx.set_global(AppearanceState {
         mode,
         system,

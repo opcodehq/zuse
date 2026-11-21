@@ -107,7 +107,11 @@ pub fn duplicate_as_editable(id: &str, cx: &mut App) -> Result<String> {
     let state = cx.global_mut::<ThemeLibraryState>();
     let mut next = state.library.clone();
     let duplicate = next.duplicate_as_editable(id, &state.data_dir)?;
-    persist_and_activate(state, next)?;
+    let created = editable_path(&next, &duplicate);
+    if let Err(error) = persist_and_activate(state, next) {
+        remove_created(created);
+        return Err(error);
+    }
     reconcile_and_refresh(cx);
     Ok(duplicate)
 }
@@ -118,7 +122,33 @@ pub fn create_editable(family: ThemeFamily, cx: &mut App) -> Result<String> {
         .context("custom theme library is not initialized")?
         .data_dir
         .clone();
-    mutate(cx, |library| library.create_editable(family, &data_dir))
+    let mut created = None;
+    let result = mutate(cx, |library| {
+        let id = library.create_editable(family, &data_dir)?;
+        created = editable_path(library, &id);
+        Ok(id)
+    });
+    if result.is_err() {
+        remove_created(created);
+    }
+    result
+}
+
+/// The JSON file an editable entry owns.
+fn editable_path(library: &CustomThemeLibrary, id: &str) -> Option<PathBuf> {
+    library
+        .entry(id)
+        .and_then(|entry| entry.source.path())
+        .map(Path::to_path_buf)
+}
+
+/// A failed library save must not leave the new editable file behind, or a
+/// retry would find its name taken and write a second copy. Editable files
+/// always get a fresh name, so this never touches one that existed before.
+fn remove_created(path: Option<PathBuf>) {
+    if let Some(path) = path {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 pub fn remove(id: &str, cx: &mut App) -> Result<()> {
@@ -179,10 +209,15 @@ fn reconcile_and_refresh(cx: &mut App) {
             zuse_theme::Appearance::Dark
         };
         let selected_id = selected.variant_id(model);
-        if registry.variant(selected_id).is_none()
-            && let Some(fallback) = registry.variants_for(model).next()
-        {
-            appearance::set_theme(appearance_kind, fallback.id.clone(), cx);
+        // Keep valid ids, move retired built-ins to their successor, and only
+        // then fall back to the first variant of the scheme.
+        let replacement = match registry.variant_for(selected_id, model) {
+            Some(variant) if variant.id == selected_id => None,
+            Some(successor) => Some(successor.id.clone()),
+            None => registry.variants_for(model).next().map(|v| v.id.clone()),
+        };
+        if let Some(id) = replacement {
+            appearance::set_theme(appearance_kind, id, cx);
         }
     }
     appearance::apply_registry_change(cx);

@@ -679,12 +679,15 @@ pub(crate) fn set_wallpaper_look(look: WallpaperLook, cx: &mut App) {
 pub(crate) fn wallpaper_input_opacity(cx: &App) -> Option<u8> {
     let settings = &cx.try_global::<SettingsStore>()?.current;
     let look = settings.wallpaper_look;
-    // See-through only pays off with artwork actually painted behind it.
+    // See-through only pays off with artwork actually painted behind it: a
+    // decoded image (effect changes keep showing it), not merely a file.
     let painted = look.opacity > 0
         && settings
             .new_thread_composer_background
             .as_ref()
-            .is_some_and(|background| Path::new(&background.path).is_file());
+            .is_some_and(|background| {
+                crate::new_thread_background_effects::artwork_ready(Path::new(&background.path))
+            });
     painted.then_some(look.input_opacity)
 }
 

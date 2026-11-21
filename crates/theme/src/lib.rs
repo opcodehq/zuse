@@ -673,10 +673,17 @@ impl ThemeRegistry {
             .filter(move |variant| variant.appearance == appearance)
     }
 
-    pub fn resolve(&self, selection: &ThemeSelection, appearance: Appearance) -> &ThemeVariant {
-        let id = selection.variant_id(appearance);
+    /// The variant a saved `id` should show in `appearance`: the variant
+    /// itself, or a retired built-in's successor, but never one of the other
+    /// scheme. `None` means callers fall back to a default.
+    pub fn variant_for(&self, id: &str, appearance: Appearance) -> Option<&ThemeVariant> {
         self.variant(id)
             .or_else(|| self.variant(retired_variant_successor(id)?))
+            .filter(|variant| variant.appearance == appearance)
+    }
+
+    pub fn resolve(&self, selection: &ThemeSelection, appearance: Appearance) -> &ThemeVariant {
+        self.variant_for(selection.variant_id(appearance), appearance)
             .or_else(|| {
                 self.variant(if appearance.is_dark() {
                     "zuse-dark"
@@ -901,6 +908,22 @@ mod tests {
         assert_eq!(
             registry.resolve(&selection, Appearance::Light).id,
             "github-light"
+        );
+        // Valid selections are untouched.
+        assert_eq!(
+            registry.variant_for("nord", Appearance::Dark).unwrap().id,
+            "nord"
+        );
+        // An id of the other scheme, retired or not, never installs.
+        assert!(
+            registry
+                .variant_for("night-owl", Appearance::Light)
+                .is_none()
+        );
+        assert!(
+            registry
+                .variant_for("tokyo-night", Appearance::Light)
+                .is_none()
         );
     }
 

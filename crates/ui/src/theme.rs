@@ -1609,9 +1609,12 @@ impl Theme {
             Appearance::Dark => "zuse-dark",
             Appearance::Light => "zuse-light",
         };
+        let scheme = match appearance {
+            Appearance::Dark => zuse_theme::Appearance::Dark,
+            Appearance::Light => zuse_theme::Appearance::Light,
+        };
         let variant = registry
-            .variant(variant_id)
-            .filter(|variant| model_appearance(variant.appearance) == appearance)
+            .variant_for(variant_id, scheme)
             .or_else(|| registry.variant(fallback_id))
             .expect("the built-in registry contains both Zuse appearances");
         if let Some(color) = wallpaper_color {
