@@ -128,10 +128,20 @@ pub struct NewThreadBackgroundAdjustment {
     pub focal_y: f32,
     /// Multiplier applied after the image has been scaled to cover the viewport.
     pub zoom: f32,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_crop"
+    )]
     pub crop: Option<[f32; 4]>,
     #[serde(skip_serializing_if = "is_zero_rotation")]
     pub quarter_turns: u8,
+}
+
+fn deserialize_crop<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<[f32; 4]>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).ok().flatten())
 }
 
 fn is_zero_rotation(turns: &u8) -> bool {
@@ -2543,6 +2553,27 @@ pub use zuse_protocol::SidebarSection;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_crop_preserves_other_settings() {
+        for crop in [serde_json::json!([0.1, 0.2, 0.3]), serde_json::json!("bad")] {
+            let settings: UiSettings = serde_json::from_value(serde_json::json!({
+                "displayName": "Kept",
+                "newThreadComposerBackground": {
+                    "path": "image.png", "name": "image.png",
+                    "adjustment": {"focalX": 0.2, "crop": crop}
+                }
+            }))
+            .unwrap();
+            assert_eq!(settings.display_name, "Kept");
+            let adjustment = settings.new_thread_composer_background.unwrap().adjustment;
+            assert_eq!(adjustment.focal_x, 0.2);
+            assert_eq!(adjustment.crop, None);
+        }
+        let valid: NewThreadBackgroundAdjustment =
+            serde_json::from_str(r#"{"crop":[0.1,0.2,0.3,0.4]}"#).unwrap();
+        assert_eq!(valid.crop, Some([0.1, 0.2, 0.3, 0.4]));
+    }
 
     #[test]
     fn cloud_workspace_agents_remember_the_latest_agent_and_stay_bounded() {

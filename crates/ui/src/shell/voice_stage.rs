@@ -241,38 +241,40 @@ impl Shell {
             .unwrap_or_default();
         // The new-thread hero's artwork with only its soft bottom fade: no
         // cutout around the orb, so no light channel splits the picture.
-        let hero = artwork.map(|artwork| {
-            let look = ui_settings.wallpaper_look;
-            div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .w(px(width))
-                .h(px(new_thread_background_height(f32::from(viewport.height))))
-                .opacity(
-                    new_thread_background_opacity(theme.is_frost()) * f32::from(look.opacity)
-                        / 100.0,
-                )
-                .child(
-                    gpui::canvas(
-                        |_, _, _| {},
-                        move |bounds, _, window, cx| {
-                            crate::new_thread_background_mask::paint(
-                                artwork.clone(),
-                                bounds,
-                                bounds,
-                                adjustment,
-                                false,
-                                look,
-                                window,
-                                cx,
-                            );
-                        },
-                    )
+        let hero = artwork
+            .filter(|_| ui_settings.wallpaper_look.opacity > 0)
+            .map(|artwork| {
+                let look = ui_settings.wallpaper_look;
+                div()
                     .absolute()
-                    .inset_0(),
-                )
-        });
+                    .top_0()
+                    .left_0()
+                    .w(px(width))
+                    .h(px(new_thread_background_height(f32::from(viewport.height))))
+                    .opacity(
+                        new_thread_background_opacity(theme.is_frost()) * f32::from(look.opacity)
+                            / 100.0,
+                    )
+                    .child(
+                        gpui::canvas(
+                            |_, _, _| {},
+                            move |bounds, _, window, cx| {
+                                crate::new_thread_background_mask::paint(
+                                    artwork.clone(),
+                                    bounds,
+                                    bounds,
+                                    adjustment,
+                                    false,
+                                    look,
+                                    window,
+                                    cx,
+                                );
+                            },
+                        )
+                        .absolute()
+                        .inset_0(),
+                    )
+            });
 
         let orb_block = div()
             .relative()

@@ -13251,10 +13251,15 @@ impl Shell {
         // the painter, including the plain fallback and visible crossfade.
         let hero_ink = artwork_frame
             .backdrop_is_dark(
-                (
-                    (self.viewport_width - self.sidebar_now()).max(1.0),
-                    new_thread_background_height(self.viewport_height),
+                gpui::Bounds::new(
+                    gpui::point(px(self.sidebar_now()), px(0.0)),
+                    gpui::size(
+                        px((self.viewport_width - self.sidebar_now()).max(1.0)),
+                        px(new_thread_background_height(self.viewport_height)),
+                    ),
                 ),
+                self.composer.read(cx).surface_bounds().get(),
+                wallpaper_look,
                 theme.bg,
                 new_thread_background_opacity(theme.is_frost())
                     * (1.0 - dock_frame.dissolve())
@@ -13321,7 +13326,8 @@ impl Shell {
         let term_h = self.terminal_geometry.get().height;
         let new_thread_background_layer =
             (!cloud_starting && (!has_selection || dock_frame.active)).then(|| {
-                if artwork_frame.active {
+                if artwork_frame.active && wallpaper_look.opacity > 0 && dock_frame.dissolve() < 1.0
+                {
                     window.request_animation_frame();
                 }
                 let width = (self.viewport_width - self.sidebar_now()).max(0.0);

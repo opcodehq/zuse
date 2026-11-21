@@ -111,15 +111,12 @@ pub(crate) fn crop_for_adjustment(
 ) -> [f32; 4] {
     let hero_bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(hero.0), px(hero.1)));
     let adjustment = adjustment.normalized();
-    if let Some(crop) = adjustment.crop {
-        return crop;
-    }
     let Some(geometry) = fitted_geometry(image.0, image.1, hero_bounds, adjustment) else {
         return [0.0, 0.0, 1.0, 1.0];
     };
     [
-        geometry.overflow_x * adjustment.focal_x / geometry.width,
-        geometry.overflow_y * adjustment.focal_y / geometry.height,
+        f32::from(hero_bounds.left() - geometry.bounds.left()) / geometry.width,
+        f32::from(hero_bounds.top() - geometry.bounds.top()) / geometry.height,
         hero.0 / geometry.width,
         hero.1 / geometry.height,
     ]
@@ -215,6 +212,44 @@ fn mask(
             )
         }),
     }
+}
+
+/// Match the shader's rounded cutout and bottom fade at one window position.
+pub(crate) fn sample_mask(mask: ImageAlphaMask, point: gpui::Point<Pixels>) -> f32 {
+    let width = f32::from(mask.bounds.size.width).max(0.0);
+    let height = f32::from(mask.bounds.size.height).max(0.0);
+    let radius = f32::from(mask.radius).clamp(0.0, width.min(height) * 0.5);
+    let x = (f32::from(point.x - mask.bounds.left()) - width * 0.5).abs() - width * 0.5 + radius;
+    let y = (f32::from(point.y - mask.bounds.top()) - height * 0.5).abs() - height * 0.5 + radius;
+    let distance = x.max(0.0).hypot(y.max(0.0)) + x.max(y).min(0.0) - radius;
+    let smooth = |value: f32| {
+        let t = value.clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    };
+    let feather = f32::from(mask.feather);
+    let mut alpha = if feather > 0.0 {
+        smooth((distance - f32::from(mask.clearance)) / feather)
+    } else {
+        1.0
+    };
+    if let Some((bottom, fade)) = mask.bottom_fade {
+        let fade = f32::from(fade);
+        if fade > 0.0 {
+            alpha = alpha.min(smooth(f32::from(bottom - point.y) / fade));
+        }
+    }
+    alpha
+}
+
+pub(crate) fn artwork_masks(
+    bounds: Bounds<Pixels>,
+    composer: Bounds<Pixels>,
+    look: WallpaperLook,
+) -> [ImageAlphaMask; 2] {
+    [
+        mask(bounds, composer, false, look),
+        mask(bounds, composer, true, look),
+    ]
 }
 
 fn adjusted_image_paint(
@@ -406,60 +441,81 @@ pub(crate) fn artwork(
         .size_full()
         .relative()
         .opacity(opacity * f32::from(look.opacity) / 100.0)
-        .children([false, true].into_iter().map(|cutout| {
-            let image = image.clone();
-            let select_image = image.clone();
-            let composer_bounds = composer_bounds.clone();
-            let prepaint_frame = shared_frame.clone();
-            let paint_frame = shared_frame.clone();
-            div()
-                .absolute()
-                .inset_0()
-                .opacity(if cutout { 1.0 } else { CUTOUT_REVEAL_OPACITY })
-                .child(
-                    gpui::canvas(
-                        move |_, _, cx| {
-                            if !cutout {
-                                prepaint_frame.set(selected_frame.unwrap_or_else(|| {
-                                    animation_frame(
-                                        &select_image,
-                                        !cx.reduce_motion(),
-                                        std::time::Instant::now(),
-                                    )
-                                }));
-                            }
-                        },
-                        move |bounds, _, window, cx| {
-                            let composer = composer_bounds.get().unwrap_or_else(|| {
-                                Bounds::new(
-                                    point(bounds.left(), bounds.bottom() + px(200.0)),
-                                    bounds.size,
-                                )
-                            });
-                            let frame = paint_frame.get();
-                            if !cutout {
-                                frame.request_next(window, cx);
-                            }
-                            paint_adjusted_with_mask(
-                                image.clone(),
-                                bounds,
-                                adjustment,
-                                Default::default(),
-                                Some(mask(bounds, composer, cutout, look)),
-                                window,
-                                frame.index,
-                            );
-                        },
-                    )
-                    .absolute()
-                    .inset_0(),
-                )
-        }))
+        .children(
+            [false, true]
+                .into_iter()
+                .filter(move |_| opacity > 0.0 && look.opacity > 0)
+                .map(|cutout| {
+                    let image = image.clone();
+                    let select_image = image.clone();
+                    let composer_bounds = composer_bounds.clone();
+                    let prepaint_frame = shared_frame.clone();
+                    let paint_frame = shared_frame.clone();
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .opacity(if cutout { 1.0 } else { CUTOUT_REVEAL_OPACITY })
+                        .child(
+                            gpui::canvas(
+                                move |_, _, cx| {
+                                    if !cutout {
+                                        prepaint_frame.set(selected_frame.unwrap_or_else(|| {
+                                            animation_frame(
+                                                &select_image,
+                                                !cx.reduce_motion(),
+                                                std::time::Instant::now(),
+                                            )
+                                        }));
+                                    }
+                                },
+                                move |bounds, _, window, cx| {
+                                    let composer = composer_bounds.get().unwrap_or_else(|| {
+                                        Bounds::new(
+                                            point(bounds.left(), bounds.bottom() + px(200.0)),
+                                            bounds.size,
+                                        )
+                                    });
+                                    let frame = paint_frame.get();
+                                    if !cutout {
+                                        frame.request_next(window, cx);
+                                    }
+                                    paint_adjusted_with_mask(
+                                        image.clone(),
+                                        bounds,
+                                        adjustment,
+                                        Default::default(),
+                                        Some(mask(bounds, composer, cutout, look)),
+                                        window,
+                                        frame.index,
+                                    );
+                                },
+                            )
+                            .absolute()
+                            .inset_0(),
+                        )
+                }),
+        )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sampling_crop_matches_explicit_crop_as_fitted_to_hero() {
+        let adjustment = NewThreadBackgroundAdjustment {
+            crop: Some([0.0, 0.0, 1.0, 1.0]),
+            ..Default::default()
+        };
+        assert_eq!(
+            crop_for_adjustment((100.0, 100.0), (200.0, 100.0), adjustment),
+            [0.0, 0.25, 1.0, 0.5]
+        );
+        assert_eq!(
+            crop_for_adjustment((100.0, 100.0), (100.0, 100.0), adjustment),
+            [0.0, 0.0, 1.0, 1.0]
+        );
+    }
 
     #[test]
     fn crop_rect_and_framing_round_trip_through_the_renderer() {

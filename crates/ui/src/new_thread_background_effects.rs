@@ -125,6 +125,7 @@ impl WallpaperRaster {
         })
     }
 
+    #[cfg(test)]
     fn backdrop_luma(
         &self,
         frame: usize,
@@ -157,12 +158,25 @@ impl std::ops::Deref for WallpaperRaster {
 impl ArtworkFrame {
     pub(crate) fn backdrop_is_dark(
         &self,
-        hero: (f32, f32),
+        hero: gpui::Bounds<gpui::Pixels>,
+        composer: Option<gpui::Bounds<gpui::Pixels>>,
+        look: crate::settings::WallpaperLook,
         canvas: gpui::Hsla,
         opacity: f32,
         previous: AnimationFrame,
         current: AnimationFrame,
     ) -> Option<bool> {
+        use crate::new_thread_background_mask::{
+            CUTOUT_REVEAL_OPACITY, artwork_masks, sample_mask,
+        };
+        let composer = composer.unwrap_or_else(|| {
+            gpui::Bounds::new(
+                gpui::point(hero.left(), hero.bottom() + gpui::px(200.0)),
+                hero.size,
+            )
+        });
+        let masks = artwork_masks(hero, composer, look);
+        let size = (f32::from(hero.size.width), f32::from(hero.size.height));
         let layers = [
             (
                 &self.previous,
@@ -174,19 +188,45 @@ impl ArtworkFrame {
         ];
         let gpui::Rgba { r, g, b, .. } = canvas.into();
         let canvas_luma = (r * 0.2126 + g * 0.7152 + b * 0.0722) * 255.0;
-        let mut backdrop = canvas_luma;
+        let mut total = 0.0;
         let mut has_artwork = false;
-        for (raster, adjustment, frame, weight) in layers {
-            let layer_opacity = (opacity * weight).clamp(0.0, 1.0);
-            if let Some(raster) = raster
-                && layer_opacity > 0.0
-            {
-                backdrop =
-                    raster.backdrop_luma(frame.index, adjustment, hero, backdrop, layer_opacity);
-                has_artwork = true;
+        // Sample the same upper-middle band as before, applying each paint pass
+        // at its own alpha before compositing the next transition layer.
+        for row in 0..12 {
+            let y = 0.2 + (row as f32 + 0.5) / 12.0 * 0.4;
+            for col in 0..24 {
+                let x = (col as f32 + 0.5) / 24.0;
+                let point = gpui::point(
+                    hero.left() + gpui::px(x * size.0),
+                    hero.top() + gpui::px(y * size.1),
+                );
+                let pass = [
+                    sample_mask(masks[0], point) * CUTOUT_REVEAL_OPACITY,
+                    sample_mask(masks[1], point),
+                ];
+                let mut backdrop = canvas_luma;
+                for (raster, adjustment, frame, weight) in layers {
+                    let Some(raster) = raster else { continue };
+                    let image_size = raster.image.size(frame.index);
+                    let crop = crop_for_adjustment(
+                        (image_size.width.0 as f32, image_size.height.0 as f32),
+                        size,
+                        adjustment,
+                    );
+                    let [luma, alpha] = raster.contrast[frame.index]
+                        .sample(crop[0] + x * crop[2], crop[1] + y * crop[3]);
+                    for mask in pass {
+                        let coverage = (opacity * weight * mask).clamp(0.0, 1.0);
+                        if coverage * alpha > 0.0 {
+                            has_artwork = true;
+                        }
+                        backdrop = luma * coverage + backdrop * (1.0 - alpha * coverage);
+                    }
+                }
+                total += backdrop;
             }
         }
-        has_artwork.then_some(backdrop < 140.0)
+        has_artwork.then_some(total / (12.0 * 24.0) < 140.0)
     }
 }
 
@@ -228,6 +268,13 @@ impl LumaGrid {
         }
     }
 
+    fn sample(&self, x: f32, y: f32) -> [f32; 2] {
+        let column = ((x * self.columns as f32) as u32).min(self.columns - 1);
+        let row = ((y * self.rows as f32) as u32).min(self.rows - 1);
+        self.cells[(row * self.columns + column) as usize]
+    }
+
+    #[cfg(test)]
     fn region(&self, [x0, y0, x1, y1]: [f32; 4]) -> [f32; 2] {
         let span = |from: f32, to: f32, size: u32| {
             let first = ((from * size as f32).floor().max(0.0) as u32).min(size - 1);
@@ -955,7 +1002,15 @@ mod tests {
         };
         let classify = |frame: &ArtworkFrame| {
             frame.backdrop_is_dark(
-                (64.0, 48.0),
+                gpui::Bounds::new(
+                    gpui::point(gpui::px(0.0), gpui::px(0.0)),
+                    gpui::size(gpui::px(64.0), gpui::px(48.0)),
+                ),
+                None,
+                crate::settings::WallpaperLook {
+                    bottom_fade: 0,
+                    ..Default::default()
+                },
                 gpui::black(),
                 1.0,
                 Default::default(),
@@ -965,6 +1020,46 @@ mod tests {
         assert_eq!(classify(&frame), Some(false));
         frame.mix = 1.0;
         assert_eq!(classify(&frame), Some(true));
+    }
+
+    #[test]
+    fn heading_contrast_includes_both_passes_and_obeys_the_cutout() {
+        let white = WallpaperRaster::new(vec![image::Frame::new(image::RgbaImage::from_pixel(
+            32,
+            32,
+            image::Rgba([255, 255, 255, 255]),
+        ))]);
+        let frame = ArtworkFrame {
+            previous: None,
+            current: Some(white),
+            previous_adjustment: Default::default(),
+            current_adjustment: Default::default(),
+            mix: 1.0,
+            active: false,
+        };
+        let hero = gpui::Bounds::new(
+            gpui::point(gpui::px(0.0), gpui::px(0.0)),
+            gpui::size(gpui::px(100.0), gpui::px(100.0)),
+        );
+        let look = crate::settings::WallpaperLook {
+            bottom_fade: 0,
+            soft_edge: 0,
+            ..Default::default()
+        };
+        let classify = |composer, opacity| {
+            frame.backdrop_is_dark(
+                hero,
+                composer,
+                look,
+                gpui::black(),
+                opacity,
+                Default::default(),
+                Default::default(),
+            )
+        };
+        assert_eq!(classify(None, 0.5), Some(false));
+        assert_eq!(classify(Some(hero), 0.5), Some(true));
+        assert_eq!(classify(None, 0.0), None);
     }
 
     fn artwork() -> Arc<WallpaperRaster> {

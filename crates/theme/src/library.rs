@@ -234,31 +234,58 @@ impl CustomThemeLibrary {
         let mut index = BTreeMap::new();
         let mut seen = HashSet::new();
         let mut ambiguous = HashSet::new();
-        for position in 0..archive.len() {
-            let entry = archive.by_index_raw(position)?;
-            if !entry.is_file() || entry.is_symlink() {
-                continue;
+        // ZipArchive indexes by name, so exact duplicates are collapsed. Walk
+        // central-directory records independently before asking it to open any
+        // local header. Associate first-seen raw names with zip's decoded names.
+        let mut cursor = usize::try_from(archive.central_directory_start())?;
+        let mut raw_names = BTreeMap::<Vec<u8>, usize>::new();
+        let mut entries = 0usize;
+        while bytes.get(cursor..cursor + 4) == Some(&[0x50, 0x4b, 0x01, 0x02]) {
+            let header = bytes
+                .get(cursor..cursor + 46)
+                .context("truncated central directory")?;
+            let field_len =
+                |offset: usize| u16::from_le_bytes([header[offset], header[offset + 1]]) as usize;
+            let (name_len, extra_len, comment_len) = (field_len(28), field_len(30), field_len(32));
+            let end = cursor
+                .checked_add(46 + name_len + extra_len + comment_len)
+                .context("invalid central directory")?;
+            let name = bytes
+                .get(cursor + 46..cursor + 46 + name_len)
+                .context("truncated central directory name")?;
+            if end > bytes.len() {
+                bail!("truncated central directory entry");
             }
-            let Some(relative) = entry
-                .enclosed_name()
-                .and_then(|path| path.strip_prefix("extension").ok().map(Path::to_path_buf))
-            else {
-                continue;
-            };
-            let normal = relative
-                .components()
-                .all(|component| matches!(component, std::path::Component::Normal(_)));
-            let vendored = relative
-                .components()
-                .any(|part| part.as_os_str() == "node_modules");
-            if !normal || vendored || relative.as_os_str().is_empty() {
-                continue;
+            entries += 1;
+            if entries > MAX_PACKAGE_ENTRIES {
+                bail!("theme package contains too many files");
             }
-            let folded = relative.to_string_lossy().to_lowercase();
-            if !seen.insert(folded.clone()) {
-                ambiguous.insert(folded);
+            let next_index = raw_names.len();
+            let position = *raw_names.entry(name.to_vec()).or_insert(next_index);
+            let decoded = archive
+                .name_for_index(position)
+                .context("ambiguous ZIP entry names")?;
+            let path = Path::new(decoded);
+            if !decoded.ends_with('/')
+                && let Ok(relative) = path.strip_prefix("extension")
+                && !relative.as_os_str().is_empty()
+                && relative
+                    .components()
+                    .all(|component| matches!(component, std::path::Component::Normal(_)))
+                && !relative
+                    .components()
+                    .any(|part| part.as_os_str() == "node_modules")
+            {
+                let folded = relative.to_string_lossy().to_lowercase();
+                if !seen.insert(folded.clone()) {
+                    ambiguous.insert(folded);
+                }
+                index.insert(relative.to_path_buf(), position);
             }
-            index.insert(relative, position);
+            cursor = end;
+        }
+        if raw_names.len() != archive.len() {
+            bail!("theme package contains ambiguous ZIP names");
         }
         // Extract the manifest, the themes it declares, and whatever those
         // files `include` or load `tokenColors` from, wherever they sit in the
@@ -297,6 +324,13 @@ impl CustomThemeLibrary {
                     continue;
                 }
             };
+            if !entry.is_file() || entry.is_symlink() {
+                if manifest {
+                    bail!("package.json is not a regular file");
+                }
+                unavailable.insert(relative, "not a regular file in theme package");
+                continue;
+            }
             let mut contents = Vec::new();
             let file_result = if entry.size() > MAX_THEME_JSON_BYTES {
                 Err("file exceeds the theme package per-file limit")
@@ -903,6 +937,63 @@ fn rekey_family(family: &mut ThemeFamily, new_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn damaged_and_duplicate_archive_entries_do_not_hide_unaffected_variants() {
+        let options = || CompileOptions {
+            family_id: "test".into(),
+            family_name: "Test".into(),
+            source_url: "test".into(),
+            revision: "1".into(),
+            license: "MIT".into(),
+        };
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, data) in [
+            (
+                "extension/package.json",
+                r#"{"contributes":{"themes":[{"label":"Light","uiTheme":"vs","path":"light.json"},{"label":"Dark","uiTheme":"vs-dark","path":"dark1.json"}]}}"#,
+            ),
+            (
+                "extension/light.json",
+                r##"{"colors":{"editor.background":"#ffffff"}}"##,
+            ),
+            ("extension/dark1.json", "{}"),
+            ("extension/dark2.json", "{}"),
+            ("extension/unrelated", "{}"),
+        ] {
+            writer
+                .start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(data.as_bytes()).unwrap();
+        }
+        let mut bytes = writer.finish().unwrap().into_inner();
+        let mut damaged = bytes.clone();
+        let name = b"extension/dark1.json";
+        let i = damaged.windows(name.len()).position(|x| x == name).unwrap();
+        damaged[i - 30] = 0;
+        let compiled = CustomThemeLibrary::compile_community_package(&damaged, options()).unwrap();
+        assert_eq!(compiled.family.variants[0].name, "Light");
+        assert!(compiled.failures[0].message.contains("could not open"));
+        // Replace both local and central names to form an exact duplicate.
+        let old = b"extension/dark2.json";
+        let positions: Vec<_> = bytes
+            .windows(old.len())
+            .enumerate()
+            .filter_map(|(i, x)| (x == old).then_some(i))
+            .collect();
+        assert_eq!(positions.len(), 2);
+        for i in positions {
+            bytes[i..i + old.len()].copy_from_slice(b"extension/dark1.json");
+        }
+        // An unrelated damaged local header must not be read while indexing.
+        let name = b"extension/unrelated";
+        let i = bytes.windows(name.len()).position(|x| x == name).unwrap();
+        bytes[i - 30] = 0;
+        let compiled = CustomThemeLibrary::compile_community_package(&bytes, options()).unwrap();
+        assert_eq!(compiled.family.variants.len(), 1);
+        assert_eq!(compiled.family.variants[0].name, "Light");
+        assert!(compiled.failures[0].message.contains("ambiguous"));
+    }
 
     #[test]
     fn imports_fenced_t3_palette_with_an_opposite_variant() {

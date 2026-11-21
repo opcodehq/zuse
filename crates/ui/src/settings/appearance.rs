@@ -94,11 +94,9 @@ impl BackgroundAdjustmentDialog {
     }
 
     fn crop_for_hero(&self, image: (f32, f32), hero: (f32, f32)) -> [f32; 4] {
-        if self.draft == Default::default() {
-            [0.0, 0.0, 1.0, 1.0]
-        } else {
+        self.draft.crop.unwrap_or_else(|| {
             crate::new_thread_background_mask::crop_for_adjustment(image, hero, self.draft)
-        }
+        })
     }
 
     fn set_crop(&mut self, crop: [f32; 4]) {
@@ -1552,45 +1550,71 @@ impl AppearancePage {
             CROP_HANDLE_REACH / f32::from(stage.size.width).max(1.0),
             CROP_HANDLE_REACH / f32::from(stage.size.height).max(1.0),
         );
-        let corner = corners
+        let edge_handles = [
+            (
+                (x, y + height / 2.0),
+                true,
+                x + width,
+                y + height / 2.0,
+                false,
+            ),
+            (
+                (x + width, y + height / 2.0),
+                true,
+                x,
+                y + height / 2.0,
+                true,
+            ),
+            (
+                (x + width / 2.0, y),
+                false,
+                y + height,
+                x + width / 2.0,
+                false,
+            ),
+            (
+                (x + width / 2.0, y + height),
+                false,
+                y,
+                x + width / 2.0,
+                true,
+            ),
+        ];
+        let candidates = corners
             .iter()
             .enumerate()
-            .filter(|(_, corner)| {
-                (point.0 - corner.0).abs() <= reach.0 && (point.1 - corner.1).abs() <= reach.1
+            .map(|(index, &location)| {
+                (
+                    location,
+                    CropDrag::Resize {
+                        anchor: corners[3 - index],
+                        sides: Some((index % 2 == 1, index >= 2)),
+                    },
+                )
             })
-            .min_by(|(_, first), (_, second)| {
-                let distance = |corner: &(f32, f32)| {
-                    ((point.0 - corner.0) / reach.0).powi(2)
-                        + ((point.1 - corner.1) / reach.1).powi(2)
-                };
-                distance(first).total_cmp(&distance(second))
+            .chain(edge_handles.into_iter().map(
+                |(location, horizontal, opposite, center, positive)| {
+                    (
+                        location,
+                        CropDrag::ResizeEdge {
+                            horizontal,
+                            opposite,
+                            center,
+                            positive,
+                        },
+                    )
+                },
+            ));
+        let handle = candidates
+            .filter_map(|(location, drag)| {
+                let dx = (point.0 - location.0) / reach.0;
+                let dy = (point.1 - location.1) / reach.1;
+                (dx.abs() <= 1.0 && dy.abs() <= 1.0).then_some((dx * dx + dy * dy, drag))
             })
-            .map(|(index, _)| index);
-        dialog.drag = Some(if let Some(index) = corner {
-            CropDrag::Resize {
-                anchor: corners[3 - index],
-                sides: Some((index % 2 == 1, index >= 2)),
-            }
-        } else if (point.1 - (y + height / 2.0)).abs() <= reach.1
-            && ((point.0 - x).abs() <= reach.0 || (point.0 - x - width).abs() <= reach.0)
-        {
-            let positive = (point.0 - x).abs() > (point.0 - x - width).abs();
-            CropDrag::ResizeEdge {
-                horizontal: true,
-                opposite: if positive { x } else { x + width },
-                center: y + height / 2.0,
-                positive,
-            }
-        } else if (point.0 - (x + width / 2.0)).abs() <= reach.0
-            && ((point.1 - y).abs() <= reach.1 || (point.1 - y - height).abs() <= reach.1)
-        {
-            let positive = (point.1 - y).abs() > (point.1 - y - height).abs();
-            CropDrag::ResizeEdge {
-                horizontal: false,
-                opposite: if positive { y } else { y + height },
-                center: x + width / 2.0,
-                positive,
-            }
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, drag)| drag);
+        dialog.drag = Some(if let Some(drag) = handle {
+            drag
         } else {
             let inside = (x..=x + width).contains(&point.0) && (y..=y + height).contains(&point.1);
             if inside {
@@ -5249,6 +5273,7 @@ mod tests {
                 let dialog = page.background_adjustment_dialog.as_mut().unwrap();
                 dialog.draft = Default::default();
                 dialog.image = Some((2000.0, 1000.0));
+                dialog.hero = (2000.0, 1000.0);
                 dialog.window_aspect = 1.6;
                 dialog.stage_bounds.set(Some(Bounds::new(
                     point(px(0.0), px(0.0)),
@@ -5264,6 +5289,31 @@ mod tests {
                     }
                 };
                 assert_crop(crop(page), [0.0, 0.0, 1.0, 1.0]);
+
+                let dialog = page.background_adjustment_dialog.as_mut().unwrap();
+                assert_crop(
+                    dialog.crop_for_hero((100.0, 100.0), (200.0, 100.0)),
+                    [0.0, 0.25, 1.0, 0.5],
+                );
+                dialog.draft.crop = Some([0.2, 0.2, 0.012, 0.2]);
+                page.start_background_drag(point(px(206.0), px(100.0)), cx);
+                assert!(matches!(
+                    page.background_adjustment_dialog.as_ref().unwrap().drag,
+                    Some(CropDrag::ResizeEdge {
+                        horizontal: false,
+                        positive: false,
+                        ..
+                    })
+                ));
+                page.start_background_drag(point(px(200.0), px(100.0)), cx);
+                assert!(matches!(
+                    page.background_adjustment_dialog.as_ref().unwrap().drag,
+                    Some(CropDrag::Resize {
+                        sides: Some((false, false)),
+                        ..
+                    })
+                ));
+                page.background_adjustment_dialog.as_mut().unwrap().draft = Default::default();
 
                 page.start_background_drag(point(px(0.0), px(0.0)), cx);
                 page.drag_background(point(px(250.0), px(100.0)), cx);

@@ -156,7 +156,7 @@ pub fn compile_source(path: &Path, options: CompileOptions) -> Result<SourceComp
     };
 
     if let Some(package_json) = package_json {
-        return compile_package(&path, &package_json, options, &BTreeMap::new());
+        return compile_package(&path, &package_json, options, &BTreeMap::new(), false);
     }
     compile_single_file(path, options)
 }
@@ -167,7 +167,7 @@ fn compile_single_file(path: PathBuf, options: CompileOptions) -> Result<SourceC
         .ok_or_else(|| anyhow!("{} has no parent directory", path.display()))?
         .canonicalize()
         .with_context(|| format!("could not resolve theme root for {}", path.display()))?;
-    let normalized = load_theme(&path, &root, &mut Vec::new(), &BTreeMap::new())?;
+    let normalized = load_theme(&path, &root, &mut Vec::new(), &BTreeMap::new(), false)?;
     let appearance = detect_appearance(&path, None, &normalized);
     let name = theme_declared_name(&path).unwrap_or_else(|| options.family_name.clone());
     let imported = convert(
@@ -201,7 +201,7 @@ pub(crate) fn compile_extracted_package(
     options: CompileOptions,
     unavailable: &BTreeMap<PathBuf, &'static str>,
 ) -> Result<SourceCompilation> {
-    compile_package(manifest, manifest, options, unavailable)
+    compile_package(manifest, manifest, options, unavailable, true)
 }
 
 fn compile_package(
@@ -209,6 +209,7 @@ fn compile_package(
     package_json: &Path,
     options: CompileOptions,
     unavailable: &BTreeMap<PathBuf, &'static str>,
+    extracted: bool,
 ) -> Result<SourceCompilation> {
     let source = read_bounded(package_json, "package manifest")?;
     let manifest: Value = json5::from_str(&source)
@@ -279,7 +280,13 @@ fn compile_package(
             let theme_path = theme_path
                 .as_deref()
                 .context("theme path resolves outside selected theme root")?;
-            let normalized = load_theme(theme_path, &package_root, &mut Vec::new(), unavailable)?;
+            let normalized = load_theme(
+                theme_path,
+                &package_root,
+                &mut Vec::new(),
+                unavailable,
+                extracted,
+            )?;
             let appearance = detect_appearance(
                 theme_path,
                 declaration.get("uiTheme").and_then(Value::as_str),
@@ -410,7 +417,7 @@ pub fn import_file(path: &Path, options: ImportOptions) -> Result<ImportResult> 
         .parent()
         .ok_or_else(|| anyhow!("{} has no parent directory", canonical.display()))?
         .to_path_buf();
-    let normalized = load_theme(&canonical, &root, &mut Vec::new(), &BTreeMap::new())?;
+    let normalized = load_theme(&canonical, &root, &mut Vec::new(), &BTreeMap::new(), false)?;
     convert(normalized, options)
 }
 
@@ -419,6 +426,7 @@ fn load_theme(
     root: &Path,
     stack: &mut Vec<PathBuf>,
     unavailable: &BTreeMap<PathBuf, &'static str>,
+    extracted: bool,
 ) -> Result<NormalizedTheme> {
     check_extracted_path(path, root, unavailable)?;
     let path = path
@@ -440,8 +448,8 @@ fn load_theme(
         .ok_or_else(|| anyhow!("{} is not a JSON object", path.display()))?;
 
     let mut theme = if let Some(include) = object.get("include").and_then(Value::as_str) {
-        let include_path = resolve_relative(&path, root, include)?;
-        load_theme(&include_path, root, stack, unavailable)?
+        let include_path = resolve_relative(&path, root, include, extracted)?;
+        load_theme(&include_path, root, stack, unavailable, extracted)?
     } else {
         NormalizedTheme::default()
     };
@@ -459,7 +467,7 @@ fn load_theme(
         match token_colors {
             Value::Array(rules) => theme.token_colors.extend(parse_token_rules(rules)),
             Value::String(relative) => {
-                let token_path = resolve_relative(&path, root, relative)?;
+                let token_path = resolve_relative(&path, root, relative, extracted)?;
                 check_extracted_path(&token_path, root, unavailable)?;
                 let token_path = token_path
                     .canonicalize()
@@ -513,19 +521,27 @@ fn check_extracted_path(
     unavailable: &BTreeMap<PathBuf, &'static str>,
 ) -> Result<()> {
     if let Ok(relative) = path.strip_prefix(root)
-        && let Some(reason) = unavailable.get(relative)
+        && let Some(relative) = package_relative(Path::new(""), &relative.to_string_lossy())
+        && let Some(reason) = unavailable.get(&relative)
     {
         bail!("{}: {reason}", relative.display());
     }
     Ok(())
 }
 
-fn resolve_relative(owner: &Path, root: &Path, relative: &str) -> Result<PathBuf> {
-    let base = owner.strip_prefix(root)?.parent().unwrap_or(Path::new(""));
-    let resolved = package_relative(base, relative).with_context(|| {
-        format!("theme dependency {relative} resolves outside selected theme root")
-    })?;
-    Ok(root.join(resolved))
+fn resolve_relative(owner: &Path, root: &Path, relative: &str, extracted: bool) -> Result<PathBuf> {
+    if extracted {
+        let base = owner.strip_prefix(root)?.parent().unwrap_or(Path::new(""));
+        return package_relative(base, relative)
+            .map(|path| root.join(path))
+            .context("theme dependency resolves outside selected theme root");
+    }
+    let path = Path::new(relative);
+    if path.is_absolute() {
+        bail!("theme dependency {relative} resolves outside selected theme root");
+    }
+    let _ = owner.strip_prefix(root)?;
+    Ok(owner.parent().unwrap_or(root).join(path))
 }
 
 /// Resolve an archive reference lexically beneath the extension root. The
@@ -1383,6 +1399,39 @@ fn syntax_role_for_semantic(selector: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn local_includes_resolve_symlink_before_parent_components() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("themes")).unwrap();
+        fs::create_dir_all(dir.path().join("shared/deep")).unwrap();
+        symlink("../shared/deep", dir.path().join("themes/alias")).unwrap();
+        fs::write(
+            dir.path().join("shared/base.json"),
+            r##"{"colors":{"editor.background":"#123456"}}"##,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("themes/dark.json"),
+            r#"{"include":"alias/../base.json"}"#,
+        )
+        .unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let result = load_theme(
+            &root.join("themes/dark.json"),
+            &root,
+            &mut Vec::new(),
+            &BTreeMap::new(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            result.colors.get("editor.background").map(String::as_str),
+            Some("#123456")
+        );
+    }
 
     fn options() -> ImportOptions {
         ImportOptions {
