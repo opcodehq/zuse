@@ -1,4 +1,5 @@
 //! Effects remain cached source-space images; a separate alpha mask follows layout.
+use crate::new_thread_background_mask::{AnimationFrame, crop_for_adjustment};
 use crate::settings::{NewThreadBackgroundAdjustment, NewThreadBackgroundEffect};
 use crate::theme::Theme;
 use std::path::{Path, PathBuf};
@@ -9,8 +10,8 @@ use std::time::Instant;
 /// Finish each blend before adopting another image to keep rapid changes smooth.
 #[derive(Default)]
 pub(crate) struct Readiness {
-    current: Option<Arc<gpui::RenderImage>>,
-    previous: Option<Arc<gpui::RenderImage>>,
+    current: Option<Arc<WallpaperRaster>>,
+    previous: Option<Arc<WallpaperRaster>>,
     current_adjustment: NewThreadBackgroundAdjustment,
     previous_adjustment: NewThreadBackgroundAdjustment,
     current_path: Option<PathBuf>,
@@ -19,8 +20,8 @@ pub(crate) struct Readiness {
 }
 
 pub(crate) struct ArtworkFrame {
-    pub current: Option<Arc<gpui::RenderImage>>,
-    pub previous: Option<Arc<gpui::RenderImage>>,
+    pub current: Option<Arc<WallpaperRaster>>,
+    pub previous: Option<Arc<WallpaperRaster>>,
     pub current_adjustment: NewThreadBackgroundAdjustment,
     pub previous_adjustment: NewThreadBackgroundAdjustment,
     pub mix: f32,
@@ -36,7 +37,7 @@ fn crossfade_mix(start: Instant, now: Instant) -> f32 {
 impl Readiness {
     pub fn frame(
         &mut self,
-        image: Option<Arc<gpui::RenderImage>>,
+        image: Option<Arc<WallpaperRaster>>,
         path: Option<&Path>,
         adjustment: NewThreadBackgroundAdjustment,
         enabled: bool,
@@ -51,10 +52,16 @@ impl Readiness {
         }
         // Effects may still be loading, but a crop belongs to the source path,
         // not its effect raster. Replacement images keep their own framing.
-        if path.is_some() && path == self.current_path.as_deref() {
+        if path.is_some()
+            && path == self.current_path.as_deref()
+            && adjustment.quarter_turns == self.current_adjustment.quarter_turns
+        {
             self.current_adjustment = adjustment.normalized();
         }
-        if path.is_some() && path == self.previous_path.as_deref() {
+        if path.is_some()
+            && path == self.previous_path.as_deref()
+            && adjustment.quarter_turns == self.previous_adjustment.quarter_turns
+        {
             self.previous_adjustment = adjustment.normalized();
         }
         // None while enabled means "still loading", not "remove artwork".
@@ -87,79 +94,166 @@ impl Readiness {
     }
 }
 type EffectEntry = (
-    (NewThreadBackgroundEffect, bool),
-    Option<Arc<gpui::RenderImage>>,
+    (NewThreadBackgroundEffect, bool, u8),
+    Option<Arc<WallpaperRaster>>,
 );
 type PhotoKey = (gpui::ImageId, u8, u8);
 
 #[derive(Debug, Default)]
 struct PhotoRaster {
     pending: bool,
-    ready: Option<(PhotoKey, Arc<gpui::RenderImage>)>,
+    ready: Option<(PhotoKey, Arc<WallpaperRaster>)>,
 }
 
-/// One decoded frame at raster resolution: color and luma per pixel.
+/// The finished pixels and their contrast data travel together through the
+/// raster cache and crossfade, including while a replacement is loading.
+#[derive(Debug)]
+pub(crate) struct WallpaperRaster {
+    pub image: Arc<gpui::RenderImage>,
+    contrast: Vec<LumaGrid>,
+}
+
+impl WallpaperRaster {
+    fn new(frames: Vec<image::Frame>) -> Arc<Self> {
+        let contrast = frames
+            .iter()
+            .map(|frame| LumaGrid::new(frame.buffer()))
+            .collect();
+        Arc::new(Self {
+            image: Arc::new(gpui::RenderImage::new(frames)),
+            contrast,
+        })
+    }
+
+    fn backdrop_luma(
+        &self,
+        frame: usize,
+        adjustment: NewThreadBackgroundAdjustment,
+        hero: (f32, f32),
+        backdrop: f32,
+        opacity: f32,
+    ) -> f32 {
+        let grid = &self.contrast[frame];
+        let size = self.image.size(frame);
+        let [x, y, width, height] = crop_for_adjustment(
+            (size.width.0 as f32, size.height.0 as f32),
+            hero,
+            adjustment,
+        );
+        // Sample the upper-middle band where the heading appears.
+        let [luma, alpha] = grid.region([x, y + height * 0.2, x + width, y + height * 0.6]);
+        luma * opacity + backdrop * (1.0 - alpha * opacity)
+    }
+}
+
+impl std::ops::Deref for WallpaperRaster {
+    type Target = gpui::RenderImage;
+
+    fn deref(&self) -> &Self::Target {
+        &self.image
+    }
+}
+
+impl ArtworkFrame {
+    pub(crate) fn backdrop_is_dark(
+        &self,
+        hero: (f32, f32),
+        canvas: gpui::Hsla,
+        opacity: f32,
+        previous: AnimationFrame,
+        current: AnimationFrame,
+    ) -> Option<bool> {
+        let layers = [
+            (
+                &self.previous,
+                self.previous_adjustment,
+                previous,
+                1.0 - self.mix,
+            ),
+            (&self.current, self.current_adjustment, current, self.mix),
+        ];
+        let gpui::Rgba { r, g, b, .. } = canvas.into();
+        let canvas_luma = (r * 0.2126 + g * 0.7152 + b * 0.0722) * 255.0;
+        let mut backdrop = canvas_luma;
+        let mut has_artwork = false;
+        for (raster, adjustment, frame, weight) in layers {
+            let layer_opacity = (opacity * weight).clamp(0.0, 1.0);
+            if let Some(raster) = raster
+                && layer_opacity > 0.0
+            {
+                backdrop =
+                    raster.backdrop_luma(frame.index, adjustment, hero, backdrop, layer_opacity);
+                has_artwork = true;
+            }
+        }
+        has_artwork.then_some(backdrop < 140.0)
+    }
+}
+
+/// Coarse grid of premultiplied luma and alpha from the finished BGRA pixels.
+#[derive(Debug)]
+struct LumaGrid {
+    columns: u32,
+    rows: u32,
+    cells: Box<[[f32; 2]]>,
+}
+
+impl LumaGrid {
+    fn new(pixels: &image::RgbaImage) -> Self {
+        let (width, height) = pixels.dimensions();
+        let columns = width.clamp(1, 32);
+        let rows = height.clamp(1, 32);
+        let mut sums = vec![[0u64; 3]; (columns * rows) as usize];
+        for (x, y, pixel) in pixels.enumerate_pixels() {
+            let [b, g, r, a] = pixel.0.map(u64::from);
+            let cell = &mut sums[((y * rows / height) * columns + (x * columns / width)) as usize];
+            cell[0] += (2126 * r + 7152 * g + 722 * b) * a;
+            cell[1] += a;
+            cell[2] += 1;
+        }
+        let cells = sums
+            .into_iter()
+            .map(|[luma, alpha, count]| {
+                let alpha_scale = 255.0 * count.max(1) as f32;
+                [
+                    luma as f32 / (10_000.0 * alpha_scale),
+                    alpha as f32 / alpha_scale,
+                ]
+            })
+            .collect();
+        Self {
+            columns,
+            rows,
+            cells,
+        }
+    }
+
+    fn region(&self, [x0, y0, x1, y1]: [f32; 4]) -> [f32; 2] {
+        let span = |from: f32, to: f32, size: u32| {
+            let first = ((from * size as f32).floor().max(0.0) as u32).min(size - 1);
+            let last = ((to * size as f32).ceil() as u32).clamp(first + 1, size);
+            first..last
+        };
+        let (mut luma, mut alpha, mut count) = (0.0, 0.0, 0.0_f32);
+        for row in span(y0, y1, self.rows) {
+            for column in span(x0, x1, self.columns) {
+                let [cell_luma, cell_alpha] = self.cells[(row * self.columns + column) as usize];
+                luma += cell_luma;
+                alpha += cell_alpha;
+                count += 1.0;
+            }
+        }
+        [luma / count.max(1.0), alpha / count.max(1.0)]
+    }
+}
+
+/// One decoded source frame at raster resolution.
 #[derive(Debug)]
 struct FrameData {
     width: u32,
     height: u32,
     pixels: Box<[u8]>,
     colors: Box<[[u8; 4]]>,
-    /// Mean luma and alpha per cell of a coarse `GRID`×`GRID` grid, so the
-    /// heading's backdrop can be measured for any crop without a pixel scan.
-    grid: Box<[[u8; 2]]>,
-}
-
-const GRID: u32 = 32;
-
-impl FrameData {
-    fn new(width: u32, height: u32, pixels: Box<[u8]>, colors: Box<[[u8; 4]]>) -> Self {
-        let mut sums = vec![[0u64; 3]; (GRID * GRID) as usize];
-        for y in 0..height {
-            for x in 0..width {
-                let cell = (y * GRID / height.max(1) * GRID + x * GRID / width.max(1)) as usize;
-                let index = (y * width + x) as usize;
-                sums[cell][0] += u64::from(pixels[index]);
-                sums[cell][1] += u64::from(colors[index][3]);
-                sums[cell][2] += 1;
-            }
-        }
-        let grid = sums
-            .iter()
-            .map(|[luma, alpha, count]| {
-                let count = (*count).max(1);
-                [(luma / count) as u8, (alpha / count) as u8]
-            })
-            .collect();
-        Self {
-            width,
-            height,
-            pixels,
-            colors,
-            grid,
-        }
-    }
-
-    /// The luma (0–255) seen across the normalized `[x0, y0, x1, y1]`
-    /// region, each cell composited over `canvas` by its own alpha and the
-    /// image brightened by `gain`.
-    fn region_luma(&self, [x0, y0, x1, y1]: [f32; 4], canvas: f32, gain: f32) -> f32 {
-        let span = |from: f32, to: f32| {
-            let first = ((from * GRID as f32).floor().max(0.0) as u32).min(GRID - 1);
-            let last = ((to * GRID as f32).ceil() as u32).clamp(first + 1, GRID);
-            first..last
-        };
-        let (mut sum, mut count) = (0.0_f32, 0.0_f32);
-        for row in span(y0, y1) {
-            for column in span(x0, x1) {
-                let [luma, alpha] = self.grid[(row * GRID + column) as usize];
-                let alpha = f32::from(alpha) / 255.0;
-                sum += (f32::from(luma) * gain).min(255.0) * alpha + canvas * (1.0 - alpha);
-                count += 1.0;
-            }
-        }
-        sum / count.max(1.0)
-    }
 }
 
 #[derive(Debug)]
@@ -179,12 +273,24 @@ impl std::ops::Deref for BackgroundLuminance {
     }
 }
 impl BackgroundLuminance {
+    #[cfg(test)]
     fn raster_image(
         self: &Arc<Self>,
         effect: NewThreadBackgroundEffect,
         light: bool,
         cx: &mut gpui::App,
     ) -> Option<Arc<gpui::RenderImage>> {
+        self.rotated_raster(effect, light, 0, cx)
+            .map(|raster| raster.image.clone())
+    }
+
+    fn rotated_raster(
+        self: &Arc<Self>,
+        effect: NewThreadBackgroundEffect,
+        light: bool,
+        turns: u8,
+        cx: &mut gpui::App,
+    ) -> Option<Arc<WallpaperRaster>> {
         let mut effects = self.effects.lock().unwrap();
         let key = (
             effect,
@@ -195,6 +301,7 @@ impl BackgroundLuminance {
                         | NewThreadBackgroundEffect::None
                         | NewThreadBackgroundEffect::Grain
                 ),
+            turns,
         );
         if let Some((_, image)) = effects.iter().find(|(cached, _)| *cached == key) {
             return image.clone();
@@ -207,7 +314,7 @@ impl BackgroundLuminance {
             let worker = source.clone();
             let image = cx
                 .background_executor()
-                .spawn(async move { worker.render_image(effect, light) })
+                .spawn(async move { worker.render_image(effect, light, turns) })
                 .await;
             cx.update(|cx| {
                 let evicted = {
@@ -238,7 +345,7 @@ impl BackgroundLuminance {
                     evicted
                 };
                 for image in evicted {
-                    cx.drop_image(image, None);
+                    cx.drop_image(image.image.clone(), None);
                 }
                 cx.refresh_windows();
             });
@@ -252,25 +359,34 @@ impl BackgroundLuminance {
         self: &Arc<Self>,
         effect: NewThreadBackgroundEffect,
         light: bool,
+        turns: u8,
         cx: &mut gpui::App,
-    ) -> Option<Arc<gpui::RenderImage>> {
-        self.raster_image(effect, light, cx)
-            .or_else(|| self.raster_image(NewThreadBackgroundEffect::None, light, cx))
+    ) -> Option<Arc<WallpaperRaster>> {
+        self.rotated_raster(effect, light, turns, cx)
+            .or_else(|| self.rotated_raster(NewThreadBackgroundEffect::None, light, turns, cx))
     }
 
     fn render_image(
         &self,
         effect: NewThreadBackgroundEffect,
         light: bool,
-    ) -> Arc<gpui::RenderImage> {
+        turns: u8,
+    ) -> Arc<WallpaperRaster> {
         let frames = self
             .frames
             .iter()
             .map(|(frame, delay)| {
-                image::Frame::from_parts(frame.effect_pixels(effect, light), 0, 0, *delay)
+                let pixels = frame.effect_pixels(effect, light);
+                let pixels = match turns % 4 {
+                    1 => image::imageops::rotate90(&pixels),
+                    2 => image::imageops::rotate180(&pixels),
+                    3 => image::imageops::rotate270(&pixels),
+                    _ => pixels,
+                };
+                image::Frame::from_parts(pixels, 0, 0, *delay)
             })
             .collect::<Vec<_>>();
-        Arc::new(gpui::RenderImage::new(frames))
+        WallpaperRaster::new(frames)
     }
 }
 
@@ -414,15 +530,21 @@ fn source_from_frames(frames: Vec<(FrameData, image::Delay)>) -> Arc<BackgroundL
 }
 
 fn frame_data(image: &image::DynamicImage, max_side: u32) -> FrameData {
-    let proxy = image.thumbnail(max_side, max_side);
+    let resized;
+    let proxy = if image.width() > max_side || image.height() > max_side {
+        resized = image.thumbnail(max_side, max_side);
+        &resized
+    } else {
+        image
+    };
     let gray = proxy.to_luma8();
     let (width, height) = gray.dimensions();
-    FrameData::new(
+    FrameData {
         width,
         height,
-        gray.into_raw().into_boxed_slice(),
-        proxy.to_rgba8().pixels().map(|pixel| pixel.0).collect(),
-    )
+        pixels: gray.into_raw().into_boxed_slice(),
+        colors: proxy.to_rgba8().pixels().map(|pixel| pixel.0).collect(),
+    }
 }
 
 const STILL_MAX_SIDE: u32 = 2048;
@@ -503,12 +625,12 @@ impl PreloadedArtwork {
                     | NewThreadBackgroundEffect::Dither
                     | NewThreadBackgroundEffect::Grain
             );
-        let image = source.render_image(effect, light);
+        let image = source.render_image(effect, light, 0);
         source
             .effects
             .lock()
             .unwrap()
-            .push(((effect, light), Some(image)));
+            .push(((effect, light, 0), Some(image)));
         Self(source)
     }
 
@@ -575,55 +697,20 @@ fn background_luminance(path: &Path, cx: &mut gpui::App) -> Option<Arc<Backgroun
     None
 }
 
-/// Whether the wallpaper behind the new-thread heading reads as dark, as it
-/// is drawn: the crop `adjustment` frames for a `hero`-sized area, the
-/// frame on screen now (the first under reduced motion), each pixel's alpha
-/// and the brightness setting, then the whole blended over `canvas` at
-/// `opacity`. `None` until the image decodes.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn backdrop_is_dark(
-    path: &Path,
-    adjustment: NewThreadBackgroundAdjustment,
-    hero: (f32, f32),
-    look: crate::settings::WallpaperLook,
-    canvas: gpui::Hsla,
-    opacity: f32,
-    animate: bool,
-    cx: &mut gpui::App,
-) -> Option<bool> {
-    use crate::new_thread_background_mask::{clock_ms, crop_for_adjustment, frame_at};
-    let source = background_luminance(path, cx)?;
-    let frame = if animate && source.frames.len() > 1 {
-        let delays = source.frames.iter().map(|(_, delay)| {
-            let (numer, denom) = delay.numer_denom_ms();
-            u64::from(numer) / u64::from(denom.max(1))
-        });
-        frame_at(delays, clock_ms())
-    } else {
-        0
-    };
-    let frame = &source.frames[frame].0;
-    let [x, y, width, height] =
-        crop_for_adjustment((frame.width as f32, frame.height as f32), hero, adjustment);
-    // The heading sits in the hero's upper-middle band.
-    let band = [x, y + height * 0.2, x + width, y + height * 0.6];
-    let canvas = canvas.l * 255.0;
-    let image = frame.region_luma(band, canvas, f32::from(look.brightness) / 100.0);
-    let alpha = (opacity * f32::from(look.opacity) / 100.0).clamp(0.0, 1.0);
-    Some(image * alpha + canvas * (1.0 - alpha) < 140.0)
-}
-
 /// Safe to call on both routes: loading/decoding/effects happen once off-thread,
 /// before the hero is requested, and never depend on composer/sidebar geometry.
 pub(super) fn prepare(
     effect: NewThreadBackgroundEffect,
     theme: &Theme,
     path: &Path,
+    turns: u8,
     cx: &mut gpui::App,
 ) -> Option<Arc<gpui::RenderImage>> {
     let light = matches!(theme.appearance, crate::theme::Appearance::Light);
     let source = background_luminance(path, cx)?;
-    source.effect_or_plain(effect, light, cx)
+    source
+        .effect_or_plain(effect, light, turns, cx)
+        .map(|raster| raster.image.clone())
 }
 
 pub(crate) fn prepare_look(
@@ -631,13 +718,26 @@ pub(crate) fn prepare_look(
     theme: &Theme,
     path: &Path,
     look: crate::settings::WallpaperLook,
+    turns: u8,
     cx: &mut gpui::App,
 ) -> Option<Arc<gpui::RenderImage>> {
-    if look.brightness == 100 && look.blur == 0 {
-        return prepare(effect, theme, path, cx);
-    }
+    prepare_look_with_contrast(effect, theme, path, look, turns, cx)
+        .map(|raster| raster.image.clone())
+}
+
+pub(crate) fn prepare_look_with_contrast(
+    effect: NewThreadBackgroundEffect,
+    theme: &Theme,
+    path: &Path,
+    look: crate::settings::WallpaperLook,
+    turns: u8,
+    cx: &mut gpui::App,
+) -> Option<Arc<WallpaperRaster>> {
     let source = background_luminance(path, cx)?;
-    let base = source.effect_or_plain(effect, theme.appearance.is_light(), cx)?;
+    let base = source.effect_or_plain(effect, theme.appearance.is_light(), turns, cx)?;
+    if look.brightness == 100 && look.blur == 0 {
+        return Some(base);
+    }
     let key = (base.id, look.brightness, look.blur);
     let mut cache = source.photo.lock().unwrap();
     let ready = cache.ready.as_ref().filter(|(cached, _)| cached.0 == key.0);
@@ -662,7 +762,7 @@ pub(crate) fn prepare_look(
                 // Each slider step makes a full-size raster; release the last
                 // one's GPU texture instead of letting the atlas grow.
                 if let Some((_, old)) = replaced {
-                    cx.drop_image(old, None);
+                    cx.drop_image(old.image.clone(), None);
                 }
                 cx.refresh_windows();
             });
@@ -672,7 +772,7 @@ pub(crate) fn prepare_look(
     Some(fallback)
 }
 
-fn photo_raster(base: Arc<gpui::RenderImage>, brightness: u8, blur: u8) -> Arc<gpui::RenderImage> {
+fn photo_raster(base: Arc<WallpaperRaster>, brightness: u8, blur: u8) -> Arc<WallpaperRaster> {
     let frames = (0..base.frame_count())
         .map(|index| {
             let size = base.size(index);
@@ -692,7 +792,7 @@ fn photo_raster(base: Arc<gpui::RenderImage>, brightness: u8, blur: u8) -> Arc<g
         })
         .collect::<Option<Vec<_>>>();
     match frames {
-        Some(frames) => Arc::new(gpui::RenderImage::new(frames)),
+        Some(frames) => WallpaperRaster::new(frames),
         None => base,
     }
 }
@@ -753,10 +853,10 @@ mod tests {
         let mut bytes = Vec::new();
         {
             let mut encoder = image::codecs::gif::GifEncoder::new(&mut bytes);
-            for shade in [40u8, 140, 240] {
+            for shade in 0u8..60 {
                 encoder
                     .encode_frame(image::Frame::from_parts(
-                        image::RgbaImage::from_pixel(32, 24, image::Rgba([shade, 20, 20, 255])),
+                        image::RgbaImage::from_pixel(128, 128, image::Rgba([shade, 20, 20, 255])),
                         0,
                         0,
                         // Zero delay: played at the browsers' 100ms instead.
@@ -766,7 +866,8 @@ mod tests {
             }
         }
         let source = decode_source(&bytes).unwrap();
-        assert_eq!(source.frames.len(), 3);
+        assert_eq!(source.frames.len(), 60);
+        assert_eq!((source.width, source.height), (128, 128));
         assert!(
             source
                 .frames
@@ -779,7 +880,7 @@ mod tests {
             let raster = source
                 .raster_image(NewThreadBackgroundEffect::Grain, false, cx)
                 .unwrap();
-            assert_eq!(raster.frame_count(), 3);
+            assert_eq!(raster.frame_count(), 60);
         });
         // A still image stays a single frame.
         let mut png = Vec::new();
@@ -790,38 +891,84 @@ mod tests {
     }
 
     #[test]
-    fn heading_band_tracks_wallpaper_darkness() {
-        let flat = |value| {
+    fn heading_contrast_samples_only_populated_cells_and_respects_crop_and_alpha() {
+        let flat = |width, height, value, alpha| {
+            WallpaperRaster::new(vec![image::Frame::new(image::RgbaImage::from_pixel(
+                width,
+                height,
+                image::Rgba([value, value, value, alpha]),
+            ))])
+        };
+        let adjustment = NewThreadBackgroundAdjustment::default();
+        assert!(
+            flat(16, 2048, 255, 255).backdrop_luma(0, adjustment, (1200.0, 760.0), 0.0, 1.0)
+                > 250.0
+        );
+        assert!(
+            flat(64, 48, 20, 255).backdrop_luma(0, adjustment, (64.0, 48.0), 255.0, 1.0) < 40.0
+        );
+        assert!(flat(64, 48, 0, 0).backdrop_luma(0, adjustment, (64.0, 48.0), 240.0, 1.0) > 200.0);
+        let split = WallpaperRaster::new(vec![image::Frame::new(image::RgbaImage::from_fn(
+            64,
+            64,
+            |_, y| {
+                let value = if y < 32 { 0 } else { 255 };
+                image::Rgba([value, value, value, 255])
+            },
+        ))]);
+        let crop = |top| NewThreadBackgroundAdjustment {
+            crop: Some([0.0, top, 1.0, 0.5]),
+            ..adjustment
+        };
+        assert!(split.backdrop_luma(0, crop(0.5), (64.0, 32.0), 0.0, 1.0) > 200.0);
+        assert!(split.backdrop_luma(0, crop(0.0), (64.0, 32.0), 255.0, 1.0) < 50.0);
+    }
+
+    #[test]
+    fn heading_contrast_follows_the_visible_raster_during_transition() {
+        let flat = |shade| {
             image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
                 64,
                 48,
-                image::Rgba([value, value, value, 255]),
+                image::Rgba([shade, shade, shade, 255]),
             ))
         };
-        let band = [0.0, 0.2, 1.0, 0.6];
-        assert!(source_from_image(&flat(20)).region_luma(band, 255.0, 1.0) < 140.0);
-        assert!(source_from_image(&flat(230)).region_luma(band, 0.0, 1.0) >= 140.0);
-        // Transparent black over a light canvas reads light, not dark.
-        let clear = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
-            64,
-            48,
-            image::Rgba([0, 0, 0, 0]),
-        ));
-        assert!(source_from_image(&clear).region_luma(band, 240.0, 1.0) > 200.0);
-        // Only the cropped region counts: black top half, white bottom half.
-        let split = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(64, 64, |_, y| {
-            let value = if y < 32 { 0 } else { 255 };
-            image::Rgba([value, value, value, 255])
-        }));
-        let split = source_from_image(&split);
-        assert!(split.region_luma([0.0, 0.6, 1.0, 0.9], 0.0, 1.0) > 200.0);
-        assert!(split.region_luma([0.0, 0.1, 1.0, 0.4], 255.0, 1.0) < 50.0);
+        let plain =
+            source_from_image(&flat(150)).render_image(NewThreadBackgroundEffect::None, false, 0);
+        let scanlines = source_from_image(&flat(150)).render_image(
+            NewThreadBackgroundEffect::Scanlines,
+            false,
+            0,
+        );
+        let white =
+            source_from_image(&flat(255)).render_image(NewThreadBackgroundEffect::None, false, 0);
+        let adjustment = NewThreadBackgroundAdjustment::default();
+        assert!(plain.backdrop_luma(0, adjustment, (64.0, 48.0), 0.0, 1.0) >= 140.0);
+        assert!(scanlines.backdrop_luma(0, adjustment, (64.0, 48.0), 0.0, 1.0) < 140.0);
+        let mut frame = ArtworkFrame {
+            previous: Some(white),
+            current: Some(scanlines),
+            previous_adjustment: adjustment,
+            current_adjustment: adjustment,
+            mix: 0.0,
+            active: true,
+        };
+        let classify = |frame: &ArtworkFrame| {
+            frame.backdrop_is_dark(
+                (64.0, 48.0),
+                gpui::black(),
+                1.0,
+                Default::default(),
+                Default::default(),
+            )
+        };
+        assert_eq!(classify(&frame), Some(false));
+        frame.mix = 1.0;
+        assert_eq!(classify(&frame), Some(true));
     }
 
-    fn artwork() -> Arc<gpui::RenderImage> {
-        Arc::new(gpui::RenderImage::new([image::Frame::new(
-            image::RgbaImage::new(1, 1),
-        )]))
+    fn artwork() -> Arc<WallpaperRaster> {
+        WallpaperRaster::new(vec![image::Frame::new(image::RgbaImage::new(1, 1))])
     }
 
     #[test]
@@ -872,6 +1019,7 @@ mod tests {
             focal_x: 0.2,
             focal_y: 0.8,
             zoom: 2.0,
+            ..Default::default()
         };
         let centered = NewThreadBackgroundAdjustment::default();
         let mut ready = Readiness::default();
@@ -972,12 +1120,12 @@ mod tests {
     }
     fn fixture() -> Arc<BackgroundLuminance> {
         source_from_frames(vec![(
-            FrameData::new(
-                60,
-                32,
-                vec![128; 1920].into_boxed_slice(),
-                vec![[128, 64, 32, 200]; 1920].into_boxed_slice(),
-            ),
+            FrameData {
+                width: 60,
+                height: 32,
+                pixels: vec![128; 1920].into_boxed_slice(),
+                colors: vec![[128, 64, 32, 200]; 1920].into_boxed_slice(),
+            },
             image::Delay::from_numer_denom_ms(0, 1),
         )])
     }
@@ -995,7 +1143,7 @@ mod tests {
                         .lock()
                         .unwrap()
                         .iter()
-                        .filter(|(key, _)| *key == (effect, false))
+                        .filter(|(key, _)| *key == (effect, false, 0))
                         .count(),
                     1
                 );

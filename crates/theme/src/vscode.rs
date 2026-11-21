@@ -156,7 +156,7 @@ pub fn compile_source(path: &Path, options: CompileOptions) -> Result<SourceComp
     };
 
     if let Some(package_json) = package_json {
-        return compile_package(&path, &package_json, options);
+        return compile_package(&path, &package_json, options, &BTreeMap::new());
     }
     compile_single_file(path, options)
 }
@@ -167,7 +167,7 @@ fn compile_single_file(path: PathBuf, options: CompileOptions) -> Result<SourceC
         .ok_or_else(|| anyhow!("{} has no parent directory", path.display()))?
         .canonicalize()
         .with_context(|| format!("could not resolve theme root for {}", path.display()))?;
-    let normalized = load_theme(&path, &root, &mut Vec::new())?;
+    let normalized = load_theme(&path, &root, &mut Vec::new(), &BTreeMap::new())?;
     let appearance = detect_appearance(&path, None, &normalized);
     let name = theme_declared_name(&path).unwrap_or_else(|| options.family_name.clone());
     let imported = convert(
@@ -196,10 +196,19 @@ fn compile_single_file(path: PathBuf, options: CompileOptions) -> Result<SourceC
     })
 }
 
+pub(crate) fn compile_extracted_package(
+    manifest: &Path,
+    options: CompileOptions,
+    unavailable: &BTreeMap<PathBuf, &'static str>,
+) -> Result<SourceCompilation> {
+    compile_package(manifest, manifest, options, unavailable)
+}
+
 fn compile_package(
     selected_path: &Path,
     package_json: &Path,
     options: CompileOptions,
+    unavailable: &BTreeMap<PathBuf, &'static str>,
 ) -> Result<SourceCompilation> {
     let source = read_bounded(package_json, "package manifest")?;
     let manifest: Value = json5::from_str(&source)
@@ -264,11 +273,15 @@ fn compile_package(
                 continue;
             }
         };
-        let theme_path = package_root.join(relative);
+        let theme_path =
+            package_relative(Path::new(""), relative).map(|path| package_root.join(path));
         let result = (|| {
-            let normalized = load_theme(&theme_path, &package_root, &mut Vec::new())?;
+            let theme_path = theme_path
+                .as_deref()
+                .context("theme path resolves outside selected theme root")?;
+            let normalized = load_theme(theme_path, &package_root, &mut Vec::new(), unavailable)?;
             let appearance = detect_appearance(
-                &theme_path,
+                theme_path,
                 declaration.get("uiTheme").and_then(Value::as_str),
                 &normalized,
             );
@@ -293,7 +306,7 @@ fn compile_package(
             Err(error) => failures.push(VariantFailure {
                 id,
                 name: label,
-                path: theme_path,
+                path: theme_path.unwrap_or_else(|| PathBuf::from(relative)),
                 message: error.to_string(),
             }),
         }
@@ -397,11 +410,17 @@ pub fn import_file(path: &Path, options: ImportOptions) -> Result<ImportResult> 
         .parent()
         .ok_or_else(|| anyhow!("{} has no parent directory", canonical.display()))?
         .to_path_buf();
-    let normalized = load_theme(&canonical, &root, &mut Vec::new())?;
+    let normalized = load_theme(&canonical, &root, &mut Vec::new(), &BTreeMap::new())?;
     convert(normalized, options)
 }
 
-fn load_theme(path: &Path, root: &Path, stack: &mut Vec<PathBuf>) -> Result<NormalizedTheme> {
+fn load_theme(
+    path: &Path,
+    root: &Path,
+    stack: &mut Vec<PathBuf>,
+    unavailable: &BTreeMap<PathBuf, &'static str>,
+) -> Result<NormalizedTheme> {
+    check_extracted_path(path, root, unavailable)?;
     let path = path
         .canonicalize()
         .with_context(|| format!("could not resolve {}", path.display()))?;
@@ -421,8 +440,8 @@ fn load_theme(path: &Path, root: &Path, stack: &mut Vec<PathBuf>) -> Result<Norm
         .ok_or_else(|| anyhow!("{} is not a JSON object", path.display()))?;
 
     let mut theme = if let Some(include) = object.get("include").and_then(Value::as_str) {
-        let include_path = resolve_relative(&path, include);
-        load_theme(&include_path, root, stack)?
+        let include_path = resolve_relative(&path, root, include)?;
+        load_theme(&include_path, root, stack, unavailable)?
     } else {
         NormalizedTheme::default()
     };
@@ -440,7 +459,8 @@ fn load_theme(path: &Path, root: &Path, stack: &mut Vec<PathBuf>) -> Result<Norm
         match token_colors {
             Value::Array(rules) => theme.token_colors.extend(parse_token_rules(rules)),
             Value::String(relative) => {
-                let token_path = resolve_relative(&path, relative);
+                let token_path = resolve_relative(&path, root, relative)?;
+                check_extracted_path(&token_path, root, unavailable)?;
                 let token_path = token_path
                     .canonicalize()
                     .with_context(|| format!("could not resolve {}", token_path.display()))?;
@@ -487,11 +507,44 @@ fn read_bounded(path: &Path, kind: &str) -> Result<String> {
     fs::read_to_string(path).with_context(|| format!("could not read {kind} {}", path.display()))
 }
 
-fn resolve_relative(owner: &Path, relative: &str) -> PathBuf {
-    owner
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(relative)
+fn check_extracted_path(
+    path: &Path,
+    root: &Path,
+    unavailable: &BTreeMap<PathBuf, &'static str>,
+) -> Result<()> {
+    if let Ok(relative) = path.strip_prefix(root)
+        && let Some(reason) = unavailable.get(relative)
+    {
+        bail!("{}: {reason}", relative.display());
+    }
+    Ok(())
+}
+
+fn resolve_relative(owner: &Path, root: &Path, relative: &str) -> Result<PathBuf> {
+    let base = owner.strip_prefix(root)?.parent().unwrap_or(Path::new(""));
+    let resolved = package_relative(base, relative).with_context(|| {
+        format!("theme dependency {relative} resolves outside selected theme root")
+    })?;
+    Ok(root.join(resolved))
+}
+
+/// Resolve an archive reference lexically beneath the extension root. The
+/// compiler also verifies containment after resolving any filesystem symlinks.
+pub(crate) fn package_relative(base: &Path, reference: &str) -> Option<PathBuf> {
+    let mut resolved = PathBuf::new();
+    for component in base.join(reference).components() {
+        match component {
+            std::path::Component::Normal(part) => resolved.push(part),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !resolved.pop() {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    (!resolved.as_os_str().is_empty()).then_some(resolved)
 }
 
 fn parse_token_rules(values: &[Value]) -> Vec<TokenRule> {

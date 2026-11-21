@@ -1619,8 +1619,10 @@ pub(crate) fn new_thread_background_height(viewport_height: f32) -> f32 {
         .min(NEW_THREAD_BACKGROUND_MAX_HEIGHT)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn new_thread_background(
     artwork: Option<std::sync::Arc<gpui::RenderImage>>,
+    frame: crate::new_thread_background_mask::AnimationFrame,
     adjustment: settings::NewThreadBackgroundAdjustment,
     viewport_height: f32,
     hero_width: f32,
@@ -1650,6 +1652,7 @@ fn new_thread_background(
             look,
             composer_bounds,
             (1.0 - dissolve) * opacity,
+            Some(frame),
         ))
         .into_any_element()
 }
@@ -13207,11 +13210,12 @@ impl Shell {
         let artwork = new_thread_background_setting
             .as_ref()
             .and_then(|background| {
-                crate::new_thread_background_effects::prepare_look(
+                crate::new_thread_background_effects::prepare_look_with_contrast(
                     new_thread_background_effect,
                     theme,
                     std::path::Path::new(&background.path),
                     wallpaper_look,
+                    background.adjustment.quarter_turns,
                     cx,
                 )
             });
@@ -13225,26 +13229,40 @@ impl Shell {
             self.reduced_motion,
             frame_time,
         );
-        // Over artwork, the heading follows the image rather than the theme:
-        // a light theme's ink vanishes on a dark wallpaper, and vice versa.
-        let hero_ink = new_thread_background_setting
-            .as_ref()
-            .filter(|_| artwork_frame.current.is_some())
-            .and_then(|background| {
-                crate::new_thread_background_effects::backdrop_is_dark(
-                    std::path::Path::new(&background.path),
-                    new_thread_background_adjustment,
-                    (
-                        (self.viewport_width - self.sidebar_now()).max(1.0),
-                        new_thread_background_height(self.viewport_height),
-                    ),
-                    wallpaper_look,
-                    theme.bg,
-                    new_thread_background_opacity(theme.is_frost()),
-                    !cx.reduce_motion(),
-                    cx,
+        let dock_frame = self.composer_dock.borrow_mut().tick(
+            has_selection || cloud_starting,
+            self.reduced_motion,
+            frame_time,
+        );
+        let sample_artwork = |raster: &Option<
+            std::sync::Arc<crate::new_thread_background_effects::WallpaperRaster>,
+        >| {
+            raster.as_ref().map_or_else(Default::default, |raster| {
+                crate::new_thread_background_mask::animation_frame(
+                    &raster.image,
+                    !self.reduced_motion,
+                    frame_time,
                 )
             })
+        };
+        let previous_frame = sample_artwork(&artwork_frame.previous);
+        let current_frame = sample_artwork(&artwork_frame.current);
+        // The heading uses the same prepared layers and animation frames as
+        // the painter, including the plain fallback and visible crossfade.
+        let hero_ink = artwork_frame
+            .backdrop_is_dark(
+                (
+                    (self.viewport_width - self.sidebar_now()).max(1.0),
+                    new_thread_background_height(self.viewport_height),
+                ),
+                theme.bg,
+                new_thread_background_opacity(theme.is_frost())
+                    * (1.0 - dock_frame.dissolve())
+                    * f32::from(wallpaper_look.opacity)
+                    / 100.0,
+                previous_frame,
+                current_frame,
+            )
             .map(|dark| {
                 let ink = if dark {
                     gpui::white()
@@ -13253,11 +13271,6 @@ impl Shell {
                 };
                 (ink, ink.opacity(0.72))
             });
-        let dock_frame = self.composer_dock.borrow_mut().tick(
-            has_selection || cloud_starting,
-            self.reduced_motion,
-            frame_time,
-        );
         if dock_frame.active {
             self.motion_active.set(true);
         }
@@ -13319,7 +13332,8 @@ impl Shell {
                     .absolute()
                     .inset_0()
                     .child(new_thread_background(
-                        artwork_frame.previous,
+                        artwork_frame.previous.map(|raster| raster.image.clone()),
+                        previous_frame,
                         artwork_frame.previous_adjustment,
                         self.viewport_height,
                         width,
@@ -13329,7 +13343,8 @@ impl Shell {
                         wallpaper_look,
                     ))
                     .child(new_thread_background(
-                        artwork_frame.current,
+                        artwork_frame.current.map(|raster| raster.image.clone()),
+                        current_frame,
                         artwork_frame.current_adjustment,
                         self.viewport_height,
                         width,

@@ -128,6 +128,14 @@ pub struct NewThreadBackgroundAdjustment {
     pub focal_y: f32,
     /// Multiplier applied after the image has been scaled to cover the viewport.
     pub zoom: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub crop: Option<[f32; 4]>,
+    #[serde(skip_serializing_if = "is_zero_rotation")]
+    pub quarter_turns: u8,
+}
+
+fn is_zero_rotation(turns: &u8) -> bool {
+    *turns == 0
 }
 
 impl NewThreadBackgroundAdjustment {
@@ -139,6 +147,19 @@ impl NewThreadBackgroundAdjustment {
         self.focal_x = clamp_or(self.focal_x, 0.0, 1.0, defaults.focal_x);
         self.focal_y = clamp_or(self.focal_y, 0.0, 1.0, defaults.focal_y);
         self.zoom = clamp_or(self.zoom, Self::MIN_ZOOM, Self::MAX_ZOOM, defaults.zoom);
+        self.crop = self.crop.and_then(|[left, top, width, height]| {
+            (width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0).then(|| {
+                let width = width.clamp(0.005, 1.0);
+                let height = height.clamp(0.005, 1.0);
+                [
+                    clamp_or(left, 0.0, 1.0 - width, 0.0),
+                    clamp_or(top, 0.0, 1.0 - height, 0.0),
+                    width,
+                    height,
+                ]
+            })
+        });
+        self.quarter_turns %= 4;
         self
     }
 }
@@ -149,6 +170,8 @@ impl Default for NewThreadBackgroundAdjustment {
             focal_x: 0.5,
             focal_y: 0.5,
             zoom: 1.0,
+            crop: None,
+            quarter_turns: 0,
         }
     }
 }
@@ -2963,6 +2986,7 @@ mod tests {
             focal_x: f32::NAN,
             focal_y: 2.0,
             zoom: f32::INFINITY,
+            ..Default::default()
         }
         .normalized();
         assert_eq!(
@@ -2971,6 +2995,7 @@ mod tests {
                 focal_x: 0.5,
                 focal_y: 1.0,
                 zoom: 1.0,
+                ..Default::default()
             }
         );
 
@@ -2982,6 +3007,7 @@ mod tests {
                     focal_x: -1.0,
                     focal_y: 0.25,
                     zoom: 99.0,
+                    ..Default::default()
                 },
             }),
             ..Default::default()
@@ -2993,6 +3019,7 @@ mod tests {
                 focal_x: 0.0,
                 focal_y: 0.25,
                 zoom: NewThreadBackgroundAdjustment::MAX_ZOOM,
+                ..Default::default()
             }
         );
     }
@@ -3017,6 +3044,7 @@ mod tests {
                     focal_x: -0.5,
                     focal_y: 0.7,
                     zoom: 2.25,
+                    ..Default::default()
                 },
                 cx,
             );
@@ -3025,6 +3053,7 @@ mod tests {
                 focal_x: 0.0,
                 focal_y: 0.7,
                 zoom: 2.25,
+                ..Default::default()
             };
             assert_eq!(
                 current(cx)
@@ -3102,6 +3131,7 @@ mod tests {
                     focal_x: 0.2,
                     focal_y: 0.8,
                     zoom: 2.0,
+                    ..Default::default()
                 },
                 cx,
             );
@@ -3321,6 +3351,7 @@ mod tests {
                     focal_x: 0.25,
                     focal_y: 0.75,
                     zoom: 1.8,
+                    ..Default::default()
                 },
             }),
             wallpaper_folder: Some("/tmp/wallpapers".into()),

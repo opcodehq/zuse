@@ -127,6 +127,7 @@ impl AppearancePage {
             theme,
             Path::new(&background.path),
             preview_look,
+            background.adjustment.quarter_turns,
             cx,
         );
         let composer_bounds = crate::new_thread_background_mask::SurfaceBounds::default();
@@ -148,6 +149,7 @@ impl AppearancePage {
                         preview_look,
                         composer_bounds.clone(),
                         crate::shell::new_thread_background_opacity(theme.is_frost()),
+                        None,
                     ),
                 ))
             })

@@ -354,6 +354,7 @@ mod tests {
                         settings.new_thread_background_effect,
                         &theme,
                         &path,
+                        0,
                         cx,
                     )
                     .is_some(),
@@ -393,6 +394,7 @@ mod tests {
                     focal_x: 0.2,
                     focal_y: 0.8,
                     zoom: 2.0,
+                    ..Default::default()
                 },
                 cx,
             );

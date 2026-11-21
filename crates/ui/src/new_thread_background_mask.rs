@@ -41,6 +41,31 @@ fn fitted_geometry(
     }
 
     let adjustment = adjustment.normalized();
+    if let Some([left, top, crop_width, crop_height]) = adjustment.crop {
+        let scale =
+            (width / (source_width * crop_width)).max(height / (source_height * crop_height));
+        let fitted_width = source_width * scale;
+        let fitted_height = source_height * scale;
+        let overflow_x = (fitted_width - width).max(0.0);
+        let overflow_y = (fitted_height - height).max(0.0);
+        return Some(FittedGeometry {
+            bounds: Bounds::new(
+                point(
+                    bounds.left()
+                        - px(((left + crop_width / 2.0) * fitted_width - width / 2.0)
+                            .clamp(0.0, overflow_x)),
+                    bounds.top()
+                        - px(((top + crop_height / 2.0) * fitted_height - height / 2.0)
+                            .clamp(0.0, overflow_y)),
+                ),
+                size(px(fitted_width), px(fitted_height)),
+            ),
+            width: fitted_width,
+            height: fitted_height,
+            overflow_x,
+            overflow_y,
+        });
+    }
     let cover = (width / source_width).max(height / source_height);
     let fitted_width = (source_width * cover * adjustment.zoom).max(width);
     let fitted_height = (source_height * cover * adjustment.zoom).max(height);
@@ -86,6 +111,9 @@ pub(crate) fn crop_for_adjustment(
 ) -> [f32; 4] {
     let hero_bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(hero.0), px(hero.1)));
     let adjustment = adjustment.normalized();
+    if let Some(crop) = adjustment.crop {
+        return crop;
+    }
     let Some(geometry) = fitted_geometry(image.0, image.1, hero_bounds, adjustment) else {
         return [0.0, 0.0, 1.0, 1.0];
     };
@@ -98,6 +126,7 @@ pub(crate) fn crop_for_adjustment(
 }
 
 /// The crop's normalized size at `zoom`: the hero's share of the covered image.
+#[cfg(test)]
 pub(crate) fn crop_size(image: (f32, f32), hero: (f32, f32), zoom: f32) -> [f32; 2] {
     let (image_w, image_h) = (image.0.max(1.0), image.1.max(1.0));
     let (hero_w, hero_h) = (hero.0.max(1.0), hero.1.max(1.0));
@@ -110,6 +139,7 @@ pub(crate) fn crop_size(image: (f32, f32), hero: (f32, f32), zoom: f32) -> [f32;
 
 /// The framing that shows the crop whose top-left is `(x, y)` and whose
 /// normalized width is `width` (height follows the hero's aspect).
+#[cfg(test)]
 pub(crate) fn adjustment_for_crop(
     image: (f32, f32),
     hero: (f32, f32),
@@ -138,6 +168,7 @@ pub(crate) fn adjustment_for_crop(
         focal_x: focal(x, width),
         focal_y: focal(y, height),
         zoom,
+        ..Default::default()
     }
     .normalized()
 }
@@ -203,14 +234,13 @@ fn paint_adjusted_with_mask(
     corner_radii: Corners<Pixels>,
     mask: Option<ImageAlphaMask>,
     window: &mut Window,
-    cx: &gpui::App,
+    frame: usize,
 ) {
     let Some((visible, fitted, corner_radii)) =
         adjusted_image_paint(&source, bounds, adjustment, corner_radii)
     else {
         return;
     };
-    let frame = animation_frame(&source, !cx.reduce_motion(), window, cx);
     let _ =
         window.paint_image_fitted_masked(visible, fitted, corner_radii, source, frame, false, mask);
 }
@@ -218,14 +248,34 @@ fn paint_adjusted_with_mask(
 /// The frame of an animated wallpaper due now, on one clock shared by every
 /// painter so the hero and its previews stay in step. Stills, and reduced
 /// motion, always show the first frame.
-fn animation_frame(source: &RenderImage, animate: bool, window: &mut Window, cx: &App) -> usize {
+#[derive(Clone, Copy, Default)]
+pub(crate) struct AnimationFrame {
+    pub index: usize,
+    next: Option<std::time::Instant>,
+}
+
+pub(crate) fn animation_frame(
+    source: &RenderImage,
+    animate: bool,
+    now: std::time::Instant,
+) -> AnimationFrame {
     let count = source.frame_count();
     if count <= 1 || !animate {
-        return 0;
+        return AnimationFrame::default();
     }
-    let (frame, wait) = frame_and_wait(frame_delays(source), clock_ms());
-    wake_at_next_frame(window, cx, wait);
-    frame
+    let (index, wait) = frame_and_wait(frame_delays(source), clock_ms(now));
+    AnimationFrame {
+        index,
+        next: Some(now + std::time::Duration::from_millis(wait)),
+    }
+}
+
+impl AnimationFrame {
+    fn request_next(self, window: &mut Window, cx: &App) {
+        if let Some(due) = self.next {
+            wake_at_next_frame(window, cx, due);
+        }
+    }
 }
 
 /// Each frame's display time in milliseconds.
@@ -237,25 +287,23 @@ pub(crate) fn frame_delays(source: &RenderImage) -> impl Iterator<Item = u64> + 
 }
 
 /// Milliseconds on the clock every wallpaper animation shares.
-pub(crate) fn clock_ms() -> u64 {
+fn clock_ms(now: std::time::Instant) -> u64 {
     static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-    START
-        .get_or_init(std::time::Instant::now)
-        .elapsed()
+    now.saturating_duration_since(*START.get_or_init(|| now))
         .as_millis() as u64
 }
 
 /// Redraw `window` once when the next frame is due, rather than every
 /// display frame: a GIF frame often holds for 100ms or more. Several
 /// painters in one window share a single pending wake-up.
-fn wake_at_next_frame(window: &mut Window, cx: &App, wait_ms: u64) {
+fn wake_at_next_frame(window: &mut Window, cx: &App, due: std::time::Instant) {
     use std::{cell::RefCell, collections::HashMap, time::Duration, time::Instant};
     thread_local! {
         static PENDING: RefCell<HashMap<gpui::WindowId, Instant>> = RefCell::default();
     }
     let id = window.window_handle().window_id();
     let now = Instant::now();
-    let due = now + Duration::from_millis(wait_ms.max(1));
+    let due = due.max(now + Duration::from_millis(1));
     let scheduled = PENDING.with_borrow_mut(|pending| {
         let earlier = pending.get(&id).is_some_and(|at| *at > now && *at <= due);
         if !earlier {
@@ -269,7 +317,7 @@ fn wake_at_next_frame(window: &mut Window, cx: &App, wait_ms: u64) {
     window
         .spawn(cx, async move |cx| {
             cx.background_executor()
-                .timer(Duration::from_millis(wait_ms.max(1)))
+                .timer(due.saturating_duration_since(Instant::now()))
                 .await;
             let _ = cx.update(|window, _| window.refresh());
         })
@@ -277,7 +325,8 @@ fn wake_at_next_frame(window: &mut Window, cx: &App, wait_ms: u64) {
 }
 
 /// Which frame of a looping animation shows `elapsed_ms` after it started.
-pub(crate) fn frame_at(delays_ms: impl Iterator<Item = u64> + Clone, elapsed_ms: u64) -> usize {
+#[cfg(test)]
+fn frame_at(delays_ms: impl Iterator<Item = u64> + Clone, elapsed_ms: u64) -> usize {
     frame_and_wait(delays_ms, elapsed_ms).0
 }
 
@@ -304,7 +353,17 @@ pub(crate) fn paint_adjusted(
     window: &mut Window,
     cx: &gpui::App,
 ) {
-    paint_adjusted_with_mask(source, bounds, adjustment, corner_radii, None, window, cx);
+    let frame = animation_frame(&source, !cx.reduce_motion(), std::time::Instant::now());
+    frame.request_next(window, cx);
+    paint_adjusted_with_mask(
+        source,
+        bounds,
+        adjustment,
+        corner_radii,
+        None,
+        window,
+        frame.index,
+    );
 }
 
 /// All elements have finished prepaint before this reads the measured surface,
@@ -321,6 +380,8 @@ pub(crate) fn paint(
     window: &mut Window,
     cx: &gpui::App,
 ) {
+    let frame = animation_frame(&source, !cx.reduce_motion(), std::time::Instant::now());
+    frame.request_next(window, cx);
     paint_adjusted_with_mask(
         source,
         bounds,
@@ -328,7 +389,7 @@ pub(crate) fn paint(
         Default::default(),
         Some(mask(bounds, composer, cutout, look)),
         window,
-        cx,
+        frame.index,
     );
 }
 
@@ -338,21 +399,36 @@ pub(crate) fn artwork(
     look: WallpaperLook,
     composer_bounds: SurfaceBounds,
     opacity: f32,
+    selected_frame: Option<AnimationFrame>,
 ) -> gpui::Div {
+    let shared_frame = Rc::new(Cell::new(AnimationFrame::default()));
     div()
         .size_full()
         .relative()
         .opacity(opacity * f32::from(look.opacity) / 100.0)
         .children([false, true].into_iter().map(|cutout| {
             let image = image.clone();
+            let select_image = image.clone();
             let composer_bounds = composer_bounds.clone();
+            let prepaint_frame = shared_frame.clone();
+            let paint_frame = shared_frame.clone();
             div()
                 .absolute()
                 .inset_0()
                 .opacity(if cutout { 1.0 } else { CUTOUT_REVEAL_OPACITY })
                 .child(
                     gpui::canvas(
-                        |_, _, _| {},
+                        move |_, _, cx| {
+                            if !cutout {
+                                prepaint_frame.set(selected_frame.unwrap_or_else(|| {
+                                    animation_frame(
+                                        &select_image,
+                                        !cx.reduce_motion(),
+                                        std::time::Instant::now(),
+                                    )
+                                }));
+                            }
+                        },
                         move |bounds, _, window, cx| {
                             let composer = composer_bounds.get().unwrap_or_else(|| {
                                 Bounds::new(
@@ -360,15 +436,18 @@ pub(crate) fn artwork(
                                     bounds.size,
                                 )
                             });
-                            paint(
+                            let frame = paint_frame.get();
+                            if !cutout {
+                                frame.request_next(window, cx);
+                            }
+                            paint_adjusted_with_mask(
                                 image.clone(),
                                 bounds,
-                                composer,
                                 adjustment,
-                                cutout,
-                                look,
+                                Default::default(),
+                                Some(mask(bounds, composer, cutout, look)),
                                 window,
-                                cx,
+                                frame.index,
                             );
                         },
                     )
@@ -391,6 +470,7 @@ mod tests {
                 focal_x: 0.2,
                 focal_y: 0.9,
                 zoom: 2.5,
+                ..Default::default()
             },
         ] {
             let [x, y, width, height] = crop_for_adjustment(image, hero, adjustment);
@@ -485,6 +565,7 @@ mod tests {
                 focal_x: 0.0,
                 focal_y: 0.0,
                 zoom: 2.0,
+                ..Default::default()
             },
         );
         assert_eq!(start.bounds.left(), viewport.left());
@@ -497,6 +578,7 @@ mod tests {
                 focal_x: 1.0,
                 focal_y: 1.0,
                 zoom: 2.0,
+                ..Default::default()
             },
         );
         assert_near(end.bounds.right(), viewport.right());
@@ -530,6 +612,7 @@ mod tests {
             focal_x: 0.23,
             focal_y: 0.71,
             zoom: 2.2,
+            ..Default::default()
         };
         for viewport in [hero(420.0, 300.0), hero(960.0, 420.0), hero(1200.0, 760.0)] {
             let crop = fitted((1600.0, 900.0), viewport, adjustment);
@@ -554,6 +637,7 @@ mod tests {
                                     focal_x,
                                     focal_y,
                                     zoom,
+                                    ..Default::default()
                                 },
                             );
                             assert!(crop.bounds.left() <= viewport.left());
@@ -575,6 +659,7 @@ mod tests {
             focal_x: 0.17,
             focal_y: 0.82,
             zoom: 1.7,
+            ..Default::default()
         };
         let main = fitted((1600.0, 900.0), viewport, adjustment);
         let reveal = fitted((1600.0, 900.0), viewport, adjustment);

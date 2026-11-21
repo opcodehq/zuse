@@ -7,7 +7,8 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::vscode::{
-    CompileOptions, DetectedThemeSource, ImportReport, SourceCompilation, compile_source,
+    CompileOptions, DetectedThemeSource, ImportReport, SourceCompilation,
+    compile_extracted_package, compile_source, package_relative,
 };
 use crate::{ThemeFamily, ThemeRegistry, replace_custom_families};
 
@@ -228,12 +229,13 @@ impl CustomThemeLibrary {
         if archive.len() > MAX_PACKAGE_ENTRIES {
             bail!("theme package contains too many files");
         }
-        // Index every extractable theme-format file under `extension/`;
-        // nothing outside it, nothing in `node_modules`, no traversal.
+        // Only referenced files are extracted. Some token files have no
+        // extension, so index every safe path without guessing its format.
         let mut index = BTreeMap::new();
         let mut seen = HashSet::new();
+        let mut ambiguous = HashSet::new();
         for position in 0..archive.len() {
-            let entry = archive.by_index(position)?;
+            let entry = archive.by_index_raw(position)?;
             if !entry.is_file() || entry.is_symlink() {
                 continue;
             }
@@ -249,53 +251,79 @@ impl CustomThemeLibrary {
             let vendored = relative
                 .components()
                 .any(|part| part.as_os_str() == "node_modules");
-            let extension = relative
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .unwrap_or_default();
-            if !normal
-                || vendored
-                || !["json", "jsonc", "tmTheme", "plist"]
-                    .iter()
-                    .any(|ext| ext.eq_ignore_ascii_case(extension))
-            {
+            if !normal || vendored || relative.as_os_str().is_empty() {
                 continue;
             }
-            if !seen.insert(relative.to_string_lossy().to_lowercase()) {
-                bail!("theme package contains duplicate paths");
+            let folded = relative.to_string_lossy().to_lowercase();
+            if !seen.insert(folded.clone()) {
+                ambiguous.insert(folded);
             }
             index.insert(relative, position);
         }
         // Extract the manifest, the themes it declares, and whatever those
         // files `include` or load `tokenColors` from, wherever they sit in the
-        // package. Unrelated data never counts against the limits. Without a
-        // readable manifest, fall back to every indexed file.
-        let mut queue = std::collections::VecDeque::from(
-            declared_theme_paths(&mut archive).unwrap_or_else(|| index.keys().cloned().collect()),
-        );
-        queue.push_front(PathBuf::from("package.json"));
+        // package. Unrelated data never counts against the limits.
+        let mut queue = std::collections::VecDeque::from([PathBuf::from("package.json")]);
         let scratch = tempfile::tempdir()?;
         let root = scratch.path().canonicalize()?;
-        let mut extracted = HashSet::new();
+        let mut visited = HashSet::new();
+        let mut unavailable = BTreeMap::new();
         let mut available = MAX_PACKAGE_BYTES;
         while let Some(relative) = queue.pop_front() {
+            if !visited.insert(relative.clone()) {
+                continue;
+            }
+            let manifest = relative == Path::new("package.json");
+            if ambiguous.contains(&relative.to_string_lossy().to_lowercase()) {
+                if manifest {
+                    bail!("theme package contains ambiguous manifest paths");
+                }
+                unavailable.insert(relative, "ambiguous path in theme package");
+                continue;
+            }
             let Some(&position) = index.get(&relative) else {
+                if manifest {
+                    bail!("theme package is missing its manifest");
+                }
+                // Preserve case-sensitive archive lookup on all file systems.
+                unavailable.insert(relative, "file is missing from the theme package");
                 continue;
             };
-            if !extracted.insert(relative.clone()) {
+            let entry = match archive.by_index(position) {
+                Ok(entry) => entry,
+                Err(error) if manifest => return Err(error).context("could not open package.json"),
+                Err(_) => {
+                    unavailable.insert(relative, "could not open file from the theme package");
+                    continue;
+                }
+            };
+            let mut contents = Vec::new();
+            let file_result = if entry.size() > MAX_THEME_JSON_BYTES {
+                Err("file exceeds the theme package per-file limit")
+            } else if entry.size() > available {
+                bail!("theme package exceeds the extracted data limit");
+            } else {
+                let limit = available.min(MAX_THEME_JSON_BYTES);
+                let read = entry.take(limit + 1).read_to_end(&mut contents);
+                let bytes_read = contents.len() as u64;
+                if bytes_read > available {
+                    bail!("theme package exceeds the extracted data limit");
+                }
+                available -= bytes_read;
+                if bytes_read > MAX_THEME_JSON_BYTES {
+                    Err("file exceeds the theme package per-file limit")
+                } else {
+                    read.map(|_| ())
+                        .map_err(|_| "could not read file from the theme package")
+                }
+            };
+            if let Err(reason) = file_result {
+                if manifest {
+                    bail!("package.json: {reason}");
+                }
+                unavailable.insert(relative, reason);
                 continue;
             }
-            let limit = available.min(MAX_THEME_JSON_BYTES);
-            let entry = archive.by_index(position)?;
-            if entry.size() > limit {
-                bail!("theme package exceeds the extracted data limit");
-            }
-            let mut contents = Vec::new();
-            entry.take(limit + 1).read_to_end(&mut contents)?;
-            if contents.len() as u64 > limit {
-                bail!("theme package exceeds the extracted data limit");
-            }
-            available -= contents.len() as u64;
             let destination = root.join(&relative);
             fs::create_dir_all(destination.parent().context("theme file has no parent")?)?;
             fs::OpenOptions::new()
@@ -303,15 +331,14 @@ impl CustomThemeLibrary {
                 .create_new(true)
                 .open(&destination)?
                 .write_all(&contents)?;
-            if relative != Path::new("package.json") {
+            if manifest {
+                queue.extend(declared_theme_paths(&contents));
+            } else {
                 queue.extend(theme_dependencies(&relative, &contents));
             }
         }
         let manifest = root.join("package.json");
-        if !manifest.is_file() {
-            bail!("theme package is missing its manifest");
-        }
-        let mut compilation = compile_source(&manifest, options)?;
+        let mut compilation = compile_extracted_package(&manifest, options, &unavailable)?;
         compilation.path.clear();
         for failure in &mut compilation.failures {
             if let Ok(relative) = failure.path.strip_prefix(&root) {
@@ -665,24 +692,20 @@ impl CustomThemeLibrary {
     }
 }
 
-/// The theme files `extension/package.json` contributes, relative to the
-/// extension root, or `None` when the manifest is missing or unreadable.
-fn declared_theme_paths<R: io::Read + io::Seek>(
-    archive: &mut zip::ZipArchive<R>,
-) -> Option<Vec<PathBuf>> {
-    let entry = archive.by_name("extension/package.json").ok()?;
-    let mut manifest = String::new();
-    entry
-        .take(MAX_THEME_JSON_BYTES)
-        .read_to_string(&mut manifest)
-        .ok()?;
-    let manifest: serde_json::Value = json5::from_str(&manifest).ok()?;
-    let paths = manifest["contributes"]["themes"]
-        .as_array()?
-        .iter()
+/// The paths declared by the manifest. Compilation reports manifest errors.
+fn declared_theme_paths(contents: &[u8]) -> Vec<PathBuf> {
+    let Ok(text) = std::str::from_utf8(contents) else {
+        return Vec::new();
+    };
+    let Ok(manifest) = json5::from_str::<serde_json::Value>(text) else {
+        return Vec::new();
+    };
+    manifest["contributes"]["themes"]
+        .as_array()
+        .into_iter()
+        .flatten()
         .filter_map(|theme| package_relative(Path::new(""), theme["path"].as_str()?))
-        .collect::<Vec<_>>();
-    (!paths.is_empty()).then_some(paths)
+        .collect()
 }
 
 /// Files a theme loads by relative path: its `include` parent and a
@@ -699,25 +722,6 @@ fn theme_dependencies(theme: &Path, contents: &[u8]) -> Vec<PathBuf> {
         .into_iter()
         .filter_map(|key| package_relative(base, value.get(key)?.as_str()?))
         .collect()
-}
-
-/// `reference` resolved against `base` inside the package; `None` if it
-/// climbs out of the extension root or is absolute.
-fn package_relative(base: &Path, reference: &str) -> Option<PathBuf> {
-    let mut resolved = PathBuf::new();
-    for component in base.join(reference).components() {
-        match component {
-            std::path::Component::Normal(part) => resolved.push(part),
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                if !resolved.pop() {
-                    return None;
-                }
-            }
-            _ => return None,
-        }
-    }
-    (!resolved.as_os_str().is_empty()).then_some(resolved)
 }
 
 /// The body of a Markdown code fence (``` or ~~~, any length of at least
@@ -962,19 +966,63 @@ mod tests {
             ),
             (
                 "extension/themes/dark.json",
-                br##"{"include":"../shared/base.json","colors":{"editor.foreground":"#e2e2f0"}}"##,
+                br##"{"include":"../shared/aux/../base.json","tokenColors":"./tokens","colors":{"editor.foreground":"#e2e2f0"}}"##,
             ),
+            ("extension/themes/tokens", br##"[{"scope":"comment","settings":{"foreground":"#ffffff"}}]"##),
             (
                 "extension/shared/base.json",
                 br##"{"colors":{"editor.background":"#202030"}}"##,
             ),
             ("extension/i18n/huge.json", &huge),
+            ("extension/i18n/EN.json", b"{}"),
+            ("extension/i18n/en.json", b"{}"),
         ]);
         let compiled = CustomThemeLibrary::compile_community_package(&included, options()).unwrap();
         assert_eq!(
             compiled.family.variants[0].colors.background,
             "#202030".parse().unwrap()
         );
+        assert!(compiled.reports.values().any(|report| {
+            report
+                .source_files
+                .iter()
+                .any(|path| path.ends_with("themes/tokens"))
+        }));
+
+        let mixed = package(&[
+            (
+                "extension/package.json",
+                br#"{"contributes":{"themes":[
+                {"label":"Light","uiTheme":"vs","path":"light.json"},
+                {"label":"Oversized","uiTheme":"vs-dark","path":"oversize.json"},
+                {"label":"Ambiguous","uiTheme":"vs-dark","path":"ambiguous.json"},
+                {"label":"Oversized dependency","uiTheme":"vs-dark","path":"with-include.json"}
+            ]}}"#,
+            ),
+            (
+                "extension/light.json",
+                br##"{"colors":{"editor.background":"#ffffff","editor.foreground":"#181818"}}"##,
+            ),
+            ("extension/oversize.json", &huge),
+            ("extension/ambiguous.json", b"{}"),
+            ("extension/AMBIGUOUS.json", b"{}"),
+            (
+                "extension/with-include.json",
+                br#"{"include":"./oversize.json"}"#,
+            ),
+        ]);
+        let compiled = CustomThemeLibrary::compile_community_package(&mixed, options()).unwrap();
+        assert_eq!(compiled.family.variants.len(), 1);
+        assert_eq!(compiled.family.variants[0].name, "Light");
+        let failures: Vec<_> = compiled
+            .failures
+            .iter()
+            .map(|failure| failure.message.as_str())
+            .collect();
+        assert_eq!(failures.len(), 3);
+        assert!(failures[0].contains("per-file limit"));
+        assert!(failures[1].contains("ambiguous path"));
+        assert!(failures[2].contains("per-file limit"));
         // A root-level theme does not admit every other folder.
         let root_level = package(&[
             (

@@ -230,6 +230,7 @@ impl Shell {
                     &theme,
                     std::path::Path::new(&background.path),
                     ui_settings.wallpaper_look,
+                    background.adjustment.quarter_turns,
                     cx,
                 )
             });
