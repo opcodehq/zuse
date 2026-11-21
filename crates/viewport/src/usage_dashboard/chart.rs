@@ -165,6 +165,14 @@ impl UsageDashboard {
             .child(plot)
             .id("usage-chart")
             .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
+                if event.pressed_button.is_some() {
+                    let had_hover = this.hovered.take().is_some();
+                    let had_cursor = this.hover_cursor.take().is_some();
+                    if had_hover || had_cursor {
+                        cx.notify();
+                    }
+                    return;
+                }
                 let b = hover.get();
                 if !b.contains(&event.position) {
                     return;
