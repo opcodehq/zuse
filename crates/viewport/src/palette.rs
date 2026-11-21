@@ -2,6 +2,25 @@
 use std::cell::Cell;
 thread_local! { static LIGHT: Cell<bool> = const { Cell::new(false) }; }
 thread_local! { static ACCENT: Cell<Option<gpui::Hsla>> = const { Cell::new(None) }; }
+
+/// Theme tokens for the sidebar's usage popovers. Stock Zuse keeps its authored styling.
+#[derive(Clone, Copy)]
+pub struct UsageMenuColors {
+    pub surface: gpui::Hsla,
+    pub border: gpui::Hsla,
+    pub text: gpui::Hsla,
+    pub muted: gpui::Hsla,
+    pub hover: gpui::Hsla,
+    pub active: gpui::Hsla,
+}
+thread_local! { static USAGE_MENU: Cell<Option<UsageMenuColors>> = const { Cell::new(None) }; }
+pub fn set_usage_menu(colors: Option<UsageMenuColors>) {
+    USAGE_MENU.set(colors);
+}
+pub fn usage_menu() -> Option<UsageMenuColors> {
+    USAGE_MENU.get()
+}
+
 /// The Zuse brand green every authored accent uses (`0x89ca21`).
 const BRAND_GREEN: u32 = 0x89ca21;
 /// The active theme's accent, which replaces the brand green in every

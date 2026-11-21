@@ -389,7 +389,7 @@ impl SidebarControls {
                                 .child(name),
                         )
                         .child(
-                            ui::meta(
+                            usage_meta(
                                 account
                                     .and_then(|a| a.plan_label.clone())
                                     .unwrap_or_else(|| "Usage limits".into()),
@@ -439,13 +439,13 @@ impl SidebarControls {
                                         .child(window.label.clone()),
                                 )
                                 .child(
-                                    ui::meta(format!("{left}% left"))
+                                    usage_meta(format!("{left}% left"))
                                         .text_size(px(12.))
                                         .line_height(px(16.)),
                                 ),
                         )
                         .child(dither_meter(left as f32, used >= 0.8))
-                        .child(ui::meta(reset).text_size(px(11.)).line_height(px(14.85))),
+                        .child(usage_meta(reset).text_size(px(11.)).line_height(px(14.85))),
                 );
             }
         } else {
@@ -454,7 +454,7 @@ impl SidebarControls {
                     .py(px(24.))
                     .text_size(px(12.))
                     .text_center()
-                    .text_color(palette::rgb(crate::shell::MUTED))
+                    .text_color(usage_muted())
                     .child(if self.pending("usage") {
                         "Loading usage…"
                     } else if account.is_some() {
@@ -520,7 +520,7 @@ impl SidebarControls {
         }
         if self.pending("usage") {
             menu = menu.child(
-                ui::meta("Loading usage…")
+                usage_meta("Loading usage…")
                     .px(px(8.))
                     .py(px(4.))
                     .text_size(px(12.)),
@@ -550,14 +550,14 @@ impl SidebarControls {
                 .rounded(px(10.))
                 .text_size(px(14.))
                 .line_height(px(20.))
-                .text_color(palette::rgb(crate::shell::TEXT))
+                .text_color(usage_text())
                 .cursor_pointer()
-                .hover(|v| v.bg(s::frame_bg()))
+                .hover(|v| v.bg(usage_hover()))
                 .child(icon(glyph).size(px(14.)).mx(px(-2.)))
                 .child(div().flex_1().min_w_0().truncate().child(name))
-                .when(self.active == i, |v| v.bg(s::frame_bg().opacity(0.6)))
+                .when(self.active == i, |v| v.bg(usage_active()))
                 .when_some(summary, |v, label| {
-                    v.child(ui::meta(label).text_size(px(11.)))
+                    v.child(usage_meta(label).text_size(px(11.)))
                 })
                 .child(
                     icon("alt-arrow-right")
@@ -590,21 +590,25 @@ impl SidebarControls {
             menu = menu.child(option);
         }
         crate::glass::menu(
-            menu.child(ui::separator())
+            menu.child(ui::separator().bg(usage_border()))
                 .child(
                     ui::option("sidebar-usage-refresh", "Refresh usage", "refresh", false)
+                        .text_color(usage_text())
+                        .hover(|v| v.bg(usage_hover()))
+                        .focus_visible(|v| v.bg(usage_hover()))
                         .role(Role::MenuItem)
-                        .when(self.active == providers().len(), |v| {
-                            v.bg(s::frame_bg().opacity(0.6))
-                        })
+                        .when(self.active == providers().len(), |v| v.bg(usage_active()))
                         .when(self.pending("usage"), |v| v.opacity(0.5))
                         .on_click(cx.listener(|this, _, _, cx| this.load_usage(true, cx))),
                 )
                 .child(
                     ui::option("sidebar-usage-accounts", "Full usage", "analytics", false)
+                        .text_color(usage_text())
+                        .hover(|v| v.bg(usage_hover()))
+                        .focus_visible(|v| v.bg(usage_hover()))
                         .role(Role::MenuItem)
                         .when(self.active == providers().len() + 1, |v| {
-                            v.bg(s::frame_bg().opacity(0.6))
+                            v.bg(usage_active())
                         })
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.close(window, cx);
@@ -829,11 +833,37 @@ fn dither_meter(left: f32, warning: bool) -> Div {
         .child(crate::dither::meter(
             left / 100.,
             palette::rgb(if warning { 0xfcd34d } else { 0x89ca21 }).into(),
-            gpui::Hsla::from(palette::rgb(crate::shell::MUTED)).opacity(0.3),
+            usage_muted().opacity(0.3),
         ))
 }
 
+fn usage_text() -> Hsla {
+    palette::usage_menu().map_or_else(|| palette::rgb(crate::shell::TEXT).into(), |c| c.text)
+}
+fn usage_muted() -> Hsla {
+    palette::usage_menu().map_or_else(|| palette::rgb(crate::shell::MUTED).into(), |c| c.muted)
+}
+fn usage_border() -> Hsla {
+    palette::usage_menu().map_or_else(|| palette::rgb(crate::shell::BORDER).into(), |c| c.border)
+}
+fn usage_hover() -> Hsla {
+    palette::usage_menu().map_or_else(s::frame_bg, |c| c.hover)
+}
+fn usage_active() -> Hsla {
+    palette::usage_menu().map_or_else(|| s::frame_bg().opacity(0.6), |c| c.active)
+}
+fn usage_meta(label: impl Into<SharedString>) -> Div {
+    ui::meta(label).text_color(usage_muted())
+}
+
 fn menu_surface(width: f32) -> Div {
+    if let Some(colors) = palette::usage_menu() {
+        return ui::menu(width)
+            .relative()
+            .bg(colors.surface)
+            .border_color(colors.border)
+            .text_color(colors.text);
+    }
     let dark = !palette::is_light();
     ui::menu(width)
         .relative()
