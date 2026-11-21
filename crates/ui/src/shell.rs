@@ -558,20 +558,10 @@ pub enum SettingsSection {
 
 impl SettingsSection {
     /// Sections shown in Settings. `Agents` is a legacy Accounts route alias.
-    /// Grouped by where things run: agents on this computer, the cloud
-    /// computer, what it all costs, then the app itself. See [`Self::heading`].
+    /// App settings first, followed by plan, local agents and cloud computer.
+    /// See [`Self::heading`].
     pub const ALL: [SettingsSection; 19] = [
         SettingsSection::General,
-        SettingsSection::Harnesses,
-        SettingsSection::Defaults,
-        SettingsSection::Plugins,
-        SettingsSection::Cloud,
-        SettingsSection::CloudRepositories,
-        SettingsSection::CloudEnvironments,
-        SettingsSection::CloudMachine,
-        SettingsSection::CloudAgents,
-        SettingsSection::Usage,
-        SettingsSection::Billing,
         SettingsSection::Appearance,
         SettingsSection::Notifications,
         SettingsSection::Voice,
@@ -580,6 +570,16 @@ impl SettingsSection {
         SettingsSection::Devices,
         SettingsSection::Appshots,
         SettingsSection::Archived,
+        SettingsSection::Usage,
+        SettingsSection::Billing,
+        SettingsSection::Harnesses,
+        SettingsSection::Defaults,
+        SettingsSection::Plugins,
+        SettingsSection::Cloud,
+        SettingsSection::CloudRepositories,
+        SettingsSection::CloudEnvironments,
+        SettingsSection::CloudMachine,
+        SettingsSection::CloudAgents,
     ];
 
     /// The sidebar heading this section opens, if it starts a group.
@@ -588,7 +588,7 @@ impl SettingsSection {
             SettingsSection::Harnesses => Some("Local agents"),
             SettingsSection::Cloud => Some("Cloud computer"),
             SettingsSection::Usage => Some("Plan & usage"),
-            SettingsSection::Appearance => Some("App"),
+            SettingsSection::General => Some("App"),
             _ => None,
         }
     }
@@ -22222,13 +22222,13 @@ mod settings_modal_regressions {
             .collect();
         assert_eq!(
             headings,
-            ["Local agents", "Cloud computer", "Plan & usage", "App"]
+            ["App", "Plan & usage", "Local agents", "Cloud computer"]
         );
         let headings: Vec<_> = listed(CloudAccess::SignedIn)
             .into_iter()
             .filter_map(SettingsSection::heading)
             .collect();
-        assert_eq!(headings, ["Local agents", "Plan & usage", "App"]);
+        assert_eq!(headings, ["App", "Plan & usage", "Local agents"]);
     }
 
     #[test]

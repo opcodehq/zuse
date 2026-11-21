@@ -10,8 +10,10 @@ use zuse_i18n::messages as msg;
 pub struct Colors {
     pub text: Hsla,
     pub muted: Hsla,
+    pub frame: Hsla,
     pub background: Hsla,
     pub border: Hsla,
+    pub card_border: Hsla,
     pub danger: Hsla,
 }
 #[derive(Clone, PartialEq)]
@@ -49,8 +51,10 @@ impl AccountCard {
         let colors = Colors {
             text: palette::rgb(crate::shell::TEXT).into(),
             muted: palette::rgb(crate::shell::MUTED).into(),
+            frame: s::frame_bg(),
             background: s::card_bg(),
             border: s::card_border(),
+            card_border: s::card_border(),
             danger: s::destructive_text(),
         };
         let owner = cx.weak_entity();
@@ -256,7 +260,7 @@ impl Render for AccountCard {
                 });
             }
         }));
-        let mut card = s::card();
+        let mut card = s::card().bg(c.background).border_color(c.card_border);
         if signed_in {
             let mut profile = div().flex_1().min_w_0().flex().flex_col();
             if self.editing.is_some() {
@@ -466,7 +470,7 @@ impl Render for AccountCard {
                     .child(error),
             );
         }
-        s::frame().text_color(c.text).child(s::header(tr(cx, msg::settings::settings_page_account),tr(cx, msg::settings::settings_page_sign_in_to_sync_your_account_across_devices_and_soon_drive_remote_agen)))
+        s::frame().bg(c.frame).text_color(c.text).child(s::header(tr(cx, msg::settings::settings_page_account),tr(cx, msg::settings::settings_page_sign_in_to_sync_your_account_across_devices_and_soon_drive_remote_agen)))
             .child(card).when_some(self.menu.as_ref(),|view,menu|view.child(edit_menu::render(menu,cx)))
     }
 }

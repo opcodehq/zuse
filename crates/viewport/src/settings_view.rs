@@ -500,8 +500,10 @@ impl WorkspaceView {
             colors: crate::account_settings::Colors {
                 text: rgb(TEXT).into(),
                 muted: rgb(MUTED).into(),
+                frame: s::frame_bg(),
                 background: s::card_bg(),
                 border: s::card_border(),
+                card_border: s::card_border(),
                 danger: s::destructive_text(),
             },
         };
