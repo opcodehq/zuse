@@ -592,20 +592,14 @@ impl SidebarControls {
         crate::glass::menu(
             menu.child(ui::separator().bg(usage_border()))
                 .child(
-                    ui::option("sidebar-usage-refresh", "Refresh usage", "refresh", false)
-                        .text_color(usage_text())
-                        .hover(|v| v.bg(usage_hover()))
-                        .focus_visible(|v| v.bg(usage_hover()))
+                    usage_option("sidebar-usage-refresh", "Refresh usage", "refresh")
                         .role(Role::MenuItem)
                         .when(self.active == providers().len(), |v| v.bg(usage_active()))
                         .when(self.pending("usage"), |v| v.opacity(0.5))
                         .on_click(cx.listener(|this, _, _, cx| this.load_usage(true, cx))),
                 )
                 .child(
-                    ui::option("sidebar-usage-accounts", "Full usage", "analytics", false)
-                        .text_color(usage_text())
-                        .hover(|v| v.bg(usage_hover()))
-                        .focus_visible(|v| v.bg(usage_hover()))
+                    usage_option("sidebar-usage-accounts", "Full usage", "analytics")
                         .role(Role::MenuItem)
                         .when(self.active == providers().len() + 1, |v| {
                             v.bg(usage_active())
@@ -855,6 +849,10 @@ fn usage_active() -> Hsla {
 fn usage_meta(label: impl Into<SharedString>) -> Div {
     ui::meta(label).text_color(usage_muted())
 }
+fn usage_option(id: &'static str, label: &'static str, glyph: &str) -> Stateful<Div> {
+    let hover = palette::usage_menu().map_or_else(|| s::frame_bg().opacity(0.6), |c| c.hover);
+    ui::option_with_colors(id, label, glyph, false, usage_text(), hover, usage_hover())
+}
 
 fn menu_surface(width: f32) -> Div {
     if let Some(colors) = palette::usage_menu() {
@@ -916,7 +914,12 @@ fn account_plan_label(signed_in: bool, subscribed: Option<bool>, failed: bool) -
 }
 #[cfg(test)]
 mod account_label_tests {
-    use super::account_plan_label;
+    use super::{account_plan_label, usage_option};
+    #[test]
+    fn usage_actions_construct_without_duplicate_interaction_styles() {
+        let _refresh = usage_option("sidebar-usage-refresh", "Refresh usage", "refresh");
+        let _accounts = usage_option("sidebar-usage-accounts", "Full usage", "analytics");
+    }
     #[test]
     fn cloud_badge_requires_a_current_account_and_verified_entitlement() {
         assert_eq!(account_plan_label(false, Some(true), false), "Sign in");
