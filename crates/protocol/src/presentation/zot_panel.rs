@@ -562,6 +562,7 @@ mod tests {
                 max_concurrent_workers: 1,
                 max_followups: 1,
                 avatar: None,
+                avatar_image: None,
             },
             status: ZotStatus::Active,
             coordinator_chat_id: "zot-z-2".into(),
