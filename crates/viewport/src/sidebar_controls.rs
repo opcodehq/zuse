@@ -26,6 +26,14 @@ pub enum Event {
     FullUsage,
 }
 type Owner = (String, Option<String>);
+/// The Upgrade key's dither ink, following the active theme's accent.
+struct PlanInk(Hsla);
+impl Global for PlanInk {}
+
+pub fn set_plan_ink(ink: Hsla, cx: &mut App) {
+    cx.set_global(PlanInk(ink));
+}
+
 pub struct SidebarControls {
     properties: Properties,
     owner: Option<Owner>,
@@ -660,7 +668,11 @@ impl Render for SidebarControls {
             .when(upgrade, |v| {
                 v.relative()
                     .overflow_hidden()
-                    .child(crate::dither::fill([151, 183, 76], 7.))
+                    .child(crate::dither::fill_color(
+                        cx.try_global::<PlanInk>()
+                            .map_or_else(|| palette::rgb(0x97b74c).into(), |ink| ink.0),
+                        7.,
+                    ))
                     .text_color(white())
                     .px(px(10.))
                     .text_size(px(11.))

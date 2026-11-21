@@ -1430,33 +1430,54 @@ pub fn dither_key<E: Styled + ParentElement>(
 ) -> E {
     // The texture is tuned for a dark plate; light cards get a deep base so
     // the white label keeps its contrast.
-    let light = theme.appearance == crate::theme::Appearance::Light;
-    let (plate, ink, edge): (gpui::Hsla, [u8; 3], gpui::Hsla) = match key {
-        DitherKey::Primary => (
-            if light {
-                gpui::hsla(80.0 / 360.0, 0.28, 0.2, 1.0)
-            } else {
-                gpui::rgb(0x13150f).into()
-            },
-            DITHER_KEY_RGB,
-            theme.accent.opacity(0.4),
-        ),
+    let (ink, edge) = match key {
+        DitherKey::Primary => (dither_ink(theme), theme.accent.opacity(0.4)),
         DitherKey::Danger => (
-            if light {
-                gpui::hsla(0.0, 0.38, 0.24, 1.0)
-            } else {
-                gpui::rgb(0x1c0f0e).into()
-            },
-            [208, 85, 78],
+            gpui::Rgba {
+                r: 208.0 / 255.0,
+                g: 85.0 / 255.0,
+                b: 78.0 / 255.0,
+                a: 1.0,
+            }
+            .into(),
             theme.danger.opacity(0.4),
         ),
     };
     el.relative()
-        .bg(plate)
+        .bg(dither_plate(theme, ink))
         .border_1()
         .border_color(edge)
         .text_color(gpui::white())
-        .child(zuse_viewport::dither::fill(ink, radius))
+        .child(zuse_viewport::dither::fill_color(ink, radius))
+}
+
+/// The primary keys' dither ink: Zuse's olive by default, otherwise the
+/// active theme's accent, held in a lightness band the white label reads on.
+pub(crate) fn dither_ink(theme: &Theme) -> gpui::Hsla {
+    let stock = theme.family_id.as_ref() == "zuse"
+        && theme.accent_selection == zuse_theme::AccentSelection::ThemeDefault
+        && theme.wallpaper_color.is_none();
+    if stock {
+        let [r, g, b] = DITHER_KEY_RGB;
+        return gpui::Rgba {
+            r: f32::from(r) / 255.0,
+            g: f32::from(g) / 255.0,
+            b: f32::from(b) / 255.0,
+            a: 1.0,
+        }
+        .into();
+    }
+    let accent = theme.accent;
+    gpui::hsla(accent.h, accent.s.min(0.78), accent.l.clamp(0.44, 0.6), 1.0)
+}
+
+/// The deep base under a dither key, in the ink's hue.
+pub(crate) fn dither_plate(theme: &Theme, ink: gpui::Hsla) -> gpui::Hsla {
+    if theme.appearance == crate::theme::Appearance::Light {
+        gpui::hsla(ink.h, (ink.s * 0.5).min(0.38), 0.21, 1.0)
+    } else {
+        gpui::hsla(ink.h, (ink.s * 0.4).min(0.2), 0.07, 1.0)
+    }
 }
 
 /// Pulsing skeleton rows shown while a list loads (zuse:

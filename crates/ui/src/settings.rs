@@ -34,6 +34,7 @@ pub mod notifications;
 pub mod pairing;
 pub mod plugins;
 pub mod shortcuts;
+mod theme_community;
 pub mod thread_naming;
 pub mod wallpaper;
 pub mod wallpaper_colors;
@@ -152,21 +153,62 @@ impl Default for NewThreadBackgroundAdjustment {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WallpaperLook {
+    pub brightness: u8,
+    pub blur: u8,
+    pub opacity: u8,
+    pub bottom_fade: u8,
+    pub soft_edge: u8,
+    pub input_opacity: u8,
+}
+
+impl Default for WallpaperLook {
+    fn default() -> Self {
+        Self {
+            brightness: 100,
+            blur: 0,
+            opacity: 100,
+            bottom_fade: 65,
+            soft_edge: 16,
+            input_opacity: 100,
+        }
+    }
+}
+
+impl WallpaperLook {
+    fn normalized(self) -> Self {
+        Self {
+            brightness: self.brightness.clamp(50, 150),
+            blur: self.blur.min(20),
+            opacity: self.opacity.min(100),
+            bottom_fade: self.bottom_fade.min(100),
+            soft_edge: self.soft_edge.min(35),
+            input_opacity: self.input_opacity.clamp(65, 100),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum NewThreadBackgroundEffect {
     #[default]
     None,
     Dither,
+    Grain,
+    Vignette,
     Ascii,
     Halftone,
     Scanlines,
 }
 
 impl NewThreadBackgroundEffect {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 7] = [
         Self::None,
         Self::Dither,
+        Self::Grain,
+        Self::Vignette,
         Self::Ascii,
         Self::Halftone,
         Self::Scanlines,
@@ -176,6 +218,8 @@ impl NewThreadBackgroundEffect {
         match self {
             Self::None => "None",
             Self::Dither => "Dither",
+            Self::Grain => "Grain",
+            Self::Vignette => "Vignette",
             Self::Ascii => "ASCII",
             Self::Halftone => "Halftone",
             Self::Scanlines => "Scanlines",
@@ -186,9 +230,30 @@ impl NewThreadBackgroundEffect {
         match self {
             Self::None => "Shows the original artwork.",
             Self::Dither => "Rebuilds the artwork with a dithered color palette.",
+            Self::Grain => "Adds a fine, static texture to the image.",
+            Self::Vignette => "Softens the edges around the center of the image.",
             Self::Ascii => "Recreates the artwork with colored characters on black.",
             Self::Halftone => "Recreates the artwork with colored print dots on black.",
             Self::Scanlines => "Adds a pronounced horizontal display-line texture.",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DiffColors {
+    #[default]
+    RedGreen,
+    BlueOrange,
+}
+
+impl DiffColors {
+    pub(crate) const ALL: [Self; 2] = [Self::RedGreen, Self::BlueOrange];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::RedGreen => "Red/green",
+            Self::BlueOrange => "Blue/orange",
         }
     }
 }
@@ -410,6 +475,16 @@ pub fn current(cx: &App) -> UiSettings {
         .unwrap_or_default()
 }
 
+pub(crate) fn split_diffs(cx: &App) -> bool {
+    cx.try_global::<SettingsStore>()
+        .is_some_and(|store| store.current.diff_split)
+}
+
+pub(crate) fn diff_colors(cx: &App) -> DiffColors {
+    cx.try_global::<SettingsStore>()
+        .map_or_else(DiffColors::default, |store| store.current.diff_colors)
+}
+
 pub fn default_model(cx: &App) -> Option<&zuse_protocol::presentation::DefaultModelSelection> {
     cx.try_global::<SettingsStore>()
         .and_then(|store| store.current.default_model.as_ref())
@@ -596,6 +671,26 @@ pub fn set_new_thread_background_effect(effect: NewThreadBackgroundEffect, cx: &
     }) {
         cx.refresh_windows();
     }
+}
+
+pub(crate) fn set_wallpaper_look(look: WallpaperLook, cx: &mut App) {
+    if update(SavePolicy::Debounced, cx, |settings| {
+        settings.wallpaper_look = look.normalized()
+    }) {
+        cx.refresh_windows();
+    }
+}
+
+pub(crate) fn wallpaper_input_opacity(cx: &App) -> Option<u8> {
+    let settings = &cx.try_global::<SettingsStore>()?.current;
+    let look = settings.wallpaper_look;
+    // See-through only pays off with artwork actually painted behind it.
+    let painted = look.opacity > 0
+        && settings
+            .new_thread_composer_background
+            .as_ref()
+            .is_some_and(|background| Path::new(&background.path).is_file());
+    painted.then_some(look.input_opacity)
 }
 
 pub fn set_new_thread_background_adjustment(
@@ -1119,6 +1214,7 @@ pub struct UiSettings {
     pub theme_selection: zuse_theme::ThemeSelection,
     /// Changes pane: side-by-side diffs instead of the unified stack.
     pub diff_split: bool,
+    pub diff_colors: DiffColors,
     /// Changes pane: wrap long source lines instead of scrolling horizontally.
     pub diff_wrap: bool,
     /// Agent-sent Markdown fences: wrap long lines to the chat width instead
@@ -1176,6 +1272,7 @@ pub struct UiSettings {
     pub wallpaper_color: Option<zuse_theme::Color>,
     /// Non-destructive treatment composited inside the artwork's fade mask.
     pub new_thread_background_effect: NewThreadBackgroundEffect,
+    pub wallpaper_look: WallpaperLook,
     /// Snap animations to rest. Defaults to following the OS.
     pub reduce_motion: crate::motion::ReduceMotion,
     /// Also snap animations while the main window is not focused.
@@ -1271,6 +1368,7 @@ impl Default for UiSettings {
             code_font_size: crate::typography::CODE_FONT_SIZE_DEFAULT,
             theme_selection: zuse_theme::ThemeSelection::default(),
             diff_split: false,
+            diff_colors: DiffColors::default(),
             diff_wrap: false,
             code_fences_fit_content: false,
             transcript_width: TRANSCRIPT_WIDTH_DEFAULT,
@@ -1295,6 +1393,7 @@ impl Default for UiSettings {
             wallpaper_theme_colors: false,
             wallpaper_color: None,
             new_thread_background_effect: NewThreadBackgroundEffect::None,
+            wallpaper_look: WallpaperLook::default(),
             reduce_motion: crate::motion::ReduceMotion::System,
             pause_animations_in_background: false,
             codex_voice: None,
@@ -2174,6 +2273,7 @@ impl UiSettings {
             code_font_size,
             theme_selection,
             diff_split,
+            diff_colors,
             diff_wrap,
             code_fences_fit_content,
             transcript_width,
@@ -2194,6 +2294,7 @@ impl UiSettings {
             wallpaper_theme_colors,
             wallpaper_color,
             new_thread_background_effect,
+            wallpaper_look,
             reduce_motion,
             pause_animations_in_background,
             codex_voice,
@@ -2259,6 +2360,7 @@ impl UiSettings {
         if let Some(background) = self.new_thread_composer_background.as_mut() {
             background.adjustment = background.adjustment.normalized();
         }
+        self.wallpaper_look = self.wallpaper_look.normalized();
         self.keymap.align_desktop_defaults();
         self.keymap.heal_jump_slots();
         self.keymap.heal_reserved_composer_shortcuts();
@@ -3177,6 +3279,7 @@ mod tests {
                 dark: "catppuccin-mocha".into(),
             },
             diff_split: true,
+            diff_colors: DiffColors::BlueOrange,
             diff_wrap: true,
             code_fences_fit_content: true,
             transcript_width: 960.0,
@@ -3219,6 +3322,11 @@ mod tests {
             wallpaper_theme_colors: false,
             wallpaper_color: None,
             new_thread_background_effect: NewThreadBackgroundEffect::Ascii,
+            wallpaper_look: WallpaperLook {
+                blur: 4,
+                opacity: 75,
+                ..WallpaperLook::default()
+            },
             reduce_motion: crate::motion::ReduceMotion::On,
             pause_animations_in_background: true,
             legacy_accent_color: None,

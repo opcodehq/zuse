@@ -1225,6 +1225,18 @@ impl Theme {
         }
     }
 
+    pub(crate) fn wallpaper_composer_fill(&self, input_opacity: u8) -> Hsla {
+        let fill = self.composer_glass_bg();
+        if input_opacity >= 100 {
+            return fill;
+        }
+        fill.opacity(self.contrast_checked_tint_alpha(
+            fill,
+            fill.a * f32::from(input_opacity) / 100.0,
+            self.adverse_backdrop(),
+        ))
+    }
+
     /// The composer card's edge: white at 8% on dark, a softened theme border
     /// on light.
     pub fn composer_glass_border(&self) -> Hsla {
@@ -1552,6 +1564,21 @@ impl Theme {
         self
     }
 
+    /// Red/green keeps the theme's own diff colors; Blue/orange swaps in a
+    /// pair that stays distinct under red-green color blindness.
+    fn with_diff_colors(mut self, preference: crate::settings::DiffColors) -> Self {
+        if preference == crate::settings::DiffColors::RedGreen {
+            return self;
+        }
+        let (added, deleted) = match self.appearance {
+            Appearance::Light => (0x1557a4, 0xa64b14),
+            Appearance::Dark => (0x7fbdff, 0xefa565),
+        };
+        self.diff_add = gpui::rgb(added).into();
+        self.diff_del = gpui::rgb(deleted).into();
+        self
+    }
+
     /// Resolve one complete registered variant and then apply the narrowly
     /// scoped accent policy. Components consume only the resulting semantic
     /// tokens; VS Code keys never escape the importer.
@@ -1797,6 +1824,7 @@ impl Theme {
             surface_preference,
             crate::settings::wallpaper_colors::active(cx),
         )
+        .with_diff_colors(crate::settings::diff_colors(cx))
         .with_font_sans(crate::typography::effective_family_name(cx))
         .with_font_mono(crate::typography::code_effective_family_name(cx))
         .with_font_terminal(crate::typography::terminal_effective_family_name(cx))
@@ -1848,6 +1876,7 @@ fn scrollbar_thumb_colors(theme: &Theme) -> (Hsla, Hsla, Hsla) {
 }
 
 fn sync_gpui_base_scrollbar(theme: &Theme, cx: &mut App) {
+    zuse_viewport::sidebar_controls::set_plan_ink(crate::popover::dither_ink(theme), cx);
     let (normal, hover, active) = scrollbar_thumb_colors(theme);
     gpui_base::Theme::global_mut(cx).scrollbar.styles = gpui_base::ScrollbarStyles::default()
         .thumb(|style| style.bg(normal))

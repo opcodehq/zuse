@@ -91,13 +91,24 @@ type EffectEntry = (
     (NewThreadBackgroundEffect, bool),
     Option<Arc<gpui::RenderImage>>,
 );
+type PhotoKey = (gpui::ImageId, u8, u8);
+
+#[derive(Debug, Default)]
+struct PhotoRaster {
+    pending: bool,
+    ready: Option<(PhotoKey, Arc<gpui::RenderImage>)>,
+}
+
 #[derive(Debug)]
 struct BackgroundLuminance {
     width: u32,
     height: u32,
     pixels: Box<[u8]>,
     colors: Box<[[u8; 4]]>,
+    /// Mean luma (0–255) of the band the new-thread heading sits over.
+    heading_luma: u8,
     effects: Mutex<Vec<EffectEntry>>,
+    photo: Mutex<PhotoRaster>,
 }
 impl BackgroundLuminance {
     fn raster_image(
@@ -112,7 +123,9 @@ impl BackgroundLuminance {
             light
                 && !matches!(
                     effect,
-                    NewThreadBackgroundEffect::Dither | NewThreadBackgroundEffect::None
+                    NewThreadBackgroundEffect::Dither
+                        | NewThreadBackgroundEffect::None
+                        | NewThreadBackgroundEffect::Grain
                 ),
         );
         if let Some((_, image)) = effects.iter().find(|(cached, _)| *cached == key) {
@@ -157,14 +170,46 @@ impl BackgroundLuminance {
                 })
             }
             NewThreadBackgroundEffect::Dither => self.dither_pixels(self.width, self.height),
+            NewThreadBackgroundEffect::Grain => self.grain_pixels(),
+            NewThreadBackgroundEffect::Vignette => self.vignette_pixels(light),
             NewThreadBackgroundEffect::Halftone => {
                 self.halftone_pixels(self.width, self.height, light)
             }
             NewThreadBackgroundEffect::Ascii => self.ascii_pixels(light),
-            _ => self.scanline_pixels(light),
+            NewThreadBackgroundEffect::Scanlines => self.scanline_pixels(light),
         };
         Arc::new(gpui::RenderImage::new([image::Frame::new(pixels)]))
     }
+
+    fn grain_pixels(&self) -> image::RgbaImage {
+        image::RgbaImage::from_fn(self.width, self.height, |x, y| {
+            let [red, green, blue, alpha] = self.colors[(y * self.width + x) as usize];
+            let mut seed = x.wrapping_mul(0x9e37_79b1) ^ y.wrapping_mul(0x85eb_ca77);
+            seed = (seed ^ (seed >> 16)).wrapping_mul(0x7feb_352d);
+            seed = (seed ^ (seed >> 15)).wrapping_mul(0x846c_a68b);
+            let offset = (((seed ^ (seed >> 16)) >> 24) as i16 - 128) / 11;
+            let grain = |channel: u8| (i16::from(channel) + offset).clamp(0, 255) as u8;
+            image::Rgba([grain(blue), grain(green), grain(red), alpha])
+        })
+    }
+
+    fn vignette_pixels(&self, light: bool) -> image::RgbaImage {
+        let width = self.width.saturating_sub(1).max(1) as f32;
+        let height = self.height.saturating_sub(1).max(1) as f32;
+        image::RgbaImage::from_fn(self.width, self.height, |x, y| {
+            let [red, green, blue, alpha] = self.colors[(y * self.width + x) as usize];
+            let horizontal = 2.0 * x as f32 / width - 1.0;
+            let vertical = 2.0 * y as f32 / height - 1.0;
+            let distance = (horizontal * horizontal + vertical * vertical) * 0.5;
+            let edge = ((distance - 0.15) / 0.85).clamp(0.0, 1.0);
+            let strength = edge * edge * (3.0 - 2.0 * edge) * if light { 0.30 } else { 0.55 };
+            let paper = if light { 255.0 } else { 0.0 };
+            let fade =
+                |channel: u8| (f32::from(channel) * (1.0 - strength) + paper * strength) as u8;
+            image::Rgba([fade(blue), fade(green), fade(red), alpha])
+        })
+    }
+
     fn scanline_pixels(&self, light: bool) -> image::RgbaImage {
         image::RgbaImage::from_fn(self.width, self.height, |x, y| {
             let [r, g, b, a] = self.colors[(y * self.width + x) as usize];
@@ -312,12 +357,15 @@ fn decode_source(bytes: &[u8]) -> Option<Arc<BackgroundLuminance>> {
 fn source_from_image(image: &image::DynamicImage) -> Arc<BackgroundLuminance> {
     let proxy = image.thumbnail(2048, 2048);
     let gray = proxy.to_luma8();
+    let heading_luma = band_luma(&gray);
     Arc::new(BackgroundLuminance {
         width: gray.width(),
         height: gray.height(),
         pixels: gray.into_raw().into_boxed_slice(),
         colors: proxy.to_rgba8().pixels().map(|pixel| pixel.0).collect(),
+        heading_luma,
         effects: Mutex::new(Vec::new()),
+        photo: Mutex::default(),
     })
 }
 
@@ -336,7 +384,9 @@ impl PreloadedArtwork {
         let light = light
             && !matches!(
                 effect,
-                NewThreadBackgroundEffect::None | NewThreadBackgroundEffect::Dither
+                NewThreadBackgroundEffect::None
+                    | NewThreadBackgroundEffect::Dither
+                    | NewThreadBackgroundEffect::Grain
             );
         let image = source.render_image(effect, light);
         source
@@ -398,6 +448,45 @@ fn background_luminance(path: &Path, cx: &mut gpui::App) -> Option<Arc<Backgroun
     None
 }
 
+/// The heading sits in the hero's upper-middle; average that band.
+fn band_luma(gray: &image::GrayImage) -> u8 {
+    let (width, height) = gray.dimensions();
+    let rows = height / 5..(height * 3 / 5).max(height / 5 + 1);
+    let (mut sum, mut count) = (0u64, 0u64);
+    for y in rows.step_by(4) {
+        for x in (0..width).step_by(4) {
+            sum += u64::from(gray.get_pixel(x, y.min(height - 1)).0[0]);
+            count += 1;
+        }
+    }
+    (sum / count.max(1)) as u8
+}
+
+/// Whether the wallpaper behind the new-thread heading reads as dark, as
+/// drawn: brightness applied, then blended over `canvas` at `opacity`.
+/// `None` until the image decodes, and for effects that redraw the artwork
+/// over the theme canvas (ASCII, halftone), where the theme's ink already fits.
+pub(crate) fn backdrop_is_dark(
+    path: &Path,
+    effect: NewThreadBackgroundEffect,
+    look: crate::settings::WallpaperLook,
+    canvas: gpui::Hsla,
+    opacity: f32,
+    cx: &mut gpui::App,
+) -> Option<bool> {
+    if matches!(
+        effect,
+        NewThreadBackgroundEffect::Ascii | NewThreadBackgroundEffect::Halftone
+    ) {
+        return None;
+    }
+    let source = background_luminance(path, cx)?;
+    let image = (f32::from(source.heading_luma) * f32::from(look.brightness) / 100.0).min(255.0);
+    let alpha = (opacity * f32::from(look.opacity) / 100.0).clamp(0.0, 1.0);
+    let luma = image * alpha + canvas.l * 255.0 * (1.0 - alpha);
+    Some(luma < 140.0)
+}
+
 /// Safe to call on both routes: loading/decoding/effects happen once off-thread,
 /// before the hero is requested, and never depend on composer/sidebar geometry.
 pub(super) fn prepare(
@@ -408,6 +497,66 @@ pub(super) fn prepare(
 ) -> Option<Arc<gpui::RenderImage>> {
     let light = matches!(theme.appearance, crate::theme::Appearance::Light);
     background_luminance(path, cx).and_then(|source| source.raster_image(effect, light, cx))
+}
+
+pub(crate) fn prepare_look(
+    effect: NewThreadBackgroundEffect,
+    theme: &Theme,
+    path: &Path,
+    look: crate::settings::WallpaperLook,
+    cx: &mut gpui::App,
+) -> Option<Arc<gpui::RenderImage>> {
+    if look.brightness == 100 && look.blur == 0 {
+        return prepare(effect, theme, path, cx);
+    }
+    let source = background_luminance(path, cx)?;
+    let base = source.raster_image(effect, theme.appearance.is_light(), cx)?;
+    let key = (base.id, look.brightness, look.blur);
+    let mut cache = source.photo.lock().unwrap();
+    let ready = cache.ready.as_ref().filter(|(cached, _)| cached.0 == key.0);
+    if let Some((_, image)) = ready.filter(|(cached, _)| *cached == key) {
+        return Some(image.clone());
+    }
+    let fallback = ready.map_or_else(|| base.clone(), |(_, image)| image.clone());
+    if !cache.pending {
+        cache.pending = true;
+        drop(cache);
+        cx.spawn(async move |cx| {
+            let image = cx
+                .background_executor()
+                .spawn(async move { photo_raster(base, look.brightness, look.blur) })
+                .await;
+            let _ = cx.update(|cx| {
+                let mut cache = source.photo.lock().unwrap();
+                cache.pending = false;
+                cache.ready = Some((key, image));
+                cx.refresh_windows();
+            });
+        })
+        .detach();
+    }
+    Some(fallback)
+}
+
+fn photo_raster(base: Arc<gpui::RenderImage>, brightness: u8, blur: u8) -> Arc<gpui::RenderImage> {
+    let size = base.size(0);
+    let Some(mut pixels) = base.as_bytes(0).and_then(|bytes| {
+        image::RgbaImage::from_raw(size.width.0 as u32, size.height.0 as u32, bytes.to_vec())
+    }) else {
+        return base;
+    };
+    if brightness != 100 {
+        let gain = f32::from(brightness) / 100.0;
+        for pixel in pixels.pixels_mut() {
+            for channel in &mut pixel.0[..3] {
+                *channel = (f32::from(*channel) * gain).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+    if blur > 0 {
+        pixels = image::imageops::blur(&pixels, f32::from(blur) * pixels.height() as f32 / 650.0);
+    }
+    Arc::new(gpui::RenderImage::new([image::Frame::new(pixels)]))
 }
 fn dither_color([r, g, b, a]: [u8; 4], threshold: u8) -> [u8; 4] {
     let peak = r.max(g).max(b) as f32;
@@ -424,6 +573,19 @@ fn dither_color([r, g, b, a]: [u8; 4], threshold: u8) -> [u8; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn heading_band_tracks_wallpaper_darkness() {
+        let flat = |value| {
+            image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+                64,
+                48,
+                image::Rgba([value, value, value, 255]),
+            ))
+        };
+        assert!(source_from_image(&flat(20)).heading_luma < 140);
+        assert!(source_from_image(&flat(230)).heading_luma >= 140);
+    }
 
     fn artwork() -> Arc<gpui::RenderImage> {
         Arc::new(gpui::RenderImage::new([image::Frame::new(
@@ -583,18 +745,15 @@ mod tests {
             height: 32,
             pixels: vec![128; 1920].into_boxed_slice(),
             colors: vec![[128, 64, 32, 200]; 1920].into_boxed_slice(),
+            heading_luma: 0,
             effects: Mutex::new(Vec::new()),
+            photo: Mutex::default(),
         })
     }
     #[gpui::test]
     fn every_effect_is_generated_once_independently_of_viewport(cx: &mut gpui::TestAppContext) {
         let source = fixture();
-        for effect in [
-            NewThreadBackgroundEffect::Dither,
-            NewThreadBackgroundEffect::Ascii,
-            NewThreadBackgroundEffect::Halftone,
-            NewThreadBackgroundEffect::Scanlines,
-        ] {
+        for effect in NewThreadBackgroundEffect::ALL {
             cx.update(|cx| {
                 for _ in 0..100 {
                     assert!(source.raster_image(effect, false, cx).is_none());
@@ -630,6 +789,7 @@ mod tests {
         for (light, dark) in [
             (source.ascii_pixels(true), source.ascii_pixels(false)),
             (source.scanline_pixels(true), source.scanline_pixels(false)),
+            (source.vignette_pixels(true), source.vignette_pixels(false)),
             (
                 source.halftone_pixels(60, 32, true),
                 source.halftone_pixels(60, 32, false),
@@ -658,6 +818,8 @@ mod tests {
             NewThreadBackgroundEffect::Halftone,
             NewThreadBackgroundEffect::Scanlines,
             NewThreadBackgroundEffect::Dither,
+            NewThreadBackgroundEffect::Grain,
+            NewThreadBackgroundEffect::Vignette,
         ] {
             cx.update(|cx| {
                 source.raster_image(effect, false, cx);
@@ -669,7 +831,10 @@ mod tests {
                 let light = source.raster_image(effect, true, cx).unwrap();
                 assert_eq!(
                     Arc::ptr_eq(&dark, &light),
-                    effect == NewThreadBackgroundEffect::Dither
+                    matches!(
+                        effect,
+                        NewThreadBackgroundEffect::Dither | NewThreadBackgroundEffect::Grain
+                    )
                 );
                 for _ in 0..100 {
                     assert!(Arc::ptr_eq(
@@ -683,7 +848,7 @@ mod tests {
                 }
             });
         }
-        assert_eq!(source.effects.lock().unwrap().len(), 7);
+        assert_eq!(source.effects.lock().unwrap().len(), 10);
     }
 
     #[test]
@@ -691,6 +856,8 @@ mod tests {
         let source = fixture();
         for image in [
             source.dither_pixels(60, 32),
+            source.grain_pixels(),
+            source.vignette_pixels(false),
             source.ascii_pixels(false),
             source.scanline_pixels(false),
             source.ascii_pixels(true),

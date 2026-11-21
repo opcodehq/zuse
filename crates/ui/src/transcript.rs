@@ -3811,6 +3811,7 @@ pub struct Transcript {
     /// Each instance owns separate scroll handles and list measurements, so
     /// every one must reset itself after a global Fit-mode transition.
     code_fences_generation: u64,
+    split_diffs: bool,
     /// Compact mode as last applied to this instance's row split. Render
     /// polls the setting each frame; a flip rebuilds every row.
     compact_mode: bool,
@@ -4253,6 +4254,7 @@ impl Transcript {
             #[cfg(feature = "browser-fixture")]
             fixture_open_groups: false,
             code_fences_generation: crate::settings::code_fences_generation(cx),
+            split_diffs: crate::settings::split_diffs(cx),
             compact_mode: crate::settings::transcript_compact_mode(cx),
             compact_last_elapsed: HashMap::new(),
             compact_fold_heights: HashMap::new(),
@@ -9968,6 +9970,7 @@ impl Transcript {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let diff_mode = crate::changes::DiffMode::from_split(self.split_diffs);
         let mut fold = self.folds.get(row_id).copied().unwrap_or_default();
         let file_opener = self.tool_file_opener(cx);
         // Agent/spawn chips never fold: they are their own row, always open,
@@ -10547,7 +10550,13 @@ impl Transcript {
                                         line.bg(crate::theme::hairline(0.06))
                                     }),
                             )
-                            .child(detail_body(invocation, None, &format!("{key}-call"), theme));
+                            .child(detail_body(
+                                invocation,
+                                None,
+                                &format!("{key}-call"),
+                                theme,
+                                diff_mode,
+                            ));
                     }
                     if let Some(images) = chip_images[ix].clone() {
                         panel = panel.child(
@@ -10571,6 +10580,7 @@ impl Transcript {
                                     detail_highlights[ix].clone(),
                                     &format!("{key}-out"),
                                     theme,
+                                    diff_mode,
                                 ));
                     }
                     if let Some(ChipAffordance { blob_ref, label }) = affordance {
@@ -11371,6 +11381,7 @@ fn detail_body(
     diff_highlights: Option<Arc<crate::changes::DiffHighlights>>,
     selection_key: &str,
     theme: &Theme,
+    diff_mode: crate::changes::DiffMode,
 ) -> AnyElement {
     let body = div().w_full().min_w_0().flex().flex_col().overflow_hidden();
     // Every line joins the transcript's selection, so paths, commands and
@@ -11407,6 +11418,7 @@ fn detail_body(
                 file,
                 diff_highlights,
                 theme,
+                diff_mode,
             ))
             .into_any_element(),
         ToolDetail::Stats { stats } => body
@@ -12671,8 +12683,10 @@ impl Render for Transcript {
             }
         }
         let content_width = crate::settings::transcript_width(cx);
-        if self.content_width != content_width {
+        let split_diffs = crate::settings::split_diffs(cx);
+        if self.content_width != content_width || self.split_diffs != split_diffs {
             self.content_width = content_width;
+            self.split_diffs = split_diffs;
             // The outer list viewport may not resize when only max-width
             // changes. Invalidate virtual row heights explicitly, retaining
             // their anchors and all live animation/provenance state.
@@ -14538,6 +14552,7 @@ mod tests {
                         None,
                         "probe",
                         &theme,
+                        crate::changes::DiffMode::Unified,
                     ))
             }
         }

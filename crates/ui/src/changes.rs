@@ -124,6 +124,15 @@ pub enum DiffMode {
 }
 
 impl DiffMode {
+    pub(crate) const ALL: [Self; 2] = [Self::Unified, Self::Split];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Unified => "Unified",
+            Self::Split => "Split",
+        }
+    }
+
     pub fn from_split(split: bool) -> Self {
         if split { Self::Split } else { Self::Unified }
     }
@@ -1698,6 +1707,7 @@ pub struct Changes {
     scope: DiffScope,
     /// Unified or side-by-side (toolbar toggle, persisted per user).
     mode: DiffMode,
+    mode_preference: DiffMode,
     /// Wrap long source lines instead of exposing the horizontal code plane.
     wrap_lines: bool,
     /// Comparison ref for [`DiffScope::Branch`] — preset to the repo's
@@ -1779,6 +1789,7 @@ impl Changes {
             show_git_controls: true,
             state,
             mode,
+            mode_preference: mode,
             wrap_lines: settings.diff_wrap,
             diffs: Vec::new(),
             started: false,
@@ -2742,12 +2753,21 @@ impl Changes {
     /// the scroll onto whichever file was under the viewport's top edge (row
     /// indices do not survive the re-pairing).
     fn toggle_mode(&mut self, cx: &mut Context<Self>) {
-        self.mode = self.mode.toggled();
-        self.reset_horizontal_scroll();
-        let split = self.mode.is_split();
+        let mode = self.mode.toggled();
+        self.mode_preference = mode;
         crate::settings::update(crate::settings::SavePolicy::Immediate, cx, |settings| {
-            settings.diff_split = split;
+            settings.diff_split = mode.is_split();
         });
+        self.set_mode(mode, cx);
+        cx.refresh_windows();
+    }
+
+    fn set_mode(&mut self, mode: DiffMode, cx: &mut Context<Self>) {
+        if self.mode == mode {
+            return;
+        }
+        self.mode = mode;
+        self.reset_horizontal_scroll();
         // A draft's `+` sits in a column that may not exist after the swap.
         self.hover = None;
         self.reflatten(cx);
@@ -5300,35 +5320,17 @@ pub(crate) fn render_file_body_with_syntax(
     file: &FileDiff,
     highlights: Option<Arc<DiffHighlights>>,
     theme: &Theme,
+    mode: DiffMode,
 ) -> AnyElement {
-    let mut children: Vec<AnyElement> = Vec::new();
-    let gutter_px = gutter_width(file);
-    for notice in file_notices(file) {
-        children.push(notice_row(notice, theme));
-    }
-    for hunk in &file.hunks {
-        children.push(hunk_header_row(&hunk.header, theme));
-        for line in &hunk.lines {
-            let spans = highlights
-                .as_deref()
-                .map(|highlights| highlights.spans(line))
-                .unwrap_or(&[]);
-            children.push(diff_line_row(
-                line,
-                spans,
-                theme,
-                gutter_px,
-                DiffCodeWidth::Clipped,
-                None,
-            ));
-        }
-    }
-    div()
-        .flex()
-        .flex_col()
-        .pb(px(BODY_BOTTOM_PAD))
-        .children(children)
-        .into_any_element()
+    render_file_body_upto(
+        file,
+        highlights,
+        theme,
+        f32::INFINITY,
+        mode,
+        DiffCodeWidth::Clipped,
+        None,
+    )
 }
 
 /// Build only rows that start above `max_px` so the fold tween's stand-in
@@ -5462,6 +5464,11 @@ impl Render for Changes {
             let history = self.history_pane(cx);
             history.update(cx, |history, cx| history.ensure_loaded(cx));
             return div().size_full().child(history).into_any_element();
+        }
+        let mode = DiffMode::from_split(crate::settings::split_diffs(cx));
+        if self.mode_preference != mode {
+            self.mode_preference = mode;
+            self.set_mode(mode, cx);
         }
         let theme = Theme::of(cx).clone();
         let active = self.active_diff(cx);

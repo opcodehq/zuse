@@ -6,7 +6,8 @@ use anyhow::{Context as _, Result, anyhow};
 use gpui::{App, Global};
 use zuse_theme::vscode::SourceCompilation;
 use zuse_theme::{
-    CustomThemeEntry, CustomThemeLibrary, InstallMode, ThemeRegistry, replace_custom_families,
+    CustomThemeEntry, CustomThemeLibrary, InstallMode, ThemeFamily, ThemeRegistry,
+    replace_custom_families,
 };
 
 use crate::appearance;
@@ -109,6 +110,15 @@ pub fn duplicate_as_editable(id: &str, cx: &mut App) -> Result<String> {
     persist_and_activate(state, next)?;
     reconcile_and_refresh(cx);
     Ok(duplicate)
+}
+
+pub fn create_editable(family: ThemeFamily, cx: &mut App) -> Result<String> {
+    let data_dir = cx
+        .try_global::<ThemeLibraryState>()
+        .context("custom theme library is not initialized")?
+        .data_dir
+        .clone();
+    mutate(cx, |library| library.create_editable(family, &data_dir))
 }
 
 pub fn remove(id: &str, cx: &mut App) -> Result<()> {

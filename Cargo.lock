@@ -15431,6 +15431,7 @@ version = "0.27.3"
 dependencies = [
  "anyhow",
  "clap",
+ "color",
  "json5 0.4.1",
  "plist",
  "serde",
@@ -15438,6 +15439,7 @@ dependencies = [
  "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.20",
+ "zip",
 ]
 
 [[package]]

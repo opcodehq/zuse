@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
-use std::io::{self, Write as _};
+use std::io::{self, Cursor, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, anyhow, bail};
@@ -15,6 +15,9 @@ const LIBRARY_FILE: &str = "theme-library.json";
 const MAX_LIBRARY_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_LIBRARY_ENTRIES: usize = 256;
 const MAX_LIBRARY_VARIANTS: usize = 1024;
+const MAX_THEME_JSON_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_PACKAGE_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_PACKAGE_ENTRIES: usize = 65_536;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallMode {
@@ -148,16 +151,171 @@ impl CustomThemeLibrary {
     }
 
     pub fn compile(path: &Path, family_id: &str, family_name: &str) -> Result<SourceCompilation> {
-        compile_source(
-            path,
+        let options = CompileOptions {
+            family_id: family_id.into(),
+            family_name: family_name.into(),
+            source_url: path.display().to_string(),
+            revision: "local".into(),
+            license: "User supplied".into(),
+        };
+        if path.is_file() && path.file_name().is_some_and(|name| name != "package.json") {
+            let file = fs::File::open(path)?;
+            let mut source = String::new();
+            file.take(MAX_THEME_JSON_BYTES + 1)
+                .read_to_string(&mut source)?;
+            if source.len() as u64 > MAX_THEME_JSON_BYTES {
+                bail!("theme JSON exceeds the {MAX_THEME_JSON_BYTES}-byte limit");
+            }
+            if let Ok(value) = json5::from_str(&source)
+                && let Some(compilation) =
+                    compile_own_format(&value, &path.canonicalize()?, &options.family_id)?
+            {
+                return Ok(compilation);
+            }
+        }
+        compile_source(path, options)
+    }
+
+    pub fn compile_pasted(source: &str) -> Result<SourceCompilation> {
+        if source.len() as u64 > MAX_THEME_JSON_BYTES {
+            bail!("theme JSON exceeds the {MAX_THEME_JSON_BYTES}-byte limit");
+        }
+        let source = source.trim().trim_start_matches('\u{feff}').trim();
+        let source = source
+            .strip_prefix("```")
+            .and_then(|fenced| fenced.split_once('\n'))
+            .and_then(|(_, body)| body.strip_suffix("```"))
+            .map_or(source, str::trim);
+        let value: serde_json::Value = json5::from_str(source).context("invalid theme JSON")?;
+        if let Some(compilation) = compile_own_format(&value, Path::new(""), "custom-theme")? {
+            return Ok(compilation);
+        }
+        let has_workbench_colors = value
+            .get("colors")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|colors| colors.keys().any(|key| key.contains('.')));
+        if !has_workbench_colors
+            && value.get("tokenColors").is_none()
+            && value.get("semanticTokenColors").is_none()
+        {
+            bail!("expected Zuse, T3 Code, or VS Code theme JSON");
+        }
+        let scratch = tempfile::tempdir()?;
+        let path = scratch.path().join("pasted-theme.json");
+        fs::write(&path, source)?;
+        let mut compilation = compile_source(
+            &path,
             CompileOptions {
-                family_id: family_id.into(),
-                family_name: family_name.into(),
-                source_url: path.display().to_string(),
+                family_id: "custom-theme".into(),
+                family_name: "Pasted theme".into(),
+                source_url: "clipboard".into(),
                 revision: "local".into(),
                 license: "User supplied".into(),
             },
-        )
+        )?;
+        compilation.family.name = compilation.family.variants[0].name.clone();
+        compilation.path.clear();
+        for report in compilation.reports.values_mut() {
+            report.source_files = vec!["clipboard".into()];
+        }
+        Ok(compilation)
+    }
+
+    pub fn compile_community_package(
+        bytes: &[u8],
+        options: CompileOptions,
+    ) -> Result<SourceCompilation> {
+        if bytes.len() as u64 > MAX_PACKAGE_BYTES {
+            bail!("theme package exceeds the download limit");
+        }
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes))?;
+        if archive.len() > MAX_PACKAGE_ENTRIES {
+            bail!("theme package contains too many files");
+        }
+        let theme_dirs = declared_theme_dirs(&mut archive);
+        let scratch = tempfile::tempdir()?;
+        let root = scratch.path().canonicalize()?;
+        let mut available = MAX_PACKAGE_BYTES;
+        let mut paths = HashSet::new();
+        for index in 0..archive.len() {
+            let entry = archive.by_index(index)?;
+            if !entry.is_file() || entry.is_symlink() {
+                continue;
+            }
+            let Some(path) = entry.enclosed_name() else {
+                continue;
+            };
+            let Ok(relative) = path.strip_prefix("extension") else {
+                continue;
+            };
+            if !relative
+                .components()
+                .all(|component| matches!(component, std::path::Component::Normal(_)))
+                || relative
+                    .components()
+                    .any(|part| part.as_os_str() == "node_modules")
+            {
+                continue;
+            }
+            // Only the manifest and the folders its themes live in (which
+            // covers their `include` siblings) count against the limits.
+            let wanted = relative == Path::new("package.json")
+                || theme_dirs.as_ref().is_none_or(|dirs| {
+                    relative
+                        .parent()
+                        .is_some_and(|parent| dirs.iter().any(|dir| parent.starts_with(dir)))
+                });
+            if !wanted {
+                continue;
+            }
+            let extension = relative
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .unwrap_or_default();
+            if !["json", "jsonc", "tmTheme", "plist"]
+                .iter()
+                .any(|ext| ext.eq_ignore_ascii_case(extension))
+            {
+                continue;
+            }
+            if !paths.insert(relative.to_string_lossy().to_lowercase()) {
+                bail!("theme package contains duplicate paths");
+            }
+            let limit = available.min(MAX_THEME_JSON_BYTES);
+            if entry.size() > limit {
+                bail!("theme package exceeds the extracted data limit");
+            }
+            let destination = root.join(relative);
+            fs::create_dir_all(destination.parent().context("theme file has no parent")?)?;
+            let mut output = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&destination)?;
+            let size = io::copy(&mut entry.take(limit + 1), &mut output)?;
+            if size > limit {
+                bail!("theme package exceeds the extracted data limit");
+            }
+            available -= size;
+        }
+        let manifest = root.join("package.json");
+        if !manifest.is_file() {
+            bail!("theme package is missing its manifest");
+        }
+        let mut compilation = compile_source(&manifest, options)?;
+        compilation.path.clear();
+        for failure in &mut compilation.failures {
+            if let Ok(relative) = failure.path.strip_prefix(&root) {
+                failure.path = relative.to_path_buf();
+            }
+        }
+        for report in compilation.reports.values_mut() {
+            for source in &mut report.source_files {
+                if let Ok(relative) = Path::new(source).strip_prefix(&root) {
+                    *source = relative.to_string_lossy().into_owned();
+                }
+            }
+        }
+        Ok(compilation)
     }
 
     pub fn install(
@@ -203,9 +361,12 @@ impl CustomThemeLibrary {
             }
         }
         let path = compilation.path;
+        if mode == InstallMode::Link && path.as_os_str().is_empty() {
+            bail!("only local sources can be linked");
+        }
         let source = match (mode, compilation.source_kind) {
             (InstallMode::Snapshot, _) => CustomThemeSource::ImportedSnapshot {
-                imported_from: Some(path),
+                imported_from: (!path.as_os_str().is_empty()).then_some(path),
             },
             (InstallMode::Link, DetectedThemeSource::File) => {
                 CustomThemeSource::LinkedFile { path }
@@ -382,24 +543,54 @@ impl CustomThemeLibrary {
     /// opens that file in the system file manager; Reload validates it and
     /// preserves the last known good family if an edit is invalid.
     pub fn duplicate_as_editable(&mut self, id: &str, data_dir: &Path) -> Result<String> {
-        let original = self
+        let mut family = self
             .entries
             .iter()
             .find(|entry| entry.id == id)
-            .cloned()
+            .map(|entry| entry.family.clone())
+            .or_else(|| {
+                ThemeRegistry::builtin()
+                    .families
+                    .iter()
+                    .find(|family| family.id == id)
+                    .cloned()
+            })
             .ok_or_else(|| anyhow!("unknown custom theme `{id}`"))?;
-        self.ensure_capacity_for(original.family.variants.len())?;
-        let new_id = unique_id(
-            &format!("{}-copy", original.id),
-            self.entries.iter().map(|entry| entry.id.as_str()),
-        );
-        let mut family = original.family;
         family.name = format!("{} Copy", family.name);
-        rekey_family(&mut family, &new_id);
+        self.create_editable(family, data_dir)
+    }
 
+    pub fn create_editable(&mut self, mut family: ThemeFamily, data_dir: &Path) -> Result<String> {
+        if family.id.is_empty()
+            || !family
+                .id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            bail!("invalid editable theme identifier");
+        }
+        self.ensure_capacity_for(family.variants.len())?;
         let editable_dir = data_dir.join("custom-themes");
         fs::create_dir_all(&editable_dir)
             .with_context(|| format!("could not create {}", editable_dir.display()))?;
+        let used_files = fs::read_dir(&editable_dir)?
+            .filter_map(Result::ok)
+            .filter_map(|file| file.file_name().into_string().ok())
+            .filter_map(|name| name.strip_suffix(".zuse-theme.json").map(str::to_owned))
+            .collect::<Vec<_>>();
+        let new_id = unique_id(
+            &format!("{}-copy", family.id),
+            self.entries
+                .iter()
+                .map(|entry| entry.id.as_str())
+                .chain(used_files.iter().map(String::as_str)),
+        );
+        rekey_family(&mut family, &new_id);
+        let errors = validation_errors(&family);
+        if !errors.is_empty() {
+            bail!("theme validation failed: {}", errors.join("; "));
+        }
+
         let path = editable_dir.join(format!("{new_id}.zuse-theme.json"));
         replace_file_recoverably(&path, &serde_json::to_vec_pretty(&family)?)?;
 
@@ -462,6 +653,77 @@ impl CustomThemeLibrary {
         }
         Ok(())
     }
+}
+
+/// The folders holding the themes `extension/package.json` contributes, or
+/// `None` when the manifest is missing or unreadable (extract everything).
+fn declared_theme_dirs<R: io::Read + io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+) -> Option<Vec<PathBuf>> {
+    let entry = archive.by_name("extension/package.json").ok()?;
+    let mut manifest = String::new();
+    entry
+        .take(MAX_THEME_JSON_BYTES)
+        .read_to_string(&mut manifest)
+        .ok()?;
+    let manifest: serde_json::Value = json5::from_str(&manifest).ok()?;
+    let dirs = manifest["contributes"]["themes"]
+        .as_array()?
+        .iter()
+        .filter_map(|theme| theme["path"].as_str())
+        .map(|path| {
+            Path::new(path.trim_start_matches("./"))
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>();
+    (!dirs.is_empty()).then_some(dirs)
+}
+
+/// A Zuse export or a T3 Code palette, parsed leniently (comments and
+/// trailing commas allowed); `None` hands the source to the VS Code compiler.
+fn compile_own_format(
+    value: &serde_json::Value,
+    path: &Path,
+    family_id: &str,
+) -> Result<Option<SourceCompilation>> {
+    match compile_native(value, path, family_id)? {
+        Some(compilation) => Ok(Some(compilation)),
+        None => crate::t3::compile(value, path, family_id),
+    }
+}
+
+fn compile_native(
+    value: &serde_json::Value,
+    path: &Path,
+    family_id: &str,
+) -> Result<Option<SourceCompilation>> {
+    if !value
+        .get("variants")
+        .is_some_and(serde_json::Value::is_array)
+    {
+        return Ok(None);
+    }
+    let mut family: ThemeFamily =
+        serde_json::from_value(value.clone()).context("invalid Zuse theme JSON")?;
+    if family.variants.is_empty() || family.variants.len() > MAX_LIBRARY_VARIANTS {
+        bail!("a Zuse theme must contain between 1 and {MAX_LIBRARY_VARIANTS} variants");
+    }
+    if family.id != family_id {
+        rekey_family(&mut family, family_id);
+    }
+    let errors = validation_errors(&family);
+    if !errors.is_empty() {
+        bail!("theme validation failed: {}", errors.join("; "));
+    }
+    Ok(Some(SourceCompilation {
+        path: path.into(),
+        source_kind: DetectedThemeSource::File,
+        family,
+        reports: BTreeMap::new(),
+        failures: Vec::new(),
+    }))
 }
 
 fn backup_path(path: &Path) -> PathBuf {
@@ -578,6 +840,143 @@ fn rekey_family(family: &mut ThemeFamily, new_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn imports_fenced_t3_palette_with_an_opposite_variant() {
+        let json = r##"{"version":1,"name":"Aurora","appearance":"dark","colors":{
+          "canvas":"rgb(16 24 35)","accent":"oklch(76% 0.11 255)","text":"#e6eef9"
+        },"variants":{"light":{"canvas":"#f4f7fb","text":"#27364a"}}}"##;
+        let pasted = CustomThemeLibrary::compile_pasted(&format!("```json\n{json}\n```")).unwrap();
+        assert_eq!(pasted.family.name, "Aurora");
+        assert_eq!(pasted.family.variants.len(), 2);
+        assert_eq!(
+            pasted.family.variants[0].colors.background,
+            "#101823".parse().unwrap()
+        );
+        assert_eq!(
+            pasted.family.variants[1].appearance,
+            crate::Appearance::Light
+        );
+        // The light variant sets no accent, so it inherits the theme's blue
+        // rather than falling back to Zuse's olive.
+        let zuse_light = ThemeRegistry::builtin().variant("zuse-light").unwrap();
+        assert_ne!(
+            pasted.family.variants[1].accent.primary,
+            zuse_light.accent.primary
+        );
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("aurora.json");
+        fs::write(&path, json).unwrap();
+        let local = CustomThemeLibrary::compile(&path, "custom-aurora", "Aurora").unwrap();
+        assert_eq!(local.path, path.canonicalize().unwrap());
+        assert_eq!(
+            local.family.variants[0].accent,
+            pasted.family.variants[0].accent
+        );
+    }
+
+    #[test]
+    fn native_export_with_comments_is_still_a_zuse_theme() {
+        let original = ThemeRegistry::builtin()
+            .families
+            .iter()
+            .find(|family| family.id == "nord")
+            .unwrap();
+        let json = serde_json::to_string_pretty(original).unwrap();
+        let commented = format!(
+            "// tweaked by hand\n{}",
+            json.replacen('{', "{ /* hi */", 1)
+        );
+        let compilation = CustomThemeLibrary::compile_pasted(&commented).unwrap();
+        assert_eq!(compilation.family.name, original.name);
+        assert_eq!(
+            compilation.family.variants[0].colors,
+            original.variants[0].colors
+        );
+    }
+
+    #[test]
+    fn native_copy_can_be_pasted_installed_and_exported_again() {
+        let original = ThemeRegistry::builtin()
+            .families
+            .iter()
+            .find(|family| family.id == "observatory")
+            .unwrap();
+        let json = serde_json::to_string(original).unwrap();
+        let compilation = CustomThemeLibrary::compile_pasted(&json).unwrap();
+        assert!(compilation.path.as_os_str().is_empty());
+        assert_eq!(compilation.family.name, original.name);
+        assert_eq!(compilation.family.variants.len(), 2);
+
+        let mut library = CustomThemeLibrary::default();
+        assert!(
+            library
+                .install(compilation.clone(), &[], InstallMode::Link)
+                .is_err()
+        );
+        let id = library
+            .install(compilation, &[], InstallMode::Snapshot)
+            .unwrap();
+        let installed = library.entry(&id).unwrap();
+        assert!(installed.source.path().is_none());
+        assert_eq!(
+            installed.family.variants[0].colors,
+            original.variants[0].colors
+        );
+        assert_eq!(
+            installed.family.variants[1].colors,
+            original.variants[1].colors
+        );
+    }
+
+    #[test]
+    fn community_package_imports_declared_theme_data() {
+        let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        archive
+            .start_file("extension/package.json", options)
+            .unwrap();
+        archive.write_all(br#"{"displayName":"Community Theme","main":"./index.js","contributes":{"themes":[{"label":"Community Dark","uiTheme":"vs-dark","path":"themes/dark.json"}]}}"#).unwrap();
+        archive
+            .start_file("extension/themes/dark.json", options)
+            .unwrap();
+        archive
+            .write_all(
+                br##"{"colors":{"editor.background":"#161625","editor.foreground":"#e2e2f0"}}"##,
+            )
+            .unwrap();
+        // Bundled dependencies and data outside the theme folders must not
+        // count against the extraction limits.
+        archive
+            .start_file("extension/node_modules/big/data.json", options)
+            .unwrap();
+        archive
+            .write_all(&vec![b' '; MAX_THEME_JSON_BYTES as usize + 1])
+            .unwrap();
+        archive
+            .start_file("extension/i18n/huge.json", options)
+            .unwrap();
+        archive
+            .write_all(&vec![b' '; MAX_THEME_JSON_BYTES as usize + 1])
+            .unwrap();
+        let bytes = archive.finish().unwrap().into_inner();
+        let compiled = CustomThemeLibrary::compile_community_package(
+            &bytes,
+            CompileOptions {
+                family_id: "custom-community-theme".into(),
+                family_name: "Community Theme".into(),
+                source_url: "https://open-vsx.org/extension/sample/theme".into(),
+                revision: "1.0.0".into(),
+                license: "MIT".into(),
+            },
+        )
+        .unwrap();
+        assert!(compiled.path.as_os_str().is_empty());
+        let variant = &compiled.family.variants[0];
+        assert_eq!(variant.name, "Community Dark");
+        assert_eq!(variant.colors.background, "#161625".parse().unwrap());
+        assert_eq!(variant.source.revision, "1.0.0");
+    }
 
     fn package(dir: &Path) {
         fs::create_dir_all(dir.join("themes")).unwrap();

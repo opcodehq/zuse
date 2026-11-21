@@ -225,10 +225,11 @@ impl Shell {
             .new_thread_composer_background
             .as_ref()
             .and_then(|background| {
-                crate::new_thread_background_effects::prepare(
+                crate::new_thread_background_effects::prepare_look(
                     ui_settings.new_thread_background_effect,
                     &theme,
                     std::path::Path::new(&background.path),
+                    ui_settings.wallpaper_look,
                     cx,
                 )
             });
@@ -240,13 +241,17 @@ impl Shell {
         // The new-thread hero's artwork with only its soft bottom fade: no
         // cutout around the orb, so no light channel splits the picture.
         let hero = artwork.map(|artwork| {
+            let look = ui_settings.wallpaper_look;
             div()
                 .absolute()
                 .top_0()
                 .left_0()
                 .w(px(width))
                 .h(px(new_thread_background_height(f32::from(viewport.height))))
-                .opacity(new_thread_background_opacity(theme.is_frost()))
+                .opacity(
+                    new_thread_background_opacity(theme.is_frost()) * f32::from(look.opacity)
+                        / 100.0,
+                )
                 .child(
                     gpui::canvas(
                         |_, _, _| {},
@@ -257,6 +262,7 @@ impl Shell {
                                 bounds,
                                 adjustment,
                                 false,
+                                look,
                                 window,
                             );
                         },

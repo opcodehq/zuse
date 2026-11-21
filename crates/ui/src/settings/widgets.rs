@@ -467,7 +467,7 @@ pub fn option_card_row() -> gpui::Div {
 }
 
 /// Default height of an [`option_card`] preview frame.
-pub const OPTION_CARD_HEIGHT: f32 = 148.0;
+pub const OPTION_CARD_HEIGHT: f32 = 92.0;
 /// Corner radius of the preview frame.
 ///
 /// Public because the preview has to round *itself* to this. gpui content masks
@@ -1303,6 +1303,7 @@ pub fn select<V: 'static>(
         menu_width: None,
         font: None,
         heading: None,
+        compact: false,
         align: popover::MenuAlign::End,
         reach: Rc::new(reach),
         on_select: None,
@@ -1319,6 +1320,7 @@ pub struct Select<V: 'static> {
     menu_width: Option<f32>,
     font: Option<SharedString>,
     heading: Option<&'static str>,
+    compact: bool,
     align: popover::MenuAlign,
     reach: SelectReach<V>,
     on_select: Option<SelectHandler<V>>,
@@ -1347,6 +1349,11 @@ fn commit_select<V: 'static>(
 }
 
 impl<V: 'static> Select<V> {
+    pub fn compact(mut self) -> Self {
+        self.compact = true;
+        self
+    }
+
     pub fn options(
         mut self,
         options: impl IntoIterator<Item = SelectOption>,
@@ -1407,6 +1414,7 @@ impl<V: 'static> Select<V> {
             menu_width,
             font,
             heading,
+            compact,
             align,
             reach,
             on_select,
@@ -1497,6 +1505,12 @@ impl<V: 'static> Select<V> {
                 let reach = reach.clone();
                 let on_select = on_select.clone();
                 select_row(&theme, ix == selected, ix == highlighted, row_id.clone())
+                    .when(compact, |row| {
+                        row.py(px(4.0))
+                            .gap(px(7.0))
+                            .rounded(px(5.0))
+                            .text_size(crate::typography::text_xs())
+                    })
                     .id(row_id.clone())
                     .debug_selector(move || row_id.to_string())
                     .role(gpui::Role::MenuItemRadio)
@@ -1525,6 +1539,7 @@ impl<V: 'static> Select<V> {
                     .into_any_element()
             });
             let menu = select_menu(&theme)
+                .when(compact, |menu| menu.p(px(3.0)).rounded(px(8.0)))
                 .w(px(menu_width
                     .or(width)
                     .unwrap_or(0.0)

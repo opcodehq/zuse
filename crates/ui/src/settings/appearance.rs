@@ -1,5 +1,4 @@
-//! Settings → Appearance: system behavior, independent light/dark variants,
-//! and the optional interactive accent overlay.
+//! Settings → Appearance: mode, themes, background, code, motion and fonts.
 
 use crate::localization::message as tr;
 use std::cell::Cell;
@@ -11,13 +10,13 @@ use zuse_i18n::messages as msg;
 
 use gpui::{
     AnyElement, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla, IntoElement,
-    KeyDownEvent, ObjectFit, Pixels, Point, Render, ScrollDelta, SharedString, StyledImage as _,
-    Subscription, Window, div, img, point, prelude::*, px,
+    KeyDownEvent, Pixels, Point, Render, ScrollDelta, SharedString, Subscription, Window, div,
+    point, prelude::*, px,
 };
 use zuse_theme::vscode::{ImportReport, SourceCompilation};
 use zuse_theme::{
-    AccentPreset, AccentSelection, CustomThemeEntry, CustomThemeStatus, InstallMode,
-    SurfacePreference, SurfaceTreatment, ThemeRegistry, ThemeSelection,
+    AccentSelection, CustomThemeEntry, CustomThemeStatus, InstallMode, SurfacePreference,
+    SurfaceTreatment, ThemeRegistry, ThemeSelection,
 };
 
 use crate::appearance::{self, AppearanceMode};
@@ -30,16 +29,43 @@ use crate::theme::{Appearance, Theme};
 use crate::theme_library;
 use crate::typography::{self, FontAvailability, UiFontFamily, UiFontSize};
 
+use super::theme_community::{self, CommunityTheme};
+
+#[path = "appearance_wallpaper.rs"]
+mod wallpaper_panel;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ImportSource {
+    File,
+    Json,
+    Community,
+}
+
 struct ImportDialog {
     input: Entity<ComposerInput>,
-    _events: Subscription,
+    json_input: Entity<ComposerInput>,
+    _events: [Subscription; 2],
     focus: FocusHandle,
     focus_pending: bool,
+    source: ImportSource,
+    creating: bool,
     mode: InstallMode,
     compilation: Option<SourceCompilation>,
     selected: HashSet<String>,
     review_variant: Option<String>,
     error: Option<SharedString>,
+    results: Option<Vec<CommunityTheme>>,
+    pending: Option<u64>,
+}
+
+impl ImportDialog {
+    fn clear_preview(&mut self) {
+        self.compilation = None;
+        self.selected.clear();
+        self.review_variant = None;
+        self.error = None;
+        self.pending = None;
+    }
 }
 
 struct BackgroundAdjustmentDialog {
@@ -313,12 +339,17 @@ pub struct AppearancePage {
     dark_theme_select: widgets::SelectState,
     surface_select: widgets::SelectState,
     background_effect_select: widgets::SelectState,
+    code_layout_size_select: widgets::SelectState,
+    diff_view_select: widgets::SelectState,
+    diff_colors_select: widgets::SelectState,
     reduce_motion_select: widgets::SelectState,
     import_dialog: Option<ImportDialog>,
+    import_request: u64,
     background_adjustment_dialog: Option<BackgroundAdjustmentDialog>,
     review_entry: Option<String>,
     library_error: Option<SharedString>,
     background_error: Option<SharedString>,
+    compare_wallpaper: bool,
 }
 
 impl AppearancePage {
@@ -580,12 +611,17 @@ impl AppearancePage {
             dark_theme_select: widgets::SelectState::default(),
             surface_select: widgets::SelectState::default(),
             background_effect_select: widgets::SelectState::default(),
+            code_layout_size_select: widgets::SelectState::default(),
+            diff_view_select: widgets::SelectState::default(),
+            diff_colors_select: widgets::SelectState::default(),
             reduce_motion_select: widgets::SelectState::default(),
             import_dialog: None,
+            import_request: 0,
             background_adjustment_dialog: None,
             review_entry: None,
             library_error: None,
             background_error: None,
+            compare_wallpaper: false,
         }
     }
 
@@ -873,73 +909,131 @@ impl AppearancePage {
 
     fn open_import(&mut self, cx: &mut Context<Self>) {
         let input = cx.new(|cx| {
-            ComposerInput::with_context(
-                "Theme file, package.json, or extension folder",
-                "PaletteSearch",
-                cx,
-            )
+            ComposerInput::with_context("Search themes…", "PaletteSearch", cx)
+                .with_single_line()
+                .with_tab_stop()
         });
-        let events = cx.subscribe(&input, |this: &mut Self, _, event, cx| match event {
-            ComposerInputEvent::Edited => {
-                let source = this
-                    .import_dialog
-                    .as_ref()
-                    .map(|dialog| PathBuf::from(dialog.input.read(cx).text().trim()));
-                if let Some(dialog) = this.import_dialog.as_mut()
-                    && dialog
-                        .compilation
-                        .as_ref()
-                        .zip(source.as_ref())
-                        .is_some_and(|(compilation, source)| compilation.path != *source)
-                {
-                    dialog.compilation = None;
-                    dialog.selected.clear();
-                    dialog.review_variant = None;
-                    dialog.error = None;
-                    cx.notify();
+        let json_input = cx.new(|cx| {
+            ComposerInput::new(JSON_SAMPLE, cx)
+                .with_enter_newline()
+                .with_viewport_height(JSON_FIELD_HEIGHT + 60.0)
+                .with_tab_stop()
+        });
+        let events = [&input, &json_input].map(|field| {
+            cx.subscribe(field, |this: &mut Self, _, event, cx| {
+                if let Some(dialog) = this.import_dialog.as_mut() {
+                    match event {
+                        ComposerInputEvent::Edited => {
+                            dialog.clear_preview();
+                            dialog.results = None;
+                            cx.notify();
+                        }
+                        ComposerInputEvent::Submitted => this.submit_import(cx),
+                        _ => {}
+                    }
                 }
-            }
-            ComposerInputEvent::Submitted => {
-                if this
-                    .import_dialog
-                    .as_ref()
-                    .is_some_and(|dialog| dialog.compilation.is_some())
-                {
-                    this.finish_import(cx);
-                } else {
-                    this.compile_import(cx);
-                }
-            }
-            _ => {}
+            })
         });
         self.import_dialog = Some(ImportDialog {
             input,
+            json_input,
             _events: events,
             focus: cx.focus_handle(),
             focus_pending: true,
+            source: ImportSource::Json,
+            creating: false,
             mode: InstallMode::Snapshot,
             compilation: None,
             selected: HashSet::new(),
             review_variant: None,
             error: None,
+            results: None,
+            pending: None,
         });
         cx.notify();
     }
 
-    fn compile_import(&mut self, cx: &mut Context<Self>) {
+    fn switch_import_source(&mut self, source: ImportSource, cx: &mut Context<Self>) {
         let Some(dialog) = self.import_dialog.as_mut() else {
             return;
         };
-        let source = dialog.input.read(cx).text().trim().to_owned();
-        if source.is_empty() {
-            dialog.error = Some("Choose a local theme file or extension folder.".into());
-            cx.notify();
+        if dialog.source == source && !dialog.creating {
             return;
         }
-        let path = PathBuf::from(&source);
-        let family_name = source_name(&path);
-        let family_id = format!("custom-{}", slug(&family_name));
-        match theme_library::compile(&path, &family_id, &family_name) {
+        dialog.source = source;
+        dialog.creating = false;
+        dialog.mode = InstallMode::Snapshot;
+        dialog.focus_pending = true;
+        dialog.clear_preview();
+        dialog.results = None;
+        cx.notify();
+    }
+
+    fn create_from_current_theme(&mut self, cx: &mut Context<Self>) {
+        let registry = ThemeRegistry::active();
+        let Some(mut family) = registry
+            .families
+            .into_iter()
+            .find(|family| family.id == Theme::of(cx).family_id.as_ref())
+        else {
+            return;
+        };
+        family.name = format!("{} Copy", family.name);
+        for variant in &mut family.variants {
+            variant.name = format!("{} Copy", variant.name);
+        }
+        let Ok(json) = serde_json::to_string_pretty(&family) else {
+            return;
+        };
+        self.switch_import_source(ImportSource::Json, cx);
+        if let Some(dialog) = self.import_dialog.as_mut() {
+            dialog.creating = true;
+            dialog
+                .json_input
+                .update(cx, |field, cx| field.set_text(json, cx));
+        }
+        cx.notify();
+    }
+
+    fn submit_import(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.import_dialog.as_ref() else {
+            return;
+        };
+        if dialog.pending.is_some() {
+            return;
+        }
+        if dialog.compilation.is_some() {
+            self.finish_import(cx);
+        } else if dialog.source == ImportSource::Community {
+            self.search_community(cx);
+        } else {
+            self.compile_import(cx);
+        }
+    }
+
+    fn compile_import(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.import_dialog.as_ref() else {
+            return;
+        };
+        let result = match dialog.source {
+            ImportSource::Json => zuse_theme::CustomThemeLibrary::compile_pasted(
+                dialog.json_input.read(cx).text().trim(),
+            ),
+            ImportSource::File | ImportSource::Community => return,
+        };
+        self.set_import_preview(result, cx);
+    }
+
+    fn set_import_preview(
+        &mut self,
+        result: anyhow::Result<SourceCompilation>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(dialog) = self.import_dialog.as_mut() else {
+            return;
+        };
+        dialog.clear_preview();
+        match result {
             Ok(compilation) => {
                 dialog.selected = compilation
                     .family
@@ -947,18 +1041,103 @@ impl AppearancePage {
                     .iter()
                     .map(|variant| variant.id.clone())
                     .collect();
-                // Mapping diagnostics are useful, but they are an advanced
-                // inspection surface rather than part of the happy path.
-                dialog.review_variant = None;
                 dialog.compilation = Some(compilation);
-                dialog.error = None;
             }
             Err(error) => dialog.error = Some(error.to_string().into()),
         }
         cx.notify();
     }
 
+    fn start_import_request(&mut self, cx: &mut Context<Self>) -> Option<u64> {
+        let dialog = self.import_dialog.as_mut()?;
+        dialog.clear_preview();
+        self.import_request = self.import_request.wrapping_add(1);
+        dialog.pending = Some(self.import_request);
+        cx.notify();
+        Some(self.import_request)
+    }
+
+    fn search_community(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.import_dialog.as_mut() else {
+            return;
+        };
+        let query = dialog.input.read(cx).text().trim().to_owned();
+        if query.is_empty() || query.chars().count() > 120 {
+            dialog.error = Some("Enter a theme name of up to 120 characters.".into());
+            cx.notify();
+            return;
+        }
+        dialog.results = None;
+        let Some(request) = self.start_import_request(cx) else {
+            return;
+        };
+        let job = gpui_tokio::Tokio::spawn(cx, theme_community::search(query));
+        cx.spawn(async move |page, cx| {
+            let result = job
+                .await
+                .map_err(anyhow::Error::from)
+                .and_then(|result| result);
+            let _ = page.update(cx, |page, cx| {
+                if let Some(dialog) = page
+                    .import_dialog
+                    .as_mut()
+                    .filter(|dialog| dialog.pending == Some(request))
+                {
+                    dialog.pending = None;
+                    match result {
+                        Ok(results) => dialog.results = Some(results),
+                        Err(error) => {
+                            dialog.error =
+                                Some(format!("Could not search Open VSX: {error}").into())
+                        }
+                    }
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn load_community_theme(&mut self, theme: CommunityTheme, cx: &mut Context<Self>) {
+        let Some(request) = self.start_import_request(cx) else {
+            return;
+        };
+        let job = gpui_tokio::Tokio::spawn(cx, theme_community::download(theme));
+        cx.spawn(async move |page, cx| {
+            let result = match job.await {
+                Ok(Ok((bytes, options))) => {
+                    cx.background_executor()
+                        .spawn(async move { theme_community::compile(&bytes, options) })
+                        .await
+                }
+                Ok(Err(error)) => Err(error),
+                Err(error) => Err(error.into()),
+            };
+            let _ = page.update(cx, |page, cx| {
+                if page
+                    .import_dialog
+                    .as_ref()
+                    .is_some_and(|dialog| dialog.pending == Some(request))
+                {
+                    page.set_import_preview(result, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
     fn choose_import_source(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self
+            .import_dialog
+            .as_mut()
+            .filter(|dialog| dialog.pending.is_none())
+        else {
+            return;
+        };
+        self.import_request = self.import_request.wrapping_add(1);
+        let request = self.import_request;
+        dialog.pending = Some(request);
+        cx.notify();
         let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: true,
             directories: true,
@@ -970,16 +1149,37 @@ impl AppearancePage {
                 Ok(Ok(Some(mut paths))) => paths.pop(),
                 _ => None,
             };
-            let Some(path) = path else {
-                return;
+            let result = if let Some(path) = path {
+                Some(
+                    cx.background_executor()
+                        .spawn(async move {
+                            let name = source_name(&path);
+                            let id = format!("custom-{}", slug(&name));
+                            theme_library::compile(&path, &id, &name)
+                        })
+                        .await,
+                )
+            } else {
+                None
             };
             let _ = this.update(cx, |page, cx| {
-                if let Some(dialog) = page.import_dialog.as_mut() {
-                    dialog.input.update(cx, |input, cx| {
-                        input.set_text(path.display().to_string(), cx)
-                    });
+                if let Some(dialog) = page
+                    .import_dialog
+                    .as_mut()
+                    .filter(|dialog| dialog.pending == Some(request))
+                {
+                    dialog.pending = None;
+                    if let Some(result) = result {
+                        dialog.source = if result.is_ok() {
+                            ImportSource::File
+                        } else {
+                            ImportSource::Json
+                        };
+                        dialog.mode = InstallMode::Snapshot;
+                        page.set_import_preview(result, cx);
+                    }
+                    cx.notify();
                 }
-                page.compile_import(cx);
             });
         })
         .detach();
@@ -1230,9 +1430,20 @@ impl AppearancePage {
         let Some(compilation) = dialog.compilation.take() else {
             return;
         };
-        let selected = dialog.selected.iter().cloned().collect::<Vec<_>>();
-        match theme_library::install(compilation.clone(), &selected, dialog.mode, cx) {
-            Ok(_) => self.import_dialog = None,
+        let result = if dialog.creating {
+            let mut family = compilation.family.clone();
+            family
+                .variants
+                .retain(|variant| dialog.selected.contains(&variant.id));
+            theme_library::create_editable(family, cx)
+        } else {
+            let selected = dialog.selected.iter().cloned().collect::<Vec<_>>();
+            theme_library::install(compilation.clone(), &selected, dialog.mode, cx)
+        };
+        match result {
+            Ok(_) => {
+                self.import_dialog = None;
+            }
             Err(error) => {
                 dialog.compilation = Some(compilation);
                 dialog.error = Some(error.to_string().into());
@@ -1273,7 +1484,7 @@ fn source_name(path: &Path) -> String {
         .to_owned()
 }
 
-fn slug(value: &str) -> String {
+pub(super) fn slug(value: &str) -> String {
     let mut result = String::new();
     let mut separator = false;
     for character in value.chars().flat_map(char::to_lowercase) {
@@ -1383,13 +1594,6 @@ fn bar(fraction: f32, tone: Hsla) -> gpui::Div {
         .bg(tone)
 }
 
-fn accent_helper(accent: AccentSelection) -> String {
-    match accent {
-        AccentSelection::ThemeDefault => "Theme default".into(),
-        AccentSelection::Preset(preset) => preset.label().into(),
-    }
-}
-
 fn surface_label(surface: SurfacePreference) -> &'static str {
     match surface {
         SurfacePreference::ThemeDefault => "Theme default",
@@ -1428,6 +1632,75 @@ enum Corners {
     All,
     Left,
     Right,
+}
+
+fn selection_tone(theme: &Theme) -> Hsla {
+    let accent = if theme.variant_id.as_ref() == "zuse-light" {
+        gpui::rgb(0x526f15).into()
+    } else {
+        theme.accent
+    };
+    if crate::theme::contrast_ratio(accent, theme.surface_card) >= 4.5 {
+        accent
+    } else {
+        theme.text_strong
+    }
+}
+
+fn workspace_thumbnail(theme: &Theme) -> gpui::Div {
+    let stroke = theme.text.opacity(0.18);
+    div()
+        .flex()
+        .size_full()
+        .rounded(px(7.0))
+        .overflow_hidden()
+        .bg(theme.bg)
+        .child(
+            div()
+                .w(gpui::relative(0.23))
+                .flex_none()
+                .flex()
+                .flex_col()
+                .gap(px(4.0))
+                .p(px(7.0))
+                .bg(theme.surface)
+                .child(bar(0.54, theme.accent))
+                .child(bar(1.0, stroke))
+                .child(bar(0.68, stroke)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .justify_between()
+                .gap(px(9.0))
+                .p(px(8.0))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.0))
+                        .child(bar(0.53, theme.text.opacity(0.62)))
+                        .child(bar(0.86, stroke))
+                        .child(bar(0.69, stroke)),
+                )
+                .child(
+                    div()
+                        .h(px(16.0))
+                        .rounded(px(5.0))
+                        .border_1()
+                        .border_color(stroke)
+                        .bg(theme.surface_card)
+                        .px(px(4.0))
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(bar(0.36, stroke))
+                        .child(div().size(px(7.0)).rounded(px(2.0)).bg(theme.accent)),
+                ),
+        )
 }
 
 fn miniature(theme: &Theme, corners: Corners) -> AnyElement {
@@ -1533,6 +1806,11 @@ fn model_appearance(appearance: Appearance) -> zuse_theme::Appearance {
     }
 }
 
+/// The paste box's resting height: tall enough for the sample to read as one.
+const JSON_FIELD_HEIGHT: f32 = 150.0;
+/// Shown in the empty paste box, so the expected shape is visible up front.
+const JSON_SAMPLE: &str = "{\n  \"version\": 1,\n  \"name\": \"Aurora\",\n  \"appearance\": \"dark\",\n  \"colors\": { \"canvas\": \"#0f1115\", \"accent\": \"#7aa2f7\" }\n}";
+
 fn palette_preview(theme: &Theme) -> gpui::Div {
     div()
         .flex_none()
@@ -1548,12 +1826,64 @@ fn palette_preview(theme: &Theme) -> gpui::Div {
         .child(div().w_1_3().h_full().bg(theme.accent))
 }
 
+/// A square icon-only action with its name as tooltip and accessible label,
+/// for secondary row actions that would crowd a row as text buttons.
+fn icon_button(
+    theme: &Theme,
+    glyph: &'static str,
+    label: &'static str,
+    id: String,
+    danger: bool,
+) -> gpui::Stateful<gpui::Div> {
+    use crate::tooltip::TooltipExt as _;
+    let (ink, wash) = if danger {
+        (theme.danger, theme.danger.opacity(0.12))
+    } else {
+        (theme.text_muted, theme.glass_hover())
+    };
+    div()
+        .id(SharedString::from(id))
+        .size(px(28.0))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(7.0))
+        .cursor_pointer()
+        .hover(move |s| s.bg(wash))
+        .tab_index(0)
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+        .tip(label)
+        .child(icons::icon(glyph).size(px(14.0)).text_color(ink))
+}
+
 fn compact_action(
     theme: &Theme,
     label: &str,
     id: impl Into<SharedString>,
 ) -> gpui::Stateful<gpui::Div> {
     widgets::text_action(theme, widgets::ActionTone::Outlined, label).id(id.into())
+}
+
+fn icon_action(
+    theme: &Theme,
+    glyph: &'static str,
+    label: &str,
+    id: impl Into<SharedString>,
+) -> gpui::Stateful<gpui::Div> {
+    // gpui's svg paints only its own text color; it never inherits the
+    // button's, so an uncolored glyph renders as an empty gap.
+    widgets::action_button(theme, widgets::ActionTone::Outlined)
+        .px(px(11.0))
+        .id(id.into())
+        .child(
+            icons::icon(glyph)
+                .size(px(13.0))
+                .text_color(theme.text_muted),
+        )
+        .child(SharedString::from(label.to_owned()))
 }
 
 fn import_scene_preview(variant: &zuse_theme::ThemeVariant) -> AnyElement {
@@ -1722,80 +2052,6 @@ fn report_panel(theme: &Theme, report: &ImportReport) -> impl IntoElement {
                 )))
             })),
     )
-}
-
-fn accent_swatch(
-    page_theme: &Theme,
-    selection: AccentSelection,
-    selected: bool,
-) -> gpui::Stateful<gpui::Div> {
-    let swatch_theme = Theme::for_selection(
-        page_theme.appearance,
-        page_theme.variant_id.as_ref(),
-        selection,
-        page_theme.surface_preference,
-    );
-    let sample = match selection {
-        AccentSelection::ThemeDefault => div()
-            .size_full()
-            .rounded(px(6.0))
-            .bg(swatch_theme.accent_wash)
-            .flex()
-            .items_center()
-            .justify_center()
-            .gap(px(2.0))
-            .child(
-                div()
-                    .w(px(4.0))
-                    .h(px(13.0))
-                    .rounded(px(2.0))
-                    .bg(swatch_theme.glyph.light),
-            )
-            .child(
-                div()
-                    .w(px(4.0))
-                    .h(px(16.0))
-                    .rounded(px(2.0))
-                    .bg(swatch_theme.glyph.mid),
-            )
-            .child(
-                div()
-                    .w(px(4.0))
-                    .h(px(11.0))
-                    .rounded(px(2.0))
-                    .bg(swatch_theme.glyph.deep),
-            ),
-        AccentSelection::Preset(_) => div().size_full().rounded(px(6.0)).bg(swatch_theme.accent),
-    };
-    div()
-        .id(SharedString::from(format!("accent-{}", selection.label())))
-        .aria_label(selection.label())
-        .aria_selected(selected)
-        .flex_none()
-        .w(px(30.0))
-        .h(px(34.0))
-        .pb(px(4.0))
-        .border_b_2()
-        .border_color(if selected {
-            swatch_theme.accent
-        } else {
-            gpui::transparent_black()
-        })
-        .cursor_pointer()
-        .child(
-            div()
-                .size(px(30.0))
-                .p(px(2.0))
-                .rounded(px(8.0))
-                .border_1()
-                .border_color(if selected {
-                    page_theme.border_strong
-                } else {
-                    page_theme.border
-                })
-                .bg(page_theme.surface_raised.opacity(0.42))
-                .child(sample),
-        )
 }
 
 impl AppearancePage {
@@ -1977,11 +2233,140 @@ impl AppearancePage {
                 .map(widgets::SelectOption::new),
             kind.size_ix(cx),
         )
+        .compact()
         .width(128.0)
         .font_family(fixed)
         .on_select(move |page, ix, window, cx| page.commit_size(kind, ix, window, cx))
         .render(self.size_select(kind), cx)
         .into_any_element()
+    }
+
+    fn render_code_layout(&mut self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
+        use crate::changes::{self, DiffMode};
+        use crate::settings::{self, DiffColors, SavePolicy};
+
+        let mode = DiffMode::from_split(settings::split_diffs(cx));
+        let colors = settings::diff_colors(cx);
+        let code_size = widgets::select(
+            "code-layout-font-size",
+            "Code font size",
+            theme,
+            |page: &mut Self| &mut page.code_layout_size_select,
+        )
+        .options(
+            MONO_FONT_SIZES.into_iter().map(|size| {
+                let label = if size == typography::CODE_FONT_SIZE_DEFAULT {
+                    format!("{} (Default)", format_px(size))
+                } else {
+                    format_px(size)
+                };
+                widgets::SelectOption::new(label)
+            }),
+            FontKind::Code.size_ix(cx),
+        )
+        .compact()
+        .width(148.0)
+        .on_select(|page, index, window, cx| page.commit_size(FontKind::Code, index, window, cx))
+        .render(&self.code_layout_size_select, cx);
+        let diff_view = widgets::select(
+            "code-layout-diff-view",
+            "Diff view",
+            theme,
+            |page: &mut Self| &mut page.diff_view_select,
+        )
+        .options(
+            DiffMode::ALL.map(|option| widgets::SelectOption::new(option.label())),
+            usize::from(mode.is_split()),
+        )
+        .compact()
+        .width(148.0)
+        .on_select(|_, index, _, cx| {
+            if settings::update(SavePolicy::Immediate, cx, |settings| {
+                settings.diff_split = DiffMode::ALL[index].is_split();
+            }) {
+                cx.refresh_windows();
+            }
+            cx.notify();
+        })
+        .render(&self.diff_view_select, cx);
+        let diff_colors = widgets::select(
+            "code-layout-diff-colors",
+            "Diff colors",
+            theme,
+            |page: &mut Self| &mut page.diff_colors_select,
+        )
+        .options(
+            DiffColors::ALL.map(|option| widgets::SelectOption::new(option.label())),
+            usize::from(colors == DiffColors::BlueOrange),
+        )
+        .compact()
+        .width(148.0)
+        .on_select(|_, index, _, cx| {
+            if settings::update(SavePolicy::Immediate, cx, |settings| {
+                settings.diff_colors = DiffColors::ALL[index];
+            }) {
+                appearance::apply_registry_change(cx);
+            }
+            cx.notify();
+        })
+        .render(&self.diff_colors_select, cx);
+
+        let row = |first, label, description, control: AnyElement| {
+            widgets::card_row(theme, first)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(widgets::row_title(theme, label))
+                        .child(widgets::meta_line(
+                            theme,
+                            vec![div().child(description).into_any_element()],
+                        )),
+                )
+                .child(control)
+        };
+        static SAMPLE: std::sync::OnceLock<(
+            changes::FileDiff,
+            Option<Arc<changes::DiffHighlights>>,
+        )> = std::sync::OnceLock::new();
+        let (file, highlights) = SAMPLE.get_or_init(|| {
+            let patch = "diff --git a/math.ts b/math.ts\n--- a/math.ts\n+++ b/math.ts\n@@ -1,3 +1,3 @@\n export function add(a: number, b: number) {\n-  return a - b;\n+  return a + b;\n }\n";
+            let file = changes::parse_patch(patch).remove(0);
+            let highlights = changes::excerpt_highlights(&file, zuse_syntax::LanguageId::TypeScript).map(Arc::new);
+            (file, highlights)
+        });
+        let preview = changes::render_file_body_with_syntax(file, highlights.clone(), theme, mode);
+
+        widgets::section(
+            theme,
+            "Code layout",
+            widgets::section_card(theme)
+                .mt_0()
+                .child(row(
+                    true,
+                    "Code font size",
+                    "Text size in diffs, files, and code blocks",
+                    code_size.into_any_element(),
+                ))
+                .child(row(
+                    false,
+                    "Diff view",
+                    "How code changes render in threads",
+                    diff_view.into_any_element(),
+                ))
+                .child(row(
+                    false,
+                    "Diff colors",
+                    "Blue/orange helps distinguish changes with red-green color blindness",
+                    diff_colors.into_any_element(),
+                )),
+        )
+        .child(
+            widgets::section_card(theme)
+                .mt(px(8.0))
+                .overflow_hidden()
+                .child(preview),
+        )
     }
 
     fn render_theme_selector(
@@ -1998,19 +2383,17 @@ impl AppearancePage {
         let surface = theme.surface_preference;
         let variants: Vec<_> = registry
             .variants_for(model_appearance(appearance_kind))
-            .map(|variant| (variant.id.clone(), variant.name.clone()))
             .collect();
         let selected = variants
             .iter()
-            .position(|(id, _)| *id == selected_id)
+            .position(|variant| variant.id == selected_id)
             .unwrap_or_default();
-        let options = variants.iter().map(|(id, name)| {
-            let sample =
-                Theme::for_selection(appearance_kind, id, AccentSelection::ThemeDefault, surface);
-            widgets::SelectOption::new(name.clone())
+        let options = variants.iter().map(|variant| {
+            let sample = Theme::from_variant(variant, AccentSelection::ThemeDefault, surface);
+            widgets::SelectOption::new(variant.name.clone())
                 .leading(move || palette_preview(&sample).into_any_element())
         });
-        let ids: Vec<String> = variants.iter().map(|(id, _)| id.clone()).collect();
+        let ids: Vec<String> = variants.iter().map(|variant| variant.id.clone()).collect();
         let (slug, label, heading) = if appearance_kind.is_light() {
             ("light", "Light theme", "Light themes")
         } else {
@@ -2026,12 +2409,13 @@ impl AppearancePage {
             },
         )
         .options(options, selected)
+        .compact()
         .width(218.0)
         .menu_width(260.0)
         .heading(heading)
         .on_select(move |_, ix, _, cx| {
             if let Some(id) = ids.get(ix) {
-                appearance::set_theme(appearance_kind, id.clone(), cx);
+                appearance::choose_theme(appearance_kind, id.clone(), cx);
             }
             cx.notify();
         })
@@ -2045,6 +2429,136 @@ impl AppearancePage {
         .into_any_element()
     }
 
+    fn render_theme_gallery(
+        &self,
+        theme: &Theme,
+        content_width: f32,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let registry = ThemeRegistry::active();
+        let appearance = theme.appearance;
+        let scheme = model_appearance(appearance);
+        // Every family's variant for this scheme; a family with one such
+        // variant is labelled by the family ("GitHub", not "GitHub Dark").
+        let tiles = registry
+            .families
+            .iter()
+            .flat_map(|family| {
+                let variants = family
+                    .variants
+                    .iter()
+                    .filter(move |variant| variant.appearance == scheme);
+                let single = variants.clone().count() == 1;
+                variants.map(move |variant| {
+                    let label = if single { &family.name } else { &variant.name };
+                    (label.as_str(), variant)
+                })
+            })
+            .collect::<Vec<_>>();
+        let focus = selection_tone(theme);
+        let columns = match content_width {
+            width if width >= 704.0 => 6,
+            width if width >= 600.0 => 5,
+            width if width >= 480.0 => 4,
+            width if width >= 360.0 => 3,
+            _ => 2,
+        };
+        let rows = tiles
+            .chunks(columns)
+            .map(|variants| {
+                let mut row = div().flex().gap(px(10.0));
+                for (label, variant) in variants {
+                    let id = variant.id.clone();
+                    let selected = theme.variant_id.as_ref() == id;
+                    let sample = Theme::from_variant(
+                        variant,
+                        AccentSelection::ThemeDefault,
+                        SurfacePreference::ThemeDefault,
+                    );
+                    row = row.child(
+                        div()
+                            .id(SharedString::from(format!("theme-tile-{id}")))
+                            .flex_1()
+                            .min_w_0()
+                            .p(px(3.0))
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.0))
+                            .rounded(px(8.0))
+                            .border_2()
+                            .border_color(if selected {
+                                focus
+                            } else {
+                                gpui::transparent_black()
+                            })
+                            .hover(|style| style.bg(theme.element_hover))
+                            .cursor_pointer()
+                            .tab_index(0)
+                            .role(gpui::Role::Button)
+                            .aria_label(SharedString::from(variant.name.clone()))
+                            .aria_selected(selected)
+                            .focus_visible(|style| style.border_2().border_color(focus))
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                appearance::choose_theme(appearance, id.clone(), cx);
+                                cx.notify();
+                            }))
+                            .child(
+                                div()
+                                    .h(px(59.0))
+                                    .w_full()
+                                    .rounded(px(8.0))
+                                    .border_1()
+                                    .border_color(theme.border)
+                                    .child(workspace_thumbnail(&sample)),
+                            )
+                            .child(
+                                div()
+                                    .w_full()
+                                    .min_w_0()
+                                    .px(px(3.0))
+                                    .pb(px(3.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap(px(4.0))
+                                    .text_size(typography::text_xs())
+                                    .text_color(if selected {
+                                        theme.text_strong
+                                    } else {
+                                        theme.text_muted
+                                    })
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .truncate()
+                                            .child(SharedString::from(*label)),
+                                    )
+                                    .when(selected, |caption| {
+                                        caption.child(
+                                            icons::icon(icons::CHECK)
+                                                .size(px(13.0))
+                                                .flex_none()
+                                                .text_color(focus),
+                                        )
+                                    }),
+                            ),
+                    );
+                }
+                for _ in variants.len()..columns {
+                    row = row.child(div().flex_1());
+                }
+                row
+            })
+            .collect::<Vec<_>>();
+
+        div()
+            .p(px(12.0))
+            .flex()
+            .flex_col()
+            .gap(px(10.0))
+            .children(rows)
+    }
+
     fn render_import_dialog(
         &mut self,
         viewport: gpui::Size<gpui::Pixels>,
@@ -2055,12 +2569,21 @@ impl AppearancePage {
         {
             let dialog = self.import_dialog.as_mut()?;
             if std::mem::take(&mut dialog.focus_pending) {
-                let input_focus = dialog.input.focus_handle(cx);
+                let input_focus = match dialog.source {
+                    ImportSource::Json => dialog.json_input.focus_handle(cx),
+                    _ => dialog.input.focus_handle(cx),
+                };
                 window.focus(&input_focus, cx);
             }
         }
         let dialog = self.import_dialog.as_ref()?;
         let input = dialog.input.clone();
+        let input_focus = input.focus_handle(cx);
+        let json_input = dialog.json_input.clone();
+        let source = dialog.source;
+        let creating = dialog.creating;
+        let results = dialog.results.clone();
+        let pending = dialog.pending.is_some();
         let focus = dialog.focus.clone();
         let mode = dialog.mode;
         let compilation = dialog.compilation.clone();
@@ -2068,82 +2591,13 @@ impl AppearancePage {
         let review_variant = dialog.review_variant.clone();
         let error = dialog.error.clone();
         let ready = compilation.is_some() && !selected.is_empty();
-        let hairline = crate::theme::hairline(0.08);
-
-        let mode_control = |label: &'static str, description: &'static str, value: InstallMode| {
-            let active = mode == value;
-            div()
-                .id(SharedString::from(format!(
-                    "theme-import-mode-{}",
-                    slug(label)
-                )))
-                .flex_1()
-                .min_w_0()
-                .p(px(10.0))
-                .rounded(px(9.0))
-                .border_1()
-                .border_color(if active { theme.accent } else { theme.border })
-                .bg(if active {
-                    theme.accent_wash
-                } else {
-                    theme.surface_raised.opacity(0.28)
-                })
-                .cursor_pointer()
-                .when(!active, |control| {
-                    control.hover(|style| style.bg(theme.surface_raised_hover))
-                })
-                .tab_index(0)
-                .role(gpui::Role::Button)
-                .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if let Some(dialog) = this.import_dialog.as_mut() {
-                        dialog.mode = value;
-                    }
-                    cx.notify();
-                }))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(7.0))
-                        .child(
-                            div()
-                                .size(px(16.0))
-                                .rounded_full()
-                                .border_1()
-                                .border_color(if active {
-                                    theme.accent
-                                } else {
-                                    theme.border_strong
-                                })
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .when(active, |dot| {
-                                    dot.child(div().size(px(8.0)).rounded_full().bg(theme.accent))
-                                }),
-                        )
-                        .child(
-                            div()
-                                .text_size(crate::typography::text_xs())
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(if active {
-                                    theme.text_strong
-                                } else {
-                                    theme.text_muted
-                                })
-                                .child(label),
-                        ),
-                )
-                .child(
-                    div()
-                        .mt(px(4.0))
-                        .ml(px(23.0))
-                        .text_size(crate::typography::text_xs())
-                        .text_color(theme.text_muted)
-                        .child(description),
-                )
+        let has_input = match source {
+            ImportSource::Json => !json_input.read(cx).text().trim().is_empty(),
+            ImportSource::Community => !input.read(cx).text().trim().is_empty(),
+            ImportSource::File => false,
         };
+        let can_submit = !pending && (ready || (compilation.is_none() && has_input));
+        let hairline = crate::theme::hairline(0.08);
 
         let section_label = |label: &'static str| {
             div()
@@ -2154,60 +2608,281 @@ impl AppearancePage {
                 .child(label)
         };
 
+        let community = source == ImportSource::Community;
+        let focus_color = selection_tone(theme);
+        let captions = [
+            ("Import", ImportSource::Json, !community),
+            ("Community", ImportSource::Community, community),
+        ];
         let mut main = div()
             .id("theme-import-main")
-            .max_h(px(520.0))
+            .max_h((viewport.height - px(180.0)).clamp(px(150.0), px(530.0)))
             .overflow_y_scroll()
-            .px(px(20.0))
-            .pb(px(18.0))
+            .px(px(18.0))
+            .pb(px(14.0))
             .flex()
             .flex_col()
-            .child(section_label("Source"))
             .child(
                 div()
                     .flex()
+                    .justify_between()
                     .items_center()
                     .gap(px(8.0))
-                    .child(
-                        popover::dialog_field(input.into_any_element())
-                            .flex_1()
-                            .min_w_0()
-                            .h(px(36.0))
-                            .py(px(0.0))
-                            .flex()
-                            .items_center(),
-                    )
-                    .child(
-                        compact_action(theme, "Browse…", "theme-import-browse")
-                            .h(px(36.0))
-                            .px(px(12.0))
-                            .flex_none()
-                            .tab_index(0)
-                            .role(gpui::Role::Button)
-                            .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                            .on_click(cx.listener(|this, _, _, cx| this.choose_import_source(cx))),
-                    ),
-            )
-            .child(
-                div()
-                    .mt(px(16.0))
-                    .child(section_label("Keep it up to date"))
+                    .flex_wrap()
                     .child(
                         div()
                             .flex()
+                            .items_center()
+                            .gap(px(2.0))
+                            .p(px(2.0))
+                            .rounded(px(7.0))
+                            .bg(theme.element_hover)
+                            .children(captions.map(|(label, choice, active)| {
+                                widgets::text_action(theme, widgets::ActionTone::Quiet, label)
+                                    .id(label)
+                                    .px(px(10.0))
+                                    .min_h(px(26.0))
+                                    .tab_index(0)
+                                    .role(gpui::Role::Button)
+                                    .aria_selected(active)
+                                    .when(active, |button| {
+                                        button.bg(theme.surface_card).text_color(theme.text_strong)
+                                    })
+                                    .focus_visible(|style| {
+                                        style.border_1().border_color(focus_color)
+                                    })
+                                    .on_click(cx.listener(move |page, _, _, cx| {
+                                        if !active || source == ImportSource::File {
+                                            page.switch_import_source(choice, cx);
+                                        }
+                                    }))
+                            })),
+                    )
+                    .when(!community, |row| {
+                        row.child(
+                            widgets::text_action(
+                                theme,
+                                widgets::ActionTone::Quiet,
+                                "Start from current theme",
+                            )
+                            .id("theme-create-copy")
+                            .px(px(6.0))
+                            .tab_index(0)
+                            .role(gpui::Role::Button)
+                            .focus_visible(|style| style.border_1().border_color(focus_color))
+                            .on_click(
+                                cx.listener(|page, _, _, cx| page.create_from_current_theme(cx)),
+                            ),
+                        )
+                    }),
+            )
+            .when(community, |form| {
+                form.child(
+                    div()
+                        .mt(px(14.0))
+                        .child(section_label("Search Open VSX"))
+                        .child(
+                            popover::dialog_field(input.into_any_element())
+                                .h(px(33.0))
+                                .py_0()
+                                .flex()
+                                .items_center(),
+                        ),
+                )
+            })
+            .when(!community && !creating, |form| {
+                form.child(
+                    div()
+                        .mt(px(14.0))
+                        .p(px(9.0))
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(px(12.0))
+                        .rounded(px(8.0))
+                        .border_1()
+                        .border_color(theme.border)
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.0))
+                                .child(widgets::row_title(theme, "Theme file"))
+                                .child(
+                                    div()
+                                        .text_size(typography::text_xs())
+                                        .text_color(theme.text_muted)
+                                        .truncate()
+                                        .child(
+                                            compilation
+                                                .as_ref()
+                                                .filter(|value| !value.path.as_os_str().is_empty())
+                                                .map(|value| {
+                                                    SharedString::from(source_name(&value.path))
+                                                })
+                                                .unwrap_or_else(|| {
+                                                    "Zuse, T3 Code, or VS Code".into()
+                                                }),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            icon_action(theme, icons::UPLOAD, "Choose file", "theme-import-browse")
+                                .flex_none()
+                                .tab_index(0)
+                                .role(gpui::Role::Button)
+                                .focus_visible(|style| style.border_1().border_color(focus_color))
+                                .on_click(
+                                    cx.listener(|page, _, _, cx| page.choose_import_source(cx)),
+                                ),
+                        ),
+                )
+            })
+            .when(!community && source != ImportSource::File, |form| {
+                form.child(
+                    div()
+                        .mt(px(12.0))
+                        .child(section_label(if creating {
+                            "Edit your theme"
+                        } else {
+                            "Theme JSON"
+                        }))
+                        .child({
+                            let field_focus = json_input.focus_handle(cx);
+                            popover::dialog_field(json_input.into_any_element())
+                                .min_w_0()
+                                .w_full()
+                                .min_h(px(JSON_FIELD_HEIGHT))
+                                .cursor_text()
+                                // The text grows from the top; clicks on the
+                                // empty area below still land in the editor.
+                                .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                                    window.focus(&field_focus, cx)
+                                })
+                        }),
+                )
+            })
+            .when(
+                source == ImportSource::File && compilation.is_some(),
+                |form| {
+                    form.child(
+                        div()
+                            .mt(px(8.0))
+                            .flex()
+                            .justify_end()
                             .gap(px(8.0))
-                            .child(mode_control(
-                                "Import a copy",
-                                "Works independently from the original file.",
-                                InstallMode::Snapshot,
-                            ))
-                            .child(mode_control(
-                                "Link to source",
-                                "Reload changes from the file on disk.",
-                                InstallMode::Link,
-                            )),
-                    ),
+                            .items_center()
+                            .text_size(typography::text_xs())
+                            .text_color(theme.text_muted)
+                            .child("Link to source")
+                            .child(
+                                widgets::toggle_switch(
+                                    theme,
+                                    mode == InstallMode::Link,
+                                    "theme-source-link",
+                                )
+                                .id("theme-source-link")
+                                .tab_index(0)
+                                .role(gpui::Role::Switch)
+                                .aria_label("Link to source")
+                                .aria_toggled(if mode == InstallMode::Link {
+                                    gpui::Toggled::True
+                                } else {
+                                    gpui::Toggled::False
+                                })
+                                .focus_visible(|style| style.border_1().border_color(focus_color))
+                                .on_click(cx.listener(
+                                    move |page, _, _, cx| {
+                                        if let Some(dialog) = page.import_dialog.as_mut() {
+                                            dialog.mode = if mode == InstallMode::Link {
+                                                InstallMode::Snapshot
+                                            } else {
+                                                InstallMode::Link
+                                            };
+                                        }
+                                        cx.notify();
+                                    },
+                                )),
+                            ),
+                    )
+                },
             );
+
+        if source == ImportSource::Community && compilation.is_none() {
+            if pending {
+                main = main.child(div().mt(px(10.0)).child(section_label("Loading themes…")));
+            } else if let Some(results) = results {
+                if results.is_empty() {
+                    main = main.child(
+                        div()
+                            .mt(px(10.0))
+                            .child(section_label("No matching themes")),
+                    );
+                } else {
+                    main = main.child(div().mt(px(10.0)).flex().flex_col().gap(px(4.0)).children(
+                        results.into_iter().map(|result| {
+                            div()
+                                .id(SharedString::from(format!(
+                                    "theme-result-{}-{}",
+                                    result.namespace, result.name
+                                )))
+                                .flex()
+                                .justify_between()
+                                .items_center()
+                                .gap(px(8.0))
+                                .px(px(8.0))
+                                .py(px(6.0))
+                                .rounded(px(6.0))
+                                .border_1()
+                                .border_color(theme.border)
+                                .hover(|style| style.bg(theme.element_hover))
+                                .cursor_pointer()
+                                .tab_index(0)
+                                .role(gpui::Role::Button)
+                                .focus_visible(|style| {
+                                    style.border_2().border_color(selection_tone(theme))
+                                })
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_color(theme.text)
+                                        .child(SharedString::from(result.label().to_owned())),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(typography::text_xs())
+                                        .text_color(theme.text_muted)
+                                        .child(SharedString::from(result.namespace.clone())),
+                                )
+                                .on_click(cx.listener(move |page, _, _, cx| {
+                                    page.load_community_theme(result.clone(), cx)
+                                }))
+                        }),
+                    ));
+                }
+            } else if error.is_none() {
+                main = main.child(div().mt(px(8.0)).flex().flex_wrap().gap(px(6.0)).children(
+                    ["Dracula", "Catppuccin", "Nord", "Tokyo Night"].map(|name| {
+                        compact_action(theme, name, format!("theme-popular-{}", slug(name)))
+                            .tab_index(0)
+                            .role(gpui::Role::Button)
+                            .focus_visible(|style| {
+                                style.border_2().border_color(selection_tone(theme))
+                            })
+                            .on_click(cx.listener(move |page, _, _, cx| {
+                                if let Some(dialog) = page.import_dialog.as_mut() {
+                                    dialog
+                                        .input
+                                        .update(cx, |field, cx| field.set_text(name, cx));
+                                }
+                            }))
+                    }),
+                ));
+            }
+        }
 
         if let Some(ref compilation) = compilation {
             main = main.child(
@@ -2396,27 +3071,6 @@ impl AppearancePage {
                         ))),
                 );
             }
-        } else {
-            main = main.child(
-                div()
-                    .mt(px(14.0))
-                    .flex()
-                    .items_start()
-                    .gap(px(7.0))
-                    .text_size(crate::typography::text_xs())
-                    .line_height(px(16.0))
-                    .text_color(theme.text_muted)
-                    .child(
-                        icons::icon(icons::INFO_CIRCLE)
-                            .size(px(13.0))
-                            .mt(px(1.0))
-                            .flex_none(),
-                    )
-                    .child(tr(
-                        cx,
-                        msg::native::zuse_finds_light_and_dark_variants_automatically,
-                    )),
-            );
         }
 
         if let Some(error) = error {
@@ -2438,14 +3092,14 @@ impl AppearancePage {
                             .flex_none()
                             .mt(px(1.0)),
                     )
-                    .child(div().flex_1().min_w_0().truncate().child(error)),
+                    .child(div().flex_1().min_w_0().child(error)),
             );
         }
 
         let header = div()
-            .px(px(20.0))
-            .pt(px(18.0))
-            .pb(px(16.0))
+            .px(px(18.0))
+            .pt(px(14.0))
+            .pb(px(12.0))
             .flex()
             .items_start()
             .gap(px(16.0))
@@ -2453,14 +3107,7 @@ impl AppearancePage {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .child(popover::dialog_title(theme, "Add a theme"))
-                    .child(
-                        popover::dialog_body(
-                            theme,
-                            "Import a local theme into your library or keep it linked to its source.",
-                        )
-                        .mt(px(4.0)),
-                    ),
+                    .child(popover::dialog_title(theme, "Add a theme")),
             )
             .child(
                 div()
@@ -2475,9 +3122,10 @@ impl AppearancePage {
                     .justify_center()
                     .cursor_pointer()
                     .hover(|style| style.bg(theme.surface_raised_hover))
-                    .tab_index(0).role(gpui::Role::Button)
-.focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-.on_click(cx.listener(|this, _, _, cx| {
+                    .tab_index(0)
+                    .role(gpui::Role::Button)
+                    .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                    .on_click(cx.listener(|this, _, _, cx| {
                         this.import_dialog = None;
                         cx.notify();
                     }))
@@ -2510,76 +3158,75 @@ impl AppearancePage {
                         cx.notify();
                     })),
             )
-            .child(
-                widgets::text_action(
-                    theme,
-                    widgets::ActionTone::Solid,
-                    if compilation.is_some() {
-                        "Import selected"
-                    } else {
-                        "Analyze theme"
-                    },
-                )
-                .id("theme-import-action")
-                .h(px(34.0))
-                .px(px(14.0))
-                .py(px(0.0))
-                .flex()
-                .items_center()
-                .when(compilation.is_some() && !ready, |button| {
-                    button.opacity(0.45)
-                })
-                .when(compilation.is_none() || ready, |button| {
-                    button
-                        .tab_index(0)
-                        .role(gpui::Role::Button)
-                        .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if this
-                                .import_dialog
-                                .as_ref()
-                                .is_some_and(|dialog| dialog.compilation.is_some())
-                            {
-                                this.finish_import(cx);
+            .child({
+                let (glyph, label) = match (compilation.is_some(), creating, source) {
+                    (true, true, _) => (icons::CHECK, "Save theme"),
+                    (true, false, _) => (icons::PLUS, "Add theme"),
+                    (false, _, ImportSource::Community) => (icons::MAGNIFER, "Search"),
+                    (false, _, _) => (icons::EYE, "Preview"),
+                };
+                let tone = if can_submit {
+                    widgets::ActionTone::Solid
+                } else {
+                    widgets::ActionTone::Filled
+                };
+                widgets::action_button(theme, tone)
+                    .id("theme-import-action")
+                    .h(px(32.0))
+                    .px(px(13.0))
+                    .py(px(0.0))
+                    // Above the dither texture.
+                    .child(
+                        icons::icon(glyph)
+                            .relative()
+                            .size(px(13.0))
+                            .text_color(if can_submit {
+                                gpui::white()
                             } else {
-                                this.compile_import(cx);
-                            }
-                        }))
-                }),
-            );
+                                theme.text_muted
+                            }),
+                    )
+                    .child(div().relative().child(label))
+                    .when(!can_submit, |button| button.opacity(0.5).cursor_default())
+                    .when(can_submit, |button| {
+                        button
+                            .tab_index(0)
+                            .role(gpui::Role::Button)
+                            .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                            .on_click(cx.listener(|this, _, _, cx| this.submit_import(cx)))
+                    })
+            });
 
         let card = popover::dialog_card(theme)
             .id("theme-import-card")
-            .w(px(600.0))
+            .w((viewport.width - px(32.0)).clamp(px(240.0), px(520.0)))
             .max_h(px(760.0))
             .p(px(0.0))
             .overflow_hidden()
             .track_focus(&focus)
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                match popover::classify_key(
-                    event.keystroke.key.as_str(),
-                    event.keystroke.modifiers.platform,
-                    event.keystroke.modifiers.control,
-                ) {
-                    popover::MenuKey::Escape => {
-                        cx.stop_propagation();
-                        this.import_dialog = None;
-                        cx.notify();
-                    }
-                    popover::MenuKey::Enter | popover::MenuKey::ModEnter => {
-                        if this
-                            .import_dialog
-                            .as_ref()
-                            .is_some_and(|dialog| dialog.compilation.is_some())
-                        {
-                            this.finish_import(cx);
-                        } else {
-                            this.compile_import(cx);
+            .on_key_down(
+                cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {
+                    match popover::classify_key(
+                        event.keystroke.key.as_str(),
+                        event.keystroke.modifiers.platform,
+                        event.keystroke.modifiers.control,
+                    ) {
+                        popover::MenuKey::Escape => {
+                            cx.stop_propagation();
+                            this.import_dialog = None;
+                            cx.notify();
                         }
+                        popover::MenuKey::Enter
+                            if community && can_submit && input_focus.is_focused(window) =>
+                        {
+                            cx.stop_propagation();
+                            this.submit_import(cx);
+                        }
+                        popover::MenuKey::ModEnter if can_submit => this.submit_import(cx),
+                        _ => {}
                     }
-                    _ => {}
-                }
-            }))
+                }),
+            )
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                 this.import_dialog = None;
                 cx.notify();
@@ -2617,10 +3264,11 @@ impl AppearancePage {
         let available = Path::new(&path).is_file();
         let source = (same_image && available)
             .then(|| {
-                crate::new_thread_background_effects::prepare(
+                crate::new_thread_background_effects::prepare_look(
                     settings.new_thread_background_effect,
                     theme,
                     Path::new(&path),
+                    settings.wallpaper_look,
                     cx,
                 )
             })
@@ -3166,11 +3814,17 @@ impl AppearancePage {
     fn render_library_entry(
         &mut self,
         entry: CustomThemeEntry,
+        first: bool,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let id = entry.id.clone();
         let linked = entry.source.is_linked();
+        let file_path = entry.source.path().map(Path::to_path_buf);
+        let is_editable = matches!(
+            entry.source,
+            zuse_theme::CustomThemeSource::EditableFile { .. }
+        );
         let source = entry
             .source
             .path()
@@ -3192,130 +3846,187 @@ impl AppearancePage {
                 format!("Using last known good · {message}")
             }
         };
-        widgets::card_row(theme, false)
+        let sample = entry.family.variants.first().map(|variant| {
+            Theme::from_variant(
+                variant,
+                AccentSelection::ThemeDefault,
+                SurfacePreference::ThemeDefault,
+            )
+        });
+        let warning = matches!(entry.status, CustomThemeStatus::Warning { .. });
+        let mut actions = div().flex().items_center().gap(px(2.0)).child(
+            icon_action(theme, icons::EYE, "Review", format!("theme-review-{id}"))
+                .mr(px(4.0))
+                .tab_index(0)
+                .role(gpui::Role::Button)
+                .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                .on_click(cx.listener({
+                    let id = id.clone();
+                    move |this, _, _, cx| {
+                        this.review_entry = Some(id.clone());
+                        cx.notify();
+                    }
+                })),
+        );
+        if linked {
+            actions = actions.child(
+                icon_button(
+                    theme,
+                    icons::REFRESH,
+                    "Reload",
+                    format!("theme-reload-{id}"),
+                    false,
+                )
+                .on_click(cx.listener({
+                    let id = id.clone();
+                    move |_, _, _, cx| {
+                        let _ = theme_library::reload(&id, cx);
+                        cx.notify();
+                    }
+                })),
+            );
+        }
+        if let Some(path) = file_path {
+            let (glyph, label) = if is_editable {
+                (icons::PEN, "Edit JSON")
+            } else {
+                (icons::FOLDER_OPEN, "Show in folder")
+            };
+            actions = actions.child(
+                icon_button(theme, glyph, label, format!("theme-reveal-{id}"), false).on_click(
+                    cx.listener(move |_, _, _, cx| {
+                        if is_editable {
+                            cx.open_with_system(&path);
+                        } else {
+                            cx.reveal_path(&path);
+                        }
+                    }),
+                ),
+            );
+        }
+        actions = actions
+            .child(
+                icon_button(
+                    theme,
+                    icons::UPLOAD,
+                    "Export JSON",
+                    format!("theme-export-{id}"),
+                    false,
+                )
+                .on_click(cx.listener(move |page, _, _, cx| page.export_theme(&entry.family, cx))),
+            )
+            .child(
+                icon_button(
+                    theme,
+                    icons::COPY,
+                    "Duplicate as editable",
+                    format!("theme-duplicate-{id}"),
+                    false,
+                )
+                .on_click(cx.listener({
+                    let id = id.clone();
+                    move |this, _, _, cx| {
+                        if let Err(error) = theme_library::duplicate_as_editable(&id, cx) {
+                            this.library_error = Some(error.to_string().into());
+                        }
+                        cx.notify();
+                    }
+                })),
+            );
+        if linked {
+            actions = actions.child(
+                icon_button(
+                    theme,
+                    icons::BROWSER_LINK,
+                    "Unlink from source",
+                    format!("theme-unlink-{id}"),
+                    false,
+                )
+                .on_click(cx.listener({
+                    let id = id.clone();
+                    move |this, _, _, cx| {
+                        if let Err(error) = theme_library::unlink(&id, cx) {
+                            this.library_error = Some(error.to_string().into());
+                        }
+                        cx.notify();
+                    }
+                })),
+            );
+        }
+        actions = actions.child(
+            icon_button(
+                theme,
+                icons::TRASH_BIN_MINIMALISTIC,
+                "Remove",
+                format!("theme-remove-{id}"),
+                true,
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if let Err(error) = theme_library::remove(&id, cx) {
+                    this.library_error = Some(error.to_string().into());
+                }
+                cx.notify();
+            })),
+        );
+        widgets::card_row(theme, first)
+            .gap(px(12.0))
+            .when_some(sample, |row, sample| row.child(palette_preview(&sample)))
             .child(
                 div()
                     .flex_1()
-                    .min_w(px(160.0))
+                    .min_w_0()
                     .child(widgets::row_title(theme, &entry.name))
                     .child(
                         div()
                             .truncate()
                             .text_size(crate::typography::text_xs())
-                            .text_color(
-                                if matches!(entry.status, CustomThemeStatus::Warning { .. }) {
-                                    theme.warning
-                                } else {
-                                    theme.text_muted
-                                },
-                            )
+                            .text_color(if warning {
+                                theme.warning
+                            } else {
+                                theme.text_muted
+                            })
                             .child(SharedString::from(status)),
                     ),
             )
-            .child(
-                div()
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap(px(2.0))
-                    .when(linked, |actions| {
-                        actions.child(
-                            compact_action(theme, "Reload", format!("theme-reload-{id}"))
-                                .tab_index(0)
-                                .role(gpui::Role::Button)
-                                .focus_visible(|s| {
-                                    s.border_2().border_color(theme.accent).opacity(1.0)
-                                })
-                                .on_click(cx.listener({
-                                    let id = id.clone();
-                                    move |_, _, _, cx| {
-                                        let _ = theme_library::reload(&id, cx);
-                                        cx.notify();
-                                    }
-                                })),
-                        )
-                    })
-                    .child(
-                        compact_action(theme, "Reveal", format!("theme-reveal-{id}"))
-                            .tab_index(0)
-                            .role(gpui::Role::Button)
-                            .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                            .on_click(cx.listener({
-                                let id = id.clone();
-                                move |this, _, _, cx| {
-                                    if let Err(error) = theme_library::reveal(&id, cx) {
-                                        this.library_error = Some(error.to_string().into());
-                                    }
-                                    cx.notify();
-                                }
-                            })),
-                    )
-                    .child(
-                        compact_action(theme, "Review", format!("theme-review-{id}"))
-                            .tab_index(0)
-                            .role(gpui::Role::Button)
-                            .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                            .on_click(cx.listener({
-                                let id = id.clone();
-                                move |this, _, _, cx| {
-                                    this.review_entry = Some(id.clone());
-                                    cx.notify();
-                                }
-                            })),
-                    )
-                    .child(
-                        compact_action(
-                            theme,
-                            "Duplicate as editable",
-                            format!("theme-duplicate-{id}"),
-                        )
-                        .tab_index(0)
-                        .role(gpui::Role::Button)
-                        .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                        .on_click(cx.listener({
-                            let id = id.clone();
-                            move |this, _, _, cx| {
-                                if let Err(error) = theme_library::duplicate_as_editable(&id, cx) {
-                                    this.library_error = Some(error.to_string().into());
-                                }
-                                cx.notify();
-                            }
-                        })),
-                    )
-                    .when(linked, |actions| {
-                        actions.child(
-                            compact_action(theme, "Unlink", format!("theme-unlink-{id}"))
-                                .tab_index(0)
-                                .role(gpui::Role::Button)
-                                .focus_visible(|s| {
-                                    s.border_2().border_color(theme.accent).opacity(1.0)
-                                })
-                                .on_click(cx.listener({
-                                    let id = id.clone();
-                                    move |this, _, _, cx| {
-                                        if let Err(error) = theme_library::unlink(&id, cx) {
-                                            this.library_error = Some(error.to_string().into());
-                                        }
-                                        cx.notify();
-                                    }
-                                })),
-                        )
-                    })
-                    .child(
-                        compact_action(theme, "Remove", format!("theme-remove-{id}"))
-                            .text_color(theme.danger)
-                            .tab_index(0)
-                            .role(gpui::Role::Button)
-                            .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Err(error) = theme_library::remove(&id, cx) {
-                                    this.library_error = Some(error.to_string().into());
-                                }
-                                cx.notify();
-                            })),
-                    ),
-            )
+            .child(actions)
             .into_any_element()
+    }
+
+    fn export_theme(&mut self, family: &zuse_theme::ThemeFamily, cx: &mut Context<Self>) {
+        let Ok(json) = serde_json::to_vec_pretty(family) else {
+            return;
+        };
+        let filename = format!("{}.zuse-theme.json", slug(&family.name));
+        // A Finder-launched app's working directory is `/`; start somewhere
+        // the user can write.
+        let directory = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| {
+                let downloads = home.join("Downloads");
+                if downloads.is_dir() { downloads } else { home }
+            })
+            .unwrap_or_default();
+        let receiver = cx.prompt_for_new_path(&directory, Some(&filename));
+        cx.spawn(async move |page, cx| {
+            let outcome = match receiver.await {
+                Ok(Ok(Some(path))) => {
+                    cx.background_executor()
+                        .spawn(async move {
+                            std::fs::write(path, json).map_err(|error| error.to_string())
+                        })
+                        .await
+                }
+                Ok(Ok(None)) | Err(_) => return,
+                Ok(Err(error)) => Err(error.to_string()),
+            };
+            if let Err(error) = outcome {
+                let _ = page.update(cx, |page, cx| {
+                    page.library_error = Some(format!("Could not export theme: {error}").into());
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
     fn render_theme_library_rows(
@@ -3327,41 +4038,17 @@ impl AppearancePage {
         let (linked, imported): (Vec<_>, Vec<_>) = entries
             .into_iter()
             .partition(|entry| entry.source.is_linked());
-        let mut rows = vec![
-            widgets::card_row(theme, true)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(160.0))
-                        .child(widgets::row_title(theme, "Custom themes"))
-                        .child(widgets::meta_line(
-                            theme,
-                            vec![
-                                div()
-                                    .child("Import a theme file, or link a folder that stays up to date.")
-                                    .into_any_element(),
-                            ],
-                        )),
-                )
-                .child(
-                    widgets::text_action(theme, widgets::ActionTone::Solid, "Add theme")
-                        .id("theme-library-add")
-                        .tab_index(0)
-                        .role(gpui::Role::Button)
-                        .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                        .on_click(cx.listener(|this, _, _, cx| this.open_import(cx))),
-                )
-                .into_any_element(),
-        ];
+        let mut rows = Vec::new();
         if !imported.is_empty() {
             rows.push(
                 div()
                     .mx(px(12.0))
-                    .pt(px(12.0))
-                    .pb(px(4.0))
+                    .pt(px(14.0))
+                    .pb(px(2.0))
                     .border_t_1()
                     .border_color(widgets::row_divider(theme))
                     .text_size(crate::typography::text_xs())
+                    .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(theme.text_muted)
                     .child(tr(cx, msg::native::imported))
                     .into_any_element(),
@@ -3369,18 +4056,20 @@ impl AppearancePage {
             rows.extend(
                 imported
                     .into_iter()
-                    .map(|entry| self.render_library_entry(entry, theme, cx)),
+                    .enumerate()
+                    .map(|(ix, entry)| self.render_library_entry(entry, ix == 0, theme, cx)),
             );
         }
         if !linked.is_empty() {
             rows.push(
                 div()
                     .mx(px(12.0))
-                    .pt(px(12.0))
-                    .pb(px(4.0))
+                    .pt(px(14.0))
+                    .pb(px(2.0))
                     .border_t_1()
                     .border_color(widgets::row_divider(theme))
                     .text_size(crate::typography::text_xs())
+                    .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(theme.text_muted)
                     .child(tr(cx, msg::native::linked))
                     .into_any_element(),
@@ -3388,7 +4077,8 @@ impl AppearancePage {
             rows.extend(
                 linked
                     .into_iter()
-                    .map(|entry| self.render_library_entry(entry, theme, cx)),
+                    .enumerate()
+                    .map(|(ix, entry)| self.render_library_entry(entry, ix == 0, theme, cx)),
             );
         }
         rows
@@ -3411,6 +4101,9 @@ impl Render for AppearancePage {
         let current_background = ui_settings.new_thread_composer_background;
         let current_background_effect = ui_settings.new_thread_background_effect;
         let reduced_motion = crate::motion::reduced_motion(cx);
+        let focus = selection_tone(&theme);
+        let mut mode_theme = theme.clone();
+        mode_theme.accent = focus;
         let cards = AppearanceMode::ALL
             .into_iter()
             .map(|mode| {
@@ -3422,7 +4115,7 @@ impl Render for AppearancePage {
                     reduced_motion,
                 );
                 widgets::option_card(
-                    &theme,
+                    &mode_theme,
                     mode.icon(),
                     mode.label(),
                     selected,
@@ -3432,7 +4125,8 @@ impl Render for AppearancePage {
                 .id(SharedString::from(format!("appearance-{}", mode.label())))
                 .tab_index(0)
                 .role(gpui::Role::Button)
-                .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                .aria_selected(selected)
+                .focus_visible(|s| s.border_2().border_color(focus).opacity(1.0))
                 .on_click(cx.listener(move |_, _, _, cx| {
                     appearance::set_mode(mode, cx);
                     cx.notify();
@@ -3448,7 +4142,6 @@ impl Render for AppearancePage {
                 "Dark theme"
             };
             let selector = self.render_theme_selector(appearance_kind, &current_themes, &theme, cx);
-            // The color scheme previews sit above these rows in the same card.
             theme_rows.push(
                 widgets::card_row(&theme, false)
                     .child(
@@ -3461,23 +4154,15 @@ impl Render for AppearancePage {
                     .into_any_element(),
             );
         }
+        let theme_gallery =
+            self.render_theme_gallery(&theme, widgets::column_width(window, cx), cx);
+        let add_theme = icon_action(&theme, icons::PLUS, "Add theme", "theme-library-add")
+            .tab_index(0)
+            .role(gpui::Role::Button)
+            .focus_visible(|style| style.border_2().border_color(focus))
+            .on_click(cx.listener(|this, _, _, cx| this.open_import(cx)))
+            .into_any_element();
 
-        let mut accent_choices = vec![AccentSelection::ThemeDefault];
-        accent_choices.extend(AccentPreset::ALL.map(AccentSelection::Preset));
-        let accent_controls = accent_choices
-            .into_iter()
-            .map(|selection| {
-                let selected = selection == current_accent;
-                accent_swatch(&theme, selection, selected)
-                    .tab_index(0)
-                    .role(gpui::Role::Button)
-                    .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        appearance::set_accent(selection, cx);
-                        cx.notify();
-                    }))
-            })
-            .collect::<Vec<_>>();
         let surface_control =
             widgets::select("appearance-surface", "Glass", &theme, |page: &mut Self| {
                 &mut page.surface_select
@@ -3491,111 +4176,37 @@ impl Render for AppearancePage {
                     .position(|surface| surface == current_surface)
                     .unwrap_or_default(),
             )
+            .compact()
             .width(148.0)
             .on_select(|_, ix, _, cx| {
                 appearance::set_surface(SurfacePreference::ALL[ix], cx);
                 cx.notify();
             })
             .render(&self.surface_select, cx);
-        let mut settings_rows = theme_rows;
-        settings_rows.push(
-            widgets::card_row(&theme, false)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(160.0))
-                        .child(widgets::row_title(&theme, tr(cx, msg::native::accent_color)))
-                        .child(widgets::meta_line(
-                            &theme,
-                            vec![
-                                div()
-                                    .child(SharedString::from(if crate::settings::current(cx).wallpaper_theme_colors {
-                                        "Wallpaper colors are enabled; this accent is used when they are off.".to_string()
-                                    } else { accent_helper(current_accent) }))
-                                    .into_any_element(),
-                            ],
-                        )),
-                )
-                .child(
-                    div()
-                        .max_w_full()
-                        .flex()
-                        .flex_wrap()
-                        .items_center()
-                        .gap(px(8.0))
-                        .children(accent_controls),
-                )
-                .into_any_element(),
-        );
-        let match_wallpaper = crate::settings::current(cx).wallpaper_theme_colors;
-        settings_rows.push(
-            widgets::card_row(&theme, false)
-                .child(div().flex_1().min_w_0()
-                    .child(widgets::row_title(&theme, tr(cx, msg::native::match_wallpaper_colors)))
-                    .child(widgets::meta_line(&theme, vec![div()
-                        .child("Use wallpaper colors for accents, highlights, and subtle surface tints.")
-                        .into_any_element()])))
-                .child(widgets::toggle_switch(&theme, match_wallpaper, "wallpaper-theme-colors")
-                    .id("wallpaper-theme-colors-toggle")
-                    .tab_index(0)
-                    .role(gpui::Role::Switch)
-                    .aria_label(tr(cx, msg::native::match_wallpaper_colors))
-                    .focus_visible(|s| s.border_2().border_color(theme.accent))
-                    .cursor_pointer()
-                    .aria_toggled(if match_wallpaper { gpui::Toggled::True } else { gpui::Toggled::False })
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        crate::settings::wallpaper_colors::set_enabled(!match_wallpaper, cx);
-                        cx.notify();
-                    })))
-                .into_any_element(),
-        );
-        let color_rows = settings_rows;
         let mut settings_rows = Vec::new();
-        settings_rows.push(
-            widgets::card_row(&theme, true)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(160.0))
-                        .child(widgets::row_title(&theme, tr(cx, msg::native::glass)))
-                        .child(widgets::meta_line(
-                            &theme,
-                            vec![
-                                div()
-                                    .child(SharedString::from(surface_helper(
-                                        current_surface,
-                                        theme.surface_treatment,
-                                    )))
-                                    .into_any_element(),
-                            ],
-                        )),
-                )
-                .child(surface_control)
-                .into_any_element(),
-        );
+        let glass_row = widgets::card_row(&theme, false)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(160.0))
+                    .child(widgets::row_title(&theme, tr(cx, msg::native::glass)))
+                    .child(widgets::meta_line(
+                        &theme,
+                        vec![
+                            div()
+                                .child(SharedString::from(surface_helper(
+                                    current_surface,
+                                    theme.surface_treatment,
+                                )))
+                                .into_any_element(),
+                        ],
+                    )),
+            )
+            .child(surface_control)
+            .into_any_element();
         let background_available = current_background
             .as_ref()
             .is_some_and(|background| Path::new(&background.path).is_file());
-        // The chosen image previews in the row; without one the row is text only.
-        let background_tile: Option<AnyElement> = current_background
-            .as_ref()
-            .filter(|_| background_available)
-            .map(|background| {
-                div()
-                    .flex_none()
-                    .size(px(36.0))
-                    .rounded(px(10.0))
-                    .overflow_hidden()
-                    .border_1()
-                    .border_color(crate::theme::hairline(0.10))
-                    .child(
-                        img(PathBuf::from(background.path.clone()))
-                            .size(px(34.0))
-                            .rounded(px(9.0))
-                            .object_fit(ObjectFit::Cover),
-                    )
-                    .into_any_element()
-            });
         let background_meta = match current_background.as_ref() {
             Some(background) if background_available => vec![
                 div()
@@ -3611,8 +4222,7 @@ impl Render for AppearancePage {
             None => vec![div().child("No image selected").into_any_element()],
         };
         settings_rows.push(
-            widgets::card_row(&theme, false)
-                .children(background_tile)
+            widgets::card_row(&theme, true)
                 .child(
                     div()
                         .flex_1()
@@ -3634,9 +4244,10 @@ impl Render for AppearancePage {
                             actions
                                 .when(background_available, |actions| {
                                     actions.child(
-                                        compact_action(
+                                        icon_action(
                                             &theme,
-                                            "Adjust",
+                                            icons::DITHER_SLIDERS,
+                                            "Frame",
                                             "new-thread-background-adjust",
                                         )
                                         .tab_index(0)
@@ -3652,9 +4263,10 @@ impl Render for AppearancePage {
                                     )
                                 })
                                 .child(
-                                    compact_action(
+                                    icon_action(
                                         &theme,
-                                        "Replace image",
+                                        icons::REFRESH,
+                                        "Replace",
                                         "new-thread-background-replace",
                                     )
                                     .tab_index(0)
@@ -3667,8 +4279,9 @@ impl Render for AppearancePage {
                                     )),
                                 )
                                 .child(
-                                    compact_action(
+                                    icon_action(
                                         &theme,
+                                        icons::TRASH_BIN_MINIMALISTIC,
                                         "Remove",
                                         "new-thread-background-remove",
                                     )
@@ -3685,8 +4298,9 @@ impl Render for AppearancePage {
                         })
                         .when(current_background.is_none(), |actions| {
                             actions.child(
-                                compact_action(
+                                icon_action(
                                     &theme,
+                                    icons::FILE_IMAGE,
                                     "Choose image",
                                     "new-thread-background-choose",
                                 )
@@ -3703,61 +4317,60 @@ impl Render for AppearancePage {
                 )
                 .into_any_element(),
         );
-        let wallpaper_settings = crate::settings::current(cx);
-        let folder_label = wallpaper_settings
+        let folder_label = ui_settings
             .wallpaper_folder
             .as_ref()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "Choose a folder of wallpaper images.".into());
-        let shortcut = crate::settings::display_combo(&wallpaper_settings.keymap.random_wallpaper);
-        settings_rows.push(
-            widgets::card_row(&theme, false)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(160.0))
-                        .child(widgets::row_title(
+        let shortcut = crate::settings::display_combo(&ui_settings.keymap.random_wallpaper);
+        let folder_row = widgets::card_row(&theme, false)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(160.0))
+                    .child(widgets::row_title(
+                        &theme,
+                        tr(cx, msg::native::wallpaper_folder),
+                    ))
+                    .child(widgets::meta_line(
+                        &theme,
+                        vec![
+                            div()
+                                .child(SharedString::from(format!(
+                                    "{folder_label} · {shortcut} picks a random image"
+                                )))
+                                .into_any_element(),
+                        ],
+                    )),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap(px(8.0))
+                    .child(
+                        icon_action(
                             &theme,
-                            tr(cx, msg::native::wallpaper_folder),
-                        ))
-                        .child(widgets::meta_line(
-                            &theme,
-                            vec![
-                                div()
-                                    .child(SharedString::from(format!(
-                                        "{folder_label} · {shortcut} picks a random image"
-                                    )))
-                                    .into_any_element(),
-                            ],
-                        )),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .gap(px(8.0))
-                        .child(
-                            compact_action(&theme, "Choose folder", "wallpaper-folder-choose")
+                            icons::FOLDER_OPEN,
+                            "Choose folder",
+                            "wallpaper-folder-choose",
+                        )
+                        .tab_index(0)
+                        .role(gpui::Role::Button)
+                        .focus_visible(|s| s.border_2().border_color(theme.accent))
+                        .on_click(cx.listener(|this, _, _, cx| this.choose_wallpaper_folder(cx))),
+                    )
+                    .when(ui_settings.wallpaper_folder.is_some(), |row| {
+                        row.child(
+                            compact_action(&theme, "Shuffle", "wallpaper-shuffle")
                                 .tab_index(0)
                                 .role(gpui::Role::Button)
                                 .focus_visible(|s| s.border_2().border_color(theme.accent))
-                                .on_click(
-                                    cx.listener(|this, _, _, cx| this.choose_wallpaper_folder(cx)),
-                                ),
+                                .on_click(cx.listener(|this, _, _, cx| this.random_wallpaper(cx))),
                         )
-                        .when(wallpaper_settings.wallpaper_folder.is_some(), |row| {
-                            row.child(
-                                compact_action(&theme, "Shuffle", "wallpaper-shuffle")
-                                    .tab_index(0)
-                                    .role(gpui::Role::Button)
-                                    .focus_visible(|s| s.border_2().border_color(theme.accent))
-                                    .on_click(
-                                        cx.listener(|this, _, _, cx| this.random_wallpaper(cx)),
-                                    ),
-                            )
-                        }),
-                )
-                .into_any_element(),
-        );
+                    }),
+            )
+            .into_any_element();
+        // Effects only act on a painted wallpaper.
         if background_available {
             use crate::settings::NewThreadBackgroundEffect;
             let effect_control = widgets::select(
@@ -3775,6 +4388,7 @@ impl Render for AppearancePage {
                     .position(|effect| effect == current_background_effect)
                     .unwrap_or_default(),
             )
+            .compact()
             .width(128.0)
             .on_select(|_, ix, _, cx| {
                 crate::settings::set_new_thread_background_effect(
@@ -3807,6 +4421,19 @@ impl Render for AppearancePage {
                     .into_any_element(),
             );
         }
+        if let Some(background) = current_background.as_ref().filter(|_| background_available) {
+            let wide = widgets::column_width(window, cx) >= 470.0;
+            settings_rows.push(self.render_wallpaper_panel(
+                background,
+                current_background_effect,
+                ui_settings.wallpaper_look,
+                &theme,
+                wide,
+                cx,
+            ));
+        }
+        settings_rows.extend([folder_row, glass_row]);
+        let code_layout = self.render_code_layout(&theme, cx);
         let current_reduce_motion = crate::motion::preference(cx);
         let reduce_motion_control = widgets::select(
             "reduce-motion",
@@ -3823,6 +4450,7 @@ impl Render for AppearancePage {
                 .position(|preference| preference == current_reduce_motion)
                 .unwrap_or_default(),
         )
+        .compact()
         .width(128.0)
         .on_select(|_, ix, _, cx| {
             crate::motion::set_preference(ReduceMotion::ALL[ix], cx);
@@ -3992,6 +4620,7 @@ impl Render for AppearancePage {
         let scrollbar = popover::rail(self, "appearance-page-scrollbar", &theme, cx);
         div()
             .id("appearance-page-host")
+            .on_drag_move(cx.listener(Self::on_wallpaper_slider_drag))
             .on_drag_move(cx.listener(
                 |this, event: &gpui::DragMoveEvent<TranscriptWidthDrag>, window, cx| {
                     this.drag_width(event.event.position.x, window, cx);
@@ -4047,50 +4676,49 @@ impl Render for AppearancePage {
                                 .child(widgets::section_title(
                                     &theme,
                                     &tr(cx, msg::settings::settings_page_appearance),
-                                    &tr(cx, msg::native::themes_colors_fonts_and_motion_for_this_app),
+                                    &tr(
+                                        cx,
+                                        msg::native::themes_colors_fonts_and_motion_for_this_app,
+                                    ),
                                 ))
                                 .child(
                                     widgets::section_stack()
+                                        .child(widgets::group(&theme, "Mode", "").child(
+                                            widgets::section_card(&theme).mt_0().child(
+                                                div().p(px(12.0)).child(
+                                                    widgets::option_card_row().children(cards),
+                                                ),
+                                            ),
+                                        ))
                                         .child(
-                                            widgets::group(
+                                            widgets::group_with_action(
                                                 &theme,
-                                                tr(cx, msg::settings::settings_page_theme),
-                                                tr(cx, msg::native::follow_your_system_or_pin_a_light_or_dark_scheme),
+                                                "Theme",
+                                                "",
+                                                Some(add_theme),
                                             )
                                             .child(
                                                 widgets::section_card(&theme)
                                                     .mt_0()
-                                                    .child(
-                                                        div()
-                                                            .p(px(12.0))
-                                                            .child(
-                                                                widgets::option_card_row()
-                                                                    .children(cards),
-                                                            ),
-                                                    )
-                                                    .children(color_rows),
+                                                    .child(theme_gallery)
+                                                    .children(theme_rows)
+                                                    .children(library_rows),
                                             ),
                                         )
                                         .child(widgets::section(
                                             &theme,
-                                            "Material and background",
+                                            "Background",
                                             widgets::section_card(&theme)
                                                 .mt_0()
                                                 .children(settings_rows),
                                         ))
+                                        .child(code_layout)
                                         .child(widgets::section(
                                             &theme,
                                             crate::localization::text("native-motion", cx),
                                             widgets::section_card(&theme)
                                                 .mt_0()
                                                 .children(motion_rows),
-                                        ))
-                                        .child(widgets::section(
-                                            &theme,
-                                            "Theme library",
-                                            widgets::section_card(&theme)
-                                                .mt_0()
-                                                .children(library_rows),
                                         ))
                                         .child(font_section),
                                 )
@@ -4115,6 +4743,39 @@ impl Render for AppearancePage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_paste_placeholder_is_an_importable_theme() {
+        let compilation = zuse_theme::CustomThemeLibrary::compile_pasted(JSON_SAMPLE).unwrap();
+        assert_eq!(compilation.family.name, "Aurora");
+    }
+
+    #[gpui::test]
+    fn create_from_current_theme_previews_both_variants(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+        });
+        let window = cx.add_window(|_, cx| AppearancePage::new(cx));
+        window
+            .update(cx, |page, _, cx| {
+                page.open_import(cx);
+                page.create_from_current_theme(cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |page, _, cx| {
+                page.compile_import(cx);
+                let dialog = page.import_dialog.as_ref().unwrap();
+                let preview = dialog.compilation.as_ref().unwrap();
+                assert!(dialog.creating);
+                assert_eq!(preview.family.name, "Zuse Copy");
+                assert_eq!(dialog.selected.len(), 2);
+            })
+            .unwrap();
+        cx.run_until_parked();
+    }
 
     fn background_settings() -> crate::settings::UiSettings {
         crate::settings::UiSettings {
@@ -4481,6 +5142,20 @@ mod tests {
             );
         });
         let (_page, cx) = cx.add_window_view(|_, cx| AppearancePage::new(cx));
+        cx.update(|window, cx| window.draw(cx).clear());
+        let viewport_center = cx.update(|window, _| {
+            let viewport = window.viewport_size();
+            point(viewport.width / 2.0, viewport.height / 2.0)
+        });
+        let initial = cx
+            .debug_bounds("appearance-surface")
+            .expect("glass trigger position");
+        cx.simulate_mouse_move(viewport_center, None, gpui::Modifiers::default());
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: viewport_center,
+            delta: ScrollDelta::Pixels(point(px(0.0), viewport_center.y - initial.center().y)),
+            ..Default::default()
+        });
         cx.update(|window, cx| window.draw(cx).clear());
         let trigger = cx
             .debug_bounds("appearance-surface")

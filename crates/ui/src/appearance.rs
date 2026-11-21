@@ -116,6 +116,7 @@ pub fn init(
         accent,
         surface,
     });
+    NATIVE_MODE.store(mode as u8, std::sync::atomic::Ordering::Relaxed);
     sync_ns_appearance(mode);
     let appearance = resolve(mode, system);
     Theme::install_selection(
@@ -170,7 +171,6 @@ pub fn set_mode(mode: AppearanceMode, cx: &mut App) {
     });
 }
 
-/// Change the interactive accent without changing any semantic theme roles.
 pub fn set_theme(appearance: Appearance, variant_id: impl Into<String>, cx: &mut App) {
     if !cx.has_global::<AppearanceState>() {
         return;
@@ -190,19 +190,22 @@ pub fn set_theme(appearance: Appearance, variant_id: impl Into<String>, cx: &mut
     });
 }
 
-pub fn set_accent(accent: AccentSelection, cx: &mut App) {
+pub(crate) fn choose_theme(appearance: Appearance, variant_id: String, cx: &mut App) {
     if !cx.has_global::<AppearanceState>() {
         return;
     }
     let state = cx.global_mut::<AppearanceState>();
-    if state.accent == accent {
-        return;
-    }
-    state.accent = accent;
-    apply(cx);
+    state
+        .themes
+        .set_variant(model_appearance(appearance), variant_id);
+    state.accent = AccentSelection::ThemeDefault;
+    let themes = state.themes.clone();
     settings::update(SavePolicy::Immediate, cx, |settings| {
-        settings.accent = accent;
+        settings.theme_selection = themes;
+        settings.accent = AccentSelection::ThemeDefault;
+        settings.wallpaper_theme_colors = false;
     });
+    apply(cx);
 }
 
 /// Change glass independently from appearance, theme, and accent selections.
@@ -264,11 +267,18 @@ pub fn apply(cx: &mut App) {
     let Some(state) = cx.try_global::<AppearanceState>() else {
         return;
     };
-    sync_ns_appearance(state.mode);
+    // `setAppearance:` makes AppKit fire appearance callbacks synchronously.
+    // From inside a click handler the window is leased out of App, so those
+    // re-entrant updates fail ("RefCell already borrowed"). Theme clicks never
+    // change the mode, so skip them; a real mode change waits for the lease.
+    let mode = state.mode;
     let wanted = resolve(state.mode, state.system);
     let accent = state.accent;
     let surface = state.surface;
     let variant_id = state.themes.variant_id(model_appearance(wanted)).to_owned();
+    if NATIVE_MODE.swap(mode as u8, std::sync::atomic::Ordering::Relaxed) != mode as u8 {
+        cx.defer(move |_| sync_ns_appearance(mode));
+    }
     let changed = !cx.try_global::<Theme>().is_some_and(|theme| {
         theme.appearance == wanted
             && theme.variant_id.as_ref() == variant_id
@@ -313,6 +323,9 @@ fn model_appearance(appearance: Appearance) -> zuse_theme::Appearance {
         Appearance::Light => zuse_theme::Appearance::Light,
     }
 }
+
+/// The mode last pushed to AppKit, so unchanged modes skip the native call.
+static NATIVE_MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(u8::MAX);
 
 /// Tell AppKit which appearance the app's windows use, so the chrome *it*
 /// draws — the traffic lights above all — matches the palette *we* paint.

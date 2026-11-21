@@ -1338,8 +1338,8 @@ const GITHUB_REPO_URL: &str = "https://github.com/opcodehq/zuse";
 /// hero reaches below the composer, giving its lower mask room to dissolve
 /// gradually into the otherwise empty lower canvas.
 const NEW_THREAD_BACKGROUND_FROSTED_OPACITY: f32 = 0.84;
-const NEW_THREAD_BACKGROUND_VIEWPORT_RATIO: f32 = 0.72;
-const NEW_THREAD_BACKGROUND_MAX_HEIGHT: f32 = 760.0;
+const NEW_THREAD_BACKGROUND_VIEWPORT_RATIO: f32 = 0.91;
+const NEW_THREAD_BACKGROUND_MAX_HEIGHT: f32 = 960.0;
 
 /// Drag marker for the sidebar resize handle.
 struct SidebarResize;
@@ -1606,7 +1606,7 @@ fn bottom_stack_measurement_matches(
     measured_has_composer == expected_has_composer
 }
 
-fn new_thread_background_opacity(is_frost: bool) -> f32 {
+pub(crate) fn new_thread_background_opacity(is_frost: bool) -> f32 {
     if is_frost {
         NEW_THREAD_BACKGROUND_FROSTED_OPACITY
     } else {
@@ -1627,6 +1627,7 @@ fn new_thread_background(
     composer_bounds: crate::new_thread_background_mask::SurfaceBounds,
     dissolve: f32,
     opacity: f32,
+    look: settings::WallpaperLook,
 ) -> AnyElement {
     let Some(artwork) = artwork else {
         return Empty.into_any_element();
@@ -1643,40 +1644,13 @@ fn new_thread_background(
         .w(px(hero_width))
         .h(px(hero_height))
         .overflow_hidden()
-        .opacity((1.0 - dissolve) * opacity)
-        // Alpha resolves into the real canvas, including translucent themes;
-        // no theme-colored overlay bleaches or darkens the source pixels.
-        .children([false, true].into_iter().map(|cutout| {
-            let artwork = artwork.clone();
-            let composer_bounds = composer_bounds.clone();
-            div()
-                .absolute()
-                .inset_0()
-                .opacity(if cutout {
-                    1.0
-                } else {
-                    crate::new_thread_background_mask::CUTOUT_REVEAL_OPACITY
-                })
-                .child(
-                    gpui::canvas(
-                        |_, _, _| {},
-                        move |bounds, _, window, _cx| {
-                            if let Some(composer) = composer_bounds.get() {
-                                crate::new_thread_background_mask::paint(
-                                    artwork.clone(),
-                                    bounds,
-                                    composer,
-                                    adjustment,
-                                    cutout,
-                                    window,
-                                );
-                            }
-                        },
-                    )
-                    .absolute()
-                    .inset_0(),
-                )
-        }))
+        .child(crate::new_thread_background_mask::artwork(
+            artwork,
+            adjustment,
+            look,
+            composer_bounds,
+            (1.0 - dissolve) * opacity,
+        ))
         .into_any_element()
 }
 
@@ -13222,6 +13196,7 @@ impl Shell {
         let ui_settings = settings::current(cx);
         let new_thread_background_setting = ui_settings.new_thread_composer_background;
         let new_thread_background_effect = ui_settings.new_thread_background_effect;
+        let wallpaper_look = ui_settings.wallpaper_look;
         let new_thread_background_adjustment = new_thread_background_setting
             .as_ref()
             .map(|background| background.adjustment)
@@ -13232,10 +13207,11 @@ impl Shell {
         let artwork = new_thread_background_setting
             .as_ref()
             .and_then(|background| {
-                crate::new_thread_background_effects::prepare(
+                crate::new_thread_background_effects::prepare_look(
                     new_thread_background_effect,
                     theme,
                     std::path::Path::new(&background.path),
+                    wallpaper_look,
                     cx,
                 )
             });
@@ -13249,6 +13225,29 @@ impl Shell {
             self.reduced_motion,
             frame_time,
         );
+        // Over artwork, the heading follows the image rather than the theme:
+        // a light theme's ink vanishes on a dark wallpaper, and vice versa.
+        let hero_ink = new_thread_background_setting
+            .as_ref()
+            .filter(|_| artwork_frame.current.is_some())
+            .and_then(|background| {
+                crate::new_thread_background_effects::backdrop_is_dark(
+                    std::path::Path::new(&background.path),
+                    new_thread_background_effect,
+                    wallpaper_look,
+                    theme.bg,
+                    new_thread_background_opacity(theme.is_frost()),
+                    cx,
+                )
+            })
+            .map(|dark| {
+                let ink = if dark {
+                    gpui::white()
+                } else {
+                    gpui::hsla(0.0, 0.0, 0.08, 1.0)
+                };
+                (ink, ink.opacity(0.72))
+            });
         let dock_frame = self.composer_dock.borrow_mut().tick(
             has_selection || cloud_starting,
             self.reduced_motion,
@@ -13322,6 +13321,7 @@ impl Shell {
                         bounds.clone(),
                         dock_frame.dissolve(),
                         (1.0 - artwork_frame.mix) * opacity,
+                        wallpaper_look,
                     ))
                     .child(new_thread_background(
                         artwork_frame.current,
@@ -13331,6 +13331,7 @@ impl Shell {
                         bounds,
                         dock_frame.dissolve(),
                         artwork_frame.mix * opacity,
+                        wallpaper_look,
                     ))
                     // Without artwork, invaders march across a dim band
                     // under the titlebar; it leaves with the canvas on send.
@@ -13504,7 +13505,7 @@ impl Shell {
                         .relative()
                         .top(px(-1.))
                         .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(theme.text_strong)
+                        .text_color(hero_ink.map_or(theme.text_strong, |ink| ink.0))
                         .child(project.as_ref().map_or_else(
                             || "What should we build today?".to_owned(),
                             |name| format!("What should we build in {name}?"),
@@ -13516,10 +13517,12 @@ impl Shell {
                         div()
                             .id("landing-without-project")
                             .role(gpui::Role::Button)
+                            // Sit closer to the heading than the stack's gap.
+                            .mt(px(-4.))
                             .cursor_pointer()
                             .text_size(px(12.))
-                            .text_color(theme.text_muted)
-                            .hover(|d| d.text_color(theme.text))
+                            .text_color(hero_ink.map_or(theme.text_muted, |ink| ink.1))
+                            .hover(move |d| d.text_color(hero_ink.map_or(theme.text, |ink| ink.0)))
                             .child(tr(cx, msg::chat::start_without_project))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 let pickers = this.composer.read(cx).pickers().clone();

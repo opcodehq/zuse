@@ -14,9 +14,20 @@ pub fn builtin_registry() -> &'static ThemeRegistry {
         families: vec![
             family("zuse", "Zuse", vec![zuse_light(), zuse_dark()]),
             family(
-                "vscode-default",
-                "VS Code Default",
-                vec![vscode_light(), vscode_dark()],
+                "glass",
+                "Glass",
+                vec![glass(Appearance::Light), glass(Appearance::Dark)],
+            ),
+            family(
+                "observatory",
+                "Observatory",
+                vec![observatory_light(), observatory_dark()],
+            ),
+            family("flexoki", "Flexoki", vec![flexoki_light(), flexoki_dark()]),
+            family(
+                "everforest",
+                "Everforest",
+                vec![everforest_light(), everforest_dark()],
             ),
             family(
                 "catppuccin",
@@ -30,7 +41,7 @@ pub fn builtin_registry() -> &'static ThemeRegistry {
             ),
             family("dracula", "Dracula", vec![dracula()]),
             family("github", "GitHub", vec![github_light(), github_dark()]),
-            family("ayu", "Ayu", vec![ayu_light(), ayu_dark(), ayu_mirage()]),
+            family("ayu", "Ayu", vec![ayu_light(), ayu_dark()]),
             family("gruvbox", "Gruvbox", vec![gruvbox_light(), gruvbox_dark()]),
             family(
                 "rose-pine",
@@ -39,21 +50,6 @@ pub fn builtin_registry() -> &'static ThemeRegistry {
             ),
             family("nord", "Nord", vec![nord()]),
             family("one-dark-pro", "One Dark Pro", vec![one_dark_pro()]),
-            family("atom-one-dark", "Atom One Dark", vec![atom_one_dark()]),
-            family(
-                "night-owl",
-                "Night Owl",
-                vec![night_owl_light(), night_owl()],
-            ),
-            family(
-                "winter-is-coming",
-                "Winter is Coming",
-                vec![winter_light(), winter_dark_blue()],
-            ),
-            family("palenight", "Palenight", vec![palenight()]),
-            family("synthwave-84", "SynthWave '84", vec![synthwave_84()]),
-            family("cobalt2", "Cobalt2", vec![cobalt2()]),
-            family("andromeda", "Andromeda", vec![andromeda()]),
         ],
     })
 }
@@ -348,72 +344,290 @@ fn zuse_light() -> ThemeVariant {
     palette
 }
 
-fn vscode_dark() -> ThemeVariant {
+fn glass(appearance: Appearance) -> ThemeVariant {
+    variant(match appearance {
+        Appearance::Light => Seeds {
+            id: "glass-light",
+            family_id: "glass",
+            name: "Glass Light",
+            appearance,
+            treatment: SurfaceTreatment::Frosted,
+            background: "#eaf0f8",
+            shell: "#dce6f3",
+            raised: "#e2ebf6",
+            card: "#f6f9fe",
+            text: "#25364c",
+            muted: "#526078",
+            faint: "#586681",
+            accent: "#395e9c",
+            danger: "#a42643",
+            warning: "#87491e",
+            success: "#1f6c59",
+            terminal_background: "#eaf0f8",
+            ansi: ANSI_LIGHT,
+            syntax: [
+                "#526078", "#65468d", "#246548", "#884a19", "#276577", "#31578e", "#734775",
+                "#25364c", "#526078", "#a42643", "#734775", "#a42643",
+            ],
+            source: source(
+                "glass-light",
+                "native",
+                "https://github.com/opcodehq/zuse",
+                "appearance-glass",
+                "MIT",
+            ),
+        },
+        Appearance::Dark => Seeds {
+            id: "glass-dark",
+            family_id: "glass",
+            name: "Glass Dark",
+            appearance,
+            treatment: SurfaceTreatment::Frosted,
+            background: "#151e2d",
+            shell: "#101724",
+            raised: "#28374f",
+            card: "#1b2638",
+            text: "#e6eefb",
+            muted: "#aabbd3",
+            faint: "#8ca2c1",
+            accent: "#a9c5ff",
+            danger: "#ff9cab",
+            warning: "#f0c28c",
+            success: "#9bdac6",
+            terminal_background: "#151e2d",
+            ansi: ANSI_DARK,
+            syntax: [
+                "#aabbd3", "#ccb7f1", "#a4dac5", "#f0c28c", "#97d9e5", "#a9c5ff", "#e7b5d6",
+                "#e6eefb", "#aabbd3", "#ff9cab", "#e7b5d6", "#ff9cab",
+            ],
+            source: source(
+                "glass-dark",
+                "native",
+                "https://github.com/opcodehq/zuse",
+                "appearance-glass",
+                "MIT",
+            ),
+        },
+    })
+}
+
+fn observatory_light() -> ThemeVariant {
     variant(Seeds {
-        id: "vscode-dark-plus",
-        family_id: "vscode-default",
-        name: "Dark+",
-        appearance: Appearance::Dark,
+        id: "observatory-light",
+        family_id: "observatory",
+        name: "Observatory Light",
+        appearance: Appearance::Light,
         treatment: SurfaceTreatment::Opaque,
-        background: "#1e1e1e",
-        shell: "#181818",
-        raised: "#2a2d2e",
-        card: "#252526",
-        text: "#d4d4d4",
-        muted: "#a8a8a8",
-        faint: "#858585",
-        accent: "#007acc",
-        danger: "#f48771",
-        warning: "#cca700",
-        success: "#89d185",
-        terminal_background: "#1e1e1e",
+        background: "#f4f7fb",
+        shell: "#e5ecf3",
+        raised: "#eaf0f7",
+        card: "#ffffff",
+        text: "#27364a",
+        muted: "#566277",
+        faint: "#627187",
+        accent: "#8a531e",
+        danger: "#a0263b",
+        warning: "#8a531e",
+        success: "#236548",
+        terminal_background: "#f4f7fb",
         ansi: [
-            "#000000", "#cd3131", "#0dbc79", "#e5e510", "#2472c8", "#bc3fbc", "#11a8cd", "#e5e5e5",
-            "#666666", "#f14c4c", "#23d18b", "#f5f543", "#3b8eea", "#d670d6", "#29b8db", "#e5e5e5",
+            "#e5ecf3", "#a0263b", "#236548", "#8a531e", "#235ba5", "#653a93", "#216a74", "#27364a",
+            "#566277", "#a0263b", "#236548", "#8a531e", "#235ba5", "#735581", "#216a74", "#27364a",
         ],
         syntax: [
-            "#6a9955", "#c586c0", "#ce9178", "#b5cea8", "#4ec9b0", "#dcdcaa", "#9cdcfe", "#d4d4d4",
-            "#d4d4d4", "#569cd6", "#9cdcfe", "#f44747",
+            "#566277", "#653a93", "#236548", "#8a531e", "#216a74", "#235ba5", "#7c4363", "#27364a",
+            "#566277", "#a0263b", "#735581", "#a0263b",
         ],
         source: source(
-            "vscode-dark-plus",
-            "vscode",
-            "https://github.com/microsoft/vscode",
-            "e33d147d4c0fa65ce17cb73ec9d798f064b4bf1f",
+            "observatory-light",
+            "native",
+            "https://github.com/opcodehq/zuse",
+            "appearance-gallery",
             "MIT",
         ),
     })
 }
 
-fn vscode_light() -> ThemeVariant {
+fn observatory_dark() -> ThemeVariant {
     variant(Seeds {
-        id: "vscode-light-plus",
-        family_id: "vscode-default",
-        name: "Light+",
-        appearance: Appearance::Light,
+        id: "observatory-dark",
+        family_id: "observatory",
+        name: "Observatory Dark",
+        appearance: Appearance::Dark,
         treatment: SurfaceTreatment::Opaque,
-        background: "#ffffff",
-        shell: "#f3f3f3",
-        raised: "#e8e8e8",
-        card: "#ffffff",
-        text: "#1f1f1f",
-        muted: "#616161",
-        faint: "#767676",
-        accent: "#0078d4",
-        danger: "#a1260d",
-        warning: "#895503",
-        success: "#008000",
-        terminal_background: "#ffffff",
-        ansi: ANSI_LIGHT,
+        background: "#101823",
+        shell: "#0c111a",
+        raised: "#202d3e",
+        card: "#192333",
+        text: "#e6eef9",
+        muted: "#a5b4c8",
+        faint: "#8799af",
+        accent: "#f3be73",
+        danger: "#ff9aa6",
+        warning: "#f3be73",
+        success: "#92d8ae",
+        terminal_background: "#101823",
+        ansi: [
+            "#0c111a", "#ff9aa6", "#92d8ae", "#f3be73", "#a5c9ff", "#ccb1f5", "#8fdbdb", "#e6eef9",
+            "#202d3e", "#ff9aa6", "#92d8ae", "#f3be73", "#a5c9ff", "#ecadd5", "#8fdbdb", "#e6eef9",
+        ],
         syntax: [
-            "#008000", "#0000ff", "#a31515", "#098658", "#267f99", "#795e26", "#001080", "#1f1f1f",
-            "#1f1f1f", "#800000", "#ff0000", "#cd3131",
+            "#a5b4c8", "#ccb1f5", "#92d8ae", "#f3be73", "#8fdbdb", "#a5c9ff", "#ecadd5", "#e6eef9",
+            "#a5b4c8", "#ff9aa6", "#ecadd5", "#ff9aa6",
         ],
         source: source(
-            "vscode-light-plus",
-            "vscode",
-            "https://github.com/microsoft/vscode",
-            "e33d147d4c0fa65ce17cb73ec9d798f064b4bf1f",
+            "observatory-dark",
+            "native",
+            "https://github.com/opcodehq/zuse",
+            "appearance-gallery",
+            "MIT",
+        ),
+    })
+}
+
+fn flexoki_light() -> ThemeVariant {
+    variant(Seeds {
+        id: "flexoki-light",
+        family_id: "flexoki",
+        name: "Flexoki Light",
+        appearance: Appearance::Light,
+        treatment: SurfaceTreatment::Opaque,
+        background: "#fffcf0",
+        shell: "#f2f0e5",
+        raised: "#f2f0e5",
+        card: "#fffcf0",
+        text: "#100f0f",
+        muted: "#6d6b66",
+        faint: "#6f6e69",
+        accent: "#bc5215",
+        danger: "#af3029",
+        warning: "#8e6b01",
+        success: "#536907",
+        terminal_background: "#fffcf0",
+        ansi: [
+            "#f2f0e5", "#af3029", "#536907", "#8e6b01", "#bc5215", "#a02f6f", "#1c6c66", "#100f0f",
+            "#6f6e69", "#af3029", "#536907", "#5e409d", "#bc5215", "#a02f6f", "#1c6c66", "#100f0f",
+        ],
+        syntax: [
+            "#6f6e69", "#a02f6f", "#536907", "#5e409d", "#1c6c66", "#bc5215", "#205ea6", "#100f0f",
+            "#6f6e69", "#af3029", "#a02f6f", "#af3029",
+        ],
+        source: source(
+            "flexoki-light",
+            "palette",
+            "https://github.com/kepano/flexoki",
+            "8d723bac4a9ac46adfdf99d42155286977aac72a",
+            "MIT",
+        ),
+    })
+}
+
+fn flexoki_dark() -> ThemeVariant {
+    variant(Seeds {
+        id: "flexoki-dark",
+        family_id: "flexoki",
+        name: "Flexoki Dark",
+        appearance: Appearance::Dark,
+        treatment: SurfaceTreatment::Opaque,
+        background: "#100f0f",
+        shell: "#1c1b1a",
+        raised: "#282726",
+        card: "#1c1b1a",
+        text: "#cecdc3",
+        muted: "#9f9d96",
+        faint: "#878580",
+        accent: "#da702c",
+        danger: "#e8705f",
+        warning: "#d0a215",
+        success: "#a0af54",
+        terminal_background: "#100f0f",
+        ansi: [
+            "#1c1b1a", "#e8705f", "#a0af54", "#d0a215", "#da702c", "#ce5d97", "#3aa99f", "#cecdc3",
+            "#282726", "#e8705f", "#a0af54", "#8b7ec8", "#da702c", "#ce5d97", "#3aa99f", "#cecdc3",
+        ],
+        syntax: [
+            "#9f9d96", "#ce5d97", "#a0af54", "#8b7ec8", "#3aa99f", "#da702c", "#66a0c8", "#cecdc3",
+            "#9f9d96", "#e8705f", "#ce5d97", "#e8705f",
+        ],
+        source: source(
+            "flexoki-dark",
+            "palette",
+            "https://github.com/kepano/flexoki",
+            "8d723bac4a9ac46adfdf99d42155286977aac72a",
+            "MIT",
+        ),
+    })
+}
+
+fn everforest_light() -> ThemeVariant {
+    variant(Seeds {
+        id: "everforest-light",
+        family_id: "everforest",
+        name: "Everforest Light",
+        appearance: Appearance::Light,
+        treatment: SurfaceTreatment::Opaque,
+        background: "#fdf6e3",
+        shell: "#efebd4",
+        raised: "#f4f0d9",
+        card: "#f8f5e4",
+        text: "#47555d",
+        muted: "#5c6a72",
+        faint: "#5c6a72",
+        accent: "#627212",
+        danger: "#a33738",
+        warning: "#89541f",
+        success: "#536d20",
+        terminal_background: "#fdf6e3",
+        ansi: [
+            "#efebd4", "#a33738", "#536d20", "#89541f", "#386d79", "#954e62", "#356c5c", "#47555d",
+            "#5c6a72", "#a33738", "#536d20", "#89541f", "#386d79", "#954e62", "#356c5c", "#47555d",
+        ],
+        syntax: [
+            "#5c6a72", "#954e62", "#536d20", "#89541f", "#356c5c", "#386d79", "#75547e", "#47555d",
+            "#5c6a72", "#a33738", "#954e62", "#a33738",
+        ],
+        source: source(
+            "everforest-light",
+            "palette",
+            "https://github.com/sainnhe/everforest",
+            "85a86eb62409e3ec88713bff3d1b9d7374e112e4",
+            "MIT",
+        ),
+    })
+}
+
+fn everforest_dark() -> ThemeVariant {
+    variant(Seeds {
+        id: "everforest-dark",
+        family_id: "everforest",
+        name: "Everforest Dark",
+        appearance: Appearance::Dark,
+        treatment: SurfaceTreatment::Opaque,
+        background: "#2d353b",
+        shell: "#232a2e",
+        raised: "#3b474b",
+        card: "#343f44",
+        text: "#e0d3b8",
+        muted: "#abb7ae",
+        faint: "#a6b2a9",
+        accent: "#a7c080",
+        danger: "#e67e80",
+        warning: "#dbbc7f",
+        success: "#a7c080",
+        terminal_background: "#2d353b",
+        ansi: [
+            "#232a2e", "#e67e80", "#a7c080", "#dbbc7f", "#9ac7c8", "#d699b6", "#a0d3aa", "#e0d3b8",
+            "#3b474b", "#e99587", "#a7c080", "#dbbc7f", "#9ac7c8", "#e99587", "#a0d3aa", "#e0d3b8",
+        ],
+        syntax: [
+            "#a6b2a9", "#d699b6", "#a7c080", "#dbbc7f", "#a0d3aa", "#9ac7c8", "#d699b6", "#e0d3b8",
+            "#a6b2a9", "#e99587", "#e99587", "#e67e80",
+        ],
+        source: source(
+            "everforest-dark",
+            "palette",
+            "https://github.com/sainnhe/everforest",
+            "85a86eb62409e3ec88713bff3d1b9d7374e112e4",
             "MIT",
         ),
     })
@@ -752,43 +966,6 @@ fn ayu_dark() -> ThemeVariant {
     })
 }
 
-fn ayu_mirage() -> ThemeVariant {
-    variant(Seeds {
-        id: "ayu-mirage",
-        family_id: "ayu",
-        name: "Ayu Mirage",
-        appearance: Appearance::Dark,
-        treatment: SurfaceTreatment::Opaque,
-        background: "#242936",
-        shell: "#1f2430",
-        raised: "#343d4d",
-        card: "#282e3b",
-        text: "#cccac2",
-        muted: "#8a94a6",
-        faint: "#6e7c8f",
-        accent: "#ffcc66",
-        danger: "#ff6666",
-        warning: "#ffcc66",
-        success: "#87d96c",
-        terminal_background: "#1f2430",
-        ansi: [
-            "#171b24", "#f28273", "#87d96c", "#fcca60", "#6acdff", "#ddbbff", "#93e2c8", "#c7c7c7",
-            "#686868", "#f28779", "#d5ff80", "#ffcd66", "#73d0ff", "#dfbfff", "#95e6cb", "#ffffff",
-        ],
-        syntax: [
-            "#6e7c8f", "#ffa659", "#d5ff80", "#dfbfff", "#5ccfe6", "#ffcd66", "#f28779", "#cccac2",
-            "#8a94a6", "#5ccfe6", "#d9be98", "#ff6666",
-        ],
-        source: source(
-            "ayu-mirage",
-            "vscode",
-            "https://github.com/ayu-theme/vscode-ayu",
-            "444ef92911cb75c3933c8003e3a7c79b6b6c914f",
-            "MIT",
-        ),
-    })
-}
-
 fn gruvbox_light() -> ThemeVariant {
     variant(Seeds {
         id: "gruvbox-light",
@@ -875,7 +1052,7 @@ fn rose_pine_dawn() -> ThemeVariant {
         raised: "#dfdad9",
         card: "#fffaf3",
         text: "#575279",
-        muted: "#797593",
+        muted: "#5f5a78",
         faint: "#9893a5",
         accent: "#907aa9",
         danger: "#b4637a",
@@ -912,7 +1089,7 @@ fn rose_pine_moon() -> ThemeVariant {
         raised: "#393552",
         card: "#2a273f",
         text: "#e0def4",
-        muted: "#908caa",
+        muted: "#aaa6c1",
         faint: "#6e6a86",
         accent: "#c4a7e7",
         danger: "#eb6f92",
@@ -1006,339 +1183,6 @@ fn one_dark_pro() -> ThemeVariant {
             "vscode",
             "https://github.com/Binaryify/OneDark-Pro",
             "e6ccf638d5b69aa38cd1005edb0ee7ba7ef6fedc",
-            "MIT",
-        ),
-    })
-}
-
-fn atom_one_dark() -> ThemeVariant {
-    variant(Seeds {
-        id: "atom-one-dark",
-        family_id: "atom-one-dark",
-        name: "Atom One Dark",
-        appearance: Appearance::Dark,
-        treatment: SurfaceTreatment::Opaque,
-        background: "#282c34",
-        shell: "#21252b",
-        raised: "#2c313a",
-        card: "#21252b",
-        text: "#abb2bf",
-        muted: "#9da5b4",
-        faint: "#5c6370",
-        accent: "#528bff",
-        danger: "#e06c75",
-        warning: "#d19a66",
-        success: "#98c379",
-        terminal_background: "#282c34",
-        ansi: [
-            "#282c34", "#e06c75", "#98c379", "#e5c07b", "#61afef", "#c678dd", "#56b6c2", "#abb2bf",
-            "#5c6370", "#e06c75", "#98c379", "#e5c07b", "#61afef", "#c678dd", "#56b6c2", "#ffffff",
-        ],
-        syntax: [
-            "#5c6370", "#c678dd", "#98c379", "#d19a66", "#e5c07b", "#61afef", "#56b6c2", "#e06c75",
-            "#abb2bf", "#e06c75", "#61afef", "#e06c75",
-        ],
-        source: source(
-            "atom-one-dark",
-            "vscode",
-            "https://github.com/akamud/vscode-theme-onedark",
-            "a8be970644982221f9b61fb1c4b3da74b4beab79",
-            "MIT",
-        ),
-    })
-}
-
-fn night_owl() -> ThemeVariant {
-    variant(Seeds {
-        id: "night-owl",
-        family_id: "night-owl",
-        name: "Night Owl",
-        appearance: Appearance::Dark,
-        treatment: SurfaceTreatment::Opaque,
-        background: "#011627",
-        shell: "#01111d",
-        raised: "#0b253a",
-        card: "#071d2e",
-        text: "#d6deeb",
-        muted: "#8ca6ba",
-        faint: "#637777",
-        accent: "#82aaff",
-        danger: "#ef5350",
-        warning: "#ffeb95",
-        success: "#22da6e",
-        terminal_background: "#011627",
-        ansi: [
-            "#011627", "#ef5350", "#22da6e", "#c5e478", "#82aaff", "#c792ea", "#21c7a8", "#ffffff",
-            "#575656", "#ef5350", "#22da6e", "#ffeb95", "#82aaff", "#c792ea", "#7fdbca", "#ffffff",
-        ],
-        syntax: [
-            "#637777", "#82aaff", "#c5e478", "#f78c6c", "#ffcb8b", "#c5e478", "#bec5d4", "#d7dbe0",
-            "#82aaff", "#7fdbca", "#f78c6c", "#ef5350",
-        ],
-        source: source(
-            "night-owl",
-            "vscode",
-            "https://github.com/sdras/night-owl-vscode-theme",
-            "cc291eba7976b20d7c66bde6883c27b902196b07",
-            "MIT",
-        ),
-    })
-}
-
-fn night_owl_light() -> ThemeVariant {
-    variant(Seeds {
-        id: "night-owl-light",
-        family_id: "night-owl",
-        name: "Night Owl Light",
-        appearance: Appearance::Light,
-        treatment: SurfaceTreatment::Opaque,
-        background: "#fbfbfb",
-        shell: "#f0f0f0",
-        raised: "#d3e8f8",
-        card: "#ffffff",
-        text: "#403f53",
-        muted: "#66657a",
-        faint: "#7a8297",
-        accent: "#4876d6",
-        danger: "#de3d3b",
-        warning: "#a67d00",
-        success: "#08916a",
-        terminal_background: "#f6f6f6",
-        ansi: [
-            "#403f53", "#de3d3b", "#08916a", "#e0af02", "#288ed7", "#d6438a", "#2aa298", "#93a1a1",
-            "#403f53", "#de3d3b", "#08916a", "#daaa01", "#288ed7", "#d6438a", "#2aa298", "#403f53",
-        ],
-        syntax: [
-            "#6f7896", "#4876d6", "#0c8f75", "#aa0982", "#111111", "#4876d6", "#111111", "#403f53",
-            "#4876d6", "#111111", "#aa0982", "#de3d3b",
-        ],
-        source: source(
-            "night-owl-light",
-            "vscode",
-            "https://github.com/sdras/night-owl-vscode-theme",
-            "cc291eba7976b20d7c66bde6883c27b902196b07",
-            "MIT",
-        ),
-    })
-}
-
-fn winter_dark_blue() -> ThemeVariant {
-    variant(Seeds {
-        id: "winter-dark-blue",
-        family_id: "winter-is-coming",
-        name: "Winter is Coming Dark Blue",
-        appearance: Appearance::Dark,
-        treatment: SurfaceTreatment::Opaque,
-        background: "#011627",
-        shell: "#01111d",
-        raised: "#0b253a",
-        card: "#071d2e",
-        text: "#d6deeb",
-        muted: "#8ca6ba",
-        faint: "#5f7e97",
-        accent: "#219fd5",
-        danger: "#ef5350",
-        warning: "#ffca28",
-        success: "#22da6e",
-        terminal_background: "#011627",
-        ansi: [
-            "#011627", "#ef5350", "#22da6e", "#f7ecb5", "#219fd5", "#c792ea", "#80cbc4", "#d6deeb",
-            "#5f7e97", "#ef9a9a", "#addb67", "#ffcb6b", "#82aaff", "#c792ea", "#7fdbca", "#ffffff",
-        ],
-        syntax: [
-            "#8095a8", "#c792ea", "#78bd65", "#8dec95", "#d29ffc", "#87aff4", "#7fdbca", "#cbcdd2",
-            "#4fb4d8", "#6dbdfa", "#f7ecb5", "#ef5350",
-        ],
-        source: source(
-            "winter-dark-blue",
-            "vscode",
-            "https://github.com/johnpapa/vscode-winteriscoming",
-            "260547834cb6ac37dd5b8bb5842cc1c8d3164946",
-            "MIT",
-        ),
-    })
-}
-
-fn winter_light() -> ThemeVariant {
-    variant(Seeds {
-        id: "winter-light",
-        family_id: "winter-is-coming",
-        name: "Winter is Coming Light",
-        appearance: Appearance::Light,
-        treatment: SurfaceTreatment::Opaque,
-        background: "#ffffff",
-        shell: "#f3f3f3",
-        raised: "#e5e5e5",
-        card: "#ffffff",
-        text: "#1857a4",
-        muted: "#62626a",
-        faint: "#66768a",
-        accent: "#2f86d2",
-        danger: "#de3d3b",
-        warning: "#9b6a00",
-        success: "#08916a",
-        terminal_background: "#ffffff",
-        ansi: [
-            "#011627", "#de3d3b", "#08916a", "#c5a332", "#236ebf", "#7c4dff", "#0097a7", "#7e8993",
-            "#403f53", "#f76c6c", "#49d0b0", "#e7c244", "#4e8cdf", "#b15a91", "#00bcd4", "#403f53",
-        ],
-        syntax: [
-            "#357b42", "#7942a8", "#87429a", "#174781", "#0444ac", "#b1108e", "#207b76", "#224555",
-            "#4f7aa0", "#0444ac", "#b46a0f", "#c73532",
-        ],
-        source: source(
-            "winter-light",
-            "vscode",
-            "https://github.com/johnpapa/vscode-winteriscoming",
-            "260547834cb6ac37dd5b8bb5842cc1c8d3164946",
-            "MIT",
-        ),
-    })
-}
-
-fn palenight() -> ThemeVariant {
-    variant(Seeds {
-        id: "palenight",
-        family_id: "palenight",
-        name: "Palenight",
-        appearance: Appearance::Dark,
-        treatment: SurfaceTreatment::Opaque,
-        background: "#292d3e",
-        shell: "#232635",
-        raised: "#34384c",
-        card: "#292d3e",
-        text: "#eeffff",
-        muted: "#a6accd",
-        faint: "#697098",
-        accent: "#82aaff",
-        danger: "#ff5572",
-        warning: "#ffcb6b",
-        success: "#c3e88d",
-        terminal_background: "#292d3e",
-        ansi: [
-            "#676e95", "#ff5572", "#a9c77d", "#ffcb6b", "#82aaff", "#c792ea", "#89ddff", "#ffffff",
-            "#676e95", "#ff5572", "#c3e88d", "#ffcb6b", "#82aaff", "#c792ea", "#89ddff", "#ffffff",
-        ],
-        syntax: [
-            "#697098", "#c792ea", "#c3e88d", "#f78c6c", "#eeffff", "#ffcb6b", "#89ddff", "#bfc7d5",
-            "#82aaff", "#89ddff", "#7986e7", "#ff5572",
-        ],
-        source: source(
-            "palenight",
-            "vscode",
-            "https://github.com/whizkydee/vscode-palenight-theme",
-            "6291efaace90855abe3d79025327ca41b9a3138c",
-            "MIT",
-        ),
-    })
-}
-
-fn synthwave_84() -> ThemeVariant {
-    variant(Seeds {
-        id: "synthwave-84",
-        family_id: "synthwave-84",
-        name: "SynthWave '84",
-        appearance: Appearance::Dark,
-        treatment: SurfaceTreatment::Opaque,
-        background: "#262335",
-        shell: "#241b2f",
-        raised: "#37294d",
-        card: "#2a2139",
-        text: "#ffffff",
-        muted: "#b8b5c6",
-        faint: "#848bbd",
-        accent: "#ff7edb",
-        danger: "#fe4450",
-        warning: "#fede5d",
-        success: "#72f1b8",
-        terminal_background: "#262335",
-        ansi: [
-            "#242424", "#fe4450", "#72f1b8", "#f3e70f", "#03edf9", "#ff7edb", "#03edf9", "#d4d4d8",
-            "#52525b", "#fe4450", "#72f1b8", "#fede5d", "#03edf9", "#ff7edb", "#03edf9", "#fafafa",
-        ],
-        syntax: [
-            "#848bbd", "#72f1b8", "#f97e72", "#2ee2fa", "#fe4450", "#72f1b8", "#2ee2fa", "#f8f8f2",
-            "#72f1b8", "#72f1b8", "#dd5500", "#fe4450",
-        ],
-        source: source(
-            "synthwave-84",
-            "vscode",
-            "https://github.com/robb0wen/synthwave-vscode",
-            "ecfa2fe1279f7233663fa3f98a96e6756000567b",
-            "MIT",
-        ),
-    })
-}
-
-fn cobalt2() -> ThemeVariant {
-    variant(Seeds {
-        id: "cobalt2",
-        family_id: "cobalt2",
-        name: "Cobalt2",
-        appearance: Appearance::Dark,
-        treatment: SurfaceTreatment::Opaque,
-        background: "#193549",
-        shell: "#15232d",
-        raised: "#20455e",
-        card: "#122738",
-        text: "#ffffff",
-        muted: "#b7c9d3",
-        faint: "#7da1b5",
-        accent: "#ffc600",
-        danger: "#ff628c",
-        warning: "#ffc600",
-        success: "#3ad900",
-        terminal_background: "#122738",
-        ansi: [
-            "#000000", "#ff628c", "#3ad900", "#ffc600", "#0088ff", "#fb94ff", "#80fcff", "#ffffff",
-            "#0050a4", "#ff628c", "#3ad900", "#ffc600", "#0088ff", "#fb94ff", "#80fcff", "#ffffff",
-        ],
-        syntax: [
-            "#0088ff", "#ff9d00", "#ffee80", "#ffc600", "#ff68b8", "#ffc600", "#9effff", "#ffffff",
-            "#ffee80", "#ffc600", "#ffb454", "#f44542",
-        ],
-        source: source(
-            "cobalt2",
-            "vscode",
-            "https://github.com/wesbos/cobalt2-vscode",
-            "c4e9574372b85afad1682ed0fdd1ac0411c62512",
-            "MIT",
-        ),
-    })
-}
-
-fn andromeda() -> ThemeVariant {
-    variant(Seeds {
-        id: "andromeda",
-        family_id: "andromeda",
-        name: "Andromeda",
-        appearance: Appearance::Dark,
-        treatment: SurfaceTreatment::Opaque,
-        background: "#23262e",
-        shell: "#1e2027",
-        raised: "#2d313b",
-        card: "#23262e",
-        text: "#d5ced9",
-        muted: "#a6a0aa",
-        faint: "#746f77",
-        accent: "#00e8c6",
-        danger: "#ee5d43",
-        warning: "#ff9f2e",
-        success: "#96e072",
-        terminal_background: "#23262e",
-        ansi: [
-            "#242424", "#ee5d43", "#96e072", "#ffe66d", "#7cb7ff", "#ff00aa", "#00e8c6", "#d4d4d8",
-            "#52525b", "#ee5d43", "#96e072", "#ffe66d", "#7cb7ff", "#ff00aa", "#00e8c6", "#fafafa",
-        ],
-        syntax: [
-            "#a0a1a7", "#ee5d43", "#96e072", "#f39c12", "#ffe66d", "#ffe66d", "#d5ced9", "#f39c12",
-            "#96e072", "#f92672", "#ee5d43", "#ee5d43",
-        ],
-        source: source(
-            "andromeda",
-            "vscode",
-            "https://github.com/EliverLara/Andromeda",
-            "d1abb48c69493000aa0133a32d594eb25e523d4f",
             "MIT",
         ),
     })
