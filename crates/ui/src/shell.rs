@@ -13233,7 +13233,6 @@ impl Shell {
             .and_then(|background| {
                 crate::new_thread_background_effects::backdrop_is_dark(
                     std::path::Path::new(&background.path),
-                    new_thread_background_effect,
                     wallpaper_look,
                     theme.bg,
                     new_thread_background_opacity(theme.is_frost()),

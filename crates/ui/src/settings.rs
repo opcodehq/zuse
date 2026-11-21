@@ -195,22 +195,21 @@ impl WallpaperLook {
 pub enum NewThreadBackgroundEffect {
     #[default]
     None,
+    /// Retired ASCII and Halftone selections load as the closest remaining
+    /// stylized treatment.
+    #[serde(alias = "ascii", alias = "halftone")]
     Dither,
     Grain,
     Vignette,
-    Ascii,
-    Halftone,
     Scanlines,
 }
 
 impl NewThreadBackgroundEffect {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 5] = [
         Self::None,
         Self::Dither,
         Self::Grain,
         Self::Vignette,
-        Self::Ascii,
-        Self::Halftone,
         Self::Scanlines,
     ];
 
@@ -220,8 +219,6 @@ impl NewThreadBackgroundEffect {
             Self::Dither => "Dither",
             Self::Grain => "Grain",
             Self::Vignette => "Vignette",
-            Self::Ascii => "ASCII",
-            Self::Halftone => "Halftone",
             Self::Scanlines => "Scanlines",
         }
     }
@@ -232,8 +229,6 @@ impl NewThreadBackgroundEffect {
             Self::Dither => "Rebuilds the artwork with a dithered color palette.",
             Self::Grain => "Adds a fine, static texture to the image.",
             Self::Vignette => "Softens the edges around the center of the image.",
-            Self::Ascii => "Recreates the artwork with colored characters on black.",
-            Self::Halftone => "Recreates the artwork with colored print dots on black.",
             Self::Scanlines => "Adds a pronounced horizontal display-line texture.",
         }
     }
@@ -3094,7 +3089,7 @@ mod tests {
             .unwrap();
         cx.update(|cx| {
             let initial = UiSettings {
-                new_thread_background_effect: NewThreadBackgroundEffect::Ascii,
+                new_thread_background_effect: NewThreadBackgroundEffect::Scanlines,
                 ..Default::default()
             };
             init(initial, dir.path(), cx);
@@ -3119,7 +3114,7 @@ mod tests {
             assert_eq!(UiSettings::load(dir.path()), settings);
             assert_eq!(
                 settings.new_thread_background_effect,
-                NewThreadBackgroundEffect::Ascii
+                NewThreadBackgroundEffect::Scanlines
             );
             assert_eq!(
                 replacement.adjustment,
@@ -3151,6 +3146,15 @@ mod tests {
             assert!(!UiSettings::path(dir.path()).exists());
             assert!(candidate.exists());
         });
+    }
+
+    #[test]
+    fn retired_background_effects_load_as_dither() {
+        for retired in ["ascii", "halftone"] {
+            let effect: NewThreadBackgroundEffect =
+                serde_json::from_str(&format!("\"{retired}\"")).unwrap();
+            assert_eq!(effect, NewThreadBackgroundEffect::Dither);
+        }
     }
 
     #[test]
@@ -3321,7 +3325,7 @@ mod tests {
             wallpaper_history: vec!["/tmp/wallpapers/background.png".into()],
             wallpaper_theme_colors: false,
             wallpaper_color: None,
-            new_thread_background_effect: NewThreadBackgroundEffect::Ascii,
+            new_thread_background_effect: NewThreadBackgroundEffect::Scanlines,
             wallpaper_look: WallpaperLook {
                 blur: 4,
                 opacity: 75,
@@ -3337,7 +3341,7 @@ mod tests {
         assert_eq!(UiSettings::load(dir.path()), settings);
         assert!(json.contains(r#""codeFencesFitContent": true"#));
         assert!(json.contains(r#""openWebLinksInZuse": false"#));
-        assert!(json.contains(r#""newThreadBackgroundEffect": "ascii""#));
+        assert!(json.contains(r#""newThreadBackgroundEffect": "scanlines""#));
         assert!(json.contains(r#""focalX": 0.25"#));
         assert!(json.contains(r#""focalY": 0.75"#));
         assert!(json.contains(r#""zoom": 1.8"#));

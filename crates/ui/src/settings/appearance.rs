@@ -148,9 +148,92 @@ fn background_preview_size(
     .max(1.0);
     let hero_height =
         crate::shell::new_thread_background_height(f32::from(viewport.height)).max(1.0);
-    let max_width = (f32::from(viewport.width) - 84.0).clamp(1.0, 556.0);
-    let scale = (max_width / hero_width).min(258.0 / hero_height);
+    let max_width = (f32::from(viewport.width) - 84.0).clamp(1.0, 676.0);
+    let scale = (max_width / hero_width).min(300.0 / hero_height);
     gpui::size(px(hero_width * scale), px(hero_height * scale))
+}
+
+/// Overlays for the adjustment preview: a rule-of-thirds grid (brighter while
+/// dragging), ghosts of the heading and composer at their real proportions so
+/// the subject can be framed around the UI, and a zoom badge once zoomed.
+fn background_layout_guides(composer: f32, zoom: f32, dragging: bool) -> gpui::Div {
+    let line = gpui::white().opacity(if dragging { 0.28 } else { 0.1 });
+    let ghost = gpui::white().opacity(if dragging { 0.16 } else { 0.32 });
+    let mut guides = div().absolute().inset_0();
+    for at in [1.0 / 3.0, 2.0 / 3.0] {
+        guides = guides
+            .child(
+                div()
+                    .absolute()
+                    .left(gpui::relative(at))
+                    .top_0()
+                    .bottom_0()
+                    .w(px(1.0))
+                    .bg(line),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top(gpui::relative(at))
+                    .left_0()
+                    .right_0()
+                    .h(px(1.0))
+                    .bg(line),
+            );
+    }
+    guides
+        .child(
+            div()
+                .absolute()
+                .top(gpui::relative(0.36))
+                .left_0()
+                .right_0()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(5.0))
+                .child(
+                    div()
+                        .w(gpui::relative(0.34))
+                        .h(px(7.0))
+                        .rounded_full()
+                        .bg(ghost),
+                )
+                .child(
+                    div()
+                        .w(gpui::relative(0.16))
+                        .h(px(4.0))
+                        .rounded_full()
+                        .bg(ghost.opacity(0.6)),
+                ),
+        )
+        .child(
+            div()
+                .absolute()
+                .bottom(gpui::relative(0.06))
+                .left(gpui::relative((1.0 - composer) / 2.0))
+                .w(gpui::relative(composer))
+                .h(gpui::relative(0.17))
+                .rounded(px(7.0))
+                .border_1()
+                .border_color(ghost)
+                .bg(gpui::black().opacity(0.22)),
+        )
+        .when(zoom > 1.005, |guides| {
+            guides.child(
+                div()
+                    .absolute()
+                    .top(px(8.0))
+                    .right(px(8.0))
+                    .px(px(7.0))
+                    .py(px(2.0))
+                    .rounded(px(5.0))
+                    .bg(gpui::black().opacity(0.55))
+                    .text_size(typography::text_xs())
+                    .text_color(gpui::white().opacity(0.9))
+                    .child(format!("{:.0}%", zoom * 100.0)),
+            )
+        })
 }
 
 /// The three independently configurable font slots. Interface and code/diff
@@ -3310,13 +3393,14 @@ impl AppearancePage {
             .as_ref()
             .is_some_and(|background| background.path == path);
         let available = Path::new(&path).is_file();
+        // Frame against the untreated photo: effects and tone adjustments
+        // obscure the detail you are positioning, and the panel previews them.
         let source = (same_image && available)
             .then(|| {
-                crate::new_thread_background_effects::prepare_look(
-                    settings.new_thread_background_effect,
+                crate::new_thread_background_effects::prepare(
+                    crate::settings::NewThreadBackgroundEffect::None,
                     theme,
                     Path::new(&path),
-                    settings.wallpaper_look,
                     cx,
                 )
             })
@@ -3324,6 +3408,17 @@ impl AppearancePage {
         let ready = source.is_some();
         let preview_size =
             background_preview_size(viewport, settings.sidebar_width, settings.sidebar_collapsed);
+        // The composer spans the transcript column, inset 24px a side on
+        // narrow windows; as a share of the hero it sizes the preview guide.
+        let hero_width = (f32::from(viewport.width)
+            - if settings.sidebar_collapsed {
+                0.0
+            } else {
+                settings.sidebar_width
+            })
+        .max(1.0);
+        let composer_fraction =
+            (settings.transcript_width.min(hero_width - 48.0) / hero_width).clamp(0.3, 0.95);
         if let Some(dialog) = self.background_adjustment_dialog.as_mut() {
             dialog.source = source.clone();
         }
@@ -3441,44 +3536,12 @@ impl AppearancePage {
                         }),
                 )
             })
-            .when(dragging, |preview| {
-                preview
-                    .child(
-                        div()
-                            .absolute()
-                            .left(gpui::relative(1.0 / 3.0))
-                            .top_0()
-                            .bottom_0()
-                            .w(px(1.0))
-                            .bg(gpui::white().opacity(0.22)),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .left(gpui::relative(2.0 / 3.0))
-                            .top_0()
-                            .bottom_0()
-                            .w(px(1.0))
-                            .bg(gpui::white().opacity(0.22)),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .top(gpui::relative(1.0 / 3.0))
-                            .left_0()
-                            .right_0()
-                            .h(px(1.0))
-                            .bg(gpui::white().opacity(0.22)),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .top(gpui::relative(2.0 / 3.0))
-                            .left_0()
-                            .right_0()
-                            .h(px(1.0))
-                            .bg(gpui::white().opacity(0.22)),
-                    )
+            .when(ready, |preview| {
+                preview.child(background_layout_guides(
+                    composer_fraction,
+                    draft.zoom,
+                    dragging,
+                ))
             });
 
         let zoom_fraction = background_zoom_fraction(draft.zoom);
@@ -3553,49 +3616,89 @@ impl AppearancePage {
                     .top(px(12.0))
                     .h(px(4.0))
                     .rounded_full()
-                    .bg(theme.border)
+                    .bg(theme.border_strong)
                     .child(
                         div()
                             .h_full()
                             .w(gpui::relative(zoom_fraction))
                             .rounded_full()
-                            .bg(theme.accent),
+                            .bg(selection_tone(theme).opacity(0.64)),
                     )
                     .child(
                         div()
                             .absolute()
                             .left(gpui::relative(zoom_fraction))
-                            .ml(px(-7.0))
-                            .top(px(-5.0))
-                            .size(px(14.0))
+                            .ml(px(-6.0))
+                            .top(px(-4.0))
+                            .size(px(12.0))
                             .rounded_full()
-                            .bg(theme.accent),
+                            .bg(selection_tone(theme)),
                     ),
             );
+        let square = |glyph: &'static str, id: &'static str| {
+            widgets::action_button(theme, widgets::ActionTone::Outlined)
+                .id(id)
+                .size(px(28.0))
+                .min_h(px(28.0))
+                .p_0()
+                .justify_center()
+                .tab_index(0)
+                .role(gpui::Role::Button)
+                .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                .child(div().text_size(typography::text_sm()).child(glyph))
+        };
         let controls = div()
             .mt(px(14.0))
             .flex()
+            .flex_wrap()
             .items_center()
             .justify_between()
-            .gap(px(12.0))
-            .child(
-                compact_action(theme, "Reset", "new-thread-background-adjustment-reset")
-                    .tab_index(0)
-                    .role(gpui::Role::Button)
-                    .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                    .on_click(cx.listener(|this, _, _, cx| this.reset_background_adjustment(cx))),
-            )
+            .gap(px(10.0))
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap(px(6.0))
                     .child(
-                        compact_action(theme, "−", "new-thread-background-adjustment-zoom-out")
+                        icon_action(
+                            theme,
+                            icons::EXPAND_ARROWS,
+                            "Fit",
+                            "new-thread-background-adjustment-fit",
+                        )
+                        .tab_index(0)
+                        .role(gpui::Role::Button)
+                        .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.set_background_zoom(
+                                crate::settings::NewThreadBackgroundAdjustment::MIN_ZOOM,
+                                cx,
+                            )
+                        })),
+                    )
+                    .child(
+                        compact_action(theme, "Center", "new-thread-background-adjustment-center")
+                            .px(px(11.0))
                             .tab_index(0)
                             .role(gpui::Role::Button)
-                            .aria_label(tr(cx, msg::chat::markdown_body_zoom_out))
                             .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(dialog) = this.background_adjustment_dialog.as_mut() {
+                                    dialog.draft.focal_x = 0.5;
+                                    dialog.draft.focal_y = 0.5;
+                                }
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(
+                        square("−", "new-thread-background-adjustment-zoom-out")
+                            .aria_label(tr(cx, msg::chat::markdown_body_zoom_out))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 let Some(dialog) = this.background_adjustment_dialog.as_ref()
                                 else {
@@ -3609,19 +3712,8 @@ impl AppearancePage {
                     )
                     .child(zoom_slider)
                     .child(
-                        div()
-                            .w(px(52.0))
-                            .text_center()
-                            .text_size(typography::text_xs())
-                            .text_color(theme.text_muted)
-                            .child(format!("{:.0}%", draft.zoom * 100.0)),
-                    )
-                    .child(
-                        compact_action(theme, "+", "new-thread-background-adjustment-zoom-in")
-                            .tab_index(0)
-                            .role(gpui::Role::Button)
+                        square("+", "new-thread-background-adjustment-zoom-in")
                             .aria_label(tr(cx, msg::chat::markdown_body_zoom_in))
-                            .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 let Some(dialog) = this.background_adjustment_dialog.as_ref()
                                 else {
@@ -3632,7 +3724,27 @@ impl AppearancePage {
                                     cx,
                                 );
                             })),
+                    )
+                    .child(
+                        div()
+                            .w(px(40.0))
+                            .text_right()
+                            .text_size(typography::text_xs())
+                            .text_color(theme.text_muted)
+                            .child(format!("{:.0}%", draft.zoom * 100.0)),
                     ),
+            )
+            .child(
+                icon_action(
+                    theme,
+                    icons::RESTART,
+                    "Reset",
+                    "new-thread-background-adjustment-reset",
+                )
+                .tab_index(0)
+                .role(gpui::Role::Button)
+                .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                .on_click(cx.listener(|this, _, _, cx| this.reset_background_adjustment(cx))),
             );
 
         let footer = popover::dialog_footer(theme)
@@ -3681,8 +3793,12 @@ impl AppearancePage {
                     .min_w_0()
                     .child(popover::dialog_title(theme, "Adjust background"))
                     .child(
-                        popover::dialog_body(theme, "Drag to reposition. Scroll or pinch to zoom.")
-                            .mt(px(4.0)),
+                        popover::dialog_body(
+                            theme,
+                            "Drag to reposition, scroll or pinch to zoom, arrow keys to nudge. \
+                             Guides show where the heading and composer sit.",
+                        )
+                        .mt(px(4.0)),
                     ),
             )
             .child(
@@ -3714,7 +3830,7 @@ impl AppearancePage {
 
         let card = popover::dialog_card(theme)
             .id("new-thread-background-adjustment-card")
-            .w(px((f32::from(viewport.width) - 40.0).clamp(1.0, 600.0)))
+            .w(px((f32::from(viewport.width) - 40.0).clamp(1.0, 720.0)))
             .p(px(20.0))
             .track_focus(&focus)
             .tab_group()
@@ -5004,8 +5120,8 @@ mod tests {
                     crate::shell::new_thread_background_height(f32::from(viewport.height));
                 let aspect = f32::from(preview.width) / f32::from(preview.height);
                 assert!((aspect - hero_width / hero_height).abs() < 0.00001);
-                assert!(f32::from(preview.width) <= 556.0);
-                assert!(f32::from(preview.height) <= 260.0);
+                assert!(f32::from(preview.width) <= 676.0);
+                assert!(f32::from(preview.height) <= 300.0);
             }
         }
     }

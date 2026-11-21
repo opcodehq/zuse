@@ -309,7 +309,7 @@ mod tests {
             cx.set_global(crate::theme::Theme::default());
             let settings = super::super::UiSettings {
                 wallpaper_folder: Some(folder.clone()),
-                new_thread_background_effect: super::super::NewThreadBackgroundEffect::Ascii,
+                new_thread_background_effect: super::super::NewThreadBackgroundEffect::Scanlines,
                 ..Default::default()
             };
             super::super::init(settings, dir.path().join("data"), cx);

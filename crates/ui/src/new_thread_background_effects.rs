@@ -225,8 +225,6 @@ impl FrameData {
             NewThreadBackgroundEffect::Dither => self.dither_pixels(),
             NewThreadBackgroundEffect::Grain => self.grain_pixels(),
             NewThreadBackgroundEffect::Vignette => self.vignette_pixels(light),
-            NewThreadBackgroundEffect::Halftone => self.halftone_pixels(light),
-            NewThreadBackgroundEffect::Ascii => self.ascii_pixels(light),
             NewThreadBackgroundEffect::Scanlines => self.scanline_pixels(light),
         }
     }
@@ -301,80 +299,6 @@ impl FrameData {
                 .clamp(0.0, 255.0) as u8
             };
             image::Rgba([channel(b), channel(g), channel(r), a])
-        })
-    }
-
-    /// ASCII art: a 5×7 bitmap ramp from " " to "@", one glyph per cell,
-    /// inked in the cell's (brightened) color over plain paper.
-    fn ascii_pixels(&self, light: bool) -> image::RgbaImage {
-        const GLYPHS: [[u8; 7]; 10] = [
-            [0, 0, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 0, 4, 0],
-            [0, 4, 0, 0, 4, 0, 0],
-            [0, 0, 0, 14, 0, 0, 0],
-            [0, 0, 14, 0, 14, 0, 0],
-            [0, 4, 4, 31, 4, 4, 0],
-            [0, 21, 14, 31, 14, 21, 0],
-            [10, 10, 31, 10, 31, 10, 10],
-            [17, 2, 4, 4, 8, 16, 17],
-            [14, 17, 23, 21, 23, 16, 14],
-        ];
-        let scale = (self.unit() * 2 / 3).max(1);
-        let (cell_w, cell_h) = (6 * scale, 8 * scale);
-        let paper = if light { 255.0 } else { 0.0 };
-        image::RgbaImage::from_fn(self.width, self.height, |x, y| {
-            let (cx, cy) = (
-                x / cell_w * cell_w + cell_w / 2,
-                y / cell_h * cell_h + cell_h / 2,
-            );
-            let tone = self.luma(cx, cy);
-            let density = if light { 255 - tone } else { tone };
-            let glyph = &GLYPHS[((f32::from(density) / 255.0).sqrt() * 9.0) as usize];
-            let (gx, gy) = (x % cell_w / scale, y % cell_h / scale);
-            let ink = gx < 5 && gy < 7 && glyph[gy as usize] & (1 << (4 - gx)) != 0;
-            let [r, g, b, _] = self.rgba(x, y);
-            let [ir, ig, ib, _] = vivid(self.rgba(cx, cy), light);
-            let alpha = self.rgba(x, y)[3];
-            // A faint underlay keeps the picture legible between glyphs.
-            let mix = |source: u8, glyph: u8| {
-                if ink {
-                    glyph
-                } else {
-                    (paper * 0.86 + f32::from(source) * 0.14) as u8
-                }
-            };
-            image::Rgba([mix(b, ib), mix(g, ig), mix(r, ir), alpha])
-        })
-    }
-
-    /// Print halftone: round dots on a 45° screen, each sized by the tone
-    /// under it and inked in that area's color, on plain paper.
-    fn halftone_pixels(&self, light: bool) -> image::RgbaImage {
-        let cell = (self.unit() * 5).max(4) as f32;
-        let paper = if light { 255.0 } else { 0.0 };
-        let (sin, cos) = std::f32::consts::FRAC_PI_4.sin_cos();
-        image::RgbaImage::from_fn(self.width, self.height, |x, y| {
-            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
-            // Into the rotated screen, snap to the cell center, and back.
-            let (u, v) = (px * cos + py * sin, -px * sin + py * cos);
-            let (cu, cv) = (
-                (u / cell).floor() * cell + cell / 2.0,
-                (v / cell).floor() * cell + cell / 2.0,
-            );
-            let (sx, sy) = (cu * cos - cv * sin, cu * sin + cv * cos);
-            let (sx, sy) = (
-                sx.clamp(0.0, self.width as f32 - 1.0) as u32,
-                sy.clamp(0.0, self.height as f32 - 1.0) as u32,
-            );
-            let tone = f32::from(self.luma(sx, sy)) / 255.0;
-            let density = if light { 1.0 - tone } else { tone };
-            let radius = cell * 0.5 * std::f32::consts::SQRT_2 * density.sqrt();
-            let distance = ((u - cu).powi(2) + (v - cv).powi(2)).sqrt();
-            let coverage = (radius - distance + 0.5).clamp(0.0, 1.0);
-            let [r, g, b, _] = vivid(self.rgba(sx, sy), light);
-            let alpha = self.rgba(x, y)[3];
-            let ink = |dot: u8| (f32::from(dot) * coverage + paper * (1.0 - coverage)) as u8;
-            image::Rgba([ink(b), ink(g), ink(r), alpha])
         })
     }
 
@@ -592,22 +516,14 @@ fn band_luma(width: u32, height: u32, luma: &[u8]) -> u8 {
 
 /// Whether the wallpaper behind the new-thread heading reads as dark, as
 /// drawn: brightness applied, then blended over `canvas` at `opacity`.
-/// `None` until the image decodes, and for effects that redraw the artwork
-/// over the theme canvas (ASCII, halftone), where the theme's ink already fits.
+/// `None` until the image decodes.
 pub(crate) fn backdrop_is_dark(
     path: &Path,
-    effect: NewThreadBackgroundEffect,
     look: crate::settings::WallpaperLook,
     canvas: gpui::Hsla,
     opacity: f32,
     cx: &mut gpui::App,
 ) -> Option<bool> {
-    if matches!(
-        effect,
-        NewThreadBackgroundEffect::Ascii | NewThreadBackgroundEffect::Halftone
-    ) {
-        return None;
-    }
     let source = background_luminance(path, cx)?;
     let image = (f32::from(source.heading_luma) * f32::from(look.brightness) / 100.0).min(255.0);
     let alpha = (opacity * f32::from(look.opacity) / 100.0).clamp(0.0, 1.0);
@@ -732,20 +648,6 @@ fn hash_unit(x: u32, y: u32) -> f32 {
     seed = (seed ^ (seed >> 16)).wrapping_mul(0x7feb_352d);
     seed = (seed ^ (seed >> 15)).wrapping_mul(0x846c_a68b);
     (seed ^ (seed >> 16)) as f32 / u32::MAX as f32
-}
-
-/// The color pushed toward a readable ink: brightened (at most 3×) on dark
-/// paper, never lighter than a deep tone on light paper. Bounded gains keep
-/// near-black pixels from blowing up into noisy, random hues.
-fn vivid([r, g, b, a]: [u8; 4], light: bool) -> [u8; 4] {
-    let peak = f32::from(r.max(g).max(b)).max(1.0);
-    let gain = if light {
-        (150.0 / peak).min(1.0)
-    } else {
-        (255.0 / peak).min(3.0)
-    };
-    let ink = |channel: u8| (f32::from(channel) * gain).min(255.0) as u8;
-    [ink(r), ink(g), ink(b), a]
 }
 
 fn dither_color([r, g, b, a]: [u8; 4], threshold: u8) -> [u8; 4] {
@@ -1018,10 +920,8 @@ mod tests {
     fn light_treatments_use_light_paper_without_inverting_source_hues() {
         let source = fixture();
         for (light, dark) in [
-            (source.ascii_pixels(true), source.ascii_pixels(false)),
             (source.scanline_pixels(true), source.scanline_pixels(false)),
             (source.vignette_pixels(true), source.vignette_pixels(false)),
-            (source.halftone_pixels(true), source.halftone_pixels(false)),
         ] {
             let brightness = |image: &image::RgbaImage| -> u64 {
                 image
@@ -1042,8 +942,6 @@ mod tests {
     ) {
         let source = fixture();
         for effect in [
-            NewThreadBackgroundEffect::Ascii,
-            NewThreadBackgroundEffect::Halftone,
             NewThreadBackgroundEffect::Scanlines,
             NewThreadBackgroundEffect::Dither,
             NewThreadBackgroundEffect::Grain,
@@ -1076,7 +974,7 @@ mod tests {
                 }
             });
         }
-        assert_eq!(source.effects.lock().unwrap().len(), 10);
+        assert_eq!(source.effects.lock().unwrap().len(), 6);
     }
 
     #[test]
@@ -1086,14 +984,11 @@ mod tests {
             source.dither_pixels(),
             source.grain_pixels(),
             source.vignette_pixels(false),
-            source.ascii_pixels(false),
             source.scanline_pixels(false),
-            source.ascii_pixels(true),
             source.scanline_pixels(true),
         ] {
             assert_eq!(image.dimensions(), (60, 32));
             assert!(image.pixels().all(|pixel| pixel.0[3] == 200));
         }
-        assert_eq!(source.halftone_pixels(false).dimensions(), (60, 32));
     }
 }
