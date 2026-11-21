@@ -1454,21 +1454,27 @@ pub fn dither_key<E: Styled + ParentElement>(
 /// The primary keys' dither ink: Zuse's olive by default, otherwise the
 /// active theme's accent, held in a lightness band the white label reads on.
 pub(crate) fn dither_ink(theme: &Theme) -> gpui::Hsla {
-    let stock = theme.family_id.as_ref() == "zuse"
-        && theme.accent_selection == zuse_theme::AccentSelection::ThemeDefault
-        && theme.wallpaper_color.is_none();
-    if stock {
+    themed_accent(theme).unwrap_or_else(|| {
         let [r, g, b] = DITHER_KEY_RGB;
-        return gpui::Rgba {
+        gpui::Rgba {
             r: f32::from(r) / 255.0,
             g: f32::from(g) / 255.0,
             b: f32::from(b) / 255.0,
             a: 1.0,
         }
-        .into();
-    }
+        .into()
+    })
+}
+
+/// The accent brand-green surfaces (keys, meters, focus rings) take on, held
+/// in a lightness band that reads on both dark plates and white labels.
+/// `None` for the stock Zuse theme, which keeps its own greens.
+pub(crate) fn themed_accent(theme: &Theme) -> Option<gpui::Hsla> {
+    let stock = theme.family_id.as_ref() == "zuse"
+        && theme.accent_selection == zuse_theme::AccentSelection::ThemeDefault
+        && theme.wallpaper_color.is_none();
     let accent = theme.accent;
-    gpui::hsla(accent.h, accent.s.min(0.78), accent.l.clamp(0.44, 0.6), 1.0)
+    (!stock).then(|| gpui::hsla(accent.h, accent.s.min(0.78), accent.l.clamp(0.44, 0.6), 1.0))
 }
 
 /// The deep base under a dither key, in the ink's hue.

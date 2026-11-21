@@ -1880,6 +1880,7 @@ fn scrollbar_thumb_colors(theme: &Theme) -> (Hsla, Hsla, Hsla) {
 
 fn sync_gpui_base_scrollbar(theme: &Theme, cx: &mut App) {
     zuse_viewport::sidebar_controls::set_plan_ink(crate::popover::dither_ink(theme), cx);
+    zuse_viewport::palette::set_accent(crate::popover::themed_accent(theme));
     let (normal, hover, active) = scrollbar_thumb_colors(theme);
     gpui_base::Theme::global_mut(cx).scrollbar.styles = gpui_base::ScrollbarStyles::default()
         .thumb(|style| style.bg(normal))

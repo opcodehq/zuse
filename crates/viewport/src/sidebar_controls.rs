@@ -592,7 +592,7 @@ impl SidebarControls {
         crate::glass::menu(
             menu.child(ui::separator())
                 .child(
-                    ui::option("sidebar-usage-refresh", "Refresh usage", "", false)
+                    ui::option("sidebar-usage-refresh", "Refresh usage", "refresh", false)
                         .role(Role::MenuItem)
                         .when(self.active == providers().len(), |v| {
                             v.bg(s::frame_bg().opacity(0.6))

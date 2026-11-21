@@ -1,6 +1,14 @@
 //! Authored Zuse app-palette colors for the current GPUI render pass.
 use std::cell::Cell;
 thread_local! { static LIGHT: Cell<bool> = const { Cell::new(false) }; }
+thread_local! { static ACCENT: Cell<Option<gpui::Hsla>> = const { Cell::new(None) }; }
+/// The Zuse brand green every authored accent uses (`0x89ca21`).
+const BRAND_GREEN: u32 = 0x89ca21;
+/// The active theme's accent, which replaces the brand green in every
+/// authored color; `None` keeps Zuse's own green.
+pub fn set_accent(accent: Option<gpui::Hsla>) {
+    ACCENT.set(accent);
+}
 pub fn set_light(light: bool) {
     LIGHT.set(light);
 }
@@ -8,6 +16,11 @@ pub fn is_light() -> bool {
     LIGHT.get()
 }
 pub fn rgb(value: u32) -> gpui::Rgba {
+    if value == BRAND_GREEN
+        && let Some(accent) = ACCENT.get()
+    {
+        return accent.into();
+    }
     let value = if is_light() {
         match value {
             0x151515 => 0xf7f9f6,
@@ -47,4 +60,19 @@ pub fn composer_toolbar() -> gpui::Hsla {
 }
 pub fn composer_border() -> gpui::Hsla {
     tone(gpui::hsla(0., 0., 1., 0.08), gpui::rgb(0xe1e7df).into())
+}
+
+#[cfg(test)]
+mod accent_tests {
+    use super::*;
+
+    #[test]
+    fn theme_accent_replaces_only_the_brand_green() {
+        let accent = gpui::hsla(0.6, 0.5, 0.5, 1.0);
+        set_accent(Some(accent));
+        assert_eq!(rgb(BRAND_GREEN), gpui::Rgba::from(accent));
+        assert_eq!(rgb(0x123456), gpui::rgb(0x123456));
+        set_accent(None);
+        assert_eq!(rgb(BRAND_GREEN), gpui::rgb(BRAND_GREEN));
+    }
 }
