@@ -2,8 +2,7 @@
 //! the image identity, pixels, atlas entry, or an asynchronous raster job.
 use crate::settings::{NewThreadBackgroundAdjustment, WallpaperLook};
 use gpui::{
-    Bounds, Corners, ImageAlphaMask, Pixels, Point, RenderImage, Window, div, point, prelude::*,
-    px, size,
+    Bounds, Corners, ImageAlphaMask, Pixels, RenderImage, Window, div, point, prelude::*, px, size,
 };
 use std::{cell::Cell, rc::Rc, sync::Arc};
 
@@ -76,55 +75,70 @@ fn source_geometry(
     )
 }
 
-/// Translate a direct-manipulation drag into viewport-independent framing.
-pub(crate) fn pan_adjustment(
-    source: &RenderImage,
-    bounds: Bounds<Pixels>,
+/// The region of the image the hero shows for `adjustment`, as a normalized
+/// `[x, y, width, height]` rect in image space. The inverse of
+/// [`adjustment_for_crop`]; both follow [`fitted_geometry`] exactly.
+pub(crate) fn crop_for_adjustment(
+    image: (f32, f32),
+    hero: (f32, f32),
     adjustment: NewThreadBackgroundAdjustment,
-    delta: Point<Pixels>,
-) -> NewThreadBackgroundAdjustment {
+) -> [f32; 4] {
+    let hero_bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(hero.0), px(hero.1)));
     let adjustment = adjustment.normalized();
-    let Some(geometry) = source_geometry(source, bounds, adjustment) else {
-        return adjustment;
+    let Some(geometry) = fitted_geometry(image.0, image.1, hero_bounds, adjustment) else {
+        return [0.0, 0.0, 1.0, 1.0];
     };
-    let mut next = adjustment;
-    if geometry.overflow_x > 0.0 {
-        next.focal_x -= f32::from(delta.x) / geometry.overflow_x;
-    }
-    if geometry.overflow_y > 0.0 {
-        next.focal_y -= f32::from(delta.y) / geometry.overflow_y;
-    }
-    next.normalized()
+    [
+        geometry.overflow_x * adjustment.focal_x / geometry.width,
+        geometry.overflow_y * adjustment.focal_y / geometry.height,
+        hero.0 / geometry.width,
+        hero.1 / geometry.height,
+    ]
 }
 
-/// Preserve the source pixel beneath `anchor` while changing magnification.
-pub(crate) fn zoom_adjustment_around(
-    source: &RenderImage,
-    bounds: Bounds<Pixels>,
-    adjustment: NewThreadBackgroundAdjustment,
-    zoom: f32,
-    anchor: Point<Pixels>,
-) -> NewThreadBackgroundAdjustment {
-    let adjustment = adjustment.normalized();
-    let Some(previous) = source_geometry(source, bounds, adjustment) else {
-        return adjustment;
-    };
-    let mut next = NewThreadBackgroundAdjustment { zoom, ..adjustment }.normalized();
-    let Some(fitted) = source_geometry(source, bounds, next) else {
-        return adjustment;
-    };
+/// The crop's normalized size at `zoom`: the hero's share of the covered image.
+pub(crate) fn crop_size(image: (f32, f32), hero: (f32, f32), zoom: f32) -> [f32; 2] {
+    let (image_w, image_h) = (image.0.max(1.0), image.1.max(1.0));
+    let (hero_w, hero_h) = (hero.0.max(1.0), hero.1.max(1.0));
+    let cover = (hero_w / image_w).max(hero_h / image_h) * zoom;
+    [
+        (hero_w / (image_w * cover)).min(1.0),
+        (hero_h / (image_h * cover)).min(1.0),
+    ]
+}
 
-    let source_x = f32::from(anchor.x - previous.bounds.left()) / previous.width;
-    let source_y = f32::from(anchor.y - previous.bounds.top()) / previous.height;
-    if fitted.overflow_x > 0.0 {
-        let desired_left = f32::from(anchor.x) - source_x * fitted.width;
-        next.focal_x = (f32::from(bounds.left()) - desired_left) / fitted.overflow_x;
+/// The framing that shows the crop whose top-left is `(x, y)` and whose
+/// normalized width is `width` (height follows the hero's aspect).
+pub(crate) fn adjustment_for_crop(
+    image: (f32, f32),
+    hero: (f32, f32),
+    x: f32,
+    y: f32,
+    width: f32,
+) -> NewThreadBackgroundAdjustment {
+    let [full_width, _] = crop_size(image, hero, 1.0);
+    let zoom = full_width / width.max(f32::EPSILON);
+    let [width, height] = crop_size(
+        image,
+        hero,
+        zoom.clamp(
+            NewThreadBackgroundAdjustment::MIN_ZOOM,
+            NewThreadBackgroundAdjustment::MAX_ZOOM,
+        ),
+    );
+    let focal = |origin: f32, size: f32| {
+        if 1.0 - size > 1e-4 {
+            origin / (1.0 - size)
+        } else {
+            0.5
+        }
+    };
+    NewThreadBackgroundAdjustment {
+        focal_x: focal(x, width),
+        focal_y: focal(y, height),
+        zoom,
     }
-    if fitted.overflow_y > 0.0 {
-        let desired_top = f32::from(anchor.y) - source_y * fitted.height;
-        next.focal_y = (f32::from(bounds.top()) - desired_top) / fitted.overflow_y;
-    }
-    next.normalized()
+    .normalized()
 }
 
 fn mask(
@@ -323,6 +337,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn crop_rect_and_framing_round_trip_through_the_renderer() {
+        let (image, hero) = ((1600.0, 900.0), (1180.0, 760.0));
+        for adjustment in [
+            NewThreadBackgroundAdjustment::default(),
+            NewThreadBackgroundAdjustment {
+                focal_x: 0.2,
+                focal_y: 0.9,
+                zoom: 2.5,
+            },
+        ] {
+            let [x, y, width, height] = crop_for_adjustment(image, hero, adjustment);
+            // The crop is exactly what the hero paints.
+            let geometry = fitted_geometry(
+                image.0,
+                image.1,
+                Bounds::new(point(px(0.0), px(0.0)), size(px(hero.0), px(hero.1))),
+                adjustment,
+            )
+            .unwrap();
+            assert!((width - hero.0 / geometry.width).abs() < 1e-4);
+            assert!((height - hero.1 / geometry.height).abs() < 1e-4);
+            assert!((x - geometry.overflow_x * adjustment.focal_x / geometry.width).abs() < 1e-4);
+            let back = adjustment_for_crop(image, hero, x, y, width);
+            assert!((back.zoom - adjustment.zoom).abs() < 1e-3);
+            assert!((back.focal_x - adjustment.focal_x).abs() < 1e-3);
+            assert!((back.focal_y - adjustment.focal_y).abs() < 1e-3);
+        }
+        // Wider than allowed clamps to the full cover; tiny clamps to max zoom.
+        assert_eq!(adjustment_for_crop(image, hero, 0.0, 0.0, 5.0).zoom, 1.0);
+        assert_eq!(
+            adjustment_for_crop(image, hero, 0.0, 0.0, 0.001).zoom,
+            NewThreadBackgroundAdjustment::MAX_ZOOM
+        );
+    }
+
+    #[test]
     fn animation_loops_through_frames_by_their_delays() {
         let delays = [100u64, 50, 200].into_iter();
         assert_eq!(frame_at(delays.clone(), 0), 0);
@@ -487,49 +537,20 @@ mod tests {
     }
 
     #[test]
-    fn pan_adjustment_tracks_direct_pointer_movement() {
-        let source = source(16, 9);
-        let viewport = hero(100.0, 50.0);
-        let adjustment = NewThreadBackgroundAdjustment {
-            zoom: 2.0,
-            ..Default::default()
-        };
-        let before = source_geometry(&source, viewport, adjustment).unwrap();
-        let next = pan_adjustment(&source, viewport, adjustment, point(px(10.0), px(-5.0)));
-        let after = source_geometry(&source, viewport, next).unwrap();
-        assert_near(after.bounds.left(), before.bounds.left() + px(10.0));
-        assert_near(after.bounds.top(), before.bounds.top() - px(5.0));
-    }
-
-    #[test]
-    fn pointer_anchored_zoom_keeps_the_same_source_pixel_underneath() {
-        let source = source(16, 9);
-        let viewport = hero(100.0, 50.0);
-        let adjustment = NewThreadBackgroundAdjustment {
-            zoom: 1.5,
-            ..Default::default()
-        };
-        let anchor = point(viewport.left() + px(60.0), viewport.top() + px(30.0));
-        let before = source_geometry(&source, viewport, adjustment).unwrap();
-        let source_x = f32::from(anchor.x - before.bounds.left()) / before.width;
-        let source_y = f32::from(anchor.y - before.bounds.top()) / before.height;
-
-        let next = zoom_adjustment_around(&source, viewport, adjustment, 2.4, anchor);
-        let after = source_geometry(&source, viewport, next).unwrap();
-        let next_source_x = f32::from(anchor.x - after.bounds.left()) / after.width;
-        let next_source_y = f32::from(anchor.y - after.bounds.top()) / after.height;
-        assert!((next_source_x - source_x).abs() < 0.0001);
-        assert!((next_source_y - source_y).abs() < 0.0001);
-    }
-
-    #[test]
     fn preview_paint_keeps_rounded_viewport_corners_when_panning_and_zooming() {
         let source = source(16, 9);
         let viewport = hero(100.0, 50.0);
         let rounded = Corners::all(px(11.0));
         let initial = NewThreadBackgroundAdjustment::default();
-        let zoomed = zoom_adjustment_around(&source, viewport, initial, 2.0, viewport.center());
-        let panned = pan_adjustment(&source, viewport, zoomed, point(px(10.0), px(-5.0)));
+        let zoomed = NewThreadBackgroundAdjustment {
+            zoom: 2.0,
+            ..initial
+        };
+        let panned = NewThreadBackgroundAdjustment {
+            focal_x: 0.3,
+            focal_y: 0.7,
+            ..zoomed
+        };
 
         for adjustment in [initial, zoomed, panned] {
             let (visible, fitted, corners) =

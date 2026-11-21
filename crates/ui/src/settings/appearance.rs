@@ -11,7 +11,7 @@ use zuse_i18n::messages as msg;
 use gpui::{
     AnyElement, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla, IntoElement,
     KeyDownEvent, Pixels, Point, Render, ScrollDelta, SharedString, Subscription, Window, div,
-    point, prelude::*, px,
+    prelude::*, px,
 };
 use zuse_theme::vscode::{ImportReport, SourceCompilation};
 use zuse_theme::{
@@ -70,19 +70,31 @@ impl ImportDialog {
 
 struct BackgroundAdjustmentDialog {
     focus: FocusHandle,
-    zoom_focus: FocusHandle,
     end_focus: FocusHandle,
     return_focus: Option<FocusHandle>,
     path: String,
     source: Option<Arc<gpui::RenderImage>>,
     draft: crate::settings::NewThreadBackgroundAdjustment,
-    preview_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
-    zoom_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
-    drag: Option<(
-        Point<Pixels>,
-        crate::settings::NewThreadBackgroundAdjustment,
-    )>,
+    /// The stage showing the whole image; crop math is relative to it.
+    stage_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Source image and hero sizes, refreshed each render.
+    image: Option<(f32, f32)>,
+    hero: (f32, f32),
+    drag: Option<CropDrag>,
     pinch: Option<(f32, f32)>,
+    show_layout: bool,
+}
+
+/// A gesture on the crop frame, in normalized image coordinates.
+#[derive(Clone, Copy, Debug)]
+enum CropDrag {
+    /// Moving the frame: pointer and frame origin when the drag began.
+    Move {
+        start: (f32, f32),
+        origin: (f32, f32),
+    },
+    /// Resizing from a corner; the opposite corner stays put.
+    Resize { anchor: (f32, f32) },
 }
 
 #[derive(Clone)]
@@ -94,16 +106,20 @@ impl Render for BackgroundAdjustmentDrag {
     }
 }
 
-#[derive(Clone)]
-struct BackgroundAdjustmentZoomDrag;
-
-impl Render for BackgroundAdjustmentZoomDrag {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        gpui::Empty
-    }
-}
-
 const BACKGROUND_ZOOM_STEP: f32 = 0.1;
+/// How far from a frame corner (in stage pixels) a press grabs the corner.
+const CROP_HANDLE_REACH: f32 = 14.0;
+/// Quick zoom levels offered beside the frame, as in a photo editor.
+const BACKGROUND_ZOOM_PRESETS: [(&str, f32); 4] =
+    [("Fit", 1.0), ("1.5×", 1.5), ("2×", 2.0), ("3×", 3.0)];
+
+/// A window position as normalized coordinates on the image stage.
+fn stage_point(stage: Bounds<Pixels>, position: Point<Pixels>) -> (f32, f32) {
+    (
+        f32::from(position.x - stage.left()) / f32::from(stage.size.width).max(1.0),
+        f32::from(position.y - stage.top()) / f32::from(stage.size.height).max(1.0),
+    )
+}
 
 fn background_pinch_factor(factor: f32, delta: f32, relative_delta: bool) -> f32 {
     if !delta.is_finite() {
@@ -119,49 +135,25 @@ fn background_pinch_factor(factor: f32, delta: f32, relative_delta: bool) -> f32
     next.max(0.001)
 }
 
-fn background_zoom_fraction(zoom: f32) -> f32 {
-    let minimum = crate::settings::NewThreadBackgroundAdjustment::MIN_ZOOM;
-    let maximum = crate::settings::NewThreadBackgroundAdjustment::MAX_ZOOM;
-    ((zoom - minimum) / (maximum - minimum)).clamp(0.0, 1.0)
-}
-
-fn background_zoom_at_x(bounds: Bounds<Pixels>, x: Pixels) -> f32 {
-    let minimum = crate::settings::NewThreadBackgroundAdjustment::MIN_ZOOM;
-    let maximum = crate::settings::NewThreadBackgroundAdjustment::MAX_ZOOM;
-    let fraction = ((f32::from(x - bounds.left()) - 7.0)
-        / (f32::from(bounds.size.width) - 14.0).max(1.0))
-    .clamp(0.0, 1.0);
-    minimum + fraction * (maximum - minimum)
-}
-
-fn background_preview_size(
-    viewport: gpui::Size<Pixels>,
-    sidebar_width: f32,
-    sidebar_collapsed: bool,
-) -> gpui::Size<Pixels> {
-    let hero_width = (f32::from(viewport.width)
-        - if sidebar_collapsed {
-            0.0
-        } else {
-            sidebar_width
-        })
-    .max(1.0);
-    let hero_height =
-        crate::shell::new_thread_background_height(f32::from(viewport.height)).max(1.0);
-    let max_width = (f32::from(viewport.width) - 84.0).clamp(1.0, 676.0);
-    let scale = (max_width / hero_width).min(300.0 / hero_height);
-    gpui::size(px(hero_width * scale), px(hero_height * scale))
-}
-
-/// Overlays for the adjustment preview: a rule-of-thirds grid (brighter while
-/// dragging), ghosts of the heading and composer at their real proportions so
-/// the subject can be framed around the UI, and a zoom badge once zoomed.
-fn background_layout_guides(composer: f32, zoom: f32, dragging: bool) -> gpui::Div {
-    let line = gpui::white().opacity(if dragging { 0.28 } else { 0.1 });
-    let ghost = gpui::white().opacity(if dragging { 0.16 } else { 0.32 });
-    let mut guides = div().absolute().inset_0();
+/// The crop frame over the whole image: everything outside is dimmed, the
+/// frame carries corner handles and a thirds grid (brighter while dragging),
+/// and with `layout` on it shows where the heading and composer will sit.
+fn crop_overlay(crop: [f32; 4], dragging: bool, layout: bool, composer: f32) -> gpui::Div {
+    let [x, y, width, height] = crop;
+    let shade = gpui::black().opacity(0.6);
+    let line = gpui::white().opacity(if dragging { 0.45 } else { 0.22 });
+    let edge = gpui::white().opacity(0.92);
+    let shaded = |piece: gpui::Div| piece.absolute().bg(shade);
+    let mut frame = div()
+        .absolute()
+        .left(gpui::relative(x))
+        .top(gpui::relative(y))
+        .w(gpui::relative(width))
+        .h(gpui::relative(height))
+        .border_1()
+        .border_color(edge);
     for at in [1.0 / 3.0, 2.0 / 3.0] {
-        guides = guides
+        frame = frame
             .child(
                 div()
                     .absolute()
@@ -181,59 +173,110 @@ fn background_layout_guides(composer: f32, zoom: f32, dragging: bool) -> gpui::D
                     .bg(line),
             );
     }
-    guides
+    // L-shaped corner handles, drawn just outside the frame's edge.
+    let handle = || div().absolute().size(px(14.0)).border_color(edge);
+    frame = frame
         .child(
-            div()
-                .absolute()
-                .top(gpui::relative(0.36))
-                .left_0()
-                .right_0()
-                .flex()
-                .flex_col()
-                .items_center()
-                .gap(px(5.0))
-                .child(
-                    div()
-                        .w(gpui::relative(0.34))
-                        .h(px(7.0))
-                        .rounded_full()
-                        .bg(ghost),
-                )
-                .child(
-                    div()
-                        .w(gpui::relative(0.16))
-                        .h(px(4.0))
-                        .rounded_full()
-                        .bg(ghost.opacity(0.6)),
-                ),
+            handle()
+                .top(px(-3.0))
+                .left(px(-3.0))
+                .border_t_2()
+                .border_l_2(),
         )
         .child(
-            div()
-                .absolute()
-                .bottom(gpui::relative(0.06))
-                .left(gpui::relative((1.0 - composer) / 2.0))
-                .w(gpui::relative(composer))
-                .h(gpui::relative(0.17))
-                .rounded(px(7.0))
-                .border_1()
-                .border_color(ghost)
-                .bg(gpui::black().opacity(0.22)),
+            handle()
+                .top(px(-3.0))
+                .right(px(-3.0))
+                .border_t_2()
+                .border_r_2(),
         )
-        .when(zoom > 1.005, |guides| {
-            guides.child(
+        .child(
+            handle()
+                .bottom(px(-3.0))
+                .left(px(-3.0))
+                .border_b_2()
+                .border_l_2(),
+        )
+        .child(
+            handle()
+                .bottom(px(-3.0))
+                .right(px(-3.0))
+                .border_b_2()
+                .border_r_2(),
+        );
+    if layout {
+        let ghost = gpui::white().opacity(0.4);
+        frame = frame
+            .child(
                 div()
                     .absolute()
-                    .top(px(8.0))
-                    .right(px(8.0))
-                    .px(px(7.0))
-                    .py(px(2.0))
-                    .rounded(px(5.0))
-                    .bg(gpui::black().opacity(0.55))
-                    .text_size(typography::text_xs())
-                    .text_color(gpui::white().opacity(0.9))
-                    .child(format!("{:.0}%", zoom * 100.0)),
+                    .top(gpui::relative(0.36))
+                    .left_0()
+                    .right_0()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(4.0))
+                    .child(
+                        div()
+                            .w(gpui::relative(0.34))
+                            .h(px(6.0))
+                            .rounded_full()
+                            .bg(ghost),
+                    )
+                    .child(
+                        div()
+                            .w(gpui::relative(0.16))
+                            .h(px(4.0))
+                            .rounded_full()
+                            .bg(ghost.opacity(0.6)),
+                    ),
             )
-        })
+            .child(
+                div()
+                    .absolute()
+                    .bottom(gpui::relative(0.06))
+                    .left(gpui::relative((1.0 - composer) / 2.0))
+                    .w(gpui::relative(composer))
+                    .h(gpui::relative(0.17))
+                    .rounded(px(6.0))
+                    .border_1()
+                    .border_color(ghost)
+                    .bg(gpui::black().opacity(0.3)),
+            );
+    }
+    div()
+        .absolute()
+        .inset_0()
+        .child(
+            shaded(div())
+                .left_0()
+                .right_0()
+                .top_0()
+                .h(gpui::relative(y)),
+        )
+        .child(
+            shaded(div())
+                .left_0()
+                .right_0()
+                .top(gpui::relative(y + height))
+                .bottom_0(),
+        )
+        .child(
+            shaded(div())
+                .left_0()
+                .top(gpui::relative(y))
+                .w(gpui::relative(x))
+                .h(gpui::relative(height)),
+        )
+        .child(
+            shaded(div())
+                .left(gpui::relative(x + width))
+                .right_0()
+                .top(gpui::relative(y))
+                .h(gpui::relative(height)),
+        )
+        .child(frame)
 }
 
 /// The three independently configurable font slots. Interface and code/diff
@@ -1349,21 +1392,21 @@ impl AppearancePage {
             return;
         };
         let focus = cx.focus_handle();
-        let zoom_focus = cx.focus_handle();
         let return_focus = window.focused(cx);
         window.focus(&focus, cx);
         self.background_adjustment_dialog = Some(BackgroundAdjustmentDialog {
             focus,
-            zoom_focus,
             end_focus: cx.focus_handle(),
             return_focus,
             path: background.path,
             source: None,
             draft: background.adjustment.normalized(),
-            preview_bounds: Rc::default(),
-            zoom_bounds: Rc::default(),
+            stage_bounds: Rc::default(),
+            image: None,
+            hero: (1.0, 1.0),
             drag: None,
             pinch: None,
+            show_layout: false,
         });
         cx.notify();
     }
@@ -1403,94 +1446,156 @@ impl AppearancePage {
         cx.notify();
     }
 
+    /// Zoom keeping the frame's center where it is.
     fn set_background_zoom(&mut self, zoom: f32, cx: &mut Context<Self>) {
-        self.zoom_background_around(zoom, None, cx);
-    }
-
-    fn set_background_zoom_from_x(&mut self, x: Pixels, cx: &mut Context<Self>) {
-        let Some(bounds) = self
-            .background_adjustment_dialog
-            .as_ref()
-            .and_then(|dialog| dialog.zoom_bounds.get())
-        else {
-            return;
+        use crate::new_thread_background_mask::{
+            adjustment_for_crop, crop_for_adjustment, crop_size,
         };
-        self.set_background_zoom(background_zoom_at_x(bounds, x), cx);
-    }
-
-    fn zoom_background_around(
-        &mut self,
-        zoom: f32,
-        anchor: Option<Point<Pixels>>,
-        cx: &mut Context<Self>,
-    ) {
+        use crate::settings::NewThreadBackgroundAdjustment as Adjustment;
         let Some(dialog) = self.background_adjustment_dialog.as_mut() else {
             return;
         };
-        if dialog.source.is_none() {
+        let Some(image) = dialog.image else {
             return;
-        }
-        let zoom = zoom.clamp(
-            crate::settings::NewThreadBackgroundAdjustment::MIN_ZOOM,
-            crate::settings::NewThreadBackgroundAdjustment::MAX_ZOOM,
+        };
+        let [x, y, width, height] = crop_for_adjustment(image, dialog.hero, dialog.draft);
+        let [next_width, next_height] = crop_size(
+            image,
+            dialog.hero,
+            zoom.clamp(Adjustment::MIN_ZOOM, Adjustment::MAX_ZOOM),
         );
-        let next = match (dialog.preview_bounds.get(), dialog.source.as_ref()) {
-            (Some(bounds), Some(source)) => {
-                crate::new_thread_background_mask::zoom_adjustment_around(
-                    source,
-                    bounds,
-                    dialog.draft,
-                    zoom,
-                    anchor.unwrap_or_else(|| bounds.center()),
-                )
+        let left = (x + width / 2.0 - next_width / 2.0).clamp(0.0, 1.0 - next_width);
+        let top = (y + height / 2.0 - next_height / 2.0).clamp(0.0, 1.0 - next_height);
+        dialog.draft = adjustment_for_crop(image, dialog.hero, left, top, next_width);
+        dialog.drag = None;
+        cx.notify();
+    }
+
+    /// Move the frame by a distance in stage pixels (keyboard nudges).
+    fn nudge_background(&mut self, dx: f32, dy: f32, cx: &mut Context<Self>) {
+        use crate::new_thread_background_mask::{adjustment_for_crop, crop_for_adjustment};
+        let Some(dialog) = self.background_adjustment_dialog.as_mut() else {
+            return;
+        };
+        let (Some(image), Some(stage)) = (dialog.image, dialog.stage_bounds.get()) else {
+            return;
+        };
+        let [x, y, width, height] = crop_for_adjustment(image, dialog.hero, dialog.draft);
+        let x = (x + dx / f32::from(stage.size.width).max(1.0)).clamp(0.0, 1.0 - width);
+        let y = (y + dy / f32::from(stage.size.height).max(1.0)).clamp(0.0, 1.0 - height);
+        dialog.draft = adjustment_for_crop(image, dialog.hero, x, y, width);
+        cx.notify();
+    }
+
+    /// Begin moving the frame, or resizing it when the press lands on a
+    /// corner. A press outside the frame recenters it under the pointer.
+    fn start_background_drag(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        use crate::new_thread_background_mask::{adjustment_for_crop, crop_for_adjustment};
+        let Some(dialog) = self.background_adjustment_dialog.as_mut() else {
+            return;
+        };
+        let (Some(image), Some(stage)) = (dialog.image, dialog.stage_bounds.get()) else {
+            return;
+        };
+        let point = stage_point(stage, position);
+        let [x, y, width, height] = crop_for_adjustment(image, dialog.hero, dialog.draft);
+        let corners = [
+            (x, y),
+            (x + width, y),
+            (x, y + height),
+            (x + width, y + height),
+        ];
+        let reach = (
+            CROP_HANDLE_REACH / f32::from(stage.size.width).max(1.0),
+            CROP_HANDLE_REACH / f32::from(stage.size.height).max(1.0),
+        );
+        let corner = corners.iter().position(|corner| {
+            (point.0 - corner.0).abs() <= reach.0 && (point.1 - corner.1).abs() <= reach.1
+        });
+        dialog.drag = Some(if let Some(index) = corner {
+            CropDrag::Resize {
+                anchor: corners[3 - index],
             }
-            _ => crate::settings::NewThreadBackgroundAdjustment {
-                zoom,
-                ..dialog.draft
-            },
-        };
-        if dialog.draft != next {
-            dialog.draft = next;
-            dialog.drag = None;
-            cx.notify();
-        }
-    }
-
-    fn pan_background(&mut self, delta: Point<f32>, cx: &mut Context<Self>) {
-        let Some(dialog) = self.background_adjustment_dialog.as_mut() else {
-            return;
-        };
-        let (Some(bounds), Some(source)) = (dialog.preview_bounds.get(), dialog.source.as_ref())
-        else {
-            return;
-        };
-        let before = dialog.draft;
-        dialog.draft = crate::new_thread_background_mask::pan_adjustment(
-            source,
-            bounds,
-            dialog.draft,
-            point(px(delta.x), px(delta.y)),
-        );
-        if dialog.draft != before {
-            cx.notify();
-        }
+        } else {
+            let inside = (x..=x + width).contains(&point.0) && (y..=y + height).contains(&point.1);
+            let origin = if inside {
+                (x, y)
+            } else {
+                let origin = (
+                    (point.0 - width / 2.0).clamp(0.0, 1.0 - width),
+                    (point.1 - height / 2.0).clamp(0.0, 1.0 - height),
+                );
+                dialog.draft = adjustment_for_crop(image, dialog.hero, origin.0, origin.1, width);
+                origin
+            };
+            CropDrag::Move {
+                start: point,
+                origin,
+            }
+        });
+        cx.notify();
     }
 
     fn drag_background(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let Some(dialog) = self.background_adjustment_dialog.as_ref() else {
+        use crate::new_thread_background_mask::{
+            adjustment_for_crop, crop_for_adjustment, crop_size,
+        };
+        use crate::settings::NewThreadBackgroundAdjustment as Adjustment;
+        let Some(dialog) = self.background_adjustment_dialog.as_mut() else {
             return;
         };
-        let Some((start, initial)) = dialog.drag else {
+        let (Some(image), Some(stage), Some(drag)) =
+            (dialog.image, dialog.stage_bounds.get(), dialog.drag)
+        else {
             return;
         };
-        let delta = point(
-            f32::from(position.x - start.x),
-            f32::from(position.y - start.y),
-        );
-        if let Some(dialog) = self.background_adjustment_dialog.as_mut() {
-            dialog.draft = initial;
+        let point = stage_point(stage, position);
+        let [_, _, width, height] = crop_for_adjustment(image, dialog.hero, dialog.draft);
+        let next = match drag {
+            CropDrag::Move { start, origin } => {
+                let x = (origin.0 + point.0 - start.0).clamp(0.0, 1.0 - width);
+                let y = (origin.1 + point.1 - start.1).clamp(0.0, 1.0 - height);
+                adjustment_for_crop(image, dialog.hero, x, y, width)
+            }
+            CropDrag::Resize { anchor } => {
+                // The frame keeps the hero's shape; the pointer sets its size
+                // along whichever axis it has pulled further.
+                let ratio = height / width.max(f32::EPSILON);
+                let (dx, dy) = (point.0 - anchor.0, point.1 - anchor.1);
+                let room_x = if dx >= 0.0 { 1.0 - anchor.0 } else { anchor.0 };
+                let room_y = if dy >= 0.0 { 1.0 - anchor.1 } else { anchor.1 };
+                let [largest, _] = crop_size(image, dialog.hero, Adjustment::MIN_ZOOM);
+                let [smallest, _] = crop_size(image, dialog.hero, Adjustment::MAX_ZOOM);
+                let next_width = dx
+                    .abs()
+                    .max(dy.abs() / ratio)
+                    .min(room_x)
+                    .min(room_y / ratio)
+                    .clamp(smallest, largest);
+                let next_height = next_width * ratio;
+                let x = if dx >= 0.0 {
+                    anchor.0
+                } else {
+                    anchor.0 - next_width
+                };
+                let y = if dy >= 0.0 {
+                    anchor.1
+                } else {
+                    anchor.1 - next_height
+                };
+                adjustment_for_crop(
+                    image,
+                    dialog.hero,
+                    x.clamp(0.0, 1.0 - next_width),
+                    y.clamp(0.0, 1.0 - next_height),
+                    next_width,
+                )
+            }
+        };
+        if dialog.draft != next {
+            dialog.draft = next;
+            cx.notify();
         }
-        self.pan_background(delta, cx);
     }
 
     fn finish_background_drag(&mut self, cx: &mut Context<Self>) {
@@ -3376,25 +3481,24 @@ impl AppearancePage {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        use crate::new_thread_background_mask::crop_for_adjustment;
+        let settings = crate::settings::current(cx);
         let dialog = self.background_adjustment_dialog.as_ref()?;
         let focus = dialog.focus.clone();
-        let zoom_focus = dialog.zoom_focus.clone();
         let end_focus = dialog.end_focus.clone();
-        let tab_start = focus.clone();
-        let tab_end = end_focus.clone();
+        let (tab_start, tab_end) = (focus.clone(), end_focus.clone());
         let path = dialog.path.clone();
         let draft = dialog.draft;
-        let preview_bounds = dialog.preview_bounds.clone();
-        let zoom_bounds = dialog.zoom_bounds.clone();
+        let stage_bounds = dialog.stage_bounds.clone();
         let dragging = dialog.drag.is_some();
-        let settings = crate::settings::current(cx);
+        let show_layout = dialog.show_layout;
         let same_image = settings
             .new_thread_composer_background
             .as_ref()
             .is_some_and(|background| background.path == path);
         let available = Path::new(&path).is_file();
         // Frame against the untreated photo: effects and tone adjustments
-        // obscure the detail you are positioning, and the panel previews them.
+        // obscure the detail being positioned, and the panel previews them.
         let source = (same_image && available)
             .then(|| {
                 crate::new_thread_background_effects::prepare(
@@ -3406,10 +3510,11 @@ impl AppearancePage {
             })
             .flatten();
         let ready = source.is_some();
-        let preview_size =
-            background_preview_size(viewport, settings.sidebar_width, settings.sidebar_collapsed);
-        // The composer spans the transcript column, inset 24px a side on
-        // narrow windows; as a share of the hero it sizes the preview guide.
+        let image = source.as_ref().map(|source| {
+            let size = source.size(0);
+            (size.width.0 as f32, size.height.0 as f32)
+        });
+        // The frame is the hero: the main area beside the sidebar.
         let hero_width = (f32::from(viewport.width)
             - if settings.sidebar_collapsed {
                 0.0
@@ -3417,24 +3522,42 @@ impl AppearancePage {
                 settings.sidebar_width
             })
         .max(1.0);
+        let hero = (
+            hero_width,
+            crate::shell::new_thread_background_height(f32::from(viewport.height)).max(1.0),
+        );
         let composer_fraction =
             (settings.transcript_width.min(hero_width - 48.0) / hero_width).clamp(0.3, 0.95);
         if let Some(dialog) = self.background_adjustment_dialog.as_mut() {
             dialog.source = source.clone();
+            dialog.image = image;
+            dialog.hero = hero;
         }
 
+        let card_width = (f32::from(viewport.width) - 40.0).clamp(1.0, 760.0);
+        let max_stage = (
+            card_width - 40.0,
+            (f32::from(viewport.height) * 0.56).clamp(180.0, 440.0),
+        );
+        let (stage_width, stage_height) = match image {
+            Some((width, height)) => {
+                let scale = (max_stage.0 / width).min(max_stage.1 / height);
+                (width * scale, height * scale)
+            }
+            None => (max_stage.0, (max_stage.0 * 9.0 / 16.0).min(max_stage.1)),
+        };
+        let crop = image.map(|image| crop_for_adjustment(image, hero, draft));
+
         let paint_source = source.clone();
-        let measured_bounds = preview_bounds.clone();
-        let preview = div()
+        let stage = div()
             .id("new-thread-background-adjustment-preview")
             .relative()
-            .w(preview_size.width + px(2.0))
-            .h(preview_size.height + px(2.0))
+            .flex_none()
+            .w(px(stage_width))
+            .h(px(stage_height))
+            .rounded(px(10.0))
             .overflow_hidden()
-            .rounded(px(12.0))
-            .border_1()
-            .border_color(crate::theme::hairline(0.12))
-            .bg(theme.bg)
+            .bg(gpui::black())
             .cursor(if !ready {
                 gpui::CursorStyle::Arrow
             } else if dragging {
@@ -3448,11 +3571,14 @@ impl AppearancePage {
                         ScrollDelta::Pixels(delta) => f32::from(delta.y),
                         ScrollDelta::Lines(delta) => delta.y * 40.0,
                     };
-                    let Some(dialog) = this.background_adjustment_dialog.as_ref() else {
+                    let Some(zoom) = this
+                        .background_adjustment_dialog
+                        .as_ref()
+                        .map(|dialog| dialog.draft.zoom)
+                    else {
                         return;
                     };
-                    let zoom = dialog.draft.zoom * (delta * 0.0025).clamp(-2.0, 2.0).exp();
-                    this.zoom_background_around(zoom, Some(event.position), cx);
+                    this.set_background_zoom(zoom * (delta * 0.0025).clamp(-2.0, 2.0).exp(), cx);
                     cx.stop_propagation();
                     window.prevent_default();
                 }),
@@ -3473,22 +3599,17 @@ impl AppearancePage {
                 *factor =
                     background_pinch_factor(*factor, event.delta, cfg!(target_os = "windows"));
                 let zoom = *start * *factor;
-                this.zoom_background_around(zoom, Some(event.position), cx);
+                this.set_background_zoom(zoom, cx);
                 cx.stop_propagation();
                 window.prevent_default();
             }))
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
-                    let Some(dialog) = this.background_adjustment_dialog.as_mut() else {
-                        return;
-                    };
-                    if dialog.source.is_none() {
-                        return;
+                    if let Some(dialog) = this.background_adjustment_dialog.as_ref() {
+                        window.focus(&dialog.focus, cx);
                     }
-                    window.focus(&dialog.focus, cx);
-                    dialog.drag = Some((event.position, dialog.draft));
-                    cx.notify();
+                    this.start_background_drag(event.position, cx);
                     cx.stop_propagation();
                 }),
             )
@@ -3498,27 +3619,30 @@ impl AppearancePage {
             })
             .child(
                 gpui::canvas(
-                    move |bounds, _, _| measured_bounds.set(Some(bounds)),
+                    move |bounds, _, _| stage_bounds.set(Some(bounds)),
                     move |bounds, _, window, cx| {
                         if let Some(source) = paint_source.clone() {
+                            // The stage has the image's own aspect ratio, so
+                            // the default cover shows the whole picture.
                             crate::new_thread_background_mask::paint_adjusted(
                                 source,
                                 bounds,
-                                draft,
-                                // Canvas content masks are rectangular; round the image
-                                // itself to the frame's 12px radius inside its 1px border.
-                                gpui::Corners::all(px(11.0)),
+                                Default::default(),
+                                gpui::Corners::all(px(10.0)),
                                 window,
                                 cx,
                             );
                         }
                     },
                 )
-                .w(preview_size.width)
-                .h(preview_size.height),
+                .absolute()
+                .inset_0(),
             )
-            .when(source.is_none(), |preview| {
-                preview.child(
+            .when_some(crop, |stage, crop| {
+                stage.child(crop_overlay(crop, dragging, show_layout, composer_fraction))
+            })
+            .when(source.is_none(), |stage| {
+                stage.child(
                     div()
                         .absolute()
                         .inset_0()
@@ -3526,225 +3650,107 @@ impl AppearancePage {
                         .items_center()
                         .justify_center()
                         .text_size(typography::text_xs())
-                        .text_color(theme.text_muted)
+                        .text_color(gpui::white().opacity(0.6))
                         .child(if !same_image {
-                            ("Background changed. Close and adjust the new image.").to_string()
+                            "Background changed. Close and adjust the new image.".to_string()
                         } else if !available {
-                            ("Image unavailable. Choose a replacement or remove it.").to_string()
+                            "Image unavailable. Choose a replacement or remove it.".to_string()
                         } else {
                             crate::localization::text("native-preparing_preview", cx)
                         }),
                 )
-            })
-            .when(ready, |preview| {
-                preview.child(background_layout_guides(
-                    composer_fraction,
-                    draft.zoom,
-                    dragging,
-                ))
             });
 
-        let zoom_fraction = background_zoom_fraction(draft.zoom);
-        let measured_zoom_bounds = zoom_bounds.clone();
-        let zoom_slider = div()
-            .id("new-thread-background-adjustment-zoom")
-            .track_focus(&zoom_focus)
-            .tab_index(0)
-            .role(gpui::Role::Slider)
-            .aria_label(tr(cx, msg::native::background_zoom))
-            .aria_numeric_value(f64::from(draft.zoom * 100.0))
-            .aria_min_numeric_value(f64::from(
-                crate::settings::NewThreadBackgroundAdjustment::MIN_ZOOM * 100.0,
-            ))
-            .aria_max_numeric_value(f64::from(
-                crate::settings::NewThreadBackgroundAdjustment::MAX_ZOOM * 100.0,
-            ))
-            .aria_numeric_value_step(f64::from(BACKGROUND_ZOOM_STEP * 100.0))
-            .aria_value(format!("{:.0}%", draft.zoom * 100.0))
-            .focus_visible(|s| s.border_2().border_color(theme.accent))
-            .relative()
-            .w(px(168.0))
-            .h(px(28.0))
-            .cursor_pointer()
-            .on_mouse_down(
-                gpui::MouseButton::Left,
-                cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
-                    if let Some(dialog) = this.background_adjustment_dialog.as_ref() {
-                        window.focus(&dialog.zoom_focus, cx);
-                    }
-                    this.set_background_zoom_from_x(event.position.x, cx);
-                    cx.stop_propagation();
-                    window.prevent_default();
-                }),
-            )
-            .on_drag(BackgroundAdjustmentZoomDrag, |drag, _, _, cx| {
-                cx.stop_propagation();
-                cx.new(|_| drag.clone())
-            })
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                let Some(current) = this
-                    .background_adjustment_dialog
-                    .as_ref()
-                    .map(|dialog| dialog.draft.zoom)
-                else {
-                    return;
-                };
-                let next = match event.keystroke.key.as_str() {
-                    "left" | "down" => current - BACKGROUND_ZOOM_STEP,
-                    "right" | "up" => current + BACKGROUND_ZOOM_STEP,
-                    "home" => crate::settings::NewThreadBackgroundAdjustment::MIN_ZOOM,
-                    "end" => crate::settings::NewThreadBackgroundAdjustment::MAX_ZOOM,
-                    _ => return,
-                };
-                this.set_background_zoom(next, cx);
-                cx.stop_propagation();
-                window.prevent_default();
-            }))
-            .child(
-                gpui::canvas(
-                    move |bounds, _, _| measured_zoom_bounds.set(Some(bounds)),
-                    |_, _, _, _| {},
-                )
-                .absolute()
-                .inset_0(),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .left(px(7.0))
-                    .right(px(7.0))
-                    .top(px(12.0))
-                    .h(px(4.0))
-                    .rounded_full()
-                    .bg(theme.border_strong)
-                    .child(
-                        div()
-                            .h_full()
-                            .w(gpui::relative(zoom_fraction))
-                            .rounded_full()
-                            .bg(selection_tone(theme).opacity(0.64)),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .left(gpui::relative(zoom_fraction))
-                            .ml(px(-6.0))
-                            .top(px(-4.0))
-                            .size(px(12.0))
-                            .rounded_full()
-                            .bg(selection_tone(theme)),
-                    ),
-            );
-        let square = |glyph: &'static str, id: &'static str| {
-            widgets::action_button(theme, widgets::ActionTone::Outlined)
+        // Zoom presets read like a photo editor's aspect chips.
+        let presets = div()
+            .flex()
+            .items_center()
+            .gap(px(2.0))
+            .p(px(2.0))
+            .rounded(px(8.0))
+            .bg(theme.element_hover)
+            .children(BACKGROUND_ZOOM_PRESETS.map(|(label, zoom)| {
+                let active = (draft.zoom - zoom).abs() < 0.01;
+                widgets::text_action(theme, widgets::ActionTone::Quiet, label)
+                    .id(SharedString::from(format!(
+                        "new-thread-background-zoom-{}",
+                        slug(label)
+                    )))
+                    .px(px(10.0))
+                    .min_h(px(26.0))
+                    .tab_index(0)
+                    .role(gpui::Role::Button)
+                    .aria_selected(active)
+                    .when(active, |chip| {
+                        chip.bg(theme.surface_card).text_color(theme.text_strong)
+                    })
+                    .focus_visible(|s| s.border_1().border_color(theme.accent))
+                    .on_click(cx.listener(move |this, _, _, cx| this.set_background_zoom(zoom, cx)))
+            }));
+        let quiet = |label: &'static str, id: &'static str| {
+            widgets::text_action(theme, widgets::ActionTone::Quiet, label)
                 .id(id)
-                .size(px(28.0))
+                .px(px(10.0))
                 .min_h(px(28.0))
-                .p_0()
-                .justify_center()
                 .tab_index(0)
                 .role(gpui::Role::Button)
-                .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                .child(div().text_size(typography::text_sm()).child(glyph))
+                .focus_visible(|s| s.border_1().border_color(theme.accent))
         };
-        let controls = div()
-            .mt(px(14.0))
+        let toolbar = div()
+            .mt(px(12.0))
             .flex()
             .flex_wrap()
             .items_center()
-            .justify_between()
-            .gap(px(10.0))
+            .gap(px(8.0))
+            .child(presets)
             .child(
                 div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .child(
-                        icon_action(
-                            theme,
-                            icons::EXPAND_ARROWS,
-                            "Fit",
-                            "new-thread-background-adjustment-fit",
-                        )
-                        .tab_index(0)
-                        .role(gpui::Role::Button)
-                        .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.set_background_zoom(
-                                crate::settings::NewThreadBackgroundAdjustment::MIN_ZOOM,
-                                cx,
-                            )
-                        })),
-                    )
-                    .child(
-                        compact_action(theme, "Center", "new-thread-background-adjustment-center")
-                            .px(px(11.0))
-                            .tab_index(0)
-                            .role(gpui::Role::Button)
-                            .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if let Some(dialog) = this.background_adjustment_dialog.as_mut() {
-                                    dialog.draft.focal_x = 0.5;
-                                    dialog.draft.focal_y = 0.5;
-                                }
-                                cx.notify();
-                            })),
-                    ),
+                    .min_w(px(40.0))
+                    .text_size(typography::text_xs())
+                    .text_color(theme.text_muted)
+                    .child(format!("{:.0}%", draft.zoom * 100.0)),
+            )
+            .child(div().w(px(1.0)).h(px(18.0)).bg(theme.border))
+            .child(
+                quiet("Center", "new-thread-background-adjustment-center").on_click(cx.listener(
+                    |this, _, _, cx| {
+                        if let Some(dialog) = this.background_adjustment_dialog.as_mut() {
+                            dialog.draft.focal_x = 0.5;
+                            dialog.draft.focal_y = 0.5;
+                        }
+                        cx.notify();
+                    },
+                )),
             )
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .child(
-                        square("−", "new-thread-background-adjustment-zoom-out")
-                            .aria_label(tr(cx, msg::chat::markdown_body_zoom_out))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                let Some(dialog) = this.background_adjustment_dialog.as_ref()
-                                else {
-                                    return;
-                                };
-                                this.set_background_zoom(
-                                    dialog.draft.zoom - BACKGROUND_ZOOM_STEP,
-                                    cx,
-                                );
-                            })),
-                    )
-                    .child(zoom_slider)
-                    .child(
-                        square("+", "new-thread-background-adjustment-zoom-in")
-                            .aria_label(tr(cx, msg::chat::markdown_body_zoom_in))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                let Some(dialog) = this.background_adjustment_dialog.as_ref()
-                                else {
-                                    return;
-                                };
-                                this.set_background_zoom(
-                                    dialog.draft.zoom + BACKGROUND_ZOOM_STEP,
-                                    cx,
-                                );
-                            })),
-                    )
-                    .child(
-                        div()
-                            .w(px(40.0))
-                            .text_right()
-                            .text_size(typography::text_xs())
-                            .text_color(theme.text_muted)
-                            .child(format!("{:.0}%", draft.zoom * 100.0)),
-                    ),
+                quiet("Layout", "new-thread-background-adjustment-layout")
+                    .aria_selected(show_layout)
+                    .when(show_layout, |chip| {
+                        chip.bg(theme.element_hover).text_color(theme.text_strong)
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(dialog) = this.background_adjustment_dialog.as_mut() {
+                            dialog.show_layout = !dialog.show_layout;
+                        }
+                        cx.notify();
+                    })),
             )
+            .child(div().flex_1())
             .child(
-                icon_action(
-                    theme,
-                    icons::RESTART,
-                    "Reset",
-                    "new-thread-background-adjustment-reset",
-                )
-                .tab_index(0)
-                .role(gpui::Role::Button)
-                .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                .on_click(cx.listener(|this, _, _, cx| this.reset_background_adjustment(cx))),
+                widgets::action_button(theme, widgets::ActionTone::Quiet)
+                    .id("new-thread-background-adjustment-reset")
+                    .px(px(10.0))
+                    .min_h(px(28.0))
+                    .tab_index(0)
+                    .role(gpui::Role::Button)
+                    .focus_visible(|s| s.border_1().border_color(theme.accent))
+                    .child(
+                        icons::icon(icons::RESTART)
+                            .size(px(13.0))
+                            .text_color(theme.text_muted),
+                    )
+                    .child("Reset")
+                    .on_click(cx.listener(|this, _, _, cx| this.reset_background_adjustment(cx))),
             );
 
         let footer = popover::dialog_footer(theme)
@@ -3785,30 +3791,31 @@ impl AppearancePage {
 
         let header = div()
             .flex()
-            .items_start()
+            .items_center()
+            .justify_between()
             .gap(px(16.0))
             .child(
                 div()
-                    .flex_1()
                     .min_w_0()
+                    .flex()
+                    .items_baseline()
+                    .gap(px(10.0))
                     .child(popover::dialog_title(theme, "Adjust background"))
                     .child(
-                        popover::dialog_body(
-                            theme,
-                            "Drag to reposition, scroll or pinch to zoom, arrow keys to nudge. \
-                             Guides show where the heading and composer sit.",
-                        )
-                        .mt(px(4.0)),
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(typography::text_xs())
+                            .text_color(theme.text_muted)
+                            .child("Drag the frame to move it · drag a corner or scroll to zoom"),
                     ),
             )
             .child(
                 div()
                     .id("new-thread-background-adjustment-close")
+                    .flex_none()
                     .size(px(28.0))
                     .rounded(px(7.0))
-                    .border_1()
-                    .border_color(theme.border)
-                    .bg(theme.surface_raised.opacity(0.28))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -3830,7 +3837,7 @@ impl AppearancePage {
 
         let card = popover::dialog_card(theme)
             .id("new-thread-background-adjustment-card")
-            .w(px((f32::from(viewport.width) - 40.0).clamp(1.0, 720.0)))
+            .w(px(card_width))
             .p(px(20.0))
             .track_focus(&focus)
             .tab_group()
@@ -3867,22 +3874,22 @@ impl AppearancePage {
                                     }
                                 }
                             }
-                            "left" => this.pan_background(point(step, 0.0), cx),
-                            "right" => this.pan_background(point(-step, 0.0), cx),
-                            "up" => this.pan_background(point(0.0, step), cx),
-                            "down" => this.pan_background(point(0.0, -step), cx),
-                            "+" | "=" => {
+                            "left" => this.nudge_background(-step, 0.0, cx),
+                            "right" => this.nudge_background(step, 0.0, cx),
+                            "up" => this.nudge_background(0.0, -step, cx),
+                            "down" => this.nudge_background(0.0, step, cx),
+                            "+" | "=" | "-" => {
+                                let sign = if event.keystroke.key == "-" {
+                                    -1.0
+                                } else {
+                                    1.0
+                                };
                                 let zoom = this
                                     .background_adjustment_dialog
                                     .as_ref()
-                                    .map_or(1.0, |dialog| dialog.draft.zoom + BACKGROUND_ZOOM_STEP);
-                                this.set_background_zoom(zoom, cx);
-                            }
-                            "-" => {
-                                let zoom = this
-                                    .background_adjustment_dialog
-                                    .as_ref()
-                                    .map_or(1.0, |dialog| dialog.draft.zoom - BACKGROUND_ZOOM_STEP);
+                                    .map_or(1.0, |dialog| {
+                                        dialog.draft.zoom + sign * BACKGROUND_ZOOM_STEP
+                                    });
                                 this.set_background_zoom(zoom, cx);
                             }
                             _ => return,
@@ -3896,17 +3903,8 @@ impl AppearancePage {
                 cx.listener(|this, _, window, cx| this.dismiss_background_adjustment(window, cx)),
             )
             .child(header)
-            .child(div().h(px(16.0)))
-            .child(
-                div()
-                    .w_full()
-                    .h(px(260.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(preview),
-            )
-            .child(controls)
+            .child(div().mt(px(14.0)).flex().justify_center().child(stage))
+            .child(toolbar)
             .child(footer)
             .child(div().track_focus(&end_focus).tab_index(0).tab_stop(false))
             .into_any_element();
@@ -4828,11 +4826,6 @@ impl Render for AppearancePage {
                     this.drag_background(event.event.position, cx);
                 },
             ))
-            .on_drag_move(cx.listener(
-                |this, event: &gpui::DragMoveEvent<BackgroundAdjustmentZoomDrag>, _, cx| {
-                    this.set_background_zoom_from_x(event.event.position.x, cx);
-                },
-            ))
             .on_mouse_up(
                 gpui::MouseButton::Left,
                 cx.listener(|this, _: &gpui::MouseUpEvent, _, cx| {
@@ -4940,6 +4933,7 @@ impl Render for AppearancePage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::point;
 
     #[test]
     fn the_paste_placeholder_is_an_importable_theme() {
@@ -5012,7 +5006,7 @@ mod tests {
                 window.focus(&page.width_focus, cx);
                 page.open_background_adjustment(window, cx);
                 let dialog = page.background_adjustment_dialog.as_mut().unwrap();
-                dialog.drag = Some((point(px(0.0), px(0.0)), dialog.draft));
+                dialog.drag = Some(CropDrag::Resize { anchor: (0.0, 0.0) });
                 dialog.pinch = Some((2.0, 1.0));
                 page.reset_background_adjustment(cx);
                 let dialog = page.background_adjustment_dialog.as_ref().unwrap();
@@ -5108,25 +5102,6 @@ mod tests {
     }
 
     #[test]
-    fn background_preview_matches_the_runtime_hero_aspect_ratio() {
-        for viewport in [
-            gpui::size(px(1440.0), px(900.0)),
-            gpui::size(px(800.0), px(1200.0)),
-        ] {
-            for collapsed in [false, true] {
-                let preview = background_preview_size(viewport, 260.0, collapsed);
-                let hero_width = f32::from(viewport.width) - if collapsed { 0.0 } else { 260.0 };
-                let hero_height =
-                    crate::shell::new_thread_background_height(f32::from(viewport.height));
-                let aspect = f32::from(preview.width) / f32::from(preview.height);
-                assert!((aspect - hero_width / hero_height).abs() < 0.00001);
-                assert!(f32::from(preview.width) <= 676.0);
-                assert!(f32::from(preview.height) <= 300.0);
-            }
-        }
-    }
-
-    #[test]
     fn background_pinch_preserves_native_scale_and_round_trips() {
         for relative_delta in [false, true] {
             let mut previous = 1.0;
@@ -5156,20 +5131,68 @@ mod tests {
         }
     }
 
-    #[test]
-    fn background_zoom_slider_matches_its_inset_track_and_clamps() {
-        let bounds = Bounds::new(point(px(100.0), px(20.0)), gpui::size(px(168.0), px(28.0)));
-        let minimum = crate::settings::NewThreadBackgroundAdjustment::MIN_ZOOM;
-        let maximum = crate::settings::NewThreadBackgroundAdjustment::MAX_ZOOM;
+    #[gpui::test]
+    fn crop_frame_moves_resizes_from_corners_and_stays_inside(cx: &mut gpui::TestAppContext) {
+        use crate::new_thread_background_mask::crop_for_adjustment;
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+            crate::settings::init(background_settings(), dir.path(), cx);
+        });
+        let window = cx.add_window(|_, cx| AppearancePage::new(cx));
+        window
+            .update(cx, |page, window, cx| {
+                page.open_background_adjustment(window, cx);
+                let dialog = page.background_adjustment_dialog.as_mut().unwrap();
+                // A 1000x500 stage at the origin showing a 2000x1000 image,
+                // framed for a 1200x800 hero.
+                dialog.draft = Default::default();
+                dialog.image = Some((2000.0, 1000.0));
+                dialog.hero = (1200.0, 800.0);
+                dialog.stage_bounds.set(Some(Bounds::new(
+                    point(px(0.0), px(0.0)),
+                    gpui::size(px(1000.0), px(500.0)),
+                )));
+                let crop = |page: &AppearancePage| {
+                    let dialog = page.background_adjustment_dialog.as_ref().unwrap();
+                    crop_for_adjustment(dialog.image.unwrap(), dialog.hero, dialog.draft)
+                };
+                let [x, y, width, height] = crop(page);
+                assert!((x + width / 2.0 - 0.5).abs() < 1e-4 && y == 0.0 && height == 1.0);
 
-        assert_eq!(background_zoom_at_x(bounds, px(90.0)), minimum);
-        assert_eq!(background_zoom_at_x(bounds, px(107.0)), minimum);
-        assert_eq!(background_zoom_at_x(bounds, px(261.0)), maximum);
-        assert_eq!(background_zoom_at_x(bounds, px(280.0)), maximum);
-        assert_eq!(background_zoom_at_x(bounds, px(184.0)), 2.5);
-        assert_eq!(background_zoom_fraction(minimum), 0.0);
-        assert_eq!(background_zoom_fraction(2.5), 0.5);
-        assert_eq!(background_zoom_fraction(maximum), 1.0);
+                // Drag the frame far right: it stops at the image edge.
+                let inside = point(px(500.0), px(250.0));
+                page.start_background_drag(inside, cx);
+                page.drag_background(point(px(5000.0), px(250.0)), cx);
+                let [x, _, width, _] = crop(page);
+                assert!((x + width - 1.0).abs() < 1e-4);
+                page.finish_background_drag(cx);
+
+                // Pull the top-left corner inward: the frame shrinks (zooms
+                // in) around the fixed bottom-right corner.
+                let [x, y, width, height] = crop(page);
+                page.start_background_drag(point(px(x * 1000.0), px(y * 500.0)), cx);
+                page.drag_background(point(px((x + width / 2.0) * 1000.0), px(250.0)), cx);
+                let [next_x, next_y, next_width, next_height] = crop(page);
+                assert!(next_width < width);
+                assert!((next_x + next_width - (x + width)).abs() < 1e-3);
+                assert!((next_y + next_height - (y + height)).abs() < 1e-3);
+                let zoom = page
+                    .background_adjustment_dialog
+                    .as_ref()
+                    .unwrap()
+                    .draft
+                    .zoom;
+                assert!(zoom > 1.0);
+                page.finish_background_drag(cx);
+
+                // Presets zoom around the frame's center.
+                page.set_background_zoom(1.0, cx);
+                let [_, _, width, _] = crop(page);
+                assert!((width - 1200.0 / 800.0 * 1000.0 / 2000.0).abs() < 1e-3);
+            })
+            .unwrap();
     }
 
     #[test]
