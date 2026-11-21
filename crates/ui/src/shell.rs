@@ -2348,6 +2348,7 @@ pub struct Shell {
     cloud_first_chat: Option<settings_cloud::FirstCloudChat>,
     /// Settings → Usage shows Cloud compute instead of model usage.
     usage_settings_compute: bool,
+    usage_settings_scroll: settings::widgets::PageScroll,
     /// The account was last seen signed in without a subscription, so the
     /// next subscribed answer is a fresh purchase (see `follow_cloud_access`).
     cloud_seen_unsubscribed: bool,
@@ -3033,6 +3034,7 @@ impl Shell {
             cloud_page_sub: None,
             cloud_first_chat: None,
             usage_settings_compute: false,
+            usage_settings_scroll: settings::widgets::PageScroll::default(),
             cloud_seen_unsubscribed: false,
             devices_page: None,
             archived_page: None,
@@ -6027,6 +6029,9 @@ impl Shell {
             || matches!(route, Route::Usage) && !matches!(self.route, Route::Usage)
         {
             self.usage_pending = true;
+        }
+        if route == Route::Settings(SettingsSection::Usage) && self.route != route {
+            self.usage_settings_scroll.reset();
         }
         self.route = route;
         if !was_pull_requests && will_show_pull_requests {
