@@ -11418,21 +11418,21 @@ impl Shell {
                         div().absolute().child(crate::loaders::upload_progress_arc(
                             percent,
                             24.0,
-                            theme.text_muted.opacity(0.2),
-                            theme.text_muted,
+                            theme.accent.opacity(0.2),
+                            theme.accent,
                         )),
                     )
                     .child(
                         div()
                             .text_size(px(8.0))
-                            .text_color(theme.text_muted)
+                            .text_color(theme.accent)
                             .child(format!("{percent}%")),
                     )
                     .into_any_element(),
                 None => crate::loaders::mini_mono_spinner(
                     "sidebar-update-progress",
                     2.0,
-                    theme.text_muted,
+                    theme.accent,
                     cx.entity_id(),
                     cx,
                 )
