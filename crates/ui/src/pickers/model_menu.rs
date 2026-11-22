@@ -1,7 +1,16 @@
-//! Provider browsing and variable-height model rows over the existing run controller.
+//! The model menu: a provider rail, a searchable list (favorites first, then
+//! one group per provider) and a detail card for the hovered model.
 use super::*;
+use crate::tooltip::TooltipExt as _;
 use std::{cell::RefCell, sync::Arc};
 use zuse_viewport::model_picker_style as ui;
+
+/// The list card's width (rail included) and tallest height.
+pub(super) const MENU_WIDTH: f32 = 328.;
+pub(super) const MENU_HEIGHT: f32 = 380.;
+const RAIL_WIDTH: f32 = 44.;
+const ROW_HEIGHT: f32 = compact::COMPACT_ROW_HEIGHT;
+const HEADER_HEIGHT: f32 = 30.;
 
 fn picker_brand(harness: HarnessId, fallback: gpui::Hsla) -> (&'static str, gpui::Hsla) {
     let (path, tint) = harness_brand_icon(harness);
@@ -10,42 +19,50 @@ fn picker_brand(harness: HarnessId, fallback: gpui::Hsla) -> (&'static str, gpui
 
 #[derive(Clone)]
 enum Item {
-    Label(String),
+    /// The starred models' section label.
+    Favorites,
+    /// A provider's group heading. `first` drops the separator above it.
     Header {
         provider: HarnessId,
         name: SharedString,
-        count: usize,
-        current: bool,
+        first: bool,
     },
     Row {
         row: ModelRowData,
         index: usize,
-        provider: bool,
-        bottom: f32,
     },
 }
 struct Cache {
     key: ModelRowsKey,
     signature: String,
     items: Arc<Vec<Item>>,
-    height: f32,
 }
 pub(super) struct MenuState {
     list: gpui::ListState,
     cache: RefCell<Option<Cache>>,
+    /// Pointer intent from a row toward the detail card: moving diagonally
+    /// across other rows on the way into the card keeps the card's model.
+    pub(super) hover: popover::HoverIntent<usize>,
+    pub(super) card_bounds: Option<gpui::Bounds<gpui::Pixels>>,
+    pub(super) card_left: bool,
+    frame_bounds: Option<gpui::Bounds<gpui::Pixels>>,
 }
 impl Default for MenuState {
     fn default() -> Self {
         Self {
             list: gpui::ListState::new(0, gpui::ListAlignment::Top, px(256.)),
             cache: RefCell::new(None),
+            hover: popover::HoverIntent::default(),
+            card_bounds: None,
+            card_left: false,
+            frame_bounds: None,
         }
     }
 }
 
 impl Pickers {
     pub(super) fn settings_menu_height(&self, _cx: &App) -> f32 {
-        ui::MAX_HEIGHT
+        MENU_HEIGHT
     }
 
     /// A provider's discovery failure belongs to that provider's tab. The
@@ -72,6 +89,11 @@ impl Pickers {
             selected: self.effective_model_id(cx).map(str::to_owned),
         }
     }
+
+    /// The menu's rows in display order: starred models first, then every
+    /// other model grouped by provider (the current provider's group first
+    /// while browsing). A provider picked on the rail narrows the list to it;
+    /// search matches names and ids within the current view.
     pub(super) fn reference_model_rows(&self, cx: &App) -> Vec<ModelRowData> {
         let query = self.search.read(cx).text().trim().to_lowercase();
         let current = self.effective_harness(cx);
@@ -79,68 +101,67 @@ impl Pickers {
         if self.model_scope.is_none() && query.is_empty() {
             providers.sort_by_key(|p| Some(p.id) != current);
         }
+        let matches = |id: &str, label: &str| {
+            query.is_empty()
+                || id.to_lowercase().contains(&query)
+                || label.to_lowercase().contains(&query)
+        };
+        let mut favorites = vec![];
         let mut rows = vec![];
         for provider in providers {
             if self.model_scope.is_some_and(|scope| scope != provider.id) {
                 continue;
             }
-            if let Some(models) = self
+            let Some(models) = self
                 .model_catalog(cx)
                 .get(&provider.id)
                 .and_then(Loadable::ready)
-            {
-                for model in models {
-                    if self.model_rail == ModelRail::Favorites
-                        && !self.defaults.is_favorite(provider.id, &model.id)
-                    {
-                        continue;
-                    }
-                    if query.is_empty()
-                        || model.id.to_lowercase().contains(&query)
-                        || model.label.to_lowercase().contains(&query)
-                    {
-                        rows.push(ModelRowData {
-                            harness: provider.id,
-                            harness_name: provider.name.clone().into(),
-                            model: model.clone(),
-                            selected_only: false,
-                            ambiguous: false,
-                        });
-                    }
+            else {
+                continue;
+            };
+            let mut push = |row: ModelRowData| {
+                if self.defaults.is_favorite(row.harness, &row.model.id) {
+                    favorites.push(row);
+                } else {
+                    rows.push(row);
                 }
-                if Some(provider.id) == current {
-                    if let Some(id) = self
-                        .effective_model_id(cx)
-                        .filter(|id| !models.iter().any(|m| m.id == *id))
-                    {
-                        if self.model_rail == ModelRail::Favorites
-                            && !self.defaults.is_favorite(provider.id, id)
-                        {
-                            continue;
-                        }
-                        let label = self.selected_model_label(cx).unwrap_or_else(|| id.into());
-                        if query.is_empty()
-                            || id.to_lowercase().contains(&query)
-                            || label.to_lowercase().contains(&query)
-                        {
-                            rows.push(ModelRowData {
-                                harness: provider.id,
-                                harness_name: provider.name.into(),
-                                model: Model {
-                                    id: id.into(),
-                                    label,
-                                    description: None,
-                                    reasoning_levels: vec![],
-                                    options: vec![],
-                                },
-                                selected_only: true,
-                                ambiguous: false,
-                            });
-                        }
-                    }
+            };
+            for model in models {
+                if matches(&model.id, &model.label) {
+                    push(ModelRowData {
+                        harness: provider.id,
+                        harness_name: provider.name.clone().into(),
+                        model: model.clone(),
+                        selected_only: false,
+                        ambiguous: false,
+                    });
+                }
+            }
+            if Some(provider.id) == current
+                && let Some(id) = self
+                    .effective_model_id(cx)
+                    .filter(|id| !models.iter().any(|m| m.id == *id))
+            {
+                let label = self.selected_model_label(cx).unwrap_or_else(|| id.into());
+                if matches(id, &label) {
+                    push(ModelRowData {
+                        harness: provider.id,
+                        harness_name: provider.name.clone().into(),
+                        model: Model {
+                            id: id.into(),
+                            label,
+                            description: None,
+                            reasoning_levels: vec![],
+                            options: vec![],
+                        },
+                        selected_only: true,
+                        ambiguous: false,
+                    });
                 }
             }
         }
+        favorites.append(&mut rows);
+        let mut rows = favorites;
         // Catalogs can contain repeated entries for the same model ID. Keep
         // separate IDs, but make same-named choices distinguishable below.
         let mut seen = std::collections::HashSet::new();
@@ -148,7 +169,16 @@ impl Pickers {
         mark_ambiguous(&mut rows);
         rows
     }
-    fn reference_items(&self, cx: &App) -> (Arc<Vec<Item>>, f32) {
+
+    /// The leading run of starred rows in [`Self::model_rows`].
+    pub(super) fn favorite_row_count(&self, cx: &App) -> usize {
+        self.model_rows(cx)
+            .iter()
+            .take_while(|row| self.defaults.is_favorite(row.harness, &row.model.id))
+            .count()
+    }
+
+    fn reference_items(&self, cx: &App) -> Arc<Vec<Item>> {
         let key = self.reference_key(cx);
         if let Some(cache) = self
             .model_menu
@@ -157,72 +187,35 @@ impl Pickers {
             .as_ref()
             .filter(|c| c.key == key)
         {
-            return (cache.items.clone(), cache.height);
+            return cache.items.clone();
         }
         let rows = self.model_rows(cx);
-        let favorites = self.model_rail == ModelRail::Favorites;
-        let grouped = self.model_scope.is_none() && key.query.is_empty() && !favorites;
-        let provider = self.model_scope.is_none() && !grouped && !favorites;
+        let starred = self.favorite_row_count(cx);
         let signature = serde_json::json!([
             key.query,
             self.model_scope,
+            starred,
             rows.iter()
                 .map(|r| (&r.harness, &r.model.id, &r.model.label, &r.harness_name))
                 .collect::<Vec<_>>()
         ])
         .to_string();
         let mut items = vec![];
-        let mut height = 10.;
-        if !rows.is_empty() {
-            let heading = self
-                .model_scope
-                .and_then(|scope| {
-                    self.rail_descriptors(cx)
-                        .into_iter()
-                        .find(|p| p.id == scope)
-                        .map(|p| p.name)
-                })
-                .unwrap_or_else(|| if favorites { "Favorites" } else { "Models" }.to_string());
-            items.push(Item::Label(heading));
-            height += ui::LABEL_HEIGHT;
-            for (index, row) in rows.iter().enumerate() {
-                if grouped && (index == 0 || rows[index - 1].harness != row.harness) {
-                    let count = rows[index..]
-                        .iter()
-                        .take_while(|r| r.harness == row.harness)
-                        .count();
-                    items.push(Item::Header {
-                        provider: row.harness,
-                        name: row.harness_name.clone(),
-                        count,
-                        current: Some(row.harness) == key.effective,
-                    });
-                    height += ui::GROUP_HEADER_HEIGHT;
-                }
-                let last =
-                    index + 1 == rows.len() || grouped && rows[index + 1].harness != row.harness;
-                let bottom = if grouped && last {
-                    8.
-                } else if last {
-                    0.
-                } else {
-                    2.
-                };
-                items.push(Item::Row {
-                    row: row.clone(),
-                    index,
-                    provider: provider || row.ambiguous,
-                    bottom,
+        if starred > 0 {
+            items.push(Item::Favorites);
+        }
+        for (index, row) in rows.iter().enumerate() {
+            if index >= starred && (index == starred || rows[index - 1].harness != row.harness) {
+                items.push(Item::Header {
+                    provider: row.harness,
+                    name: row.harness_name.clone(),
+                    first: items.is_empty(),
                 });
-                height += if provider || row.ambiguous {
-                    ui::PROVIDER_ROW_HEIGHT
-                } else {
-                    ui::ROW_HEIGHT
-                };
-                height += bottom;
             }
-        } else {
-            height += 64.;
+            items.push(Item::Row {
+                row: row.clone(),
+                index,
+            });
         }
         let items = Arc::new(items);
         if self
@@ -238,12 +231,11 @@ impl Pickers {
             key,
             signature,
             items: items.clone(),
-            height,
         });
-        (items, height)
+        items
     }
     pub(super) fn scroll_reference_row(&self, row: usize, cx: &App) {
-        let (items, _) = self.reference_items(cx);
+        let items = self.reference_items(cx);
         if let Some(index) = items
             .iter()
             .position(|i| matches!(i,Item::Row{index,..}if *index==row))
@@ -255,95 +247,222 @@ impl Pickers {
         self.model_menu.list.scroll_to(gpui::ListOffset::default());
     }
 
-    fn reference_item(&mut self, item: &Item, cx: &mut Context<Self>) -> AnyElement {
-        match item {
-            Item::Label(label) => ui::section(label.clone()).into_any_element(),
-            Item::Header {
-                provider,
-                name,
-                count,
-                current,
-            } => {
-                let (path, tint) = picker_brand(*provider, Theme::of(cx).text);
-                ui::provider_heading(
-                    name.clone(),
-                    crate::icons::brand_icon(path, 14., tint),
-                    *count,
-                    *current,
-                )
-                .into_any_element()
+    /// Hovering a row shows its card; moving toward an open card across
+    /// other rows keeps the card until the pointer settles.
+    pub(super) fn hover_model_row(
+        &mut self,
+        index: usize,
+        pointer: gpui::Point<gpui::Pixels>,
+        entered: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let current = self.active;
+        let bounds = self.model_menu.card_bounds;
+        let left = self.model_menu.card_left;
+        let action = if entered {
+            self.model_menu
+                .hover
+                .enter(Some(&current), &index, pointer, bounds, left)
+        } else {
+            self.model_menu
+                .hover
+                .moved(Some(&current), &index, pointer, bounds, left)
+        };
+        match action {
+            popover::HoverAction::None => {}
+            popover::HoverAction::Open => {
+                self.model_menu.hover.record_origin(pointer);
+                if self.active != index || self.compact_keyboard {
+                    self.active = index;
+                    self.compact_keyboard = false;
+                    cx.notify();
+                }
             }
-            Item::Row {
-                row,
-                index,
-                provider,
-                bottom,
-            } => {
-                let theme = Theme::of(cx).for_popup();
-                let (path, tint) = picker_brand(row.harness, theme.text_muted);
-                let selected = self.effective_harness(cx) == Some(row.harness)
-                    && self
-                        .selected_model(cx)
-                        .is_some_and(|m| m.id == row.model.id);
-                let favorite = self.defaults.is_favorite(row.harness, &row.model.id);
-                let harness = row.harness;
-                let click_model = row.model.id.clone();
-                let keyboard_model = click_model.clone();
-                let index = *index;
-                let star = ui::favorite_button(("model-favorite", index), favorite)
-                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.toggle_model_favorite(harness, &click_model, cx);
-                    }))
-                    .on_key_down(cx.listener(move |this, e: &KeyDownEvent, _, cx| {
-                        if matches!(e.keystroke.key.as_str(), "enter" | "space") {
-                            cx.stop_propagation();
-                            this.toggle_model_favorite(harness, &keyboard_model, cx);
-                        }
-                    }));
-                div()
-                    .pb(px(*bottom))
-                    .child(
-                        ui::model_row(
-                            ("model-row", index),
-                            row.model.label.clone(),
-                            if row.ambiguous {
-                                Some(SharedString::from(row.model.id.clone()))
-                            } else {
-                                provider.then(|| row.harness_name.clone())
-                            },
-                            crate::icons::brand_icon(path, 16., tint),
-                            selected,
-                            self.compact_keyboard && self.active == index,
-                            (index < 9).then_some(index + 1),
-                            star,
-                        )
-                        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                cx.stop_propagation();
-                                this.activate_model_index(index, cx);
-                            }
-                        }))
-                        .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                            if *hovered {
-                                this.active = index;
-                                this.compact_keyboard = false;
-                                cx.notify();
-                            }
-                        }))
-                        .on_click(
-                            cx.listener(move |this, _, _, cx| this.activate_model_index(index, cx)),
-                        ),
-                    )
-                    .into_any_element()
+            popover::HoverAction::Defer => {
+                self.model_menu.hover.defer(cx, move |this, cx| {
+                    if this.is_open()
+                        && this.active == current
+                        && this.model_menu.hover.pending() == Some(&index)
+                    {
+                        this.model_menu.hover.record_origin(pointer);
+                        this.active = index;
+                        this.compact_keyboard = false;
+                        cx.notify();
+                    }
+                });
             }
         }
     }
+
+    fn reference_item(&mut self, item: &Item, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::of(cx).for_popup();
+        match item {
+            Item::Favorites => div()
+                .h(px(HEADER_HEIGHT))
+                .px(px(8.))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .text_size(crate::typography::text_xs())
+                .text_color(theme.text_muted)
+                .child(
+                    crate::icons::icon(crate::icons::STAR)
+                        .size(px(13.))
+                        .flex_none()
+                        .text_color(theme.text_muted),
+                )
+                .child("Favorites")
+                .into_any_element(),
+            Item::Header {
+                provider,
+                name,
+                first,
+            } => {
+                let (path, tint) = picker_brand(*provider, theme.text_muted);
+                div()
+                    .w_full()
+                    .when(!first, |el| {
+                        el.mt(px(4.))
+                            .border_t_1()
+                            .border_color(theme.border.opacity(0.5))
+                    })
+                    .h(px(HEADER_HEIGHT))
+                    .px(px(8.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .text_size(crate::typography::text_xs())
+                    .text_color(theme.text_muted)
+                    .child(
+                        div()
+                            .opacity(0.8)
+                            .child(crate::icons::brand_icon(path, 13., tint)),
+                    )
+                    .child(div().min_w_0().truncate().child(name.clone()))
+                    .into_any_element()
+            }
+            Item::Row { row, index } => self.reference_row(row, *index, cx),
+        }
+    }
+
+    fn reference_row(
+        &mut self,
+        row: &ModelRowData,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = Theme::of(cx).for_popup();
+        let (path, tint) = picker_brand(row.harness, theme.text_muted);
+        let selected = self.row_is_selected(row, cx);
+        let highlighted = self.active == index;
+        let is_default = crate::settings::default_model(cx)
+            .is_some_and(|model| model.provider == row.harness && model.model == row.model.id);
+        // A second muted line only tells same-named rows apart.
+        let attribution: Option<SharedString> = row.ambiguous.then(|| {
+            row.model
+                .description
+                .as_deref()
+                .map(str::trim)
+                .filter(|d| !d.is_empty())
+                .unwrap_or(&row.model.id)
+                .to_owned()
+                .into()
+        });
+        let label: SharedString = row.model.label.clone().into();
+        let item = div()
+            .id(("model-row", index))
+            .role(gpui::Role::ListBoxOption)
+            .aria_label(SharedString::from(format!(
+                "{} · {}",
+                row.model.label, row.harness_name
+            )))
+            .aria_selected(selected)
+            .tab_index(0)
+            .relative()
+            .h(px(ROW_HEIGHT))
+            .px(px(8.))
+            .rounded(px(MODEL_ROW_RADIUS))
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .cursor_pointer()
+            .text_size(crate::typography::text_xs())
+            .text_color(theme.text)
+            .when(selected, |el| model_selected(el, &theme))
+            .when(!selected && highlighted, |el| {
+                el.bg(theme.muted_fill().opacity(0.6))
+            })
+            .when(self.compact_keyboard && highlighted, |el| {
+                el.aria_active_descendant()
+            })
+            .on_hover(cx.listener(move |this, hovered: &bool, window, cx| {
+                if *hovered {
+                    this.hover_model_row(index, window.mouse_position(), true, cx);
+                } else {
+                    this.model_menu.hover.leave(&index);
+                }
+            }))
+            .on_mouse_move(
+                cx.listener(move |this, event: &gpui::MouseMoveEvent, _, cx| {
+                    this.hover_model_row(index, event.position, false, cx);
+                }),
+            )
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    cx.stop_propagation();
+                    this.activate_model_index(index, cx);
+                }
+            }))
+            .on_click(cx.listener(move |this, _, _, cx| this.activate_model_index(index, cx)))
+            .child(crate::icons::brand_icon(path, 15., tint))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .items_baseline()
+                    .gap(px(6.))
+                    .child(
+                        div()
+                            .flex_none()
+                            .max_w_full()
+                            .truncate()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child(label),
+                    )
+                    .when_some(attribution, |el, attribution| {
+                        el.child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_color(theme.text_muted)
+                                .child(attribution),
+                        )
+                    }),
+            )
+            .when(is_default, |el| {
+                el.child(
+                    div()
+                        .flex_none()
+                        .text_color(theme.text_muted)
+                        .child("Default"),
+                )
+            })
+            .when(selected, |el| {
+                el.child(model_check(&theme))
+                    .child(compact::selected_bar(&theme))
+            });
+        div()
+            .pb(px(popover::MENU_GAP))
+            .child(item)
+            .into_any_element()
+    }
+
+    /// Narrow the list to one provider, or (`None`) list every model.
     pub(super) fn scope_model_menu(&mut self, scope: Option<HarnessId>, cx: &mut Context<Self>) {
         self.model_scope = scope;
         self.model_rail = if scope.is_none() {
-            ModelRail::Favorites
+            ModelRail::All
         } else {
             ModelRail::Harness
         };
@@ -352,23 +471,49 @@ impl Pickers {
         } else {
             self.prefetch_models(false, cx);
         }
-        self.active = 0;
+        self.model_menu.hover.reset();
+        self.active = self.selected_model_index(cx);
+        self.reset_reference_scroll();
         self.refresh_compact_placeholder(cx);
         cx.notify();
     }
+
+    /// A rail click narrows the list to that provider; clicking the
+    /// highlighted provider again returns to every model.
+    fn toggle_model_scope(&mut self, scope: Option<HarnessId>, cx: &mut Context<Self>) {
+        let scope = scope.filter(|scope| self.model_scope != Some(*scope));
+        self.scope_model_menu(scope, cx);
+    }
+
+    fn rail_tab(
+        &self,
+        id: impl Into<gpui::ElementId>,
+        label: SharedString,
+        active: bool,
+        glyph: AnyElement,
+        scope: Option<HarnessId>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        ui::provider_tab(id, label.clone(), active, false, Some(glyph))
+            .tip(label)
+            .on_key_down(cx.listener(move |this, e: &KeyDownEvent, _, cx| {
+                if matches!(e.keystroke.key.as_str(), "enter" | "space") {
+                    cx.stop_propagation();
+                    this.toggle_model_scope(scope, cx);
+                }
+            }))
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle_model_scope(scope, cx)))
+            .into_any_element()
+    }
+
     pub(super) fn render_reference_menu(
         &mut self,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         self.compact_model_list = true;
-        if self.model_scope.is_none() && self.model_rail != ModelRail::Favorites {
-            self.model_scope = self
-                .effective_harness(cx)
-                .or_else(|| self.rail_descriptors(cx).first().map(|p| p.id));
-        }
         let theme = Theme::of(cx).for_popup();
-        let (items, _) = self.reference_items(cx);
+        let items = self.reference_items(cx);
         let empty = items.is_empty();
         let error = if self.cloud_models_active(cx) {
             self.cloud.model_error.clone()
@@ -390,61 +535,46 @@ impl Pickers {
                     )
             });
         let providers = self.rail_descriptors(cx);
-        self.compact_motion.frame_height = ui::MAX_HEIGHT.min(self.menu_geometry().height);
-        let mut rail = div()
-            .id("model-provider-rail")
-            .overflow_y_scroll()
-            .w(px(44.))
-            .flex_none()
-            .p(px(5.))
-            .border_r_1()
-            .border_color(theme.border.opacity(0.5))
-            .flex()
-            .flex_col()
-            .items_center()
-            .gap(px(4.))
-            .child(
-                ui::provider_tab(
-                    "model-tab-favorites",
-                    "Favorite models",
-                    self.model_rail == ModelRail::Favorites,
-                    false,
-                    Some(crate::icons::brand_icon(
-                        crate::icons::STAR,
-                        16.,
-                        theme.text_muted,
-                    )),
-                )
-                .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
-                    if matches!(e.keystroke.key.as_str(), "enter" | "space") {
-                        cx.stop_propagation();
-                        this.scope_model_menu(None, cx);
-                    }
-                }))
-                .on_click(cx.listener(|this, _, _, cx| this.scope_model_menu(None, cx))),
-            );
-        for (index, p) in providers.iter().enumerate() {
-            let provider = p.id;
-            let (path, tint) = picker_brand(provider, theme.text_muted);
-            rail = rail.child(
-                ui::provider_tab(
+        self.compact_motion.frame_height = MENU_HEIGHT.min(self.menu_geometry().height);
+        let rail = (providers.len() > 1).then(|| {
+            let mut rail = div()
+                .id("model-provider-rail")
+                .overflow_y_scroll()
+                .w(px(RAIL_WIDTH))
+                .flex_none()
+                .p(px(6.))
+                .border_r_1()
+                .border_color(theme.border.opacity(0.5))
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(4.))
+                .child(
+                    self.rail_tab(
+                        "model-tab-all",
+                        "All models".into(),
+                        self.model_scope.is_none(),
+                        crate::icons::icon(crate::icons::LIST)
+                            .size(px(15.))
+                            .text_color(theme.text_muted)
+                            .into_any_element(),
+                        None,
+                        cx,
+                    ),
+                );
+            for (index, p) in providers.iter().enumerate() {
+                let (path, tint) = picker_brand(p.id, theme.text_muted);
+                rail = rail.child(self.rail_tab(
                     ("harness-tab", index),
-                    format!("{} models", p.name),
-                    self.model_rail != ModelRail::Favorites && self.model_scope == Some(provider),
-                    false,
-                    Some(crate::icons::brand_icon(path, 16., tint)),
-                )
-                .on_key_down(cx.listener(move |this, e: &KeyDownEvent, _, cx| {
-                    if matches!(e.keystroke.key.as_str(), "enter" | "space") {
-                        cx.stop_propagation();
-                        this.scope_model_menu(Some(provider), cx);
-                    }
-                }))
-                .on_click(
-                    cx.listener(move |this, _, _, cx| this.scope_model_menu(Some(provider), cx)),
-                ),
-            );
-        }
+                    p.name.clone().into(),
+                    self.model_scope == Some(p.id),
+                    crate::icons::brand_icon(path, 16., tint),
+                    Some(p.id),
+                    cx,
+                ));
+            }
+            rail
+        });
         let list = gpui::list(
             self.model_menu.list.clone(),
             cx.processor(move |this, index, _, cx| this.reference_item(&items[index], cx)),
@@ -458,6 +588,13 @@ impl Pickers {
             .border_color(theme.border.opacity(0.5))
             .flex()
             .items_center()
+            .gap(px(8.))
+            .child(
+                crate::icons::icon(crate::icons::MAGNIFER)
+                    .size(px(14.))
+                    .flex_none()
+                    .text_color(theme.text_muted),
+            )
             .child(div().flex_1().min_w_0().child(self.search.clone()));
         let body = div()
             .flex()
@@ -479,7 +616,8 @@ impl Pickers {
                     .flex_1()
                     .min_h_0()
                     .px(px(ui::LIST_INSET))
-                    .pb(px(10.))
+                    .pt(px(4.))
+                    .pb(px(6.))
                     .when(!empty, |v| v.child(list))
                     .when(empty, |v| {
                         v.child(
@@ -493,17 +631,27 @@ impl Pickers {
                                         "providers-model_picker_checking_available_agents",
                                         cx,
                                     )
-                                } else if self.model_rail == ModelRail::Favorites
-                                    && self.search.read(cx).text().trim().is_empty()
-                                {
-                                    "No favorites yet. Star a model to add it here.".to_string()
                                 } else {
                                     "No models match your search.".to_string()
                                 }),
                         )
                     }),
             );
+        // The card opens on whichever side of the list has room.
+        let viewport = window.viewport_size().width;
+        if let Some(frame) = self.model_menu.frame_bounds {
+            let room_right = f32::from(viewport - frame.right());
+            self.model_menu.card_left = room_right < super::model_detail::CARD_WIDTH + 24.;
+        }
+        let card = self.render_model_detail(cx);
+        if card.is_none() {
+            self.model_menu.card_bounds = None;
+        }
+        let card =
+            card.map(|card| popover::nested_menu("model-detail", card, self.model_menu.card_left));
+        let entity = cx.entity().downgrade();
         let content = div()
+            .relative()
             .size_full()
             .flex()
             .flex_col()
@@ -514,10 +662,26 @@ impl Pickers {
                     .min_h_0()
                     .flex()
                     .items_stretch()
-                    .child(rail)
+                    .children(rail)
                     .child(body),
             )
+            .child(
+                gpui::canvas(
+                    move |bounds, _, cx| {
+                        let _ = entity.update(cx, |this, cx| {
+                            if this.model_menu.frame_bounds != Some(bounds) {
+                                this.model_menu.frame_bounds = Some(bounds);
+                                cx.notify();
+                            }
+                        });
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
+            .children(card)
             .into_any_element();
-        self.popover_frame_flush(ui::WIDTH, content, cx)
+        self.popover_frame_flush(MENU_WIDTH, content, cx)
     }
 }

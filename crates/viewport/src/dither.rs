@@ -149,6 +149,110 @@ pub fn meter(fraction: f32, on: Hsla, off: Hsla) -> impl IntoElement {
     .inset_0()
 }
 
+/// Whether the point `(cx, cy)` falls inside a `width` x `height` box with
+/// `radius` corners.
+fn inside_rounded(cx: f32, cy: f32, width: f32, height: f32, radius: f32) -> bool {
+    let dx = (radius - cx).max(cx - (width - radius)).max(0.0);
+    let dy = (radius - cy).max(cy - (height - radius)).max(0.0);
+    dx * dx + dy * dy <= radius * radius
+}
+
+/// Density of a slider fill cell at `t` (0 at the start, 1 at the leading
+/// edge): sparse at the start, solid at the leading edge.
+pub fn ramp_density(t: f32) -> f32 {
+    (0.15 + 0.85 * t.clamp(0.0, 1.0).powf(1.4)).clamp(0.0, 1.0)
+}
+
+/// A rounded slider fill: ordered-dither cells whose density ramps from a
+/// sparse start to a solid leading edge, clipped to `radius` corners. Paints
+/// its positioned parent; size the parent to the filled span.
+pub fn ramp(color: Hsla, radius: f32) -> impl IntoElement {
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let width = f32::from(bounds.size.width);
+            let height = f32::from(bounds.size.height);
+            if width < 1.0 || height < 1.0 {
+                return;
+            }
+            let columns = (width / DITHER_CELL).round().max(1.0) as usize;
+            let rows = (height / DITHER_CELL).round().max(1.0) as usize;
+            let cell_w = width / columns as f32;
+            let cell_h = height / rows as f32;
+            for y in 0..rows {
+                for x in 0..columns {
+                    let cx = (x as f32 + 0.5) * cell_w;
+                    let cy = (y as f32 + 0.5) * cell_h;
+                    if !inside_rounded(cx, cy, width, height, radius) {
+                        continue;
+                    }
+                    let t = (x as f32 + 1.0) / columns as f32;
+                    let density = ramp_density(t);
+                    let alpha = if density > threshold(x, y) { 1.0 } else { 0.18 };
+                    window.paint_quad(gpui::fill(
+                        gpui::Bounds::new(
+                            bounds.origin
+                                + gpui::point(px(x as f32 * cell_w), px(y as f32 * cell_h)),
+                            gpui::size(px(cell_w), px(cell_h)),
+                        ),
+                        color.opacity(alpha),
+                    ));
+                }
+            }
+        },
+    )
+    .absolute()
+    .inset_0()
+}
+
+/// A faint ordered-dither wash fading out of a card's top-right corner:
+/// densest at the corner, gone by the far edge. Paints its positioned parent,
+/// clipped to the card's `radius` top-right corner.
+pub fn corner(color: Hsla, radius: f32) -> impl IntoElement {
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let width = f32::from(bounds.size.width);
+            let height = f32::from(bounds.size.height);
+            if width < 1.0 || height < 1.0 {
+                return;
+            }
+            let columns = (width / DITHER_CELL).round().max(1.0) as usize;
+            let rows = (height / DITHER_CELL).round().max(1.0) as usize;
+            let cell_w = width / columns as f32;
+            let cell_h = height / rows as f32;
+            for y in 0..rows {
+                for x in 0..columns {
+                    let cx = (x as f32 + 0.5) * cell_w;
+                    let cy = (y as f32 + 0.5) * cell_h;
+                    // Only the top-right corner is rounded inside the card.
+                    let dx = (cx - (width - radius)).max(0.0);
+                    let dy = (radius - cy).max(0.0);
+                    if dx * dx + dy * dy > radius * radius {
+                        continue;
+                    }
+                    let fx = cx / width;
+                    let fy = 1.0 - cy / height;
+                    let density = (fx * fx * 0.75 + fy * 0.25) * fx * fy.sqrt() * 0.9;
+                    if density <= threshold(x, y) {
+                        continue;
+                    }
+                    window.paint_quad(gpui::fill(
+                        gpui::Bounds::new(
+                            bounds.origin
+                                + gpui::point(px(x as f32 * cell_w), px(y as f32 * cell_h)),
+                            gpui::size(px(cell_w), px(cell_h)),
+                        ),
+                        color.opacity(0.25 + 0.5 * density),
+                    ));
+                }
+            }
+        },
+    )
+    .absolute()
+    .inset_0()
+}
+
 // ---------------------------------------------------------------------------
 // Chart dither kit.
 //

@@ -6,7 +6,7 @@ use zuse_i18n::messages as msg;
 
 pub(super) const COMPACT_ROW_HEIGHT: f32 = 32.0;
 const COMPACT_LIST_ROWS: usize = 7;
-const THUMB_INSET: f32 = 12.0;
+pub(super) const THUMB_INSET: f32 = 12.0;
 
 pub(super) struct CompactEffort {
     pub labels: Vec<SharedString>,
@@ -527,64 +527,12 @@ impl Pickers {
         if self.is_settings_model() || !self.model_configuration_available(cx) {
             return None;
         }
-        let mut levels = self.trait_ladder(cx);
-        levels.sort();
-        if !levels.is_empty() {
-            let current = self.effective_reasoning(cx);
-            return Some(CompactEffort {
-                labels: levels.iter().map(|l| reasoning_label(*l).into()).collect(),
-                selected: levels.iter().position(|l| Some(*l) == current).unwrap_or(0),
-                stops: EffortStops::Reasoning(levels),
-            });
-        }
-        let option = zuse_protocol::presentation::model_effort_option(self.selected_model(cx)?)?;
-        let options = self.explicit_options(cx);
-        let current = options
-            .get(&option.id)
-            .and_then(|v| v.as_str())
-            .unwrap_or(&option.default_choice);
-        let mut choices: Vec<_> = option.choices.iter().collect();
-        // Preserve provider-specific ladders unless every label has a known rank.
-        fn rank(value: &str) -> Option<u8> {
-            match value
-                .to_ascii_lowercase()
-                .replace([' ', '-', '_'], "")
-                .as_str()
-            {
-                "minimal" => Some(0),
-                "low" => Some(1),
-                "medium" => Some(2),
-                "high" => Some(3),
-                "xhigh" | "extrahigh" => Some(4),
-                "max" => Some(5),
-                "ultra" => Some(6),
-                "ultracode" => Some(7),
-                "ultrathink" => Some(8),
-                _ => None,
-            }
-        }
-        if choices
-            .iter()
-            .all(|c| rank(&c.id).or_else(|| rank(&c.label)).is_some())
-        {
-            choices.sort_by_key(|c| rank(&c.id).or_else(|| rank(&c.label)).unwrap());
-        }
-        Some(CompactEffort {
-            labels: choices
-                .iter()
-                .map(|c| SharedString::from(c.label.clone()))
-                .collect(),
-            selected: choices
-                .iter()
-                .position(|c| c.id == current)
-                .or_else(|| choices.iter().position(|c| c.id == option.default_choice))
-                .unwrap_or(0),
-            stops: EffortStops::Option {
-                id: option.id.clone(),
-                choices: choices.iter().map(|c| c.id.clone()).collect(),
-                default: option.default_choice.clone(),
-            },
-        })
+        effort_stops(
+            self.trait_ladder(cx),
+            self.effective_reasoning(cx),
+            self.selected_model(cx),
+            &self.explicit_options(cx),
+        )
     }
 
     /// Option ids the compact card draws as its own controls, not rows.
@@ -958,7 +906,7 @@ fn shortcut_chip(theme: &Theme, slot: usize) -> gpui::Div {
 }
 
 /// The 2px lime bar on the selected row's leading edge.
-fn selected_bar(theme: &Theme) -> gpui::Div {
+pub(super) fn selected_bar(theme: &Theme) -> gpui::Div {
     div()
         .absolute()
         .left_0()
@@ -1019,6 +967,84 @@ fn fast_toggle(theme: &Theme, on: bool) -> gpui::Stateful<gpui::Div> {
                 .size(px(14.0))
                 .text_color(if on { theme.warning } else { theme.text_muted }),
         )
+}
+
+/// Slider stops for a model: its reasoning ladder (sorted), else an option
+/// shaped like one (an `effort`/`reasoning` choice list), so every model with
+/// an effort gets the same slider. `current` and `options` are the picks the
+/// stops start on.
+pub(super) fn effort_stops(
+    mut levels: Vec<ReasoningLevel>,
+    current: Option<ReasoningLevel>,
+    model: Option<&Model>,
+    options: &serde_json::Map<String, serde_json::Value>,
+) -> Option<CompactEffort> {
+    levels.sort();
+    if !levels.is_empty() {
+        return Some(CompactEffort {
+            labels: levels.iter().map(|l| reasoning_label(*l).into()).collect(),
+            selected: levels.iter().position(|l| Some(*l) == current).unwrap_or(0),
+            stops: EffortStops::Reasoning(levels),
+        });
+    }
+    let option = zuse_protocol::presentation::model_effort_option(model?)?;
+    let current = options
+        .get(&option.id)
+        .and_then(|v| v.as_str())
+        .unwrap_or(&option.default_choice);
+    let mut choices: Vec<_> = option.choices.iter().collect();
+    // Preserve provider-specific ladders unless every label has a known rank.
+    fn rank(value: &str) -> Option<u8> {
+        match value
+            .to_ascii_lowercase()
+            .replace([' ', '-', '_'], "")
+            .as_str()
+        {
+            "minimal" => Some(0),
+            "low" => Some(1),
+            "medium" => Some(2),
+            "high" => Some(3),
+            "xhigh" | "extrahigh" => Some(4),
+            "max" => Some(5),
+            "ultra" => Some(6),
+            "ultracode" => Some(7),
+            "ultrathink" => Some(8),
+            _ => None,
+        }
+    }
+    if choices
+        .iter()
+        .all(|c| rank(&c.id).or_else(|| rank(&c.label)).is_some())
+    {
+        choices.sort_by_key(|c| rank(&c.id).or_else(|| rank(&c.label)).unwrap());
+    }
+    Some(CompactEffort {
+        labels: choices
+            .iter()
+            .map(|c| SharedString::from(c.label.clone()))
+            .collect(),
+        selected: choices
+            .iter()
+            .position(|c| c.id == current)
+            .or_else(|| choices.iter().position(|c| c.id == option.default_choice))
+            .unwrap_or(0),
+        stops: EffortStops::Option {
+            id: option.id.clone(),
+            choices: choices.iter().map(|c| c.id.clone()).collect(),
+            default: option.default_choice.clone(),
+        },
+    })
+}
+
+impl CompactEffort {
+    /// The option id the stops drive, when they are an effort option rather
+    /// than the reasoning ladder.
+    pub(super) fn option_id(&self) -> Option<&str> {
+        match &self.stops {
+            EffortStops::Option { id, .. } => Some(id),
+            EffortStops::Reasoning(_) => None,
+        }
+    }
 }
 
 fn effort_fraction(x: f32, width: f32) -> f32 {

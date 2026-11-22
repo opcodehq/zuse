@@ -19,6 +19,7 @@ mod cloud_models;
 mod compact;
 mod creation_sources;
 mod import_chat;
+mod model_detail;
 mod model_menu;
 mod settings_models;
 mod workspace;
@@ -851,8 +852,6 @@ pub struct Pickers {
     model_rail: ModelRail,
     model_scope: Option<HarnessId>,
     model_menu: model_menu::MenuState,
-    effort_menu_open: bool,
-    effort_trigger_bounds: Option<gpui::Bounds<gpui::Pixels>>,
     setting_menu: Option<ModelSetting>,
     setting_active: usize,
     setting_on_left: bool,
@@ -1158,8 +1157,6 @@ impl Pickers {
             model_rail: ModelRail::default(),
             model_scope: None,
             model_menu: Default::default(),
-            effort_menu_open: false,
-            effort_trigger_bounds: None,
             setting_menu: None,
             setting_active: 0,
             setting_on_left: false,
@@ -1755,6 +1752,8 @@ impl Pickers {
         self.setting_bounds = None;
         self.close_config();
         self.menu_bar = popover::MenuScrollbarState::default();
+        self.model_menu.hover.reset();
+        self.model_menu.card_bounds = None;
         if self.open.begin_close() {
             popover::reap_popup(cx, |pickers: &mut Self| &mut pickers.open);
         }
@@ -1815,7 +1814,6 @@ impl Pickers {
             return;
         }
         if kind == PickerKind::HarnessModel {
-            self.effort_menu_open = false;
             self.model_scope = self
                 .effective_harness(cx)
                 .or_else(|| self.rail_descriptors(cx).first().map(|p| p.id));
@@ -1860,6 +1858,11 @@ impl Pickers {
             // Each open browses from the saved agent's tab.
             self.config.harness = None;
             self.model_rail = ModelRail::Harness;
+        } else if kind == PickerKind::HarnessModel && self.compact_model_picker(cx) {
+            // Every model, favorites first; the rail narrows to a provider.
+            self.model_rail = ModelRail::All;
+            self.model_scope = None;
+            self.prefetch_models(false, cx);
         } else if kind == PickerKind::HarnessModel {
             let locked = self.harness_locked(cx);
             let effective = self.effective_harness(cx);
@@ -3390,7 +3393,7 @@ impl Pickers {
         }
     }
 
-    fn on_key_down(&mut self, event: &KeyDownEvent, _window: &Window, cx: &mut Context<Self>) {
+    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.cancel_setting_hover();
         // The frame stays mounted (and possibly focused) through the exit
         // animation — keys must not drive a dying popover.
@@ -3464,6 +3467,44 @@ impl Pickers {
                 self.close(cx);
                 cx.stop_propagation();
                 return;
+            }
+            let search = self.search.read(cx).focus_handle(cx);
+            if !search.is_focused(window) {
+                let modifiers = &event.keystroke.modifiers;
+                // Typing anywhere in the menu searches.
+                if !modifiers.platform
+                    && !modifiers.control
+                    && !modifiers.alt
+                    && let Some(text) = event
+                        .keystroke
+                        .key_char
+                        .as_deref()
+                        .filter(|text| text.chars().all(|c| !c.is_control()) && *text != " ")
+                {
+                    let query = format!("{}{text}", self.search.read(cx).text());
+                    self.search
+                        .update(cx, |input, cx| input.set_text(query, cx));
+                    window.focus(&search, cx);
+                    cx.stop_propagation();
+                    return;
+                }
+                // Left and Right step the highlighted model's reasoning.
+                if matches!(event.keystroke.key.as_str(), "left" | "right")
+                    && !modifiers.modified()
+                    && let Some(detail) = self.model_detail(cx)
+                    && let Some(effort) = detail.effort
+                {
+                    let last = effort.labels.len().saturating_sub(1);
+                    let index = if event.keystroke.key == "left" {
+                        effort.selected.saturating_sub(1)
+                    } else {
+                        (effort.selected + 1).min(last)
+                    };
+                    let row = detail.row;
+                    self.set_detail_effort(row.harness, &row.model.id, index, cx);
+                    cx.stop_propagation();
+                    return;
+                }
             }
         }
         if event.keystroke.key == "right"
@@ -4161,6 +4202,14 @@ impl Pickers {
                         && this
                             .setting_bounds
                             .is_some_and(|bounds| bounds.contains(&event.position))
+                    {
+                        return;
+                    }
+                    // The detail card floats beside the list but belongs to it.
+                    if this
+                        .model_menu
+                        .card_bounds
+                        .is_some_and(|bounds| bounds.contains(&event.position))
                     {
                         return;
                     }
@@ -5038,7 +5087,7 @@ impl Pickers {
             return Vec::new();
         }
         if self.selected_model(cx).is_some_and(configured_in_place) {
-            return if self.compact_model_picker(cx) || self.effort_menu_open {
+            return if self.compact_model_picker(cx) {
                 card_order(self.live_groups(cx))
             } else {
                 Vec::new()
@@ -5447,7 +5496,6 @@ impl Pickers {
                 .map(|c| c.label.clone())
                 .unwrap_or_default();
             let id = group.id.clone();
-            let click_id = id.clone();
             let outside_id = id.clone();
             let move_id = id.clone();
             let exit_id = id.clone();
@@ -5480,11 +5528,6 @@ impl Pickers {
             .on_click(cx.listener(move |this, _, window, cx| {
                 if tray {
                     this.active = base_index + ix;
-                }
-                if this.effort_menu_open && this.setting_menu.as_ref() != Some(&click_id) {
-                    this.open_setting(scope, click_id.clone(), cx);
-                    cx.stop_propagation();
-                    return;
                 }
                 this.cancel_setting_hover();
                 this.setting_menu = None;
@@ -5727,15 +5770,12 @@ impl Pickers {
             .clear();
         self.harnesses = Loadable::Ready(
             serde_json::from_value(serde_json::json!([
-                {
-                    "id":"codex",
-                    "name":"Codex",
-                    "installed":true,
-                    "enabled":true,
-                    "supportsSteering":true,
-                    "steeringMode":"step-boundary",
-                    "reasoningLevels":[]
-                }
+                {"id":"codex","name":"Codex","installed":true,"enabled":true,
+                 "supportsSteering":true,"steeringMode":"step-boundary","reasoningLevels":[]},
+                {"id":"claude-code","name":"Claude Code","installed":true,"enabled":true,
+                 "supportsSteering":true,"steeringMode":"step-boundary","reasoningLevels":[]},
+                {"id":"zuse","name":"Zuse","installed":true,"enabled":true,
+                 "supportsSteering":true,"steeringMode":"step-boundary","reasoningLevels":[]}
             ]))
             .unwrap(),
         );
@@ -5749,50 +5789,77 @@ impl Pickers {
                         "description":"Best for complex coding and reasoning",
                         "reasoningLevels":["low","medium","high","xhigh"],
                         "options":[
-                            {
-                                "id":"serviceTier",
-                                "label":"Service tier",
-                                "defaultChoice":"standard",
-                                "choices":[
-                                    {"id":"standard","label":"Standard"},
-                                    {"id":"fast","label":"Fast"}
-                                ]
-                            },
-                            {
-                                "id":"contextWindow",
-                                "label":"Context window",
-                                "defaultChoice":"standard",
-                                "choices":[
-                                    {"id":"standard","label":"Standard"},
-                                    {"id":"1m","label":"1M tokens"}
-                                ]
-                            }
+                            {"id":"serviceTier","label":"Service tier","defaultChoice":"standard",
+                             "choices":[{"id":"standard","label":"Standard"},{"id":"fast","label":"Fast"}]},
+                            {"id":"contextWindow","label":"Context window","defaultChoice":"standard",
+                             "choices":[{"id":"standard","label":"Standard"},{"id":"1m","label":"1M tokens"}]}
                         ]
                     },
-                    {
-                        "id":"gpt-5.3-codex",
-                        "label":"GPT-5.3 Codex",
-                        "description":"Optimized for agentic coding"
-                    },
-                    {
-                        "id":"gpt-5.2",
-                        "label":"GPT-5.2",
-                        "description":"General purpose reasoning"
-                    },
-                    {
-                        "id":"gpt-5.1-codex-mini",
-                        "label":"GPT-5.1 Codex Mini",
-                        "description":"Fast, efficient coding"
-                    }
+                    {"id":"gpt-5.3-codex","label":"GPT-5.3 Codex",
+                     "description":"Optimized for agentic coding",
+                     "reasoningLevels":["low","medium","high","xhigh"]},
+                    {"id":"gpt-5.2","label":"GPT-5.2","description":"General purpose reasoning",
+                     "reasoningLevels":["low","medium","high"]},
+                    {"id":"gpt-5.1-codex-mini","label":"GPT-5.1 Codex Mini",
+                     "description":"Fast, efficient coding"}
                 ]))
                 .unwrap(),
             ),
         );
+        self.models.insert(
+            HarnessId::ClaudeCode,
+            Loadable::Ready(
+                serde_json::from_value(serde_json::json!([
+                    {
+                        "id":"opus",
+                        "label":"Opus",
+                        "description":"Most capable for complex work",
+                        "reasoningLevels":["low","medium","high","xhigh","max"],
+                        "options":[
+                            {"id":"fastMode","label":"Fast mode","defaultChoice":"off",
+                             "choices":[{"id":"off","label":"Off"},{"id":"on","label":"On"}]},
+                            {"id":"contextWindow","label":"Context window","defaultChoice":"200k",
+                             "choices":[{"id":"200k","label":"200K"},{"id":"1m","label":"1M"}]}
+                        ]
+                    },
+                    {"id":"sonnet","label":"Sonnet","description":"Fast and capable",
+                     "reasoningLevels":["low","medium","high"]},
+                    {"id":"haiku","label":"Haiku","description":"Fastest for quick answers"}
+                ]))
+                .unwrap(),
+            ),
+        );
+        self.models.insert(
+            HarnessId::Zuse,
+            Loadable::Ready(
+                serde_json::from_value(serde_json::json!([
+                    {"id":"zuse-balanced","label":"Balanced"},
+                    {"id":"auto","label":"Auto"}
+                ]))
+                .unwrap(),
+            ),
+        );
+        for (harness, model) in [
+            (HarnessId::ClaudeCode, "opus"),
+            (HarnessId::Codex, "gpt-5.3-codex"),
+        ] {
+            if !self.defaults.is_favorite(harness, model) {
+                self.defaults.toggle_favorite(harness, model);
+            }
+        }
         self.compact_model_list = false;
         self.compact_keyboard = false;
         self.active = 0;
         self.catalog_rev += 1;
         cx.notify();
+    }
+
+    /// Fixture: highlight the row naming `model`, as hovering it would.
+    pub fn fixture_highlight_model(&mut self, model: &str, cx: &mut Context<Self>) {
+        if let Some(ix) = self.model_rows(cx).iter().position(|r| r.model.id == model) {
+            self.active = ix;
+            cx.notify();
+        }
     }
 
     pub fn fixture_compact_state(&self, cx: &App) -> CompactPickerFixtureState {
@@ -6540,8 +6607,17 @@ impl Render for Pickers {
                     })
                 })
             });
-        let chip_width =
-            self.model_chip_width(window, &model_label, None, chip_label_loading, fast, cx);
+        // One trigger: the model, then its reasoning level in the muted
+        // second tone. The level is set in the picker's detail card.
+        let effort_label = self.chip_reasoning_label(cx);
+        let chip_width = self.model_chip_width(
+            window,
+            &model_label,
+            effort_label.as_ref(),
+            chip_label_loading,
+            fast,
+            cx,
+        );
         let model_chip = self
             .trigger_chip(
                 PickerKind::HarnessModel,
@@ -6550,7 +6626,7 @@ impl Render for Pickers {
                 Some(harness_icon),
                 chip_icon_loading,
                 chip_label_loading,
-                None,
+                effort_label.map(|label| (label, None)),
                 &theme,
                 cx,
             )
@@ -6612,248 +6688,6 @@ impl Render for Pickers {
             "model-popover",
             closing,
         );
-        let effort = self.compact_effort(cx);
-        let has_options = self.model_configuration_available(cx)
-            && (self.live_groups(cx).iter().any(|group| {
-                Self::compact_option_visible(&group.id, &self.compact_hidden_options(cx))
-            }) || self.compact_fast_choice(cx).is_some());
-        let effort_control = if !self.is_settings_model() && (effort.is_some() || has_options) {
-            {
-                let label = effort
-                    .as_ref()
-                    .and_then(|e| e.labels.get(e.selected))
-                    .cloned()
-                    .unwrap_or_else(|| "Options".into());
-                let mut button = div()
-                    .id("reasoning-trigger")
-                    .relative()
-                    .role(gpui::Role::Button)
-                    .aria_label("Reasoning")
-                    .tab_index(0)
-                    .cursor_pointer()
-                    .px(px(8.))
-                    .h(px(28.))
-                    .flex_none()
-                    .rounded(px(7.))
-                    .flex()
-                    .items_center()
-                    .gap(px(4.))
-                    .text_size(crate::typography::text_xs())
-                    .text_color(theme.text_muted)
-                    .hover(|s| s.bg(theme.muted_fill().opacity(0.6)))
-                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                            this.effort_menu_open = !this.effort_menu_open;
-                            if this.effort_menu_open {
-                                this.dismiss(cx);
-                            }
-                            cx.stop_propagation();
-                            cx.notify();
-                        } else if event.keystroke.key == "escape" && this.effort_menu_open {
-                            this.effort_menu_open = false;
-                            cx.stop_propagation();
-                            cx.notify();
-                        }
-                    }))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.effort_menu_open = !this.effort_menu_open;
-                        if this.effort_menu_open {
-                            this.dismiss(cx);
-                        }
-                        cx.notify();
-                    }))
-                    .child(label)
-                    .child(
-                        div()
-                            .id("reasoning-chevron")
-                            .size(px(14.))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(
-                                crate::icons::icon(crate::icons::ALT_ARROW_DOWN)
-                                    .size(px(14.))
-                                    .text_color(theme.text_muted),
-                            ),
-                    )
-                    .child({
-                        let entity = cx.entity().downgrade();
-                        gpui::canvas(
-                            move |bounds, _, cx| {
-                                let _ = entity.update(cx, |this, _| {
-                                    this.effort_trigger_bounds = Some(bounds)
-                                });
-                            },
-                            |_, _, _, _| {},
-                        )
-                        .absolute()
-                        .inset_0()
-                    });
-                if self.effort_menu_open {
-                    let popup_theme = Theme::of(cx).for_popup();
-                    let labels = effort
-                        .as_ref()
-                        .map(|e| e.labels.clone())
-                        .unwrap_or_default();
-                    let selected = effort.as_ref().map(|e| e.selected);
-                    let sections =
-                        (self.tray_group_count(cx) > 0).then(|| self.render_traits_sections(cx));
-                    let fast_choice = self.compact_fast_choice(cx);
-                    let menu = popover::popover_card(&popup_theme)
-                        .w(px(if has_options { 208. } else { 170. }))
-                        .on_mouse_down_out(cx.listener(
-                            |this, event: &gpui::MouseDownEvent, _, cx| {
-                                if !this
-                                    .setting_bounds
-                                    .is_some_and(|bounds| bounds.contains(&event.position))
-                                    && !this
-                                        .effort_trigger_bounds
-                                        .is_some_and(|bounds| bounds.contains(&event.position))
-                                {
-                                    this.effort_menu_open = false;
-                                    cx.notify();
-                                }
-                            },
-                        ))
-                        .when(!labels.is_empty(), |menu| {
-                            menu.child(
-                                div()
-                                    .px(px(8.))
-                                    .py(px(4.))
-                                    .text_size(px(11.))
-                                    .text_color(popup_theme.text_muted)
-                                    .child("Reasoning"),
-                            )
-                        })
-                        .children(labels.into_iter().enumerate().map(|(index, label)| {
-                            popover::menu_row(
-                                &popup_theme,
-                                false,
-                                format!("reasoning-choice-{index}"),
-                            )
-                            .id(("reasoning-choice", index))
-                            .role(gpui::Role::Button)
-                            .tab_index(0)
-                            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                    if let Some(effort) = this.compact_effort(cx) {
-                                        this.pick_compact_effort(effort, index, cx);
-                                    }
-                                    this.effort_menu_open = false;
-                                    cx.stop_propagation();
-                                    cx.notify();
-                                } else if event.keystroke.key == "escape" {
-                                    this.effort_menu_open = false;
-                                    cx.stop_propagation();
-                                    cx.notify();
-                                }
-                            }))
-                            .h(px(28.))
-                            .py(px(0.))
-                            .text_size(px(12.))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Some(effort) = this.compact_effort(cx) {
-                                    this.pick_compact_effort(effort, index, cx);
-                                }
-                                this.effort_menu_open = false;
-                                cx.stop_propagation();
-                                cx.notify();
-                            }))
-                            .child(label)
-                            .child(div().flex_1())
-                            .when(Some(index) == selected, |row| {
-                                row.child(
-                                    crate::icons::icon(crate::icons::CHECK)
-                                        .size(px(13.))
-                                        .text_color(popup_theme.text),
-                                )
-                            })
-                        }))
-                        .when(has_options, |menu| {
-                            menu.child(
-                                div()
-                                    .mt(px(5.))
-                                    .pt(px(6.))
-                                    .border_t_1()
-                                    .border_color(popup_theme.border.opacity(0.5))
-                                    .px(px(8.))
-                                    .text_size(px(11.))
-                                    .text_color(popup_theme.text_muted)
-                                    .child("Modes"),
-                            )
-                        })
-                        .children(sections)
-                        .when_some(fast_choice, |menu, (option, choice, default, on)| {
-                            let key_option = option.clone();
-                            let key_choice = choice.clone();
-                            menu.child(
-                                popover::menu_row(&popup_theme, false, "fast-mode")
-                                    .id("reasoning-fast-mode")
-                                    .role(gpui::Role::Switch)
-                                    .aria_label("Fast mode")
-                                    .tab_index(0)
-                                    .on_key_down(cx.listener(
-                                        move |this, event: &KeyDownEvent, _, cx| {
-                                            if !event.is_held
-                                                && matches!(
-                                                    event.keystroke.key.as_str(),
-                                                    "enter" | "space"
-                                                )
-                                            {
-                                                this.pick_option(
-                                                    key_option.clone(),
-                                                    key_choice.clone(),
-                                                    default,
-                                                    cx,
-                                                );
-                                                cx.stop_propagation();
-                                            }
-                                        },
-                                    ))
-                                    .aria_toggled(if on {
-                                        gpui::Toggled::True
-                                    } else {
-                                        gpui::Toggled::False
-                                    })
-                                    .h(px(30.))
-                                    .py(px(0.))
-                                    .gap(px(8.))
-                                    .text_size(px(12.))
-                                    .line_height(px(16.))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.pick_option(
-                                            option.clone(),
-                                            choice.clone(),
-                                            default,
-                                            cx,
-                                        );
-                                        cx.stop_propagation();
-                                    }))
-                                    .child(
-                                        crate::icons::icon(crate::icons::FAST_TIER)
-                                            .size(px(14.))
-                                            .text_color(popup_theme.text_muted),
-                                    )
-                                    .child(div().flex_1().child("Fast"))
-                                    .child(crate::settings::widgets::toggle_switch(
-                                        &popup_theme,
-                                        on,
-                                        "reasoning-fast",
-                                    )),
-                            )
-                        });
-                    button = button.child(popover::anchored_menu_above_end(
-                        "reasoning-menu",
-                        menu.into_any_element(),
-                        None,
-                    ));
-                }
-                Some(button.into_any_element())
-            }
-        } else {
-            None
-        };
         div()
             .flex()
             .flex_row()
@@ -6866,7 +6700,6 @@ impl Render for Pickers {
             .min_w_0()
             .gap(px(4.0))
             .child(model_chip)
-            .children(effort_control)
     }
 }
 
@@ -8157,7 +7990,7 @@ mod tests {
         });
     }
 
-    fn bare_model(id: &str, label: &str) -> Model {
+    pub(super) fn bare_model(id: &str, label: &str) -> Model {
         Model {
             id: id.into(),
             label: label.into(),
@@ -9101,7 +8934,7 @@ mod tests {
         });
     }
 
-    fn descriptor(id: HarnessId, name: &str) -> HarnessDescriptor {
+    pub(super) fn descriptor(id: HarnessId, name: &str) -> HarnessDescriptor {
         HarnessDescriptor {
             id,
             name: name.into(),
@@ -9267,15 +9100,17 @@ mod tests {
                 assert_eq!(picker.resolved(cx).harness, Some(HarnessId::ClaudeCode));
                 assert_eq!(picker.resolved(cx).model.as_deref(), Some("opus"));
                 assert!(!picker.is_open());
-                // Reopening starts on the newly selected provider with a
-                // cleared search, not on whatever was browsed last.
+                // Reopening lists every model again with a cleared search,
+                // the newly selected provider's group first, not whatever
+                // provider was browsed last.
                 picker.open_model_menu(window, cx);
-                assert_eq!(picker.model_scope, Some(HarnessId::ClaudeCode));
+                assert_eq!(picker.model_scope, None);
                 assert!(picker.search.read(cx).text().is_empty());
+                assert_eq!(picker.model_rows(cx)[0].harness, HarnessId::ClaudeCode);
                 picker.model_scope = Some(HarnessId::Codex);
                 picker.close(cx);
                 picker.open_model_menu(window, cx);
-                assert_eq!(picker.model_scope, Some(HarnessId::ClaudeCode));
+                assert_eq!(picker.model_scope, None);
             })
             .unwrap();
         cx.update_window(handle.into(), |_, window, cx| window.draw(cx).clear())
@@ -9474,7 +9309,7 @@ mod tests {
                 assert_eq!(picker.resolved(cx).model.as_deref(), Some("claude"));
                 picker.open_model_menu(window, cx);
                 picker.show_compact_models(cx);
-                assert_eq!(picker.model_rows_len(cx), 1);
+                assert_eq!(picker.model_rows_len(cx), 2);
                 assert_eq!(
                     picker.model_rows(cx)[picker.active].harness,
                     HarnessId::ClaudeCode
@@ -9586,9 +9421,8 @@ mod tests {
                 picker.pick_compact_provider(HarnessId::ClaudeCode, cx);
                 assert_eq!(picker.resolved(cx).model.as_deref(), Some("opus"));
                 assert_eq!(picker.effective_reasoning(cx), Some(ReasoningLevel::High));
-                // The list's tabs are its provider groups, the current provider
-                // (Claude) first; a starred model keeps its place in its
-                // provider's run but forms its own group.
+                // The list groups by provider, the current provider (Claude)
+                // first; starred models lead the list as Favorites.
                 picker.show_compact_models(cx);
                 assert_eq!(
                     picker.compact_groups(cx),
@@ -9598,24 +9432,23 @@ mod tests {
                     ]
                 );
                 picker.toggle_model_favorite(HarnessId::Codex, "gpt-a", cx);
+                assert_eq!(picker.favorite_row_count(cx), 1);
                 assert_eq!(
                     picker.compact_groups(cx),
                     vec![
-                        (Some(HarnessId::ClaudeCode), 0),
-                        (None, 1),
+                        (None, 0),
+                        (Some(HarnessId::ClaudeCode), 1),
                         (Some(HarnessId::Codex), 2),
                     ]
                 );
                 let rows = picker.model_rows(cx);
                 assert_eq!(
                     (rows[0].harness, rows[0].model.id.as_str()),
-                    (HarnessId::ClaudeCode, "opus")
+                    (HarnessId::Codex, "gpt-a")
                 );
-                // The starred model stays in its provider's run, flagged by
-                // its own group.
                 assert_eq!(
                     (rows[1].harness, rows[1].model.id.as_str()),
-                    (HarnessId::Codex, "gpt-a")
+                    (HarnessId::ClaudeCode, "opus")
                 );
             })
             .unwrap();
@@ -9656,10 +9489,10 @@ mod tests {
             .update(cx, |picker, window, cx| {
                 picker.open_model_menu(window, cx);
                 assert!(picker.compact_model_list);
-                // The list opens on the current provider; the provider rail
-                // switches to another provider's models.
+                // The list opens on every model, the current provider's
+                // first; the provider rail narrows it to one provider.
                 picker.show_compact_models(cx);
-                assert_eq!(picker.model_rows_len(cx), 1);
+                assert_eq!(picker.model_rows_len(cx), 2);
                 assert_eq!(picker.model_rows(cx)[0].harness, HarnessId::Codex);
                 picker.scope_model_menu(Some(HarnessId::ClaudeCode), cx);
                 picker
@@ -9749,7 +9582,6 @@ mod tests {
                 {"id":"other","label":"Other","defaultChoice":"a","choices":[{"id":"a","label":"A"},{"id":"b","label":"B"},{"id":"c","label":"C"}]}
             ])).unwrap();
             picker.models.insert(HarnessId::Codex, Loadable::Ready(vec![model]));
-            picker.effort_menu_open = true;
             let effort = picker.compact_effort(cx).unwrap();
             assert_eq!(effort.labels.iter().map(|v| v.as_ref()).collect::<Vec<&str>>(), ["Low", "Medium", "High", "X-High"]);
             picker.pick_compact_effort(effort, 0, cx);
@@ -9767,7 +9599,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn compact_picker_opens_favorites_or_current_provider(cx: &mut gpui::TestAppContext) {
+    fn model_picker_opens_on_every_model_with_favorites_first(cx: &mut gpui::TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         cx.update(|cx| {
             cx.set_global(Theme::dark());
@@ -9799,19 +9631,33 @@ mod tests {
                 picker.config.harness = Some(HarnessId::Codex);
                 picker.config.model = Some("gpt-a".into());
 
+                // Every model, the current provider's group first, with the
+                // highlight (and so the detail card) on the selected model.
                 picker.open_model_menu(window, cx);
-                assert_eq!(picker.model_rail, ModelRail::Harness);
-                assert_eq!(picker.model_scope, Some(HarnessId::Codex));
-                assert_eq!(picker.model_rows(cx).len(), 2);
+                assert_eq!(picker.model_rail, ModelRail::All);
+                assert_eq!(picker.model_scope, None);
+                let ids: Vec<_> = picker
+                    .model_rows(cx)
+                    .iter()
+                    .map(|r| r.model.id.clone())
+                    .collect();
+                assert_eq!(ids, ["gpt-a", "gpt-b", "opus"]);
+                assert_eq!(picker.favorite_row_count(cx), 0);
+                assert_eq!(picker.detail_row(cx).unwrap().model.id, "gpt-a");
                 picker.close(cx);
 
+                // Favorites lead the list, ahead of every provider group.
                 picker.toggle_model_favorite(HarnessId::ClaudeCode, "opus", cx);
                 picker.open_model_menu(window, cx);
-                assert_eq!(picker.model_rail, ModelRail::Favorites);
                 assert_eq!(picker.model_scope, None);
-                let rows = picker.model_rows(cx);
-                assert_eq!(rows.len(), 1);
-                assert_eq!(rows[0].model.id, "opus");
+                let ids: Vec<_> = picker
+                    .model_rows(cx)
+                    .iter()
+                    .map(|r| r.model.id.clone())
+                    .collect();
+                assert_eq!(ids, ["opus", "gpt-a", "gpt-b"]);
+                assert_eq!(picker.favorite_row_count(cx), 1);
+                assert_eq!(picker.active, 1, "the highlight starts on the selection");
             })
             .unwrap();
     }
@@ -9894,15 +9740,21 @@ mod tests {
                 picker.model_rail = ModelRail::Harness;
                 picker.toggle_model_favorite(HarnessId::Codex, "gpt-b", cx);
                 picker.toggle_model_favorite(HarnessId::ClaudeCode, "opus", cx);
-                assert_eq!(picker.model_rows(cx).len(), 2);
-                picker.model_scope = None;
-                picker.model_rail = ModelRail::Favorites;
+                // One provider: its own models, starred first.
                 let ids: Vec<_> = picker
                     .model_rows(cx)
                     .iter()
                     .map(|row| row.model.id.clone())
                     .collect();
-                assert_eq!(ids, ["gpt-b", "opus"]);
+                assert_eq!(ids, ["gpt-b", "gpt-a"]);
+                picker.model_scope = None;
+                picker.model_rail = ModelRail::All;
+                let ids: Vec<_> = picker
+                    .model_rows(cx)
+                    .iter()
+                    .map(|row| row.model.id.clone())
+                    .collect();
+                assert_eq!(ids, ["gpt-b", "opus", "gpt-a"]);
                 picker
                     .search
                     .update(cx, |input, cx| input.set_text("opus", cx));
@@ -9914,7 +9766,7 @@ mod tests {
                 assert_eq!(picker.effective_harness(cx), Some(HarnessId::ClaudeCode));
                 assert_eq!(picker.effective_model_id(cx), Some("opus"));
                 picker.toggle_model_favorite(HarnessId::Codex, "gpt-b", cx);
-                assert_eq!(picker.model_rows(cx).len(), 1);
+                assert_eq!(picker.favorite_row_count(cx), 1);
                 assert_eq!(picker.model_rows(cx)[0].model.id, "opus");
             })
             .unwrap();

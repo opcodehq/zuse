@@ -9,7 +9,7 @@ publish.workspace = true
 simulator-fixture = ["gpui_platform/test-support", "gpui/bench"]
 voice-experimental = [] # Compatibility flag; native subscription voice uses Codex's packaged helper.
 project-palette-fixture = []
-compact-picker-fixture = ["gpui_platform/test-support"]
+compact-picker-fixture = ["gpui_platform/test-support", "gpui/bench"]
 
 # Native captures explicitly present the freshly drawn scene, including when
 # a nested Wayland compositor has stopped requesting idle frames.

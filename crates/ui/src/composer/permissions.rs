@@ -178,10 +178,12 @@ impl Composer {
         cx.stop_propagation();
         cx.notify();
     }
+    /// The access control: one icon tinted by level (muted while asking,
+    /// the accent while approving for you, the warning tone at full access)
+    /// with the level's name in its tooltip, opening the list of levels.
     pub(super) fn render_permission_control(
         &self,
         theme: &Theme,
-        icon_only: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let resolved = self.pickers.read(cx).resolved(cx);
@@ -192,15 +194,9 @@ impl Composer {
             && !self.native_cloud_task()
             && !pending
             && self.state.read(cx).configuration_blocked();
-        // Safe modes rest muted and brighten on hover; full access stays in
-        // the warning tone so the unlocked state is never mistaken for them.
-        let full_access = selected == SandboxLevel::DangerFullAccess;
         let hover_key: SharedString = format!("composer-permission-{}", cx.entity_id()).into();
-        let tint = if full_access {
-            theme.warning
-        } else {
-            motion::hover_blend(&hover_key, theme.text_muted, theme.text)
-        };
+        let tint = level_tint(selected, theme)
+            .unwrap_or_else(|| motion::hover_blend(&hover_key, theme.text_muted, theme.text));
         div()
             .id("composer-permissions")
             .relative()
@@ -213,22 +209,18 @@ impl Composer {
             .child(
                 div()
                     .id("composer-permission-trigger")
+                    .debug_selector(|| "composer-permission-trigger".into())
                     .role(Role::ComboBox)
                     .aria_label(format!("Permission mode: {}", label(selected)))
                     .aria_expanded(self.permission_open)
                     .tab_index(0)
-                    .h(px(28.))
-                    .px(px(if icon_only { 7. } else { 10. }))
+                    .size(px(28.))
                     .flex()
                     .items_center()
-                    .gap(px(6.))
+                    .justify_center()
                     .rounded(px(7.))
-                    .text_size(crate::typography::text_xs())
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(tint)
                     .cursor_pointer()
-                    // An unconfirmed mode keeps its name, dimmed, so the
-                    // control doesn't change width while the chat connects.
+                    // An unconfirmed or saving mode dims until it settles.
                     .when(pending || unconfirmed, |view| view.opacity(0.5))
                     .bg(if self.permission_open {
                         theme.muted_fill().opacity(0.7)
@@ -240,23 +232,17 @@ impl Composer {
                         )
                     })
                     .on_hover(motion::hover_listener(hover_key.clone()))
-                    .child(
-                        icons::icon(access_details(selected).icon)
-                            .size(px(14.))
-                            .text_color(tint),
-                    )
-                    .when(!icon_only, |el| {
-                        el.child(if pending {
+                    .when(!self.permission_open, |el| {
+                        el.tip(if pending {
                             crate::localization::text("settings-wallpaper_saving", cx)
                         } else {
-                            (label(selected)).to_string()
+                            label(selected).to_string()
                         })
                     })
-                    .when(icon_only, |el| el.tip(label(selected)))
                     .child(
-                        icons::icon(icons::ALT_ARROW_DOWN)
-                            .size(px(12.))
-                            .text_color(tint.opacity(tint.a * 0.6)),
+                        icons::icon(access_details(selected).icon)
+                            .size(px(15.))
+                            .text_color(tint),
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if !pending {
@@ -284,23 +270,22 @@ impl Composer {
                         format!("permission-row-{index}"),
                     )
                     .id(("permission-level", index))
+                    .debug_selector(move || format!("permission-level-{index}"))
                     .role(Role::ListBoxOption)
                     .aria_label(label(level))
                     .aria_selected(checked)
                     .aria_description(blocked.unwrap_or(description(level)))
-                    .h(px(44.))
+                    .h(px(40.))
                     .py(px(0.))
                     .gap(px(10.))
                     .when(blocked.is_some(), |row| row.opacity(0.45).cursor_default())
                     .child(
                         icons::icon(access_details(level).icon)
                             .flex_none()
-                            .size(px(16.))
-                            .text_color(if checked {
-                                popup_theme.text
-                            } else {
-                                popup_theme.text_muted
-                            }),
+                            .size(px(15.))
+                            .text_color(
+                                level_tint(level, &popup_theme).unwrap_or(popup_theme.text_muted),
+                            ),
                     )
                     .child(
                         div()
@@ -308,12 +293,11 @@ impl Composer {
                             .min_w_0()
                             .flex()
                             .flex_col()
-                            .gap(px(1.))
                             .child(
                                 div()
                                     .truncate()
-                                    .line_height(px(17.))
-                                    .text_size(crate::typography::text_sm())
+                                    .line_height(px(16.))
+                                    .text_size(crate::typography::text_xs())
                                     .font_weight(gpui::FontWeight::MEDIUM)
                                     .text_color(popup_theme.text)
                                     .child(label(level)),
@@ -341,46 +325,30 @@ impl Composer {
                     })
                 };
                 // Plan mode is not an access level; it lives in the `+` menu.
+                // Saved permission rules open with `/permissions`.
                 let rows = LEVELS
                     .into_iter()
                     .enumerate()
                     .map(|(index, level)| row(index, level).into_any_element());
                 let menu = popover::popover_card(&popup_theme)
                     .id("composer-permission-menu")
+                    .debug_selector(|| "composer-permission-menu".into())
                     .role(Role::ListBox)
-                    .w(px(260.))
+                    .aria_label("Agent access")
+                    .w(px(284.))
                     .flex()
                     .flex_col()
                     .gap(px(2.))
-                    .child(popover::menu_heading(&popup_theme, "Agent access"))
                     .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                         this.permission_open = false;
                         cx.notify();
                     }))
-                    .children(rows)
-                    .when(self.state.read(cx).selected_chat.is_some(), |menu| {
-                        menu.child(popover::menu_separator()).child(
-                            div()
-                                .id("open-permission-rules")
-                                .role(Role::Button)
-                                .aria_label(tr(cx, msg::native::saved_permission_rules_c6bd67ad))
-                                .px(px(10.))
-                                .py(px(8.))
-                                .text_size(crate::typography::text_xs())
-                                .text_color(popup_theme.text)
-                                .cursor_pointer()
-                                .child(tr(cx, msg::native::saved_permission_rules))
-                                .on_click(
-                                    cx.listener(|this, _, _, cx| {
-                                        this.open_permission_inspector(cx)
-                                    }),
-                                ),
-                        )
-                    });
+                    .children(rows);
                 let menu = menu.when(unconfirmed, |view| {
                     view.child(
                         div()
                             .id("refresh-saved-permissions")
+                            .debug_selector(|| "refresh-saved-permissions".into())
                             .role(Role::Button)
                             .aria_label(tr(cx, msg::native::refresh_saved_chat_choices))
                             .cursor_pointer()
@@ -405,7 +373,16 @@ impl Composer {
     }
 }
 
-#[cfg(feature = "browser-fixture")]
+/// The access icon's tone: `None` keeps the quiet muted ink (asking first).
+fn level_tint(level: SandboxLevel, theme: &Theme) -> Option<gpui::Hsla> {
+    match level {
+        SandboxLevel::DangerFullAccess => Some(theme.warning),
+        SandboxLevel::Auto => Some(theme.accent),
+        _ => None,
+    }
+}
+
+#[cfg(any(feature = "browser-fixture", feature = "compact-picker-fixture"))]
 impl Composer {
     /// Review fixture: open the agent access menu.
     pub fn fixture_open_permissions(&mut self, cx: &mut Context<Self>) {
@@ -416,6 +393,11 @@ impl Composer {
             .position(|level| *level == current)
             .unwrap_or(0);
         self.permission_open = true;
+        cx.notify();
+    }
+    /// Review fixture: close the agent access menu.
+    pub fn fixture_close_permissions(&mut self, cx: &mut Context<Self>) {
+        self.permission_open = false;
         cx.notify();
     }
     /// Review fixture: store `level` on the selected chat (or the draft).
@@ -575,5 +557,60 @@ mod tests {
             );
         })
         .unwrap();
+    }
+
+    #[gpui::test]
+    fn access_control_is_one_icon_and_its_menu_lists_only_the_levels(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (_directory, handle) = composer_focus_window(cx);
+        handle
+            .update(cx, |composer, _, cx| {
+                // Saved rules used to be offered here for an existing chat.
+                composer.state.update(cx, |state, cx| {
+                    state.chats = vec![
+                        serde_json::from_value(serde_json::json!({
+                            "id":"saved", "deviceId":"local", "archived":false,
+                            "createdAt":"2026-01-01T00:00:00Z",
+                            "config":{"harness":"codex","sandbox":"workspace-write"}
+                        }))
+                        .unwrap(),
+                    ];
+                    state.selected_chat = Some("saved".into());
+                    cx.notify();
+                });
+            })
+            .unwrap();
+        cx.run_until_parked();
+        handle
+            .update(cx, |composer, _, cx| {
+                composer.permission_open = true;
+                cx.notify();
+            })
+            .unwrap();
+        cx.update_window(handle.into(), |_, window, cx| window.draw(cx).clear())
+            .unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(handle.into(), cx);
+        let trigger = visual.debug_bounds("composer-permission-trigger").unwrap();
+        assert_eq!(trigger.size.width, trigger.size.height, "icon only");
+        assert!(f32::from(trigger.size.width) <= 28.0);
+        let menu = visual.debug_bounds("composer-permission-menu").unwrap();
+        assert_eq!(LEVELS.len(), 3);
+        let rows: Vec<_> = [
+            "permission-level-0",
+            "permission-level-1",
+            "permission-level-2",
+        ]
+        .into_iter()
+        .map(|selector| visual.debug_bounds(selector).unwrap())
+        .collect();
+        assert!(visual.debug_bounds("permission-level-3").is_none());
+        // The levels are followed only by the offline chat's refresh action:
+        // no saved-rules section between or after them.
+        let refresh = visual.debug_bounds("refresh-saved-permissions").unwrap();
+        let gap = f32::from(refresh.top() - rows.last().unwrap().bottom());
+        assert!(gap <= popover::MENU_GAP + 0.5, "{gap}");
+        let below = f32::from(menu.bottom() - refresh.bottom());
+        assert!(below <= popover::CARD_INSET + 2.0, "{below}");
     }
 }

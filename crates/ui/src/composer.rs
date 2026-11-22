@@ -78,7 +78,6 @@ pub const TEXTAREA_PAD_V: f32 = 20.0 + 2.0 * zuse_viewport::composer_style::CONT
 pub const TEXTAREA_MIN: f32 = zuse_viewport::composer_style::EDITOR_MIN + 20.0;
 pub const TEXTAREA_MAX: f32 = zuse_viewport::composer_style::EDITOR_MAX + 20.0;
 const ACTIONS_BOTTOM_PAD: f32 = 8.0;
-const NARROW_TOOLBAR_WIDTH: f32 = 440.0;
 pub const ACTIONS_ROW_HEIGHT: f32 = zuse_viewport::composer_style::TOOLBAR_HEIGHT;
 pub const PILL_BORDER_V: f32 = 2.0;
 pub(crate) const COMPOSER_RADIUS: f32 = zuse_viewport::composer_style::RADIUS;
@@ -6335,6 +6334,9 @@ pub enum WorkspaceCommand {
     Terminal,
     Rename,
     Stop,
+    /// `/permissions`: the selected chat's saved permission rules. Answered
+    /// by the composer, never sent to the agent.
+    Permissions,
     /// `/mcp`: the agent's MCP servers and the user's plugins, as a card in
     /// the chat. Answered by Zuse, never sent to the agent.
     Mcp,
@@ -6380,6 +6382,12 @@ impl WorkspaceCommand {
                 true,
             ),
             (Self::Stop, "stop", "Zuse: stop the active run", true),
+            (
+                Self::Permissions,
+                "permissions",
+                "Zuse: saved permission rules for this chat",
+                true,
+            ),
         ]
     }
 }
@@ -10181,6 +10189,11 @@ impl Composer {
         self.reset_slash(None, cx);
         self.failure = None;
         self.failure_key = None;
+        if command == WorkspaceCommand::Permissions {
+            self.open_permission_inspector(cx);
+            cx.notify();
+            return;
+        }
         if command == WorkspaceCommand::Mcp && self.queue_chat_command("mcp", cx) {
             cx.notify();
             return;
@@ -14024,14 +14037,8 @@ impl Render for Composer {
                 el.max_w(px(surface_width * 0.45 * beneath_voice))
                     .overflow_hidden()
             });
-        // A narrow card (a side chat, or the chat beside an open panel)
-        // can't fit the access label beside the model pill: keep its glyph.
-        let narrow = {
-            let width = self.input.read(cx).last_width;
-            width > 0.0 && width < NARROW_TOOLBAR_WIDTH
-        };
         let permission = self
-            .render_permission_control(&theme, narrow, cx)
+            .render_permission_control(&theme, cx)
             .opacity(beneath_voice);
         let zapper_coordinator = self.state.read(cx).selected_chat_is_zot_coordinator();
         let plan_chip = self
@@ -15594,7 +15601,7 @@ mod tests {
             vec![],
         );
         let rows = with_workspace_commands(native, true);
-        assert_eq!(rows.len(), 12);
+        assert_eq!(rows.len(), 13);
         assert!(rows[0].workspace_command.is_none());
         assert_eq!(rows[0].input_hint.as_deref(), Some("model id"));
         assert_eq!(workspace_command_for_text("/model", &rows), None);
@@ -15603,10 +15610,19 @@ mod tests {
             workspace_command_for_text("/zuse:zuse:model", &rows),
             Some(WorkspaceCommand::Model)
         );
-        assert_eq!(with_workspace_commands(rows, true).len(), 12);
+        // Saved permission rules belong to an existing chat.
+        assert_eq!(
+            workspace_command_for_text("/permissions", &rows),
+            Some(WorkspaceCommand::Permissions)
+        );
+        assert_eq!(with_workspace_commands(rows, true).len(), 13);
         let draft_rows = with_workspace_commands(vec![], false);
         assert_eq!(draft_rows.len(), 5);
         assert_eq!(workspace_command_for_text("/diff", &draft_rows), None);
+        assert_eq!(
+            workspace_command_for_text("/permissions", &draft_rows),
+            None
+        );
         assert_eq!(
             workspace_command_for_text("/model  ", &draft_rows),
             Some(WorkspaceCommand::Model)
