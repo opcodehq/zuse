@@ -9,6 +9,14 @@ its purpose, repository scope, instructions, decisions, digest and reports.
 Each Zapper has one home engine. Its private state is stored under that engine's
 resolved profile in `zappers/state.sqlite`; its coordinator checkout is a private
 directory beside that database. Local profiles require no hosted account.
+
+Profiles from before Zots were renamed Zappers kept this state in `zots/`.
+On first open the engine copies the database into `zappers/`, moves the control
+token and renames the `zot_*` tables and `zot` columns (`zappers/migrate.rs`).
+Zappers created before the rename keep their coordinator folder under `zots/<id>`,
+because harnesses key saved conversations by working directory. Engines keep
+accepting the old method, field, tool and chat-id names (`zappers::legacy`) for
+one release.
 Account profiles do not share this database with local profiles.
 
 Commands require a caller-minted command ID. The input, result, state mutation,
