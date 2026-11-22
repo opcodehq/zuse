@@ -1299,6 +1299,24 @@ mod pinned_session_tests {
             }))
         });
         let shell = host.read_with(cx, |host, _| host.0.clone());
+        // Rows glide on wall-clock time, so bounds read mid-motion go stale
+        // before the pointer arrives: on a slow machine a press aimed at one
+        // row lands on another. Finish every glide before measuring.
+        fn settle_sidebar_motion(shell: &Entity<Shell>, cx: &mut gpui::VisualTestContext) {
+            for _ in 0..2 {
+                shell.update(cx, |shell, cx| {
+                    shell.sidebar_session_return = None;
+                    shell.sidebar_resort.clear();
+                    shell.sidebar_new_keys.clear();
+                    shell.sidebar_disclosure_motion.clear();
+                    cx.notify();
+                });
+                cx.update(|window, cx| {
+                    window.refresh();
+                    window.draw(cx).clear();
+                });
+            }
+        }
 
         // Archived sessions never show in the sidebar, and its rename is
         // refused rather than revealing a shelf.
@@ -1377,6 +1395,7 @@ mod pinned_session_tests {
         });
 
         // The transient empty Pinned header accepts the first pin.
+        settle_sidebar_motion(&shell, cx);
         let from = cx.debug_bounds("chat-older").unwrap().center();
         cx.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::default());
         cx.simulate_mouse_move(
@@ -1422,6 +1441,7 @@ mod pinned_session_tests {
         });
 
         // A single pin can leave Pinned and returns to its activity position.
+        settle_sidebar_motion(&shell, cx);
         let from = cx.debug_bounds("chat-older").unwrap().center();
         cx.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::default());
         cx.simulate_mouse_move(
@@ -1463,6 +1483,7 @@ mod pinned_session_tests {
         });
 
         // A live activity update still wins while the normal session is dragged.
+        settle_sidebar_motion(&shell, cx);
         let from = cx.debug_bounds("chat-older").unwrap().center();
         cx.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::default());
         cx.simulate_mouse_move(
@@ -1495,6 +1516,7 @@ mod pinned_session_tests {
             shell.pinned_open = false;
             cx.notify();
         });
+        settle_sidebar_motion(&shell, cx);
         let from = cx.debug_bounds("chat-newer").unwrap().center();
         cx.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::default());
         cx.simulate_mouse_move(
@@ -1514,6 +1536,7 @@ mod pinned_session_tests {
         });
 
         // Dropping outside the sections cancels; it must not unpin the source.
+        settle_sidebar_motion(&shell, cx);
         let from = cx.debug_bounds("chat-newer").unwrap().center();
         cx.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::default());
         cx.simulate_mouse_move(
@@ -1551,6 +1574,7 @@ mod pinned_session_tests {
         });
 
         // Remote pin changes invalidate an in-flight snapshot instead of being overwritten.
+        settle_sidebar_motion(&shell, cx);
         let from = cx.debug_bounds("chat-older").unwrap().center();
         cx.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::default());
         cx.simulate_mouse_move(
@@ -1578,6 +1602,7 @@ mod pinned_session_tests {
         });
 
         // Even with no regular rows, a temporary destination can unpin one.
+        settle_sidebar_motion(&shell, cx);
         let from = cx.debug_bounds("chat-newer").unwrap().center();
         cx.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::default());
         cx.simulate_mouse_move(
@@ -1600,6 +1625,7 @@ mod pinned_session_tests {
         });
 
         // Dropping in the lower half of a pinned row inserts after that row.
+        settle_sidebar_motion(&shell, cx);
         let from = cx.debug_bounds("chat-newer").unwrap().center();
         cx.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::default());
         cx.simulate_mouse_move(
@@ -1627,6 +1653,7 @@ mod pinned_session_tests {
             shell.reduced_motion = false;
             cx.notify();
         });
+        settle_sidebar_motion(&shell, cx);
         let from = cx.debug_bounds("chat-newer").unwrap().center();
         cx.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::default());
         cx.simulate_mouse_move(
@@ -1690,10 +1717,9 @@ mod pinned_session_tests {
             shell.sidebar_disclosure_motion.clear();
             cx.notify();
         });
-        cx.update(|window, cx| {
-            window.refresh();
-            window.draw(cx).clear();
-        });
+        // The pin moves "older" above "newer", which starts the rows' resort
+        // glide: aim only once it has settled.
+        settle_sidebar_motion(&shell, cx);
         let from = cx.debug_bounds("chat-older").unwrap().center();
         cx.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::default());
         cx.simulate_mouse_move(
