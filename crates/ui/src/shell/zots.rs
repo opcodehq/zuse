@@ -2,8 +2,8 @@
 use super::zot_forms::{Form, Kind, ZotAfter};
 use super::*;
 use zuse_protocol::presentation::zot_panel::{
-    NeedsYouItem, NeedsYouTarget, ZOT_SECTIONS, ZotPage, ZotPanelTabs, ZotTab,
-    finished_zapper_threads, needs_you_items,
+    NeedsYouItem, NeedsYouTarget, ThreadRank, ZOT_SECTIONS, ZotPage, ZotPanelTabs, ZotTab,
+    finished_zapper_threads, needs_you_items, ordered_zapper_threads,
 };
 use zuse_protocol::zots::*;
 
@@ -2081,11 +2081,19 @@ impl Shell {
     }
 
     fn zot_threads(&mut self, zot: &Zot, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let workers: Vec<&ZotWorker> = zot
-            .workers
-            .iter()
-            .filter(|w| !self.zot_thread_archived(&w.chat_id, cx))
-            .collect();
+        let workers = ordered_zapper_threads(
+            zot.workers
+                .iter()
+                .filter(|w| !self.zot_thread_archived(&w.chat_id, cx)),
+            |w| {
+                use zuse_protocol::SessionStatus as S;
+                match self.zot_thread_status(&w.chat_id, cx) {
+                    Some(S::Working) => ThreadRank::Working,
+                    Some(S::AwaitingInput | S::Errored) => ThreadRank::NeedsYou,
+                    Some(S::Idle) | None => ThreadRank::Idle,
+                }
+            },
+        );
         let new_zot = zot.clone();
         let mut threads = div().flex().flex_col().gap(px(2.0)).child(
             div()

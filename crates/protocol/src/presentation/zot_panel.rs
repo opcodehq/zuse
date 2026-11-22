@@ -288,6 +288,35 @@ pub fn finished_zapper_threads(zot: &crate::zots::Zot) -> Vec<String> {
     finished
 }
 
+/// Where a thread sits in a Zapper's Threads lists. Working threads lead,
+/// then ones waiting on the user, then queued, then idle or finished.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ThreadRank {
+    Working,
+    NeedsYou,
+    Queued,
+    Idle,
+}
+
+/// A Zapper's threads in the order its Overview and Threads tab list them:
+/// by [`ThreadRank`], newest first within a rank. The engine appends each new
+/// thread to `workers`, so newest first is their reverse. A queued thread
+/// ranks as queued whatever `rank` says: it has no conversation yet.
+pub fn ordered_zapper_threads<'a>(
+    workers: impl DoubleEndedIterator<Item = &'a crate::zots::ZotWorker>,
+    rank: impl Fn(&crate::zots::ZotWorker) -> ThreadRank,
+) -> Vec<&'a crate::zots::ZotWorker> {
+    let mut threads: Vec<_> = workers.rev().collect();
+    threads.sort_by_key(|w| {
+        if w.queued() {
+            ThreadRank::Queued
+        } else {
+            rank(w)
+        }
+    });
+    threads
+}
+
 /// One thing in the Overview's "Needs you" card: something that really waits
 /// on the user. Coordinator events (thread reports, linked pull requests,
 /// interruptions) are the Zapper's inbox and never appear here.
@@ -589,6 +618,25 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn threads_list_working_then_queued_then_idle_newest_first() {
+        let mut zot = zapper(&["a", "b", "c", "d", "e", "f"], &[]);
+        zot.workers[1].queue_position = Some(2);
+        zot.workers[4].queue_position = Some(1);
+        let rank = |w: &crate::zots::ZotWorker| match w.chat_id.as_str() {
+            "a" | "d" => ThreadRank::Working,
+            "c" => ThreadRank::NeedsYou,
+            // A queued thread has no chat; whatever the host says, it's queued.
+            "e" => ThreadRank::Working,
+            _ => ThreadRank::Idle,
+        };
+        let order: Vec<&str> = ordered_zapper_threads(zot.workers.iter(), rank)
+            .into_iter()
+            .map(|w| w.chat_id.as_str())
+            .collect();
+        assert_eq!(order, ["d", "a", "c", "e", "b", "f"]);
     }
 
     #[test]

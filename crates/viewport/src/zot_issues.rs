@@ -4,6 +4,7 @@ use crate::zapper_avatar::{ZapperFace, known_face, person_avatar, unassigned_ava
 use crate::{assets::icon, input::TextInput, palette::rgb};
 use gpui::{prelude::*, *};
 use std::collections::{HashMap, HashSet};
+use zuse_protocol::presentation::zot_panel::{ThreadRank, ordered_zapper_threads};
 use zuse_protocol::zots::*;
 
 const TEXT: u32 = 0xe5e5e5;
@@ -811,12 +812,17 @@ impl IssuePanel {
             })
             .collect();
         let finished = self.zot.issues.len() - open.len();
-        let threads: Vec<&ZotWorker> = self
-            .zot
-            .workers
-            .iter()
-            .filter(|w| self.thread_state(&w.chat_id) != ThreadState::Archived)
-            .collect();
+        let threads = ordered_zapper_threads(
+            self.zot
+                .workers
+                .iter()
+                .filter(|w| self.thread_state(&w.chat_id) != ThreadState::Archived),
+            |w| match self.thread_state(&w.chat_id) {
+                ThreadState::Working => ThreadRank::Working,
+                ThreadState::NeedsYou => ThreadRank::NeedsYou,
+                ThreadState::Idle | ThreadState::Archived => ThreadRank::Idle,
+            },
+        );
         let prs: Vec<_> = self
             .zot
             .issues
