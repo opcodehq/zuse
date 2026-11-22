@@ -8,8 +8,8 @@ pub use cloud_projects::{
 pub mod git_history;
 mod model_config;
 pub mod motion;
-pub mod zot_mascots;
-pub mod zot_panel;
+pub mod zapper_mascots;
+pub mod zapper_panel;
 pub use model_config::RememberedModelConfig;
 mod queue;
 pub use effort::{EffortSetting, EffortStop, ModelEffort, model_effort, model_effort_option};
@@ -619,4 +619,4 @@ pub fn masked_email(email: &str) -> String {
     }
 }
 
-pub mod zot_message;
+pub mod zapper_message;

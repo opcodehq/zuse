@@ -48,7 +48,7 @@ pub mod visual_session;
 pub mod voice;
 pub mod workflow;
 pub mod workspace;
-pub mod zots;
+pub mod zappers;
 
 pub use agent::*;
 pub use chat_config::ChatConfigPatch;

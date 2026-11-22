@@ -3,37 +3,174 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-pub const CAPABILITY: &str = "zots.v1";
+pub const CAPABILITY: &str = "zappers.v1";
+
+/// Prefix of a coordinator conversation's id: `zapper-<zapper>-<n>`.
+pub const COORDINATOR_CHAT_PREFIX: &str = "zapper-";
+/// Prefix of a thread a Zapper delegated: `zapper-worker-<commandId>`.
+pub const WORKER_CHAT_PREFIX: &str = "zapper-worker-";
+
+/// Whether `chat_id` is the id a delegate command must give its thread.
+pub fn worker_chat_id_for(chat_id: &str, command_id: &str) -> bool {
+    [WORKER_CHAT_PREFIX, legacy::WORKER_CHAT_PREFIX]
+        .iter()
+        .any(|prefix| chat_id.strip_prefix(prefix) == Some(command_id))
+}
+
+/// Names from before Zots were renamed Zappers. Saved data, running
+/// coordinators, older clients and older peer engines still use them, so every
+/// reader accepts them. Legacy, remove after one release.
+pub mod legacy {
+    use crate::control;
+
+    /// Advertised beside [`super::CAPABILITY`] so older clients still find Zappers.
+    pub const CAPABILITY: &str = "zots.v1";
+    /// The Zapper id field in commands, file/event/issue requests and events.
+    pub const ID_FIELD: &str = "zotId";
+    /// Coordinator chat ids minted before the rename: `zot-<zapper>-<n>`.
+    pub const COORDINATOR_CHAT_PREFIX: &str = "zot-";
+    /// Thread chat ids minted before the rename: `zot-worker-<commandId>`.
+    pub const WORKER_CHAT_PREFIX: &str = "zot-worker-";
+    /// Profile folder holding Zapper state before the rename.
+    pub const DATA_DIR: &str = "zots";
+    /// Environment the engine gave Zapper MCP servers before the rename.
+    pub const COORDINATOR_ENV: &str = "ZUSE_ZOT_ID";
+    pub const WORKER_ENV: &str = "ZUSE_ZOT_WORKER_ID";
+    /// Engine-to-engine worker placement.
+    pub const BIND_WORKER: &str = "BindZotWorker";
+    /// MCP tool names before the rename, with their current names.
+    pub const TOOLS: &[(&str, &str)] = &[
+        ("zot_command", "zapper_command"),
+        ("zot_files", "zapper_files"),
+        ("zot_events", "zapper_events"),
+        ("zot_issue", "zapper_issue"),
+        ("zot_acknowledge", "zapper_acknowledge"),
+    ];
+    /// Control methods before the rename, with their current names.
+    pub const METHODS: &[(&str, &str)] = &[
+        ("ZotCommand", control::ZAPPER_COMMAND),
+        ("WatchZots", control::WATCH_ZAPPERS),
+        ("ZotFiles", control::ZAPPER_FILES),
+        ("ZotEvents", control::ZAPPER_EVENTS),
+        ("ZotIssue", control::ZAPPER_ISSUE),
+        ("AckZotEvents", control::ACK_ZAPPER_EVENTS),
+        (BIND_WORKER, control::BIND_ZAPPER_WORKER),
+    ];
+    /// Engine-internal request fields before the rename, with their current names.
+    const FIELDS: &[(&str, &str)] = &[
+        (ID_FIELD, "zapperId"),
+        ("_zotActor", "_zapperActor"),
+        ("_zotWorkerChatId", "_zapperWorkerChatId"),
+    ];
+
+    /// The current name of a pre-rename MCP tool.
+    pub fn current_tool(name: &str) -> Option<&'static str> {
+        TOOLS
+            .iter()
+            .find(|(old, _)| *old == name)
+            .map(|(_, new)| *new)
+    }
+    /// The current name of a pre-rename control method.
+    pub fn current_method(name: &str) -> Option<&'static str> {
+        METHODS
+            .iter()
+            .find(|(old, _)| *old == name)
+            .map(|(_, new)| *new)
+    }
+    /// The pre-rename name of a current control method.
+    pub fn legacy_method(name: &str) -> Option<&'static str> {
+        METHODS
+            .iter()
+            .find(|(_, new)| *new == name)
+            .map(|(old, _)| *old)
+    }
+
+    /// Rename pre-rename request fields to their current names. A legacy
+    /// field never overrides a current one that is already present.
+    pub fn from_legacy_params(mut params: serde_json::Value) -> serde_json::Value {
+        if let Some(object) = params.as_object_mut() {
+            for (old, new) in FIELDS {
+                if let Some(value) = object.remove(*old) {
+                    object.entry(*new).or_insert(value);
+                }
+            }
+        }
+        params
+    }
+
+    /// The same request as an engine from before the rename reads it, for
+    /// forwarding to a peer that may not be upgraded yet. Upgraded engines
+    /// accept these names too. Current fields win over stale legacy ones.
+    pub fn to_legacy_params(mut params: serde_json::Value) -> serde_json::Value {
+        if let Some(object) = params.as_object_mut() {
+            for (old, new) in FIELDS {
+                if let Some(value) = object.remove(*new) {
+                    object.insert((*old).to_owned(), value);
+                }
+            }
+            // Older engines only accept the old thread id prefix on delegate.
+            if let Some(worker) = object
+                .get_mut("action")
+                .filter(|action| action["type"] == "delegate")
+                .and_then(|action| action.get_mut("worker"))
+                && let Some(id) = worker["chatId"].as_str()
+                && let Some(rest) = id.strip_prefix(super::WORKER_CHAT_PREFIX)
+            {
+                worker["chatId"] = format!("{WORKER_CHAT_PREFIX}{rest}").into();
+            }
+        }
+        params
+    }
+
+    /// Events as a client from before the rename reads them (`zotId`).
+    pub fn events_to_legacy(events: serde_json::Value) -> serde_json::Value {
+        rename_event_id(events, "zapperId", ID_FIELD)
+    }
+    /// Events from an engine from before the rename, with current names.
+    pub fn events_from_legacy(events: serde_json::Value) -> serde_json::Value {
+        rename_event_id(events, ID_FIELD, "zapperId")
+    }
+    fn rename_event_id(mut events: serde_json::Value, from: &str, to: &str) -> serde_json::Value {
+        for event in events.as_array_mut().into_iter().flatten() {
+            if let Some(object) = event.as_object_mut()
+                && let Some(id) = object.remove(from)
+            {
+                object.insert(to.to_owned(), id);
+            }
+        }
+        events
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ZotRepository {
+pub struct ZapperRepository {
     pub device_id: String,
     pub space_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ZotModel {
+pub struct ZapperModel {
     pub harness: String,
     pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ZotConfig {
+pub struct ZapperConfig {
     pub name: String,
     pub purpose: String,
     pub home_device_id: String,
-    pub repositories: Vec<ZotRepository>,
-    pub coordinator_model: ZotModel,
+    pub repositories: Vec<ZapperRepository>,
+    pub coordinator_model: ZapperModel,
     pub worker_device_id: String,
     pub max_concurrent_workers: u32,
     pub max_followups: u32,
-    /// Saved pixel character; absent uses one derived from the Zot's id.
+    /// Saved pixel character; absent uses one derived from the Zapper's id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub avatar: Option<ZotAvatar>,
+    pub avatar: Option<ZapperAvatar>,
     /// The user's own picture, shown instead of the mascot: a small square
     /// PNG or JPEG as a `data:` URL (see [`AVATAR_IMAGE_MAX_LEN`]). It lives
     /// beside `avatar` so the mascot stays the fallback for clients, Slack
@@ -64,14 +201,14 @@ pub fn avatar_image_ok(value: &str) -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ZotAvatar {
+pub struct ZapperAvatar {
     pub mascot: String,
     pub color: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub enum ZotStatus {
+pub enum ZapperStatus {
     Active,
     Paused,
     Stopped,
@@ -80,7 +217,7 @@ pub enum ZotStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ZotWorker {
+pub struct ZapperWorker {
     pub chat_id: String,
     pub device_id: String,
     pub space_id: String,
@@ -94,7 +231,7 @@ pub struct ZotWorker {
     #[ts(optional)]
     pub queue_position: Option<u32>,
 }
-impl ZotWorker {
+impl ZapperWorker {
     pub fn queued(&self) -> bool {
         self.queue_position.is_some()
     }
@@ -102,7 +239,7 @@ impl ZotWorker {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ZotDecision {
+pub struct ZapperDecision {
     pub id: String,
     pub worker_chat_id: Option<String>,
     pub question: String,
@@ -111,24 +248,24 @@ pub struct ZotDecision {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct Zot {
+pub struct Zapper {
     pub id: String,
     pub revision: u32,
     #[serde(default)]
     pub activity_revision: u32,
-    pub config: ZotConfig,
-    pub status: ZotStatus,
+    pub config: ZapperConfig,
+    pub status: ZapperStatus,
     pub coordinator_chat_id: String,
     pub previous_coordinator_chats: Vec<String>,
-    pub workers: Vec<ZotWorker>,
-    pub decisions: Vec<ZotDecision>,
+    pub workers: Vec<ZapperWorker>,
+    pub decisions: Vec<ZapperDecision>,
     #[serde(default)]
-    pub issues: Vec<ZotIssue>,
+    pub issues: Vec<ZapperIssue>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ZotFile {
+pub struct ZapperFile {
     pub path: String,
     pub version: u32,
     pub content: String,
@@ -137,26 +274,28 @@ pub struct ZotFile {
 /// IDs are caller-minted and reused verbatim after a transport failure.
 #[derive(Debug, Clone, Serialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ZotCommand {
+pub struct ZapperCommand {
     pub command_id: String,
-    pub zot_id: String,
+    pub zapper_id: String,
     /// Optional. When given, the command fails only if what it depends on
-    /// changed after that revision (see [`ZotAction::conflict_scope`]).
+    /// changed after that revision (see [`ZapperAction::conflict_scope`]).
     pub expected_revision: Option<u32>,
     /// The action object, or the same object as a JSON-encoded string for
     /// clients that struggle to escape large nested JSON.
     #[schemars(schema_with = "action_or_json_string_schema")]
-    pub action: ZotAction,
+    pub action: ZapperAction,
 }
 
-impl<'de> Deserialize<'de> for ZotCommand {
+impl<'de> Deserialize<'de> for ZapperCommand {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         use serde::de::Error;
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Raw {
             command_id: String,
-            zot_id: String,
+            // Legacy, remove after one release: `zotId` from before the rename.
+            #[serde(alias = "zotId")]
+            zapper_id: String,
             #[serde(default)]
             expected_revision: Option<u32>,
             action: serde_json::Value,
@@ -169,7 +308,7 @@ impl<'de> Deserialize<'de> for ZotCommand {
         .map_err(D::Error::custom)?;
         Ok(Self {
             command_id: raw.command_id,
-            zot_id: raw.zot_id,
+            zapper_id: raw.zapper_id,
             expected_revision: raw.expected_revision,
             action,
         })
@@ -177,7 +316,7 @@ impl<'de> Deserialize<'de> for ZotCommand {
 }
 
 fn action_or_json_string_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-    let action = generator.subschema_for::<ZotAction>();
+    let action = generator.subschema_for::<ZapperAction>();
     schemars::json_schema!({
         "anyOf": [
             action,
@@ -195,26 +334,26 @@ fn action_or_json_string_schema(generator: &mut schemars::SchemaGenerator) -> sc
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
-pub enum ZotAction {
+pub enum ZapperAction {
     Create {
-        config: ZotConfig,
+        config: ZapperConfig,
     },
     Configure {
-        config: ZotConfig,
+        config: ZapperConfig,
     },
     SetStatus {
-        status: ZotStatus,
+        status: ZapperStatus,
     },
     AdoptWorker {
-        worker: ZotWorker,
+        worker: ZapperWorker,
     },
     Delegate {
         /// Atomically link the new thread and mark this issue in progress.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         issue_id: Option<String>,
-        worker: ZotWorker,
-        model: ZotModel,
+        worker: ZapperWorker,
+        model: ZapperModel,
         base: String,
     },
     MessageWorker {
@@ -232,7 +371,7 @@ pub enum ZotAction {
         chat_id: String,
     },
     Decide {
-        decision: ZotDecision,
+        decision: ZapperDecision,
     },
     WriteFile {
         path: String,
@@ -246,11 +385,11 @@ pub enum ZotAction {
     },
     CreateIssue {
         issue_id: String,
-        details: ZotIssueDetails,
+        details: ZapperIssueDetails,
     },
     EditIssue {
         issue_id: String,
-        details: ZotIssueDetails,
+        details: ZapperIssueDetails,
     },
     LinkIssueThread {
         issue_id: String,
@@ -290,7 +429,7 @@ pub enum ZotAction {
     /// the note says what happened.
     CloseIssue {
         issue_id: String,
-        outcome: ZotIssueOutcome,
+        outcome: ZapperIssueOutcome,
         note: String,
     },
     FreshConversation,
@@ -299,9 +438,11 @@ pub enum ZotAction {
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ZotEvent {
+pub struct ZapperEvent {
     pub id: String,
-    pub zot_id: String,
+    // Engines from before the rename send `zotId`; forwarding renames it
+    // (see `legacy::events_from_legacy`).
+    pub zapper_id: String,
     pub worker_chat_id: String,
     pub kind: String,
     pub summary: String,
@@ -329,7 +470,7 @@ pub fn command_outcome_unknown(error: &str) -> bool {
 
 /// Canonical command schema exposed by both application discovery and MCP.
 pub fn command_schema() -> serde_json::Value {
-    serde_json::to_value(schemars::schema_for!(ZotCommand)).expect("command schema serializes")
+    serde_json::to_value(schemars::schema_for!(ZapperCommand)).expect("command schema serializes")
 }
 
 /// What a command's `expectedRevision` protects. Most commands touch one
@@ -354,7 +495,7 @@ pub fn decision_target(id: &str) -> String {
     format!("decision:{id}")
 }
 
-impl ZotAction {
+impl ZapperAction {
     /// The wire name of this action's `type`.
     pub fn kind(&self) -> String {
         serde_json::to_value(self)
@@ -433,8 +574,8 @@ impl ActionShape {
 /// Every action, read from the generated schema so tool descriptions and
 /// error hints can't drift from what the engine accepts.
 pub fn action_shapes() -> Vec<ActionShape> {
-    let schema =
-        serde_json::to_value(schemars::schema_for!(ZotAction)).expect("action schema serializes");
+    let schema = serde_json::to_value(schemars::schema_for!(ZapperAction))
+        .expect("action schema serializes");
     let variants = schema["oneOf"]
         .as_array()
         .or_else(|| schema["anyOf"].as_array())
@@ -481,8 +622,8 @@ pub fn action_catalog() -> String {
 
 /// Parse a command, turning serde's bare "missing field" into a message that
 /// names the action's full shape.
-pub fn parse_command(value: serde_json::Value) -> Result<ZotCommand, String> {
-    serde_json::from_value::<ZotCommand>(value.clone()).map_err(|error| {
+pub fn parse_command(value: serde_json::Value) -> Result<ZapperCommand, String> {
+    serde_json::from_value::<ZapperCommand>(value.clone()).map_err(|error| {
         let action = match &value["action"] {
             serde_json::Value::String(text) => serde_json::from_str(text).unwrap_or_default(),
             other => other.clone(),
@@ -507,13 +648,13 @@ pub fn parse_command(value: serde_json::Value) -> Result<ZotCommand, String> {
                 ),
             },
             None => format!(
-                "{error}. A command is {{commandId, zotId, expectedRevision?, action: {{type, ...fields}}}}"
+                "{error}. A command is {{commandId, zapperId, expectedRevision?, action: {{type, ...fields}}}}"
             ),
         }
     })
 }
 
-fn issue_summary(issue: &ZotIssue) -> serde_json::Value {
+fn issue_summary(issue: &ZapperIssue) -> serde_json::Value {
     serde_json::json!({
         "id": issue.id,
         "code": issue.code(),
@@ -534,32 +675,32 @@ fn issue_summary(issue: &ZotIssue) -> serde_json::Value {
 
 /// A short result for agents: the new revision, what changed and one line
 /// saying so. The full state stays available to callers that ask for it.
-pub fn command_summary(command: &ZotCommand, result: Option<&Zot>) -> serde_json::Value {
+pub fn command_summary(command: &ZapperCommand, result: Option<&Zapper>) -> serde_json::Value {
     let kind = command.action.kind();
-    let Some(zot) = result else {
+    let Some(zapper) = result else {
         return serde_json::json!({
             "ok": true,
             "action": kind,
             "summary": "Zapper deleted",
         });
     };
-    let issue = |id: &str| zot.issues.iter().find(|i| i.id == id);
-    let worker = |id: &str| zot.workers.iter().find(|w| w.chat_id == id);
+    let issue = |id: &str| zapper.issues.iter().find(|i| i.id == id);
+    let worker = |id: &str| zapper.workers.iter().find(|w| w.chat_id == id);
     let mut out = serde_json::json!({
         "ok": true,
         "action": kind,
-        "revision": zot.revision,
+        "revision": zapper.revision,
     });
     let summary = match &command.action {
-        ZotAction::CreateIssue { issue_id, .. }
-        | ZotAction::EditIssue { issue_id, .. }
-        | ZotAction::LinkIssueThread { issue_id, .. }
-        | ZotAction::LinkIssuePullRequest { issue_id, .. }
-        | ZotAction::UnlinkIssueThread { issue_id, .. }
-        | ZotAction::UnlinkIssuePullRequest { issue_id, .. }
-        | ZotAction::CommentIssue { issue_id, .. }
-        | ZotAction::AskUser { issue_id, .. }
-        | ZotAction::CloseIssue { issue_id, .. } => match issue(issue_id) {
+        ZapperAction::CreateIssue { issue_id, .. }
+        | ZapperAction::EditIssue { issue_id, .. }
+        | ZapperAction::LinkIssueThread { issue_id, .. }
+        | ZapperAction::LinkIssuePullRequest { issue_id, .. }
+        | ZapperAction::UnlinkIssueThread { issue_id, .. }
+        | ZapperAction::UnlinkIssuePullRequest { issue_id, .. }
+        | ZapperAction::CommentIssue { issue_id, .. }
+        | ZapperAction::AskUser { issue_id, .. }
+        | ZapperAction::CloseIssue { issue_id, .. } => match issue(issue_id) {
             Some(i) => {
                 out["issue"] = issue_summary(i);
                 format!(
@@ -571,7 +712,7 @@ pub fn command_summary(command: &ZotCommand, result: Option<&Zot>) -> serde_json
             }
             None => format!("{kind} applied"),
         },
-        ZotAction::Delegate {
+        ZapperAction::Delegate {
             issue_id,
             worker: w,
             ..
@@ -594,33 +735,34 @@ pub fn command_summary(command: &ZotCommand, result: Option<&Zot>) -> serde_json
                 ),
             }
         }
-        ZotAction::AdoptWorker { worker: w } => {
+        ZapperAction::AdoptWorker { worker: w } => {
             out["worker"] = serde_json::json!(worker(&w.chat_id));
             format!("Adopted thread {}", w.chat_id)
         }
-        ZotAction::MessageWorker { chat_id, .. } => {
+        ZapperAction::MessageWorker { chat_id, .. } => {
             out["worker"] = serde_json::json!(worker(chat_id));
             format!("Message queued for {chat_id}")
         }
-        ZotAction::StopWorker { chat_id } => {
+        ZapperAction::StopWorker { chat_id } => {
             out["worker"] = serde_json::json!(worker(chat_id));
             format!("Stopping {chat_id}")
         }
-        ZotAction::ArchiveWorker { chat_id } => {
+        ZapperAction::ArchiveWorker { chat_id } => {
             out["worker"] = serde_json::json!(worker(chat_id));
             format!("Archiving {chat_id}")
         }
-        ZotAction::ReleaseWorker { chat_id } => format!("Released {chat_id}"),
-        ZotAction::Decide { decision } => {
-            out["decision"] = serde_json::json!(zot.decisions.iter().find(|d| d.id == decision.id));
+        ZapperAction::ReleaseWorker { chat_id } => format!("Released {chat_id}"),
+        ZapperAction::Decide { decision } => {
+            out["decision"] =
+                serde_json::json!(zapper.decisions.iter().find(|d| d.id == decision.id));
             format!("Recorded decision {}", decision.id)
         }
-        ZotAction::WriteFile {
+        ZapperAction::WriteFile {
             path,
             expected_version,
             ..
         }
-        | ZotAction::RestoreFile {
+        | ZapperAction::RestoreFile {
             path,
             expected_version,
             ..
@@ -629,18 +771,18 @@ pub fn command_summary(command: &ZotCommand, result: Option<&Zot>) -> serde_json
             out["file"] = serde_json::json!({"path": path, "version": version});
             format!("Wrote {path} at version {version}")
         }
-        ZotAction::Create { .. }
-        | ZotAction::Configure { .. }
-        | ZotAction::SetStatus { .. }
-        | ZotAction::FreshConversation => {
-            out["zot"] = serde_json::json!({
-                "name": zot.config.name,
-                "status": zot.status,
-                "coordinatorChatId": zot.coordinator_chat_id,
+        ZapperAction::Create { .. }
+        | ZapperAction::Configure { .. }
+        | ZapperAction::SetStatus { .. }
+        | ZapperAction::FreshConversation => {
+            out["zapper"] = serde_json::json!({
+                "name": zapper.config.name,
+                "status": zapper.status,
+                "coordinatorChatId": zapper.coordinator_chat_id,
             });
             format!("{kind} applied")
         }
-        ZotAction::Delete => "Zapper deleted".into(),
+        ZapperAction::Delete => "Zapper deleted".into(),
     };
     out["summary"] = serde_json::json!(summary);
     out
@@ -650,7 +792,7 @@ pub fn command_summary(command: &ZotCommand, result: Option<&Zot>) -> serde_json
 /// evidence for review, never an automatic completion signal.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub enum ZotIssueStatus {
+pub enum ZapperIssueStatus {
     #[default]
     Backlog,
     Todo,
@@ -662,7 +804,7 @@ pub enum ZotIssueStatus {
     Done,
     Canceled,
 }
-impl ZotIssueStatus {
+impl ZapperIssueStatus {
     pub const ALL: [Self; 8] = [
         Self::Backlog,
         Self::Todo,
@@ -703,14 +845,14 @@ impl ZotIssueStatus {
 }
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub enum ZotIssuePriority {
+pub enum ZapperIssuePriority {
     Urgent,
     High,
     #[default]
     Normal,
     Low,
 }
-impl ZotIssuePriority {
+impl ZapperIssuePriority {
     pub const ALL: [Self; 4] = [Self::Urgent, Self::High, Self::Normal, Self::Low];
     pub fn label(self) -> &'static str {
         match self {
@@ -723,29 +865,29 @@ impl ZotIssuePriority {
 }
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ZotIssueDetails {
+pub struct ZapperIssueDetails {
     pub title: String,
     pub description: String,
     #[serde(default)]
-    pub status: ZotIssueStatus,
+    pub status: ZapperIssueStatus,
     #[serde(default)]
-    pub priority: ZotIssuePriority,
+    pub priority: ZapperIssuePriority,
     /// The Zapper (or one of its threads) is responsible. Kept in step with
-    /// [`ZotIssueDetails::owner`] for clients that predate owners.
+    /// [`ZapperIssueDetails::owner`] for clients that predate owners.
     #[serde(default)]
     pub assigned: bool,
     /// ISO calendar date, or absent.
     pub due_date: Option<String>,
     #[serde(default)]
     pub labels: Vec<String>,
-    /// Other issue ids in the same Zot.
+    /// Other issue ids in the same Zapper.
     #[serde(default)]
     pub relations: Vec<String>,
     /// Who holds the issue now: exactly one owner at a time. Absent on issues
     /// saved before owners, where `assigned` means the Zapper.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub owner: Option<ZotIssueOwner>,
+    pub owner: Option<ZapperIssueOwner>,
     /// What must be true for the issue to be done.
     #[serde(default)]
     pub done_criteria: String,
@@ -757,12 +899,12 @@ pub struct ZotIssueDetails {
     #[ts(optional)]
     pub parent: Option<String>,
 }
-impl ZotIssueDetails {
+impl ZapperIssueDetails {
     /// The current owner, reading issues saved before owners existed.
-    pub fn current_owner(&self) -> Option<ZotIssueOwner> {
+    pub fn current_owner(&self) -> Option<ZapperIssueOwner> {
         self.owner
             .clone()
-            .or_else(|| self.assigned.then_some(ZotIssueOwner::Zapper))
+            .or_else(|| self.assigned.then_some(ZapperIssueOwner::Zapper))
     }
     /// Keep `assigned` and the status in step with the owner: the user owning
     /// an open issue means it needs them, and an issue that no longer needs
@@ -771,18 +913,18 @@ impl ZotIssueDetails {
         let owner = self.current_owner();
         self.assigned = matches!(
             owner,
-            Some(ZotIssueOwner::Zapper | ZotIssueOwner::Thread { .. })
+            Some(ZapperIssueOwner::Zapper | ZapperIssueOwner::Thread { .. })
         );
         if self.status.terminal() {
             return;
         }
         match owner {
-            Some(ZotIssueOwner::User) => self.status = ZotIssueStatus::NeedsYou,
-            _ if self.status == ZotIssueStatus::NeedsYou => {
+            Some(ZapperIssueOwner::User) => self.status = ZapperIssueStatus::NeedsYou,
+            _ if self.status == ZapperIssueStatus::NeedsYou => {
                 self.status = if has_thread {
-                    ZotIssueStatus::InProgress
+                    ZapperIssueStatus::InProgress
                 } else {
-                    ZotIssueStatus::Todo
+                    ZapperIssueStatus::Todo
                 }
             }
             _ => {}
@@ -796,7 +938,7 @@ impl ZotIssueDetails {
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
-pub enum ZotIssueOwner {
+pub enum ZapperIssueOwner {
     /// The Zapper itself, while it plans or decides.
     Zapper,
     /// The person the Zapper works for.
@@ -807,7 +949,7 @@ pub enum ZotIssueOwner {
 /// How an issue closed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub enum ZotIssueOutcome {
+pub enum ZapperIssueOutcome {
     /// Its pull request merged.
     Merged,
     /// Deliberately not done.
@@ -815,13 +957,13 @@ pub enum ZotIssueOutcome {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ZotIssuePullRequest {
+pub struct ZapperIssuePullRequest {
     pub url: String,
     pub title: String,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ZotIssueActivity {
+pub struct ZapperIssueActivity {
     #[serde(default)]
     pub actor: Option<String>,
     pub id: String,
@@ -835,30 +977,30 @@ pub struct ZotIssueActivity {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ZotIssue {
+pub struct ZapperIssue {
     pub id: String,
     pub number: u32,
-    pub details: ZotIssueDetails,
+    pub details: ZapperIssueDetails,
     #[ts(type = "number")]
     pub created_at: i64,
     #[ts(type = "number")]
     pub updated_at: i64,
     pub threads: Vec<String>,
-    pub pull_requests: Vec<ZotIssuePullRequest>,
-    pub activity: Vec<ZotIssueActivity>,
+    pub pull_requests: Vec<ZapperIssuePullRequest>,
+    pub activity: Vec<ZapperIssueActivity>,
 }
-impl ZotIssue {
+impl ZapperIssue {
     pub fn code(&self) -> String {
         format!("ZAP-{}", self.number)
     }
 }
-impl Zot {
+impl Zapper {
     /// The queued thread that owns `issue`, if any. Such an issue keeps the
     /// `inProgress` status it was delegated with (the work is committed to a
     /// thread and starts on its own), but every surface shows it as Queued
     /// until the thread starts, so nothing claims a thread is running.
-    pub fn issue_queued_worker(&self, issue: &ZotIssue) -> Option<&ZotWorker> {
-        let ZotIssueOwner::Thread { chat_id } = issue.details.owner.as_ref()? else {
+    pub fn issue_queued_worker(&self, issue: &ZapperIssue) -> Option<&ZapperWorker> {
+        let ZapperIssueOwner::Thread { chat_id } = issue.details.owner.as_ref()? else {
             return None;
         };
         self.workers
@@ -866,7 +1008,7 @@ impl Zot {
             .find(|w| &w.chat_id == chat_id && w.queued())
     }
     /// The status label an issue shows: Queued while its thread waits.
-    pub fn issue_status_label(&self, issue: &ZotIssue) -> &'static str {
+    pub fn issue_status_label(&self, issue: &ZapperIssue) -> &'static str {
         if self.issue_queued_worker(issue).is_some() {
             "Queued"
         } else {
@@ -884,12 +1026,12 @@ mod tests {
     fn action_may_arrive_as_a_json_string() {
         let action =
             json!({"type": "commentIssue", "issueId": "fix", "text": "a \"quoted\"\nline"});
-        let as_object: ZotCommand = parse_command(json!({
-            "commandId": "c1", "zotId": "z", "action": action
+        let as_object: ZapperCommand = parse_command(json!({
+            "commandId": "c1", "zapperId": "z", "action": action
         }))
         .unwrap();
-        let as_string: ZotCommand = parse_command(json!({
-            "commandId": "c1", "zotId": "z", "expectedRevision": 3,
+        let as_string: ZapperCommand = parse_command(json!({
+            "commandId": "c1", "zapperId": "z", "expectedRevision": 3,
             "action": action.to_string()
         }))
         .unwrap();
@@ -913,42 +1055,42 @@ mod tests {
         let shapes = action_shapes();
         // One sample per variant; adding a variant without a sample fails the
         // exhaustive match below, and the catalog check covers its fields.
-        let samples: Vec<ZotAction> = vec![
-            ZotAction::FreshConversation,
-            ZotAction::Delete,
-            ZotAction::StopWorker {
+        let samples: Vec<ZapperAction> = vec![
+            ZapperAction::FreshConversation,
+            ZapperAction::Delete,
+            ZapperAction::StopWorker {
                 chat_id: "w".into(),
             },
         ];
         for sample in &samples {
             match sample {
-                ZotAction::Create { .. }
-                | ZotAction::Configure { .. }
-                | ZotAction::SetStatus { .. }
-                | ZotAction::AdoptWorker { .. }
-                | ZotAction::Delegate { .. }
-                | ZotAction::MessageWorker { .. }
-                | ZotAction::StopWorker { .. }
-                | ZotAction::ArchiveWorker { .. }
-                | ZotAction::ReleaseWorker { .. }
-                | ZotAction::Decide { .. }
-                | ZotAction::WriteFile { .. }
-                | ZotAction::RestoreFile { .. }
-                | ZotAction::CreateIssue { .. }
-                | ZotAction::EditIssue { .. }
-                | ZotAction::LinkIssueThread { .. }
-                | ZotAction::LinkIssuePullRequest { .. }
-                | ZotAction::UnlinkIssueThread { .. }
-                | ZotAction::UnlinkIssuePullRequest { .. }
-                | ZotAction::CommentIssue { .. }
-                | ZotAction::AskUser { .. }
-                | ZotAction::CloseIssue { .. }
-                | ZotAction::FreshConversation
-                | ZotAction::Delete => {}
+                ZapperAction::Create { .. }
+                | ZapperAction::Configure { .. }
+                | ZapperAction::SetStatus { .. }
+                | ZapperAction::AdoptWorker { .. }
+                | ZapperAction::Delegate { .. }
+                | ZapperAction::MessageWorker { .. }
+                | ZapperAction::StopWorker { .. }
+                | ZapperAction::ArchiveWorker { .. }
+                | ZapperAction::ReleaseWorker { .. }
+                | ZapperAction::Decide { .. }
+                | ZapperAction::WriteFile { .. }
+                | ZapperAction::RestoreFile { .. }
+                | ZapperAction::CreateIssue { .. }
+                | ZapperAction::EditIssue { .. }
+                | ZapperAction::LinkIssueThread { .. }
+                | ZapperAction::LinkIssuePullRequest { .. }
+                | ZapperAction::UnlinkIssueThread { .. }
+                | ZapperAction::UnlinkIssuePullRequest { .. }
+                | ZapperAction::CommentIssue { .. }
+                | ZapperAction::AskUser { .. }
+                | ZapperAction::CloseIssue { .. }
+                | ZapperAction::FreshConversation
+                | ZapperAction::Delete => {}
             }
             assert!(shapes.iter().any(|s| s.kind == sample.kind()));
         }
-        let schema = serde_json::to_value(schemars::schema_for!(ZotAction)).unwrap();
+        let schema = serde_json::to_value(schemars::schema_for!(ZapperAction)).unwrap();
         let variants = schema["oneOf"].as_array().unwrap();
         assert_eq!(shapes.len(), variants.len());
         let catalog = action_catalog();
@@ -973,7 +1115,7 @@ mod tests {
     #[test]
     fn parse_errors_name_the_action_shape() {
         let error = parse_command(json!({
-            "commandId": "c", "zotId": "z",
+            "commandId": "c", "zapperId": "z",
             "action": {"type": "createIssue", "issue": {"title": "x"}}
         }))
         .unwrap_err();
@@ -981,13 +1123,13 @@ mod tests {
         assert!(error.contains("createIssue takes"), "{error}");
         assert!(error.contains("issueId, details"), "{error}");
         let error = parse_command(json!({
-            "commandId": "c", "zotId": "z",
+            "commandId": "c", "zapperId": "z",
             "action": {"type": "linkIssuePullRequest", "issueId": "i", "url": "u"}
         }))
         .unwrap_err();
         assert!(error.contains("title"), "{error}");
         let error = parse_command(json!({
-            "commandId": "c", "zotId": "z", "action": {"type": "nope"}
+            "commandId": "c", "zapperId": "z", "action": {"type": "nope"}
         }))
         .unwrap_err();
         assert!(error.contains("Unknown action type"), "{error}");
@@ -996,11 +1138,11 @@ mod tests {
     #[test]
     fn conflict_scopes_keep_ordered_actions_strict() {
         assert_eq!(
-            ZotAction::FreshConversation.conflict_scope(),
+            ZapperAction::FreshConversation.conflict_scope(),
             ConflictScope::Whole
         );
         assert_eq!(
-            ZotAction::CommentIssue {
+            ZapperAction::CommentIssue {
                 issue_id: "a".into(),
                 text: "t".into(),
                 reply_to: None
@@ -1009,7 +1151,7 @@ mod tests {
             ConflictScope::Targets(vec![])
         );
         assert_eq!(
-            ZotAction::EditIssue {
+            ZapperAction::EditIssue {
                 issue_id: "a".into(),
                 details: Default::default()
             }
@@ -1020,16 +1162,16 @@ mod tests {
 
     #[test]
     fn command_summary_is_compact() {
-        let zot = Zot {
+        let zapper = Zapper {
             id: "z".into(),
             revision: 7,
             activity_revision: 0,
-            config: ZotConfig {
+            config: ZapperConfig {
                 name: "n".into(),
                 purpose: "p".repeat(10_000),
                 home_device_id: "d".into(),
                 repositories: vec![],
-                coordinator_model: ZotModel {
+                coordinator_model: ZapperModel {
                     harness: "mock".into(),
                     model: None,
                 },
@@ -1039,15 +1181,15 @@ mod tests {
                 avatar: None,
                 avatar_image: None,
             },
-            status: ZotStatus::Active,
-            coordinator_chat_id: "zot-z-0".into(),
+            status: ZapperStatus::Active,
+            coordinator_chat_id: "zapper-z-0".into(),
             previous_coordinator_chats: vec![],
             workers: vec![],
             decisions: vec![],
-            issues: vec![ZotIssue {
+            issues: vec![ZapperIssue {
                 id: "fix".into(),
                 number: 3,
-                details: ZotIssueDetails {
+                details: ZapperIssueDetails {
                     title: "Fix".into(),
                     description: "d".repeat(10_000),
                     ..Default::default()
@@ -1059,20 +1201,78 @@ mod tests {
                 activity: vec![],
             }],
         };
-        let command = ZotCommand {
+        let command = ZapperCommand {
             command_id: "c".into(),
-            zot_id: "z".into(),
+            zapper_id: "z".into(),
             expected_revision: None,
-            action: ZotAction::CommentIssue {
+            action: ZapperAction::CommentIssue {
                 issue_id: "fix".into(),
                 text: "hi".into(),
                 reply_to: None,
             },
         };
-        let summary = command_summary(&command, Some(&zot));
+        let summary = command_summary(&command, Some(&zapper));
         assert_eq!(summary["revision"], 7);
         assert_eq!(summary["issue"]["code"], "ZAP-3");
         assert!(summary["summary"].as_str().unwrap().contains("ZAP-3"));
         assert!(summary.to_string().len() < 1000);
+    }
+    #[test]
+    fn legacy_names_still_parse() {
+        // Legacy, remove after one release.
+        let command = parse_command(serde_json::json!({
+            "commandId": "c", "zotId": "z", "action": {"type": "freshConversation"}
+        }))
+        .unwrap();
+        assert_eq!(command.zapper_id, "z");
+        assert_eq!(serde_json::to_value(&command).unwrap()["zapperId"], "z");
+        let event: ZapperEvent = serde_json::from_value(
+            legacy::events_from_legacy(serde_json::json!([{
+                "id": "e", "zotId": "z", "workerChatId": "w", "kind": "k",
+                "summary": "s", "acknowledged": false
+            }]))[0]
+                .clone(),
+        )
+        .unwrap();
+        assert_eq!(event.zapper_id, "z");
+        assert!(worker_chat_id_for("zot-worker-c", "c"));
+        assert!(worker_chat_id_for("zapper-worker-c", "c"));
+        assert!(!worker_chat_id_for("zapper-worker-d", "c"));
+        assert_eq!(
+            legacy::current_method("WatchZots"),
+            Some(crate::control::WATCH_ZAPPERS)
+        );
+        assert_eq!(
+            legacy::legacy_method(crate::control::ZAPPER_COMMAND),
+            Some("ZotCommand")
+        );
+        assert_eq!(legacy::current_tool("zot_command"), Some("zapper_command"));
+    }
+
+    #[test]
+    fn forwarded_requests_use_names_older_engines_read() {
+        let current = serde_json::json!({
+            "commandId": "c", "zapperId": "z", "_zapperActor": "a",
+            "_zapperWorkerChatId": "w", "_zotActor": "stale",
+            "action": {"type": "delegate", "worker": {"chatId": "zapper-worker-c"}}
+        });
+        let old = legacy::to_legacy_params(current.clone());
+        assert_eq!(old["zotId"], "z");
+        assert_eq!(old["_zotActor"], "a");
+        assert_eq!(old["_zotWorkerChatId"], "w");
+        assert_eq!(old["action"]["worker"]["chatId"], "zot-worker-c");
+        assert!(old.get("zapperId").is_none());
+        let back = legacy::from_legacy_params(old);
+        assert_eq!(back["zapperId"], "z");
+        assert_eq!(back["_zapperActor"], "a");
+        assert!(back.get("zotId").is_none());
+        // A legacy field never overrides a current one.
+        let both =
+            legacy::from_legacy_params(serde_json::json!({"zapperId": "new", "zotId": "old"}));
+        assert_eq!(both, serde_json::json!({"zapperId": "new"}));
+        assert_eq!(
+            legacy::events_to_legacy(serde_json::json!([{"id": "e", "zapperId": "z"}])),
+            serde_json::json!([{"id": "e", "zotId": "z"}])
+        );
     }
 }

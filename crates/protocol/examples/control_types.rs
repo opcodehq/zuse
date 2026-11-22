@@ -1,6 +1,6 @@
 //! Generate the public SDK contracts from Rust. Run with --check in CI.
 use ts_rs::TS;
-use zuse_protocol::{control::*, zots::*};
+use zuse_protocol::{control::*, zappers::*};
 fn main() {
     let sdk = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/sdk");
     for manifest in ["package.json", "package-lock.json"] {
@@ -26,26 +26,26 @@ fn main() {
     );
     macro_rules! emit { ($($ty:ty),*) => { $(text.push_str(&format!("export {}\n", <$ty>::decl()));)* }; }
     emit!(
-        ZotRepository,
-        ZotAvatar,
-        ZotModel,
-        ZotConfig,
-        ZotStatus,
-        ZotWorker,
-        ZotDecision,
-        ZotIssueStatus,
-        ZotIssuePriority,
-        ZotIssueOwner,
-        ZotIssueOutcome,
-        ZotIssueDetails,
-        ZotIssuePullRequest,
-        ZotIssueActivity,
-        ZotIssue,
-        Zot,
-        ZotFile,
-        ZotAction,
-        ZotCommand,
-        ZotEvent,
+        ZapperRepository,
+        ZapperAvatar,
+        ZapperModel,
+        ZapperConfig,
+        ZapperStatus,
+        ZapperWorker,
+        ZapperDecision,
+        ZapperIssueStatus,
+        ZapperIssuePriority,
+        ZapperIssueOwner,
+        ZapperIssueOutcome,
+        ZapperIssueDetails,
+        ZapperIssuePullRequest,
+        ZapperIssueActivity,
+        ZapperIssue,
+        Zapper,
+        ZapperFile,
+        ZapperAction,
+        ZapperCommand,
+        ZapperEvent,
         ControlInfo
     );
     text.push_str(&format!(

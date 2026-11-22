@@ -505,7 +505,7 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 
 /// Whether a tool name is one of the Zapper MCP tools, in any form a harness
 /// stores it: bare (`zapper_command`), or with the `mcp__<server>__` prefix
-/// (`mcp__zuse__zapper_command`). Includes the legacy `zot_*` names.
+/// (`mcp__zuse__zapper_command`). Includes the legacy pre-rename names (`zappers::legacy::TOOLS`).
 pub fn is_zapper_tool_name(name: &str) -> bool {
     let bare = match name.strip_prefix("mcp__") {
         Some(rest) => rest.split_once("__").map_or(rest, |(_, tool)| tool),
@@ -513,16 +513,8 @@ pub fn is_zapper_tool_name(name: &str) -> bool {
     };
     matches!(
         bare,
-        "zapper_command"
-            | "zapper_events"
-            | "zapper_files"
-            | "zapper_issue"
-            | "zapper_acknowledge"
-            | "zot_command"
-            | "zot_events"
-            | "zot_files"
-            | "zot_acknowledge"
-    )
+        "zapper_command" | "zapper_events" | "zapper_files" | "zapper_issue" | "zapper_acknowledge"
+    ) || crate::zappers::legacy::current_tool(bare).is_some()
 }
 
 /// Whether a call is to one of the Zapper MCP tools (see [`is_zapper_tool_name`]).

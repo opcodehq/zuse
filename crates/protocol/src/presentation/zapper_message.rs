@@ -1,41 +1,46 @@
 //! Display attribution rides the same durable prompt envelope as chat-to-chat
 //! messages. It is descriptive context only, never an authorization credential.
-use crate::zots::{Zot, ZotAvatar};
+use crate::zappers::{Zapper, ZapperAvatar};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ZotSender {
-    pub zot_id: String,
+pub struct ZapperSender {
+    // Legacy, remove after one release: transcripts saved before the rename
+    // carry `zotId`.
+    #[serde(alias = "zotId")]
+    pub zapper_id: String,
     pub chat_id: String,
     pub name: String,
-    pub avatar: Option<ZotAvatar>,
+    pub avatar: Option<ZapperAvatar>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub activity: bool,
 }
 /// Opens a Zapper-attributed message. Models read this, so it names the
 /// product; [`LEGACY_PREFIX`] still parses in transcripts saved before.
 pub const PREFIX: &str = "[Message from Zapper ";
+// Legacy, remove after one release.
 const LEGACY_PREFIX: &str = "[Message from Zot ";
 pub const EXECUTION_CONTEXT: &str = "\n\n[Zapper execution context]\n";
+// Legacy, remove after one release.
 const LEGACY_EXECUTION_CONTEXT: &str = "\n\n[Zot execution context]\n";
 
-pub fn envelope(zot: &Zot, body: &str) -> String {
-    attributed(zot, &zot.config.name, body, false)
+pub fn envelope(zapper: &Zapper, body: &str) -> String {
+    attributed(zapper, &zapper.config.name, body, false)
 }
 
 /// A model-free activity notice, rather than a message composed by the coordinator.
-pub fn activity(zot: &Zot, body: &str) -> String {
-    activity_from(zot, &zot.config.name, body)
+pub fn activity(zapper: &Zapper, body: &str) -> String {
+    activity_from(zapper, &zapper.config.name, body)
 }
 
 /// An activity notice displayed as sent by its source, such as a worker thread.
-pub fn activity_from(zot: &Zot, source: &str, body: &str) -> String {
+pub fn activity_from(zapper: &Zapper, source: &str, body: &str) -> String {
     let source = source.trim();
     attributed(
-        zot,
+        zapper,
         if source.is_empty() {
-            &zot.config.name
+            &zapper.config.name
         } else {
             source
         },
@@ -44,12 +49,12 @@ pub fn activity_from(zot: &Zot, source: &str, body: &str) -> String {
     )
 }
 
-fn attributed(zot: &Zot, name: &str, body: &str, activity: bool) -> String {
-    let sender = ZotSender {
-        zot_id: zot.id.clone(),
-        chat_id: zot.coordinator_chat_id.clone(),
+fn attributed(zapper: &Zapper, name: &str, body: &str, activity: bool) -> String {
+    let sender = ZapperSender {
+        zapper_id: zapper.id.clone(),
+        chat_id: zapper.coordinator_chat_id.clone(),
         name: name.to_owned(),
-        avatar: zot.config.avatar.clone(),
+        avatar: zapper.config.avatar.clone(),
         activity,
     };
     format!(
@@ -59,7 +64,7 @@ fn attributed(zot: &Zot, name: &str, body: &str, activity: bool) -> String {
 }
 /// UI projection also recognizes the existing chat-to-chat routing envelope.
 /// Keep it intact for model execution and reply routing.
-pub fn parse_display(text: &str) -> Option<(ZotSender, &str)> {
+pub fn parse_display(text: &str) -> Option<(ZapperSender, &str)> {
     if let Some(rest) = text.strip_prefix("[Message from Zuse chat ") {
         let (header, body) = rest.split_once("]\n\n")?;
         let (label, destination) =
@@ -74,8 +79,8 @@ pub fn parse_display(text: &str) -> Option<(ZotSender, &str)> {
             return None;
         }
         return Some((
-            ZotSender {
-                zot_id: format!("chat:{chat_id}"),
+            ZapperSender {
+                zapper_id: format!("chat:{chat_id}"),
                 chat_id: chat_id.to_owned(),
                 name: name.to_owned(),
                 avatar: None,
@@ -97,13 +102,13 @@ fn visible_body(body: &str) -> &str {
         .map_or(body, |at| &body[..at])
 }
 
-pub fn parse(text: &str) -> Option<(ZotSender, &str)> {
+pub fn parse(text: &str) -> Option<(ZapperSender, &str)> {
     let rest = text
         .strip_prefix(PREFIX)
         .or_else(|| text.strip_prefix(LEGACY_PREFIX))?;
     let (json, body) = rest.split_once("]\n\n")?;
-    let sender: ZotSender = serde_json::from_str(json).ok()?;
-    if sender.name.trim().is_empty() || sender.zot_id.is_empty() || sender.chat_id.is_empty() {
+    let sender: ZapperSender = serde_json::from_str(json).ok()?;
+    if sender.name.trim().is_empty() || sender.zapper_id.is_empty() || sender.chat_id.is_empty() {
         return None;
     }
     Some((sender, visible_body(body)))
@@ -131,21 +136,21 @@ mod tests {
     }
     #[test]
     fn attribution_round_trips_without_eating_message_content() {
-        let sender = ZotSender {
-            zot_id: "z".into(),
+        let sender = ZapperSender {
+            zapper_id: "z".into(),
             chat_id: "chat".into(),
             name: "A ]\n\n B".into(),
             avatar: None,
             activity: false,
         };
         let input = format!(
-            "[Message from Zot {}]\n\nBody\n\nReply",
+            "[Message from Zapper {}]\n\nBody\n\nReply",
             serde_json::to_string(&sender).unwrap()
         );
         let (actual, body) = parse(&input).unwrap();
         assert_eq!(actual, sender);
         assert_eq!(body, "Body\n\nReply");
-        assert!(parse("[Message from Zot nope]\n\nmessage").is_none());
+        assert!(parse("[Message from Zapper nope]\n\nmessage").is_none());
         assert!(parse("ordinary user message").is_none());
         let enriched = format!("{input}{EXECUTION_CONTEXT}Private engine instructions");
         assert_eq!(parse(&enriched).unwrap().1, "Body\n\nReply");
@@ -158,8 +163,8 @@ mod tests {
     }
     #[test]
     fn new_messages_name_the_zapper() {
-        let sender = ZotSender {
-            zot_id: "z".into(),
+        let sender = ZapperSender {
+            zapper_id: "z".into(),
             chat_id: "chat".into(),
             name: "Release".into(),
             avatar: None,
@@ -170,7 +175,7 @@ mod tests {
             serde_json::to_string(&sender).unwrap()
         );
         assert!(text.starts_with("[Message from Zapper "));
-        assert!(!text.contains("Zot"));
+        assert!(!text.contains(crate::zappers::legacy::ID_FIELD));
         assert_eq!(parse(&text).unwrap().1, "Ship it");
     }
 }

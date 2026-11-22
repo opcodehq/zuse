@@ -14,7 +14,7 @@
 //! you. Mascot and colour ids are saved with
 //! each Zapper, so art and names can change but ids cannot; every id saved
 //! by an earlier version still names one of these.
-use crate::zots::ZotAvatar;
+use crate::zappers::ZapperAvatar;
 
 /// The flat round face an earlier version drew for each mascot. The Slack
 /// persona renderer still draws these until it learns the sprites.
@@ -341,10 +341,10 @@ fn hash(text: &str) -> u32 {
     })
 }
 
-/// A stable avatar for a seed, so Zots saved without one keep their look.
-pub fn default_avatar(seed: &str) -> ZotAvatar {
+/// A stable avatar for a seed, so Zappers saved without one keep their look.
+pub fn default_avatar(seed: &str) -> ZapperAvatar {
     let value = hash(seed);
-    ZotAvatar {
+    ZapperAvatar {
         mascot: MASCOTS[value as usize % MASCOTS.len()].id.into(),
         color: COLORS[(value >> 8) as usize % COLORS.len()].id.into(),
     }
@@ -352,7 +352,7 @@ pub fn default_avatar(seed: &str) -> ZotAvatar {
 
 /// The mascot and colour an avatar draws, unknown ids falling back to the
 /// first of each so a Zapper saved by a newer client still has a face.
-pub fn resolve(avatar: &ZotAvatar) -> (&'static Mascot, &'static MascotColor) {
+pub fn resolve(avatar: &ZapperAvatar) -> (&'static Mascot, &'static MascotColor) {
     let mascot = MASCOTS
         .iter()
         .find(|m| m.id == avatar.mascot)
@@ -688,8 +688,8 @@ mod tests {
 
     #[test]
     fn defaults_are_stable_and_unknown_ids_still_draw() {
-        assert_eq!(default_avatar("zot"), default_avatar("zot"));
-        let unknown = ZotAvatar {
+        assert_eq!(default_avatar("zapper"), default_avatar("zapper"));
+        let unknown = ZapperAvatar {
             mascot: "gone".into(),
             color: "gone".into(),
         };
@@ -714,7 +714,7 @@ mod tests {
     #[test]
     fn every_saved_mascot_id_maps_to_its_mascot() {
         for (id, name) in LEGACY {
-            let avatar = ZotAvatar {
+            let avatar = ZapperAvatar {
                 mascot: id.into(),
                 color: "teal".into(),
             };
@@ -958,11 +958,11 @@ mod tests {
 
     #[test]
     fn configs_saved_before_custom_images_still_load() {
-        use crate::zots::{ZotConfig, avatar_image_ok};
+        use crate::zappers::{ZapperConfig, avatar_image_ok};
         let old = r#"{"name":"Ops","purpose":"","homeDeviceId":"d","repositories":[],
             "coordinatorModel":{"harness":"claude-code","model":null},"workerDeviceId":"d",
             "maxConcurrentWorkers":4,"maxFollowups":3,"avatar":{"mascot":"hex","color":"pink"}}"#;
-        let config: ZotConfig = serde_json::from_str(old).unwrap();
+        let config: ZapperConfig = serde_json::from_str(old).unwrap();
         assert_eq!(config.avatar_image, None);
         assert_eq!(resolve(config.avatar.as_ref().unwrap()).0.name, "Orbit");
         // Without an image the saved shape is unchanged, so older clients
@@ -974,15 +974,15 @@ mod tests {
             serde_json::json!({"mascot":"hex","color":"pink"})
         );
         let image = "data:image/png;base64,iVBORw0KGgo=";
-        let with = ZotConfig {
+        let with = ZapperConfig {
             avatar_image: Some(image.into()),
             ..config
         };
         let text = serde_json::to_string(&with).unwrap();
         assert!(text.contains(r#""avatarImage":"data:image/png;base64,iVBORw0KGgo=""#));
-        assert_eq!(serde_json::from_str::<ZotConfig>(&text).unwrap(), with);
+        assert_eq!(serde_json::from_str::<ZapperConfig>(&text).unwrap(), with);
         // The avatar itself never gains fields, so personas stay small.
-        let avatar: ZotAvatar =
+        let avatar: ZapperAvatar =
             serde_json::from_str(r#"{"mascot":"bolt","color":"teal","future":1}"#).unwrap();
         assert_eq!(
             serde_json::to_string(&avatar).unwrap(),
@@ -1002,7 +1002,7 @@ mod tests {
         }
         let huge = format!(
             "data:image/png;base64,{}",
-            "A".repeat(crate::zots::AVATAR_IMAGE_MAX_LEN)
+            "A".repeat(crate::zappers::AVATAR_IMAGE_MAX_LEN)
         );
         assert!(!avatar_image_ok(&huge));
     }

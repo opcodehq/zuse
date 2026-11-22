@@ -5,23 +5,25 @@ use ts_rs::TS;
 pub const API_VERSION: u32 = 1;
 pub const API_INFO: &str = "ControlInfo";
 pub const CALL: &str = "ControlCall";
-pub const ZOT_COMMAND: &str = "ZotCommand";
-pub const WATCH_ZOTS: &str = "WatchZots";
-pub const ZOT_FILES: &str = "ZotFiles";
-pub const ZOT_EVENTS: &str = "ZotEvents";
+pub const ZAPPER_COMMAND: &str = "ZapperCommand";
+pub const WATCH_ZAPPERS: &str = "WatchZappers";
+pub const ZAPPER_FILES: &str = "ZapperFiles";
+pub const ZAPPER_EVENTS: &str = "ZapperEvents";
 /// One issue in full, including activity the coordinator prompt leaves out.
-pub const ZOT_ISSUE: &str = "ZotIssue";
-pub const ACK_ZOT_EVENTS: &str = "AckZotEvents";
+pub const ZAPPER_ISSUE: &str = "ZapperIssue";
+pub const ACK_ZAPPER_EVENTS: &str = "AckZapperEvents";
+/// Engine-to-engine: place a worker on the device that hosts it.
+pub const BIND_ZAPPER_WORKER: &str = "BindZapperWorker";
 
 /// Explicit public surface. Credential-management and raw provider transport stay private.
 pub const METHODS: &[&str] = &[
     API_INFO,
-    ZOT_COMMAND,
-    WATCH_ZOTS,
-    ZOT_FILES,
-    ZOT_EVENTS,
-    ZOT_ISSUE,
-    ACK_ZOT_EVENTS,
+    ZAPPER_COMMAND,
+    WATCH_ZAPPERS,
+    ZAPPER_FILES,
+    ZAPPER_EVENTS,
+    ZAPPER_ISSUE,
+    ACK_ZAPPER_EVENTS,
     "ControlUpdateStatus",
     "RetryControlUpdate",
     "EngineInfo",

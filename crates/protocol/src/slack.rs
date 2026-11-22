@@ -20,7 +20,7 @@ pub enum MessageSource {
     /// updates. Older readers drop this part and show the full prompt.
     Zapper {
         text: String,
-        sender: crate::presentation::zot_message::ZotSender,
+        sender: crate::presentation::zapper_message::ZapperSender,
         /// The owner typed this turn: the transcript shows it as their own
         /// message, without the "Sent from Zapper" header.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -68,12 +68,12 @@ impl MessageSource {
     }
     /// The same attribution header Zapper messages use, so every message sent
     /// on someone's behalf reads alike.
-    pub fn sender(&self) -> crate::presentation::zot_message::ZotSender {
+    pub fn sender(&self) -> crate::presentation::zapper_message::ZapperSender {
         if let Self::Zapper { sender, .. } = self {
             return sender.clone();
         }
-        crate::presentation::zot_message::ZotSender {
-            zot_id: "slack".into(),
+        crate::presentation::zapper_message::ZapperSender {
+            zapper_id: "slack".into(),
             chat_id: String::new(),
             name: self.sender_name(),
             avatar: None,
@@ -124,7 +124,7 @@ pub struct Connection {
 pub struct Persona {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub avatar: Option<crate::zots::ZotAvatar>,
+    pub avatar: Option<crate::zappers::ZapperAvatar>,
 }
 impl Persona {
     /// Slack caps display names at 80 characters; avatar ids are short slugs.
@@ -262,8 +262,8 @@ mod tests {
     }
     #[test]
     fn zapper_turns_carry_their_summary_and_sender() {
-        let sender = crate::presentation::zot_message::ZotSender {
-            zot_id: "z".into(),
+        let sender = crate::presentation::zapper_message::ZapperSender {
+            zapper_id: "z".into(),
             chat_id: "coord".into(),
             name: "Release".into(),
             avatar: None,
