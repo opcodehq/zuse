@@ -27,13 +27,13 @@ const TABLES: &[(&str, &str)] = &[
 ];
 const LEGACY_COLUMN: &str = "zot";
 
-/// Move the state database and control token from `legacy` into `root`.
+/// Copy the state database and control token from `legacy` into `root`.
 /// Per-Zapper folders stay where they are (see `Zappers::workspace`).
 pub(super) fn move_state(legacy: &Path, root: &Path) -> Result<()> {
     let token = root.join("control-token");
     let old_token = legacy.join("control-token");
     if !token.exists() && old_token.exists() {
-        std::fs::rename(&old_token, &token)?;
+        std::fs::copy(&old_token, &token)?;
     }
     let db = root.join("state.sqlite");
     let old_db = legacy.join("state.sqlite");
@@ -44,7 +44,9 @@ pub(super) fn move_state(legacy: &Path, root: &Path) -> Result<()> {
     // published by an atomic rename: a crash leaves no database or all of it.
     let staged = root.join("state.sqlite.migrating");
     let _ = std::fs::remove_file(&staged);
-    Connection::open(&old_db)?.execute("VACUUM INTO ?1", [staged.to_string_lossy()])?;
+    // Read-only, so closing it never checkpoints or rewrites the old files.
+    Connection::open_with_flags(&old_db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?
+        .execute("VACUUM INTO ?1", [staged.to_string_lossy()])?;
     {
         let copy = Connection::open(&staged)?;
         let check: String = copy.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
@@ -59,9 +61,7 @@ pub(super) fn move_state(legacy: &Path, root: &Path) -> Result<()> {
     if let Ok(dir) = std::fs::File::open(root) {
         let _ = dir.sync_all();
     }
-    for suffix in ["", "-wal", "-shm"] {
-        let _ = std::fs::remove_file(legacy.join(format!("state.sqlite{suffix}")));
-    }
+    // The old database, WAL and token are kept for downgrade; they go with the legacy module.
     Ok(())
 }
 
@@ -256,10 +256,43 @@ mod tests {
             assert!(profile.join("zots/release/notes.txt").exists());
             drop(store);
         }
+        // An older build still opens its pre-upgrade state: database, WAL
+        // and token are untouched.
+        assert!(
+            profile
+                .join("zots/state.sqlite-wal")
+                .metadata()
+                .unwrap()
+                .len()
+                > 0
+        );
+        assert_eq!(
+            std::fs::read_to_string(profile.join("zots/control-token")).unwrap(),
+            token
+        );
+        let old = rusqlite::Connection::open(profile.join("zots/state.sqlite")).unwrap();
+        let state: String = old
+            .query_row("SELECT state FROM zots WHERE id='release'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Zapper>(&state).unwrap(),
+            saved_zapper()
+        );
+        let counts: (i64, i64, i64) = old
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM zot_files WHERE zot='release'),
+                        (SELECT COUNT(*) FROM zot_events WHERE zot='release'),
+                        (SELECT COUNT(*) FROM zot_receipts)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(counts, (1, 1, 1));
+        drop(old);
 
         assert!(profile.join("zappers/state.sqlite").exists());
-        assert!(!profile.join("zots/state.sqlite").exists());
-        assert!(!profile.join("zots/state.sqlite-wal").exists());
         let db = rusqlite::Connection::open(profile.join("zappers/state.sqlite")).unwrap();
         let tables: Vec<String> = db
             .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
