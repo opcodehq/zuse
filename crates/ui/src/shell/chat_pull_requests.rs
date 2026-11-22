@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::pull_request_detail::PullRequestDetailPage;
+use zuse_protocol::presentation::zot_panel::ZotPage;
 
 pub(super) struct ChatPullRequest {
     pub(super) url: String,
@@ -29,6 +30,13 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         if !self.chat_pull_requests_available() {
+            return;
+        }
+        // A coordinator chat's right side is its Zapper panel: the pull
+        // request opens as a tab in the panel's strip, like one linked from
+        // an issue.
+        if self.selected_zot(cx).is_some() {
+            self.show_in_zot_panel(ZotPage::PullRequest(url), cx);
             return;
         }
         let key = self.panel_key(cx);
@@ -73,9 +81,7 @@ impl Shell {
                 surface
             }
         };
-        self.set_surfaces_open(true, cx);
-        self.set_right_active(surface, cx);
-        cx.notify();
+        self.show_right_surface(surface, cx);
     }
 
     /// The device a chat's pull request is read from: the one named, else

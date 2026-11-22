@@ -91,7 +91,8 @@ pub const ZOT_SECTIONS: [ZotTab; 4] = [
 ];
 
 /// One page of the native Zapper panel: a section, or a closable tab opened
-/// from one (an issue, a Drive document, the version history).
+/// from one (an issue, a Drive document, the version history) or from the
+/// coordinator chat (a pull request, a subagent, a diff).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ZotPage {
     Section(ZotTab),
@@ -99,9 +100,16 @@ pub enum ZotPage {
     Issue(String),
     /// A Drive document, by path.
     File(String),
-    /// A pull request linked from an issue, by URL.
+    /// A pull request, by URL: linked from an issue, or opened from the
+    /// coordinator chat.
     PullRequest(String),
     History,
+    /// A subagent's transcript opened from the coordinator chat, by the
+    /// client's handle for it.
+    Subagent(u64),
+    /// A diff (the checkout review) opened from the coordinator chat, by the
+    /// client's handle for it.
+    Diff(u64),
 }
 
 impl Default for ZotPage {

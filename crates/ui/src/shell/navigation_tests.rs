@@ -1,6 +1,7 @@
 //! Real pane rendering and key dispatch without booting an engine.
 use super::*;
 use gpui::{AppContext, TestAppContext, VisualTestContext};
+use zuse_protocol::presentation::zot_panel::ZotPage;
 
 struct NavigationHost {
     shell: Entity<Shell>,
@@ -19,7 +20,13 @@ impl Render for NavigationHost {
                 restore_mounted_focus(&root, &preferred, &neutral, window, cx);
             });
             let main = shell.render_main(window, 400., 400., cx);
-            let right = shell.render_right_pane(window, cx);
+            // A Zapper coordinator chat's right side is its Zapper panel.
+            let zot_panel = shell.zot_panel_on_right(cx) && !shell.zot_ui.panel_hidden;
+            let right = if zot_panel {
+                shell.render_zot_inspector(window, cx)
+            } else {
+                shell.render_right_pane(window, cx)
+            };
             div()
                 .size_full()
                 .flex()
@@ -49,7 +56,7 @@ impl Render for NavigationHost {
                                 .h_full()
                                 .child(main),
                         )
-                        .when(shell.right_pane_open(cx), |el| el.child(right)),
+                        .when(zot_panel || shell.right_pane_open(cx), |el| el.child(right)),
                 )
         })
     }
@@ -792,49 +799,6 @@ fn a_subagent_chip_opens_focuses_and_closes_its_right_pane_tab(cx: &mut TestAppC
 }
 
 #[gpui::test]
-fn a_subagent_chip_in_a_zapper_chat_shows_in_the_right_side_pane(cx: &mut TestAppContext) {
-    let (shell, cx) = setup(cx);
-    shell.update(cx, |shell, cx| shell.open_chat("other".into(), cx));
-    cx.run_until_parked();
-    cx.update(|window, cx| window.draw(cx).clear());
-    shell.update(cx, |shell, cx| {
-        assert_eq!(shell.active_chat, "other");
-        coordinate_zot_from(shell, "other", cx);
-        assert!(shell.zot_panel_on_right(cx));
-        assert!(!shell.titlebar_trailing_layout(false, cx).right_pane_visible);
-
-        shell.add_subagent_surface("other".into(), "zsub".into(), "Research".into(), false, cx);
-        // The pane under the titlebar's surface strip is the surface host,
-        // so the tab the strip lists is the one on screen.
-        assert!(!shell.zot_panel_on_right(cx));
-        assert!(shell.titlebar_trailing_layout(false, cx).right_pane_visible);
-        assert_eq!(shell.right_tabs["other"], vec![RightSurface::Subagent(3)]);
-        assert_eq!(shell.resolved_right_active(cx), RightSurface::Subagent(3));
-
-        // Reopening focuses it.
-        shell.add_subagent_surface("other".into(), "zsub".into(), "Research".into(), false, cx);
-        assert_eq!(shell.right_tabs["other"].len(), 1);
-        assert_eq!(shell.subagent_tabs.len(), 3);
-
-        // The panel toggle goes back to the Zapper panel, keeping the tab.
-        shell.toggle_right_pane(cx);
-        assert!(shell.zot_panel_on_right(cx));
-        assert!(!shell.zot_ui.panel_hidden);
-        assert!(shell.subagent_tabs.contains_key(&3));
-        shell.add_subagent_surface("other".into(), "zsub".into(), "Research".into(), false, cx);
-        assert!(!shell.zot_panel_on_right(cx));
-        assert_eq!(shell.resolved_right_active(cx), RightSurface::Subagent(3));
-    });
-    cx.update(|window, cx| window.draw(cx).clear());
-    close_surface(&shell, cx, RightSurface::Subagent(3));
-    shell.read_with(cx, |shell, cx| {
-        assert!(!shell.subagent_tabs.contains_key(&3));
-        assert!(shell.zot_panel_on_right(cx));
-        assert!(!shell.titlebar_trailing_layout(false, cx).right_pane_visible);
-    });
-}
-
-#[gpui::test]
 fn a_subagent_tab_open_in_another_chat_moves_into_this_chats_strip(cx: &mut TestAppContext) {
     let (shell, cx) = setup(cx);
     shell.update(cx, |shell, cx| shell.open_chat("other".into(), cx));
@@ -848,5 +812,220 @@ fn a_subagent_tab_open_in_another_chat_moves_into_this_chats_strip(cx: &mut Test
         assert!(!shell.right_tabs["parent"].contains(&RightSurface::Subagent(1)));
         assert_eq!(shell.resolved_right_active(cx), RightSurface::Subagent(1));
         assert!(shell.right_pane_shown(cx));
+    });
+}
+
+/// Open `url` the way a transcript link or a PR chip does.
+fn open_pr(shell: &Entity<Shell>, cx: &mut VisualTestContext, url: &str) {
+    cx.update(|window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.open_chat_pull_request(url.into(), None, window, cx)
+        })
+    });
+}
+
+/// Open the checkout review the way the session info row, the Changes
+/// command and the panel menu do.
+fn open_review(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
+    cx.update(|window, cx| shell.update(cx, |shell, cx| shell.open_review_tab(window, cx)));
+}
+
+/// Leave the setup on the "other" chat, coordinated by a Zapper, with the
+/// Zapper panel on the right showing Overview.
+fn zapper_chat(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext) {
+    let (shell, cx) = setup(cx);
+    shell.update(cx, |shell, cx| shell.open_chat("other".into(), cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear());
+    shell.update(cx, |shell, cx| {
+        assert_eq!(shell.active_chat, "other");
+        coordinate_zot_from(shell, "other", cx);
+        assert!(shell.zot_panel_on_right(cx));
+        assert_eq!(
+            shell.zot_tabs().active(),
+            &ZotPage::Section(zot_panel::ZotTab::Overview)
+        );
+    });
+    (shell, cx)
+}
+
+/// What a Zapper chat must keep true whatever is open: the Zapper panel is
+/// the right side, the surface host stays shut, and no titlebar surface tab
+/// stands for a pane nobody sees.
+fn assert_zapper_panel_hosts(shell: &Shell, cx: &App) {
+    assert!(shell.zot_panel_on_right(cx));
+    assert!(!shell.titlebar_trailing_layout(false, cx).right_pane_visible);
+    assert!(shell.right_tabs.get("other").is_none_or(Vec::is_empty));
+}
+
+#[gpui::test]
+fn a_pull_request_in_a_zapper_chat_opens_focuses_and_closes_as_a_zapper_panel_tab(
+    cx: &mut TestAppContext,
+) {
+    let (shell, cx) = zapper_chat(cx);
+    let first = "https://github.com/a/b/pull/1";
+    let second = "https://github.com/a/b/pull/2";
+    open_pr(&shell, cx, first);
+    cx.update(|window, cx| window.draw(cx).clear());
+    shell.read_with(cx, |shell, cx| {
+        assert_zapper_panel_hosts(shell, cx);
+        // A tab after the sections; Overview and the rest stay put.
+        assert_eq!(
+            shell.zot_tabs().open_tabs(),
+            [ZotPage::PullRequest(first.into())]
+        );
+        assert_eq!(
+            shell.zot_tabs().active(),
+            &ZotPage::PullRequest(first.into())
+        );
+        assert_eq!(shell.zot_tabs().section(), zot_panel::ZotTab::Overview);
+        assert!(shell.chat_pull_requests.is_empty());
+    });
+
+    // Another link opens beside it; the first link focuses its tab.
+    open_pr(&shell, cx, second);
+    open_pr(&shell, cx, first);
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.zot_tabs().open_tabs().len(), 2);
+        assert_eq!(
+            shell.zot_tabs().active(),
+            &ZotPage::PullRequest(first.into())
+        );
+    });
+
+    // A hidden panel comes back for the link.
+    shell.update(cx, |shell, cx| {
+        shell.toggle_right_pane(cx);
+        assert!(shell.zot_ui.panel_hidden);
+    });
+    open_pr(&shell, cx, second);
+    shell.update(cx, |shell, cx| {
+        assert!(!shell.zot_ui.panel_hidden);
+        assert_eq!(
+            shell.zot_tabs().active(),
+            &ZotPage::PullRequest(second.into())
+        );
+
+        // Closing goes back to the page shown before; the last one to
+        // Overview.
+        shell.close_zot_page(&ZotPage::PullRequest(second.into()), cx);
+        assert_eq!(
+            shell.zot_tabs().active(),
+            &ZotPage::PullRequest(first.into())
+        );
+        shell.close_zot_page(&ZotPage::PullRequest(first.into()), cx);
+        assert!(shell.zot_tabs().open_tabs().is_empty());
+        assert_eq!(
+            shell.zot_tabs().active(),
+            &ZotPage::Section(zot_panel::ZotTab::Overview)
+        );
+        assert_zapper_panel_hosts(shell, cx);
+    });
+}
+
+#[gpui::test]
+fn zapper_panel_tabs_sit_right_after_the_section_icons(cx: &mut TestAppContext) {
+    let (shell, cx) = zapper_chat(cx);
+    let url = "https://github.com/a/b/pull/7";
+    open_pr(&shell, cx, url);
+    cx.update(|window, cx| window.draw(cx).clear());
+    // With the pull request active every section is an icon; the last one
+    // shown (Drive hides until written) ends just before the tab.
+    let last_section = [
+        "zot-tab-Drive",
+        "zot-tab-Threads",
+        "zot-tab-Issues",
+        "zot-tab-Overview",
+    ]
+    .into_iter()
+    .find_map(|selector| cx.debug_bounds(selector))
+    .expect("a section button is drawn");
+    let tab = cx
+        .debug_bounds("zot-page-pr-https://github.com/a/b/pull/7")
+        .expect("the pull request tab is drawn");
+    let gap = tab.left() - last_section.right();
+    // The separator and the gaps around it, no reserved room.
+    assert!(gap > px(0.0) && gap < px(16.0), "gap {gap:?}");
+}
+
+#[gpui::test]
+fn the_review_diff_in_a_zapper_chat_opens_focuses_and_closes_as_a_zapper_panel_tab(
+    cx: &mut TestAppContext,
+) {
+    let (shell, cx) = zapper_chat(cx);
+    open_review(&shell, cx);
+    cx.update(|window, cx| window.draw(cx).clear());
+    let review = shell.read_with(cx, |shell, cx| {
+        assert_zapper_panel_hosts(shell, cx);
+        let review = shell.review_surface(cx).expect("review is open");
+        assert_eq!(shell.zot_tabs().open_tabs(), [ZotPage::Diff(review)]);
+        assert_eq!(shell.zot_tabs().active(), &ZotPage::Diff(review));
+        review
+    });
+    // Reopening focuses the same diff, from another page too.
+    shell.update(cx, |shell, cx| {
+        shell.show_zot_page(ZotPage::Section(zot_panel::ZotTab::Issues), cx)
+    });
+    open_review(&shell, cx);
+    shell.update(cx, |shell, cx| {
+        assert_eq!(shell.zot_tabs().open_tabs(), [ZotPage::Diff(review)]);
+        assert_eq!(shell.zot_tabs().active(), &ZotPage::Diff(review));
+
+        // Closing drops the diff and its watch and returns to Issues.
+        shell.close_zot_page(&ZotPage::Diff(review), cx);
+        assert!(!shell.diffs.contains_key(&review));
+        assert_eq!(
+            shell.zot_tabs().active(),
+            &ZotPage::Section(zot_panel::ZotTab::Issues)
+        );
+        assert_zapper_panel_hosts(shell, cx);
+    });
+}
+
+#[gpui::test]
+fn a_subagent_chip_in_a_zapper_chat_opens_as_a_zapper_panel_tab(cx: &mut TestAppContext) {
+    let (shell, cx) = zapper_chat(cx);
+    shell.update(cx, |shell, cx| {
+        shell.add_subagent_surface("other".into(), "zsub".into(), "Research".into(), false, cx);
+        assert_zapper_panel_hosts(shell, cx);
+        assert_eq!(shell.zot_tabs().open_tabs(), [ZotPage::Subagent(3)]);
+        assert_eq!(shell.zot_tabs().active(), &ZotPage::Subagent(3));
+        assert_eq!(shell.subagent_tabs[&3].doc_id, "zsub");
+
+        // Reopening focuses it rather than adding another.
+        shell.show_zot_page(ZotPage::Section(zot_panel::ZotTab::Threads), cx);
+        shell.add_subagent_surface("other".into(), "zsub".into(), "Research".into(), false, cx);
+        assert_eq!(shell.zot_tabs().open_tabs().len(), 1);
+        assert_eq!(shell.subagent_tabs.len(), 3);
+        assert_eq!(shell.zot_tabs().active(), &ZotPage::Subagent(3));
+    });
+    shell.update(cx, |shell, cx| {
+        // Closing drops the transcript and returns to Threads.
+        shell.close_zot_page(&ZotPage::Subagent(3), cx);
+        assert!(!shell.subagent_tabs.contains_key(&3));
+        assert_eq!(
+            shell.zot_tabs().active(),
+            &ZotPage::Section(zot_panel::ZotTab::Threads)
+        );
+        assert_zapper_panel_hosts(shell, cx);
+    });
+}
+
+#[gpui::test]
+fn a_pull_request_and_a_diff_in_a_plain_chat_still_open_in_the_right_pane(cx: &mut TestAppContext) {
+    let (shell, cx) = setup(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_surfaces_open(false, cx);
+        assert!(shell.selected_zot(cx).is_none());
+    });
+    open_pr(&shell, cx, "https://github.com/a/b/pull/3");
+    open_review(&shell, cx);
+    shell.read_with(cx, |shell, cx| {
+        assert!(shell.right_pane_shown(cx));
+        assert!(!shell.zot_panel_on_right(cx));
+        let review = shell.review_surface(cx).expect("review is open");
+        assert_eq!(shell.resolved_right_active(cx), RightSurface::Diff(review));
+        // The setup's two subagents, the pull request and the review.
+        assert_eq!(shell.right_tabs["parent"].len(), 4);
     });
 }

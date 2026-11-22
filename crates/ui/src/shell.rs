@@ -29,6 +29,7 @@ use gpui_tokio::Tokio;
 use zuse_engine::InstanceLock;
 #[cfg(test)]
 use zuse_protocol::HarnessId;
+use zuse_protocol::presentation::zot_panel;
 use zuse_protocol::{AuthState, WorkspaceScope};
 use zuse_rpc::methods;
 
@@ -4299,6 +4300,76 @@ impl Shell {
         }
     }
 
+    /// Whether the focused chat is a Zapper coordinator, whose right side is
+    /// the Zapper panel.
+    fn zapper_hosts_surfaces(&self, cx: &App) -> bool {
+        matches!(self.route, Route::Chat) && self.selected_zot(cx).is_some()
+    }
+
+    /// The Zapper panel page that hosts `surface` in a coordinator chat:
+    /// its subagents and diffs open as tabs in the panel's own strip, beside
+    /// Overview and the issues, instead of in the surface host.
+    fn zapper_page_for(&self, surface: RightSurface, cx: &App) -> Option<zot_panel::ZotPage> {
+        if !self.zapper_hosts_surfaces(cx) {
+            return None;
+        }
+        match surface {
+            RightSurface::Subagent(id) => Some(zot_panel::ZotPage::Subagent(id)),
+            RightSurface::Diff(id) => Some(zot_panel::ZotPage::Diff(id)),
+            _ => None,
+        }
+    }
+
+    /// Add a new surface to this chat's strip and show it. Every opener (a
+    /// subagent chip, a workflow agent, a diff) goes through here.
+    fn add_right_tab(&mut self, surface: RightSurface, cx: &mut Context<Self>) {
+        if self.zapper_page_for(surface, cx).is_none() {
+            let key = self.panel_key(cx);
+            self.right_tabs.entry(key).or_default().push(surface);
+        }
+        self.show_right_surface(surface, cx);
+    }
+
+    /// Show an open surface: focus its tab in the surface host, opening the
+    /// host, or in a Zapper coordinator chat its tab in the Zapper panel.
+    fn show_right_surface(&mut self, surface: RightSurface, cx: &mut Context<Self>) {
+        if let Some(page) = self.zapper_page_for(surface, cx) {
+            if let RightSurface::Subagent(id) = surface
+                && let Some(tab) = self.subagent_tabs.get(&id)
+            {
+                let doc_id = tab.doc_id.clone();
+                self.state
+                    .update(cx, |state, cx| state.focus_subagent_sync(&doc_id, cx));
+            }
+            self.show_in_zot_panel(page, cx);
+            return;
+        }
+        self.set_surfaces_open(true, cx);
+        self.set_right_active(surface, cx);
+    }
+
+    /// Drop what a closed Zapper panel tab held: a subagent's transcript
+    /// (and its doc watch) unless a surface strip still lists it, a diff and
+    /// its watch.
+    fn release_zot_page(&mut self, page: &zot_panel::ZotPage, cx: &mut Context<Self>) {
+        match *page {
+            zot_panel::ZotPage::Subagent(id) => {
+                let surface = RightSurface::Subagent(id);
+                if !self.right_tabs.values().any(|tabs| tabs.contains(&surface))
+                    && let Some(tab) = self.subagent_tabs.remove(&id)
+                {
+                    self.state
+                        .update(cx, |s, _| s.unwatch_subagent_doc(&tab.doc_id));
+                }
+            }
+            zot_panel::ZotPage::Diff(id) => {
+                self.diffs.remove(&id);
+                self.diff_subs.remove(&id);
+            }
+            _ => {}
+        }
+    }
+
     fn set_right_active(&mut self, surface: RightSurface, cx: &mut Context<Self>) {
         if let RightSurface::Subagent(id) = surface
             && let Some(tab) = self.subagent_tabs.get(&id)
@@ -4989,12 +5060,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let id = self.subscribe_diff(changes, window, cx);
-        let key = self.panel_key(cx);
-        self.right_tabs
-            .entry(key)
-            .or_default()
-            .push(RightSurface::Diff(id));
-        self.set_right_active(RightSurface::Diff(id), cx);
+        self.add_right_tab(RightSurface::Diff(id), cx);
     }
 
     /// Keep `changes` under a fresh diff handle (a key of [`Self::diffs`]),
@@ -5161,7 +5227,6 @@ impl Shell {
         title: String,
         cx: &mut Context<Self>,
     ) {
-        self.set_surfaces_open(true, cx);
         let doc_id = format!("workflow-agent:{row_id}:{index}");
         if self.focus_open_subagent_tab(&doc_id, cx) {
             return;
@@ -5221,12 +5286,7 @@ impl Shell {
                 _feed: Some(feed),
             },
         );
-        let key = self.panel_key(cx);
-        self.right_tabs
-            .entry(key)
-            .or_default()
-            .push(RightSurface::Subagent(id));
-        self.set_right_active(RightSurface::Subagent(id), cx);
+        self.add_right_tab(RightSurface::Subagent(id), cx);
     }
 
     /// Focus the tab already showing `doc_id`, if any. The tab must sit in
@@ -5242,6 +5302,10 @@ impl Shell {
             return false;
         };
         let surface = RightSurface::Subagent(id);
+        if self.zapper_page_for(surface, cx).is_some() {
+            self.show_right_surface(surface, cx);
+            return true;
+        }
         let key = self.panel_key(cx);
         if !self
             .right_tabs
@@ -5255,7 +5319,7 @@ impl Shell {
             }
             self.right_tabs.entry(key).or_default().push(surface);
         }
-        self.set_right_active(surface, cx);
+        self.show_right_surface(surface, cx);
         true
     }
 
@@ -5271,9 +5335,6 @@ impl Shell {
         frozen: bool,
         cx: &mut Context<Self>,
     ) {
-        // The chip lives in the conversation column — the pane it opens into
-        // may still be closed.
-        self.set_surfaces_open(true, cx);
         if self.focus_open_subagent_tab(&doc_id, cx) {
             return;
         }
@@ -5330,12 +5391,7 @@ impl Shell {
                 _feed: None,
             },
         );
-        let key = self.panel_key(cx);
-        self.right_tabs
-            .entry(key)
-            .or_default()
-            .push(RightSurface::Subagent(id));
-        self.set_right_active(RightSurface::Subagent(id), cx);
+        self.add_right_tab(RightSurface::Subagent(id), cx);
     }
 
     /// Fetch a finished subagent's frozen transcript blob
@@ -14056,6 +14112,67 @@ impl Shell {
     /// default, drag-resizable. Content is the ACTIVE surface — the Diff
     /// page (its options row + the lazy [`Changes`] viewer), workspace Files,
     /// an embedded terminal, or the surface picker when no tabs exist.
+    /// A diff's or a subagent's content, for the surface host or the Zapper
+    /// panel tab that shows it. `None` once its entity is gone.
+    fn render_surface_body(
+        &mut self,
+        surface: RightSurface,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let theme = Theme::of(cx).clone();
+        Some(match surface {
+            RightSurface::Diff(id) => {
+                let changes = self.diffs.get(&id).cloned()?;
+                // Idempotent — also covers a persisted-open pane on boot.
+                changes.update(cx, |changes, cx| changes.ensure_content(cx));
+                // The diff options (scope dropdown, ref selector,
+                // fold-all) moved DOWN from the titlebar band — the
+                // surface tabs own that row now; the expand/close
+                // buttons stayed up there (user request).
+                let controls = changes.update(cx, |changes, cx| changes.render_header_controls(cx));
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .child(crate::surface_chrome::toolbar(&theme).child(controls))
+                    .child(div().flex_1().min_h_0().child(changes))
+                    .into_any_element()
+            }
+            RightSurface::Subagent(id) => {
+                let transcript = self.subagent_tabs.get(&id)?.transcript.clone();
+                // The pane hosts its own jump pill: the conversation
+                // overlay's is bound to the PRIMARY transcript, and this
+                // one anchors to the pane (no composer stack to clear).
+                let pill = transcript.read(cx).jump_button_shown().then(|| {
+                    div()
+                        .absolute()
+                        .bottom(px(16.0))
+                        .left_0()
+                        .right_0()
+                        .flex()
+                        .justify_center()
+                        .child(self.jump_pill(
+                            "subagent-jump-to-bottom",
+                            "subagent-jump-pill",
+                            transcript.clone(),
+                            cx,
+                        ))
+                });
+                // Read-only surface: the transcript fills the pane — no
+                // composer, no status strip.
+                div()
+                    .size_full()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .child(div().flex_1().min_h_0().child(transcript))
+                    .children(pill)
+                    .into_any_element()
+            }
+            _ => return None,
+        })
+    }
+
     fn render_right_pane(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let exiting = self.fit_exit_width(1).is_some();
         let visible = self.horizontal_fit().right || exiting;
@@ -14102,24 +14219,9 @@ impl Shell {
                         self.render_surface_picker(cx)
                     }
                 }
-                RightSurface::Diff(id) if self.diffs.contains_key(&id) => {
-                    let changes = self.diffs.get(&id).cloned().expect("checked");
-                    // Idempotent — also covers a persisted-open pane on boot.
-                    changes.update(cx, |changes, cx| changes.ensure_content(cx));
-                    // The diff options (scope dropdown, ref selector,
-                    // fold-all) moved DOWN from the titlebar band — the
-                    // surface tabs own that row now; the expand/close
-                    // buttons stayed up there (user request).
-                    let controls =
-                        changes.update(cx, |changes, cx| changes.render_header_controls(cx));
-                    div()
-                        .size_full()
-                        .flex()
-                        .flex_col()
-                        .child(crate::surface_chrome::toolbar(&theme).child(controls))
-                        .child(div().flex_1().min_h_0().child(changes))
-                        .into_any_element()
-                }
+                surface @ (RightSurface::Diff(_) | RightSurface::Subagent(_)) => self
+                    .render_surface_body(surface, cx)
+                    .unwrap_or_else(|| self.render_surface_picker(cx)),
                 RightSurface::Simulator(id) => self
                     .simulators
                     .get(&id)
@@ -14149,42 +14251,6 @@ impl Shell {
                 RightSurface::PullRequest(id) => self
                     .render_chat_pull_request(id, cx)
                     .unwrap_or_else(|| self.render_surface_picker(cx)),
-                RightSurface::Subagent(id) if self.subagent_tabs.contains_key(&id) => {
-                    let transcript = self
-                        .subagent_tabs
-                        .get(&id)
-                        .expect("checked")
-                        .transcript
-                        .clone();
-                    // The pane hosts its own jump pill: the conversation
-                    // overlay's is bound to the PRIMARY transcript, and this
-                    // one anchors to the pane (no composer stack to clear).
-                    let pill = transcript.read(cx).jump_button_shown().then(|| {
-                        div()
-                            .absolute()
-                            .bottom(px(16.0))
-                            .left_0()
-                            .right_0()
-                            .flex()
-                            .justify_center()
-                            .child(self.jump_pill(
-                                "subagent-jump-to-bottom",
-                                "subagent-jump-pill",
-                                transcript.clone(),
-                                cx,
-                            ))
-                    });
-                    // Read-only surface: the transcript fills the pane — no
-                    // composer, no status strip.
-                    div()
-                        .size_full()
-                        .relative()
-                        .flex()
-                        .flex_col()
-                        .child(div().flex_1().min_h_0().child(transcript))
-                        .children(pill)
-                        .into_any_element()
-                }
                 _ => self.render_surface_picker(cx),
             }
         } else {

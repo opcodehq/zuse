@@ -209,15 +209,6 @@ fn section_width(visible: &[ZotTab]) -> f32 {
     10.0 + 13.0 + 6.0 + label + 10.0
 }
 
-/// The section group's fixed width: room for one expanded button and the
-/// rest as icons. With an issue or file tab active every button is an icon
-/// and the spare room stays at the group's end, so the tabs after it never
-/// move. Every part is sized in the same rem units, so this sum matches.
-fn section_group_width(visible: &[ZotTab]) -> f32 {
-    let icons = visible.len().saturating_sub(1) as f32;
-    section_width(visible) + icons * (SECTION_BUTTON + SECTION_GAP)
-}
-
 /// The newest version of `path`; history listings carry several.
 fn latest_file<'a>(files: &'a [ZotFile], path: &str) -> Option<&'a ZotFile> {
     files
@@ -1010,7 +1001,7 @@ impl Shell {
 
     /// Show `page`, opening it as a tab when it is an issue, document, pull
     /// request or the history. Leaves the Zapper's settings if they are open.
-    fn show_zot_page(&mut self, page: ZotPage, cx: &mut Context<Self>) {
+    pub(super) fn show_zot_page(&mut self, page: ZotPage, cx: &mut Context<Self>) {
         if self.zot_editor_open(cx) {
             self.zot_ui.page = None;
         }
@@ -1028,10 +1019,59 @@ impl Shell {
         cx.notify();
     }
 
+    /// Start a different Zapper's panel on a bare Overview, releasing what
+    /// the previous one's tabs held.
+    fn sync_zot_tabs(&mut self, zot_id: &str, cx: &mut Context<Self>) {
+        if self.zot_ui.tabs_zot.as_deref() == Some(zot_id) {
+            return;
+        }
+        let history = self.zot_history_view();
+        for page in self.zot_ui.tabs.open_tabs().to_vec() {
+            self.release_zot_page(&page, cx);
+        }
+        self.zot_ui.tabs.reset();
+        self.zot_page_changed(history);
+        self.zot_ui.tabs_zot = Some(zot_id.to_owned());
+    }
+
+    /// A coordinator chat's opener (a pull request link, a subagent chip, a
+    /// diff): show `page` as a tab in the Zapper panel, bringing the panel
+    /// back if it was hidden.
+    pub(super) fn show_in_zot_panel(&mut self, page: ZotPage, cx: &mut Context<Self>) {
+        let Some(zot) = self.selected_zot(cx) else {
+            return;
+        };
+        self.sync_zot_tabs(&zot.id, cx);
+        self.zot_ui.panel_hidden = false;
+        self.show_zot_page(page, cx);
+    }
+
+    /// The checkout review open as a Zapper panel tab, if any.
+    pub(super) fn zot_review_page(&self, cx: &App) -> Option<u64> {
+        self.zot_ui
+            .tabs
+            .open_tabs()
+            .iter()
+            .find_map(|page| match page {
+                ZotPage::Diff(id) => self
+                    .diffs
+                    .get(id)
+                    .filter(|changes| changes.read(cx).is_review())
+                    .map(|_| *id),
+                _ => None,
+            })
+    }
+
+    #[cfg(test)]
+    pub(super) fn zot_tabs(&self) -> &ZotPanelTabs {
+        &self.zot_ui.tabs
+    }
+
     /// Close a tab and return to the page shown before it.
-    fn close_zot_page(&mut self, page: &ZotPage, cx: &mut Context<Self>) {
+    pub(super) fn close_zot_page(&mut self, page: &ZotPage, cx: &mut Context<Self>) {
         let history = self.zot_history_view();
         if self.zot_ui.tabs.close(page) {
+            self.release_zot_page(page, cx);
             self.zot_page_changed(history);
             self.reveal_active_zot_tab();
             cx.notify();
@@ -1081,8 +1121,10 @@ impl Shell {
             .flex()
             .flex_none()
             .items_center()
-            .gap(crate::typography::ui_rems(SECTION_GAP))
-            .w(crate::typography::ui_rems(section_group_width(visible)));
+            // Sized to its buttons: with an issue or pull request tab
+            // active every section is an icon, and the tabs follow the
+            // separator right after them instead of after reserved room.
+            .gap(crate::typography::ui_rems(SECTION_GAP));
         for &tab in visible {
             let label = tab.label();
             let expanded = Some(tab) == expanded_section;
@@ -1302,6 +1344,21 @@ impl Shell {
                 None,
                 glyph(icons::HISTORY),
             ),
+            ZotPage::Subagent(id) => {
+                let tab = self.subagent_tabs.get(id);
+                (
+                    format!("subagent-{id}"),
+                    tab.map_or_else(|| "Subagent".to_owned(), |t| t.title.to_string()),
+                    tab.map(|t| t.title.to_string()),
+                    glyph(icons::BOT),
+                )
+            }
+            ZotPage::Diff(id) => (
+                format!("diff-{id}"),
+                "Diff".into(),
+                None,
+                glyph(icons::GIT_COMPARE),
+            ),
             ZotPage::Section(_) => return Empty.into_any_element(),
         };
         let group = SharedString::from(format!("zot-page-{key}"));
@@ -1405,12 +1462,7 @@ impl Shell {
             return Empty.into_any_element();
         };
         let theme = Theme::of(cx).clone();
-        if self.zot_ui.tabs_zot.as_deref() != Some(zot.id.as_str()) {
-            let history = self.zot_history_view();
-            self.zot_ui.tabs.reset();
-            self.zot_page_changed(history);
-            self.zot_ui.tabs_zot = Some(zot.id.clone());
-        }
+        self.sync_zot_tabs(&zot.id, cx);
         let key = (zot.id.clone(), zot.revision, zot.activity_revision);
         if self.zot_ui.loaded.as_ref() != Some(&key) && !self.zot_ui.loading {
             if let Some(engine) = self.state.read(cx).engine().cloned() {
@@ -1472,6 +1524,19 @@ impl Shell {
         if editing {
             let editor = self.render_zot_editor(&zot, window, cx);
             return self.zot_inspector_frame(&theme, tab_bar, editor);
+        }
+        // A subagent or a diff opened from the coordinator chat fills the
+        // panel below its strip, as it would the surface host.
+        let surface = match *self.zot_ui.tabs.active() {
+            ZotPage::Subagent(id) => Some(RightSurface::Subagent(id)),
+            ZotPage::Diff(id) => Some(RightSurface::Diff(id)),
+            _ => None,
+        };
+        if let Some(surface) = surface {
+            let content = self
+                .render_surface_body(surface, cx)
+                .unwrap_or_else(|| Empty.into_any_element());
+            return self.zot_inspector_frame(&theme, tab_bar, content);
         }
         if let ZotPage::PullRequest(url) = self.zot_ui.tabs.active().clone() {
             let page = self
@@ -1586,9 +1651,11 @@ impl Shell {
             ZotPage::Section(ZotTab::Threads) => self.zot_threads(&zot, &theme, cx),
             ZotPage::Section(ZotTab::Drive) => self.zot_drive(files, &theme, cx),
             ZotPage::File(path) => self.zot_document(&zot, &path, &files, &theme, window, cx),
-            ZotPage::Section(ZotTab::History) | ZotPage::History | ZotPage::PullRequest(_) => {
-                self.zot_history(&zot, files, &theme, cx)
-            }
+            ZotPage::Section(ZotTab::History)
+            | ZotPage::History
+            | ZotPage::PullRequest(_)
+            | ZotPage::Subagent(_)
+            | ZotPage::Diff(_) => self.zot_history(&zot, files, &theme, cx),
         };
         let body = div()
             .id("zot-inspector-body")
@@ -2748,11 +2815,6 @@ mod tests {
         for tab in ZOT_SECTIONS {
             assert!(width >= 39.0 + tab.label_width());
         }
-        // The group holds one expanded button and the rest as icons, so it
-        // keeps its width whether a section or an issue tab is active.
-        let group = section_group_width(&ZOT_SECTIONS);
-        assert_eq!(group, width + 3.0 * (SECTION_BUTTON + SECTION_GAP));
-        assert!(group > 4.0 * SECTION_BUTTON + 3.0 * SECTION_GAP);
     }
 
     #[test]

@@ -118,6 +118,9 @@ impl Shell {
 
     /// The current chat's review surface, if it is open in the right pane.
     pub(super) fn review_surface(&self, cx: &App) -> Option<u64> {
+        if self.zapper_hosts_surfaces(cx) {
+            return self.zot_review_page(cx);
+        }
         self.right_tabs
             .get(&self.panel_key(cx))?
             .iter()
@@ -139,7 +142,7 @@ impl Shell {
         }
         self.activate_main_tab(None, cx);
         if let Some(id) = self.review_surface(cx) {
-            self.set_right_active(RightSurface::Diff(id), cx);
+            self.show_right_surface(RightSurface::Diff(id), cx);
         } else {
             let changes = cx.new(|cx| {
                 Changes::for_sidebar_review(
@@ -150,7 +153,6 @@ impl Shell {
             });
             self.register_diff_surface(changes, window, cx);
         }
-        self.set_surfaces_open(true, cx);
     }
 
     /// A History row click: the commit's own diff opens as a main-area tab.
