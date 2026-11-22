@@ -233,6 +233,9 @@ impl CloudConversation {
             cx.observe(&composer, |_: &mut Self, _, cx| cx.notify()),
             cx.observe(&state, |this: &mut Self, state, cx| {
                 this.history.observe_live(state.read(cx));
+                // New transcript or admissions reconcile the first message's
+                // stand-in and the working lines right away.
+                this.sync_progress(cx);
                 let transcript = state.read(cx).transcript.clone();
                 this.composer.update(cx, |composer, cx| {
                     composer.apply_cloud_response_activity(&transcript, cx)
@@ -292,6 +295,18 @@ impl CloudConversation {
         this
     }
     #[cfg(test)]
+    pub(super) fn set_computer_metadata_for_test(&mut self, metadata: Value) {
+        self.computer.metadata = metadata;
+    }
+    #[cfg(test)]
+    pub(super) fn set_admissions_for_test(&mut self, rows: Value) {
+        self.admissions = rows;
+    }
+    #[cfg(test)]
+    pub(super) fn transcript_for_test(&self) -> &Entity<Transcript> {
+        &self.transcript
+    }
+    #[cfg(test)]
     fn activity(&self, cx: &App) -> Option<activity::Activity> {
         self.computer_activity(cx)
             .or_else(|| self.agent_activity(cx))
@@ -338,6 +353,13 @@ impl CloudConversation {
                 }));
         activity::preparation(&self.computer.metadata, initial)
     }
+    /// The agent is mid-turn: a message it is working on whose turn the
+    /// transcript doesn't show finished. Tabs and sidebar rows spin on it,
+    /// like a local chat's.
+    pub(super) fn agent_working(&self, cx: &App) -> bool {
+        self.agent_activity(cx)
+            .is_some_and(|activity| activity.busy)
+    }
     /// The message's progress once it is with the agent.
     fn agent_activity(&self, cx: &App) -> Option<activity::Activity> {
         if self.access_revoked {
@@ -376,6 +398,25 @@ impl CloudConversation {
                 .pending_echoes()
                 .iter()
                 .any(|entry| entry.id == echo);
+            // The first message's stand-in is in the server's transcript now
+            // (under its own id): the send anchor moves to it, then the
+            // stand-in goes, so the message keeps its place with no jump.
+            if pending.is_none() && shown {
+                let real = self
+                    .state
+                    .read(cx)
+                    .transcript
+                    .iter()
+                    .find(|entry| entry.role == zuse_model::MessageRole::User)
+                    .map(|entry| entry.id.clone());
+                if let Some(real) = real {
+                    self.transcript.update(cx, |transcript, cx| {
+                        transcript.retarget_own_send(&echo, &real, cx)
+                    });
+                }
+            }
+            let anchor = pending.is_some() && !shown;
+            let pending_changed = pending.is_some() != shown;
             match (pending, shown) {
                 (Some(text), false) => self.state.update(cx, |state, cx| {
                     let device = state.local_device_id.clone().unwrap_or_default();
@@ -402,6 +443,19 @@ impl CloudConversation {
                     cx.notify();
                 }),
                 _ => {}
+            }
+            if pending_changed {
+                // This can run while the conversation renders, where the
+                // transcript would not hear the state change: tell it, so it
+                // rebuilds its rows (the stand-in never lingers).
+                self.transcript.update(cx, |_, cx| cx.notify());
+            }
+            if anchor {
+                // Like any send: the first message moves to the top and the
+                // reply streams in below it.
+                self.transcript.update(cx, |transcript, cx| {
+                    transcript.on_own_first_send(session.clone(), echo.clone(), cx)
+                });
             }
         }
         let computer = self.computer_activity(cx);
@@ -466,7 +520,9 @@ impl CloudConversation {
     /// unavailable. Follows the workspace state the history and environment
     /// streams already deliver.
     pub(super) fn computer_online(&self) -> bool {
-        !self.access_revoked && matches!(self.computer_summary().tone, Tone::Running)
+        !self.access_revoked
+            && matches!(self.computer_summary().tone, Tone::Running)
+            && self.computer.metadata["runtimeState"].as_str() != Some("offline")
     }
 
     /// The same cloud icon placement as an ordinary conversation. Computer
@@ -1024,17 +1080,17 @@ impl Shell {
         // A failed start says why on the status line; nothing spins here.
         let working = self.composer.read(cx).cloud_launch_working();
         let width = crate::settings::transcript_width(cx);
-        let clearance = (self.bottom_stack.get() - self.terminal_geometry.get().height).max(0.0)
-            + Theme::TRANSCRIPT_FADE_BAND
-            + 8.0;
+        // The first message sits where the transcript puts a new chat's
+        // first message when its send anchors it (the top, the reply below),
+        // so the conversation that takes over shows it in the same place.
         div()
             .id("cloud-launch-outlet")
             .debug_selector(|| "cloud-launch-outlet".into())
             .size_full()
             .flex()
             .flex_col()
-            .justify_end()
-            .pb(px(clearance))
+            .justify_start()
+            .pt(px(crate::transcript::FIRST_ROW_TOP_GAP_PX))
             .child(
                 div().w_full().flex().justify_center().px(px(48.0)).child(
                     div()
@@ -1070,12 +1126,10 @@ impl Shell {
                                     .items_center()
                                     .gap(px(Theme::SPACE_SM))
                                     .pt(px(Theme::SPACE_LG))
-                                    .child(crate::loaders::mini_glyph_spinner(
+                                    .child(crate::loaders::retro_loader(
                                         "cloud-launch-working",
-                                        2.5,
+                                        11.0,
                                         theme.loader_glyph(),
-                                        cx.entity_id(),
-                                        cx,
                                     ))
                                     .child(
                                         div()
@@ -2012,6 +2066,11 @@ mod tests {
                     .any(|e| e.id == echo),
                 "the first message shows at once"
             );
+            assert_eq!(
+                view.transcript.read(cx).own_send_target().as_deref(),
+                Some(echo.as_str()),
+                "the first message anchors like any send"
+            );
             assert!(view.computer_activity(cx).is_some_and(|stage| stage.busy));
             // Ready; history and the live transcript arrive together.
             view.computer.metadata = json!({"workspaceId":"task","state":"ready"});
@@ -2046,6 +2105,11 @@ mod tests {
                 state.pending_echoes().is_empty(),
                 "the stand-in is replaced"
             );
+            assert_eq!(
+                view.transcript.read(cx).own_send_target().as_deref(),
+                Some("runtime-user"),
+                "the anchor moves to the server's copy, so nothing jumps"
+            );
             let users = state
                 .transcript
                 .iter()
@@ -2058,6 +2122,92 @@ mod tests {
                 "no stale waiting line"
             );
         });
+    }
+    /// The real server's order: the stand-in, then the admitted row (its
+    /// own id) while the computer starts, then the computer's own record
+    /// with the reply. The first message stays anchored through every
+    /// replacement instead of dropping to the bottom.
+    #[gpui::test]
+    fn first_message_stays_anchored_through_each_server_copy(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(initialize);
+        let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
+            std::sync::Arc::new(PendingController),
+        ));
+        let view = cx.new(|cx| {
+            CloudConversation::new(
+                CloudTarget {
+                    controller,
+                    subject: "owner".into(),
+                    organization: None,
+                    workspace: "task".into(),
+                    initial_session: "session".into(),
+                },
+                json!({"workspaceId":"task","state":"provisioning","statusCode":"allocating"}),
+                json!({"firstMessage":"yoo"}),
+                boot(dir.path()),
+                cx,
+            )
+        });
+        let entry = |id: &str, role, text: &str| zuse_model::SessionMessageEntry {
+            id: id.into(),
+            role,
+            parts: vec![zuse_model::MessagePart::Text {
+                id: format!("text:{id}"),
+                text: text.into(),
+            }],
+            created_at: 1,
+            device_id: String::new(),
+            status: None,
+            continuation_of: None,
+            duration_ms: None,
+        };
+        let target = |view: &Entity<CloudConversation>, cx: &mut TestAppContext| {
+            view.read_with(cx, |view, cx| view.transcript.read(cx).own_send_target())
+        };
+        view.update(cx, |view, cx| view.sync_progress(cx));
+        cx.run_until_parked();
+        assert_eq!(target(&view, cx).as_deref(), Some("launch-echo:task"));
+        // Admitted: the saved history lists the message under its admitted id.
+        view.update(cx, |view, cx| {
+            view.admissions = json!([{"commandId":"launch:task","messageId":"admitted-first",
+                "text":"yoo","executionState":"admitted"}]);
+            view.state.update(cx, |state, cx| {
+                state.apply_transcript(vec![entry(
+                    "admitted-first",
+                    zuse_model::MessageRole::User,
+                    "yoo",
+                )]);
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+        view.update(cx, |view, cx| view.sync_progress(cx));
+        cx.run_until_parked();
+        assert_eq!(target(&view, cx).as_deref(), Some("admitted-first"));
+        // Ready: the computer's own record replaces it, with the reply.
+        view.update(cx, |view, cx| {
+            view.computer.metadata = json!({"workspaceId":"task","state":"ready"});
+            view.state.update(cx, |state, cx| {
+                state.apply_transcript(vec![
+                    entry("runtime-user", zuse_model::MessageRole::User, "yoo"),
+                    entry(
+                        "runtime-reply",
+                        zuse_model::MessageRole::Assistant,
+                        "Yoo! What are we working on?",
+                    ),
+                ]);
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            target(&view, cx).as_deref(),
+            Some("runtime-user"),
+            "the anchor follows the server's copy instead of retiring"
+        );
     }
     struct OlderHistoryController {
         calls: std::sync::Mutex<Vec<Value>>,
@@ -2459,6 +2609,8 @@ mod tests {
         let _entered = runtime.enter();
         let dir = tempfile::tempdir().unwrap();
         cx.update(initialize);
+        // The admission refreshes the sidebar's account list.
+        cx.update(|cx| gpui_tokio::init_from_handle(cx, runtime.handle().clone()));
         let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
             std::sync::Arc::new(PendingController),
         ));

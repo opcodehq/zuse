@@ -2737,6 +2737,12 @@ impl Shell {
                     organization,
                     launch,
                 } => {
+                    // The tab's pending row goes with the launch: the sidebar
+                    // lists the created chat from here on, without a gap.
+                    this.state.update(cx, |state, cx| {
+                        state.note_created_cloud_workspace(workspace, launch, cx);
+                        cx.notify();
+                    });
                     let controller = this
                         .state
                         .read(cx)
@@ -9388,12 +9394,12 @@ impl Shell {
         let cloud_locked = cloud
             && (self.state.read(cx).cloud_organization_id().is_some()
                 || id[CLOUD_ROW_PREFIX.len()..].starts_with(cloud_sidebar::PENDING_LAUNCH_PREFIX));
-        // Cloud rows wear a small cloud beside their age, green while the
-        // computer is up (the catalog's own state; nothing is polled).
+        // Cloud rows wear a small cloud beside their age, green only while
+        // the computer is up. An open conversation follows the computer's
+        // live state; otherwise the account list's row decides.
         let cloud_online = id
             .strip_prefix(CLOUD_ROW_PREFIX)
-            .and_then(|workspace| self.state.read(cx).cloud_sidebar_workspace(workspace))
-            .is_some_and(|row| chat_peek::cloud_machine(row["state"].as_str()).1);
+            .is_some_and(|workspace| self.cloud_row_online(workspace, cx));
         let corner_hovered = !preview
             && !cloud_locked
             && !(cloud && archived)

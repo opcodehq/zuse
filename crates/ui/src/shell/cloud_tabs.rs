@@ -448,6 +448,11 @@ impl Shell {
                     })
                     .or_else(|| draft.and_then(|(_, harness)| harness));
                 let active = index == self.cloud_tabs.active;
+                // Mid-turn, the tab trades its agent icon for the activity
+                // glyph, like a local chat's tab.
+                let working = view
+                    .as_ref()
+                    .is_some_and(|view| view.read(cx).agent_working(cx));
                 crate::surface_chrome::workspace_tab(
                     ("cloud-conversation-tab", index),
                     active,
@@ -467,7 +472,26 @@ impl Shell {
                 .when(!active, |tab| tab.text_color(theme.text_muted))
                 .cursor_pointer()
                 .text_size(crate::typography::text_md())
-                .child(cloud_tab_icon(harness, index, &theme))
+                .child(if working {
+                    div()
+                        .id(("cloud-tab-working", index))
+                        .debug_selector(move || format!("cloud-tab-working-{index}"))
+                        .size(px(14.))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(crate::loaders::mini_glyph_spinner(
+                            format!("cloud-tab-working-{index}"),
+                            2.0,
+                            theme.loader_glyph(),
+                            cx.entity_id(),
+                            cx,
+                        ))
+                        .into_any_element()
+                } else {
+                    cloud_tab_icon(harness, index, &theme).into_any_element()
+                })
                 .child(div().flex_1().min_w_0().truncate().child(title))
                 .child(
                     div()
@@ -508,6 +532,35 @@ impl Shell {
 }
 
 impl Shell {
+    /// Whether an open conversation (in front or in a tab) for `workspace`
+    /// has its agent mid-turn.
+    pub(super) fn cloud_workspace_working(&self, workspace: &str, cx: &App) -> bool {
+        self.cloud_open_activity(workspace, cx)
+            .is_some_and(|(working, _)| working)
+    }
+    /// Whether a cloud chat's computer is up, for its sidebar row's cloud:
+    /// an open conversation's live state, else the listed row's. A message
+    /// waiting for a computer that is still starting is not "up".
+    pub(super) fn cloud_row_online(&self, workspace: &str, cx: &App) -> bool {
+        match self.cloud_open_activity(workspace, cx) {
+            Some((_, online)) => online,
+            None => self
+                .state
+                .read(cx)
+                .cloud_sidebar_workspace(workspace)
+                .is_some_and(super::chat_peek::cloud_row_online),
+        }
+    }
+    /// `(agent working, computer online)` for an open conversation (in
+    /// front or in a tab) of `workspace`; `None` when none is open.
+    pub(super) fn cloud_open_activity(&self, workspace: &str, cx: &App) -> Option<(bool, bool)> {
+        self.cloud_conversation
+            .iter()
+            .chain(self.cloud_tabs.views.iter().flatten())
+            .map(|view| view.read(cx))
+            .find(|view| view.target.workspace == workspace)
+            .map(|view| (view.agent_working(cx), view.computer_online()))
+    }
     /// A draft tab's provisional title (its first message, once sent) and
     /// agent (the one its launch uses, else the one chosen in front), so a
     /// new cloud chat's tab reads like a local chat's from the first frame.
@@ -1211,5 +1264,377 @@ mod tests {
             })
             .unwrap();
         assert_eq!(cx.update(|cx| cx.windows().len()), windows);
+    }
+    struct OutletOnly {
+        shell: Entity<Shell>,
+    }
+    impl Render for OutletOnly {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div().w(px(1200.)).h(px(800.)).child(
+                self.shell
+                    .update(cx, |shell, cx| shell.render_cloud_launch_outlet(cx)),
+            )
+        }
+    }
+    struct ViewOnly {
+        view: gpui::AnyView,
+    }
+    impl Render for ViewOnly {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().w(px(1200.)).h(px(800.)).child(self.view.clone())
+        }
+    }
+    fn sidebar_rows(shell: &Shell, cx: &App) -> Vec<Value> {
+        shell
+            .cloud_sidebar_groups(cx)
+            .into_iter()
+            .flat_map(|group| group.rows)
+            .collect()
+    }
+    fn catalog(state: &mut AppState, workspaces: Value) {
+        assert!(state.apply_cloud_sidebar_catalog(
+            &json!({"accountId":"owner","organizationId":null,"ownerId":"owner","projects":[{"projectId":"p","accountId":"owner","providerId":"boxd","repositoryIdentity":"github.com/owner/p"}]}),
+            &json!({"accountId":"owner","organizationId":null,"workspaces":workspaces}),
+        ));
+    }
+    /// The owner's report: New thread → a cloud project → Send. While the
+    /// chat is being created its row is in the sidebar and its message sits
+    /// at the top, where any send anchors it. The create confirms: the row
+    /// stays (no list has it yet, and the list is read again), and the
+    /// conversation that takes over anchors the message like any send.
+    #[gpui::test]
+    fn new_thread_cloud_send_keeps_its_sidebar_row_and_anchors_its_message(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| gpui_tokio::init_from_handle(cx, runtime.handle().clone()));
+        let window = draft_shell(cx, dir.path());
+        let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
+            std::sync::Arc::new(Pending),
+        ));
+        let older = |id: &str, at: i64| {
+            json!({"workspaceId":id,"initialSessionId":format!("{id}-session"),"projectId":"p",
+                "title":id,"state":"ready","createdAt":at,"updatedAt":at})
+        };
+        let listed = json!([
+            older("w1", 1),
+            older("w2", 2),
+            older("w3", 3),
+            older("w4", 4)
+        ]);
+        let first = "yooo so what's cooking?";
+        window
+            .update(cx, |shell, _, cx| {
+                shell.state.update(cx, |state, _| {
+                    state.set_test_engine(controller.clone());
+                    catalog(state, listed.clone());
+                });
+                shell.open_new_session(None, cx);
+                shell.track_current_cloud_canvas(cx);
+                let request = json!({"idempotencyKey":"k","projectId":"p","providerId":"boxd",
+                    "firstMessage":first,"agent":"codex","model":"m"});
+                shell.composer.update(cx, |composer, _| {
+                    composer.seed_pending_cloud_creation_for_test(request)
+                });
+                let rows = sidebar_rows(shell, cx);
+                assert_eq!(rows.len(), 5, "the new chat is listed while it is created");
+                assert_eq!(rows[0]["title"], first);
+                assert!(rows[0]["pendingLaunch"].is_string());
+            })
+            .unwrap();
+        // The pending launch view: the message at the top, like a sent one.
+        let shell = window.entity(cx).unwrap();
+        let outlet_host = cx.add_window(|_, _| OutletOnly {
+            shell: shell.clone(),
+        });
+        cx.update_window(outlet_host.into(), |_, window, cx| window.draw(cx).clear())
+            .unwrap();
+        {
+            let mut visual = gpui::VisualTestContext::from_window(outlet_host.into(), cx);
+            let prompt = visual
+                .debug_bounds("cloud-launch-prompt")
+                .expect("the pending view shows the first message");
+            let outlet = visual.debug_bounds("cloud-launch-outlet").unwrap();
+            let offset = f32::from(prompt.top() - outlet.top());
+            assert!(
+                (offset - crate::transcript::FIRST_ROW_TOP_GAP_PX).abs() < 1.0,
+                "the first message sits where the transcript anchors it, not above the composer (offset {offset})"
+            );
+        }
+        outlet_host
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+        window
+            .update(cx, |shell, _, cx| {
+                // The create response admits the chat: the production
+                // hand-off from the composer to the shell.
+                shell.composer.update(cx, |composer, cx| {
+                    composer.admit_pending_cloud_creation_for_test(
+                        json!({"workspaceId":"fresh","initialSessionId":"fresh-session",
+                            "state":"provisioning","commandDeliveryMode":"server-admitted-v2",
+                            "commandAdmissionVersion":2}),
+                        cx,
+                    )
+                });
+            })
+            .unwrap();
+        window
+            .update(cx, |shell, _, cx| {
+                assert!(shell.composer.read(cx).cloud_launch_summaries().is_empty());
+                let rows = sidebar_rows(shell, cx);
+                assert_eq!(
+                    rows.len(),
+                    5,
+                    "no gap between the pending and the created row"
+                );
+                assert_eq!(rows[0]["workspaceId"], "fresh");
+                assert_eq!(rows[0]["title"], first);
+                assert!(
+                    shell.state.read(cx).cloud_sidebar_loading(),
+                    "the account list is read again after the create"
+                );
+                assert!(
+                    shell.cloud_conversation.is_some(),
+                    "the conversation takes over in the same tab"
+                );
+            })
+            .unwrap();
+        // The conversation paints, as the shell paints it in this tab.
+        let conversation = window
+            .update(cx, |shell, _, _| shell.cloud_conversation.clone().unwrap())
+            .unwrap();
+        let conversation_host = cx.add_window(|_, _| ViewOnly {
+            view: conversation.into(),
+        });
+        cx.update_window(conversation_host.into(), |_, window, cx| {
+            window.draw(cx).clear()
+        })
+        .unwrap();
+        conversation_host
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+        window
+            .update(cx, |shell, _, cx| {
+                let view = shell.cloud_conversation.clone().unwrap();
+                let transcript = view.read(cx).transcript_for_test().clone();
+                assert_eq!(
+                    transcript.read(cx).own_send_target().as_deref(),
+                    Some("launch-echo:fresh"),
+                    "the first message anchors to the top like any send"
+                );
+                // A list read before the server had it keeps the row.
+                shell
+                    .state
+                    .update(cx, |state, _| catalog(state, listed.clone()));
+                assert!(
+                    shell
+                        .state
+                        .read(cx)
+                        .cloud_sidebar_workspace("fresh")
+                        .is_some(),
+                    "a list without the new chat yet does not drop it"
+                );
+                // The server lists it: its own row replaces the created one.
+                let mut with_new = listed.as_array().unwrap().clone();
+                with_new.push(
+                    json!({"workspaceId":"fresh","initialSessionId":"fresh-session",
+                    "projectId":"p","title":first,"state":"ready","createdAt":10,"updatedAt":10}),
+                );
+                shell
+                    .state
+                    .update(cx, |state, _| catalog(state, Value::Array(with_new)));
+                let rows = sidebar_rows(shell, cx);
+                assert_eq!(rows.len(), 5, "one row for the new chat");
+                let fresh: Vec<_> = rows
+                    .iter()
+                    .filter(|row| row["workspaceId"] == "fresh")
+                    .collect();
+                assert_eq!(fresh.len(), 1);
+                assert_eq!(fresh[0]["state"], "ready", "the server's row");
+            })
+            .unwrap();
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+    }
+
+    /// A cloud chat whose agent is mid-turn spins in its tab and sidebar row
+    /// like a local chat, and stops once the transcript shows the turn done.
+    #[gpui::test]
+    fn a_working_cloud_chat_spins_in_its_tab_and_sidebar_row(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| gpui_tokio::init_from_handle(cx, runtime.handle().clone()));
+        let window = draft_shell(cx, dir.path());
+        let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
+            std::sync::Arc::new(Pending),
+        ));
+        let row = json!({"workspaceId":"w","initialSessionId":"s","projectId":"p","title":"Busy",
+            "state":"ready","createdAt":1,"updatedAt":1});
+        let entry = |id: &str, role, status| zuse_model::SessionMessageEntry {
+            id: id.into(),
+            role,
+            parts: vec![zuse_model::MessagePart::Text {
+                id: format!("text:{id}"),
+                text: "go".into(),
+            }],
+            created_at: 1,
+            device_id: String::new(),
+            status,
+            continuation_of: None,
+            duration_ms: None,
+        };
+        let view = window
+            .update(cx, |shell, _, cx| {
+                shell.state.update(cx, |state, _| {
+                    state.set_test_engine(controller.clone());
+                    catalog(state, json!([row.clone()]));
+                });
+                shell.open_cloud_conversation(
+                    crate::state::CloudTarget {
+                        controller: controller.clone(),
+                        subject: "owner".into(),
+                        organization: None,
+                        workspace: "w".into(),
+                        initial_session: "s".into(),
+                    },
+                    row.clone(),
+                    Value::Null,
+                    cx,
+                );
+                let view = shell.cloud_conversation.clone().unwrap();
+                view.update(cx, |view, cx| {
+                    view.set_admissions_for_test(json!([{"commandId":"c","messageId":"ask",
+                        "text":"go","executionState":"running","createdAt":1}]));
+                    view.state.update(cx, |state, _| {
+                        state.apply_transcript(vec![
+                            entry("ask", zuse_model::MessageRole::User, None),
+                            entry(
+                                "reply",
+                                zuse_model::MessageRole::Assistant,
+                                Some(zuse_model::MessageStatus::Streaming),
+                            ),
+                        ])
+                    });
+                });
+                assert!(
+                    shell.cloud_workspace_working("w", cx),
+                    "the sidebar row spins while the agent works"
+                );
+                view
+            })
+            .unwrap();
+        let shell = window.entity(cx).unwrap();
+        let tabs = cx.add_window(|_, _| TabsOnly {
+            shell: shell.clone(),
+            _dir: tempfile::tempdir().unwrap(),
+        });
+        cx.update_window(tabs.into(), |_, window, cx| window.draw(cx).clear())
+            .unwrap();
+        {
+            let mut visual = gpui::VisualTestContext::from_window(tabs.into(), cx);
+            assert!(
+                visual.debug_bounds("cloud-tab-working-0").is_some(),
+                "the tab spins while the agent works"
+            );
+        }
+        // The turn completes (its command row may still read running).
+        view.update(cx, |view, cx| {
+            view.state.update(cx, |state, _| {
+                state.apply_transcript(vec![
+                    entry("ask", zuse_model::MessageRole::User, None),
+                    entry(
+                        "reply",
+                        zuse_model::MessageRole::Assistant,
+                        Some(zuse_model::MessageStatus::Complete),
+                    ),
+                ])
+            });
+        });
+        shell.read_with(cx, |shell, cx| {
+            assert!(!shell.cloud_workspace_working("w", cx), "done: no spinner");
+        });
+        cx.update_window(tabs.into(), |_, window, cx| window.draw(cx).clear())
+            .unwrap();
+        {
+            let mut visual = gpui::VisualTestContext::from_window(tabs.into(), cx);
+            assert!(visual.debug_bounds("cloud-tab-working-0").is_none());
+        }
+        tabs.update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+    }
+
+    /// A sidebar row's cloud is green only while its computer is up: a
+    /// sleeping one is muted even while the account list still reads it
+    /// running, and an open conversation's live state decides over the list.
+    #[gpui::test]
+    fn a_sleeping_computers_row_is_not_green(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| gpui_tokio::init_from_handle(cx, runtime.handle().clone()));
+        let window = draft_shell(cx, dir.path());
+        let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
+            std::sync::Arc::new(Pending),
+        ));
+        let row = |id: &str, state: &str, runtime: &str| {
+            json!({"workspaceId":id,"initialSessionId":format!("{id}-s"),"projectId":"p",
+                "title":id,"state":state,"runtimeState":runtime,"createdAt":1,"updatedAt":1})
+        };
+        window
+            .update(cx, |shell, _, cx| {
+                shell.state.update(cx, |state, _| {
+                    state.set_test_engine(controller.clone());
+                    catalog(
+                        state,
+                        json!([
+                            row("asleep", "paused", "offline"),
+                            row("up", "ready", "online"),
+                            row("stale", "ready", "online"),
+                        ]),
+                    );
+                });
+                assert!(!shell.cloud_row_online("asleep", cx), "paused: muted");
+                assert!(shell.cloud_row_online("up", cx), "ready and online: green");
+                // Open, the computer reports going to sleep before any list does.
+                shell.open_cloud_conversation(
+                    crate::state::CloudTarget {
+                        controller: controller.clone(),
+                        subject: "owner".into(),
+                        organization: None,
+                        workspace: "stale".into(),
+                        initial_session: "stale-s".into(),
+                    },
+                    row("stale", "ready", "online"),
+                    Value::Null,
+                    cx,
+                );
+                let view = shell.cloud_conversation.clone().unwrap();
+                view.update(cx, |view, _| {
+                    view.set_computer_metadata_for_test(
+                        json!({"workspaceId":"stale","state":"paused","runtimeState":"offline"}),
+                    )
+                });
+                assert!(
+                    !shell.cloud_row_online("stale", cx),
+                    "the live state wins over a stale list"
+                );
+                view.update(cx, |view, _| {
+                    view.set_computer_metadata_for_test(
+                        json!({"workspaceId":"stale","state":"ready","runtimeState":"online"}),
+                    )
+                });
+                assert!(shell.cloud_row_online("stale", cx));
+            })
+            .unwrap();
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
     }
 }

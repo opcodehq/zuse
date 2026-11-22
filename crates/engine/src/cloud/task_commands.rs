@@ -523,15 +523,21 @@ async fn queue(
     scoped(auth, account, organization)?;
     queue_shape(result)
 }
+/// How often an open queue is read again without an account event.
+const QUEUE_REVALIDATE: std::time::Duration = std::time::Duration::from_secs(15);
 fn queue_hint(frame: &Value, workspace: &str) -> bool {
     let data = &frame["data"];
     matches!(
         data["type"].as_str(),
         Some("ready" | "reset" | "revalidate")
     ) || data["events"].as_array().is_some_and(|events| {
+        // A turn starting or ending (a `conversation` or `workspace` hint)
+        // can claim the queue's head without a queue hint of its own.
         events.iter().any(|e| {
-            e["kind"] == "task-command-queue"
-                && (e["workspaceId"] == workspace || e["resourceId"] == workspace)
+            matches!(
+                e["kind"].as_str(),
+                Some("task-command-queue" | "conversation" | "workspace")
+            ) && (e["workspaceId"] == workspace || e["resourceId"] == workspace)
         })
     })
 }
@@ -608,7 +614,15 @@ pub(super) async fn maybe_forward(
             let stream=futures::stream::unfold((api,auth,account,organization,workspace,session,feed,receiver,Some(first.clone()),first),move|(api,auth,account,organization,workspace,session,feed,mut receiver,initial,mut previous)|async move{
                 if let Some(page)=initial{return Some((json!({"id":id,"item":page}),(api,auth,account,organization,workspace,session,feed,receiver,None,previous)));}
                 loop{
-                    let dirty=match receiver.recv().await{
+                    // A missed or late account event must not leave the panel
+                    // showing a stale queue: read it again at an interval too.
+                    let Ok(next)=tokio::time::timeout(QUEUE_REVALIDATE,receiver.recv()).await else{
+                        match queue(&api,&auth,&account,organization.as_deref(),&workspace,&session).await{
+                            Ok(page)=>{if page==previous{continue;}previous=page.clone();return Some((json!({"id":id,"item":page}),(api,auth,account,organization,workspace,session,feed,receiver,None,previous)));}
+                            Err(_)=>continue,
+                        }
+                    };
+                    let dirty=match next{
                         Ok(frame)=>{
                             if frame["accountId"]!=account||frame["organizationId"].as_str()!=organization.as_deref(){continue;}
                             if frame["data"]["cacheRevoked"]==true||frame["data"]["revokedWorkspaceIds"].as_array().is_some_and(|ids|ids.iter().any(|v|v==&workspace)){
@@ -802,3 +816,17 @@ pub(super) fn admission_head(
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod queue_hint_tests {
+    use super::*;
+    #[test]
+    fn a_turn_change_on_this_computer_reads_its_queue_again() {
+        let frame = |kind: &str, workspace: &str| json!({"data":{"events":[{"kind":kind,"workspaceId":workspace,"resourceId":"session"}]}});
+        for kind in ["task-command-queue", "conversation", "workspace"] {
+            assert!(queue_hint(&frame(kind, "w"), "w"), "{kind}");
+            assert!(!queue_hint(&frame(kind, "other"), "w"), "{kind} elsewhere");
+        }
+        assert!(!queue_hint(&frame("billing", "w"), "w"));
+        assert!(queue_hint(&json!({"data":{"type":"revalidate"}}), "w"));
+    }
+}

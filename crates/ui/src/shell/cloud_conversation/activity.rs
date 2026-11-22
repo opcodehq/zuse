@@ -37,9 +37,12 @@ pub(super) fn command(
     // A held queue is not inference. These are execution records, not queue items.
     // A message with an unknown outcome is not progress either: the composer
     // shows it with Retry and Discard instead.
+    // A turn the transcript shows finished is over, whatever an older read
+    // of its command row still says (a missed end event, an app restart).
     let eligible = |row: &&Value| {
         row["messageId"].as_str().is_some_and(|id| {
             !id.is_empty()
+                && !turn_ended(messages, id, row["text"].as_str())
                 && (matches!(
                     row["executionState"].as_str(),
                     Some("running" | "waiting-input")
@@ -81,6 +84,46 @@ pub(super) fn command(
         label: label.into(),
         next: None,
         busy,
+    })
+}
+/// Whether the agent's turn for `message` has ended in the transcript: an
+/// assistant message after it is complete or aborted. A message the computer
+/// recorded under its own id is found by its text, as the latest such user
+/// message.
+pub(super) fn turn_ended(
+    messages: &[zuse_model::SessionMessageEntry],
+    message: &str,
+    text: Option<&str>,
+) -> bool {
+    use zuse_model::{MessagePart, MessageRole, MessageStatus};
+    let text_of = |entry: &zuse_model::SessionMessageEntry| {
+        entry
+            .parts
+            .iter()
+            .filter_map(|part| match part {
+                MessagePart::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<String>()
+    };
+    let start = messages
+        .iter()
+        .position(|entry| entry.id == message)
+        .or_else(|| {
+            let text = text?.trim();
+            messages
+                .iter()
+                .rposition(|entry| entry.role == MessageRole::User && text_of(entry).trim() == text)
+        });
+    let Some(start) = start else {
+        return false;
+    };
+    messages[start + 1..].iter().any(|entry| {
+        entry.role == MessageRole::Assistant
+            && matches!(
+                entry.status,
+                Some(MessageStatus::Complete | MessageStatus::Aborted)
+            )
     })
 }
 /// The newest message failed for a known reason before it ran (the computer
@@ -179,6 +222,54 @@ mod tests {
     }
     fn command(rows: &Value) -> Option<Activity> {
         super::command(rows, &[])
+    }
+    /// A completed turn shows no working line, also when its command row
+    /// still reads running (the end event was missed, or the app restarted
+    /// and refreshed history).
+    #[test]
+    fn a_finished_turn_shows_no_working_line_even_with_a_stale_running_row() {
+        let entry = |id: &str, role, text: &str, status| zuse_model::SessionMessageEntry {
+            id: id.into(),
+            role,
+            parts: vec![zuse_model::MessagePart::Text {
+                id: format!("text:{id}"),
+                text: text.into(),
+            }],
+            created_at: 1,
+            device_id: String::new(),
+            status,
+            continuation_of: None,
+            duration_ms: None,
+        };
+        let rows = json!([{"commandId":"c1","messageId":"ask","text":"do you have access?",
+            "executionState":"running","createdAt":1}]);
+        let mut messages = vec![
+            entry(
+                "ask",
+                zuse_model::MessageRole::User,
+                "do you have access?",
+                None,
+            ),
+            entry(
+                "reply",
+                zuse_model::MessageRole::Assistant,
+                "I'll check",
+                Some(zuse_model::MessageStatus::Streaming),
+            ),
+        ];
+        assert_eq!(
+            super::command(&rows, &messages).unwrap().label,
+            "Agent working…",
+            "a streaming turn is still working"
+        );
+        messages[1].status = Some(zuse_model::MessageStatus::Complete);
+        assert!(
+            super::command(&rows, &messages).is_none(),
+            "completed turn: no working line"
+        );
+        // The same, with the message recorded under the computer's own id.
+        messages[0].id = "runtime-id".into();
+        assert!(super::command(&rows, &messages).is_none());
     }
     #[test]
     fn launch_prompt_shows_until_the_transcript_owns_a_user_message() {

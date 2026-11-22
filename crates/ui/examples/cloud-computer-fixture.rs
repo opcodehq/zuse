@@ -23,6 +23,9 @@ struct Controller {
     /// project starts on Cloud (`native-mixed-first`).
     subscribed: bool,
     admitted: Mutex<Option<Value>>,
+    /// `FIXTURE_ADMIT=provisioning`: the admitted computer has finished
+    /// starting and the agent replied.
+    ready: std::sync::atomic::AtomicBool,
 }
 #[async_trait::async_trait]
 impl RpcService for Controller {
@@ -55,6 +58,12 @@ impl RpcService for Controller {
             ),
             methods::WATCH_SPACES if self.mixed => RpcReply::value(&json!([mixed_space()])),
             methods::WATCH_CHATS if self.mixed => RpcReply::value(&json!([mixed_chat()])),
+            // The new chat's project is listed, so its sidebar row shows.
+            methods::CLOUD_PROJECTS if (self.new_chat && admit_provisioning()) || queued() => {
+                let mut context = new_chat_context();
+                context["data"] = json!({"projects": context["projects"].clone()});
+                RpcReply::value(&context)
+            }
             methods::CLOUD_PROJECTS => RpcReply::value(
                 &json!({"accountId":"fixture-owner","organizationId":null,"projects":[]}),
             ),
@@ -90,6 +99,19 @@ impl RpcService for Controller {
                 assert_eq!(_params["firstMessage"], "Fix the flaky sync test");
                 assert_eq!(_params["agentConnectionId"], "fixture-codex");
                 *self.admitted.lock().unwrap() = Some(_params.clone());
+                // `FIXTURE_ADMIT=1`: the server admits the chat at once.
+                // `FIXTURE_ADMIT=provisioning`: admitted while the computer
+                // is still starting, as on a fresh account computer.
+                if admit() {
+                    let state = if admit_provisioning() {
+                        "provisioning"
+                    } else {
+                        "ready"
+                    };
+                    return RpcReply::value(
+                        &json!({"workspace":{"workspaceId":"admitted-computer","chatId":"admitted-thread","initialSessionId":"admitted-session","state":state,"desiredState":"ready","statusCode":state,"commandDeliveryMode":"server-admitted-v2","commandAdmissionVersion":2}}),
+                    );
+                }
                 RpcReply::value(
                     &json!({"workspace":{"workspaceId":"admitted-computer","chatId":"admitted-thread","initialSessionId":"admitted-session","state":"provisioning","desiredState":"ready","statusCode":"allocating"}}),
                 )
@@ -97,6 +119,25 @@ impl RpcService for Controller {
             methods::CLOUD_CONTEXT => RpcReply::value(
                 &json!({"accountId":"fixture-owner","organizationId":null,"apiOrigin":"https://fixture-api.example.test","projects":[{"id":"project","name":"Fieldnotes","repositoryFullName":"example/fieldnotes"}],"agentConnections":[{"connectionId":"claude","agent":"claude","state":"connected","label":"Alex’s Claude"},{"connectionId":"codex","agent":"codex","state":"connected","label":"Alex’s Codex"}],"agentCatalog":{},"providerAgentCatalogs":{},"computerCapabilities":{"providers":[]}}),
             ),
+            // The account list has the new chat only once it is ready: the
+            // sidebar keeps the created row until then.
+            methods::CLOUD_WORKSPACES if self.new_chat && admit_provisioning() => {
+                let ready = self.ready.load(std::sync::atomic::Ordering::SeqCst);
+                let mut row = admitted_history()["workspace"].clone();
+                row["projectId"] = json!("cloud-only-project");
+                let workspaces = if ready { vec![row] } else { vec![] };
+                RpcReply::value(
+                    &json!({"accountId":"fixture-owner","organizationId":null,"apiOrigin":"https://fixture-api.example.test","workspaces":workspaces}),
+                )
+            }
+            // `FIXTURE_QUEUE=1`: the open chat is listed, so its row spins.
+            methods::CLOUD_WORKSPACES if queued() => {
+                let mut row = computer_seed()["workspace"].clone();
+                row["projectId"] = json!("cloud-only-project");
+                RpcReply::value(
+                    &json!({"accountId":"fixture-owner","organizationId":null,"apiOrigin":"https://fixture-api.example.test","workspaces":[row]}),
+                )
+            }
             methods::CLOUD_WORKSPACES => {
                 let workspaces = if self.mixed {
                     let mut row = computer_seed()["workspace"].clone();
@@ -117,6 +158,19 @@ impl RpcService for Controller {
                     value["provisional"] = json!(true);
                 }
                 RpcReply::value(&value)
+            }
+            // The computer records the first message under its own id and
+            // replies; the launch command row still reads running (a missed
+            // end event).
+            methods::CLOUD_HISTORY
+                if self.new_chat
+                    && admit_provisioning()
+                    && !self.ready.load(std::sync::atomic::Ordering::SeqCst) =>
+            {
+                RpcReply::value(&provisioning_history())
+            }
+            methods::CLOUD_HISTORY if self.new_chat && admit() => {
+                RpcReply::value(&admitted_history())
             }
             methods::CLOUD_HISTORY if self.new_chat => RpcReply::value(
                 &json!({"accountId":"fixture-owner","apiOrigin":"https://fixture-api.example.test","workspace":admitted_workspace()}),
@@ -151,6 +205,15 @@ impl RpcService for Controller {
                 RpcReply::value(&self.seed)
             }
             methods::CLOUD_WORKSPACE => RpcReply::value(&self.seed["workspace"]),
+            // `FIXTURE_QUEUE=1`: three messages wait behind the running turn.
+            methods::CLOUD_RPC if queued() && _params["method"] == methods::WATCH_QUEUE => {
+                let id = _params["requestId"].clone();
+                let rows = queue_rows();
+                Ok(RpcReply::Stream(Box::pin(
+                    stream::once(async move { json!({"id":id,"item":{"sessionId":"fixture-session","items":rows,"paused":false}}) })
+                        .chain(stream::pending()),
+                )))
+            }
             methods::CLOUD_RPC => Ok(RpcReply::Stream(Box::pin(
                 stream::once(async move {
                     json!({"id":_params["requestId"],"item":{"items":[],"paused":false}})
@@ -233,6 +296,7 @@ fn main() -> anyhow::Result<()> {
         new_chat: new_chat || mixed,
         subscribed: mode.contains("first"),
         admitted: Default::default(),
+        ready: Default::default(),
     });
     let client = zuse_rpc::memory_client(controller.clone());
     let temp = tempfile::tempdir()?;
@@ -344,6 +408,17 @@ fn main() -> anyhow::Result<()> {
                     cx.background_executor().timer(Duration::from_millis(300)).await;
                     actual_window.update(cx,|_,window,cx|capture(window,cx,&output)).unwrap().unwrap();
                 }
+                // The computer finishes starting and the agent replies: the
+                // message keeps its place and the reply streams in below it.
+                if new_chat && admit_provisioning() {
+                    controller.ready.store(true, std::sync::atomic::Ordering::SeqCst);
+                    for feed in controller.feeds.lock().unwrap().iter() {
+                        let _ = feed.unbounded_send(json!({"accountId":"fixture-owner","organizationId":null,"data":{"type":"revalidate"}}));
+                    }
+                    cx.background_executor().timer(Duration::from_millis(2000)).await;
+                    let reply = output.with_file_name(format!("{}-reply.png", output.file_stem().unwrap().to_string_lossy()));
+                    actual_window.update(cx,|_,window,cx|capture(window,cx,&reply)).unwrap().unwrap();
+                }
                 if let Ok(coordinates) = std::env::var("ZUSE_MIXED_RETURN_CLICK") {
                     let before = controller.calls.lock().unwrap().iter().filter(|m| m.as_str() == methods::WATCH_QUEUE).count();
                     let status = std::process::Command::new("python3").env("ZUSE_MIXED_CLOUD_CLICK", coordinates).args(["-c", MIXED_CLICK, "click"]).status().unwrap();
@@ -438,9 +513,33 @@ fn computer_seed() -> Value {
         {"id":"fixture-user","role":"user","parts":[{"id":"fixture-text","kind":"text","text":"Inspect the startup path and reduce redundant repository fetches."}],"createdAt":1793361600000_i64,"deviceId":"cloud:fixture-computer"},
         {"id":"fixture-assistant","role":"assistant","parts":[{"id":"fixture-result","kind":"text","text":"The clone step fetched every branch on each start. It now does a shallow fetch of the task branch only, and the setup cache is keyed by the lockfile, so a warm start skips the install. Startup went from 48 s to 19 s in three runs."}],"createdAt":1793361601000_i64,"deviceId":"cloud:fixture-computer","status":"complete"}
     ]);
-    json!({"apiOrigin":"https://fixture-api.example.test","accountId":"fixture-owner","workspace":workspace,"commandDeliveryMode":"server-admitted-v2","commandAdmissionVersion":2,"taskCommandCanEdit":true,"commandAdmissions":[],"head":{"schemaVersion":1,"payloadFormat":"zuse-transcript-v1","workspaceId":"fixture-computer","sessionId":"fixture-session","runtimeGeneration":1,"cursor":{"epoch":"fixture-checkpoint","version":4},"chat":chat,"conversations":[chat],"transcript":{"reset":messages},"queue":[],"queuePaused":false,"olderMessageSequence":null}})
+    // `FIXTURE_QUEUE=1`: a follow-up is running (the agent mid-turn).
+    let (messages, admissions) = if queued() {
+        let mut messages = messages.as_array().unwrap().clone();
+        messages.push(json!({"id":"fixture-follow-up","role":"user","parts":[{"id":"fixture-follow-up-text","kind":"text","text":"Now make the warm start skip the install entirely."}],"createdAt":1793361650000_i64,"deviceId":"cloud:fixture-computer"}));
+        messages.push(json!({"id":"fixture-working","role":"assistant","parts":[{"id":"fixture-working-text","kind":"text","text":"Checking which install steps the lockfile cache already covers."}],"createdAt":1793361651000_i64,"deviceId":"cloud:fixture-computer","status":"streaming"}));
+        (
+            json!(messages),
+            json!([{"commandId":"follow-up","messageId":"fixture-follow-up","text":"Now make the warm start skip the install entirely.","executionState":"running","createdAt":1793361650000_i64}]),
+        )
+    } else {
+        (messages, json!([]))
+    };
+    let queue = if queued() { queue_rows() } else { json!([]) };
+    json!({"apiOrigin":"https://fixture-api.example.test","accountId":"fixture-owner","workspace":workspace,"commandDeliveryMode":"server-admitted-v2","commandAdmissionVersion":2,"taskCommandCanEdit":true,"commandAdmissions":admissions,"head":{"schemaVersion":1,"payloadFormat":"zuse-transcript-v1","workspaceId":"fixture-computer","sessionId":"fixture-session","runtimeGeneration":1,"cursor":{"epoch":"fixture-checkpoint","version":4},"chat":chat,"conversations":[chat],"transcript":{"reset":messages},"queue":queue,"queuePaused":false,"olderMessageSequence":null}})
 }
 
+/// Three messages queued behind the running turn, in server order.
+fn queue_rows() -> Value {
+    json!(["Then update the setup docs", "yo", "Also check the cache key"]
+        .iter()
+        .enumerate()
+        .map(|(ix, text)| json!({"id":format!("queued-{ix}"),"messageId":format!("queued-message-{ix}"),"revision":1,"position":ix+1,"text":text,"attachments":[],"holdForTurnEnd":true,"issuedBy":"cloud-authority","issuedAt":1793361700000_i64 + ix as i64}))
+        .collect::<Vec<_>>())
+}
+fn queued() -> bool {
+    std::env::var("FIXTURE_QUEUE").is_ok()
+}
 fn collide() -> bool {
     std::env::var("FIXTURE_COLLIDE").is_ok()
 }
@@ -488,6 +587,37 @@ for char in 'Fix the flaky sync test':
 key('Return',1);key('Return',0);x.XFlush(d)
 "#;
 
+fn admit() -> bool {
+    std::env::var("FIXTURE_ADMIT").is_ok()
+}
+fn admit_provisioning() -> bool {
+    std::env::var("FIXTURE_ADMIT").as_deref() == Ok("provisioning")
+}
+/// The admitted chat while its computer starts: the launch message is
+/// admitted, and nothing has run yet.
+fn provisioning_history() -> Value {
+    let mut history = admitted_history();
+    history["workspace"] = admitted_workspace();
+    history["head"]["transcript"]["reset"] = json!([]);
+    history["head"]["cursor"]["version"] = json!(1);
+    history["commandAdmissions"][0]["executionState"] = json!("admitted");
+    history
+}
+fn admitted_history() -> Value {
+    let mut workspace = admitted_workspace();
+    workspace["state"] = json!("ready");
+    workspace["desiredState"] = json!("ready");
+    workspace["statusCode"] = json!("ready");
+    workspace["revision"] = json!(2);
+    let chat = json!({"id":"admitted-session","threadId":"admitted-thread","deviceId":"cloud:admitted-computer","title":"Fix the flaky sync test","archived":false,"cwd":".","branch":"task/cloud-only","createdAt":"2026-11-20T10:50:00Z","config":{"harness":"codex","model":"gpt-5.5","sandbox":"workspace-write"}});
+    let messages = json!([
+        {"id":"runtime-user","role":"user","parts":[{"id":"runtime-user-text","kind":"text","text":"Fix the flaky sync test"}],"createdAt":1793361600000_i64,"deviceId":"cloud:admitted-computer"},
+        {"id":"runtime-reply","role":"assistant","parts":[{"id":"runtime-reply-text","kind":"text","text":"The sync test raced the file watcher. It now waits for the watcher's ready signal before writing, and passed 50 runs in a row."}],"createdAt":1793361607000_i64,"deviceId":"cloud:admitted-computer","status":"complete","durationMs":7000}
+    ]);
+    json!({"apiOrigin":"https://fixture-api.example.test","accountId":"fixture-owner","workspace":workspace,"commandDeliveryMode":"server-admitted-v2","commandAdmissionVersion":2,"taskCommandCanEdit":true,
+        "commandAdmissions":[{"commandId":"launch:admitted-computer","messageId":"admitted-first","text":"Fix the flaky sync test","executionState":"running","createdAt":1793361600000_i64}],
+        "head":{"schemaVersion":1,"payloadFormat":"zuse-transcript-v1","workspaceId":"admitted-computer","sessionId":"admitted-session","runtimeGeneration":1,"cursor":{"epoch":"fixture-checkpoint","version":4},"chat":chat,"conversations":[chat],"transcript":{"reset":messages},"queue":[],"queuePaused":false,"olderMessageSequence":null}})
+}
 fn admitted_workspace() -> Value {
     json!({"workspaceId":"admitted-computer","chatId":"admitted-thread","initialSessionId":"admitted-session","state":"provisioning","desiredState":"ready","statusCode":"allocating","title":"Fix the flaky sync test","branch":"task/cloud-only","createdAt":1793361600000_i64})
 }

@@ -324,7 +324,16 @@ impl Shell {
         let time_ago = zuse_protocol::view::format_time_ago(updated, now);
         // Starting and resuming read as activity, like a local run; an idle
         // or sleeping computer shows its age, like any idle chat.
+        // An open conversation knows more than the last list read: its agent
+        // mid-turn spins, like a local chat's row, and a computer it sees
+        // online is idle even while the listed row still reads starting.
+        let open = pending
+            .is_none()
+            .then(|| self.cloud_open_activity(&workspace, cx))
+            .flatten();
         let status = match row["state"].as_str() {
+            _ if open.is_some_and(|(working, _)| working) => zuse_protocol::ChatIndicator::Working,
+            _ if open.is_some_and(|(_, online)| online) => zuse_protocol::ChatIndicator::Idle,
             Some("ready" | "paused" | "pausing" | "archived") => zuse_protocol::ChatIndicator::Idle,
             Some("failed" | "error" | "blocked") => zuse_protocol::ChatIndicator::Errored,
             _ => zuse_protocol::ChatIndicator::Working,
