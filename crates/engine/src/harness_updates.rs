@@ -17,8 +17,9 @@ use tokio_util::sync::CancellationToken;
 use zuse_providers::process::{Command, Stdio};
 
 use zuse_protocol::{
-    HarnessId, HarnessInstallSource, HarnessUpdateFailure, HarnessUpdatePhase, HarnessUpdatePolicy,
-    HarnessUpdateProgress, HarnessUpdateStatus,
+    HarnessId, HarnessInstallSource, HarnessUpdateFailure, HarnessUpdateFailureCode,
+    HarnessUpdatePhase, HarnessUpdatePolicy, HarnessUpdateProgress, HarnessUpdateStatus,
+    HarnessUpdateStep,
 };
 
 use crate::now_ms;
@@ -29,6 +30,17 @@ const MAX_JITTER: u64 = 30 * 60;
 const FIRST_RETRY: Duration = Duration::from_secs(5 * 60);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+/// Pauses before quietly retrying a busy or offline install. Only failures
+/// that outlast every retry are shown.
+#[cfg(not(test))]
+const TRANSIENT_RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(5), Duration::from_secs(20)];
+#[cfg(test)]
+const TRANSIENT_RETRY_DELAYS: [Duration; 2] =
+    [Duration::from_millis(10), Duration::from_millis(10)];
+/// When a check skipped because another Zuse process held the agent runs
+/// again.
+const CHECK_RETRY_DELAY: Duration = Duration::from_secs(60);
+const LOCK_POLL: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -99,6 +111,7 @@ impl HomebrewPackage {
     }
 }
 
+#[derive(Clone)]
 enum UpdatePlan {
     Command {
         executable: PathBuf,
@@ -207,6 +220,110 @@ impl Drop for InstallFileLock {
             }
         }
     }
+}
+
+/// Machine-wide, per-agent lock held while Zuse checks or updates an agent,
+/// so two Zuse processes (an old and a new engine around a restart, or two
+/// profiles) never run one agent's updater at the same time. Updaters that
+/// use git or a package manager fail on each other's lock files otherwise.
+struct AgentUpdateLock {
+    _file: File,
+}
+
+impl AgentUpdateLock {
+    /// One lock file per agent under `dir`.
+    fn path(dir: &Path, harness: HarnessId) -> PathBuf {
+        let name: String = String::from(harness)
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        dir.join(format!("{name}.lock"))
+    }
+
+    /// `Ok(None)` while another process holds it. The OS releases the lock
+    /// if its holder exits, so a crash can never leave it stuck.
+    fn try_acquire(path: &Path) -> Result<Option<Self>, String> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                format!("could not create the agent update lock folder: {error}")
+            })?;
+        }
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+            .map_err(|error| format!("could not open the agent update lock: {error}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd as _;
+            loop {
+                // Released by the OS when `file` closes (drop or process exit).
+                let result =
+                    unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+                if result == 0 {
+                    break;
+                }
+                let error = std::io::Error::last_os_error();
+                match error.raw_os_error() {
+                    Some(libc::EINTR) => continue,
+                    Some(libc::EWOULDBLOCK) => return Ok(None),
+                    _ => return Err(format!("could not lock the agent update: {error}")),
+                }
+            }
+        }
+        Ok(Some(Self { _file: file }))
+    }
+
+    /// Waits up to `wait` for the lock. `Ok(None)` when it stayed busy or
+    /// `cancel` fired first.
+    async fn acquire(
+        path: &Path,
+        wait: Duration,
+        cancel: &CancellationToken,
+    ) -> Result<Option<Self>, String> {
+        let deadline = tokio::time::Instant::now() + wait;
+        loop {
+            if let Some(lock) = Self::try_acquire(path)? {
+                return Ok(Some(lock));
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Ok(None);
+            }
+            tokio::select! {
+                _ = cancel.cancelled() => return Ok(None),
+                _ = tokio::time::sleep(LOCK_POLL) => {}
+            }
+        }
+    }
+}
+
+/// Where every Zuse process on this machine looks for agent update locks.
+/// Agents are installed per user, not per Zuse profile, so this ignores the
+/// profile's data folder.
+fn shared_update_lock_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("ZUSE_AGENT_UPDATE_LOCK_DIR").filter(|v| !v.is_empty()) {
+        return PathBuf::from(dir);
+    }
+    std::env::var_os("HOME")
+        .filter(|home| !home.is_empty())
+        .map(|home| {
+            PathBuf::from(home)
+                .join(".zuse")
+                .join("locks")
+                .join("agent-updates")
+        })
+        .unwrap_or_else(|| std::env::temp_dir().join("zuse-agent-update-locks"))
+}
+
+/// Shown while an install waits out a transient failure before retrying.
+fn retry_message(code: HarnessUpdateFailureCode) -> String {
+    match code {
+        HarnessUpdateFailureCode::Network => "Connection problem. Trying again…",
+        _ => "Another process is using its files. Trying again…",
+    }
+    .to_owned()
 }
 
 /// Removes only nonce-scoped artifacts made by one update attempt. Installed
@@ -401,6 +518,8 @@ struct Inner {
     registry: Arc<HarnessRegistry>,
     order: Vec<HarnessId>,
     prefs_path: PathBuf,
+    /// Machine-wide [`AgentUpdateLock`] folder.
+    update_lock_dir: PathBuf,
     prefs: Mutex<Preferences>,
     statuses: Mutex<HashMap<HarnessId, HarnessUpdateStatus>>,
     status_tx: watch::Sender<Vec<HarnessUpdateStatus>>,
@@ -451,11 +570,11 @@ impl Drop for UpdateIntentGuard {
                 HarnessUpdatePhase::Installing | HarnessUpdatePhase::Verifying
             ) {
                 status.phase = HarnessUpdatePhase::Failed;
-                status.error = Some(HarnessUpdateFailure {
-                    message: "update ended before verification; inspect the CLI installation"
-                        .into(),
-                    retryable: true,
-                });
+                status.error = Some(HarnessUpdateFailure::from_raw(
+                    HarnessUpdateStep::Install,
+                    "update ended before verification; inspect the CLI installation",
+                    true,
+                ));
             } else {
                 status.phase = if status.policy == HarnessUpdatePolicy::Off {
                     HarnessUpdatePhase::Dormant
@@ -530,6 +649,12 @@ impl HarnessUpdateCoordinator {
                 registry,
                 order,
                 prefs_path,
+                // Tests stay inside their temporary data folder.
+                update_lock_dir: if cfg!(test) {
+                    data_dir.join("agent-update-locks")
+                } else {
+                    shared_update_lock_dir()
+                },
                 prefs: Mutex::new(prefs),
                 statuses: Mutex::new(statuses),
                 status_tx,
@@ -666,6 +791,23 @@ impl HarnessUpdateCoordinator {
         });
     }
 
+    /// Re-runs a check skipped because another Zuse process held the agent.
+    /// A plain function so the spawned check is not part of the caller's future.
+    fn check_later(&self, harness: HarnessId) {
+        if self.inner.shutdown.is_cancelled() {
+            return;
+        }
+        let coordinator = self.clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = coordinator.inner.shutdown.cancelled() => {}
+                _ = tokio::time::sleep(CHECK_RETRY_DELAY) => {
+                    coordinator.check_one(harness).await.ok();
+                }
+            }
+        });
+    }
+
     async fn check_one_inner(&self, harness: HarnessId) -> Result<(), String> {
         // Checks and activation refreshes must never overwrite a live
         // mutation phase (especially Installing, which is non-interruptible).
@@ -690,6 +832,28 @@ impl HarnessUpdateCoordinator {
         if self.settle_if_unmonitored(harness) {
             return Ok(());
         }
+        // Some checks run the agent's own updater (`hermes update --check`
+        // fetches with git). Never run one while another Zuse process is
+        // updating the same agent; skip this round instead of failing. No
+        // waiting here: that would hold this agent's operation gate and one
+        // of the two check slots for every other agent.
+        let lock_path = AgentUpdateLock::path(&self.inner.update_lock_dir, harness);
+        let _shared_lock = match AgentUpdateLock::try_acquire(&lock_path) {
+            Ok(Some(lock)) => Some(lock),
+            Ok(None) => {
+                tracing::info!(
+                    ?harness,
+                    "agent busy in another Zuse process; checking later"
+                );
+                self.check_later(harness);
+                return Ok(());
+            }
+            // An unusable lock folder must not stop update checks.
+            Err(error) => {
+                tracing::warn!(?harness, %error, "agent update lock unavailable");
+                None
+            }
+        };
         self.mutate(harness, |status| {
             status.phase = HarnessUpdatePhase::Checking;
             status.progress = None;
@@ -1110,59 +1274,77 @@ impl HarnessUpdateCoordinator {
             intent.finish();
             return Err("update cancelled".into());
         }
-        let applied = match plan {
-            UpdatePlan::Command { executable, args } => {
-                match self.begin_install(harness, &cancel) {
-                    Ok(()) => run_command(&executable, args, UPDATE_TIMEOUT).await,
-                    Err(error) => Err(error),
-                }
+        // Another Zuse process may be updating or checking this agent. Wait
+        // for it here, while the update can still be cancelled.
+        let lock_path = AgentUpdateLock::path(&self.inner.update_lock_dir, harness);
+        let shared_lock = match AgentUpdateLock::try_acquire(&lock_path) {
+            Ok(Some(lock)) => Ok(Some(lock)),
+            Ok(None) => {
+                self.mutate(harness, |status| {
+                    status.progress = Some(HarnessUpdateProgress {
+                        completed_bytes: None,
+                        total_bytes: None,
+                        message: Some("Waiting for another Zuse process to finish…".into()),
+                    });
+                });
+                AgentUpdateLock::acquire(&lock_path, UPDATE_TIMEOUT, &cancel).await
             }
-            UpdatePlan::AntigravityArchive => {
-                let release = lock(&self.inner.antigravity_release)
-                    .clone()
-                    .filter(|release| current.latest_version.as_ref() == Some(&release.version));
-                match release {
-                    Some(release) => match self.begin_install(harness, &cancel) {
-                        Ok(()) => zuse_providers::acp::install_antigravity_release(&release)
-                            .await
-                            .map(drop)
-                            .map_err(|error| error.to_string()),
-                        Err(error) => Err(error),
-                    },
-                    None => Err("the Antigravity release changed; check for updates again".into()),
-                }
+            Err(error) => Err(error),
+        };
+        let shared_lock = match shared_lock {
+            Ok(Some(lock)) => Some(lock),
+            Ok(None) if cancel.is_cancelled() => {
+                drop(lease);
+                self.finish_cancelled(harness);
+                intent.finish();
+                return Err("update cancelled".into());
             }
-            UpdatePlan::CodexStandalone(install) => {
-                self.install_codex_standalone(harness, &current, install, &cancel)
-                    .await
+            Ok(None) => {
+                drop(lease);
+                let error = "another Zuse process is already updating this agent".to_string();
+                self.finish_failed_update(harness, error.clone());
+                intent.finish();
+                return Err(error);
             }
-            UpdatePlan::MuseInstaller { dir } => match self.begin_install(harness, &cancel) {
-                Ok(()) => {
-                    let (program, args, env) = muse_installer(&dir);
-                    let env: Vec<(&str, &str)> =
-                        env.iter().map(|(k, v)| (*k, v.as_str())).collect();
-                    run_command_output_env(&program, &args, UPDATE_TIMEOUT, &env)
-                        .await
-                        .map(drop)
-                }
-                Err(error) => Err(error),
-            },
-            UpdatePlan::Homebrew(package) => match resolve_brew(&package.brew) {
-                Ok(brew) => {
-                    let args = package.upgrade_args();
-                    match self.begin_install(harness, &cancel) {
-                        Ok(()) => {
-                            run_command_output_env(&brew, &args, UPDATE_TIMEOUT, BREW_UPGRADE_ENV)
-                                .await
-                                .map(drop)
-                        }
-                        Err(error) => Err(error),
-                    }
-                }
-                Err(error) => Err(error),
-            },
+            // An unusable lock folder must not block updates.
+            Err(error) => {
+                tracing::warn!(?harness, %error, "agent update lock unavailable");
+                None
+            }
+        };
+        self.mutate(harness, |status| status.progress = None);
+        // Busy files and dropped connections usually clear within seconds:
+        // retry quietly and only surface a failure that outlasts the retries.
+        let mut retries = TRANSIENT_RETRY_DELAYS.iter();
+        let applied = loop {
+            let result = self
+                .run_update_plan(harness, &current, plan.clone(), &cancel)
+                .await;
+            let Err(error) = &result else {
+                break result;
+            };
+            let code = HarnessUpdateFailureCode::classify(error);
+            if cancel.is_cancelled() || !code.is_transient() {
+                break result;
+            }
+            let Some(delay) = retries.next() else {
+                break result;
+            };
+            tracing::info!(?harness, ?code, %error, "agent update hit a transient failure; retrying");
+            self.mutate(harness, |status| {
+                status.progress = Some(HarnessUpdateProgress {
+                    completed_bytes: None,
+                    total_bytes: None,
+                    message: Some(retry_message(code)),
+                });
+            });
+            tokio::select! {
+                _ = self.inner.shutdown.cancelled() => break result,
+                _ = tokio::time::sleep(*delay) => {}
+            }
         };
         if let Err(error) = applied {
+            drop(shared_lock);
             drop(lease);
             if cancel.is_cancelled() {
                 self.finish_cancelled(harness);
@@ -1226,6 +1408,7 @@ impl HarnessUpdateCoordinator {
             )
             .await;
         }
+        drop(shared_lock);
         drop(lease);
         lock(&self.inner.cancellations).remove(&harness);
         self.inner.registry.end_update(harness);
@@ -1251,6 +1434,67 @@ impl HarnessUpdateCoordinator {
         }
         intent.finish();
         result
+    }
+
+    /// One installation attempt. Callers hold the update lease and the
+    /// shared [`AgentUpdateLock`].
+    async fn run_update_plan(
+        &self,
+        harness: HarnessId,
+        current: &HarnessUpdateStatus,
+        plan: UpdatePlan,
+        cancel: &CancellationToken,
+    ) -> Result<(), String> {
+        match plan {
+            UpdatePlan::Command { executable, args } => match self.begin_install(harness, cancel) {
+                Ok(()) => run_command(&executable, args, UPDATE_TIMEOUT).await,
+                Err(error) => Err(error),
+            },
+            UpdatePlan::AntigravityArchive => {
+                let release = lock(&self.inner.antigravity_release)
+                    .clone()
+                    .filter(|release| current.latest_version.as_ref() == Some(&release.version));
+                match release {
+                    Some(release) => match self.begin_install(harness, cancel) {
+                        Ok(()) => zuse_providers::acp::install_antigravity_release(&release)
+                            .await
+                            .map(drop)
+                            .map_err(|error| error.to_string()),
+                        Err(error) => Err(error),
+                    },
+                    None => Err("the Antigravity release changed; check for updates again".into()),
+                }
+            }
+            UpdatePlan::CodexStandalone(install) => {
+                self.install_codex_standalone(harness, current, install, cancel)
+                    .await
+            }
+            UpdatePlan::MuseInstaller { dir } => match self.begin_install(harness, cancel) {
+                Ok(()) => {
+                    let (program, args, env) = muse_installer(&dir);
+                    let env: Vec<(&str, &str)> =
+                        env.iter().map(|(k, v)| (*k, v.as_str())).collect();
+                    run_command_output_env(&program, &args, UPDATE_TIMEOUT, &env)
+                        .await
+                        .map(drop)
+                }
+                Err(error) => Err(error),
+            },
+            UpdatePlan::Homebrew(package) => match resolve_brew(&package.brew) {
+                Ok(brew) => {
+                    let args = package.upgrade_args();
+                    match self.begin_install(harness, cancel) {
+                        Ok(()) => {
+                            run_command_output_env(&brew, &args, UPDATE_TIMEOUT, BREW_UPGRADE_ENV)
+                                .await
+                                .map(drop)
+                        }
+                        Err(error) => Err(error),
+                    }
+                }
+                Err(error) => Err(error),
+            },
+        }
     }
 
     /// Serialize the final cancellation check and installation commit with
@@ -1780,14 +2024,16 @@ impl HarnessUpdateCoordinator {
         lock(&self.inner.cancellations).contains_key(&harness)
     }
 
+    /// Marks a failed install. Failed checks go through [`Self::fail_check`].
     fn fail(&self, harness: HarnessId, error: String) -> Result<(), String> {
         self.mutate(harness, |status| {
             status.phase = HarnessUpdatePhase::Failed;
             status.checked_at = Some(now_ms());
-            status.error = Some(HarnessUpdateFailure {
-                message: error.clone(),
-                retryable: true,
-            });
+            status.error = Some(HarnessUpdateFailure::from_raw(
+                HarnessUpdateStep::Install,
+                error.clone(),
+                true,
+            ));
         });
         Err(error)
     }
@@ -1803,10 +2049,11 @@ impl HarnessUpdateCoordinator {
             } else {
                 status.phase = HarnessUpdatePhase::Failed;
                 status.checked_at = Some(now_ms());
-                status.error = Some(HarnessUpdateFailure {
-                    message: error.clone(),
-                    retryable: true,
-                });
+                status.error = Some(HarnessUpdateFailure::from_raw(
+                    HarnessUpdateStep::Check,
+                    error.clone(),
+                    true,
+                ));
             }
         });
         Err(error)
@@ -2436,10 +2683,10 @@ fn version_is_newer(latest: &str, installed: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        LatestSource, UpdatePlan, activate_codex_release, can_apply_update,
-        codex_standalone_install, extract_latest_version, extract_version, installed_version,
-        muse_installer, opencode_release_package, provider, update_plan, validate_codex_package,
-        version_is_newer,
+        AgentUpdateLock, LatestSource, TRANSIENT_RETRY_DELAYS, UpdatePlan, activate_codex_release,
+        can_apply_update, codex_standalone_install, extract_latest_version, extract_version,
+        installed_version, muse_installer, opencode_release_package, provider, update_plan,
+        validate_codex_package, version_is_newer,
     };
     use std::path::Path;
     use std::path::PathBuf;
@@ -2449,7 +2696,8 @@ mod tests {
     use async_trait::async_trait;
     use futures::StreamExt as _;
     use zuse_protocol::{
-        AgentEvent, HarnessId, HarnessUpdatePhase, Model, ReasoningLevel, RunRequest, SteeringMode,
+        AgentEvent, HarnessId, HarnessUpdateFailureCode, HarnessUpdatePhase, HarnessUpdateStep,
+        Model, ReasoningLevel, RunRequest, SteeringMode,
     };
     use zuse_providers::{Harness, HarnessError, RunControls};
 
@@ -2836,6 +3084,155 @@ esac
         assert_eq!(status.installed_version.as_deref(), Some("0.20.0"));
         assert_eq!(status.latest_version, None);
         assert!(status.error.is_none());
+        coordinator.shutdown().await;
+    }
+
+    /// A fake Hermes whose `update --yes` fails like a held git lock until
+    /// it has been called `fail_times` times.
+    fn busy_hermes(dir: &Path, fail_times: u32) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let executable = dir.join("hermes");
+        std::fs::write(
+            &executable,
+            format!(
+                r#"#!/bin/sh
+root="$(dirname "$0")"
+case "$1:$2" in
+  --version:) printf 'Hermes 0.20.0\n' ;;
+  update:--check)
+    if test -f "$root/updated"; then
+      printf '✓ Already up to date.\n'
+    else
+      printf '☤ Update available: 3 commits behind origin/main.\n'
+    fi ;;
+  update:--yes)
+    echo x >> "$root/attempts"
+    if test "$(wc -l < "$root/attempts")" -le {fail_times}; then
+      printf "fatal: Unable to create '$root/.git/index.lock': File exists.\n" >&2
+      exit 1
+    fi
+    touch "$root/updated" ;;
+  *) exit 2 ;;
+esac
+"#
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        executable
+    }
+
+    fn attempts(dir: &Path) -> usize {
+        std::fs::read_to_string(dir.join("attempts"))
+            .map(|text| text.lines().count())
+            .unwrap_or(0)
+    }
+
+    #[tokio::test]
+    async fn a_busy_install_is_retried_quietly_before_anyone_sees_a_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = Arc::new(HarnessRegistry::new());
+        registry.register(Arc::new(ExecutableHarness(
+            busy_hermes(temp.path(), 1),
+            HarnessId::Hermes,
+        )));
+        let coordinator = super::HarnessUpdateCoordinator::new(temp.path(), registry);
+        coordinator.check_one(HarnessId::Hermes).await.unwrap();
+        coordinator.apply(HarnessId::Hermes).await.unwrap();
+        let status = coordinator.status(HarnessId::Hermes);
+        assert_eq!(status.phase, HarnessUpdatePhase::Updated);
+        assert!(status.error.is_none());
+        assert_eq!(attempts(temp.path()), 2);
+        coordinator.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_lasting_failure_shows_a_plain_summary_and_keeps_the_raw_output() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = Arc::new(HarnessRegistry::new());
+        registry.register(Arc::new(ExecutableHarness(
+            busy_hermes(temp.path(), 99),
+            HarnessId::Hermes,
+        )));
+        let coordinator = super::HarnessUpdateCoordinator::new(temp.path(), registry);
+        coordinator.check_one(HarnessId::Hermes).await.unwrap();
+        assert!(coordinator.apply(HarnessId::Hermes).await.is_err());
+        assert_eq!(attempts(temp.path()), 1 + TRANSIENT_RETRY_DELAYS.len());
+        let status = coordinator.status(HarnessId::Hermes);
+        assert_eq!(status.phase, HarnessUpdatePhase::Failed);
+        let error = status.error.unwrap();
+        assert_eq!(error.code, HarnessUpdateFailureCode::Busy);
+        assert_eq!(error.step, HarnessUpdateStep::Install);
+        assert_eq!(
+            error.message,
+            HarnessUpdateFailureCode::Busy.summary(HarnessUpdateStep::Install)
+        );
+        assert!(error.details.unwrap().contains("index.lock"));
+        assert!(error.retryable);
+        coordinator.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn another_zuse_process_holding_the_agent_pauses_checks_and_installs() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = Arc::new(HarnessRegistry::new());
+        registry.register(Arc::new(ExecutableHarness(
+            busy_hermes(temp.path(), 0),
+            HarnessId::Hermes,
+        )));
+        let coordinator = super::HarnessUpdateCoordinator::new(temp.path(), registry);
+        coordinator.check_one(HarnessId::Hermes).await.unwrap();
+        assert_eq!(
+            coordinator.status(HarnessId::Hermes).phase,
+            HarnessUpdatePhase::Available
+        );
+        // A second open file description stands in for another process.
+        let path = AgentUpdateLock::path(&coordinator.inner.update_lock_dir, HarnessId::Hermes);
+        let held = AgentUpdateLock::try_acquire(&path).unwrap().unwrap();
+        assert!(AgentUpdateLock::try_acquire(&path).unwrap().is_none());
+
+        // A check skips the round at once instead of waiting on the holder.
+        let checked_at = coordinator.status(HarnessId::Hermes).checked_at;
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            coordinator.check_one(HarnessId::Hermes),
+        )
+        .await
+        .expect("a busy agent never stalls the check")
+        .unwrap();
+        let status = coordinator.status(HarnessId::Hermes);
+        assert_eq!(status.phase, HarnessUpdatePhase::Available);
+        assert_eq!(status.checked_at, checked_at);
+        assert!(status.error.is_none());
+
+        let installing = tokio::spawn({
+            let coordinator = coordinator.clone();
+            async move { coordinator.apply(HarnessId::Hermes).await }
+        });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let status = coordinator.status(HarnessId::Hermes);
+                if status
+                    .progress
+                    .and_then(|progress| progress.message)
+                    .is_some_and(|message| message.contains("another Zuse process"))
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("install waits for the other process");
+        assert_eq!(attempts(temp.path()), 0);
+
+        drop(held);
+        installing.await.unwrap().unwrap();
+        assert_eq!(attempts(temp.path()), 1);
+        assert_eq!(
+            coordinator.status(HarnessId::Hermes).phase,
+            HarnessUpdatePhase::Updated
+        );
         coordinator.shutdown().await;
     }
 
@@ -3565,7 +3962,10 @@ esac
         .unwrap();
         apply.abort();
 
-        tokio::time::timeout(Duration::from_secs(2), async {
+        // Normally well under a second. The bound only proves the install
+        // finishes; process launches can stall for seconds right after a
+        // build while the OS scans the new binaries.
+        tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 let status = coordinator.status(HarnessId::ClaudeCode);
                 if matches!(

@@ -3,7 +3,10 @@
 //! tweens; content keeps its final width while the outer surface clips it.
 
 use super::*;
-use zuse_protocol::{HarnessId, HarnessUpdatePhase as Phase, HarnessUpdateStatus};
+use zuse_protocol::{
+    HarnessId, HarnessUpdateFailure, HarnessUpdatePhase as Phase, HarnessUpdateStatus,
+    HarnessUpdateStep,
+};
 
 pub(super) fn versionless_notification_key(device: &str, harness: HarnessId) -> String {
     format!("{device}:{harness:?}:versionless")
@@ -149,13 +152,14 @@ fn detail(status: &HarnessUpdateStatus) -> String {
             _ => "Update available".into(),
         },
         Phase::WaitingForIdle => "Waiting for the current run".into(),
-        Phase::Preparing => "Preparing update…".into(),
+        Phase::Preparing => progress_message(status).unwrap_or_else(|| "Preparing update…".into()),
         Phase::Downloading => status
             .progress
             .as_ref()
             .and_then(|p| p.message.clone())
             .unwrap_or_else(|| "Downloading…".into()),
-        Phase::Installing => "Installing…".into(),
+        // The engine names a quiet retry or a wait for another Zuse here.
+        Phase::Installing => progress_message(status).unwrap_or_else(|| "Installing…".into()),
         Phase::Verifying => "Verifying installation…".into(),
         Phase::Updated => status
             .installed_version
@@ -168,6 +172,53 @@ fn detail(status: &HarnessUpdateStatus) -> String {
             .map(|e| e.message.clone())
             .unwrap_or_else(|| "Couldn’t check for updates".into()),
         _ => "Checking for updates…".into(),
+    }
+}
+
+fn progress_message(status: &HarnessUpdateStatus) -> Option<String> {
+    status.progress.as_ref().and_then(|p| p.message.clone())
+}
+
+/// One toast per device and agent, so a later success can close it.
+fn failure_toast_key(device: &str, harness: HarnessId) -> String {
+    format!("agent-update:{device}:{harness:?}")
+}
+
+/// What the failure toast says and what "Copy details" copies. Raw engine
+/// text never reaches the toast itself.
+fn failure_toast(
+    device: &str,
+    device_name: &str,
+    harness: HarnessId,
+    step: HarnessUpdateStep,
+    error: &str,
+) -> (String, String) {
+    let name = crate::pickers::harness_display_name(harness);
+    let failure = HarnessUpdateFailure::from_raw(step, error, true);
+    let (headline, action) = match step {
+        HarnessUpdateStep::Install => (format!("{name} update didn’t finish."), "update"),
+        HarnessUpdateStep::Check => (format!("{name} update check failed."), "update check"),
+    };
+    // A generic failure line would only repeat the headline.
+    let message = if failure.is_generic() {
+        headline
+    } else {
+        format!("{headline} {}", failure.message)
+    };
+    let details = format!(
+        "{name} {action} on {device_name} ({device})\nReason: {:?}\n\n{}",
+        failure.code,
+        failure.details.as_deref().unwrap_or(error)
+    );
+    (message, details)
+}
+
+/// Older engines don't say which step failed; their failures keep the "check
+/// failed" title older apps gave every failure.
+fn failed_title(name: &str, status: &HarnessUpdateStatus) -> String {
+    match status.error.as_ref().map(|error| error.step) {
+        Some(HarnessUpdateStep::Install) => format!("{name} update failed"),
+        _ => format!("{name} update check failed"),
     }
 }
 
@@ -424,7 +475,7 @@ impl Shell {
                 Phase::Installing => format!("Updating {name}…"),
                 Phase::Verifying => format!("Verifying {name}…"),
                 Phase::Updated => format!("{name} updated"),
-                Phase::Failed => format!("{name} update check failed"),
+                Phase::Failed => failed_title(&name, status),
                 _ => return None,
             }
         };
@@ -953,7 +1004,9 @@ impl Shell {
                         .await;
                     if let Ok(mut stream) = result {
                         while let Some(value) = stream.recv().await {
-                            let Ok(rows) = serde_json::from_value(value) else {
+                            let Ok(rows) =
+                                serde_json::from_value::<Vec<HarnessUpdateStatus>>(value)
+                            else {
                                 break;
                             };
                             if this
@@ -963,6 +1016,16 @@ impl Shell {
                                     else {
                                         return;
                                     };
+                                    // An update that recovered (a retry or a later
+                                    // automatic install) retires its old failure toast.
+                                    for status in rows.iter().filter(|status| {
+                                        matches!(status.phase, Phase::Updated | Phase::Current)
+                                    }) {
+                                        crate::toast::dismiss_by_key(
+                                            cx,
+                                            &failure_toast_key(&device, status.harness),
+                                        );
+                                    }
                                     updates.statuses = rows;
                                     updates.connected = true;
                                     cx.notify();
@@ -1041,14 +1104,24 @@ impl Shell {
                         if method == methods::APPLY_HARNESS_UPDATE && message == "update cancelled")
                 {
                     tracing::warn!(%device, ?harness, %error, "agent update action failed");
-                    let name = crate::pickers::harness_display_name(harness);
-                    let message = format!("{name} update failed. Retry from Local agents.");
+                    let device_name = shell
+                        .state
+                        .read(cx)
+                        .device_name(&device)
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| device.clone());
+                    let step = if method == methods::APPLY_HARNESS_UPDATE {
+                        HarnessUpdateStep::Install
+                    } else {
+                        HarnessUpdateStep::Check
+                    };
+                    let (message, details) =
+                        failure_toast(&device, &device_name, harness, step, &error.to_string());
                     shell.sidebar_notice = Some(message.clone().into());
-                    let details = format!("Agent update ({device}, {name}): {error}");
                     crate::toast::error_with_action(
                         cx,
                         message,
-                        format!("agent-update:{device}:{harness:?}"),
+                        failure_toast_key(&device, harness),
                         "Copy details",
                         move |_, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(details.clone()));
@@ -1094,6 +1167,94 @@ mod tests {
             applying: Default::default(),
             watch: None,
         }
+    }
+
+    #[test]
+    fn failure_toasts_say_what_happened_and_keep_raw_output_for_copying() {
+        let raw = "/Users/me/.local/bin/hermes exited with exit status: 1: fatal: Unable to create '/Users/me/.hermes/hermes-agent/.git/index.lock': File exists.";
+        let (message, details) = failure_toast(
+            "8d1d8261",
+            "MacBook",
+            HarnessId::Hermes,
+            HarnessUpdateStep::Install,
+            raw,
+        );
+        assert_eq!(
+            message,
+            "Hermes update didn’t finish. Another process was using its files. Try again in a moment."
+        );
+        assert!(!message.contains('/') && !message.contains("8d1d8261"));
+        assert!(details.starts_with("Hermes update on MacBook (8d1d8261)"));
+        assert!(details.contains("Reason: Busy"));
+        assert!(details.contains("index.lock"));
+        assert_eq!(
+            failure_toast_key("8d1d8261", HarnessId::Hermes),
+            "agent-update:8d1d8261:Hermes"
+        );
+    }
+
+    #[test]
+    fn failure_toasts_name_the_step_and_never_repeat_the_generic_line() {
+        let raw = "/opt/bin/hermes exited with exit status: 2";
+        let toast = |step| failure_toast("d", "MacBook", HarnessId::Hermes, step, raw).0;
+        assert_eq!(
+            toast(HarnessUpdateStep::Install),
+            "Hermes update didn’t finish."
+        );
+        assert_eq!(
+            toast(HarnessUpdateStep::Check),
+            "Hermes update check failed."
+        );
+        let (offline, details) = failure_toast(
+            "d",
+            "MacBook",
+            HarnessId::Hermes,
+            HarnessUpdateStep::Check,
+            "error sending request for url (https://registry.npmjs.org/x)",
+        );
+        assert_eq!(
+            offline,
+            "Hermes update check failed. Couldn’t reach the update server. Check your connection and try again."
+        );
+        assert!(details.starts_with("Hermes update check on MacBook (d)"));
+    }
+
+    #[test]
+    fn failed_rows_say_whether_the_check_or_the_install_failed() {
+        let mut failed = status(Phase::Failed);
+        assert_eq!(failed_title("Codex", &failed), "Codex update check failed");
+        failed.error = Some(HarnessUpdateFailure::from_raw(
+            HarnessUpdateStep::Install,
+            "index.lock: File exists",
+            true,
+        ));
+        assert_eq!(failed_title("Codex", &failed), "Codex update failed");
+        assert_eq!(
+            detail(&failed),
+            "Another process was using its files. Try again in a moment."
+        );
+        failed.error = Some(HarnessUpdateFailure::from_raw(
+            HarnessUpdateStep::Check,
+            "/opt/bin/codex exited with exit status: 2",
+            true,
+        ));
+        assert_eq!(failed_title("Codex", &failed), "Codex update check failed");
+        assert_eq!(detail(&failed), "Couldn’t check for updates.");
+    }
+
+    #[test]
+    fn installing_rows_show_the_engines_retry_and_wait_messages() {
+        let mut installing = status(Phase::Installing);
+        assert_eq!(detail(&installing), "Installing…");
+        installing.progress = Some(zuse_protocol::HarnessUpdateProgress {
+            completed_bytes: None,
+            total_bytes: None,
+            message: Some("Another process is using its files. Trying again…".into()),
+        });
+        assert_eq!(
+            detail(&installing),
+            "Another process is using its files. Trying again…"
+        );
     }
 
     #[test]

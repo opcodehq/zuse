@@ -246,6 +246,29 @@ pub fn error_with_action(
     );
 }
 
+/// Close live toasts whose action key is `key`, for when the failure they
+/// report has since resolved itself (a retried update that succeeded).
+pub fn dismiss_by_key(cx: &mut App, key: &str) {
+    let Some(store) = cx.try_global::<ToastStore>() else {
+        return;
+    };
+    let ids: Vec<u64> = store
+        .toasts
+        .iter()
+        .filter(|toast| {
+            toast.closing.is_none()
+                && toast
+                    .action
+                    .as_ref()
+                    .is_some_and(|action| action.key.as_ref() == key)
+        })
+        .map(|toast| toast.id)
+        .collect();
+    for id in ids {
+        dismiss(id, cx);
+    }
+}
+
 /// A confirmation toast ("Link copied").
 pub fn success(cx: &mut App, message: impl Into<SharedString>) {
     push(cx, ToastKind::Success, message.into());
@@ -825,6 +848,38 @@ mod tests {
         let id = cx.update(|_, cx| cx.global::<ToastStore>().toasts[1].id);
         cx.update(|_, cx| dismiss(id, cx));
         cx.update(|_, cx| assert_eq!(messages(cx), ["Couldn't save"]));
+    }
+
+    #[gpui::test]
+    fn a_resolved_failure_closes_only_its_own_toast(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| cx.set_global(Theme::dark()));
+        let (_, cx) = cx.add_window_view(|_, _| Host);
+        cx.update(|_, cx| {
+            error_with_action(
+                cx,
+                "Hermes update didn’t finish.",
+                "agent-update:a:Hermes",
+                "Copy details",
+                |_, _| {},
+            );
+            error_with_action(
+                cx,
+                "Codex update didn’t finish.",
+                "agent-update:a:Codex",
+                "Copy details",
+                |_, _| {},
+            );
+            error(cx, "Couldn't save");
+        });
+        cx.update(|_, cx| dismiss_by_key(cx, "agent-update:a:Hermes"));
+        cx.update(|_, cx| {
+            assert_eq!(
+                messages(cx),
+                ["Codex update didn’t finish.", "Couldn't save"]
+            );
+        });
+        // Nothing to close is fine.
+        cx.update(|_, cx| dismiss_by_key(cx, "agent-update:b:Hermes"));
     }
 
     #[gpui::test]

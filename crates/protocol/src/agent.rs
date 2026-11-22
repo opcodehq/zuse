@@ -106,12 +106,203 @@ pub struct HarnessUpdateProgress {
     pub message: Option<String>,
 }
 
+/// Why an agent update or check stopped, so clients can pick wording and
+/// actions without parsing installer output. Unknown future codes read as
+/// [`HarnessUpdateFailureCode::Unknown`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HarnessUpdateFailureCode {
+    /// Another process (an updater, git, a package manager or another Zuse)
+    /// was using the agent's files.
+    Busy,
+    /// A restart or shutdown stopped the update partway.
+    Interrupted,
+    Network,
+    Permission,
+    DiskFull,
+    TimedOut,
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+impl HarnessUpdateFailureCode {
+    /// Failures that usually clear on their own, worth retrying quietly
+    /// before telling anyone.
+    pub fn is_transient(self) -> bool {
+        matches!(self, Self::Busy | Self::Network)
+    }
+
+    /// One plain sentence about what happened during `step`, without the
+    /// agent's name (surfaces already show it) or any command output.
+    pub fn summary(self, step: HarnessUpdateStep) -> &'static str {
+        let check = step == HarnessUpdateStep::Check;
+        match self {
+            Self::Busy => "Another process was using its files. Try again in a moment.",
+            Self::Interrupted if check => "A restart interrupted the check. Try again.",
+            Self::Interrupted => "A restart interrupted the update. Try again.",
+            Self::Network if check => {
+                "Couldn’t reach the update server. Check your connection and try again."
+            }
+            Self::Network => {
+                "Couldn’t reach the download server. Check your connection and try again."
+            }
+            Self::Permission if check => "Zuse doesn’t have permission to access its files.",
+            Self::Permission => {
+                "Zuse doesn’t have permission to change its files. Update it from a terminal."
+            }
+            Self::DiskFull => "Your disk is full. Free up space and try again.",
+            Self::TimedOut if check => "The check took too long and was stopped. Try again.",
+            Self::TimedOut => "The update took too long and was stopped. Try again.",
+            Self::Unknown if check => "Couldn’t check for updates.",
+            Self::Unknown => "The update didn’t finish.",
+        }
+    }
+
+    /// Best-effort reading of installer, git, package-manager and engine
+    /// error text. Order matters: the most specific causes win.
+    pub fn classify(raw: &str) -> Self {
+        let text = raw.to_ascii_lowercase();
+        let any = |needles: &[&str]| needles.iter().any(|needle| text.contains(needle));
+        if any(&["no space left on device", "enospc", "disk quota exceeded"]) {
+            Self::DiskFull
+        } else if any(&[
+            "permission denied",
+            "eacces",
+            "operation not permitted",
+            "eperm",
+        ]) {
+            Self::Permission
+        } else if any(&[
+            "index.lock",
+            "another git process",
+            "already in progress",
+            "another zuse process",
+            "has already locked",
+            "is locked by",
+            "resource temporarily unavailable",
+            "ebusy",
+            "text file busy",
+        ]) {
+            Self::Busy
+        } else if any(&[
+            "could not resolve host",
+            "temporary failure in name resolution",
+            "getaddrinfo",
+            "enotfound",
+            "econnreset",
+            "econnrefused",
+            "etimedout",
+            "enetunreach",
+            "network is unreachable",
+            "connection refused",
+            "connection reset",
+            "failed to connect",
+            "unable to access 'http",
+            "error sending request",
+        ]) {
+            Self::Network
+        } else if any(&[
+            "update ended before verification",
+            "signal: 9",
+            "signal: 15",
+            "sigkill",
+            "sigterm",
+        ]) {
+            Self::Interrupted
+        } else if text.contains("timed out") {
+            Self::TimedOut
+        } else {
+            Self::Unknown
+        }
+    }
+}
+
+/// Which step of keeping an agent current failed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HarnessUpdateStep {
+    /// Installing a new version.
+    Install,
+    /// Looking up the installed and latest versions. Older engines don't say
+    /// which step failed; their failures read as checks, as older apps
+    /// labelled them.
+    #[default]
+    #[serde(other)]
+    Check,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HarnessUpdateFailure {
+    /// One plain sentence for people. Never raw command output; that goes in
+    /// [`Self::details`].
     pub message: String,
     #[serde(default)]
     pub retryable: bool,
+    /// Older engines omit this; it then reads as `Unknown`.
+    #[serde(default)]
+    pub code: HarnessUpdateFailureCode,
+    #[serde(default)]
+    pub step: HarnessUpdateStep,
+    /// The raw error (command output, paths) for "Copy details" and logs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<String>,
+}
+
+impl HarnessUpdateFailure {
+    /// Turns raw error text from `step` into a classified failure. Short
+    /// sentences the engine wrote itself are kept as the message; installer
+    /// output is replaced by the code's summary and kept only in `details`.
+    pub fn from_raw(step: HarnessUpdateStep, raw: impl Into<String>, retryable: bool) -> Self {
+        let raw: String = raw.into();
+        let code = HarnessUpdateFailureCode::classify(&raw);
+        let trimmed = raw.trim();
+        let message = if code == HarnessUpdateFailureCode::Unknown && is_plain_sentence(trimmed) {
+            sentence(trimmed)
+        } else {
+            code.summary(step).to_owned()
+        };
+        let details = (!trimmed.is_empty() && trimmed != message).then(|| trimmed.to_owned());
+        Self {
+            message,
+            retryable,
+            code,
+            step,
+            details,
+        }
+    }
+
+    /// Whether the message is only the generic "didn't finish" line, so a
+    /// surface that already says that can leave it out.
+    pub fn is_generic(&self) -> bool {
+        self.message == HarnessUpdateFailureCode::Unknown.summary(self.step)
+    }
+}
+
+/// Whether engine-authored text is fit to show as is: one short line that
+/// is not command output and names no file paths.
+fn is_plain_sentence(text: &str) -> bool {
+    !text.is_empty()
+        && text.chars().count() <= 160
+        && !text.contains('\n')
+        && !text.contains(" exited with ")
+        && !text.split_whitespace().any(|word| {
+            let word = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '/' && c != '~');
+            word.starts_with('/') || word.starts_with("~/")
+        })
+}
+
+fn sentence(text: &str) -> String {
+    let mut chars = text.chars();
+    let mut out: String = chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default();
+    if !out.ends_with(['.', '!', '?']) {
+        out.push('.');
+    }
+    out
 }
 
 /// One row in the device-local harness-update stream.
@@ -1114,11 +1305,134 @@ mod tests {
         assert!(!status.can_start_update());
         status.phase = HarnessUpdatePhase::Failed;
         assert!(!status.can_start_update());
-        status.error = Some(HarnessUpdateFailure {
-            message: "Retry download".into(),
-            retryable: true,
-        });
+        status.error = Some(HarnessUpdateFailure::from_raw(
+            HarnessUpdateStep::Install,
+            "Retry download",
+            true,
+        ));
         assert!(status.can_start_update());
+    }
+
+    #[test]
+    fn update_failures_hide_installer_output_behind_a_plain_summary() {
+        let raw = "/Users/me/.local/bin/hermes exited with exit status: 1: ⚕ Updating Hermes Agent...\n\
+                   → Pulling updates...\n  ⚠ Fast-forward not possible (history diverged)\n\
+                   ✗ Failed to reset to origin/main.\n  fatal: Unable to create \
+                   '/Users/me/.hermes/hermes-agent/.git/index.lock': File exists.";
+        let failure = HarnessUpdateFailure::from_raw(HarnessUpdateStep::Install, raw, true);
+        assert_eq!(failure.code, HarnessUpdateFailureCode::Busy);
+        assert_eq!(
+            failure.message,
+            "Another process was using its files. Try again in a moment."
+        );
+        assert!(!failure.message.contains('/'));
+        assert_eq!(failure.details.as_deref(), Some(raw));
+        assert!(failure.code.is_transient());
+        assert!(!failure.is_generic());
+
+        let unknown = HarnessUpdateFailure::from_raw(
+            HarnessUpdateStep::Install,
+            "/opt/bin/grok exited with exit status: 2",
+            true,
+        );
+        assert_eq!(unknown.code, HarnessUpdateFailureCode::Unknown);
+        assert_eq!(unknown.message, "The update didn’t finish.");
+        assert!(unknown.details.is_some());
+        assert!(unknown.is_generic());
+    }
+
+    #[test]
+    fn check_failures_never_read_as_failed_updates() {
+        let unknown = HarnessUpdateFailure::from_raw(
+            HarnessUpdateStep::Check,
+            "/opt/bin/grok exited with exit status: 2",
+            true,
+        );
+        assert_eq!(unknown.step, HarnessUpdateStep::Check);
+        assert_eq!(unknown.message, "Couldn’t check for updates.");
+        assert!(unknown.is_generic());
+        for code in [
+            HarnessUpdateFailureCode::Busy,
+            HarnessUpdateFailureCode::Interrupted,
+            HarnessUpdateFailureCode::Network,
+            HarnessUpdateFailureCode::Permission,
+            HarnessUpdateFailureCode::DiskFull,
+            HarnessUpdateFailureCode::TimedOut,
+            HarnessUpdateFailureCode::Unknown,
+        ] {
+            let summary = code.summary(HarnessUpdateStep::Check);
+            // Phrases that only fit an install.
+            for install in ["the update.", "The update", "Update it", "download"] {
+                assert!(!summary.contains(install), "{code:?}: {summary}");
+            }
+        }
+    }
+
+    #[test]
+    fn update_failures_keep_short_engine_sentences_and_classify_common_causes() {
+        let kept = HarnessUpdateFailure::from_raw(
+            HarnessUpdateStep::Install,
+            "the Antigravity release changed; check for updates again",
+            true,
+        );
+        assert_eq!(kept.code, HarnessUpdateFailureCode::Unknown);
+        assert_eq!(
+            kept.message,
+            "The Antigravity release changed; check for updates again."
+        );
+        assert_eq!(
+            kept.details.as_deref(),
+            Some("the Antigravity release changed; check for updates again")
+        );
+        for (raw, code) in [
+            ("npm ERR! code EACCES", HarnessUpdateFailureCode::Permission),
+            (
+                "write failed: No space left on device",
+                HarnessUpdateFailureCode::DiskFull,
+            ),
+            (
+                "fatal: unable to access 'https://github.com/x/y/': Could not resolve host",
+                HarnessUpdateFailureCode::Network,
+            ),
+            (
+                "error: Another `brew upgrade` process has already locked /opt/homebrew",
+                HarnessUpdateFailureCode::Busy,
+            ),
+            (
+                "update ended before verification; inspect the CLI installation",
+                HarnessUpdateFailureCode::Interrupted,
+            ),
+            (
+                "/usr/local/bin/claude timed out",
+                HarnessUpdateFailureCode::TimedOut,
+            ),
+        ] {
+            assert_eq!(HarnessUpdateFailureCode::classify(raw), code, "{raw}");
+        }
+    }
+
+    #[test]
+    fn update_failure_codes_read_older_and_newer_engines() {
+        let old: HarnessUpdateFailure =
+            serde_json::from_value(serde_json::json!({"message":"boom","retryable":true})).unwrap();
+        assert_eq!(old.code, HarnessUpdateFailureCode::Unknown);
+        assert_eq!(old.step, HarnessUpdateStep::Check);
+        assert_eq!(old.details, None);
+        let newer: HarnessUpdateFailure = serde_json::from_value(
+            serde_json::json!({"message":"x","code":"somethingNew","step":"later","details":"raw"}),
+        )
+        .unwrap();
+        assert_eq!(newer.code, HarnessUpdateFailureCode::Unknown);
+        assert_eq!(newer.step, HarnessUpdateStep::Check);
+        let wire = serde_json::to_value(HarnessUpdateFailure::from_raw(
+            HarnessUpdateStep::Install,
+            "index.lock: File exists",
+            true,
+        ))
+        .unwrap();
+        assert_eq!(wire["code"], "busy");
+        assert_eq!(wire["step"], "install");
+        assert_eq!(wire["details"], "index.lock: File exists");
     }
 
     #[test]
