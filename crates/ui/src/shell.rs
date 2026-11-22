@@ -582,12 +582,17 @@ impl SettingsSection {
         SettingsSection::CloudAgents,
     ];
 
-    /// The sidebar heading this section opens, if it starts a group.
-    fn heading(self) -> Option<&'static str> {
+    /// The sidebar heading this section opens for `access`, if it starts a
+    /// group. Plan & usage opens on Usage, or on Billing when Usage (Cloud
+    /// compute, subscribers only) is not listed.
+    fn heading(self, access: CloudAccess) -> Option<&'static str> {
         match self {
             SettingsSection::Harnesses => Some("Local agents"),
             SettingsSection::Cloud => Some("Cloud computer"),
             SettingsSection::Usage => Some("Plan & usage"),
+            SettingsSection::Billing if !SettingsSection::Usage.visible_in_nav(access) => {
+                Some("Plan & usage")
+            }
             SettingsSection::General => Some("App"),
             _ => None,
         }
@@ -602,6 +607,7 @@ impl SettingsSection {
             SettingsSection::CloudEnvironments => CloudView::Environments,
             SettingsSection::CloudMachine => CloudView::Machine,
             SettingsSection::CloudAgents => CloudView::Agents,
+            SettingsSection::Usage => CloudView::Compute,
             SettingsSection::Billing => CloudView::Billing,
             _ => return None,
         })
@@ -631,12 +637,13 @@ impl SettingsSection {
     }
 
     /// Whether the Settings menu lists this section for `access`. The Cloud
-    /// computer group needs an active Cloud subscription; Billing needs a
-    /// signed-in account (so it can sell one). Local agents, Usage (model
-    /// usage) and App sections are always listed.
+    /// computer group and Usage (Cloud compute) need an active Cloud
+    /// subscription; Billing needs a signed-in account (so it can sell one).
+    /// Local agents and App sections are always listed. Local model usage
+    /// lives in the sidebar footer's usage menu, not here.
     fn visible_in_nav(self, access: CloudAccess) -> bool {
         self.offered_by_build()
-            && (!self.cloud_computer() || access.subscribed())
+            && (!self.needs_subscription() || access.subscribed())
             && (self != Self::Billing || access.signed_in())
     }
 
@@ -646,7 +653,7 @@ impl SettingsSection {
     fn offered_by_build(self) -> bool {
         self != Self::Agents
             && (self != Self::Appshots || crate::appshots::is_desktop())
-            && (!(self.cloud_computer() || matches!(self, Self::Billing | Self::Plugins))
+            && (!(self.needs_subscription() || matches!(self, Self::Billing | Self::Plugins))
                 || zuse_viewport::cloud_gate::enabled())
             && (self != Self::Devices || zuse_viewport::cloud_gate::remote_enabled())
     }
@@ -657,6 +664,12 @@ impl SettingsSection {
     /// section the menu hides is not reachable.
     fn reachable(self, access: CloudAccess) -> bool {
         self.visible_in_nav(access) || (!access.settled() && self.offered_by_build())
+    }
+
+    /// Sections only a Cloud subscriber sees: the Cloud computer group and
+    /// Usage, which shows Cloud compute.
+    fn needs_subscription(self) -> bool {
+        self.cloud_computer() || self == Self::Usage
     }
 
     /// The Cloud computer group: cloud computers, their repositories,
@@ -682,7 +695,7 @@ impl SettingsSection {
         let section = self.canonical();
         if section.reachable(access) {
             section
-        } else if section.cloud_computer() && Self::Billing.reachable(access) {
+        } else if section.needs_subscription() && Self::Billing.reachable(access) {
             Self::Billing
         } else {
             Self::General
@@ -2323,9 +2336,6 @@ pub struct Shell {
     cloud_page_sub: Option<Subscription>,
     /// The first cloud chat onboarding opened, for its guide.
     cloud_first_chat: Option<settings_cloud::FirstCloudChat>,
-    /// Settings → Usage shows Cloud compute instead of model usage.
-    usage_settings_compute: bool,
-    usage_settings_scroll: settings::widgets::PageScroll,
     /// The account was last seen signed in without a subscription, so the
     /// next subscribed answer is a fresh purchase (see `follow_cloud_access`).
     cloud_seen_unsubscribed: bool,
@@ -3010,8 +3020,6 @@ impl Shell {
             cloud_billing_page: None,
             cloud_page_sub: None,
             cloud_first_chat: None,
-            usage_settings_compute: false,
-            usage_settings_scroll: settings::widgets::PageScroll::default(),
             cloud_seen_unsubscribed: false,
             devices_page: None,
             archived_page: None,
@@ -3020,7 +3028,7 @@ impl Shell {
             usage_tasks: Default::default(),
             usage_project: None,
             usage_project_scope: false,
-            usage_pending: route == Route::Settings(SettingsSection::Usage),
+            usage_pending: false,
             project_archives: std::collections::HashMap::new(),
             project_archive_events: std::collections::HashMap::new(),
             appearance_page: None,
@@ -5990,25 +5998,17 @@ impl Shell {
                 page.update(cx, |page, cx| page.on_hidden(cx));
             }
         }
-        // The model-usage dashboard shows on the Usage route and on
-        // Settings → Usage → Models; it loads on entry and stops on exit.
-        let shows_usage = |route: Route, compute: bool| {
-            matches!(route, Route::Usage)
-                || (route == Route::Settings(SettingsSection::Usage) && !compute)
-        };
-        let compute = self.usage_settings_compute;
-        if shows_usage(self.route, compute) && !shows_usage(route, compute) {
+        // The model-usage dashboard shows on the Usage route only; it loads
+        // on entry and stops on exit.
+        let shows_usage = matches!(self.route, Route::Usage);
+        let will_show_usage = matches!(route, Route::Usage);
+        if shows_usage && !will_show_usage {
             if let Some(dashboard) = self.usage_dashboard.clone() {
                 dashboard.update(cx, |dashboard, cx| dashboard.hide(cx));
             }
         }
-        if shows_usage(route, compute) && !shows_usage(self.route, compute)
-            || matches!(route, Route::Usage) && !matches!(self.route, Route::Usage)
-        {
+        if will_show_usage && !shows_usage {
             self.usage_pending = true;
-        }
-        if route == Route::Settings(SettingsSection::Usage) && self.route != route {
-            self.usage_settings_scroll.reset();
         }
         self.route = route;
         if !was_pull_requests && will_show_pull_requests {
@@ -6566,13 +6566,13 @@ impl Shell {
             | SettingsSection::CloudEnvironments
             | SettingsSection::CloudMachine
             | SettingsSection::CloudAgents
+            | SettingsSection::Usage
             | SettingsSection::Billing => {
                 let view = section.cloud_view().unwrap_or_default();
                 let page = self.ensure_cloud_page(window, cx);
                 page.update(cx, |page, cx| page.set_view(view, cx));
                 page.into_any_element()
             }
-            SettingsSection::Usage => self.usage_settings(window, cx),
             SettingsSection::Devices => {
                 if self.devices_page.is_none() {
                     self.devices_page = Some(self.create_devices_page(cx));
@@ -9182,7 +9182,7 @@ impl Shell {
                                 .into_iter()
                                 .filter(|item| item.visible_in_nav(access))
                                 .flat_map(|item| {
-                                    let heading = item.heading().map(|heading| {
+                                    let heading = item.heading(access).map(|heading| {
                                         if compact {
                                             div()
                                                 .mx(px(8.))
@@ -22229,11 +22229,10 @@ mod settings_modal_regressions {
 
     #[test]
     fn cloud_settings_follow_the_account_and_its_subscription() {
-        // Every group heading but Cloud computer's is listed for everyone.
+        // App and Local agents are listed for everyone.
         let always = [
             SettingsSection::General,
             SettingsSection::Harnesses,
-            SettingsSection::Usage,
             SettingsSection::Appearance,
         ];
         for access in [
@@ -22249,25 +22248,35 @@ mod settings_modal_regressions {
             }
             let cloud = CLOUD_GROUP.iter().filter(|s| sections.contains(s)).count();
             assert_eq!(cloud, if access.subscribed() { 5 } else { 0 }, "{access:?}");
+            // Usage is Cloud compute only; local model usage lives in the
+            // sidebar footer's usage menu.
+            assert_eq!(
+                sections.contains(&SettingsSection::Usage),
+                access.subscribed(),
+                "{access:?}"
+            );
             assert_eq!(
                 sections.contains(&SettingsSection::Billing),
                 access.signed_in(),
                 "{access:?}"
             );
         }
-        let headings: Vec<_> = listed(CloudAccess::Subscribed)
-            .into_iter()
-            .filter_map(SettingsSection::heading)
-            .collect();
+        let headings = |access| -> Vec<_> {
+            listed(access)
+                .into_iter()
+                .filter_map(|section| section.heading(access))
+                .collect()
+        };
         assert_eq!(
-            headings,
+            headings(CloudAccess::Subscribed),
             ["App", "Plan & usage", "Local agents", "Cloud computer"]
         );
-        let headings: Vec<_> = listed(CloudAccess::SignedIn)
-            .into_iter()
-            .filter_map(SettingsSection::heading)
-            .collect();
-        assert_eq!(headings, ["App", "Plan & usage", "Local agents"]);
+        // Without Usage, Plan & usage opens on Billing.
+        assert_eq!(
+            headings(CloudAccess::SignedIn),
+            ["App", "Plan & usage", "Local agents"]
+        );
+        assert_eq!(headings(CloudAccess::SignedOut), ["App", "Local agents"]);
     }
 
     #[test]
@@ -22295,8 +22304,21 @@ mod settings_modal_regressions {
             SettingsSection::Billing.reopenable(CloudAccess::SignedOut),
             SettingsSection::General
         );
+        // Usage (Cloud compute) follows the Cloud computer pages.
+        assert_eq!(
+            SettingsSection::Usage.reopenable(CloudAccess::Subscribed),
+            SettingsSection::Usage
+        );
+        assert_eq!(
+            SettingsSection::Usage.reopenable(CloudAccess::SignedIn),
+            SettingsSection::Billing
+        );
         assert_eq!(
             SettingsSection::Usage.reopenable(CloudAccess::SignedOut),
+            SettingsSection::General
+        );
+        assert_eq!(
+            SettingsSection::Usage.reopenable(CloudAccess::Checking),
             SettingsSection::Usage
         );
     }

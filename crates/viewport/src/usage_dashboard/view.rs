@@ -232,34 +232,25 @@ impl UsageDashboard {
                 }
             }))
             .w_full()
-            .when(!self.embedded, |v| v.h_full().bg(rgb(BG)))
-            .when(self.embedded, |v| v.flex_none())
+            .h_full()
+            .bg(rgb(BG))
             .min_w_0()
             .min_h_0()
-            .on_scroll_wheel(cx.listener(|this, _, _, cx| {
-                if this.embedded && (this.hovered.is_some() || this.hover_cursor.is_some()) {
-                    this.hovered = None;
-                    this.hover_cursor = None;
-                    cx.notify();
-                }
-            }))
             .text_color(rgb(TEXT))
             .text_size(px(14.))
             .line_height(px(18.9))
-            .when(!self.embedded, |v| {
-                v.child(
-                    row()
-                        .flex_none()
-                        .h(px(48.))
-                        .px(px(20.))
-                        .border_b_1()
-                        .border_color(rgb(BORDER))
-                        .child(
-                            label(tr(cx, msg::usage::usage_dashboard_usage), 14.)
-                                .font_weight(FontWeight::MEDIUM),
-                        ),
-                )
-            })
+            .child(
+                row()
+                    .flex_none()
+                    .h(px(48.))
+                    .px(px(20.))
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .child(
+                        label(tr(cx, msg::usage::usage_dashboard_usage), 14.)
+                            .font_weight(FontWeight::MEDIUM),
+                    ),
+            )
             .child(controls);
         if self.report_error.is_some() && report.is_some() {
             root = root.child(
@@ -317,11 +308,7 @@ impl UsageDashboard {
                         .to_string()
                     }),
             );
-            root = if self.embedded {
-                root.child(body)
-            } else {
-                root.child(self.scroll_view(body, cx))
-            };
+            root = root.child(self.scroll_view(body, cx));
         } else if refreshing {
             root = root.child(self.skeleton(wide));
         } else {

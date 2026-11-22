@@ -681,7 +681,6 @@ fn main() {
         state.update(cx, |_, cx| cx.notify());
         cx.activate(true);
         let out = std::env::var("FIXTURE_OUT").ok();
-        let compute = std::env::var("FIXTURE_COMPUTE").is_ok();
         let onboarding = std::env::var("FIXTURE_ONBOARDING").ok();
         cx.spawn(async move |cx| {
             let delay = std::env::var("FIXTURE_DELAY_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(2500);
@@ -693,10 +692,6 @@ fn main() {
                     })
                     .unwrap();
                 cx.background_executor().timer(std::time::Duration::from_millis(1500)).await;
-            }
-            if compute {
-                window.update(cx, |shell, _, cx| shell.fixture_usage_compute(cx)).unwrap();
-                cx.background_executor().timer(std::time::Duration::from_millis(2000)).await;
             }
             for point in std::env::var("FIXTURE_CLICKS").unwrap_or_default().split(';').filter(|p| !p.is_empty()) {
                 let status = std::process::Command::new("python3")

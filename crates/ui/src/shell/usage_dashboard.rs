@@ -68,9 +68,6 @@ impl Shell {
                         });
                     }
                 }
-                Event::Close if matches!(this.route, Route::Settings(_)) => {
-                    this.close_settings(cx);
-                }
                 Event::Close => {
                     this.set_route(Route::Chat, cx);
                     this.focus_composer(cx);
@@ -122,17 +119,13 @@ impl Shell {
             self.usage_dashboard = Some(dashboard);
         }
         let dashboard = self.usage_dashboard.clone().unwrap();
-        let embedded = matches!(self.route, Route::Settings(_));
-        dashboard.update(cx, |dashboard, cx| dashboard.set_embedded(embedded, cx));
         let properties = self.usage_properties(cx);
         if self.usage_pending {
             self.usage_pending = false;
             dashboard.update(cx, |dashboard, cx| {
                 dashboard.open(properties, self.usage_project_scope, cx)
             });
-            if !embedded {
-                window.focus(&self.unfocused, cx);
-            }
+            window.focus(&self.unfocused, cx);
         } else {
             dashboard.update(cx, |dashboard, cx| dashboard.set_properties(properties, cx));
         }
