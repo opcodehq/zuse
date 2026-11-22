@@ -130,6 +130,27 @@ fn admit(
     Ok(!busy(chat))
 }
 
+fn archive_unstarted_worker(workspace: &WorkspaceHost, zot: &Zot, chat: &str) -> Result<()> {
+    let worker = zot
+        .workers
+        .iter()
+        .find(|worker| worker.chat_id == chat)
+        .context("worker not found")?;
+    workspace.create_chat_with_parent(
+        chat,
+        Some(&worker.space_id),
+        Some(&worker.device_id),
+        None,
+        None,
+        None,
+    )?;
+    ensure!(
+        workspace.set_chat_archived(chat, true)?,
+        "worker conversation unavailable"
+    );
+    Ok(())
+}
+
 fn reconcile(
     zots: &Zots,
     sessions: &SessionsEngine,
@@ -533,6 +554,15 @@ fn reconcile(
             tx.commit()?;
         }
         let delivery: Result<()> = (|| {
+            if stopping && workspace.chat(&chat)?.is_none() {
+                // A cancelled queued delegate never created a conversation.
+                // Stop has nothing to interrupt; archive still needs a durable
+                // chat row so it stays out of the sidebar after reconnecting.
+                if matches!(action, ZotAction::ArchiveWorker { .. }) {
+                    archive_unstarted_worker(workspace, zot, &chat)?;
+                }
+                return Ok(());
+            }
             let payload = match &action {
                 ZotAction::Delegate {
                     worker,
@@ -753,6 +783,54 @@ mod queue_tests {
             .into_iter()
             .map(|w| (w.chat_id, w.queue_position))
             .collect()
+    }
+
+    #[tokio::test]
+    async fn archiving_an_unstarted_worker_persists_an_archived_chat() {
+        use crate::{DocsStore, WorkspaceHostConfig};
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceHost::open(
+            Arc::new(DocsStore::open(dir.path()).unwrap()),
+            WorkspaceHostConfig {
+                device_id: "local".into(),
+                device_name: "Test device".into(),
+                platform: "linux".into(),
+                org_id: "test-org".into(),
+                user_id: "test-user".into(),
+                edge: None,
+                local_only: true,
+            },
+        )
+        .unwrap();
+        let store = Zots::open(&dir.path().join("zots"), "local").unwrap();
+        store
+            .command(command(
+                "release",
+                "create",
+                ZotAction::Create { config: config() },
+            ))
+            .unwrap();
+        delegate(&store, "queued", "one");
+        let zot = store.get("release").unwrap();
+        let worker = &zot.workers[0];
+        workspace
+            .import_space_row(&zuse_protocol::Space {
+                id: worker.space_id.clone(),
+                device_id: worker.device_id.clone(),
+                path: dir.path().to_string_lossy().into_owned(),
+                name: None,
+                git_detected: false,
+                git_checked_at: None,
+                checkout_id: None,
+                repository_id: None,
+                remote_repository: None,
+                created_at: chrono::Utc::now(),
+            })
+            .unwrap();
+        assert!(workspace.chat("queued").unwrap().is_none());
+        archive_unstarted_worker(&workspace, &zot, "queued").unwrap();
+        archive_unstarted_worker(&workspace, &zot, "queued").unwrap();
+        assert!(workspace.chat("queued").unwrap().unwrap().archived);
     }
 
     #[test]
