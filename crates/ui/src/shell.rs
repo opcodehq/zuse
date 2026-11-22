@@ -11414,14 +11414,12 @@ impl Shell {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(
-                        div().absolute().child(crate::loaders::upload_progress_arc(
-                            percent,
-                            24.0,
-                            theme.accent.opacity(0.2),
-                            theme.accent,
-                        )),
-                    )
+                    .child(div().absolute().child(crate::loaders::upload_progress_arc(
+                        percent,
+                        24.0,
+                        theme.accent.opacity(0.2),
+                        theme.accent,
+                    )))
                     .child(
                         div()
                             .text_size(px(8.0))
@@ -11468,9 +11466,7 @@ impl Shell {
                 } else {
                     bg
                 })
-                .when(downloading, |el| {
-                    el.hover(move |el| el.bg(download_hover))
-                })
+                .when(downloading, |el| el.hover(move |el| el.bg(download_hover)))
                 .map(|el| match notes {
                     // Hoverable so the pointer can reach the card's link. It
                     // sits at the window's bottom edge, so gpui flips it up.
