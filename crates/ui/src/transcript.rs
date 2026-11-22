@@ -1161,8 +1161,11 @@ pub enum RowKind {
         pending: bool,
         /// A coordinator turn the Zapper engine assembled: `text` is its
         /// short version and this is everything the agent received, shown
-        /// only behind "Show full prompt".
+        /// only behind "Show full prompt", when it differs from `text`.
         full_prompt: Option<SharedString>,
+        /// An engine-generated Zapper turn: its header reads "Sent from
+        /// Zapper". The owner's own coordinator messages are not.
+        zapper: bool,
     },
     /// One top-level markdown block of a completed message.
     Markdown {
@@ -1430,14 +1433,17 @@ pub fn user_resize_spec(height_delta: f32) -> motion::MotionSpec {
 #[cfg(test)]
 thread_local! { static FORBID_ROW_PREPARATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 
-/// The whole prompt behind a Zapper coordinator turn, when the entry is one.
-/// Slack requests and ordinary messages show their text as before.
+/// The whole prompt behind an engine-generated Zapper turn, when it says more
+/// than the short text shown. The owner's own messages, Slack requests and
+/// ordinary messages show their text as before.
 fn zapper_full_prompt(
     source: Option<&zuse_protocol::slack::MessageSource>,
     raw: &str,
 ) -> Option<SharedString> {
     match source {
-        Some(zuse_protocol::slack::MessageSource::Zapper { .. }) if !raw.trim().is_empty() => {
+        Some(source @ zuse_protocol::slack::MessageSource::Zapper { typed: false, .. })
+            if !raw.trim().is_empty() && raw.trim() != source.text().trim() =>
+        {
             Some(raw.to_owned().into())
         }
         _ => None,
@@ -1489,6 +1495,10 @@ pub fn rows_for_entry(
             .collect::<Vec<_>>()
             .join("\n\n");
         let full_prompt = zapper_full_prompt(source.as_ref(), &raw);
+        let zapper = matches!(
+            source,
+            Some(zuse_protocol::slack::MessageSource::Zapper { typed: false, .. })
+        );
         let raw = source.as_ref().map(|s| s.text().to_owned()).unwrap_or(raw);
         // Attachment refs ride the plain text (the `withAttachments`
         // transport); split them back out for the thumbnail strip.
@@ -1504,7 +1514,13 @@ pub fn rows_for_entry(
             None => (None, agent_message_display(&body)),
         };
         // A Slack request reads like any message sent on someone's behalf.
-        let sender = sender.or_else(|| source.as_ref().map(|s| s.sender()));
+        // The owner's own coordinator message reads as theirs, unattributed.
+        let sender = sender.or_else(|| {
+            source
+                .as_ref()
+                .filter(|s| !s.is_typed())
+                .map(|s| s.sender())
+        });
         // Draft chips become attachment references above the sent bubble.
         // Resolve uploads before lifting their spans so ordinary text and links
         // keep their original meaning; the draft editor is unaffected.
@@ -1579,6 +1595,7 @@ pub fn rows_for_entry(
                 files: Arc::new(files),
                 pending,
                 full_prompt,
+                zapper,
             },
             entry_id,
             // User rows always carry the strip (chat-view.tsx: whenever
@@ -9229,8 +9246,10 @@ impl Transcript {
                 files,
                 pending,
                 full_prompt,
+                zapper,
             } => {
                 let full_prompt = full_prompt.clone();
+                let zapper = *zapper;
                 let attachments = attachments.clone();
                 let badges = badges.clone();
                 let files = files.clone();
@@ -9318,7 +9337,7 @@ impl Transcript {
                                         .text_color(theme.text)
                                         .when(pending, |el| el.opacity(0.65))
                                         .when_some(sender.as_ref(), |d, sender| {
-                                            d.child(if full_prompt.is_some() {
+                                            d.child(if zapper {
                                                 zuse_viewport::zot_issues::sender_header_labeled(
                                                     sender,
                                                     zuse_protocol::slack::MessageSource::ZAPPER_LABEL,
@@ -19805,6 +19824,53 @@ mod slack_tests {
         assert!(full.contains("You are Release, a Zapper"));
         assert!(!text.contains("You are Release"));
         assert_eq!(zapper_prompt_label(false), "Show full prompt");
+        assert!(matches!(rows[0].kind, RowKind::User { zapper: true, .. }));
+    }
+
+    #[test]
+    fn the_owners_own_coordinator_message_reads_as_a_normal_message() {
+        // ZAP-22: what the owner typed has no "Sent from Zapper" header and
+        // no "Show full prompt", even though the agent got the whole brief.
+        let entry = zapper_entry(Some(serde_json::json!({
+            "_tag": "zapper",
+            "text": "Ship the notes",
+            "sender": {"zotId": "release", "chatId": "coord", "name": "Release", "avatar": null},
+            "typed": true,
+        })));
+        let rows = rows_for_entry(&entry, false, false, &mut |_, _| {
+            panic!("User messages do not parse assistant markdown")
+        });
+        let RowKind::User {
+            text,
+            sender,
+            full_prompt,
+            zapper,
+            ..
+        } = &rows[0].kind
+        else {
+            panic!("user row missing")
+        };
+        assert_eq!(text.as_ref(), "Ship the notes");
+        assert!(sender.is_none());
+        assert!(full_prompt.is_none());
+        assert!(!zapper);
+    }
+
+    #[test]
+    fn engine_turns_hide_the_disclosure_when_the_prompt_is_the_text() {
+        let source = zuse_protocol::slack::MessageSource::Zapper {
+            text: "Update from Build thread".into(),
+            sender: zuse_protocol::presentation::zot_message::ZotSender {
+                zot_id: "release".into(),
+                chat_id: "coord".into(),
+                name: "Release".into(),
+                avatar: None,
+                activity: false,
+            },
+            typed: false,
+        };
+        assert!(zapper_full_prompt(Some(&source), " Update from Build thread\n").is_none());
+        assert!(zapper_full_prompt(Some(&source), "Brief\n\nUpdate from Build thread").is_some());
     }
 
     #[test]

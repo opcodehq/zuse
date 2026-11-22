@@ -55,18 +55,22 @@ impl Zots {
         let Some(zot) = self.coordinator(chat)? else {
             return Ok(None);
         };
-        let text = match zot_message::parse(original) {
+        // Only an unattributed prompt is the owner's own message; activity
+        // wakes and thread reports arrive attributed to their sender.
+        let (text, typed) = match zot_message::parse(original) {
             Some((sender, body)) if sender.activity => {
-                match message_id.map(|id| self.turn_summary_for(id)).transpose()? {
+                let text = match message_id.map(|id| self.turn_summary_for(id)).transpose()? {
                     Some(Some(summary)) => summary,
                     _ => activity_fallback(&sender, body),
-                }
+                };
+                (text, false)
             }
-            Some((_, body)) => body.trim().to_owned(),
-            None => original.trim().to_owned(),
+            Some((_, body)) => (body.trim().to_owned(), false),
+            None => (original.trim().to_owned(), true),
         };
         Ok(Some(MessageSource::Zapper {
             text,
+            typed,
             sender: ZotSender {
                 zot_id: zot.id.clone(),
                 chat_id: zot.coordinator_chat_id.clone(),
@@ -234,10 +238,16 @@ mod tests {
             .turn_source(&chat, "  Ship the release notes  ", Some("m1"))
             .unwrap()
             .unwrap();
-        let MessageSource::Zapper { text, sender } = &source else {
+        let MessageSource::Zapper {
+            text,
+            sender,
+            typed,
+        } = &source
+        else {
             panic!("expected a Zapper source");
         };
         assert_eq!(text, "Ship the release notes");
+        assert!(typed, "the owner's message shows as their own");
         assert_eq!(sender.zot_id, "release");
         assert_eq!(sender.chat_id, chat);
         assert_eq!(sender.name, zot.config.name);
@@ -255,6 +265,14 @@ mod tests {
                 .unwrap()
                 .text(),
             "2 thread reports"
+        );
+        assert!(
+            !store
+                .turn_source(&chat, &notice, Some("wake-1"))
+                .unwrap()
+                .unwrap()
+                .is_typed(),
+            "engine updates keep the Zapper header"
         );
         // Without the record it still never shows the raw updates.
         assert_eq!(

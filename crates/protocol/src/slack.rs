@@ -21,9 +21,17 @@ pub enum MessageSource {
     Zapper {
         text: String,
         sender: crate::presentation::zot_message::ZotSender,
+        /// The owner typed this turn: the transcript shows it as their own
+        /// message, without the "Sent from Zapper" header.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        typed: bool,
     },
 }
 impl MessageSource {
+    /// A coordinator turn that only carries what the owner typed.
+    pub fn is_typed(&self) -> bool {
+        matches!(self, Self::Zapper { typed: true, .. })
+    }
     pub fn text(&self) -> &str {
         match self {
             Self::Slack { text, .. } | Self::Zapper { text, .. } => text,
@@ -264,16 +272,22 @@ mod tests {
         let source = MessageSource::Zapper {
             text: "2 thread reports · ZAP-7 changed".into(),
             sender: sender.clone(),
+            typed: false,
         };
         let json = serde_json::to_value(&source).unwrap();
         assert_eq!(json["_tag"], "zapper");
         assert_eq!(json["text"], "2 thread reports · ZAP-7 changed");
+        assert!(
+            json.get("typed").is_none(),
+            "older readers see the same part"
+        );
         let back: MessageSource = serde_json::from_value(json).unwrap();
         assert_eq!(back, source);
         assert_eq!(back.label(), "Sent from Zapper");
         assert_eq!(back.sender(), sender);
         assert!(!back.is_slack());
         assert_eq!(back.text(), "2 thread reports · ZAP-7 changed");
+        assert!(!back.is_typed());
     }
     #[test]
     fn slack_unicode_results_are_bounded_without_cutting_characters() {
