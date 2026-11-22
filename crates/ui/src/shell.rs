@@ -11314,7 +11314,7 @@ impl Shell {
         let notes = update
             .read(cx)
             .release_notes()
-            .map(|(version, sections)| (version.to_owned(), sections.to_vec()));
+            .map(|(version, _)| version.to_owned());
         let working = self.working_agent_count(cx);
 
         enum Tone {
@@ -11328,9 +11328,9 @@ impl Shell {
                 (Flow::Installed, _) => (None, "Restarting", Tone::Quiet, status),
                 (Flow::Downloading { .. }, _) => (
                     None,
-                    "Updating",
+                    "Downloading update",
                     Tone::Quiet,
-                    format!("{status} You can keep working.").into(),
+                    SharedString::from("You can keep working. We’ll let you know when it’s ready."),
                 ),
                 (_, StripAction::Restart) => (
                     Some(icons::RESTART),
@@ -11369,8 +11369,7 @@ impl Shell {
         let interactive = action != StripAction::None;
         let focus_ring = theme.accent;
         // Icon only, the same size as the footer's other buttons, so update
-        // status never adds a row; the label and notes live in the hover card.
-        let _ = label;
+        // status never adds a row; its label lives in the hover card.
         let glyph = glyph.unwrap_or(match flow {
             Flow::Installed => icons::RESTART,
             _ => icons::ARROW_DOWN,
@@ -11414,11 +11413,11 @@ impl Shell {
                 .map(|el| match notes {
                     // Hoverable so the pointer can reach the card's link. It
                     // sits at the window's bottom edge, so gpui flips it up.
-                    Some((version, sections)) => el.hoverable_tooltip(move |_, cx| {
+                    Some(version) => el.hoverable_tooltip(move |_, cx| {
                         cx.new(|_| update_notes::UpdateNotesCard {
+                            title: label.into(),
                             status: tip.clone(),
                             version: version.clone(),
-                            sections: sections.clone(),
                         })
                         .into()
                     }),
