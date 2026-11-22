@@ -76,14 +76,14 @@ function ConfigForm(props: { existing?: Zapper }) {
       return void setError("Choose the coordinator and worker computers.");
     setError(null);
     try {
-      const zot = await command(
+      const zapper = await command(
         id,
         { type: props.existing ? "configure" : "create", config },
         config.homeDeviceId,
       );
-      if (zot) {
+      if (zapper) {
         await Promise.resolve();
-        openZapper(zot);
+        openZapper(zapper);
       }
     } catch {
       /* The shared command alert retains the exact retry, if delivery is uncertain. */

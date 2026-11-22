@@ -13,13 +13,13 @@ import {
   workerVisible,
 } from "./state";
 
-export function Threads(props: { zot: Zapper }) {
+export function Threads(props: { zapper: Zapper }) {
   const [mode, setMode] = createSignal<"delegate" | "adopt" | null>(null);
   const [message, setMessage] = createSignal<string | null>(null);
   const [text, setText] = createSignal("");
   const sendMessage = async () => {
     try {
-      await command(props.zot.id, {
+      await command(props.zapper.id, {
         type: "messageWorker",
         chatId: message()!,
         text: text().trim(),
@@ -48,7 +48,7 @@ export function Threads(props: { zot: Zapper }) {
         </div>
       </div>
       <For
-        each={props.zot.workers.filter((w) => workerVisible(w.chatId))}
+        each={props.zapper.workers.filter((w) => workerVisible(w.chatId))}
         fallback={
           <p class="zp-muted">
             Delegate a task or adopt an existing project conversation.
@@ -82,7 +82,7 @@ export function Threads(props: { zot: Zapper }) {
                   {
                     label: "Stop thread",
                     onSelect: () =>
-                      act(props.zot.id, {
+                      act(props.zapper.id, {
                         type: "stopWorker",
                         chatId: worker.chatId,
                       }),
@@ -90,7 +90,7 @@ export function Threads(props: { zot: Zapper }) {
                   {
                     label: "Archive thread",
                     onSelect: () =>
-                      act(props.zot.id, {
+                      act(props.zapper.id, {
                         type: "archiveWorker",
                         chatId: worker.chatId,
                       }),
@@ -98,7 +98,7 @@ export function Threads(props: { zot: Zapper }) {
                   {
                     label: "Release to project",
                     onSelect: () =>
-                      act(props.zot.id, {
+                      act(props.zapper.id, {
                         type: "releaseWorker",
                         chatId: worker.chatId,
                       }),
@@ -120,20 +120,20 @@ export function Threads(props: { zot: Zapper }) {
       <h3>Coordinator conversations</h3>
       <For
         each={[
-          props.zot.coordinatorChatId,
-          ...props.zot.previousCoordinatorChats,
+          props.zapper.coordinatorChatId,
+          ...props.zapper.previousCoordinatorChats,
         ]}
       >
         {(id) => (
           <button class="zp-history-row" onClick={() => openChat(id)}>
             {threadTitle(
               id,
-              id === props.zot.coordinatorChatId
+              id === props.zapper.coordinatorChatId
                 ? "Current coordinator"
                 : "Previous coordinator",
             )}
             <span class="zp-muted">
-              {id === props.zot.coordinatorChatId ? "Current" : "Previous"}
+              {id === props.zapper.coordinatorChatId ? "Current" : "Previous"}
             </span>
           </button>
         )}
@@ -141,7 +141,7 @@ export function Threads(props: { zot: Zapper }) {
       <Show when={mode()}>
         {(value) => (
           <WorkerDialog
-            zot={props.zot}
+            zapper={props.zapper}
             mode={value()}
             close={() => setMode(null)}
           />
@@ -179,7 +179,7 @@ export function Threads(props: { zot: Zapper }) {
   );
 }
 export function WorkerDialog(props: {
-  zot: Zapper;
+  zapper: Zapper;
   mode: "delegate" | "adopt";
   close: () => void;
   issueId?: string;
@@ -188,7 +188,7 @@ export function WorkerDialog(props: {
   const [objective, setObjective] = createSignal(() =>
     untrack(() =>
       props.issueId
-        ? (props.zot.issues.find((i) => i.id === props.issueId)?.details
+        ? (props.zapper.issues.find((i) => i.id === props.issueId)?.details
             .title ?? "")
         : "",
     ),
@@ -196,12 +196,12 @@ export function WorkerDialog(props: {
   const [chat, setChat] = createSignal("");
   const [base, setBase] = createSignal("HEAD");
   const [harness, setHarness] = createSignal(() =>
-    untrack(() => props.zot.config.coordinatorModel.harness),
+    untrack(() => props.zapper.config.coordinatorModel.harness),
   );
   const [model, setModel] = createSignal(() =>
-    untrack(() => props.zot.config.coordinatorModel.model ?? ""),
+    untrack(() => props.zapper.config.coordinatorModel.model ?? ""),
   );
-  const repository = () => props.zot.config.repositories[repo()];
+  const repository = () => props.zapper.config.repositories[repo()];
   const candidates = createMemo(() =>
     Object.values(state.chats).filter(
       (c) =>
@@ -225,7 +225,7 @@ export function WorkerDialog(props: {
     };
     try {
       const result = await command(
-        props.zot.id,
+        props.zapper.id,
         props.mode === "adopt"
           ? { type: "adoptWorker", worker }
           : {
@@ -269,7 +269,7 @@ export function WorkerDialog(props: {
               setChat("");
             }}
           >
-            <For each={props.zot.config.repositories}>
+            <For each={props.zapper.config.repositories}>
               {(r, i) => (
                 <option value={i()}>
                   {state.spaces[r.spaceId]?.name ||
@@ -281,7 +281,7 @@ export function WorkerDialog(props: {
             </For>
           </select>
         </label>
-        <Show when={!props.zot.config.repositories.length}>
+        <Show when={!props.zapper.config.repositories.length}>
           <p>Add a repository in Zapper settings before delegating work.</p>
         </Show>
         <Show when={props.mode === "adopt"}>

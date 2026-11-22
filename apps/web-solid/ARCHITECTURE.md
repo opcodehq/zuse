@@ -85,7 +85,7 @@ Kobalte is pinned to `2.0.0-alpha.4`, its published Solid 2 line. Its peer range
 
 ## Zappers
 
-`WatchZots` is a standing connection watch. `core/zappers.ts` determines ownership, including previous coordinators and thread descendants. Owned threads are excluded from ordinary sidebar and search results; `openChat` routes them into the Zapper conversation and inspector. The regular list waits for the first ownership snapshot to avoid briefly leaking Zapper threads. Released workers return to their projects; archived workers remain accessible from the archive.
+`WatchZappers` is a standing connection watch. `core/zappers.ts` determines ownership, including previous coordinators and thread descendants. Owned threads are excluded from ordinary sidebar and search results; `openChat` routes them into the Zapper conversation and inspector. The regular list waits for the first ownership snapshot to avoid briefly leaking Zapper threads. Released workers return to their projects; archived workers remain accessible from the archive.
 
 The inspector mirrors desktop Overview, Issues, Threads, Drive and History. Commands carry an expected revision and stable command ID. A lost response preserves the exact command for an explicit idempotent retry. Delegated chat IDs derive from that command ID. Document edits/restores carry an expected file version. Display attribution parses the engine envelope without modifying the stored or submitted prompt. Pixel mascots are generated from the shared Rust presentation definitions using `scripts/gen-zapper-mascots.py`.
 

@@ -2,7 +2,7 @@
 from pathlib import Path
 import json, re
 root = Path(__file__).resolve().parents[3]
-source = (root / 'crates/protocol/src/presentation/zot_mascots.rs').read_text()
+source = (root / 'crates/protocol/src/presentation/zapper_mascots.rs').read_text()
 mascots = [dict(id=id, name=name, sprite=re.findall(r'"([.bskwcgtp]{16})"', sprite)) for id, name, sprite in re.findall(r'Mascot \{\s*id: "([^"]+)",\s*name: "([^"]+)",\s*sprite: \[(.*?)\]', source, re.S)]
 colors = [dict(id=id, body=f'#{body}', shade=f'#{shade}') for id, body, shade in re.findall(r'MascotColor \{\s*id: "([^"]+)",\s*body: 0x([0-9a-f]+),\s*shade: 0x([0-9a-f]+)', source)]
 assert mascots and colors and all(len(m['sprite']) == 16 for m in mascots)

@@ -14,7 +14,7 @@ function client() { return createZuseClient({ endpoint:'ws://127.0.0.1:27654', t
 async function sent() { await new Promise(resolve => setImmediate(resolve)); return FakeSocket.last; }
 
 test('authenticates envelopes and preserves a nullable result', async () => {
-  const api=client(); const result=api.call('ZotCommand',{commandId:'same-id'}); const socket=await sent();
+  const api=client(); const result=api.call('ZapperCommand',{commandId:'same-id'}); const socket=await sent();
   const request=socket.sent[0]; assert.equal(request.method,'ControlCall'); assert.equal(request.params.token,'private');
   assert.equal(request.params.params.commandId,'same-id'); socket.receive({id:request.id,ok:null}); assert.equal(await result,null);api.close();
 });
@@ -24,12 +24,12 @@ test('cancellation sends cancellation without replay', async () => {
   assert.deepEqual(socket.sent[1],{id:socket.sent[0].id,cancel:true});api.close();
 });
 test('subscription return cancels the server operation', async () => {
-  const api=client();const iterator=api.zots.watch();const socket=await sent();const id=socket.sent[0].id;
+  const api=client();const iterator=api.zappers.watch();const socket=await sent();const id=socket.sent[0].id;
   socket.receive({id,item:[]});assert.deepEqual(await iterator.next(),{value:[],done:false});await iterator.return!();
   assert.deepEqual(socket.sent.at(-1),{id,cancel:true});api.close();
 });
 test('transport failure rejects writes and never replays them', async () => {
-  const api=client();const result=api.call('ZotCommand',{});const rejected=assert.rejects(result,(e:any)=>e.code==='transport');const socket=await sent();
+  const api=client();const result=api.call('ZapperCommand',{});const rejected=assert.rejects(result,(e:any)=>e.code==='transport');const socket=await sent();
   socket.close();await rejected;assert.equal(socket.sent.length,1);
 });
 test('unsupported capabilities and bad credentials are typed failures', async () => {
@@ -43,7 +43,7 @@ test('remote connections require TLS and credentials stay out of URLs',()=>{
   assert.throws(()=>createZuseClient({endpoint:'wss://remote.example/api/control?token=secret',token:'secret'}));
 });
 test('slow subscription consumers receive bounded overflow errors',async()=>{
-  const api=client();const iterator=api.zots.watch();const socket=await sent();const id=socket.sent[0].id;
+  const api=client();const iterator=api.zappers.watch();const socket=await sent();const id=socket.sent[0].id;
   for(let index=0;index<257;index++)socket.receive({id,item:[]});
   await assert.rejects(iterator.next(),(e:any)=>e.code==='overflow');assert.deepEqual(socket.sent.at(-1),{id,cancel:true});api.close();
 });
@@ -60,7 +60,7 @@ test('requests can be cancelled before a connection opens', async()=>{
 
 test('returning a connecting subscription prevents dispatch', async () => {
   const api = client();
-  const iterator = api.zots.watch();
+  const iterator = api.zappers.watch();
   await iterator.return!();
   const socket = await sent();
   assert.deepEqual(socket.sent, []);
@@ -70,7 +70,7 @@ test('returning a connecting subscription prevents dispatch', async () => {
 
 test('overlapping subscription reads each receive a result', async () => {
   const api = client();
-  const iterator = api.zots.watch();
+  const iterator = api.zappers.watch();
   const socket = await sent();
   const first = iterator.next();
   const second = iterator.next();
@@ -126,7 +126,7 @@ test('synchronous subscription replies cancel after the first call result', asyn
     }
   }
   const api = createZuseClient({ endpoint: 'ws://[::1]:27654', token: 'private', webSocket: Immediate as unknown as typeof WebSocket });
-  assert.deepEqual(await api.call('WatchZots'), []);
+  assert.deepEqual(await api.call('WatchZappers'), []);
   const socket = await sent();
   assert.deepEqual(socket.sent[1], { id: socket.sent[0].id, cancel: true });
   api.close();
@@ -154,7 +154,7 @@ test('invalid URLs and socket construction failures use typed transport errors',
 
 test('completed subscriptions drain buffered items and finish every waiting read', async () => {
   const api = client();
-  const iterator = api.zots.watch();
+  const iterator = api.zappers.watch();
   const socket = await sent();
   const id = socket.sent[0].id;
   socket.receive({ id, item: ['last'] });
@@ -168,7 +168,7 @@ test('completed subscriptions drain buffered items and finish every waiting read
 
 test('return wakes every pending iterator read', async () => {
   const api = client();
-  const iterator = api.zots.watch();
+  const iterator = api.zappers.watch();
   await sent();
   const reads = [iterator.next(), iterator.next()];
   await iterator.return!();

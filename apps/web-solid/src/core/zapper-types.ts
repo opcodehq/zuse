@@ -1,4 +1,4 @@
-// Wire contracts from crates/protocol/src/zots.rs (Zot is the engine name).
+// Wire contracts from crates/protocol/src/zappers.rs (Zapper is the engine name).
 export interface ZapperAvatar {
   mascot: string;
   color: string;
@@ -98,7 +98,7 @@ export interface ZapperFile {
 }
 export interface ZapperEvent {
   id: string;
-  zotId: string;
+  zapperId: string;
   workerChatId: string;
   kind: string;
   summary: string;
@@ -158,7 +158,7 @@ export type ZapperAction =
   | { type: "freshConversation" | "delete" };
 export interface ZapperCommand {
   commandId: string;
-  zotId: string;
+  zapperId: string;
   expectedRevision: number | null;
   action: ZapperAction;
 }

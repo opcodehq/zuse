@@ -8,6 +8,7 @@ import { RpcClient, type Subscription } from "./rpc";
 import { applySnapshot, setState, state, type ConnectionStatus } from "./store";
 import { OwnerTransport, type Transport } from "./transport";
 import type { Zapper } from "./zapper-types";
+import { wireMethod } from "./zapper-legacy";
 import { reconcile } from "solid-js";
 
 export const rpc = new RpcClient();
@@ -140,7 +141,7 @@ onConnected(() => rpc.subscribe(M.WATCH_CHATS, {}, (rows) => {
 onConnected(() => rpc.subscribe(M.WATCH_SESSIONS, {}, (rows) => applySnapshot("sessions", rows)));
 onConnected(() => {
   setState(draft => { draft.zappersReady = false; draft.zappersError = null; });
-  return rpc.subscribe<Zapper[]>(M.CONTROL_WATCH_ZOTS, {}, rows => {
+  return rpc.subscribe<Zapper[]>(wireMethod(M.CONTROL_WATCH_ZAPPERS), {}, rows => {
     setState(draft => {
       reconcile(rows, "id")(draft.zappers);
       draft.zappersReady = true;

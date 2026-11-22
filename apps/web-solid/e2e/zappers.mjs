@@ -103,11 +103,11 @@ try {
       'window.__zuse.state.zappers.length===1 && !!document.querySelector(".zp-inspector")',
     );
   });
-  const zotId = await page.eval("window.__zuse.state.zappers[0].id");
+  const zapperId = await page.eval("window.__zuse.state.zappers[0].id");
   const mutate = (action) =>
-    engine.rpc("ZotCommand", {
+    engine.rpc("ZapperCommand", {
       commandId: randomUUID(),
-      zotId,
+      zapperId,
       expectedRevision: null,
       action,
       targetDeviceId: deviceId,
@@ -191,8 +191,8 @@ try {
     );
     await clickText("[role=dialog] button", "Restore version");
     await page.waitFor('!document.querySelector("[role=dialog]")');
-    const files = await engine.rpc("ZotFiles", {
-      zotId,
+    const files = await engine.rpc("ZapperFiles", {
+      zapperId,
       history: false,
       targetDeviceId: deviceId,
     });
@@ -215,7 +215,7 @@ try {
       const workerId = await page.eval(
         'window.__zuse.state.zappers[0].workers.find(w=>w.objective==="Run release verification").chatId',
       );
-      assert.ok(workerId.startsWith("zot-worker-"));
+      assert.ok(workerId.startsWith("zapper-worker-"));
       assert.equal(await page.eval("window.__zuse.view.route.kind"), "zappers");
       await page.waitFor(`!!window.__zuse.state.chats[${q(workerId)}]`);
       assert.equal(

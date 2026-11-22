@@ -30,15 +30,15 @@ const statuses: Record<IssueStatus, string> = {
   canceled: "Canceled",
 };
 const priorities: IssuePriority[] = ["urgent", "high", "normal", "low"];
-export function Issues(props: { zot: Zapper; compact?: boolean }) {
+export function Issues(props: { zapper: Zapper; compact?: boolean }) {
   const [filter, setFilter] = createSignal("open");
   const [query, setQuery] = createSignal("");
   const [selected, setSelected] = createSignal<string | null>(null);
   const [editing, setEditing] = createSignal(false);
   const [creating, setCreating] = createSignal(false);
-  const issue = () => props.zot.issues.find((i) => i.id === selected());
+  const issue = () => props.zapper.issues.find((i) => i.id === selected());
   const filtered = createMemo(() =>
-    props.zot.issues
+    props.zapper.issues
       .filter(
         (i) =>
           (filter() === "all" ||
@@ -106,7 +106,7 @@ export function Issues(props: { zot: Zapper; compact?: boolean }) {
         )}
       </For>
       <Show when={creating()}>
-        <IssueEditor zot={props.zot} close={() => setCreating(false)} />
+        <IssueEditor zapper={props.zapper} close={() => setCreating(false)} />
       </Show>
       <Show when={issue()}>
         {(value) => (
@@ -118,7 +118,7 @@ export function Issues(props: { zot: Zapper; compact?: boolean }) {
             title={`#${value().number} ${value().details.title}`}
           >
             <IssueDetail
-              zot={props.zot}
+              zapper={props.zapper}
               issue={value()}
               edit={() => setEditing(true)}
             />
@@ -128,7 +128,7 @@ export function Issues(props: { zot: Zapper; compact?: boolean }) {
       <Show when={editing() && issue()}>
         {(value) => (
           <IssueEditor
-            zot={props.zot}
+            zapper={props.zapper}
             issue={value()}
             close={() => setEditing(false)}
           />
@@ -138,7 +138,7 @@ export function Issues(props: { zot: Zapper; compact?: boolean }) {
   );
 }
 function IssueEditor(props: {
-  zot: Zapper;
+  zapper: Zapper;
   issue?: ZapperIssue;
   close: () => void;
 }) {
@@ -177,7 +177,7 @@ function IssueEditor(props: {
           e.preventDefault();
           if (!draft().title.trim()) return;
           try {
-            await command(props.zot.id, {
+            await command(props.zapper.id, {
               type: props.issue ? "editIssue" : "createIssue",
               issueId: id,
               details: { ...draft(), title: draft().title.trim() },
@@ -268,7 +268,7 @@ function IssueEditor(props: {
         </label>
         <fieldset>
           <legend>Related issues</legend>
-          <For each={props.zot.issues.filter((i) => i.id !== id)}>
+          <For each={props.zapper.issues.filter((i) => i.id !== id)}>
             {(i) => (
               <label class="zp-check">
                 <input
@@ -304,7 +304,7 @@ function IssueEditor(props: {
   );
 }
 function IssueDetail(props: {
-  zot: Zapper;
+  zapper: Zapper;
   issue: ZapperIssue;
   edit: () => void;
 }) {
@@ -336,7 +336,7 @@ function IssueDetail(props: {
         {(id) => (
           <p class="zp-muted">
             Related:{" "}
-            {props.zot.issues.find((i) => i.id === id)?.details.title ?? id}
+            {props.zapper.issues.find((i) => i.id === id)?.details.title ?? id}
           </p>
         )}
       </For>
@@ -350,7 +350,7 @@ function IssueDetail(props: {
             <Button
               size="sm"
               onClick={() =>
-                act(props.zot.id, {
+                act(props.zapper.id, {
                   type: "unlinkIssueThread",
                   issueId: props.issue.id,
                   chatId: id,
@@ -370,7 +370,7 @@ function IssueDetail(props: {
         >
           <option value="">Choose a worker thread</option>
           <For
-            each={props.zot.workers.filter(
+            each={props.zapper.workers.filter(
               (w) => !props.issue.threads.includes(w.chatId),
             )}
           >
@@ -384,7 +384,7 @@ function IssueDetail(props: {
         <Button
           disabled={!link() || commandState.busy}
           onClick={() =>
-            act(props.zot.id, {
+            act(props.zapper.id, {
               type: "linkIssueThread",
               issueId: props.issue.id,
               chatId: link(),
@@ -414,7 +414,7 @@ function IssueDetail(props: {
             <Button
               size="sm"
               onClick={() =>
-                act(props.zot.id, {
+                act(props.zapper.id, {
                   type: "unlinkIssuePullRequest",
                   issueId: props.issue.id,
                   url: pr.url,
@@ -431,7 +431,7 @@ function IssueDetail(props: {
         onSubmit={(e) => {
           e.preventDefault();
           if (/^https?:\/\//.test(url()))
-            act(props.zot.id, {
+            act(props.zapper.id, {
               type: "linkIssuePullRequest",
               issueId: props.issue.id,
               url: url(),
@@ -475,7 +475,7 @@ function IssueDetail(props: {
           e.preventDefault();
           if (!comment().trim()) return;
           try {
-            await command(props.zot.id, {
+            await command(props.zapper.id, {
               type: "commentIssue",
               issueId: props.issue.id,
               text: comment().trim(),
@@ -515,7 +515,7 @@ function IssueDetail(props: {
       </form>
       <Show when={delegating()}>
         <WorkerDialog
-          zot={props.zot}
+          zapper={props.zapper}
           mode="delegate"
           issueId={props.issue.id}
           close={() => setDelegating(false)}

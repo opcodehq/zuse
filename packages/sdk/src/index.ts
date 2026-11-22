@@ -1,5 +1,12 @@
-import { API_VERSION, type ControlInfo, type ControlMethod, type Zot, type ZotCommand, type ZotEvent, type ZotFile, type ZotIssue } from './generated.js';
+import { API_VERSION, type ControlInfo, type ControlMethod, type Zapper, type ZapperCommand, type ZapperEvent, type ZapperFile, type ZapperIssue } from './generated.js';
 export * from './generated.js';
+
+// Legacy, removed after one release: type names from before Zots were renamed Zappers.
+/** @deprecated Use `Zapper`. */ export type Zot = Zapper;
+/** @deprecated Use `ZapperCommand`. */ export type ZotCommand = ZapperCommand;
+/** @deprecated Use `ZapperEvent`. */ export type ZotEvent = ZapperEvent;
+/** @deprecated Use `ZapperFile`. */ export type ZotFile = ZapperFile;
+/** @deprecated Use `ZapperIssue`. */ export type ZotIssue = ZapperIssue;
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 export type ErrorCode = 'unauthorized' | 'unsupported' | 'transport' | 'cancelled' | 'overflow' | 'operation';
@@ -159,6 +166,15 @@ export function createZuseClient(options: ClientOptions) {
     };
   }
 
+  const zappers = {
+    watch: (settings?: RequestOptions) => watch<Zapper[]>('WatchZappers', {}, settings),
+    command: (command: ZapperCommand, settings?: RequestOptions) => call<Zapper | null>('ZapperCommand', command, settings),
+    files: (zapperId: string, history = false, settings?: RequestOptions) => call<ZapperFile[]>('ZapperFiles', { zapperId, history }, settings),
+    events: (zapperId: string, settings?: RequestOptions) => call<ZapperEvent[]>('ZapperEvents', { zapperId }, settings),
+    issue: (zapperId: string, issueId: string, settings?: RequestOptions) => call<ZapperIssue>('ZapperIssue', { zapperId, issueId }, settings),
+    acknowledge: (zapperId: string, eventIds: string[], settings?: RequestOptions) => call('AckZapperEvents', { zapperId, eventIds }, settings),
+  };
+
   return {
     call, watch,
     async info(settings?: RequestOptions) {
@@ -166,14 +182,9 @@ export function createZuseClient(options: ClientOptions) {
       if (info.apiVersion !== API_VERSION) throw new ZuseError('unsupported', `Unsupported control API version ${info.apiVersion}`);
       return info;
     },
-    zots: {
-      watch: (settings?: RequestOptions) => watch<Zot[]>('WatchZots', {}, settings),
-      command: (command: ZotCommand, settings?: RequestOptions) => call<Zot | null>('ZotCommand', command, settings),
-      files: (zotId: string, history = false, settings?: RequestOptions) => call<ZotFile[]>('ZotFiles', { zotId, history }, settings),
-      events: (zotId: string, settings?: RequestOptions) => call<ZotEvent[]>('ZotEvents', { zotId }, settings),
-      issue: (zotId: string, issueId: string, settings?: RequestOptions) => call<ZotIssue>('ZotIssue', { zotId, issueId }, settings),
-      acknowledge: (zotId: string, eventIds: string[], settings?: RequestOptions) => call('AckZotEvents', { zotId, eventIds }, settings),
-    },
+    zappers,
+    /** @deprecated Renamed to `zappers`; legacy alias, removed after one release. */
+    zots: zappers,
     close() { disconnect(); socket.close(); },
   };
 }

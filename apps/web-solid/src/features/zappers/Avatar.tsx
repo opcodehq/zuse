@@ -11,8 +11,8 @@ export function defaultAvatar(seed: string): ZapperAvatar {
     color: colors[(hash >>> 8) % colors.length]!.id,
   };
 }
-export const avatarOf = (zot: Zapper) =>
-  zot.config.avatar ?? defaultAvatar(zot.id);
+export const avatarOf = (zapper: Zapper) =>
+  zapper.config.avatar ?? defaultAvatar(zapper.id);
 export function Avatar(props: { avatar: ZapperAvatar; size?: number }) {
   const pixels = createMemo(() => {
     const sprite = (

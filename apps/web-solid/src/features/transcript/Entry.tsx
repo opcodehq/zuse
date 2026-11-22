@@ -57,7 +57,7 @@ function UserEntry(props: { entry: SessionMessageEntry; ctx: EntryContext }) {
   const bodyId = () => `${props.entry.id}-body`;
   return (
     <div class="t-entry" data-role="user" data-zapper-message={attributed() ? "true" : undefined}>
-      <Show when={attributed()}>{message => <button class="zp-message-sender" onClick={() => openChat(message().sender.chatId)}><Avatar avatar={message().sender.avatar ?? defaultAvatar(message().sender.zotId)} size={22} /><strong>{message().sender.name}</strong><Show when={message().sender.activity}><span>Activity</span></Show></button>}</Show>
+      <Show when={attributed()}>{message => <button class="zp-message-sender" onClick={() => openChat(message().sender.chatId)}><Avatar avatar={message().sender.avatar ?? defaultAvatar(message().sender.zapperId)} size={22} /><strong>{message().sender.name}</strong><Show when={message().sender.activity}><span>Activity</span></Show></button>}</Show>
       <For each={switches()}>{(s) => <AgentSwitch from={s.from} to={s.to} />}</For>
       <Show when={parsed().attachments.length}>
         <Attachments items={parsed().attachments} device={props.ctx.device()} />

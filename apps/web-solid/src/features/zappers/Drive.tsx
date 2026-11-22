@@ -3,7 +3,7 @@ import type { Zapper, ZapperFile } from "@/core/zapper-types";
 import { Button, Dialog } from "@/ui/primitives";
 import { command, commandState, loadResources, resources } from "./state";
 
-export function Drive(props: { zot: Zapper; history: boolean }) {
+export function Drive(props: { zapper: Zapper; history: boolean }) {
   const current = createMemo(() => {
     const latest = new Map<string, ZapperFile>();
     for (const f of resources.files)
@@ -21,14 +21,14 @@ export function Drive(props: { zot: Zapper; history: boolean }) {
     const f = edit();
     if (!f) return;
     try {
-      await command(props.zot.id, {
+      await command(props.zapper.id, {
         type: "writeFile",
         path: f.path.trim(),
         content: f.content,
         expectedVersion: f.version,
       });
       setEdit(null);
-      await loadResources(props.zot);
+      await loadResources(props.zapper);
     } catch {
       /* shared alert */
     }
@@ -37,14 +37,14 @@ export function Drive(props: { zot: Zapper; history: boolean }) {
     const f = restore();
     if (!f) return;
     try {
-      await command(props.zot.id, {
+      await command(props.zapper.id, {
         type: "restoreFile",
         path: f.path,
         version: f.version,
         expectedVersion: current().find((c) => c.path === f.path)?.version ?? 0,
       });
       setRestore(null);
-      await loadResources(props.zot);
+      await loadResources(props.zapper);
     } catch {
       /* shared alert */
     }
@@ -64,7 +64,7 @@ export function Drive(props: { zot: Zapper; history: boolean }) {
         <Button
           size="sm"
           disabled={resources.loading}
-          onClick={() => void loadResources(props.zot)}
+          onClick={() => void loadResources(props.zapper)}
         >
           Refresh
         </Button>

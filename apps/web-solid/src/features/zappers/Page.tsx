@@ -73,7 +73,7 @@ export function ZapperPage() {
               </div>
             </div>
             <Show when={inspectorOpen() && !view.rightPanel}>
-              <Inspector zot={z()} />
+              <Inspector zapper={z()} />
             </Show>
           </div>
         )}
@@ -142,7 +142,7 @@ function Directory() {
     </div>
   );
 }
-function Inspector(props: { zot: Zapper }) {
+function Inspector(props: { zapper: Zapper }) {
   const [confirm, setConfirm] = createSignal<"delete" | "archive" | null>(null);
   const files = createMemo(() =>
     resources.files.filter(
@@ -163,7 +163,7 @@ function Inspector(props: { zot: Zapper }) {
   );
   const fresh = async () => {
     try {
-      const z = await command(props.zot.id, { type: "freshConversation" });
+      const z = await command(props.zapper.id, { type: "freshConversation" });
       if (z) {
         await Promise.resolve();
         openZapper(z);
@@ -178,7 +178,7 @@ function Inspector(props: { zot: Zapper }) {
         ? { type: "delete" }
         : { type: "setStatus", status: "archived" };
     try {
-      await command(props.zot.id, action);
+      await command(props.zapper.id, action);
       setConfirm(null);
       if (action.type === "delete") navigate({ kind: "zappers", zapperId: "" });
     } catch {
@@ -188,10 +188,10 @@ function Inspector(props: { zot: Zapper }) {
   return (
     <aside class="zp-inspector" aria-label="Zapper inspector">
       <header class="zp-inspector-header">
-        <Avatar avatar={avatarOf(props.zot)} size={38} />
+        <Avatar avatar={avatarOf(props.zapper)} size={38} />
         <div>
-          <h2>{props.zot.config.name}</h2>
-          <span class="zp-muted">{statusLabel(props.zot.status)}</span>
+          <h2>{props.zapper.config.name}</h2>
+          <span class="zp-muted">{statusLabel(props.zapper.status)}</span>
         </div>
         <Menu
           trigger={(attrs) => (
@@ -203,21 +203,21 @@ function Inspector(props: { zot: Zapper }) {
             {
               label: "Zapper settings",
               onSelect: () =>
-                navigate({ kind: "newZapper", zapperId: props.zot.id }),
+                navigate({ kind: "newZapper", zapperId: props.zapper.id }),
             },
             { label: "Fresh conversation", onSelect: () => void fresh() },
             {
-              label: props.zot.status === "active" ? "Pause" : "Resume",
+              label: props.zapper.status === "active" ? "Pause" : "Resume",
               onSelect: () =>
-                act(props.zot.id, {
+                act(props.zapper.id, {
                   type: "setStatus",
-                  status: props.zot.status === "active" ? "paused" : "active",
+                  status: props.zapper.status === "active" ? "paused" : "active",
                 }),
             },
             {
               label: "Stop Zapper",
               onSelect: () =>
-                act(props.zot.id, { type: "setStatus", status: "stopped" }),
+                act(props.zapper.id, { type: "setStatus", status: "stopped" }),
             },
             { label: "Archive Zapper", onSelect: () => setConfirm("archive") },
             {
@@ -258,16 +258,16 @@ function Inspector(props: { zot: Zapper }) {
       </nav>
       <div class="zp-inspector-body">
         <Show when={tab() === "overview"}>
-          <Overview zot={props.zot} />
+          <Overview zapper={props.zapper} />
         </Show>
         <Show when={tab() === "issues"}>
-          <Issues zot={props.zot} />
+          <Issues zapper={props.zapper} />
         </Show>
         <Show when={tab() === "threads"}>
-          <Threads zot={props.zot} />
+          <Threads zapper={props.zapper} />
         </Show>
         <Show when={tab() === "drive" || tab() === "history"}>
-          <Drive zot={props.zot} history={tab() === "history"} />
+          <Drive zapper={props.zapper} history={tab() === "history"} />
         </Show>
       </div>
       <Dialog
@@ -297,20 +297,20 @@ function Inspector(props: { zot: Zapper }) {
     </aside>
   );
 }
-function Overview(props: { zot: Zapper }) {
+function Overview(props: { zapper: Zapper }) {
   return (
     <>
       <p class="zp-purpose">
-        {props.zot.config.purpose || "Add a purpose in Zapper settings."}
+        {props.zapper.config.purpose || "Add a purpose in Zapper settings."}
       </p>
       <div class="zp-stats">
         <button onClick={() => setTab("threads")}>
-          <strong>{props.zot.workers.length}</strong>Threads
+          <strong>{props.zapper.workers.length}</strong>Threads
         </button>
         <button onClick={() => setTab("issues")}>
           <strong>
             {
-              props.zot.issues.filter(
+              props.zapper.issues.filter(
                 (i) => !["done", "canceled"].includes(i.details.status),
               ).length
             }
@@ -319,17 +319,17 @@ function Overview(props: { zot: Zapper }) {
         </button>
         <span>
           <strong>
-            {props.zot.decisions.filter((d) => d.answer === null).length}
+            {props.zapper.decisions.filter((d) => d.answer === null).length}
           </strong>
           Decisions
         </span>
       </div>
       <h3>Needs your decision</h3>
       <For
-        each={props.zot.decisions.filter((d) => d.answer === null)}
+        each={props.zapper.decisions.filter((d) => d.answer === null)}
         fallback={<p class="zp-muted">No decisions waiting for you.</p>}
       >
-        {(decision) => <Decision zot={props.zot} decision={decision} />}
+        {(decision) => <Decision zapper={props.zapper} decision={decision} />}
       </For>
       <div class="zp-section-heading">
         <h3>Issues</h3>
@@ -337,7 +337,7 @@ function Overview(props: { zot: Zapper }) {
           View all
         </Button>
       </div>
-      <Issues zot={props.zot} compact />
+      <Issues zapper={props.zapper} compact />
       <div class="zp-section-heading">
         <h3>Drive</h3>
         <Button size="sm" onClick={() => setTab("drive")}>
@@ -351,7 +351,7 @@ function Overview(props: { zot: Zapper }) {
       <Show when={resources.error}>
         <p class="zp-error">
           {resources.error}
-          <Button onClick={() => void loadResources(props.zot)}>Retry</Button>
+          <Button onClick={() => void loadResources(props.zapper)}>Retry</Button>
         </p>
       </Show>
       <For
@@ -373,7 +373,7 @@ function Overview(props: { zot: Zapper }) {
     </>
   );
 }
-function Decision(props: { zot: Zapper; decision: ZapperDecision }) {
+function Decision(props: { zapper: Zapper; decision: ZapperDecision }) {
   const [answer, setAnswer] = createSignal("");
   return (
     <form
@@ -381,7 +381,7 @@ function Decision(props: { zot: Zapper; decision: ZapperDecision }) {
       onSubmit={(e) => {
         e.preventDefault();
         if (answer().trim())
-          act(props.zot.id, {
+          act(props.zapper.id, {
             type: "decide",
             decision: { ...props.decision, answer: answer().trim() },
           });

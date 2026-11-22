@@ -12,28 +12,28 @@ const zuse = createZuseClient({
   token: process.env.ZUSE_CONTROL_TOKEN!,
 });
 console.log(await zuse.info());
-for await (const zots of zuse.zots.watch()) {
-  console.log(zots);
+for await (const zappers of zuse.zappers.watch()) {
+  console.log(zappers);
 }
 zuse.close();
 ```
 
-Local engine discovery lives at `<profile>/zots/control.json`. Keep it private:
+Local engine discovery lives at `<profile>/zappers/control.json`. Keep it private:
 it contains an installation-owner credential. The CLI discovers the default
 local profile or accepts `--discovery` / `ZUSE_CONTROL_FILE` for another profile.
 Remote endpoints require `wss://`; tokens never belong in a URL.
 
 `call(method, params, { signal, targetDeviceId })` invokes the advertised
 application operations. `watch` returns a cancellable asynchronous iterator.
-Use the typed `zots` helpers for coordinator commands, versioned files and events.
+Use the typed `zappers` helpers for coordinator commands, versioned files and events.
 `info()` checks API compatibility and returns the current operation catalog.
 Errors expose a stable `code`; disconnects never automatically replay mutations.
-Reuse a Zot command ID and identical input after reconciling an uncertain result.
+Reuse a Zapper command ID and identical input after reconciling an uncertain result.
 
 ```sh
 zuse-control info
-zuse-control call ZotFiles '{"zotId":"release"}'
-zuse-control watch WatchZots
+zuse-control call ZapperFiles '{"zapperId":"release"}'
+zuse-control watch WatchZappers
 zuse-control mcp
 ```
 
