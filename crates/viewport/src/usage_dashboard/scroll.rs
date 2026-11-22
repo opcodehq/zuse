@@ -38,13 +38,19 @@ impl UsageDashboard {
             .flex_1()
             .min_h_0()
             .w_full()
-            .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
+            .on_scroll_wheel(cx.listener(|this, _, _, cx| {
+                this.hovered = None;
+                this.hover_cursor = None;
+                cx.notify();
+            }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
                 if let Some(grab) = this.scroll_drag {
                     if event.pressed_button != Some(MouseButton::Left) {
                         this.scroll_drag = None;
                         return;
                     }
+                    this.hovered = None;
+                    this.hover_cursor = None;
                     let bounds = this.scroll.bounds();
                     let height = f32::from(bounds.size.height);
                     let maximum = f32::from(this.scroll.max_offset().y).max(0.);
@@ -108,6 +114,8 @@ impl UsageDashboard {
                             } else {
                                 thumb / 2.
                             };
+                            this.hovered = None;
+                            this.hover_cursor = None;
                             this.scroll_drag = Some(grab);
                             let fraction =
                                 ((position - grab) / (height - thumb).max(1.)).clamp(0., 1.);

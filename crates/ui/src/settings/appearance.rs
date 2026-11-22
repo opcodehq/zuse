@@ -1,5 +1,4 @@
-//! Settings → Appearance: system behavior, independent light/dark variants,
-//! and the optional interactive accent overlay.
+//! Settings → Appearance: mode, themes, background, code, motion and fonts.
 
 use crate::localization::message as tr;
 use std::cell::Cell;
@@ -11,13 +10,13 @@ use zuse_i18n::messages as msg;
 
 use gpui::{
     AnyElement, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla, IntoElement,
-    KeyDownEvent, ObjectFit, Pixels, Point, Render, ScrollDelta, SharedString, StyledImage as _,
-    Subscription, Window, div, img, point, prelude::*, px,
+    KeyDownEvent, Pixels, Point, Render, ScrollDelta, SharedString, Subscription, Window, div,
+    prelude::*, px,
 };
 use zuse_theme::vscode::{ImportReport, SourceCompilation};
 use zuse_theme::{
-    AccentPreset, AccentSelection, CustomThemeEntry, CustomThemeStatus, InstallMode,
-    SurfacePreference, SurfaceTreatment, ThemeRegistry, ThemeSelection,
+    AccentSelection, CustomThemeEntry, CustomThemeStatus, InstallMode, SurfacePreference,
+    SurfaceTreatment, ThemeRegistry, ThemeSelection,
 };
 
 use crate::appearance::{self, AppearanceMode};
@@ -30,33 +29,162 @@ use crate::theme::{Appearance, Theme};
 use crate::theme_library;
 use crate::typography::{self, FontAvailability, UiFontFamily, UiFontSize};
 
+use super::theme_community::{self, CommunityTheme};
+
+#[path = "appearance_wallpaper.rs"]
+mod wallpaper_panel;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ImportSource {
+    File,
+    Json,
+    Community,
+}
+
 struct ImportDialog {
     input: Entity<ComposerInput>,
-    _events: Subscription,
+    json_input: Entity<ComposerInput>,
+    _events: [Subscription; 2],
     focus: FocusHandle,
+    /// The Choose file button: the control the File view keeps mounted.
+    file_focus: FocusHandle,
     focus_pending: bool,
+    source: ImportSource,
+    creating: bool,
     mode: InstallMode,
     compilation: Option<SourceCompilation>,
     selected: HashSet<String>,
     review_variant: Option<String>,
     error: Option<SharedString>,
+    results: Option<Vec<CommunityTheme>>,
+    pending: Option<u64>,
+}
+
+impl ImportDialog {
+    fn clear_preview(&mut self) {
+        self.compilation = None;
+        self.selected.clear();
+        self.review_variant = None;
+        self.error = None;
+        self.pending = None;
+    }
 }
 
 struct BackgroundAdjustmentDialog {
     focus: FocusHandle,
-    zoom_focus: FocusHandle,
     end_focus: FocusHandle,
     return_focus: Option<FocusHandle>,
     path: String,
     source: Option<Arc<gpui::RenderImage>>,
     draft: crate::settings::NewThreadBackgroundAdjustment,
-    preview_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
-    zoom_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
-    drag: Option<(
-        Point<Pixels>,
-        crate::settings::NewThreadBackgroundAdjustment,
-    )>,
-    pinch: Option<(f32, f32)>,
+    /// The stage showing the whole image; crop math is relative to it.
+    stage_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Source image and hero sizes, refreshed each render.
+    image: Option<(f32, f32)>,
+    hero: (f32, f32),
+    window_aspect: f32,
+    crop_mode: CropMode,
+    drag: Option<CropDrag>,
+    pinch: Option<([f32; 4], f32)>,
+}
+
+impl BackgroundAdjustmentDialog {
+    fn crop(&self, image: (f32, f32)) -> [f32; 4] {
+        self.crop_for_hero(image, self.hero)
+    }
+
+    fn crop_for_hero(&self, image: (f32, f32), hero: (f32, f32)) -> [f32; 4] {
+        self.draft.crop.unwrap_or_else(|| {
+            crate::new_thread_background_mask::crop_for_adjustment(image, hero, self.draft)
+        })
+    }
+
+    fn set_crop(&mut self, crop: [f32; 4]) {
+        self.draft.crop = Some(crop);
+        self.draft = self.draft.normalized();
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CropMode {
+    Free,
+    Original,
+    Window,
+    Wide,
+    Tall,
+    Standard,
+    Square,
+}
+
+impl CropMode {
+    const OPTIONS: [(Self, &'static str); 7] = [
+        (Self::Free, "Free"),
+        (Self::Original, "Original"),
+        (Self::Window, "Window"),
+        (Self::Wide, "16:9"),
+        (Self::Tall, "16:10"),
+        (Self::Standard, "4:3"),
+        (Self::Square, "1:1"),
+    ];
+
+    fn ratio(self, image: (f32, f32), window_aspect: f32) -> Option<f32> {
+        let image_aspect = image.0 / image.1;
+        let aspect = match self {
+            Self::Free => return None,
+            Self::Original => image_aspect,
+            Self::Window => window_aspect,
+            Self::Wide => 16.0 / 9.0,
+            Self::Tall => 16.0 / 10.0,
+            Self::Standard => 4.0 / 3.0,
+            Self::Square => 1.0,
+        };
+        Some(aspect / image_aspect)
+    }
+}
+
+fn center_crop(
+    [left, top, width, height]: [f32; 4],
+    next_width: f32,
+    next_height: f32,
+) -> [f32; 4] {
+    [
+        (left + (width - next_width) / 2.0).clamp(0.0, 1.0 - next_width),
+        (top + (height - next_height) / 2.0).clamp(0.0, 1.0 - next_height),
+        next_width,
+        next_height,
+    ]
+}
+
+fn scale_crop(crop: [f32; 4], factor: f32) -> [f32; 4] {
+    let [_, _, width, height] = crop;
+    let max_factor = width.max(height).recip();
+    let min_factor = (MIN_CROP_SIDE / width.min(height)).min(max_factor);
+    let factor = factor.clamp(min_factor, max_factor);
+    center_crop(crop, (width * factor).min(1.0), (height * factor).min(1.0))
+}
+
+/// A gesture on the crop frame, in normalized image coordinates.
+#[derive(Clone, Copy, Debug)]
+enum CropDrag {
+    /// Moving the frame: pointer and frame origin when the drag began.
+    Move {
+        start: (f32, f32),
+        origin: (f32, f32),
+    },
+    /// Resizing from a corner; the opposite corner stays put.
+    Resize {
+        anchor: (f32, f32),
+        // Existing handles stay on their side of the anchor. A new crop
+        // can be drawn in any direction from the press point.
+        sides: Option<(bool, bool)>,
+    },
+    /// Resize from the middle of an edge, keeping the opposite edge fixed.
+    ResizeEdge {
+        horizontal: bool,
+        opposite: f32,
+        center: f32,
+        positive: bool,
+    },
 }
 
 #[derive(Clone)]
@@ -68,16 +196,17 @@ impl Render for BackgroundAdjustmentDrag {
     }
 }
 
-#[derive(Clone)]
-struct BackgroundAdjustmentZoomDrag;
+/// How far from a frame corner (in stage pixels) a press grabs the corner.
+const CROP_HANDLE_REACH: f32 = 10.0;
+const MIN_CROP_SIDE: f32 = 0.005;
 
-impl Render for BackgroundAdjustmentZoomDrag {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        gpui::Empty
-    }
+/// A window position as normalized coordinates on the image stage.
+fn stage_point(stage: Bounds<Pixels>, position: Point<Pixels>) -> (f32, f32) {
+    (
+        f32::from(position.x - stage.left()) / f32::from(stage.size.width).max(1.0),
+        f32::from(position.y - stage.top()) / f32::from(stage.size.height).max(1.0),
+    )
 }
-
-const BACKGROUND_ZOOM_STEP: f32 = 0.1;
 
 fn background_pinch_factor(factor: f32, delta: f32, relative_delta: bool) -> f32 {
     if !delta.is_finite() {
@@ -93,38 +222,57 @@ fn background_pinch_factor(factor: f32, delta: f32, relative_delta: bool) -> f32
     next.max(0.001)
 }
 
-fn background_zoom_fraction(zoom: f32) -> f32 {
-    let minimum = crate::settings::NewThreadBackgroundAdjustment::MIN_ZOOM;
-    let maximum = crate::settings::NewThreadBackgroundAdjustment::MAX_ZOOM;
-    ((zoom - minimum) / (maximum - minimum)).clamp(0.0, 1.0)
-}
-
-fn background_zoom_at_x(bounds: Bounds<Pixels>, x: Pixels) -> f32 {
-    let minimum = crate::settings::NewThreadBackgroundAdjustment::MIN_ZOOM;
-    let maximum = crate::settings::NewThreadBackgroundAdjustment::MAX_ZOOM;
-    let fraction = ((f32::from(x - bounds.left()) - 7.0)
-        / (f32::from(bounds.size.width) - 14.0).max(1.0))
-    .clamp(0.0, 1.0);
-    minimum + fraction * (maximum - minimum)
-}
-
-fn background_preview_size(
-    viewport: gpui::Size<Pixels>,
-    sidebar_width: f32,
-    sidebar_collapsed: bool,
-) -> gpui::Size<Pixels> {
-    let hero_width = (f32::from(viewport.width)
-        - if sidebar_collapsed {
-            0.0
-        } else {
-            sidebar_width
-        })
-    .max(1.0);
-    let hero_height =
-        crate::shell::new_thread_background_height(f32::from(viewport.height)).max(1.0);
-    let max_width = (f32::from(viewport.width) - 84.0).clamp(1.0, 556.0);
-    let scale = (max_width / hero_width).min(258.0 / hero_height);
-    gpui::size(px(hero_width * scale), px(hero_height * scale))
+/// Paint the selection above the photo, using coordinates normalized to the
+/// displayed image.
+fn paint_crop_overlay(bounds: Bounds<Pixels>, crop: [f32; 4], dragging: bool, window: &mut Window) {
+    let [x, y, width, height] = crop;
+    let sw = f32::from(bounds.size.width);
+    let sh = f32::from(bounds.size.height);
+    let (left, top, w, h) = (x * sw, y * sh, width * sw, height * sh);
+    let mut rect = |x: f32, y: f32, w: f32, h: f32, color: gpui::Hsla, radius: f32| {
+        if w > 0.0 && h > 0.0 {
+            window.paint_quad(gpui::quad(
+                Bounds::new(
+                    bounds.origin + gpui::point(px(x), px(y)),
+                    gpui::size(px(w), px(h)),
+                ),
+                gpui::Corners::all(px(radius)),
+                color,
+                gpui::Edges::all(px(0.0)),
+                gpui::transparent_black(),
+                gpui::BorderStyle::Solid,
+            ));
+        }
+    };
+    let shade = gpui::black().opacity(0.6);
+    rect(0.0, 0.0, sw, top, shade, 0.0);
+    rect(0.0, top + h, sw, sh - top - h, shade, 0.0);
+    rect(0.0, top, left, h, shade, 0.0);
+    rect(left + w, top, sw - left - w, h, shade, 0.0);
+    let edge = gpui::white().opacity(0.95);
+    let line = gpui::white().opacity(if dragging { 0.5 } else { 0.35 });
+    rect(left, top, w, 1.0, edge, 0.0);
+    rect(left, top + h - 1.0, w, 1.0, edge, 0.0);
+    rect(left, top, 1.0, h, edge, 0.0);
+    rect(left + w - 1.0, top, 1.0, h, edge, 0.0);
+    for at in [1.0 / 3.0, 2.0 / 3.0] {
+        rect(left + w * at, top, 1.0, h, line, 0.0);
+        rect(left, top + h * at, w, 1.0, line, 0.0);
+    }
+    // Eight inset handles remain visible even when the selection fills the photo.
+    let handle = 7.0_f32.min(w).min(h);
+    for (hx, hy) in [
+        (left, top),
+        (left + w / 2.0 - handle / 2.0, top),
+        (left + w - handle, top),
+        (left, top + h / 2.0 - handle / 2.0),
+        (left + w - handle, top + h / 2.0 - handle / 2.0),
+        (left, top + h - handle),
+        (left + w / 2.0 - handle / 2.0, top + h - handle),
+        (left + w - handle, top + h - handle),
+    ] {
+        rect(hx, hy, handle, handle, edge, 1.5);
+    }
 }
 
 /// The three independently configurable font slots. Interface and code/diff
@@ -313,12 +461,17 @@ pub struct AppearancePage {
     dark_theme_select: widgets::SelectState,
     surface_select: widgets::SelectState,
     background_effect_select: widgets::SelectState,
+    code_layout_size_select: widgets::SelectState,
+    diff_view_select: widgets::SelectState,
+    diff_colors_select: widgets::SelectState,
     reduce_motion_select: widgets::SelectState,
     import_dialog: Option<ImportDialog>,
+    import_request: u64,
     background_adjustment_dialog: Option<BackgroundAdjustmentDialog>,
     review_entry: Option<String>,
     library_error: Option<SharedString>,
     background_error: Option<SharedString>,
+    compare_wallpaper: bool,
 }
 
 impl AppearancePage {
@@ -580,12 +733,17 @@ impl AppearancePage {
             dark_theme_select: widgets::SelectState::default(),
             surface_select: widgets::SelectState::default(),
             background_effect_select: widgets::SelectState::default(),
+            code_layout_size_select: widgets::SelectState::default(),
+            diff_view_select: widgets::SelectState::default(),
+            diff_colors_select: widgets::SelectState::default(),
             reduce_motion_select: widgets::SelectState::default(),
             import_dialog: None,
+            import_request: 0,
             background_adjustment_dialog: None,
             review_entry: None,
             library_error: None,
             background_error: None,
+            compare_wallpaper: false,
         }
     }
 
@@ -873,73 +1031,138 @@ impl AppearancePage {
 
     fn open_import(&mut self, cx: &mut Context<Self>) {
         let input = cx.new(|cx| {
-            ComposerInput::with_context(
-                "Theme file, package.json, or extension folder",
-                "PaletteSearch",
-                cx,
-            )
+            ComposerInput::with_context("Search themes…", "PaletteSearch", cx)
+                .with_single_line()
+                .with_tab_stop()
         });
-        let events = cx.subscribe(&input, |this: &mut Self, _, event, cx| match event {
-            ComposerInputEvent::Edited => {
-                let source = this
-                    .import_dialog
-                    .as_ref()
-                    .map(|dialog| PathBuf::from(dialog.input.read(cx).text().trim()));
-                if let Some(dialog) = this.import_dialog.as_mut()
-                    && dialog
-                        .compilation
-                        .as_ref()
-                        .zip(source.as_ref())
-                        .is_some_and(|(compilation, source)| compilation.path != *source)
-                {
-                    dialog.compilation = None;
-                    dialog.selected.clear();
-                    dialog.review_variant = None;
-                    dialog.error = None;
-                    cx.notify();
+        let json_input = cx.new(|cx| {
+            ComposerInput::new(JSON_SAMPLE, cx)
+                .with_enter_newline()
+                .with_viewport_height(JSON_FIELD_HEIGHT + 60.0)
+                .with_tab_stop()
+        });
+        let events = [&input, &json_input].map(|field| {
+            cx.subscribe(field, |this: &mut Self, _, event, cx| {
+                if let Some(dialog) = this.import_dialog.as_mut() {
+                    match event {
+                        ComposerInputEvent::Edited => {
+                            dialog.clear_preview();
+                            dialog.results = None;
+                            cx.notify();
+                        }
+                        ComposerInputEvent::Submitted => this.submit_import(cx),
+                        _ => {}
+                    }
                 }
-            }
-            ComposerInputEvent::Submitted => {
-                if this
-                    .import_dialog
-                    .as_ref()
-                    .is_some_and(|dialog| dialog.compilation.is_some())
-                {
-                    this.finish_import(cx);
-                } else {
-                    this.compile_import(cx);
-                }
-            }
-            _ => {}
+            })
         });
         self.import_dialog = Some(ImportDialog {
             input,
+            json_input,
             _events: events,
             focus: cx.focus_handle(),
+            file_focus: cx.focus_handle(),
             focus_pending: true,
+            source: ImportSource::Json,
+            creating: false,
             mode: InstallMode::Snapshot,
             compilation: None,
             selected: HashSet::new(),
             review_variant: None,
             error: None,
+            results: None,
+            pending: None,
         });
         cx.notify();
     }
 
-    fn compile_import(&mut self, cx: &mut Context<Self>) {
+    fn switch_import_source(&mut self, source: ImportSource, cx: &mut Context<Self>) {
         let Some(dialog) = self.import_dialog.as_mut() else {
             return;
         };
-        let source = dialog.input.read(cx).text().trim().to_owned();
-        if source.is_empty() {
-            dialog.error = Some("Choose a local theme file or extension folder.".into());
-            cx.notify();
+        if dialog.source == source && !dialog.creating {
             return;
         }
-        let path = PathBuf::from(&source);
-        let family_name = source_name(&path);
-        let family_id = format!("custom-{}", slug(&family_name));
-        match theme_library::compile(&path, &family_id, &family_name) {
+        if dialog.creating {
+            // Leaving "start from current theme" drops its copied JSON.
+            dialog
+                .json_input
+                .update(cx, |field, cx| field.set_text("", cx));
+        }
+        dialog.source = source;
+        dialog.creating = false;
+        dialog.mode = InstallMode::Snapshot;
+        dialog.focus_pending = true;
+        dialog.clear_preview();
+        dialog.results = None;
+        cx.notify();
+    }
+
+    fn create_from_current_theme(&mut self, cx: &mut Context<Self>) {
+        let registry = ThemeRegistry::active();
+        let Some(mut family) = registry
+            .families
+            .into_iter()
+            .find(|family| family.id == Theme::of(cx).family_id.as_ref())
+        else {
+            return;
+        };
+        family.name = format!("{} Copy", family.name);
+        for variant in &mut family.variants {
+            variant.name = format!("{} Copy", variant.name);
+        }
+        let Ok(json) = serde_json::to_string_pretty(&family) else {
+            return;
+        };
+        self.switch_import_source(ImportSource::Json, cx);
+        if let Some(dialog) = self.import_dialog.as_mut() {
+            dialog.creating = true;
+            dialog
+                .json_input
+                .update(cx, |field, cx| field.set_text(json, cx));
+        }
+        cx.notify();
+    }
+
+    fn submit_import(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.import_dialog.as_ref() else {
+            return;
+        };
+        if dialog.pending.is_some() {
+            return;
+        }
+        if dialog.compilation.is_some() {
+            self.finish_import(cx);
+        } else if dialog.source == ImportSource::Community {
+            self.search_community(cx);
+        } else {
+            self.compile_import(cx);
+        }
+    }
+
+    fn compile_import(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.import_dialog.as_ref() else {
+            return;
+        };
+        let result = match dialog.source {
+            ImportSource::Json => zuse_theme::CustomThemeLibrary::compile_pasted(
+                dialog.json_input.read(cx).text().trim(),
+            ),
+            ImportSource::File | ImportSource::Community => return,
+        };
+        self.set_import_preview(result, cx);
+    }
+
+    fn set_import_preview(
+        &mut self,
+        result: anyhow::Result<SourceCompilation>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(dialog) = self.import_dialog.as_mut() else {
+            return;
+        };
+        dialog.clear_preview();
+        match result {
             Ok(compilation) => {
                 dialog.selected = compilation
                     .family
@@ -947,18 +1170,103 @@ impl AppearancePage {
                     .iter()
                     .map(|variant| variant.id.clone())
                     .collect();
-                // Mapping diagnostics are useful, but they are an advanced
-                // inspection surface rather than part of the happy path.
-                dialog.review_variant = None;
                 dialog.compilation = Some(compilation);
-                dialog.error = None;
             }
             Err(error) => dialog.error = Some(error.to_string().into()),
         }
         cx.notify();
     }
 
+    fn start_import_request(&mut self, cx: &mut Context<Self>) -> Option<u64> {
+        let dialog = self.import_dialog.as_mut()?;
+        dialog.clear_preview();
+        self.import_request = self.import_request.wrapping_add(1);
+        dialog.pending = Some(self.import_request);
+        cx.notify();
+        Some(self.import_request)
+    }
+
+    fn search_community(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.import_dialog.as_mut() else {
+            return;
+        };
+        let query = dialog.input.read(cx).text().trim().to_owned();
+        if query.is_empty() || query.chars().count() > 120 {
+            dialog.error = Some("Enter a theme name of up to 120 characters.".into());
+            cx.notify();
+            return;
+        }
+        dialog.results = None;
+        let Some(request) = self.start_import_request(cx) else {
+            return;
+        };
+        let job = gpui_tokio::Tokio::spawn(cx, theme_community::search(query));
+        cx.spawn(async move |page, cx| {
+            let result = job
+                .await
+                .map_err(anyhow::Error::from)
+                .and_then(|result| result);
+            let _ = page.update(cx, |page, cx| {
+                if let Some(dialog) = page
+                    .import_dialog
+                    .as_mut()
+                    .filter(|dialog| dialog.pending == Some(request))
+                {
+                    dialog.pending = None;
+                    match result {
+                        Ok(results) => dialog.results = Some(results),
+                        Err(error) => {
+                            dialog.error =
+                                Some(format!("Could not search Open VSX: {error}").into())
+                        }
+                    }
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn load_community_theme(&mut self, theme: CommunityTheme, cx: &mut Context<Self>) {
+        let Some(request) = self.start_import_request(cx) else {
+            return;
+        };
+        let job = gpui_tokio::Tokio::spawn(cx, theme_community::download(theme));
+        cx.spawn(async move |page, cx| {
+            let result = match job.await {
+                Ok(Ok((bytes, options))) => {
+                    cx.background_executor()
+                        .spawn(async move { theme_community::compile(&bytes, options) })
+                        .await
+                }
+                Ok(Err(error)) => Err(error),
+                Err(error) => Err(error.into()),
+            };
+            let _ = page.update(cx, |page, cx| {
+                if page
+                    .import_dialog
+                    .as_ref()
+                    .is_some_and(|dialog| dialog.pending == Some(request))
+                {
+                    page.set_import_preview(result, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
     fn choose_import_source(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self
+            .import_dialog
+            .as_mut()
+            .filter(|dialog| dialog.pending.is_none())
+        else {
+            return;
+        };
+        self.import_request = self.import_request.wrapping_add(1);
+        let request = self.import_request;
+        dialog.pending = Some(request);
+        cx.notify();
         let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: true,
             directories: true,
@@ -970,16 +1278,38 @@ impl AppearancePage {
                 Ok(Ok(Some(mut paths))) => paths.pop(),
                 _ => None,
             };
-            let Some(path) = path else {
-                return;
+            let result = if let Some(path) = path {
+                Some(
+                    cx.background_executor()
+                        .spawn(async move {
+                            let name = source_name(&path);
+                            let id = format!("custom-{}", slug(&name));
+                            theme_library::compile(&path, &id, &name)
+                        })
+                        .await,
+                )
+            } else {
+                None
             };
             let _ = this.update(cx, |page, cx| {
-                if let Some(dialog) = page.import_dialog.as_mut() {
-                    dialog.input.update(cx, |input, cx| {
-                        input.set_text(path.display().to_string(), cx)
-                    });
+                if let Some(dialog) = page
+                    .import_dialog
+                    .as_mut()
+                    .filter(|dialog| dialog.pending == Some(request))
+                {
+                    dialog.pending = None;
+                    if let Some(result) = result {
+                        dialog.source = if result.is_ok() {
+                            ImportSource::File
+                        } else {
+                            ImportSource::Json
+                        };
+                        dialog.focus_pending = true;
+                        dialog.mode = InstallMode::Snapshot;
+                        page.set_import_preview(result, cx);
+                    }
+                    cx.notify();
                 }
-                page.compile_import(cx);
             });
         })
         .detach();
@@ -1066,19 +1396,20 @@ impl AppearancePage {
             return;
         };
         let focus = cx.focus_handle();
-        let zoom_focus = cx.focus_handle();
         let return_focus = window.focused(cx);
         window.focus(&focus, cx);
         self.background_adjustment_dialog = Some(BackgroundAdjustmentDialog {
             focus,
-            zoom_focus,
             end_focus: cx.focus_handle(),
             return_focus,
             path: background.path,
             source: None,
             draft: background.adjustment.normalized(),
-            preview_bounds: Rc::default(),
-            zoom_bounds: Rc::default(),
+            stage_bounds: Rc::default(),
+            image: None,
+            hero: (1.0, 1.0),
+            window_aspect: 1.0,
+            crop_mode: CropMode::Free,
             drag: None,
             pinch: None,
         });
@@ -1113,101 +1444,289 @@ impl AppearancePage {
 
     fn reset_background_adjustment(&mut self, cx: &mut Context<Self>) {
         if let Some(dialog) = self.background_adjustment_dialog.as_mut() {
+            if dialog.draft.quarter_turns != 0 {
+                dialog.source = None;
+                dialog.image = None;
+            }
             dialog.draft = Default::default();
+            dialog.crop_mode = CropMode::Free;
             dialog.drag = None;
             dialog.pinch = None;
         }
         cx.notify();
     }
 
-    fn set_background_zoom(&mut self, zoom: f32, cx: &mut Context<Self>) {
-        self.zoom_background_around(zoom, None, cx);
-    }
-
-    fn set_background_zoom_from_x(&mut self, x: Pixels, cx: &mut Context<Self>) {
-        let Some(bounds) = self
-            .background_adjustment_dialog
-            .as_ref()
-            .and_then(|dialog| dialog.zoom_bounds.get())
-        else {
-            return;
-        };
-        self.set_background_zoom(background_zoom_at_x(bounds, x), cx);
-    }
-
-    fn zoom_background_around(
-        &mut self,
-        zoom: f32,
-        anchor: Option<Point<Pixels>>,
-        cx: &mut Context<Self>,
-    ) {
+    fn set_crop_mode(&mut self, mode: CropMode, cx: &mut Context<Self>) {
         let Some(dialog) = self.background_adjustment_dialog.as_mut() else {
             return;
         };
-        if dialog.source.is_none() {
+        let Some(image) = dialog.image else {
             return;
-        }
-        let zoom = zoom.clamp(
-            crate::settings::NewThreadBackgroundAdjustment::MIN_ZOOM,
-            crate::settings::NewThreadBackgroundAdjustment::MAX_ZOOM,
-        );
-        let next = match (dialog.preview_bounds.get(), dialog.source.as_ref()) {
-            (Some(bounds), Some(source)) => {
-                crate::new_thread_background_mask::zoom_adjustment_around(
-                    source,
-                    bounds,
-                    dialog.draft,
-                    zoom,
-                    anchor.unwrap_or_else(|| bounds.center()),
-                )
-            }
-            _ => crate::settings::NewThreadBackgroundAdjustment {
-                zoom,
-                ..dialog.draft
-            },
         };
-        if dialog.draft != next {
-            dialog.draft = next;
+        let crop = dialog.crop(image);
+        if let Some(ratio) = mode.ratio(image, dialog.window_aspect) {
+            let width = ratio.min(1.0);
+            let height = ratio.recip().min(1.0);
+            dialog.set_crop(center_crop(crop, width, height));
+        }
+        dialog.crop_mode = mode;
+        dialog.drag = None;
+        cx.notify();
+    }
+
+    fn rotate_background(&mut self, clockwise: bool, cx: &mut Context<Self>) {
+        let Some(dialog) = self.background_adjustment_dialog.as_mut() else {
+            return;
+        };
+        let Some(image) = dialog.image else {
+            return;
+        };
+        let [left, top, width, height] = dialog.crop(image);
+        let crop = if clockwise {
+            [1.0 - top - height, left, height, width]
+        } else {
+            [top, 1.0 - left - width, height, width]
+        };
+        let ratio = dialog
+            .crop_mode
+            .ratio((image.1, image.0), dialog.window_aspect);
+        let rotated_crop = ratio.map_or(crop, |ratio| {
+            let width = crop[2].min(crop[3] * ratio);
+            center_crop(crop, width, (width / ratio).min(1.0))
+        });
+        dialog.set_crop(rotated_crop);
+        dialog.draft.quarter_turns =
+            (dialog.draft.quarter_turns + if clockwise { 1 } else { 3 }) % 4;
+        dialog.source = None;
+        dialog.image = None;
+        dialog.drag = None;
+        dialog.pinch = None;
+        cx.notify();
+    }
+
+    fn scale_background_crop(&mut self, factor: f32, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.background_adjustment_dialog.as_mut()
+            && let Some(image) = dialog.image
+        {
+            dialog.set_crop(scale_crop(dialog.crop(image), factor));
             dialog.drag = None;
             cx.notify();
         }
     }
 
-    fn pan_background(&mut self, delta: Point<f32>, cx: &mut Context<Self>) {
+    /// Move the frame by a distance in stage pixels (keyboard nudges).
+    fn nudge_background(&mut self, dx: f32, dy: f32, cx: &mut Context<Self>) {
         let Some(dialog) = self.background_adjustment_dialog.as_mut() else {
             return;
         };
-        let (Some(bounds), Some(source)) = (dialog.preview_bounds.get(), dialog.source.as_ref())
-        else {
+        let (Some(image), Some(stage)) = (dialog.image, dialog.stage_bounds.get()) else {
             return;
         };
-        let before = dialog.draft;
-        dialog.draft = crate::new_thread_background_mask::pan_adjustment(
-            source,
-            bounds,
-            dialog.draft,
-            point(px(delta.x), px(delta.y)),
+        let [x, y, width, height] = dialog.crop(image);
+        let x = (x + dx / f32::from(stage.size.width).max(1.0)).clamp(0.0, 1.0 - width);
+        let y = (y + dy / f32::from(stage.size.height).max(1.0)).clamp(0.0, 1.0 - height);
+        dialog.set_crop([x, y, width, height]);
+        cx.notify();
+    }
+
+    /// Begin moving the frame, or resizing it when the press lands on a
+    /// corner. Dragging outside the frame draws a new selection.
+    fn start_background_drag(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(dialog) = self.background_adjustment_dialog.as_mut() else {
+            return;
+        };
+        let (Some(image), Some(stage)) = (dialog.image, dialog.stage_bounds.get()) else {
+            return;
+        };
+        let point = stage_point(stage, position);
+        let [x, y, width, height] = dialog.crop(image);
+        let corners = [
+            (x, y),
+            (x + width, y),
+            (x, y + height),
+            (x + width, y + height),
+        ];
+        let reach = (
+            CROP_HANDLE_REACH / f32::from(stage.size.width).max(1.0),
+            CROP_HANDLE_REACH / f32::from(stage.size.height).max(1.0),
         );
-        if dialog.draft != before {
-            cx.notify();
-        }
+        let edge_handles = [
+            (
+                (x, y + height / 2.0),
+                true,
+                x + width,
+                y + height / 2.0,
+                false,
+            ),
+            (
+                (x + width, y + height / 2.0),
+                true,
+                x,
+                y + height / 2.0,
+                true,
+            ),
+            (
+                (x + width / 2.0, y),
+                false,
+                y + height,
+                x + width / 2.0,
+                false,
+            ),
+            (
+                (x + width / 2.0, y + height),
+                false,
+                y,
+                x + width / 2.0,
+                true,
+            ),
+        ];
+        let candidates = corners
+            .iter()
+            .enumerate()
+            .map(|(index, &location)| {
+                (
+                    location,
+                    CropDrag::Resize {
+                        anchor: corners[3 - index],
+                        sides: Some((index % 2 == 1, index >= 2)),
+                    },
+                )
+            })
+            .chain(edge_handles.into_iter().map(
+                |(location, horizontal, opposite, center, positive)| {
+                    (
+                        location,
+                        CropDrag::ResizeEdge {
+                            horizontal,
+                            opposite,
+                            center,
+                            positive,
+                        },
+                    )
+                },
+            ));
+        let handle = candidates
+            .filter_map(|(location, drag)| {
+                let dx = (point.0 - location.0) / reach.0;
+                let dy = (point.1 - location.1) / reach.1;
+                (dx.abs() <= 1.0 && dy.abs() <= 1.0).then_some((dx * dx + dy * dy, drag))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, drag)| drag);
+        dialog.drag = Some(if let Some(drag) = handle {
+            drag
+        } else {
+            let inside = (x..=x + width).contains(&point.0) && (y..=y + height).contains(&point.1);
+            if inside {
+                CropDrag::Move {
+                    start: point,
+                    origin: (x, y),
+                }
+            } else {
+                CropDrag::Resize {
+                    anchor: (point.0.clamp(0.0, 1.0), point.1.clamp(0.0, 1.0)),
+                    sides: None,
+                }
+            }
+        });
+        cx.notify();
     }
 
     fn drag_background(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let Some(dialog) = self.background_adjustment_dialog.as_ref() else {
+        let Some(dialog) = self.background_adjustment_dialog.as_mut() else {
             return;
         };
-        let Some((start, initial)) = dialog.drag else {
+        let (Some(image), Some(stage), Some(drag)) =
+            (dialog.image, dialog.stage_bounds.get(), dialog.drag)
+        else {
             return;
         };
-        let delta = point(
-            f32::from(position.x - start.x),
-            f32::from(position.y - start.y),
-        );
-        if let Some(dialog) = self.background_adjustment_dialog.as_mut() {
-            dialog.draft = initial;
+        let point = stage_point(stage, position);
+        let [_, _, width, height] = dialog.crop(image);
+        let ratio = dialog.crop_mode.ratio(image, dialog.window_aspect);
+        let extent = |anchor: f32, pointer: f32, positive: bool| {
+            if positive {
+                ((pointer - anchor).max(0.0), 1.0 - anchor)
+            } else {
+                ((anchor - pointer).max(0.0), anchor)
+            }
+        };
+        let start_at = |anchor: f32, positive: bool, length: f32| {
+            if positive { anchor } else { anchor - length }
+        };
+        let limit = |requested: f32, room: f32, minimum: f32| {
+            (room >= minimum).then(|| requested.clamp(minimum, room))
+        };
+        let next = match drag {
+            CropDrag::Move { start, origin } => [
+                (origin.0 + point.0 - start.0).clamp(0.0, 1.0 - width),
+                (origin.1 + point.1 - start.1).clamp(0.0, 1.0 - height),
+                width,
+                height,
+            ],
+            CropDrag::ResizeEdge {
+                horizontal,
+                opposite,
+                center,
+                positive,
+            } => {
+                let coordinate = if horizontal { point.0 } else { point.1 };
+                let (offset, room) = extent(opposite, coordinate, positive);
+                let cross_size = if horizontal { height } else { width };
+                let cross_per_side =
+                    ratio.map(|ratio| if horizontal { ratio.recip() } else { ratio });
+                let cross_room = 2.0 * center.min(1.0 - center);
+                let (room, minimum) = cross_per_side.map_or((room, MIN_CROP_SIDE), |scale| {
+                    (
+                        room.min(cross_room / scale),
+                        MIN_CROP_SIDE.max(MIN_CROP_SIDE / scale),
+                    )
+                });
+                let Some(side) = limit(offset, room, minimum) else {
+                    return;
+                };
+                let cross = cross_per_side.map_or(cross_size, |scale| side * scale);
+                let origin = start_at(opposite, positive, side);
+                if horizontal {
+                    [origin, center - cross / 2.0, side, cross]
+                } else {
+                    [center - cross / 2.0, origin, cross, side]
+                }
+            }
+            CropDrag::Resize { anchor, sides } => {
+                let (right, down) = sides.unwrap_or((point.0 >= anchor.0, point.1 >= anchor.1));
+                let (dx, room_x) = extent(anchor.0, point.0, right);
+                let (dy, room_y) = extent(anchor.1, point.1, down);
+                let (width, height) = if let Some(ratio) = ratio {
+                    let Some(width) = limit(
+                        dx.max(dy * ratio),
+                        room_x.min(room_y * ratio),
+                        MIN_CROP_SIDE.max(MIN_CROP_SIDE * ratio),
+                    ) else {
+                        return;
+                    };
+                    (width, width / ratio)
+                } else {
+                    let (Some(width), Some(height)) = (
+                        limit(dx, room_x, MIN_CROP_SIDE),
+                        limit(dy, room_y, MIN_CROP_SIDE),
+                    ) else {
+                        return;
+                    };
+                    (width, height)
+                };
+                [
+                    start_at(anchor.0, right, width),
+                    start_at(anchor.1, down, height),
+                    width,
+                    height,
+                ]
+            }
+        };
+        if dialog.crop(image) != next {
+            dialog.set_crop(next);
+            cx.notify();
         }
-        self.pan_background(delta, cx);
     }
 
     fn finish_background_drag(&mut self, cx: &mut Context<Self>) {
@@ -1230,9 +1749,20 @@ impl AppearancePage {
         let Some(compilation) = dialog.compilation.take() else {
             return;
         };
-        let selected = dialog.selected.iter().cloned().collect::<Vec<_>>();
-        match theme_library::install(compilation.clone(), &selected, dialog.mode, cx) {
-            Ok(_) => self.import_dialog = None,
+        let result = if dialog.creating {
+            let mut family = compilation.family.clone();
+            family
+                .variants
+                .retain(|variant| dialog.selected.contains(&variant.id));
+            theme_library::create_editable(family, cx)
+        } else {
+            let selected = dialog.selected.iter().cloned().collect::<Vec<_>>();
+            theme_library::install(compilation.clone(), &selected, dialog.mode, cx)
+        };
+        match result {
+            Ok(_) => {
+                self.import_dialog = None;
+            }
             Err(error) => {
                 dialog.compilation = Some(compilation);
                 dialog.error = Some(error.to_string().into());
@@ -1273,7 +1803,7 @@ fn source_name(path: &Path) -> String {
         .to_owned()
 }
 
-fn slug(value: &str) -> String {
+pub(super) fn slug(value: &str) -> String {
     let mut result = String::new();
     let mut separator = false;
     for character in value.chars().flat_map(char::to_lowercase) {
@@ -1383,13 +1913,6 @@ fn bar(fraction: f32, tone: Hsla) -> gpui::Div {
         .bg(tone)
 }
 
-fn accent_helper(accent: AccentSelection) -> String {
-    match accent {
-        AccentSelection::ThemeDefault => "Theme default".into(),
-        AccentSelection::Preset(preset) => preset.label().into(),
-    }
-}
-
 fn surface_label(surface: SurfacePreference) -> &'static str {
     match surface {
         SurfacePreference::ThemeDefault => "Theme default",
@@ -1428,6 +1951,75 @@ enum Corners {
     All,
     Left,
     Right,
+}
+
+fn selection_tone(theme: &Theme) -> Hsla {
+    let accent = if theme.variant_id.as_ref() == "zuse-light" {
+        gpui::rgb(0x526f15).into()
+    } else {
+        theme.accent
+    };
+    if crate::theme::contrast_ratio(accent, theme.surface_card) >= 4.5 {
+        accent
+    } else {
+        theme.text_strong
+    }
+}
+
+fn workspace_thumbnail(theme: &Theme) -> gpui::Div {
+    let stroke = theme.text.opacity(0.18);
+    div()
+        .flex()
+        .size_full()
+        .rounded(px(7.0))
+        .overflow_hidden()
+        .bg(theme.bg)
+        .child(
+            div()
+                .w(gpui::relative(0.23))
+                .flex_none()
+                .flex()
+                .flex_col()
+                .gap(px(4.0))
+                .p(px(7.0))
+                .bg(theme.surface)
+                .child(bar(0.54, theme.accent))
+                .child(bar(1.0, stroke))
+                .child(bar(0.68, stroke)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .justify_between()
+                .gap(px(9.0))
+                .p(px(8.0))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.0))
+                        .child(bar(0.53, theme.text.opacity(0.62)))
+                        .child(bar(0.86, stroke))
+                        .child(bar(0.69, stroke)),
+                )
+                .child(
+                    div()
+                        .h(px(16.0))
+                        .rounded(px(5.0))
+                        .border_1()
+                        .border_color(stroke)
+                        .bg(theme.surface_card)
+                        .px(px(4.0))
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(bar(0.36, stroke))
+                        .child(div().size(px(7.0)).rounded(px(2.0)).bg(theme.accent)),
+                ),
+        )
 }
 
 fn miniature(theme: &Theme, corners: Corners) -> AnyElement {
@@ -1533,6 +2125,11 @@ fn model_appearance(appearance: Appearance) -> zuse_theme::Appearance {
     }
 }
 
+/// The paste box's resting height: tall enough for the sample to read as one.
+const JSON_FIELD_HEIGHT: f32 = 150.0;
+/// Shown in the empty paste box, so the expected shape is visible up front.
+const JSON_SAMPLE: &str = "{\n  \"version\": 1,\n  \"name\": \"Aurora\",\n  \"appearance\": \"dark\",\n  \"colors\": { \"canvas\": \"#0f1115\", \"accent\": \"#7aa2f7\" }\n}";
+
 fn palette_preview(theme: &Theme) -> gpui::Div {
     div()
         .flex_none()
@@ -1548,6 +2145,39 @@ fn palette_preview(theme: &Theme) -> gpui::Div {
         .child(div().w_1_3().h_full().bg(theme.accent))
 }
 
+/// A square icon-only action with its name as tooltip and accessible label,
+/// for secondary row actions that would crowd a row as text buttons.
+fn icon_button(
+    theme: &Theme,
+    glyph: &'static str,
+    label: &'static str,
+    id: String,
+    danger: bool,
+) -> gpui::Stateful<gpui::Div> {
+    use crate::tooltip::TooltipExt as _;
+    let (ink, wash) = if danger {
+        (theme.danger, theme.danger.opacity(0.12))
+    } else {
+        (theme.text_muted, theme.glass_hover())
+    };
+    div()
+        .id(SharedString::from(id))
+        .size(px(28.0))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(7.0))
+        .cursor_pointer()
+        .hover(move |s| s.bg(wash))
+        .tab_index(0)
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+        .tip(label)
+        .child(icons::icon(glyph).size(px(14.0)).text_color(ink))
+}
+
 fn compact_action(
     theme: &Theme,
     label: &str,
@@ -1556,101 +2186,168 @@ fn compact_action(
     widgets::text_action(theme, widgets::ActionTone::Outlined, label).id(id.into())
 }
 
-fn import_scene_preview(variant: &zuse_theme::ThemeVariant) -> AnyElement {
+fn icon_action(
+    theme: &Theme,
+    glyph: &'static str,
+    label: &str,
+    id: impl Into<SharedString>,
+) -> gpui::Stateful<gpui::Div> {
+    tinted_action(theme, glyph, label, id, theme.text_muted)
+}
+
+/// [`icon_action`] with the glyph and label in `ink` (e.g. danger red).
+fn tinted_action(
+    theme: &Theme,
+    glyph: &'static str,
+    label: &str,
+    id: impl Into<SharedString>,
+    ink: gpui::Hsla,
+) -> gpui::Stateful<gpui::Div> {
+    // gpui's svg paints only its own text color; it never inherits the
+    // button's, so an uncolored glyph renders as an empty gap.
+    widgets::action_button(theme, widgets::ActionTone::Outlined)
+        .px(px(11.0))
+        .id(id.into())
+        .when(ink != theme.text_muted, |button| button.text_color(ink))
+        .child(icons::icon(glyph).size(px(13.0)).text_color(ink))
+        .child(SharedString::from(label.to_owned()))
+}
+
+/// A variant at a glance: workspace thumbnail, a highlighted code sample,
+/// and its key roles as labelled chips. `ui` styles the dialog chrome; the
+/// sample itself is painted in the variant's own colors.
+fn import_scene_preview(ui: &Theme, variant: &zuse_theme::ThemeVariant) -> AnyElement {
     let theme = Theme::from_variant(
         variant,
         AccentSelection::ThemeDefault,
         SurfacePreference::ThemeDefault,
     );
+    let syntax = &theme.syntax;
+    let token = |color: gpui::Hsla, text: &'static str| div().text_color(color).child(text);
+    let code_lines: [Vec<gpui::Div>; 5] = [
+        vec![
+            token(syntax.keyword, "fn "),
+            token(syntax.function, "preview"),
+            token(syntax.punctuation, "("),
+            token(syntax.parameter, "theme"),
+            token(syntax.punctuation, ": "),
+            token(syntax.type_name, "&Theme"),
+            token(syntax.punctuation, ") {"),
+        ],
+        vec![
+            token(syntax.keyword, "    let "),
+            token(syntax.variable, "accent"),
+            token(syntax.operator, " = "),
+            token(syntax.number, "0.86"),
+            token(syntax.punctuation, ";"),
+        ],
+        vec![token(syntax.comment, "    // every role, mapped")],
+        vec![
+            token(syntax.function, "    render"),
+            token(syntax.punctuation, "("),
+            token(syntax.string, "\"zuse\""),
+            token(syntax.punctuation, ")"),
+        ],
+        vec![token(syntax.punctuation, "}")],
+    ];
+    let code = div()
+        .flex_1()
+        .min_w_0()
+        .h_full()
+        .overflow_hidden()
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.bg)
+        .px(px(10.0))
+        .py(px(9.0))
+        .flex()
+        .flex_col()
+        .gap(px(3.0))
+        .text_size(crate::typography::text_xs())
+        .font_family(theme.font_mono.clone())
+        .children(code_lines.into_iter().enumerate().map(|(index, spans)| {
+            div()
+                .flex()
+                .gap(px(10.0))
+                .whitespace_nowrap()
+                .child(
+                    div()
+                        .w(px(12.0))
+                        .flex_none()
+                        .text_right()
+                        .text_color(theme.text_faint)
+                        .child(SharedString::from((index + 1).to_string())),
+                )
+                .child(div().flex().children(spans))
+        }));
+    let chip = |name: &'static str, color: gpui::Hsla| {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .px(px(8.0))
+            .py(px(4.0))
+            .rounded(px(6.0))
+            .border_1()
+            .border_color(ui.border)
+            .text_size(crate::typography::text_xs())
+            .text_color(ui.text_muted)
+            .child(
+                div()
+                    .size(px(11.0))
+                    .rounded(px(3.0))
+                    .border_1()
+                    .border_color(ui.border)
+                    .bg(color),
+            )
+            .child(name)
+    };
     div()
         .w_full()
-        .h(px(86.0))
         .flex()
+        .flex_col()
         .gap(px(8.0))
         .child(
             div()
-                .w(px(152.0))
-                .h_full()
-                .overflow_hidden()
-                .rounded(px(8.0))
-                .border_1()
-                .border_color(theme.border)
-                .child(miniature(&theme, Corners::All)),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .h_full()
-                .rounded(px(8.0))
-                .border_1()
-                .border_color(theme.border)
-                .bg(theme.bg)
-                .p(px(9.0))
+                .w_full()
+                .h(px(112.0))
                 .flex()
-                .flex_col()
-                .gap(px(6.0))
+                .gap(px(8.0))
                 .child(
                     div()
-                        .text_size(crate::typography::text_xs())
-                        .font_family(theme.font_mono.clone())
-                        .child(
-                            div()
-                                .text_color(theme.syntax.keyword)
-                                .child("fn ")
-                                .child(div().text_color(theme.syntax.function).child("preview"))
-                                .child(div().text_color(theme.syntax.punctuation).child("() {")),
-                        ),
-                )
-                .child(
-                    div()
-                        .text_size(crate::typography::text_xs())
-                        .font_family(theme.font_mono.clone())
-                        .text_color(theme.syntax.string)
-                        .child("  \"Theme mapping\""),
-                )
-                .child(
-                    div()
-                        .mt_auto()
-                        .h(px(12.0))
-                        .flex()
-                        .rounded(px(3.0))
+                        .w(px(150.0))
+                        .flex_none()
+                        .h_full()
                         .overflow_hidden()
-                        .children(
-                            theme
-                                .terminal
-                                .ansi
-                                .iter()
-                                .take(8)
-                                .map(|color| div().flex_1().h_full().bg(*color)),
-                        ),
-                ),
+                        .rounded(px(8.0))
+                        .border_1()
+                        .border_color(theme.border)
+                        .child(miniature(&theme, Corners::All)),
+                )
+                .child(code),
         )
+        .child(div().flex().flex_wrap().gap(px(6.0)).children([
+            chip("Canvas", theme.bg),
+            chip("Surface", theme.surface),
+            chip("Text", theme.text),
+            chip("Accent", theme.accent),
+            chip("Added", theme.diff_add),
+            chip("Removed", theme.diff_del),
+        ]))
         .child(
             div()
-                .w(px(84.0))
-                .h_full()
-                .rounded(px(8.0))
-                .border_1()
-                .border_color(theme.border)
-                .bg(theme.surface)
-                .p(px(8.0))
+                .h(px(8.0))
                 .flex()
-                .flex_col()
-                .gap(px(6.0))
-                .child(
-                    div()
-                        .h(px(12.0))
-                        .rounded(px(3.0))
-                        .bg(theme.diff_add.opacity(0.35)),
-                )
-                .child(
-                    div()
-                        .h(px(12.0))
-                        .rounded(px(3.0))
-                        .bg(theme.diff_del.opacity(0.35)),
-                )
-                .child(div().h(px(12.0)).rounded(px(3.0)).bg(theme.accent_wash)),
+                .rounded(px(3.0))
+                .overflow_hidden()
+                .children(
+                    theme
+                        .terminal
+                        .ansi
+                        .iter()
+                        .map(|color| div().flex_1().h_full().bg(*color)),
+                ),
         )
         .into_any_element()
 }
@@ -1722,80 +2419,6 @@ fn report_panel(theme: &Theme, report: &ImportReport) -> impl IntoElement {
                 )))
             })),
     )
-}
-
-fn accent_swatch(
-    page_theme: &Theme,
-    selection: AccentSelection,
-    selected: bool,
-) -> gpui::Stateful<gpui::Div> {
-    let swatch_theme = Theme::for_selection(
-        page_theme.appearance,
-        page_theme.variant_id.as_ref(),
-        selection,
-        page_theme.surface_preference,
-    );
-    let sample = match selection {
-        AccentSelection::ThemeDefault => div()
-            .size_full()
-            .rounded(px(6.0))
-            .bg(swatch_theme.accent_wash)
-            .flex()
-            .items_center()
-            .justify_center()
-            .gap(px(2.0))
-            .child(
-                div()
-                    .w(px(4.0))
-                    .h(px(13.0))
-                    .rounded(px(2.0))
-                    .bg(swatch_theme.glyph.light),
-            )
-            .child(
-                div()
-                    .w(px(4.0))
-                    .h(px(16.0))
-                    .rounded(px(2.0))
-                    .bg(swatch_theme.glyph.mid),
-            )
-            .child(
-                div()
-                    .w(px(4.0))
-                    .h(px(11.0))
-                    .rounded(px(2.0))
-                    .bg(swatch_theme.glyph.deep),
-            ),
-        AccentSelection::Preset(_) => div().size_full().rounded(px(6.0)).bg(swatch_theme.accent),
-    };
-    div()
-        .id(SharedString::from(format!("accent-{}", selection.label())))
-        .aria_label(selection.label())
-        .aria_selected(selected)
-        .flex_none()
-        .w(px(30.0))
-        .h(px(34.0))
-        .pb(px(4.0))
-        .border_b_2()
-        .border_color(if selected {
-            swatch_theme.accent
-        } else {
-            gpui::transparent_black()
-        })
-        .cursor_pointer()
-        .child(
-            div()
-                .size(px(30.0))
-                .p(px(2.0))
-                .rounded(px(8.0))
-                .border_1()
-                .border_color(if selected {
-                    page_theme.border_strong
-                } else {
-                    page_theme.border
-                })
-                .bg(page_theme.surface_raised.opacity(0.42))
-                .child(sample),
-        )
 }
 
 impl AppearancePage {
@@ -1977,11 +2600,140 @@ impl AppearancePage {
                 .map(widgets::SelectOption::new),
             kind.size_ix(cx),
         )
+        .compact()
         .width(128.0)
         .font_family(fixed)
         .on_select(move |page, ix, window, cx| page.commit_size(kind, ix, window, cx))
         .render(self.size_select(kind), cx)
         .into_any_element()
+    }
+
+    fn render_code_layout(&mut self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
+        use crate::changes::{self, DiffMode};
+        use crate::settings::{self, DiffColors, SavePolicy};
+
+        let mode = DiffMode::from_split(settings::split_diffs(cx));
+        let colors = settings::diff_colors(cx);
+        let code_size = widgets::select(
+            "code-layout-font-size",
+            "Code font size",
+            theme,
+            |page: &mut Self| &mut page.code_layout_size_select,
+        )
+        .options(
+            MONO_FONT_SIZES.into_iter().map(|size| {
+                let label = if size == typography::CODE_FONT_SIZE_DEFAULT {
+                    format!("{} (Default)", format_px(size))
+                } else {
+                    format_px(size)
+                };
+                widgets::SelectOption::new(label)
+            }),
+            FontKind::Code.size_ix(cx),
+        )
+        .compact()
+        .width(148.0)
+        .on_select(|page, index, window, cx| page.commit_size(FontKind::Code, index, window, cx))
+        .render(&self.code_layout_size_select, cx);
+        let diff_view = widgets::select(
+            "code-layout-diff-view",
+            "Diff view",
+            theme,
+            |page: &mut Self| &mut page.diff_view_select,
+        )
+        .options(
+            DiffMode::ALL.map(|option| widgets::SelectOption::new(option.label())),
+            usize::from(mode.is_split()),
+        )
+        .compact()
+        .width(148.0)
+        .on_select(|_, index, _, cx| {
+            if settings::update(SavePolicy::Immediate, cx, |settings| {
+                settings.diff_split = DiffMode::ALL[index].is_split();
+            }) {
+                cx.refresh_windows();
+            }
+            cx.notify();
+        })
+        .render(&self.diff_view_select, cx);
+        let diff_colors = widgets::select(
+            "code-layout-diff-colors",
+            "Diff colors",
+            theme,
+            |page: &mut Self| &mut page.diff_colors_select,
+        )
+        .options(
+            DiffColors::ALL.map(|option| widgets::SelectOption::new(option.label())),
+            usize::from(colors == DiffColors::BlueOrange),
+        )
+        .compact()
+        .width(148.0)
+        .on_select(|_, index, _, cx| {
+            if settings::update(SavePolicy::Immediate, cx, |settings| {
+                settings.diff_colors = DiffColors::ALL[index];
+            }) {
+                appearance::apply_registry_change(cx);
+            }
+            cx.notify();
+        })
+        .render(&self.diff_colors_select, cx);
+
+        let row = |first, label, description, control: AnyElement| {
+            widgets::card_row(theme, first)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(widgets::row_title(theme, label))
+                        .child(widgets::meta_line(
+                            theme,
+                            vec![div().child(description).into_any_element()],
+                        )),
+                )
+                .child(control)
+        };
+        static SAMPLE: std::sync::OnceLock<(
+            changes::FileDiff,
+            Option<Arc<changes::DiffHighlights>>,
+        )> = std::sync::OnceLock::new();
+        let (file, highlights) = SAMPLE.get_or_init(|| {
+            let patch = "diff --git a/math.ts b/math.ts\n--- a/math.ts\n+++ b/math.ts\n@@ -1,3 +1,3 @@\n export function add(a: number, b: number) {\n-  return a - b;\n+  return a + b;\n }\n";
+            let file = changes::parse_patch(patch).remove(0);
+            let highlights = changes::excerpt_highlights(&file, zuse_syntax::LanguageId::TypeScript).map(Arc::new);
+            (file, highlights)
+        });
+        let preview = changes::render_file_body_with_syntax(file, highlights.clone(), theme, mode);
+
+        widgets::section(
+            theme,
+            "Code layout",
+            widgets::section_card(theme)
+                .mt_0()
+                .child(row(
+                    true,
+                    "Code font size",
+                    "Text size in diffs, files, and code blocks",
+                    code_size.into_any_element(),
+                ))
+                .child(row(
+                    false,
+                    "Diff view",
+                    "How code changes render in threads",
+                    diff_view.into_any_element(),
+                ))
+                .child(row(
+                    false,
+                    "Diff colors",
+                    "Blue/orange helps distinguish changes with red-green color blindness",
+                    diff_colors.into_any_element(),
+                )),
+        )
+        .child(
+            widgets::section_card(theme)
+                .mt(px(8.0))
+                .overflow_hidden()
+                .child(preview),
+        )
     }
 
     fn render_theme_selector(
@@ -1998,19 +2750,17 @@ impl AppearancePage {
         let surface = theme.surface_preference;
         let variants: Vec<_> = registry
             .variants_for(model_appearance(appearance_kind))
-            .map(|variant| (variant.id.clone(), variant.name.clone()))
             .collect();
         let selected = variants
             .iter()
-            .position(|(id, _)| *id == selected_id)
+            .position(|variant| variant.id == selected_id)
             .unwrap_or_default();
-        let options = variants.iter().map(|(id, name)| {
-            let sample =
-                Theme::for_selection(appearance_kind, id, AccentSelection::ThemeDefault, surface);
-            widgets::SelectOption::new(name.clone())
+        let options = variants.iter().map(|variant| {
+            let sample = Theme::from_variant(variant, AccentSelection::ThemeDefault, surface);
+            widgets::SelectOption::new(variant.name.clone())
                 .leading(move || palette_preview(&sample).into_any_element())
         });
-        let ids: Vec<String> = variants.iter().map(|(id, _)| id.clone()).collect();
+        let ids: Vec<String> = variants.iter().map(|variant| variant.id.clone()).collect();
         let (slug, label, heading) = if appearance_kind.is_light() {
             ("light", "Light theme", "Light themes")
         } else {
@@ -2026,12 +2776,13 @@ impl AppearancePage {
             },
         )
         .options(options, selected)
+        .compact()
         .width(218.0)
         .menu_width(260.0)
         .heading(heading)
         .on_select(move |_, ix, _, cx| {
             if let Some(id) = ids.get(ix) {
-                appearance::set_theme(appearance_kind, id.clone(), cx);
+                appearance::choose_theme(appearance_kind, id.clone(), cx);
             }
             cx.notify();
         })
@@ -2045,6 +2796,136 @@ impl AppearancePage {
         .into_any_element()
     }
 
+    fn render_theme_gallery(
+        &self,
+        theme: &Theme,
+        content_width: f32,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let registry = ThemeRegistry::active();
+        let appearance = theme.appearance;
+        let scheme = model_appearance(appearance);
+        // Every family's variant for this scheme; a family with one such
+        // variant is labelled by the family ("GitHub", not "GitHub Dark").
+        let tiles = registry
+            .families
+            .iter()
+            .flat_map(|family| {
+                let variants = family
+                    .variants
+                    .iter()
+                    .filter(move |variant| variant.appearance == scheme);
+                let single = variants.clone().count() == 1;
+                variants.map(move |variant| {
+                    let label = if single { &family.name } else { &variant.name };
+                    (label.as_str(), variant)
+                })
+            })
+            .collect::<Vec<_>>();
+        let focus = selection_tone(theme);
+        let columns = match content_width {
+            width if width >= 704.0 => 6,
+            width if width >= 600.0 => 5,
+            width if width >= 480.0 => 4,
+            width if width >= 360.0 => 3,
+            _ => 2,
+        };
+        let rows = tiles
+            .chunks(columns)
+            .map(|variants| {
+                let mut row = div().flex().gap(px(10.0));
+                for (label, variant) in variants {
+                    let id = variant.id.clone();
+                    let selected = theme.variant_id.as_ref() == id;
+                    let sample = Theme::from_variant(
+                        variant,
+                        AccentSelection::ThemeDefault,
+                        SurfacePreference::ThemeDefault,
+                    );
+                    row = row.child(
+                        div()
+                            .id(SharedString::from(format!("theme-tile-{id}")))
+                            .flex_1()
+                            .min_w_0()
+                            .p(px(3.0))
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.0))
+                            .rounded(px(8.0))
+                            .border_2()
+                            .border_color(if selected {
+                                focus
+                            } else {
+                                gpui::transparent_black()
+                            })
+                            .hover(|style| style.bg(theme.element_hover))
+                            .cursor_pointer()
+                            .tab_index(0)
+                            .role(gpui::Role::Button)
+                            .aria_label(SharedString::from(variant.name.clone()))
+                            .aria_selected(selected)
+                            .focus_visible(|style| style.border_2().border_color(focus))
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                appearance::choose_theme(appearance, id.clone(), cx);
+                                cx.notify();
+                            }))
+                            .child(
+                                div()
+                                    .h(px(59.0))
+                                    .w_full()
+                                    .rounded(px(8.0))
+                                    .border_1()
+                                    .border_color(theme.border)
+                                    .child(workspace_thumbnail(&sample)),
+                            )
+                            .child(
+                                div()
+                                    .w_full()
+                                    .min_w_0()
+                                    .px(px(3.0))
+                                    .pb(px(3.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap(px(4.0))
+                                    .text_size(typography::text_xs())
+                                    .text_color(if selected {
+                                        theme.text_strong
+                                    } else {
+                                        theme.text_muted
+                                    })
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .truncate()
+                                            .child(SharedString::from(*label)),
+                                    )
+                                    .when(selected, |caption| {
+                                        caption.child(
+                                            icons::icon(icons::CHECK)
+                                                .size(px(13.0))
+                                                .flex_none()
+                                                .text_color(focus),
+                                        )
+                                    }),
+                            ),
+                    );
+                }
+                for _ in variants.len()..columns {
+                    row = row.child(div().flex_1());
+                }
+                row
+            })
+            .collect::<Vec<_>>();
+
+        div()
+            .p(px(12.0))
+            .flex()
+            .flex_col()
+            .gap(px(10.0))
+            .children(rows)
+    }
+
     fn render_import_dialog(
         &mut self,
         viewport: gpui::Size<gpui::Pixels>,
@@ -2055,12 +2936,25 @@ impl AppearancePage {
         {
             let dialog = self.import_dialog.as_mut()?;
             if std::mem::take(&mut dialog.focus_pending) {
-                let input_focus = dialog.input.focus_handle(cx);
+                let input_focus = match dialog.source {
+                    ImportSource::Json => dialog.json_input.focus_handle(cx),
+                    ImportSource::Community => dialog.input.focus_handle(cx),
+                    // The JSON editor unmounts in the File view; focus a
+                    // control that stays, so Enter still submits.
+                    ImportSource::File => dialog.file_focus.clone(),
+                };
                 window.focus(&input_focus, cx);
             }
         }
         let dialog = self.import_dialog.as_ref()?;
         let input = dialog.input.clone();
+        let input_focus = input.focus_handle(cx);
+        let json_input = dialog.json_input.clone();
+        let source = dialog.source;
+        let creating = dialog.creating;
+        let file_focus = dialog.file_focus.clone();
+        let results = dialog.results.clone();
+        let pending = dialog.pending.is_some();
         let focus = dialog.focus.clone();
         let mode = dialog.mode;
         let compilation = dialog.compilation.clone();
@@ -2068,82 +2962,13 @@ impl AppearancePage {
         let review_variant = dialog.review_variant.clone();
         let error = dialog.error.clone();
         let ready = compilation.is_some() && !selected.is_empty();
-        let hairline = crate::theme::hairline(0.08);
-
-        let mode_control = |label: &'static str, description: &'static str, value: InstallMode| {
-            let active = mode == value;
-            div()
-                .id(SharedString::from(format!(
-                    "theme-import-mode-{}",
-                    slug(label)
-                )))
-                .flex_1()
-                .min_w_0()
-                .p(px(10.0))
-                .rounded(px(9.0))
-                .border_1()
-                .border_color(if active { theme.accent } else { theme.border })
-                .bg(if active {
-                    theme.accent_wash
-                } else {
-                    theme.surface_raised.opacity(0.28)
-                })
-                .cursor_pointer()
-                .when(!active, |control| {
-                    control.hover(|style| style.bg(theme.surface_raised_hover))
-                })
-                .tab_index(0)
-                .role(gpui::Role::Button)
-                .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if let Some(dialog) = this.import_dialog.as_mut() {
-                        dialog.mode = value;
-                    }
-                    cx.notify();
-                }))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(7.0))
-                        .child(
-                            div()
-                                .size(px(16.0))
-                                .rounded_full()
-                                .border_1()
-                                .border_color(if active {
-                                    theme.accent
-                                } else {
-                                    theme.border_strong
-                                })
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .when(active, |dot| {
-                                    dot.child(div().size(px(8.0)).rounded_full().bg(theme.accent))
-                                }),
-                        )
-                        .child(
-                            div()
-                                .text_size(crate::typography::text_xs())
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(if active {
-                                    theme.text_strong
-                                } else {
-                                    theme.text_muted
-                                })
-                                .child(label),
-                        ),
-                )
-                .child(
-                    div()
-                        .mt(px(4.0))
-                        .ml(px(23.0))
-                        .text_size(crate::typography::text_xs())
-                        .text_color(theme.text_muted)
-                        .child(description),
-                )
+        let has_input = match source {
+            ImportSource::Json => !json_input.read(cx).text().trim().is_empty(),
+            ImportSource::Community => !input.read(cx).text().trim().is_empty(),
+            ImportSource::File => false,
         };
+        let can_submit = !pending && (ready || (compilation.is_none() && has_input));
+        let hairline = crate::theme::hairline(0.08);
 
         let section_label = |label: &'static str| {
             div()
@@ -2154,60 +2979,284 @@ impl AppearancePage {
                 .child(label)
         };
 
+        let community = source == ImportSource::Community;
+        let focus_color = selection_tone(theme);
+        let captions = [
+            ("Import", ImportSource::Json, !community),
+            ("Community", ImportSource::Community, community),
+        ];
         let mut main = div()
             .id("theme-import-main")
-            .max_h(px(520.0))
+            .max_h((viewport.height - px(180.0)).clamp(px(150.0), px(530.0)))
             .overflow_y_scroll()
-            .px(px(20.0))
-            .pb(px(18.0))
+            .px(px(18.0))
+            .pb(px(14.0))
             .flex()
             .flex_col()
-            .child(section_label("Source"))
             .child(
                 div()
                     .flex()
+                    .justify_between()
                     .items_center()
                     .gap(px(8.0))
-                    .child(
-                        popover::dialog_field(input.into_any_element())
-                            .flex_1()
-                            .min_w_0()
-                            .h(px(36.0))
-                            .py(px(0.0))
-                            .flex()
-                            .items_center(),
-                    )
-                    .child(
-                        compact_action(theme, "Browse…", "theme-import-browse")
-                            .h(px(36.0))
-                            .px(px(12.0))
-                            .flex_none()
-                            .tab_index(0)
-                            .role(gpui::Role::Button)
-                            .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                            .on_click(cx.listener(|this, _, _, cx| this.choose_import_source(cx))),
-                    ),
-            )
-            .child(
-                div()
-                    .mt(px(16.0))
-                    .child(section_label("Keep it up to date"))
+                    .flex_wrap()
                     .child(
                         div()
                             .flex()
+                            .items_center()
+                            .gap(px(2.0))
+                            .p(px(2.0))
+                            .rounded(px(7.0))
+                            .bg(theme.element_hover)
+                            .children(captions.map(|(label, choice, active)| {
+                                widgets::text_action(theme, widgets::ActionTone::Quiet, label)
+                                    .id(label)
+                                    .px(px(10.0))
+                                    .min_h(px(26.0))
+                                    .tab_index(0)
+                                    .role(gpui::Role::Button)
+                                    .aria_selected(active)
+                                    .when(active, |button| {
+                                        button.bg(theme.surface_card).text_color(theme.text_strong)
+                                    })
+                                    .focus_visible(|style| {
+                                        style.border_1().border_color(focus_color)
+                                    })
+                                    .on_click(cx.listener(move |page, _, _, cx| {
+                                        // Import also leaves "start from
+                                        // current theme" for the file form.
+                                        if !active || source == ImportSource::File || creating {
+                                            page.switch_import_source(choice, cx);
+                                        }
+                                    }))
+                            })),
+                    )
+                    .when(!community, |row| {
+                        row.child(
+                            widgets::text_action(
+                                theme,
+                                widgets::ActionTone::Quiet,
+                                "Start from current theme",
+                            )
+                            .id("theme-create-copy")
+                            .px(px(6.0))
+                            .tab_index(0)
+                            .role(gpui::Role::Button)
+                            .focus_visible(|style| style.border_1().border_color(focus_color))
+                            .on_click(
+                                cx.listener(|page, _, _, cx| page.create_from_current_theme(cx)),
+                            ),
+                        )
+                    }),
+            )
+            .when(community, |form| {
+                form.child(
+                    div()
+                        .mt(px(14.0))
+                        .child(section_label("Search Open VSX"))
+                        .child(
+                            popover::dialog_field(input.into_any_element())
+                                .h(px(33.0))
+                                .py_0()
+                                .flex()
+                                .items_center(),
+                        ),
+                )
+            })
+            .when(!community && !creating, |form| {
+                form.child(
+                    div()
+                        .mt(px(14.0))
+                        .p(px(9.0))
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(px(12.0))
+                        .rounded(px(8.0))
+                        .border_1()
+                        .border_color(theme.border)
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.0))
+                                .child(widgets::row_title(theme, "Theme file"))
+                                .child(
+                                    div()
+                                        .text_size(typography::text_xs())
+                                        .text_color(theme.text_muted)
+                                        .truncate()
+                                        .child(
+                                            compilation
+                                                .as_ref()
+                                                .filter(|value| !value.path.as_os_str().is_empty())
+                                                .map(|value| {
+                                                    SharedString::from(source_name(&value.path))
+                                                })
+                                                .unwrap_or_else(|| {
+                                                    "Zuse, T3 Code, or VS Code".into()
+                                                }),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            icon_action(theme, icons::UPLOAD, "Choose file", "theme-import-browse")
+                                .track_focus(&file_focus)
+                                .flex_none()
+                                .tab_index(0)
+                                .role(gpui::Role::Button)
+                                .focus_visible(|style| style.border_1().border_color(focus_color))
+                                .on_click(
+                                    cx.listener(|page, _, _, cx| page.choose_import_source(cx)),
+                                ),
+                        ),
+                )
+            })
+            .when(!community && source != ImportSource::File, |form| {
+                form.child(
+                    div()
+                        .mt(px(12.0))
+                        .child(section_label(if creating {
+                            "Edit your theme"
+                        } else {
+                            "Theme JSON"
+                        }))
+                        .child({
+                            let field_focus = json_input.focus_handle(cx);
+                            popover::dialog_field(json_input.into_any_element())
+                                .min_w_0()
+                                .w_full()
+                                .min_h(px(JSON_FIELD_HEIGHT))
+                                .cursor_text()
+                                // The text grows from the top; clicks on the
+                                // empty area below still land in the editor.
+                                .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                                    window.focus(&field_focus, cx)
+                                })
+                        }),
+                )
+            })
+            .when(
+                source == ImportSource::File && compilation.is_some(),
+                |form| {
+                    form.child(
+                        div()
+                            .mt(px(8.0))
+                            .flex()
+                            .justify_end()
                             .gap(px(8.0))
-                            .child(mode_control(
-                                "Import a copy",
-                                "Works independently from the original file.",
-                                InstallMode::Snapshot,
-                            ))
-                            .child(mode_control(
-                                "Link to source",
-                                "Reload changes from the file on disk.",
-                                InstallMode::Link,
-                            )),
-                    ),
+                            .items_center()
+                            .text_size(typography::text_xs())
+                            .text_color(theme.text_muted)
+                            .child("Link to source")
+                            .child(
+                                widgets::toggle_switch(
+                                    theme,
+                                    mode == InstallMode::Link,
+                                    "theme-source-link",
+                                )
+                                .id("theme-source-link")
+                                .tab_index(0)
+                                .role(gpui::Role::Switch)
+                                .aria_label("Link to source")
+                                .aria_toggled(if mode == InstallMode::Link {
+                                    gpui::Toggled::True
+                                } else {
+                                    gpui::Toggled::False
+                                })
+                                .focus_visible(|style| style.border_1().border_color(focus_color))
+                                .on_click(cx.listener(
+                                    move |page, _, _, cx| {
+                                        if let Some(dialog) = page.import_dialog.as_mut() {
+                                            dialog.mode = if mode == InstallMode::Link {
+                                                InstallMode::Snapshot
+                                            } else {
+                                                InstallMode::Link
+                                            };
+                                        }
+                                        cx.notify();
+                                    },
+                                )),
+                            ),
+                    )
+                },
             );
+
+        if source == ImportSource::Community && compilation.is_none() {
+            if pending {
+                main = main.child(div().mt(px(10.0)).child(section_label("Loading themes…")));
+            } else if let Some(results) = results {
+                if results.is_empty() {
+                    main = main.child(
+                        div()
+                            .mt(px(10.0))
+                            .child(section_label("No matching themes")),
+                    );
+                } else {
+                    main = main.child(div().mt(px(10.0)).flex().flex_col().gap(px(4.0)).children(
+                        results.into_iter().map(|result| {
+                            div()
+                                .id(SharedString::from(format!(
+                                    "theme-result-{}-{}",
+                                    result.namespace, result.name
+                                )))
+                                .flex()
+                                .justify_between()
+                                .items_center()
+                                .gap(px(8.0))
+                                .px(px(8.0))
+                                .py(px(6.0))
+                                .rounded(px(6.0))
+                                .border_1()
+                                .border_color(theme.border)
+                                .hover(|style| style.bg(theme.element_hover))
+                                .cursor_pointer()
+                                .tab_index(0)
+                                .role(gpui::Role::Button)
+                                .focus_visible(|style| {
+                                    style.border_2().border_color(selection_tone(theme))
+                                })
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_color(theme.text)
+                                        .child(SharedString::from(result.label().to_owned())),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(typography::text_xs())
+                                        .text_color(theme.text_muted)
+                                        .child(SharedString::from(result.namespace.clone())),
+                                )
+                                .on_click(cx.listener(move |page, _, _, cx| {
+                                    page.load_community_theme(result.clone(), cx)
+                                }))
+                        }),
+                    ));
+                }
+            } else if error.is_none() {
+                main = main.child(div().mt(px(8.0)).flex().flex_wrap().gap(px(6.0)).children(
+                    ["Dracula", "Catppuccin", "Nord", "Tokyo Night"].map(|name| {
+                        compact_action(theme, name, format!("theme-popular-{}", slug(name)))
+                            .tab_index(0)
+                            .role(gpui::Role::Button)
+                            .focus_visible(|style| {
+                                style.border_2().border_color(selection_tone(theme))
+                            })
+                            .on_click(cx.listener(move |page, _, _, cx| {
+                                if let Some(dialog) = page.import_dialog.as_mut() {
+                                    dialog
+                                        .input
+                                        .update(cx, |field, cx| field.set_text(name, cx));
+                                }
+                            }))
+                    }),
+                ));
+            }
+        }
 
         if let Some(ref compilation) = compilation {
             main = main.child(
@@ -2375,7 +3424,7 @@ impl AppearancePage {
                                     .pt(px(10.0))
                                     .border_t_1()
                                     .border_color(hairline)
-                                    .child(import_scene_preview(variant)),
+                                    .child(import_scene_preview(theme, variant)),
                             )
                             .when_some(report, |row, report| row.child(report_panel(theme, report)))
                         }),
@@ -2396,27 +3445,6 @@ impl AppearancePage {
                         ))),
                 );
             }
-        } else {
-            main = main.child(
-                div()
-                    .mt(px(14.0))
-                    .flex()
-                    .items_start()
-                    .gap(px(7.0))
-                    .text_size(crate::typography::text_xs())
-                    .line_height(px(16.0))
-                    .text_color(theme.text_muted)
-                    .child(
-                        icons::icon(icons::INFO_CIRCLE)
-                            .size(px(13.0))
-                            .mt(px(1.0))
-                            .flex_none(),
-                    )
-                    .child(tr(
-                        cx,
-                        msg::native::zuse_finds_light_and_dark_variants_automatically,
-                    )),
-            );
         }
 
         if let Some(error) = error {
@@ -2438,14 +3466,14 @@ impl AppearancePage {
                             .flex_none()
                             .mt(px(1.0)),
                     )
-                    .child(div().flex_1().min_w_0().truncate().child(error)),
+                    .child(div().flex_1().min_w_0().child(error)),
             );
         }
 
         let header = div()
-            .px(px(20.0))
-            .pt(px(18.0))
-            .pb(px(16.0))
+            .px(px(18.0))
+            .pt(px(14.0))
+            .pb(px(12.0))
             .flex()
             .items_start()
             .gap(px(16.0))
@@ -2453,14 +3481,7 @@ impl AppearancePage {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .child(popover::dialog_title(theme, "Add a theme"))
-                    .child(
-                        popover::dialog_body(
-                            theme,
-                            "Import a local theme into your library or keep it linked to its source.",
-                        )
-                        .mt(px(4.0)),
-                    ),
+                    .child(popover::dialog_title(theme, "Add a theme")),
             )
             .child(
                 div()
@@ -2475,9 +3496,10 @@ impl AppearancePage {
                     .justify_center()
                     .cursor_pointer()
                     .hover(|style| style.bg(theme.surface_raised_hover))
-                    .tab_index(0).role(gpui::Role::Button)
-.focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-.on_click(cx.listener(|this, _, _, cx| {
+                    .tab_index(0)
+                    .role(gpui::Role::Button)
+                    .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                    .on_click(cx.listener(|this, _, _, cx| {
                         this.import_dialog = None;
                         cx.notify();
                     }))
@@ -2510,76 +3532,75 @@ impl AppearancePage {
                         cx.notify();
                     })),
             )
-            .child(
-                widgets::text_action(
-                    theme,
-                    widgets::ActionTone::Solid,
-                    if compilation.is_some() {
-                        "Import selected"
-                    } else {
-                        "Analyze theme"
-                    },
-                )
-                .id("theme-import-action")
-                .h(px(34.0))
-                .px(px(14.0))
-                .py(px(0.0))
-                .flex()
-                .items_center()
-                .when(compilation.is_some() && !ready, |button| {
-                    button.opacity(0.45)
-                })
-                .when(compilation.is_none() || ready, |button| {
-                    button
-                        .tab_index(0)
-                        .role(gpui::Role::Button)
-                        .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if this
-                                .import_dialog
-                                .as_ref()
-                                .is_some_and(|dialog| dialog.compilation.is_some())
-                            {
-                                this.finish_import(cx);
+            .child({
+                let (glyph, label) = match (compilation.is_some(), creating, source) {
+                    (true, true, _) => (icons::CHECK, "Save theme"),
+                    (true, false, _) => (icons::PLUS, "Add theme"),
+                    (false, _, ImportSource::Community) => (icons::MAGNIFER, "Search"),
+                    (false, _, _) => (icons::EYE, "Preview"),
+                };
+                let tone = if can_submit {
+                    widgets::ActionTone::Solid
+                } else {
+                    widgets::ActionTone::Filled
+                };
+                widgets::action_button(theme, tone)
+                    .id("theme-import-action")
+                    .h(px(32.0))
+                    .px(px(13.0))
+                    .py(px(0.0))
+                    // Above the dither texture.
+                    .child(
+                        icons::icon(glyph)
+                            .relative()
+                            .size(px(13.0))
+                            .text_color(if can_submit {
+                                gpui::white()
                             } else {
-                                this.compile_import(cx);
-                            }
-                        }))
-                }),
-            );
+                                theme.text_muted
+                            }),
+                    )
+                    .child(div().relative().child(label))
+                    .when(!can_submit, |button| button.opacity(0.5).cursor_default())
+                    .when(can_submit, |button| {
+                        button
+                            .tab_index(0)
+                            .role(gpui::Role::Button)
+                            .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                            .on_click(cx.listener(|this, _, _, cx| this.submit_import(cx)))
+                    })
+            });
 
         let card = popover::dialog_card(theme)
             .id("theme-import-card")
-            .w(px(600.0))
+            .w((viewport.width - px(32.0)).clamp(px(240.0), px(520.0)))
             .max_h(px(760.0))
             .p(px(0.0))
             .overflow_hidden()
             .track_focus(&focus)
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                match popover::classify_key(
-                    event.keystroke.key.as_str(),
-                    event.keystroke.modifiers.platform,
-                    event.keystroke.modifiers.control,
-                ) {
-                    popover::MenuKey::Escape => {
-                        cx.stop_propagation();
-                        this.import_dialog = None;
-                        cx.notify();
-                    }
-                    popover::MenuKey::Enter | popover::MenuKey::ModEnter => {
-                        if this
-                            .import_dialog
-                            .as_ref()
-                            .is_some_and(|dialog| dialog.compilation.is_some())
-                        {
-                            this.finish_import(cx);
-                        } else {
-                            this.compile_import(cx);
+            .on_key_down(
+                cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {
+                    match popover::classify_key(
+                        event.keystroke.key.as_str(),
+                        event.keystroke.modifiers.platform,
+                        event.keystroke.modifiers.control,
+                    ) {
+                        popover::MenuKey::Escape => {
+                            cx.stop_propagation();
+                            this.import_dialog = None;
+                            cx.notify();
                         }
+                        popover::MenuKey::Enter
+                            if community && can_submit && input_focus.is_focused(window) =>
+                        {
+                            cx.stop_propagation();
+                            this.submit_import(cx);
+                        }
+                        popover::MenuKey::ModEnter if can_submit => this.submit_import(cx),
+                        _ => {}
                     }
-                    _ => {}
-                }
-            }))
+                }),
+            )
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                 this.import_dialog = None;
                 cx.notify();
@@ -2598,52 +3619,83 @@ impl AppearancePage {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        let settings = crate::settings::current(cx);
         let dialog = self.background_adjustment_dialog.as_ref()?;
         let focus = dialog.focus.clone();
-        let zoom_focus = dialog.zoom_focus.clone();
         let end_focus = dialog.end_focus.clone();
-        let tab_start = focus.clone();
-        let tab_end = end_focus.clone();
+        let (tab_start, tab_end) = (focus.clone(), end_focus.clone());
         let path = dialog.path.clone();
         let draft = dialog.draft;
-        let preview_bounds = dialog.preview_bounds.clone();
-        let zoom_bounds = dialog.zoom_bounds.clone();
+        let stage_bounds = dialog.stage_bounds.clone();
         let dragging = dialog.drag.is_some();
-        let settings = crate::settings::current(cx);
+        let crop_mode = dialog.crop_mode;
         let same_image = settings
             .new_thread_composer_background
             .as_ref()
             .is_some_and(|background| background.path == path);
         let available = Path::new(&path).is_file();
+        // Frame against the untreated photo: effects and tone adjustments
+        // obscure the detail being positioned, and the panel previews them.
         let source = (same_image && available)
             .then(|| {
                 crate::new_thread_background_effects::prepare(
-                    settings.new_thread_background_effect,
+                    crate::settings::NewThreadBackgroundEffect::None,
                     theme,
                     Path::new(&path),
+                    draft.quarter_turns,
                     cx,
                 )
             })
             .flatten();
         let ready = source.is_some();
-        let preview_size =
-            background_preview_size(viewport, settings.sidebar_width, settings.sidebar_collapsed);
+        let image = source.as_ref().map(|source| {
+            let size = source.size(0);
+            (size.width.0 as f32, size.height.0 as f32)
+        });
+        // The frame is the hero: the main area beside the sidebar.
+        let hero_width = (f32::from(viewport.width)
+            - if settings.sidebar_collapsed {
+                0.0
+            } else {
+                settings.sidebar_width
+            })
+        .max(1.0);
+        let hero = (
+            hero_width,
+            crate::shell::new_thread_background_height(f32::from(viewport.height)).max(1.0),
+        );
+        let crop = image.map(|image| dialog.crop_for_hero(image, hero));
         if let Some(dialog) = self.background_adjustment_dialog.as_mut() {
             dialog.source = source.clone();
+            dialog.image = image;
+            dialog.hero = hero;
+            dialog.window_aspect =
+                f32::from(viewport.width).max(1.0) / f32::from(viewport.height).max(1.0);
         }
 
+        let card_width = (f32::from(viewport.width) - 32.0).clamp(1.0, 620.0);
+        let max_stage = (
+            (card_width - 32.0).max(1.0),
+            (f32::from(viewport.height) - 176.0).clamp(32.0, 340.0),
+        );
+        let (stage_width, stage_height) = match image {
+            Some((width, height)) => {
+                let scale = (max_stage.0 / width).min(max_stage.1 / height);
+                (width * scale, height * scale)
+            }
+            None => (max_stage.0, (max_stage.0 * 9.0 / 16.0).min(max_stage.1)),
+        };
+
         let paint_source = source.clone();
-        let measured_bounds = preview_bounds.clone();
-        let preview = div()
+        let stage = div()
             .id("new-thread-background-adjustment-preview")
             .relative()
-            .w(preview_size.width + px(2.0))
-            .h(preview_size.height + px(2.0))
+            .flex_none()
+            .w(px(stage_width))
+            .h(px(stage_height))
+            .rounded(px(10.0))
             .overflow_hidden()
-            .rounded(px(12.0))
-            .border_1()
-            .border_color(crate::theme::hairline(0.12))
-            .bg(theme.bg)
+            .bg(gpui::black())
             .cursor(if !ready {
                 gpui::CursorStyle::Arrow
             } else if dragging {
@@ -2657,11 +3709,7 @@ impl AppearancePage {
                         ScrollDelta::Pixels(delta) => f32::from(delta.y),
                         ScrollDelta::Lines(delta) => delta.y * 40.0,
                     };
-                    let Some(dialog) = this.background_adjustment_dialog.as_ref() else {
-                        return;
-                    };
-                    let zoom = dialog.draft.zoom * (delta * 0.0025).clamp(-2.0, 2.0).exp();
-                    this.zoom_background_around(zoom, Some(event.position), cx);
+                    this.scale_background_crop((-delta * 0.0025).clamp(-2.0, 2.0).exp(), cx);
                     cx.stop_propagation();
                     window.prevent_default();
                 }),
@@ -2674,30 +3722,27 @@ impl AppearancePage {
                     dialog.pinch = None;
                     return;
                 }
+                let Some(image) = dialog.image else { return };
+                let crop = dialog.crop(image);
                 if event.phase == gpui::TouchPhase::Started {
-                    dialog.pinch = Some((dialog.draft.zoom, 1.0));
+                    dialog.pinch = Some((crop, 1.0));
                 }
-                let current_zoom = dialog.draft.zoom;
-                let (start, factor) = dialog.pinch.get_or_insert((current_zoom, 1.0));
+                let (start, factor) = dialog.pinch.get_or_insert((crop, 1.0));
                 *factor =
                     background_pinch_factor(*factor, event.delta, cfg!(target_os = "windows"));
-                let zoom = *start * *factor;
-                this.zoom_background_around(zoom, Some(event.position), cx);
+                let next = scale_crop(*start, factor.recip());
+                dialog.set_crop(next);
+                cx.notify();
                 cx.stop_propagation();
                 window.prevent_default();
             }))
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
-                    let Some(dialog) = this.background_adjustment_dialog.as_mut() else {
-                        return;
-                    };
-                    if dialog.source.is_none() {
-                        return;
+                    if let Some(dialog) = this.background_adjustment_dialog.as_ref() {
+                        window.focus(&dialog.focus, cx);
                     }
-                    window.focus(&dialog.focus, cx);
-                    dialog.drag = Some((event.position, dialog.draft));
-                    cx.notify();
+                    this.start_background_drag(event.position, cx);
                     cx.stop_propagation();
                 }),
             )
@@ -2707,26 +3752,32 @@ impl AppearancePage {
             })
             .child(
                 gpui::canvas(
-                    move |bounds, _, _| measured_bounds.set(Some(bounds)),
-                    move |bounds, _, window, _| {
+                    move |bounds, _, _| stage_bounds.set(Some(bounds)),
+                    move |bounds, _, window, cx| {
                         if let Some(source) = paint_source.clone() {
+                            // The stage has the image's own aspect ratio, so
+                            // the default cover shows the whole picture.
                             crate::new_thread_background_mask::paint_adjusted(
                                 source,
                                 bounds,
-                                draft,
-                                // Canvas content masks are rectangular; round the image
-                                // itself to the frame's 12px radius inside its 1px border.
-                                gpui::Corners::all(px(11.0)),
+                                Default::default(),
+                                gpui::Corners::all(px(6.0)),
                                 window,
+                                cx,
                             );
+                            if let Some(crop) = crop {
+                                window.paint_layer(bounds, |window| {
+                                    paint_crop_overlay(bounds, crop, dragging, window);
+                                });
+                            }
                         }
                     },
                 )
-                .w(preview_size.width)
-                .h(preview_size.height),
+                .absolute()
+                .inset_0(),
             )
-            .when(source.is_none(), |preview| {
-                preview.child(
+            .when(source.is_none(), |stage| {
+                stage.child(
                     div()
                         .absolute()
                         .inset_0()
@@ -2734,218 +3785,119 @@ impl AppearancePage {
                         .items_center()
                         .justify_center()
                         .text_size(typography::text_xs())
-                        .text_color(theme.text_muted)
+                        .text_color(gpui::white().opacity(0.6))
                         .child(if !same_image {
-                            ("Background changed. Close and adjust the new image.").to_string()
+                            "Background changed. Close and adjust the new image.".to_string()
                         } else if !available {
-                            ("Image unavailable. Choose a replacement or remove it.").to_string()
+                            "Image unavailable. Choose a replacement or remove it.".to_string()
                         } else {
                             crate::localization::text("native-preparing_preview", cx)
                         }),
                 )
-            })
-            .when(dragging, |preview| {
-                preview
-                    .child(
-                        div()
-                            .absolute()
-                            .left(gpui::relative(1.0 / 3.0))
-                            .top_0()
-                            .bottom_0()
-                            .w(px(1.0))
-                            .bg(gpui::white().opacity(0.22)),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .left(gpui::relative(2.0 / 3.0))
-                            .top_0()
-                            .bottom_0()
-                            .w(px(1.0))
-                            .bg(gpui::white().opacity(0.22)),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .top(gpui::relative(1.0 / 3.0))
-                            .left_0()
-                            .right_0()
-                            .h(px(1.0))
-                            .bg(gpui::white().opacity(0.22)),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .top(gpui::relative(2.0 / 3.0))
-                            .left_0()
-                            .right_0()
-                            .h(px(1.0))
-                            .bg(gpui::white().opacity(0.22)),
-                    )
             });
 
-        let zoom_fraction = background_zoom_fraction(draft.zoom);
-        let measured_zoom_bounds = zoom_bounds.clone();
-        let zoom_slider = div()
-            .id("new-thread-background-adjustment-zoom")
-            .track_focus(&zoom_focus)
-            .tab_index(0)
-            .role(gpui::Role::Slider)
-            .aria_label(tr(cx, msg::native::background_zoom))
-            .aria_numeric_value(f64::from(draft.zoom * 100.0))
-            .aria_min_numeric_value(f64::from(
-                crate::settings::NewThreadBackgroundAdjustment::MIN_ZOOM * 100.0,
-            ))
-            .aria_max_numeric_value(f64::from(
-                crate::settings::NewThreadBackgroundAdjustment::MAX_ZOOM * 100.0,
-            ))
-            .aria_numeric_value_step(f64::from(BACKGROUND_ZOOM_STEP * 100.0))
-            .aria_value(format!("{:.0}%", draft.zoom * 100.0))
-            .focus_visible(|s| s.border_2().border_color(theme.accent))
-            .relative()
-            .w(px(168.0))
-            .h(px(28.0))
-            .cursor_pointer()
-            .on_mouse_down(
-                gpui::MouseButton::Left,
-                cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
-                    if let Some(dialog) = this.background_adjustment_dialog.as_ref() {
-                        window.focus(&dialog.zoom_focus, cx);
-                    }
-                    this.set_background_zoom_from_x(event.position.x, cx);
-                    cx.stop_propagation();
-                    window.prevent_default();
-                }),
-            )
-            .on_drag(BackgroundAdjustmentZoomDrag, |drag, _, _, cx| {
-                cx.stop_propagation();
-                cx.new(|_| drag.clone())
-            })
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                let Some(current) = this
-                    .background_adjustment_dialog
-                    .as_ref()
-                    .map(|dialog| dialog.draft.zoom)
-                else {
-                    return;
-                };
-                let next = match event.keystroke.key.as_str() {
-                    "left" | "down" => current - BACKGROUND_ZOOM_STEP,
-                    "right" | "up" => current + BACKGROUND_ZOOM_STEP,
-                    "home" => crate::settings::NewThreadBackgroundAdjustment::MIN_ZOOM,
-                    "end" => crate::settings::NewThreadBackgroundAdjustment::MAX_ZOOM,
-                    _ => return,
-                };
-                this.set_background_zoom(next, cx);
-                cx.stop_propagation();
-                window.prevent_default();
-            }))
-            .child(
-                gpui::canvas(
-                    move |bounds, _, _| measured_zoom_bounds.set(Some(bounds)),
-                    |_, _, _, _| {},
+        let quiet = |id: gpui::ElementId| {
+            widgets::action_button(theme, widgets::ActionTone::Quiet)
+                .id(id)
+                .px(px(8.0))
+                .py(px(0.0))
+                .h(px(25.0))
+                .min_h(px(25.0))
+                .text_size(typography::text_xs())
+                .flex_none()
+                .when(!ready, |button| button.opacity(0.45).cursor_default())
+                .when(ready, |button| {
+                    button
+                        .tab_index(0)
+                        .role(gpui::Role::Button)
+                        .focus_visible(|style| style.border_1().border_color(theme.accent))
+                })
+        };
+        let rotate = |clockwise: bool, cx: &mut Context<Self>| {
+            let (id, label) = if clockwise {
+                ("background-rotate-right", "Rotate right")
+            } else {
+                ("background-rotate-left", "Rotate left")
+            };
+            quiet(id.into())
+                .aria_label(label)
+                .tooltip(widgets::text_tooltip(label))
+                .child(
+                    icons::icon(icons::RESTORE)
+                        .with_transformation(gpui::Transformation::scale(gpui::size(
+                            if clockwise { -1.0 } else { 1.0 },
+                            1.0,
+                        )))
+                        .size(px(13.0))
+                        .text_color(theme.text_muted),
                 )
-                .absolute()
-                .inset_0(),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .left(px(7.0))
-                    .right(px(7.0))
-                    .top(px(12.0))
-                    .h(px(4.0))
-                    .rounded_full()
-                    .bg(theme.border)
-                    .child(
-                        div()
-                            .h_full()
-                            .w(gpui::relative(zoom_fraction))
-                            .rounded_full()
-                            .bg(theme.accent),
+                .when(ready, |button| {
+                    button.on_click(
+                        cx.listener(move |this, _, _, cx| this.rotate_background(clockwise, cx)),
                     )
-                    .child(
-                        div()
-                            .absolute()
-                            .left(gpui::relative(zoom_fraction))
-                            .ml(px(-7.0))
-                            .top(px(-5.0))
-                            .size(px(14.0))
-                            .rounded_full()
-                            .bg(theme.accent),
-                    ),
-            );
-        let controls = div()
-            .mt(px(14.0))
+                })
+        };
+        let toolbar = div()
+            .mt(px(9.0))
             .flex()
+            .flex_wrap()
             .items_center()
-            .justify_between()
-            .gap(px(12.0))
-            .child(
-                compact_action(theme, "Reset", "new-thread-background-adjustment-reset")
-                    .tab_index(0)
-                    .role(gpui::Role::Button)
-                    .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                    .on_click(cx.listener(|this, _, _, cx| this.reset_background_adjustment(cx))),
-            )
+            .gap(px(3.0))
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(6.0))
+                    .gap(px(2.0))
+                    .child(rotate(false, cx))
+                    .child(rotate(true, cx))
+                    .child(div().mx(px(5.0)).w(px(1.0)).h(px(15.0)).bg(theme.border)),
+            )
+            .children(CropMode::OPTIONS.map(|(mode, label)| {
+                let active = crop_mode == mode;
+                let mut chip =
+                    quiet(SharedString::from(format!("background-crop-ratio-{label}")).into())
+                        .aria_selected(active)
+                        .child(label)
+                        .when(active, |chip| {
+                            chip.bg(theme.element_hover).text_color(theme.text_strong)
+                        });
+                if ready {
+                    chip = chip
+                        .on_click(cx.listener(move |this, _, _, cx| this.set_crop_mode(mode, cx)));
+                }
+                chip
+            }))
+            .child(div().flex_1())
+            .child(
+                quiet("new-thread-background-adjustment-reset".into())
                     .child(
-                        compact_action(theme, "−", "new-thread-background-adjustment-zoom-out")
-                            .tab_index(0)
-                            .role(gpui::Role::Button)
-                            .aria_label(tr(cx, msg::chat::markdown_body_zoom_out))
-                            .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                let Some(dialog) = this.background_adjustment_dialog.as_ref()
-                                else {
-                                    return;
-                                };
-                                this.set_background_zoom(
-                                    dialog.draft.zoom - BACKGROUND_ZOOM_STEP,
-                                    cx,
-                                );
-                            })),
+                        icons::icon(icons::RESTART)
+                            .size(px(12.0))
+                            .text_color(theme.text_muted),
                     )
-                    .child(zoom_slider)
-                    .child(
-                        div()
-                            .w(px(52.0))
-                            .text_center()
-                            .text_size(typography::text_xs())
-                            .text_color(theme.text_muted)
-                            .child(format!("{:.0}%", draft.zoom * 100.0)),
-                    )
-                    .child(
-                        compact_action(theme, "+", "new-thread-background-adjustment-zoom-in")
-                            .tab_index(0)
-                            .role(gpui::Role::Button)
-                            .aria_label(tr(cx, msg::chat::markdown_body_zoom_in))
-                            .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                let Some(dialog) = this.background_adjustment_dialog.as_ref()
-                                else {
-                                    return;
-                                };
-                                this.set_background_zoom(
-                                    dialog.draft.zoom + BACKGROUND_ZOOM_STEP,
-                                    cx,
-                                );
-                            })),
-                    ),
+                    .child("Reset")
+                    .when(ready, |button| {
+                        button.on_click(
+                            cx.listener(|this, _, _, cx| this.reset_background_adjustment(cx)),
+                        )
+                    }),
             );
 
-        let footer = popover::dialog_footer(theme)
+        let footer = div()
+            .mt(px(10.0))
+            .flex()
+            .items_center()
+            .justify_end()
+            .gap(px(6.0))
             .child(
-                compact_action(theme, "Cancel", "new-thread-background-adjustment-cancel")
-                    .h(px(34.0))
-                    .px(px(13.0))
+                widgets::text_action(theme, widgets::ActionTone::Quiet, "Cancel")
+                    .id("new-thread-background-adjustment-cancel")
+                    .h(px(28.0))
+                    .min_h(px(28.0))
+                    .px(px(10.0))
                     .tab_index(0)
                     .role(gpui::Role::Button)
-                    .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                    .focus_visible(|style| style.border_1().border_color(theme.accent))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.dismiss_background_adjustment(window, cx)
                     })),
@@ -2957,17 +3909,16 @@ impl AppearancePage {
                     tr(cx, msg::native::apply),
                 )
                 .id("new-thread-background-adjustment-apply")
-                .h(px(34.0))
-                .px(px(14.0))
-                .py(px(0.0))
-                .flex()
-                .items_center()
-                .when(!ready, |button| button.opacity(0.45))
+                .h(px(28.0))
+                .min_h(px(26.0))
+                .px(px(10.0))
+                .py_0()
+                .when(!ready, |button| button.opacity(0.45).cursor_default())
                 .when(ready, |button| {
                     button
                         .tab_index(0)
                         .role(gpui::Role::Button)
-                        .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                        .focus_visible(|style| style.border_1().border_color(theme.accent))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.apply_background_adjustment(window, cx)
                         }))
@@ -2976,26 +3927,16 @@ impl AppearancePage {
 
         let header = div()
             .flex()
-            .items_start()
+            .items_center()
+            .justify_between()
             .gap(px(16.0))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(popover::dialog_title(theme, "Adjust background"))
-                    .child(
-                        popover::dialog_body(theme, "Drag to reposition. Scroll or pinch to zoom.")
-                            .mt(px(4.0)),
-                    ),
-            )
+            .child(popover::dialog_title(theme, "Adjust dashboard background"))
             .child(
                 div()
                     .id("new-thread-background-adjustment-close")
+                    .flex_none()
                     .size(px(28.0))
                     .rounded(px(7.0))
-                    .border_1()
-                    .border_color(theme.border)
-                    .bg(theme.surface_raised.opacity(0.28))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -3017,8 +3958,10 @@ impl AppearancePage {
 
         let card = popover::dialog_card(theme)
             .id("new-thread-background-adjustment-card")
-            .w(px((f32::from(viewport.width) - 40.0).clamp(1.0, 600.0)))
-            .p(px(20.0))
+            .w(px(card_width))
+            .p(px(16.0))
+            .rounded(px(12.0))
+            .bg(theme.surface_card.opacity(1.0))
             .track_focus(&focus)
             .tab_group()
             .tab_index(0)
@@ -3054,23 +3997,17 @@ impl AppearancePage {
                                     }
                                 }
                             }
-                            "left" => this.pan_background(point(step, 0.0), cx),
-                            "right" => this.pan_background(point(-step, 0.0), cx),
-                            "up" => this.pan_background(point(0.0, step), cx),
-                            "down" => this.pan_background(point(0.0, -step), cx),
-                            "+" | "=" => {
-                                let zoom = this
-                                    .background_adjustment_dialog
-                                    .as_ref()
-                                    .map_or(1.0, |dialog| dialog.draft.zoom + BACKGROUND_ZOOM_STEP);
-                                this.set_background_zoom(zoom, cx);
-                            }
-                            "-" => {
-                                let zoom = this
-                                    .background_adjustment_dialog
-                                    .as_ref()
-                                    .map_or(1.0, |dialog| dialog.draft.zoom - BACKGROUND_ZOOM_STEP);
-                                this.set_background_zoom(zoom, cx);
+                            "left" => this.nudge_background(-step, 0.0, cx),
+                            "right" => this.nudge_background(step, 0.0, cx),
+                            "up" => this.nudge_background(0.0, -step, cx),
+                            "down" => this.nudge_background(0.0, step, cx),
+                            "+" | "=" | "-" => {
+                                let factor = if event.keystroke.key == "-" {
+                                    1.1
+                                } else {
+                                    1.0 / 1.1
+                                };
+                                this.scale_background_crop(factor, cx);
                             }
                             _ => return,
                         },
@@ -3083,25 +4020,17 @@ impl AppearancePage {
                 cx.listener(|this, _, window, cx| this.dismiss_background_adjustment(window, cx)),
             )
             .child(header)
-            .child(div().h(px(16.0)))
-            .child(
-                div()
-                    .w_full()
-                    .h(px(260.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(preview),
-            )
-            .child(controls)
+            .child(div().mt(px(10.0)).flex().justify_center().child(stage))
+            .child(toolbar)
             .child(footer)
             .child(div().track_focus(&end_focus).tab_index(0).tab_stop(false))
             .into_any_element();
 
-        Some(popover::modal(
+        Some(popover::modal_glass(
             "new-thread-background-adjustment-dialog",
             viewport,
             card,
+            12.0,
         ))
     }
 
@@ -3125,19 +4054,49 @@ impl AppearancePage {
                 popover::dialog_body(theme, format!("{} · {}", entry.name, entry.source.label()))
                     .mt(px(6.0)),
             );
-        for variant in &entry.family.variants {
-            card = card
+        for (index, variant) in entry.family.variants.iter().enumerate() {
+            let mut section = div()
+                .mt(px(16.0))
+                .when(index > 0, |section| {
+                    section
+                        .pt(px(16.0))
+                        .border_t_1()
+                        .border_color(widgets::row_divider(theme))
+                })
+                .flex()
+                .flex_col()
+                .gap(px(10.0))
                 .child(
                     div()
-                        .mt(px(14.0))
-                        .text_size(crate::typography::text_sm())
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .child(SharedString::from(variant.name.clone())),
+                        .flex()
+                        .items_baseline()
+                        .justify_between()
+                        .gap(px(12.0))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(crate::typography::text_sm())
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .child(SharedString::from(variant.name.clone())),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_size(crate::typography::text_xs())
+                                .text_color(theme.text_muted)
+                                .child(if variant.appearance.is_dark() {
+                                    "Dark"
+                                } else {
+                                    "Light"
+                                }),
+                        ),
                 )
-                .child(import_scene_preview(variant));
+                .child(import_scene_preview(theme, variant));
             if let Some(report) = entry.reports.get(&variant.id) {
-                card = card.child(report_panel(theme, report));
+                section = section.child(report_panel(theme, report));
             }
+            card = card.child(section);
         }
         card = card.child(
             popover::dialog_footer(&theme).child(
@@ -3166,11 +4125,17 @@ impl AppearancePage {
     fn render_library_entry(
         &mut self,
         entry: CustomThemeEntry,
+        first: bool,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let id = entry.id.clone();
         let linked = entry.source.is_linked();
+        let file_path = entry.source.path().map(Path::to_path_buf);
+        let is_editable = matches!(
+            entry.source,
+            zuse_theme::CustomThemeSource::EditableFile { .. }
+        );
         let source = entry
             .source
             .path()
@@ -3192,130 +4157,189 @@ impl AppearancePage {
                 format!("Using last known good · {message}")
             }
         };
-        widgets::card_row(theme, false)
+        let sample = entry.family.variants.first().map(|variant| {
+            Theme::from_variant(
+                variant,
+                AccentSelection::ThemeDefault,
+                SurfacePreference::ThemeDefault,
+            )
+        });
+        let warning = matches!(entry.status, CustomThemeStatus::Warning { .. });
+        let mut actions = div().flex().items_center().gap(px(2.0)).child(
+            icon_action(theme, icons::EYE, "Review", format!("theme-review-{id}"))
+                .mr(px(4.0))
+                .tab_index(0)
+                .role(gpui::Role::Button)
+                .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                .on_click(cx.listener({
+                    let id = id.clone();
+                    move |this, _, _, cx| {
+                        this.review_entry = Some(id.clone());
+                        cx.notify();
+                    }
+                })),
+        );
+        if linked {
+            actions = actions.child(
+                icon_button(
+                    theme,
+                    icons::REFRESH,
+                    "Reload",
+                    format!("theme-reload-{id}"),
+                    false,
+                )
+                .on_click(cx.listener({
+                    let id = id.clone();
+                    move |_, _, _, cx| {
+                        let _ = theme_library::reload(&id, cx);
+                        cx.notify();
+                    }
+                })),
+            );
+        }
+        if let Some(path) = file_path {
+            let (glyph, label) = if is_editable {
+                (icons::PEN, "Edit JSON")
+            } else {
+                (icons::FOLDER_OPEN, "Show in folder")
+            };
+            actions = actions.child(
+                icon_button(theme, glyph, label, format!("theme-reveal-{id}"), false).on_click(
+                    cx.listener(move |_, _, _, cx| {
+                        if is_editable {
+                            cx.open_with_system(&path);
+                        } else {
+                            cx.reveal_path(&path);
+                        }
+                    }),
+                ),
+            );
+        }
+        actions = actions
+            .child(
+                icon_button(
+                    theme,
+                    icons::UPLOAD,
+                    "Export JSON",
+                    format!("theme-export-{id}"),
+                    false,
+                )
+                .on_click(cx.listener(move |page, _, _, cx| page.export_theme(&entry.family, cx))),
+            )
+            .child(
+                icon_button(
+                    theme,
+                    icons::COPY,
+                    "Duplicate as editable",
+                    format!("theme-duplicate-{id}"),
+                    false,
+                )
+                .on_click(cx.listener({
+                    let id = id.clone();
+                    move |this, _, _, cx| {
+                        if let Err(error) = theme_library::duplicate_as_editable(&id, cx) {
+                            this.library_error = Some(error.to_string().into());
+                        }
+                        cx.notify();
+                    }
+                })),
+            );
+        if linked {
+            actions = actions.child(
+                icon_button(
+                    theme,
+                    icons::BROWSER_LINK,
+                    "Unlink from source",
+                    format!("theme-unlink-{id}"),
+                    false,
+                )
+                .on_click(cx.listener({
+                    let id = id.clone();
+                    move |this, _, _, cx| {
+                        if let Err(error) = theme_library::unlink(&id, cx) {
+                            this.library_error = Some(error.to_string().into());
+                        }
+                        cx.notify();
+                    }
+                })),
+            );
+        }
+        actions = actions.child(
+            icon_button(
+                theme,
+                icons::TRASH_BIN_MINIMALISTIC,
+                "Remove",
+                format!("theme-remove-{id}"),
+                true,
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if let Err(error) = theme_library::remove(&id, cx) {
+                    this.library_error = Some(error.to_string().into());
+                }
+                cx.notify();
+            })),
+        );
+        widgets::card_row(theme, first)
+            .gap(px(12.0))
+            .when_some(sample, |row, sample| row.child(palette_preview(&sample)))
             .child(
                 div()
                     .flex_1()
-                    .min_w(px(160.0))
+                    .min_w_0()
                     .child(widgets::row_title(theme, &entry.name))
                     .child(
                         div()
                             .truncate()
                             .text_size(crate::typography::text_xs())
-                            .text_color(
-                                if matches!(entry.status, CustomThemeStatus::Warning { .. }) {
-                                    theme.warning
-                                } else {
-                                    theme.text_muted
-                                },
-                            )
+                            .text_color(if warning {
+                                theme.warning
+                            } else {
+                                theme.text_muted
+                            })
                             .child(SharedString::from(status)),
                     ),
             )
-            .child(
-                div()
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap(px(2.0))
-                    .when(linked, |actions| {
-                        actions.child(
-                            compact_action(theme, "Reload", format!("theme-reload-{id}"))
-                                .tab_index(0)
-                                .role(gpui::Role::Button)
-                                .focus_visible(|s| {
-                                    s.border_2().border_color(theme.accent).opacity(1.0)
-                                })
-                                .on_click(cx.listener({
-                                    let id = id.clone();
-                                    move |_, _, _, cx| {
-                                        let _ = theme_library::reload(&id, cx);
-                                        cx.notify();
-                                    }
-                                })),
-                        )
-                    })
-                    .child(
-                        compact_action(theme, "Reveal", format!("theme-reveal-{id}"))
-                            .tab_index(0)
-                            .role(gpui::Role::Button)
-                            .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                            .on_click(cx.listener({
-                                let id = id.clone();
-                                move |this, _, _, cx| {
-                                    if let Err(error) = theme_library::reveal(&id, cx) {
-                                        this.library_error = Some(error.to_string().into());
-                                    }
-                                    cx.notify();
-                                }
-                            })),
-                    )
-                    .child(
-                        compact_action(theme, "Review", format!("theme-review-{id}"))
-                            .tab_index(0)
-                            .role(gpui::Role::Button)
-                            .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                            .on_click(cx.listener({
-                                let id = id.clone();
-                                move |this, _, _, cx| {
-                                    this.review_entry = Some(id.clone());
-                                    cx.notify();
-                                }
-                            })),
-                    )
-                    .child(
-                        compact_action(
-                            theme,
-                            "Duplicate as editable",
-                            format!("theme-duplicate-{id}"),
-                        )
-                        .tab_index(0)
-                        .role(gpui::Role::Button)
-                        .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                        .on_click(cx.listener({
-                            let id = id.clone();
-                            move |this, _, _, cx| {
-                                if let Err(error) = theme_library::duplicate_as_editable(&id, cx) {
-                                    this.library_error = Some(error.to_string().into());
-                                }
-                                cx.notify();
-                            }
-                        })),
-                    )
-                    .when(linked, |actions| {
-                        actions.child(
-                            compact_action(theme, "Unlink", format!("theme-unlink-{id}"))
-                                .tab_index(0)
-                                .role(gpui::Role::Button)
-                                .focus_visible(|s| {
-                                    s.border_2().border_color(theme.accent).opacity(1.0)
-                                })
-                                .on_click(cx.listener({
-                                    let id = id.clone();
-                                    move |this, _, _, cx| {
-                                        if let Err(error) = theme_library::unlink(&id, cx) {
-                                            this.library_error = Some(error.to_string().into());
-                                        }
-                                        cx.notify();
-                                    }
-                                })),
-                        )
-                    })
-                    .child(
-                        compact_action(theme, "Remove", format!("theme-remove-{id}"))
-                            .text_color(theme.danger)
-                            .tab_index(0)
-                            .role(gpui::Role::Button)
-                            .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Err(error) = theme_library::remove(&id, cx) {
-                                    this.library_error = Some(error.to_string().into());
-                                }
-                                cx.notify();
-                            })),
-                    ),
-            )
+            .child(actions)
             .into_any_element()
+    }
+
+    fn export_theme(&mut self, family: &zuse_theme::ThemeFamily, cx: &mut Context<Self>) {
+        let Ok(json) = serde_json::to_vec_pretty(family) else {
+            return;
+        };
+        let filename = format!("{}.zuse-theme.json", slug(&family.name));
+        // A Finder-launched app's working directory is `/`; start somewhere
+        // the user can write.
+        let directory = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .filter(|home| !home.is_empty())
+            .map(PathBuf::from)
+            .map(|home| {
+                let downloads = home.join("Downloads");
+                if downloads.is_dir() { downloads } else { home }
+            })
+            .unwrap_or_default();
+        let receiver = cx.prompt_for_new_path(&directory, Some(&filename));
+        cx.spawn(async move |page, cx| {
+            let outcome = match receiver.await {
+                Ok(Ok(Some(path))) => {
+                    cx.background_executor()
+                        .spawn(async move {
+                            std::fs::write(path, json).map_err(|error| error.to_string())
+                        })
+                        .await
+                }
+                Ok(Ok(None)) | Err(_) => return,
+                Ok(Err(error)) => Err(error.to_string()),
+            };
+            if let Err(error) = outcome {
+                let _ = page.update(cx, |page, cx| {
+                    page.library_error = Some(format!("Could not export theme: {error}").into());
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
     fn render_theme_library_rows(
@@ -3327,41 +4351,17 @@ impl AppearancePage {
         let (linked, imported): (Vec<_>, Vec<_>) = entries
             .into_iter()
             .partition(|entry| entry.source.is_linked());
-        let mut rows = vec![
-            widgets::card_row(theme, true)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(160.0))
-                        .child(widgets::row_title(theme, "Custom themes"))
-                        .child(widgets::meta_line(
-                            theme,
-                            vec![
-                                div()
-                                    .child("Import a theme file, or link a folder that stays up to date.")
-                                    .into_any_element(),
-                            ],
-                        )),
-                )
-                .child(
-                    widgets::text_action(theme, widgets::ActionTone::Solid, "Add theme")
-                        .id("theme-library-add")
-                        .tab_index(0)
-                        .role(gpui::Role::Button)
-                        .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                        .on_click(cx.listener(|this, _, _, cx| this.open_import(cx))),
-                )
-                .into_any_element(),
-        ];
+        let mut rows = Vec::new();
         if !imported.is_empty() {
             rows.push(
                 div()
                     .mx(px(12.0))
-                    .pt(px(12.0))
-                    .pb(px(4.0))
+                    .pt(px(14.0))
+                    .pb(px(2.0))
                     .border_t_1()
                     .border_color(widgets::row_divider(theme))
                     .text_size(crate::typography::text_xs())
+                    .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(theme.text_muted)
                     .child(tr(cx, msg::native::imported))
                     .into_any_element(),
@@ -3369,18 +4369,20 @@ impl AppearancePage {
             rows.extend(
                 imported
                     .into_iter()
-                    .map(|entry| self.render_library_entry(entry, theme, cx)),
+                    .enumerate()
+                    .map(|(ix, entry)| self.render_library_entry(entry, ix == 0, theme, cx)),
             );
         }
         if !linked.is_empty() {
             rows.push(
                 div()
                     .mx(px(12.0))
-                    .pt(px(12.0))
-                    .pb(px(4.0))
+                    .pt(px(14.0))
+                    .pb(px(2.0))
                     .border_t_1()
                     .border_color(widgets::row_divider(theme))
                     .text_size(crate::typography::text_xs())
+                    .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(theme.text_muted)
                     .child(tr(cx, msg::native::linked))
                     .into_any_element(),
@@ -3388,7 +4390,8 @@ impl AppearancePage {
             rows.extend(
                 linked
                     .into_iter()
-                    .map(|entry| self.render_library_entry(entry, theme, cx)),
+                    .enumerate()
+                    .map(|(ix, entry)| self.render_library_entry(entry, ix == 0, theme, cx)),
             );
         }
         rows
@@ -3411,6 +4414,9 @@ impl Render for AppearancePage {
         let current_background = ui_settings.new_thread_composer_background;
         let current_background_effect = ui_settings.new_thread_background_effect;
         let reduced_motion = crate::motion::reduced_motion(cx);
+        let focus = selection_tone(&theme);
+        let mut mode_theme = theme.clone();
+        mode_theme.accent = focus;
         let cards = AppearanceMode::ALL
             .into_iter()
             .map(|mode| {
@@ -3422,7 +4428,7 @@ impl Render for AppearancePage {
                     reduced_motion,
                 );
                 widgets::option_card(
-                    &theme,
+                    &mode_theme,
                     mode.icon(),
                     mode.label(),
                     selected,
@@ -3432,7 +4438,8 @@ impl Render for AppearancePage {
                 .id(SharedString::from(format!("appearance-{}", mode.label())))
                 .tab_index(0)
                 .role(gpui::Role::Button)
-                .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                .aria_selected(selected)
+                .focus_visible(|s| s.border_2().border_color(focus).opacity(1.0))
                 .on_click(cx.listener(move |_, _, _, cx| {
                     appearance::set_mode(mode, cx);
                     cx.notify();
@@ -3448,7 +4455,6 @@ impl Render for AppearancePage {
                 "Dark theme"
             };
             let selector = self.render_theme_selector(appearance_kind, &current_themes, &theme, cx);
-            // The color scheme previews sit above these rows in the same card.
             theme_rows.push(
                 widgets::card_row(&theme, false)
                     .child(
@@ -3461,23 +4467,15 @@ impl Render for AppearancePage {
                     .into_any_element(),
             );
         }
+        let theme_gallery =
+            self.render_theme_gallery(&theme, widgets::column_width(window, cx), cx);
+        let add_theme = icon_action(&theme, icons::PLUS, "Add theme", "theme-library-add")
+            .tab_index(0)
+            .role(gpui::Role::Button)
+            .focus_visible(|style| style.border_2().border_color(focus))
+            .on_click(cx.listener(|this, _, _, cx| this.open_import(cx)))
+            .into_any_element();
 
-        let mut accent_choices = vec![AccentSelection::ThemeDefault];
-        accent_choices.extend(AccentPreset::ALL.map(AccentSelection::Preset));
-        let accent_controls = accent_choices
-            .into_iter()
-            .map(|selection| {
-                let selected = selection == current_accent;
-                accent_swatch(&theme, selection, selected)
-                    .tab_index(0)
-                    .role(gpui::Role::Button)
-                    .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        appearance::set_accent(selection, cx);
-                        cx.notify();
-                    }))
-            })
-            .collect::<Vec<_>>();
         let surface_control =
             widgets::select("appearance-surface", "Glass", &theme, |page: &mut Self| {
                 &mut page.surface_select
@@ -3491,111 +4489,37 @@ impl Render for AppearancePage {
                     .position(|surface| surface == current_surface)
                     .unwrap_or_default(),
             )
+            .compact()
             .width(148.0)
             .on_select(|_, ix, _, cx| {
                 appearance::set_surface(SurfacePreference::ALL[ix], cx);
                 cx.notify();
             })
             .render(&self.surface_select, cx);
-        let mut settings_rows = theme_rows;
-        settings_rows.push(
-            widgets::card_row(&theme, false)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(160.0))
-                        .child(widgets::row_title(&theme, tr(cx, msg::native::accent_color)))
-                        .child(widgets::meta_line(
-                            &theme,
-                            vec![
-                                div()
-                                    .child(SharedString::from(if crate::settings::current(cx).wallpaper_theme_colors {
-                                        "Wallpaper colors are enabled; this accent is used when they are off.".to_string()
-                                    } else { accent_helper(current_accent) }))
-                                    .into_any_element(),
-                            ],
-                        )),
-                )
-                .child(
-                    div()
-                        .max_w_full()
-                        .flex()
-                        .flex_wrap()
-                        .items_center()
-                        .gap(px(8.0))
-                        .children(accent_controls),
-                )
-                .into_any_element(),
-        );
-        let match_wallpaper = crate::settings::current(cx).wallpaper_theme_colors;
-        settings_rows.push(
-            widgets::card_row(&theme, false)
-                .child(div().flex_1().min_w_0()
-                    .child(widgets::row_title(&theme, tr(cx, msg::native::match_wallpaper_colors)))
-                    .child(widgets::meta_line(&theme, vec![div()
-                        .child("Use wallpaper colors for accents, highlights, and subtle surface tints.")
-                        .into_any_element()])))
-                .child(widgets::toggle_switch(&theme, match_wallpaper, "wallpaper-theme-colors")
-                    .id("wallpaper-theme-colors-toggle")
-                    .tab_index(0)
-                    .role(gpui::Role::Switch)
-                    .aria_label(tr(cx, msg::native::match_wallpaper_colors))
-                    .focus_visible(|s| s.border_2().border_color(theme.accent))
-                    .cursor_pointer()
-                    .aria_toggled(if match_wallpaper { gpui::Toggled::True } else { gpui::Toggled::False })
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        crate::settings::wallpaper_colors::set_enabled(!match_wallpaper, cx);
-                        cx.notify();
-                    })))
-                .into_any_element(),
-        );
-        let color_rows = settings_rows;
         let mut settings_rows = Vec::new();
-        settings_rows.push(
-            widgets::card_row(&theme, true)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(160.0))
-                        .child(widgets::row_title(&theme, tr(cx, msg::native::glass)))
-                        .child(widgets::meta_line(
-                            &theme,
-                            vec![
-                                div()
-                                    .child(SharedString::from(surface_helper(
-                                        current_surface,
-                                        theme.surface_treatment,
-                                    )))
-                                    .into_any_element(),
-                            ],
-                        )),
-                )
-                .child(surface_control)
-                .into_any_element(),
-        );
+        let glass_row = widgets::card_row(&theme, false)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(160.0))
+                    .child(widgets::row_title(&theme, tr(cx, msg::native::glass)))
+                    .child(widgets::meta_line(
+                        &theme,
+                        vec![
+                            div()
+                                .child(SharedString::from(surface_helper(
+                                    current_surface,
+                                    theme.surface_treatment,
+                                )))
+                                .into_any_element(),
+                        ],
+                    )),
+            )
+            .child(surface_control)
+            .into_any_element();
         let background_available = current_background
             .as_ref()
             .is_some_and(|background| Path::new(&background.path).is_file());
-        // The chosen image previews in the row; without one the row is text only.
-        let background_tile: Option<AnyElement> = current_background
-            .as_ref()
-            .filter(|_| background_available)
-            .map(|background| {
-                div()
-                    .flex_none()
-                    .size(px(36.0))
-                    .rounded(px(10.0))
-                    .overflow_hidden()
-                    .border_1()
-                    .border_color(crate::theme::hairline(0.10))
-                    .child(
-                        img(PathBuf::from(background.path.clone()))
-                            .size(px(34.0))
-                            .rounded(px(9.0))
-                            .object_fit(ObjectFit::Cover),
-                    )
-                    .into_any_element()
-            });
         let background_meta = match current_background.as_ref() {
             Some(background) if background_available => vec![
                 div()
@@ -3611,8 +4535,7 @@ impl Render for AppearancePage {
             None => vec![div().child("No image selected").into_any_element()],
         };
         settings_rows.push(
-            widgets::card_row(&theme, false)
-                .children(background_tile)
+            widgets::card_row(&theme, true)
                 .child(
                     div()
                         .flex_1()
@@ -3634,8 +4557,9 @@ impl Render for AppearancePage {
                             actions
                                 .when(background_available, |actions| {
                                     actions.child(
-                                        compact_action(
+                                        icon_action(
                                             &theme,
+                                            icons::DITHER_SLIDERS,
                                             "Adjust",
                                             "new-thread-background-adjust",
                                         )
@@ -3652,9 +4576,10 @@ impl Render for AppearancePage {
                                     )
                                 })
                                 .child(
-                                    compact_action(
+                                    icon_action(
                                         &theme,
-                                        "Replace image",
+                                        icons::REFRESH,
+                                        "Replace",
                                         "new-thread-background-replace",
                                     )
                                     .tab_index(0)
@@ -3667,12 +4592,13 @@ impl Render for AppearancePage {
                                     )),
                                 )
                                 .child(
-                                    compact_action(
+                                    tinted_action(
                                         &theme,
+                                        icons::TRASH_BIN_MINIMALISTIC,
                                         "Remove",
                                         "new-thread-background-remove",
+                                        theme.danger,
                                     )
-                                    .text_color(theme.danger)
                                     .tab_index(0)
                                     .role(gpui::Role::Button)
                                     .focus_visible(|s| {
@@ -3685,8 +4611,9 @@ impl Render for AppearancePage {
                         })
                         .when(current_background.is_none(), |actions| {
                             actions.child(
-                                compact_action(
+                                icon_action(
                                     &theme,
+                                    icons::FILE_IMAGE,
                                     "Choose image",
                                     "new-thread-background-choose",
                                 )
@@ -3703,61 +4630,60 @@ impl Render for AppearancePage {
                 )
                 .into_any_element(),
         );
-        let wallpaper_settings = crate::settings::current(cx);
-        let folder_label = wallpaper_settings
+        let folder_label = ui_settings
             .wallpaper_folder
             .as_ref()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "Choose a folder of wallpaper images.".into());
-        let shortcut = crate::settings::display_combo(&wallpaper_settings.keymap.random_wallpaper);
-        settings_rows.push(
-            widgets::card_row(&theme, false)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(160.0))
-                        .child(widgets::row_title(
+        let shortcut = crate::settings::display_combo(&ui_settings.keymap.random_wallpaper);
+        let folder_row = widgets::card_row(&theme, false)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(160.0))
+                    .child(widgets::row_title(
+                        &theme,
+                        tr(cx, msg::native::wallpaper_folder),
+                    ))
+                    .child(widgets::meta_line(
+                        &theme,
+                        vec![
+                            div()
+                                .child(SharedString::from(format!(
+                                    "{folder_label} · {shortcut} picks a random image"
+                                )))
+                                .into_any_element(),
+                        ],
+                    )),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap(px(8.0))
+                    .child(
+                        icon_action(
                             &theme,
-                            tr(cx, msg::native::wallpaper_folder),
-                        ))
-                        .child(widgets::meta_line(
-                            &theme,
-                            vec![
-                                div()
-                                    .child(SharedString::from(format!(
-                                        "{folder_label} · {shortcut} picks a random image"
-                                    )))
-                                    .into_any_element(),
-                            ],
-                        )),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .gap(px(8.0))
-                        .child(
-                            compact_action(&theme, "Choose folder", "wallpaper-folder-choose")
+                            icons::FOLDER_OPEN,
+                            "Choose folder",
+                            "wallpaper-folder-choose",
+                        )
+                        .tab_index(0)
+                        .role(gpui::Role::Button)
+                        .focus_visible(|s| s.border_2().border_color(theme.accent))
+                        .on_click(cx.listener(|this, _, _, cx| this.choose_wallpaper_folder(cx))),
+                    )
+                    .when(ui_settings.wallpaper_folder.is_some(), |row| {
+                        row.child(
+                            compact_action(&theme, "Shuffle", "wallpaper-shuffle")
                                 .tab_index(0)
                                 .role(gpui::Role::Button)
                                 .focus_visible(|s| s.border_2().border_color(theme.accent))
-                                .on_click(
-                                    cx.listener(|this, _, _, cx| this.choose_wallpaper_folder(cx)),
-                                ),
+                                .on_click(cx.listener(|this, _, _, cx| this.random_wallpaper(cx))),
                         )
-                        .when(wallpaper_settings.wallpaper_folder.is_some(), |row| {
-                            row.child(
-                                compact_action(&theme, "Shuffle", "wallpaper-shuffle")
-                                    .tab_index(0)
-                                    .role(gpui::Role::Button)
-                                    .focus_visible(|s| s.border_2().border_color(theme.accent))
-                                    .on_click(
-                                        cx.listener(|this, _, _, cx| this.random_wallpaper(cx)),
-                                    ),
-                            )
-                        }),
-                )
-                .into_any_element(),
-        );
+                    }),
+            )
+            .into_any_element();
+        // Effects only act on a painted wallpaper.
         if background_available {
             use crate::settings::NewThreadBackgroundEffect;
             let effect_control = widgets::select(
@@ -3775,6 +4701,7 @@ impl Render for AppearancePage {
                     .position(|effect| effect == current_background_effect)
                     .unwrap_or_default(),
             )
+            .compact()
             .width(128.0)
             .on_select(|_, ix, _, cx| {
                 crate::settings::set_new_thread_background_effect(
@@ -3807,6 +4734,19 @@ impl Render for AppearancePage {
                     .into_any_element(),
             );
         }
+        if let Some(background) = current_background.as_ref().filter(|_| background_available) {
+            let wide = widgets::column_width(window, cx) >= 470.0;
+            settings_rows.push(self.render_wallpaper_panel(
+                background,
+                current_background_effect,
+                ui_settings.wallpaper_look,
+                &theme,
+                wide,
+                cx,
+            ));
+        }
+        settings_rows.extend([folder_row, glass_row]);
+        let code_layout = self.render_code_layout(&theme, cx);
         let current_reduce_motion = crate::motion::preference(cx);
         let reduce_motion_control = widgets::select(
             "reduce-motion",
@@ -3823,6 +4763,7 @@ impl Render for AppearancePage {
                 .position(|preference| preference == current_reduce_motion)
                 .unwrap_or_default(),
         )
+        .compact()
         .width(128.0)
         .on_select(|_, ix, _, cx| {
             crate::motion::set_preference(ReduceMotion::ALL[ix], cx);
@@ -3992,6 +4933,7 @@ impl Render for AppearancePage {
         let scrollbar = popover::rail(self, "appearance-page-scrollbar", &theme, cx);
         div()
             .id("appearance-page-host")
+            .on_drag_move(cx.listener(Self::on_wallpaper_slider_drag))
             .on_drag_move(cx.listener(
                 |this, event: &gpui::DragMoveEvent<TranscriptWidthDrag>, window, cx| {
                     this.drag_width(event.event.position.x, window, cx);
@@ -4000,11 +4942,6 @@ impl Render for AppearancePage {
             .on_drag_move(cx.listener(
                 |this, event: &gpui::DragMoveEvent<BackgroundAdjustmentDrag>, _, cx| {
                     this.drag_background(event.event.position, cx);
-                },
-            ))
-            .on_drag_move(cx.listener(
-                |this, event: &gpui::DragMoveEvent<BackgroundAdjustmentZoomDrag>, _, cx| {
-                    this.set_background_zoom_from_x(event.event.position.x, cx);
                 },
             ))
             .on_mouse_up(
@@ -4047,50 +4984,49 @@ impl Render for AppearancePage {
                                 .child(widgets::section_title(
                                     &theme,
                                     &tr(cx, msg::settings::settings_page_appearance),
-                                    &tr(cx, msg::native::themes_colors_fonts_and_motion_for_this_app),
+                                    &tr(
+                                        cx,
+                                        msg::native::themes_colors_fonts_and_motion_for_this_app,
+                                    ),
                                 ))
                                 .child(
                                     widgets::section_stack()
+                                        .child(widgets::group(&theme, "Mode", "").child(
+                                            widgets::section_card(&theme).mt_0().child(
+                                                div().p(px(12.0)).child(
+                                                    widgets::option_card_row().children(cards),
+                                                ),
+                                            ),
+                                        ))
                                         .child(
-                                            widgets::group(
+                                            widgets::group_with_action(
                                                 &theme,
-                                                tr(cx, msg::settings::settings_page_theme),
-                                                tr(cx, msg::native::follow_your_system_or_pin_a_light_or_dark_scheme),
+                                                "Theme",
+                                                "",
+                                                Some(add_theme),
                                             )
                                             .child(
                                                 widgets::section_card(&theme)
                                                     .mt_0()
-                                                    .child(
-                                                        div()
-                                                            .p(px(12.0))
-                                                            .child(
-                                                                widgets::option_card_row()
-                                                                    .children(cards),
-                                                            ),
-                                                    )
-                                                    .children(color_rows),
+                                                    .child(theme_gallery)
+                                                    .children(theme_rows)
+                                                    .children(library_rows),
                                             ),
                                         )
                                         .child(widgets::section(
                                             &theme,
-                                            "Material and background",
+                                            "Background",
                                             widgets::section_card(&theme)
                                                 .mt_0()
                                                 .children(settings_rows),
                                         ))
+                                        .child(code_layout)
                                         .child(widgets::section(
                                             &theme,
                                             crate::localization::text("native-motion", cx),
                                             widgets::section_card(&theme)
                                                 .mt_0()
                                                 .children(motion_rows),
-                                        ))
-                                        .child(widgets::section(
-                                            &theme,
-                                            "Theme library",
-                                            widgets::section_card(&theme)
-                                                .mt_0()
-                                                .children(library_rows),
                                         ))
                                         .child(font_section),
                                 )
@@ -4115,6 +5051,40 @@ impl Render for AppearancePage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::point;
+
+    #[test]
+    fn the_paste_placeholder_is_an_importable_theme() {
+        let compilation = zuse_theme::CustomThemeLibrary::compile_pasted(JSON_SAMPLE).unwrap();
+        assert_eq!(compilation.family.name, "Aurora");
+    }
+
+    #[gpui::test]
+    fn create_from_current_theme_previews_both_variants(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+        });
+        let window = cx.add_window(|_, cx| AppearancePage::new(cx));
+        window
+            .update(cx, |page, _, cx| {
+                page.open_import(cx);
+                page.create_from_current_theme(cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |page, _, cx| {
+                page.compile_import(cx);
+                let dialog = page.import_dialog.as_ref().unwrap();
+                let preview = dialog.compilation.as_ref().unwrap();
+                assert!(dialog.creating);
+                assert_eq!(preview.family.name, "Zuse Copy");
+                assert_eq!(dialog.selected.len(), 2);
+            })
+            .unwrap();
+        cx.run_until_parked();
+    }
 
     fn background_settings() -> crate::settings::UiSettings {
         crate::settings::UiSettings {
@@ -4125,6 +5095,7 @@ mod tests {
                     focal_x: 0.25,
                     focal_y: 0.75,
                     zoom: 2.0,
+                    ..Default::default()
                 },
             }),
             ..Default::default()
@@ -4154,8 +5125,11 @@ mod tests {
                 window.focus(&page.width_focus, cx);
                 page.open_background_adjustment(window, cx);
                 let dialog = page.background_adjustment_dialog.as_mut().unwrap();
-                dialog.drag = Some((point(px(0.0), px(0.0)), dialog.draft));
-                dialog.pinch = Some((2.0, 1.0));
+                dialog.drag = Some(CropDrag::Resize {
+                    anchor: (0.0, 0.0),
+                    sides: None,
+                });
+                dialog.pinch = Some(([0.0, 0.0, 1.0, 1.0], 1.0));
                 page.reset_background_adjustment(cx);
                 let dialog = page.background_adjustment_dialog.as_ref().unwrap();
                 assert_eq!(dialog.draft, Default::default());
@@ -4191,17 +5165,22 @@ mod tests {
                 assert!(page.background_adjustment_dialog.is_some());
                 assert_eq!(crate::settings::current(cx), original);
                 ready_background_preview(page);
-                page.reset_background_adjustment(cx);
+                let crop = [0.125, 0.25, 0.5, 0.5];
+                let dialog = page.background_adjustment_dialog.as_mut().unwrap();
+                dialog.set_crop(crop);
+                dialog.draft.quarter_turns = 1;
                 assert_eq!(crate::settings::current(cx), original);
                 page.apply_background_adjustment(window, cx);
                 assert!(page.background_adjustment_dialog.is_none());
                 assert!(page.width_focus.is_focused(window));
                 let mut expected = original.clone();
-                expected
+                let adjustment = &mut expected
                     .new_thread_composer_background
                     .as_mut()
                     .unwrap()
-                    .adjustment = Default::default();
+                    .adjustment;
+                adjustment.crop = Some(crop);
+                adjustment.quarter_turns = 1;
                 assert_eq!(crate::settings::current(cx), expected);
                 assert_eq!(crate::settings::UiSettings::load(dir.path()), expected);
             })
@@ -4250,25 +5229,6 @@ mod tests {
     }
 
     #[test]
-    fn background_preview_matches_the_runtime_hero_aspect_ratio() {
-        for viewport in [
-            gpui::size(px(1440.0), px(900.0)),
-            gpui::size(px(800.0), px(1200.0)),
-        ] {
-            for collapsed in [false, true] {
-                let preview = background_preview_size(viewport, 260.0, collapsed);
-                let hero_width = f32::from(viewport.width) - if collapsed { 0.0 } else { 260.0 };
-                let hero_height =
-                    crate::shell::new_thread_background_height(f32::from(viewport.height));
-                let aspect = f32::from(preview.width) / f32::from(preview.height);
-                assert!((aspect - hero_width / hero_height).abs() < 0.00001);
-                assert!(f32::from(preview.width) <= 556.0);
-                assert!(f32::from(preview.height) <= 260.0);
-            }
-        }
-    }
-
-    #[test]
     fn background_pinch_preserves_native_scale_and_round_trips() {
         for relative_delta in [false, true] {
             let mut previous = 1.0;
@@ -4298,20 +5258,117 @@ mod tests {
         }
     }
 
-    #[test]
-    fn background_zoom_slider_matches_its_inset_track_and_clamps() {
-        let bounds = Bounds::new(point(px(100.0), px(20.0)), gpui::size(px(168.0), px(28.0)));
-        let minimum = crate::settings::NewThreadBackgroundAdjustment::MIN_ZOOM;
-        let maximum = crate::settings::NewThreadBackgroundAdjustment::MAX_ZOOM;
+    #[gpui::test]
+    fn crop_frame_moves_resizes_from_corners_and_stays_inside(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+            crate::settings::init(background_settings(), dir.path(), cx);
+        });
+        let window = cx.add_window(|_, cx| AppearancePage::new(cx));
+        window
+            .update(cx, |page, window, cx| {
+                page.open_background_adjustment(window, cx);
+                let dialog = page.background_adjustment_dialog.as_mut().unwrap();
+                dialog.draft = Default::default();
+                dialog.image = Some((2000.0, 1000.0));
+                dialog.hero = (2000.0, 1000.0);
+                dialog.window_aspect = 1.6;
+                dialog.stage_bounds.set(Some(Bounds::new(
+                    point(px(0.0), px(0.0)),
+                    gpui::size(px(1000.0), px(500.0)),
+                )));
+                let crop = |page: &AppearancePage| {
+                    let dialog = page.background_adjustment_dialog.as_ref().unwrap();
+                    dialog.crop(dialog.image.unwrap())
+                };
+                let assert_crop = |actual: [f32; 4], expected: [f32; 4]| {
+                    for (value, target) in actual.into_iter().zip(expected) {
+                        assert!((value - target).abs() < 0.001, "{actual:?} != {expected:?}");
+                    }
+                };
+                assert_crop(crop(page), [0.0, 0.0, 1.0, 1.0]);
 
-        assert_eq!(background_zoom_at_x(bounds, px(90.0)), minimum);
-        assert_eq!(background_zoom_at_x(bounds, px(107.0)), minimum);
-        assert_eq!(background_zoom_at_x(bounds, px(261.0)), maximum);
-        assert_eq!(background_zoom_at_x(bounds, px(280.0)), maximum);
-        assert_eq!(background_zoom_at_x(bounds, px(184.0)), 2.5);
-        assert_eq!(background_zoom_fraction(minimum), 0.0);
-        assert_eq!(background_zoom_fraction(2.5), 0.5);
-        assert_eq!(background_zoom_fraction(maximum), 1.0);
+                let dialog = page.background_adjustment_dialog.as_mut().unwrap();
+                assert_crop(
+                    dialog.crop_for_hero((100.0, 100.0), (200.0, 100.0)),
+                    [0.0, 0.25, 1.0, 0.5],
+                );
+                dialog.draft.crop = Some([0.2, 0.2, 0.012, 0.2]);
+                page.start_background_drag(point(px(206.0), px(100.0)), cx);
+                assert!(matches!(
+                    page.background_adjustment_dialog.as_ref().unwrap().drag,
+                    Some(CropDrag::ResizeEdge {
+                        horizontal: false,
+                        positive: false,
+                        ..
+                    })
+                ));
+                page.start_background_drag(point(px(200.0), px(100.0)), cx);
+                assert!(matches!(
+                    page.background_adjustment_dialog.as_ref().unwrap().drag,
+                    Some(CropDrag::Resize {
+                        sides: Some((false, false)),
+                        ..
+                    })
+                ));
+                page.background_adjustment_dialog.as_mut().unwrap().draft = Default::default();
+
+                page.start_background_drag(point(px(0.0), px(0.0)), cx);
+                page.drag_background(point(px(250.0), px(100.0)), cx);
+                page.finish_background_drag(cx);
+                assert_crop(crop(page), [0.25, 0.2, 0.75, 0.8]);
+
+                page.start_background_drag(point(px(625.0), px(100.0)), cx);
+                page.drag_background(point(px(625.0), px(250.0)), cx);
+                page.finish_background_drag(cx);
+                assert_crop(crop(page), [0.25, 0.5, 0.75, 0.5]);
+
+                page.start_background_drag(point(px(500.0), px(375.0)), cx);
+                page.drag_background(point(px(-100.0), px(375.0)), cx);
+                page.finish_background_drag(cx);
+                assert_crop(crop(page), [0.0, 0.5, 0.75, 0.5]);
+
+                page.start_background_drag(point(px(40.0), px(100.0)), cx);
+                page.drag_background(point(px(340.0), px(200.0)), cx);
+                page.finish_background_drag(cx);
+                assert_crop(crop(page), [0.04, 0.2, 0.3, 0.2]);
+
+                page.set_crop_mode(CropMode::Square, cx);
+                let [left, top, width, height] = crop(page);
+                assert!((width * 2.0 - height).abs() < 0.001);
+                page.start_background_drag(point(px(left * 1000.0), px(top * 500.0)), cx);
+                page.drag_background(
+                    point(px((left + 0.1) * 1000.0), px((top + 0.1) * 500.0)),
+                    cx,
+                );
+                page.finish_background_drag(cx);
+                let [_, _, next_width, next_height] = crop(page);
+                assert!(next_width < width);
+                assert!((next_width * 2.0 - next_height).abs() < 0.001);
+
+                let [left, top, width, height] = crop(page);
+                let (right, bottom) = (left + width, top + height);
+                page.start_background_drag(point(px(left * 1000.0), px(top * 500.0)), cx);
+                page.drag_background(
+                    point(px((right + 0.04) * 1000.0), px((bottom - 0.1) * 500.0)),
+                    cx,
+                );
+                page.finish_background_drag(cx);
+                assert_crop(crop(page), [right - 0.05, bottom - 0.1, 0.05, 0.1]);
+
+                page.set_crop_mode(CropMode::Free, cx);
+                let [left, top, width, height] = crop(page);
+                page.rotate_background(true, cx);
+                let draft = page.background_adjustment_dialog.as_ref().unwrap().draft;
+                assert_eq!(draft.quarter_turns, 1);
+                assert_crop(
+                    draft.crop.unwrap(),
+                    [1.0 - top - height, left, height, width],
+                );
+            })
+            .unwrap();
     }
 
     #[test]
@@ -4481,6 +5538,20 @@ mod tests {
             );
         });
         let (_page, cx) = cx.add_window_view(|_, cx| AppearancePage::new(cx));
+        cx.update(|window, cx| window.draw(cx).clear());
+        let viewport_center = cx.update(|window, _| {
+            let viewport = window.viewport_size();
+            point(viewport.width / 2.0, viewport.height / 2.0)
+        });
+        let initial = cx
+            .debug_bounds("appearance-surface")
+            .expect("glass trigger position");
+        cx.simulate_mouse_move(viewport_center, None, gpui::Modifiers::default());
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: viewport_center,
+            delta: ScrollDelta::Pixels(point(px(0.0), viewport_center.y - initial.center().y)),
+            ..Default::default()
+        });
         cx.update(|window, cx| window.draw(cx).clear());
         let trigger = cx
             .debug_bounds("appearance-surface")

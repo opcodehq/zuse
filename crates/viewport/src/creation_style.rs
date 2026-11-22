@@ -76,6 +76,26 @@ pub fn option(
     glyph: &str,
     selected: bool,
 ) -> Stateful<Div> {
+    option_with_colors(
+        id,
+        label,
+        glyph,
+        selected,
+        palette::rgb(TEXT).into(),
+        s::frame_bg().opacity(0.6),
+        s::frame_bg(),
+    )
+}
+
+pub fn option_with_colors(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    glyph: &str,
+    selected: bool,
+    text: Hsla,
+    hover: Hsla,
+    focus: Hsla,
+) -> Stateful<Div> {
     let label = label.into();
     div()
         .id(id)
@@ -92,11 +112,11 @@ pub fn option(
         .rounded(px(7.))
         .text_size(px(12.))
         .line_height(px(20.))
-        .text_color(palette::rgb(TEXT))
+        .text_color(text)
         .when(selected, |v| v.bg(s::frame_bg().opacity(0.4)))
         .cursor_pointer()
-        .hover(|v| v.bg(s::frame_bg().opacity(0.6)))
-        .focus_visible(|v| v.bg(s::frame_bg()))
+        .hover(|v| v.bg(hover))
+        .focus_visible(|v| v.bg(focus))
         .on_key_down(|e: &KeyDownEvent, _, cx| {
             if matches!(e.keystroke.key.as_str(), "enter" | "space") {
                 cx.stop_propagation()

@@ -441,8 +441,10 @@ impl PullRequestDetailPage {
             "Merge"
         };
         let solid = !busy && (draft || mergeable);
+        // The solid face is a dither key with a white label; its glyphs
+        // match the label rather than the theme's on-solid ink.
         let tint = if solid {
-            theme.on_solid
+            gpui::white()
         } else {
             theme.text_muted
         };

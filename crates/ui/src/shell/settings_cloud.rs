@@ -300,27 +300,56 @@ impl Shell {
                 },
             ))
             .when(cloud, |header| header.child(tabs));
-        let body = if compute {
+        if compute {
             let page = self.ensure_cloud_page(window, cx);
             page.update(cx, |page, cx| page.set_view(CloudView::Compute, cx));
-            page.into_any_element()
-        } else {
-            let padding = settings::widgets::page_padding(window);
-            div()
+            return div()
+                .id("usage-settings")
                 .size_full()
-                .max_w(px(768. + 2. * padding))
-                .mx_auto()
-                .px(px((padding - 24.).max(0.)))
-                .child(self.usage_view(window, cx))
-                .into_any_element()
-        };
+                .flex()
+                .flex_col()
+                .child(div().flex_none().child(header))
+                .child(div().flex_1().min_h_0().child(page))
+                .into_any_element();
+        }
+
+        let padding = settings::widgets::page_padding(window);
+        let body = div()
+            .flex_none()
+            .w_full()
+            .max_w(px(768. + 2. * padding))
+            .mx_auto()
+            .px(px((padding - 24.).max(0.)))
+            .child(self.usage_view(window, cx));
+        let rail = settings::widgets::rail(
+            &mut self.usage_settings_scroll,
+            "usage-settings-scrollbar",
+            &theme,
+            cx,
+            |this: &mut Shell| &mut this.usage_settings_scroll,
+        );
         div()
             .id("usage-settings")
+            .relative()
             .size_full()
-            .flex()
-            .flex_col()
-            .child(div().flex_none().child(header))
-            .child(div().flex_1().min_h_0().child(body))
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if this.usage_settings_scroll.set_list_hovered(*hovered) {
+                    cx.notify();
+                }
+            }))
+            .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
+            .child(
+                div()
+                    .id("usage-settings-scroll")
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.usage_settings_scroll.scroll)
+                    .child(div().flex_none().child(header))
+                    .child(body),
+            )
+            .children(rail)
             .into_any_element()
     }
 }

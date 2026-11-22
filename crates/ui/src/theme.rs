@@ -1225,6 +1225,18 @@ impl Theme {
         }
     }
 
+    pub(crate) fn wallpaper_composer_fill(&self, input_opacity: u8) -> Hsla {
+        let fill = self.composer_glass_bg();
+        if input_opacity >= 100 {
+            return fill;
+        }
+        fill.opacity(self.contrast_checked_tint_alpha(
+            fill,
+            fill.a * f32::from(input_opacity) / 100.0,
+            self.adverse_backdrop(),
+        ))
+    }
+
     /// The composer card's edge: white at 8% on dark, a softened theme border
     /// on light.
     pub fn composer_glass_border(&self) -> Hsla {
@@ -1552,6 +1564,21 @@ impl Theme {
         self
     }
 
+    /// Red/green keeps the theme's own diff colors; Blue/orange swaps in a
+    /// pair that stays distinct under red-green color blindness.
+    fn with_diff_colors(mut self, preference: crate::settings::DiffColors) -> Self {
+        if preference == crate::settings::DiffColors::RedGreen {
+            return self;
+        }
+        let (added, deleted) = match self.appearance {
+            Appearance::Light => (0x1557a4, 0xa64b14),
+            Appearance::Dark => (0x7fbdff, 0xefa565),
+        };
+        self.diff_add = gpui::rgb(added).into();
+        self.diff_del = gpui::rgb(deleted).into();
+        self
+    }
+
     /// Resolve one complete registered variant and then apply the narrowly
     /// scoped accent policy. Components consume only the resulting semantic
     /// tokens; VS Code keys never escape the importer.
@@ -1582,9 +1609,12 @@ impl Theme {
             Appearance::Dark => "zuse-dark",
             Appearance::Light => "zuse-light",
         };
+        let scheme = match appearance {
+            Appearance::Dark => zuse_theme::Appearance::Dark,
+            Appearance::Light => zuse_theme::Appearance::Light,
+        };
         let variant = registry
-            .variant(variant_id)
-            .filter(|variant| model_appearance(variant.appearance) == appearance)
+            .variant_for(variant_id, scheme)
             .or_else(|| registry.variant(fallback_id))
             .expect("the built-in registry contains both Zuse appearances");
         if let Some(color) = wallpaper_color {
@@ -1797,6 +1827,7 @@ impl Theme {
             surface_preference,
             crate::settings::wallpaper_colors::active(cx),
         )
+        .with_diff_colors(crate::settings::diff_colors(cx))
         .with_font_sans(crate::typography::effective_family_name(cx))
         .with_font_mono(crate::typography::code_effective_family_name(cx))
         .with_font_terminal(crate::typography::terminal_effective_family_name(cx))
@@ -1848,6 +1879,20 @@ fn scrollbar_thumb_colors(theme: &Theme) -> (Hsla, Hsla, Hsla) {
 }
 
 fn sync_gpui_base_scrollbar(theme: &Theme, cx: &mut App) {
+    zuse_viewport::sidebar_controls::set_plan_ink(crate::popover::dither_ink(theme), cx);
+    zuse_viewport::palette::set_accent(crate::popover::themed_accent(theme));
+    zuse_viewport::palette::set_usage_menu(
+        (theme.family_id.as_ref() != "zuse" || theme.wallpaper_color.is_some()).then_some(
+            zuse_viewport::palette::UsageMenuColors {
+                surface: theme.surface_overlay,
+                border: theme.border_strong,
+                text: theme.text_strong,
+                muted: theme.text_muted,
+                hover: theme.element_hover,
+                active: theme.element_active,
+            },
+        ),
+    );
     let (normal, hover, active) = scrollbar_thumb_colors(theme);
     gpui_base::Theme::global_mut(cx).scrollbar.styles = gpui_base::ScrollbarStyles::default()
         .thumb(|style| style.bg(normal))

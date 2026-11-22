@@ -231,10 +231,18 @@ impl UsageDashboard {
                     cx.stop_propagation();
                 }
             }))
-            .size_full()
+            .w_full()
+            .when(!self.embedded, |v| v.h_full().bg(rgb(BG)))
+            .when(self.embedded, |v| v.flex_none())
             .min_w_0()
             .min_h_0()
-            .when(!self.embedded, |v| v.bg(rgb(BG)))
+            .on_scroll_wheel(cx.listener(|this, _, _, cx| {
+                if this.embedded && (this.hovered.is_some() || this.hover_cursor.is_some()) {
+                    this.hovered = None;
+                    this.hover_cursor = None;
+                    cx.notify();
+                }
+            }))
             .text_color(rgb(TEXT))
             .text_size(px(14.))
             .line_height(px(18.9))
@@ -309,7 +317,11 @@ impl UsageDashboard {
                         .to_string()
                     }),
             );
-            root = root.child(self.scroll_view(body, cx));
+            root = if self.embedded {
+                root.child(body)
+            } else {
+                root.child(self.scroll_view(body, cx))
+            };
         } else if refreshing {
             root = root.child(self.skeleton(wide));
         } else {
