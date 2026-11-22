@@ -236,6 +236,9 @@ pub const GLIDE_MAX_VIEWPORTS: f32 = 2.5;
 /// The titlebar overlays the full-height list, so its height is part of the
 /// inset; the extra 10px matches the first row's breathing room.
 pub(crate) const OWN_SEND_TOP_INSET_PX: f32 = Theme::TITLEBAR_HEIGHT + 10.0;
+/// The first row's top gap in a full-window transcript: it rests below the
+/// titlebar it fades under. A new chat's anchored first message sits here.
+pub(crate) const FIRST_ROW_TOP_GAP_PX: f32 = Theme::TITLEBAR_HEIGHT + Theme::SPACE_LG + 10.0;
 /// Epsilon of extra height under the reservation. The runway ends AT the
 /// app's bottom — this is not scroll room (24px of it read as a janky
 /// overshoot-and-fight zone, user report) — it exists only to keep the held
@@ -3851,6 +3854,11 @@ pub struct Transcript {
     /// Queue rows authored in this window. They become own-turn anchors only
     /// after the host promotes their stable id into a transcript message.
     pending_queued_turns: PendingQueuedTurns,
+    /// The own-turn prompt is a new chat's first message, which the server
+    /// may record under another id than the stand-in shown at send: when the
+    /// anchored copy goes, the anchor moves to the chat's first message
+    /// instead of retiring (see [`Self::on_own_first_send`]).
+    own_turn_follows_first: bool,
     /// A layout-affecting change needs one post-layout own-turn measurement.
     own_turn_kick: bool,
     /// One own-turn `on_next_frame` callback in flight at most.
@@ -4273,6 +4281,7 @@ impl Transcript {
             pinned,
             own_turn: None,
             pending_queued_turns: PendingQueuedTurns::default(),
+            own_turn_follows_first: false,
             own_turn_kick: false,
             own_turn_scheduled: false,
             own_turn_last_tick: None,
@@ -4582,7 +4591,7 @@ impl Transcript {
             if self.doc_override.is_some() {
                 Theme::SPACE_LG
             } else {
-                Theme::TITLEBAR_HEIGHT + Theme::SPACE_LG + 10.0
+                FIRST_ROW_TOP_GAP_PX
             }
         } else {
             top_gap_for(ix.checked_sub(1).and_then(|i| self.rows.get(i)), row)
@@ -4960,8 +4969,46 @@ impl Transcript {
         });
         self.own_turn_last_tick = None;
         self.own_turn_kick = true;
+        self.own_turn_follows_first = false;
         self.remeasure_last_row();
         cx.notify();
+    }
+
+    /// [`Self::on_own_send`] for a new chat's first message. Its stand-in
+    /// is replaced by the server's copy, possibly more than once and under
+    /// other ids (an admitted row, then the computer's own record): the
+    /// anchor follows the chat's first message through each, so it never
+    /// drops to the bottom.
+    pub fn on_own_first_send(
+        &mut self,
+        chat_id: String,
+        message_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.on_own_send(chat_id, message_id, cx);
+        self.own_turn_follows_first = true;
+        // The launch view already showed the message at the top: hold it
+        // there from the first frame instead of gliding up from below.
+        if let Some(anchor) = self.own_turn.as_mut() {
+            anchor.positioned = true;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn own_send_target(&self) -> Option<String> {
+        self.own_turn
+            .as_ref()
+            .map(|anchor| anchor.message_id.to_string())
+    }
+    /// The prompt an own send is anchored to was replaced by the server's
+    /// copy under another id: keep the anchor on it, with no jump.
+    pub fn retarget_own_send(&mut self, from: &str, to: &str, cx: &mut Context<Self>) {
+        if let Some(anchor) = self.own_turn.as_mut()
+            && anchor.message_id.as_ref() == from
+        {
+            anchor.message_id = SharedString::from(to.to_owned());
+            cx.notify();
+        }
     }
 
     /// Remember a locally-authored queue row without touching the active
@@ -5073,6 +5120,19 @@ impl Transcript {
             .rows
             .iter()
             .any(|row| row.turn_start && row.entry_id == message_id);
+        if !exists && self.own_turn_follows_first {
+            let first = self
+                .rows
+                .iter()
+                .find(|row| row.turn_start && matches!(row.kind, RowKind::User { .. }))
+                .map(|row| row.entry_id.clone());
+            if let (Some(first), Some(anchor)) = (first, self.own_turn.as_mut()) {
+                anchor.message_id = first;
+                anchor.seen_prompt = true;
+                self.own_turn_kick = true;
+                return;
+            }
+        }
         let keep = self
             .own_turn
             .as_mut()
@@ -5082,6 +5142,7 @@ impl Transcript {
         }
 
         self.own_turn = None;
+        self.own_turn_follows_first = false;
         self.own_turn_kick = false;
         self.own_turn_last_tick = None;
         self.remeasure_last_row();
@@ -5163,7 +5224,12 @@ impl Transcript {
             return;
         }
         let inset = Self::own_send_inset(anchor_ix);
-        if self.is_glued() && self.own_turn.as_ref().is_some_and(|anchor| anchor.held) {
+        // A new chat's first message is held at the top from its first frame
+        // (it never glides), so it needs no glide runway.
+        if !self.own_turn_follows_first
+            && self.is_glued()
+            && self.own_turn.as_ref().is_some_and(|anchor| anchor.held)
+        {
             self.list.scroll_by(px(-viewport_height));
         }
         let anchor_bounds = self.list.bounds_for_item(anchor_ix);
@@ -5229,6 +5295,15 @@ impl Transcript {
                 // (user report). Bounds-less flicker still snaps — there is
                 // nothing to ease against.
                 match anchor_bounds {
+                    // A new chat's first message stays exactly where the
+                    // launch view showed it: snap, never ease into place.
+                    _ if self.own_turn_follows_first => {
+                        self.list.scroll_to(ListOffset {
+                            item_ix: anchor_ix,
+                            offset_in_item: px(-inset),
+                        });
+                        self.own_turn_last_tick = None;
+                    }
                     Some(b) => {
                         let err = f32::from(b.top()) - (f32::from(viewport.top()) + inset);
                         let now = Instant::now();
@@ -16787,6 +16862,36 @@ mod tests {
                     previous = top;
                 }
                 assert!(previous.abs() < px(1.0));
+            });
+        }
+
+        /// A new chat's first message is already at the top in the launch
+        /// view: the conversation holds it there from its first step instead
+        /// of gliding up from the bottom-aligned position.
+        #[test]
+        fn first_send_holds_the_prompt_at_the_top_without_a_glide() {
+            with_window(|transcript, window, cx| {
+                transcript.update(cx, |this, cx| {
+                    this.rows = vec![viewport_row("prompt", "prompt")];
+                    this.list.reset(1);
+                    this.rail_enabled = false;
+                    cx.notify();
+                });
+                draw(window, cx);
+                transcript.update(cx, |this, cx| {
+                    this.on_own_first_send("chat".into(), "prompt".into(), cx)
+                });
+                draw(window, cx);
+                transcript.update(cx, |this, cx| this.step_own_turn(cx));
+                draw(window, cx);
+                let top = transcript.read(cx).list.bounds_for_item(0).unwrap().top();
+                assert!(top.abs() < px(1.0), "held at the top at once, got {top:?}");
+                for _ in 0..5 {
+                    transcript.update(cx, |this, cx| this.step_own_turn(cx));
+                    draw(window, cx);
+                    let next = transcript.read(cx).list.bounds_for_item(0).unwrap().top();
+                    assert!(next.abs() < px(1.0), "stays put, got {next:?}");
+                }
             });
         }
 

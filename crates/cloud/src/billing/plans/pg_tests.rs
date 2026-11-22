@@ -496,6 +496,28 @@ async fn machine_minute_plans_trials_metering_and_holds() {
         .unwrap();
     assert_eq!(item.machine_rate, Some(4));
     assert_eq!(item.machine_minutes, Some(36_480));
+    // Machine-image builds settle under their own kind; the page still loads
+    // and shows them as image builds instead of rejecting every row.
+    sqlx::query("UPDATE api_cloud_billing_usage SET resource_kind='machine-image' WHERE entry_id='cloud-150h'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let with_image = store
+        .billing_usage("user-cloud", None, 50, t0 + 4 * HOUR)
+        .await
+        .unwrap();
+    let image = with_image
+        .items
+        .iter()
+        .find(|i| i.entry_id == "cloud-150h")
+        .unwrap();
+    assert_eq!(image.resource_kind, "build");
+    sqlx::query(
+        "UPDATE api_cloud_billing_usage SET resource_kind='workspace' WHERE entry_id='cloud-150h'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     for text in [
         serde_json::to_string(&held).unwrap(),
         serde_json::to_string(&usage).unwrap(),

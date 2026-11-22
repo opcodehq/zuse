@@ -487,7 +487,7 @@ impl PullRequestDetailPage {
         let mut rows = vec![
             summary::property_row(
                 "handoff",
-                crate::icons::BOT,
+                crate::icons::AGENT,
                 "Hand off",
                 div()
                     .id("pr-handoff-actions")

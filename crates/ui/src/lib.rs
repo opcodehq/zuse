@@ -28,6 +28,7 @@ mod chat_configuration;
 pub(crate) mod chat_find;
 pub(crate) mod cloud_destination;
 pub use zuse_engine::cloud_ssh;
+mod background_work;
 mod comment_ui;
 pub mod comments;
 pub mod composer;

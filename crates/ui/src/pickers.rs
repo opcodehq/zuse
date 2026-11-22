@@ -612,8 +612,6 @@ struct DeviceRow {
     name: String,
     /// The project's space on this device; `None` when no project is picked.
     space: Option<Space>,
-    /// The checkout's path, when the device holds several of the project.
-    detail: Option<String>,
 }
 
 /// What names the selected model, shared by the composer chip and the
@@ -1882,7 +1880,7 @@ impl Pickers {
         // otherwise reads as a second active row (user report).
         self.active = match kind {
             PickerKind::Checkout => {
-                let current = self.workspace_choice(cx);
+                let current = self.workspace_choice();
                 self.workspace_choices(cx)
                     .iter()
                     .position(|choice| *choice == current)
@@ -3121,10 +3119,11 @@ impl Pickers {
         }
     }
 
-    /// The device picker's rows. With a project picked: its checkouts, one
-    /// row per device (this device first), with the path when a device holds
-    /// several. Without one: every device — project-less sessions run in its
-    /// home.
+    /// The device picker's rows. With a project picked: one row per device
+    /// holding a checkout of it (this device first). A device with several
+    /// checkouts is still one computer: its row keeps the checkout in use,
+    /// else its first. Without a project: every device — project-less
+    /// sessions run in its home.
     fn device_rows(&self, cx: &App) -> Vec<DeviceRow> {
         let state = self.state.read(cx);
         let local = state.local_device_id.clone();
@@ -3135,23 +3134,24 @@ impl Pickers {
                 .to_string()
         };
         if let Some(space) = state.selected_space_row() {
-            let members = state.project_members(space);
-            return members
-                .iter()
-                .map(|member| {
-                    let shared = members
-                        .iter()
-                        .filter(|other| other.device_id == member.device_id)
-                        .count()
-                        > 1;
-                    DeviceRow {
-                        device_id: member.device_id.clone(),
-                        name: device_name(&member.device_id),
-                        space: Some((*member).clone()),
-                        detail: shared.then(|| member.path.clone()),
+            let mut rows: Vec<DeviceRow> = Vec::new();
+            for member in state.project_members(space) {
+                if let Some(row) = rows
+                    .iter_mut()
+                    .find(|row| row.device_id == member.device_id)
+                {
+                    if member.id == space.id {
+                        row.space = Some(member.clone());
                     }
-                })
-                .collect();
+                    continue;
+                }
+                rows.push(DeviceRow {
+                    device_id: member.device_id.clone(),
+                    name: device_name(&member.device_id),
+                    space: Some(member.clone()),
+                });
+            }
+            return rows;
         }
         let mut devices: Vec<&zuse_protocol::Device> = state.devices.iter().collect();
         devices.sort_by_key(|d| {
@@ -3167,7 +3167,6 @@ impl Pickers {
                 device_id: device.id.clone(),
                 name: device.name.clone(),
                 space: None,
-                detail: None,
             })
             .collect()
     }
@@ -3177,13 +3176,7 @@ impl Pickers {
     fn filtered_device_rows(&self, cx: &App) -> Vec<DeviceRow> {
         let query = self.search.read(cx).text().to_string();
         let rows = self.device_rows(cx);
-        let names: Vec<String> = rows
-            .iter()
-            .map(|row| match &row.detail {
-                Some(detail) => format!("{} {detail}", row.name),
-                None => row.name.clone(),
-            })
-            .collect();
+        let names: Vec<String> = rows.iter().map(|row| row.name.clone()).collect();
         popover::filter_indices(&query, &names)
             .into_iter()
             .map(|ix| rows[ix].clone())
@@ -3191,6 +3184,10 @@ impl Pickers {
     }
 
     fn selected_device_index(&self, cx: &App) -> usize {
+        // On Cloud the highlight starts on the Cloud row, after the devices.
+        if self.state.read(cx).cloud_project.is_some() {
+            return self.device_rows(cx).len();
+        }
         let (selected, effective) = {
             let state = self.state.read(cx);
             (
@@ -3975,6 +3972,8 @@ impl Pickers {
                 cx,
             )
             .when(offline, |el| el.text_color(theme.warning.opacity(0.8)));
+        let show_device_chip =
+            self.shows_device_chip(zuse_viewport::cloud_gate::remote_enabled(), cx);
         let project_chip = self.tray_chip(
             PickerKind::Space,
             "picker-project",
@@ -3997,8 +3996,8 @@ impl Pickers {
                 "project-popover",
                 closing,
             ))
-            // Without remote access there is only this computer to pick.
-            .when(zuse_viewport::cloud_gate::remote_enabled(), |row| {
+            // Without remote access or Cloud there is only this computer.
+            .when(show_device_chip, |row| {
                 row.child(attach_creation_overlay(
                     device_chip,
                     &mut overlay,
@@ -4012,6 +4011,30 @@ impl Pickers {
             .child(div().flex_1())
             .children(self.render_new_thread_git_selectors(cx))
             .into_any_element()
+    }
+
+    /// The computer chip: always with remote access; otherwise only when
+    /// Cloud can be picked. Cloud's destinations load here, so the chip
+    /// doesn't wait for a picker to open, and until they arrive a
+    /// subscriber's GitHub project already counts as able to use Cloud.
+    fn shows_device_chip(&mut self, remote: bool, cx: &mut Context<Self>) -> bool {
+        if remote || self.state.read(cx).cloud_project.is_some() {
+            return true;
+        }
+        self.ensure_cloud(cx);
+        if self.cloud_offer_selectable(cx) {
+            return true;
+        }
+        let state = self.state.read(cx);
+        crate::cloud_beta()
+            && zuse_viewport::cloud_gate::enabled()
+            && state.cloud_access().offers_cloud()
+            && !self.cloud_context_known()
+            && state
+                .selected_space_row()
+                .and_then(|space| space.remote_repository.as_deref())
+                .and_then(crate::cloud_destination::github_repository)
+                .is_some()
     }
 
     /// Prepare a source checkout or issue context before the first send.
@@ -8096,19 +8119,18 @@ mod tests {
             );
             // "zuse" is the second row once rows are alphabetical.
             assert_eq!(pickers.selected_project_index(cx), 1);
-            // The device picker offers only the project's checkouts; a device
-            // holding two is told apart by path.
+            // The device picker offers the computers holding the project,
+            // each once even when it holds two checkouts.
             let devices: Vec<(String, Option<String>)> = pickers
                 .device_rows(cx)
                 .into_iter()
-                .map(|row| (row.device_id, row.detail))
+                .map(|row| (row.device_id, row.space.map(|s| s.id)))
                 .collect();
             assert_eq!(
                 devices,
                 [
-                    ("mac".into(), None),
-                    ("vps".into(), Some("/vps/server".into())),
-                    ("vps".into(), Some("/vps/server-wt".into())),
+                    ("mac".into(), Some("laptop".into())),
+                    ("vps".into(), Some("server".into())),
                 ]
             );
             let server = pickers.device_rows(cx).remove(1);

@@ -7,6 +7,28 @@
 - Add opt-in Slack cloud tasks with threaded status/results, sender/channel attribution, and a workspace/repository connection flow in Cloud settings. Server credentials stay encrypted; enablement requires the Slack migration and a rebuilt compatible runtime image.
 - Link a chat or a Zapper to a Slack channel from its right-click menu. Finished replies post into a Slack thread, your replies in that thread come back to the chat, and Zappers post under their own name and avatar. Their worker threads get their own threads in the same channel. Requires the new Slack migration and re-authorizing the Slack app for its added scopes.
 
+## 0.27.4 - 2026-11-22
+
+### Added
+
+- Appearance: themes, an Add theme dialog and animated wallpapers.
+- Zappers: soft pixel avatars that react (or your own picture), a PR tab with Merge, Open on GitHub and the missing PR facts, and a visible archive button.
+- A background work row in the tray for running subagents and tasks.
+
+### Changed
+
+- Cloud is chosen in one place, the computer picker: one "This computer" row, the cloud size inline on the Cloud row, and the Worktree/Local chip only for chats on this computer.
+- The first message of a new cloud chat pins to the top like any send and stays there when the computer starts and the reply arrives.
+- Cloud chats show a working spinner on their tab and sidebar row; the cloud icon is green only while the computer is up.
+- Settings navigation is reordered and the account card matches the other cards.
+
+### Fixed
+
+- New cloud chats appear in the sidebar right away and stay there.
+- The Queued panel lists every queued cloud message and drops only the ones the agent picked up.
+- Cloud usage loads for accounts with image builds.
+- Usage settings page scrolling and chart tooltip.
+
 ## 0.27.3 - 2026-11-20
 
 ### Added

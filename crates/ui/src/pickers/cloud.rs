@@ -650,14 +650,11 @@ impl Pickers {
             .or_else(|| sizes.iter().find(|s| s.available))
             .cloned()
     }
-    fn cloud_computer_title(&self, cx: &App) -> String {
-        match self
-            .cloud_selected_size(cx)
+    /// The Cloud row's size, as "4 vCPU · 16 GB". A task's computer is fixed.
+    pub(super) fn cloud_size_meta(&self, cx: &App) -> Option<String> {
+        self.cloud_selected_size(cx)
             .filter(|_| self.cloud.task_binding.is_none())
-        {
-            Some(size) => format!("Computer · {}", size.label),
-            None => "Computer · Cloud".to_owned(),
-        }
+            .map(|size| size_resources(&size))
     }
     /// Picking a size the plan lacks opens Billing to upgrade instead.
     fn choose_cloud_size(
@@ -681,40 +678,17 @@ impl Pickers {
         }
         cx.notify();
     }
-    /// The computer for a new chat: one Cloud option with a size choice. A
-    /// task's computer is fixed.
-    fn cloud_computer_rows(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    /// The Cloud row's size submenu, open under it, plus why new computers
+    /// can't start when they can't.
+    fn cloud_size_rows(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let locked = self.cloud.task_binding.is_some();
-        let sizes = providers::sizes(&self.cloud.context);
         let selected = self.cloud_selected_size(cx);
-        let expandable = !locked && !sizes.is_empty();
-        let title = self.cloud_computer_title(cx);
-        let mut view = div().flex().flex_col().child(
-            zuse_viewport::creation_style::option(
-                "cloud-computer-options",
-                title,
-                "monitor",
-                false,
-            )
-            .debug_selector(|| "cloud-computer-options".into())
-            .when(locked || expandable, |row| {
-                row.child(zuse_viewport::creation_style::meta(if locked {
-                    "Task computer"
-                } else if self.cloud.sizes_expanded {
-                    "▾"
-                } else {
-                    "▸"
-                }))
-            })
-            .on_click(cx.listener(move |this, _, _, cx| {
-                if expandable {
-                    this.cloud.sizes_expanded = !this.cloud.sizes_expanded;
-                    cx.notify();
-                }
-            })),
-        );
-        if expandable && self.cloud.sizes_expanded {
-            for (i, size) in sizes.into_iter().enumerate() {
+        let mut view = div().flex().flex_col();
+        if !locked && self.cloud.sizes_expanded {
+            for (i, size) in providers::sizes(&self.cloud.context)
+                .into_iter()
+                .enumerate()
+            {
                 let chosen = selected.as_ref().is_some_and(|s| s.id == size.id);
                 let debug_id = format!("cloud-computer-size-{}", size.id);
                 let label = providers::size_label(&size);
@@ -723,9 +697,10 @@ impl Pickers {
                     zuse_viewport::creation_style::option(
                         ("cloud-computer-size", i),
                         label,
-                        "cloud-dither",
+                        "",
                         chosen,
                     )
+                    .ml(px(22.))
                     .debug_selector(move || debug_id.clone())
                     .when(!available, |row| {
                         row.opacity(0.6)
@@ -751,6 +726,44 @@ impl Pickers {
         }
         view.into_any_element()
     }
+    /// The Cloud row's trailing size control: "4 vCPU · 16 GB ▸" opens the
+    /// size submenu without picking Cloud.
+    fn cloud_size_trigger(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.cloud.task_binding.is_some() {
+            return Some(zuse_viewport::creation_style::meta("Task computer").into_any_element());
+        }
+        let size = self.cloud_size_meta(cx)?;
+        let theme = Theme::of(cx).for_popup();
+        Some(
+            div()
+                .id("cloud-size-menu")
+                .debug_selector(|| "cloud-size-menu".into())
+                .role(gpui::Role::Button)
+                .aria_label("Computer size")
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .px(px(4.))
+                .py(px(2.))
+                .rounded(px(5.))
+                .hover(|v| v.bg(theme.element_hover))
+                .child(zuse_viewport::creation_style::meta(size))
+                .child(zuse_viewport::creation_style::meta(
+                    if self.cloud.sizes_expanded {
+                        "▾"
+                    } else {
+                        "▸"
+                    },
+                ))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.cloud.sizes_expanded = !this.cloud.sizes_expanded;
+                    cx.notify();
+                }))
+                .into_any_element(),
+        )
+    }
     pub(crate) fn cloud_v2_available(&self, provider: &str) -> bool {
         self.cloud.context["commandAdmissionVersion"] == 2
             && self.cloud.context["computerCapabilities"]["providers"]
@@ -769,55 +782,6 @@ impl Pickers {
                 .and_then(|space| space.remote_repository.as_deref()),
             &self.cloud.rows,
         )
-    }
-    /// What the workspace menu's Cloud row says it will do.
-    pub(super) fn cloud_workspace_detail(&self, cx: &App) -> &'static str {
-        if self.state.read(cx).cloud_project.is_some()
-            || self
-                .cloud_destination(cx)
-                .is_some_and(|row| availability::launchable(&row))
-        {
-            "Runs on your cloud computer"
-        } else if self.cloud.connecting {
-            "Connecting this repository…"
-        } else if self.local_github_repository(cx).is_some() {
-            "Connect this repository to Cloud"
-        } else {
-            "Choose a repository in Cloud setup"
-        }
-    }
-    /// The chat's local project as `owner/repo`, when it lives on GitHub.
-    fn local_github_repository(&self, cx: &App) -> Option<String> {
-        let remote = self
-            .state
-            .read(cx)
-            .selected_space_row()?
-            .remote_repository
-            .as_deref()?
-            .to_owned();
-        let normalized = availability::normalize(&remote);
-        normalized.strip_prefix("github.com/").map(str::to_owned)
-    }
-    /// "Cloud" in the workspace menu: this chat runs on the cloud computer
-    /// with the Cloud repository its project's remote points at. A
-    /// repository Cloud doesn't have yet is connected first, then picked.
-    pub(super) fn pick_cloud_workspace(&mut self, cx: &mut Context<Self>) {
-        if self.state.read(cx).cloud_project.is_some() || self.cloud.connecting {
-            self.close(cx);
-            return;
-        }
-        self.ensure_cloud(cx);
-        if let Some(row) = self
-            .cloud_destination(cx)
-            .filter(|row| availability::launchable(row))
-        {
-            self.select_cloud(row, cx);
-            return;
-        }
-        match self.local_github_repository(cx) {
-            Some(repository) => self.connect_cloud_repository(repository, cx),
-            None => self.open_cloud_setup(cx),
-        }
     }
     fn open_cloud_setup(&mut self, cx: &mut Context<Self>) {
         let target = {
@@ -859,6 +823,9 @@ impl Pickers {
                 .unwrap_or_else(|| owner.clone());
             (engine, owner, organization, scope)
         };
+        // The chat the connection is for; picking another project meanwhile
+        // must not be pulled onto Cloud when it finishes.
+        let origin = self.state.read(cx).selected_space.clone();
         self.cloud.connecting = true;
         self.cloud.error = None;
         cx.notify();
@@ -902,37 +869,58 @@ impl Pickers {
         cx.spawn(async move |this, cx| {
             let result = job.await.unwrap_or_else(|e| Err(e.to_string()));
             let _ = this.update(cx, |this, cx| {
-                this.cloud.connecting = false;
-                match result {
-                    Ok(Some(project)) if project["projectId"].is_string() => {
-                        let row = json!({
-                            "projectId": project["projectId"],
-                            "repositoryIdentity": project["repositoryIdentity"],
-                            "repositoryUrl": project["repositoryUrl"],
-                            "displayName": project["displayName"],
-                            "defaultBranch": project["defaultBranch"],
-                            "accountId": scope,
-                            "providerId": "boxd",
-                        });
-                        this.cloud.rows.push(row.clone());
-                        this.select_cloud(row, cx);
-                        // Reload destinations so the new repository is listed.
-                        this.cloud.refresh();
-                    }
-                    // GitHub doesn't grant this repository yet: set it up.
-                    Ok(_) => this.open_cloud_setup(cx),
-                    Err(error) => this.cloud.error = Some(error),
-                }
-                cx.notify();
+                this.finish_cloud_connect(origin, scope, result, cx)
             });
         })
         .detach();
+    }
+    /// A repository connection came back. The connected repository joins
+    /// the catalog either way; Cloud is picked (or setup opened) only while
+    /// the chat is still on the project the connection started from.
+    fn finish_cloud_connect(
+        &mut self,
+        origin: Option<String>,
+        scope: String,
+        result: Result<Option<Value>, String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.cloud.connecting = false;
+        let current = self.state.read(cx).selected_space == origin
+            && self.state.read(cx).cloud_project.is_none();
+        match result {
+            Ok(Some(project)) if project["projectId"].is_string() => {
+                let row = json!({
+                    "projectId": project["projectId"],
+                    "repositoryIdentity": project["repositoryIdentity"],
+                    "repositoryUrl": project["repositoryUrl"],
+                    "displayName": project["displayName"],
+                    "defaultBranch": project["defaultBranch"],
+                    "accountId": scope,
+                    "providerId": "boxd",
+                });
+                self.cloud.rows.push(row.clone());
+                if current {
+                    self.select_cloud(row, cx);
+                }
+                // Reload destinations so the new repository is listed.
+                self.cloud.refresh();
+            }
+            // GitHub doesn't grant this repository yet: set it up.
+            Ok(_) if current => self.open_cloud_setup(cx),
+            Ok(_) => {}
+            Err(error) => self.cloud.error = Some(error),
+        }
+        cx.notify();
+    }
+    /// Cloud's account context has been read (or painted from cache).
+    pub(super) fn cloud_context_known(&self) -> bool {
+        !self.cloud.context.is_null()
     }
     /// Cloud is a row the keyboard can land on.
     pub(super) fn cloud_offer_selectable(&self, cx: &App) -> bool {
         matches!(
             self.cloud_offer(cx),
-            CloudOffer::Repository(_) | CloudOffer::ChooseRepository
+            CloudOffer::Repository(_) | CloudOffer::Connect(_) | CloudOffer::ChooseRepository
         )
     }
     /// How the computer picker offers Cloud for this chat.
@@ -991,6 +979,11 @@ impl Pickers {
     pub(super) fn select_cloud_destination(&mut self, cx: &mut Context<Self>) {
         match self.cloud_offer(cx) {
             CloudOffer::Repository(row) => self.select_cloud(row, cx),
+            CloudOffer::Connect(repository) => {
+                if !self.cloud.connecting {
+                    self.connect_cloud_repository(repository, cx);
+                }
+            }
             CloudOffer::ChooseRepository => {
                 self.cloud.choose_repository = !self.cloud.choose_repository;
                 cx.notify();
@@ -1027,6 +1020,8 @@ impl Pickers {
         }
         view.into_any_element()
     }
+    /// The computer picker's Cloud part: one Cloud row (size inline, with
+    /// its submenu), and Cloud setup only while Cloud isn't set up.
     pub(super) fn cloud_rows(&mut self, cx: &mut Context<Self>) -> AnyElement {
         self.ensure_cloud(cx);
         let theme = Theme::of(cx).for_popup();
@@ -1037,21 +1032,19 @@ impl Pickers {
             .as_ref()
             .map(|p| p["projectId"].clone());
         let offer = self.cloud_offer(cx);
-        let ready = self.cloud_launch_provider(cx).is_ok();
         let on_repository = matches!(offer, CloudOffer::Repository(_));
-        let computer_rows = if (on_repository || self.cloud.task_binding.is_some()) && ready {
-            self.cloud_computer_rows(cx)
-        } else {
-            div().into_any_element()
-        };
+        let size_trigger = on_repository.then(|| self.cloud_size_trigger(cx)).flatten();
+        let size_rows = on_repository.then(|| self.cloud_size_rows(cx));
         let active = self.active == self.filtered_device_rows(cx).len();
         let choices = (matches!(offer, CloudOffer::ChooseRepository)
             && self.cloud.choose_repository)
             .then(|| self.cloud_repository_choices(cx));
+        let connecting = self.cloud.connecting;
+        let needs_setup = self.state.read(cx).cloud_access().offers_cloud()
+            && matches!(offer, CloudOffer::Hidden | CloudOffer::Unavailable(_));
         div()
             .flex()
             .flex_col()
-            .child(computer_rows)
             .when_some(
                 match &offer {
                     CloudOffer::Repository(row) => Some(row.clone()),
@@ -1069,13 +1062,47 @@ impl Pickers {
                             )
                             .debug_selector(|| "cloud-destination".into())
                             .when(active, |v| v.bg(theme.element_hover))
-                            .child(zuse_viewport::creation_style::meta("Beta"))
+                            .children(size_trigger)
                             .child(zuse_viewport::creation_style::selection(selected))
                             .on_click(
                                 cx.listener(move |this, _, _, cx| {
                                     this.select_cloud(row.clone(), cx)
                                 }),
                             ),
+                        )
+                        .children(size_rows)
+                },
+            )
+            // The project's GitHub repository isn't in Cloud yet: Cloud
+            // connects it, then picks it.
+            .when_some(
+                match &offer {
+                    CloudOffer::Connect(repository) => Some(repository.clone()),
+                    _ => None,
+                },
+                |view, repository| {
+                    view.child(zuse_viewport::creation_style::separator())
+                        .child(
+                            zuse_viewport::creation_style::option(
+                                "cloud-destination",
+                                "Cloud",
+                                "cloud-dither",
+                                false,
+                            )
+                            .debug_selector(|| "cloud-connect".into())
+                            .when(active, |v| v.bg(theme.element_hover))
+                            .child(zuse_viewport::creation_style::meta(if connecting {
+                                "Connecting…"
+                            } else {
+                                "Connect repository"
+                            }))
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    if !this.cloud.connecting {
+                                        this.connect_cloud_repository(repository.clone(), cx);
+                                    }
+                                },
+                            )),
                         )
                 },
             )
@@ -1133,18 +1160,14 @@ impl Pickers {
                         )
                 },
             )
-            // Cloud setup is for Cloud subscribers; local-only builds,
-            // signed-out and unsubscribed accounts leave it out.
-            .when(self.state.read(cx).cloud_access().offers_cloud(), |view| {
+            // Cloud setup is for Cloud subscribers whose Cloud can't run this
+            // chat yet; once it can, setup lives in Settings.
+            .when(needs_setup, |view| {
                 view.child(zuse_viewport::creation_style::separator())
                     .child(
                         zuse_viewport::creation_style::option(
                             "add-computer",
-                            if self.cloud_destination(cx).is_none() {
-                                "Add project to Cloud…"
-                            } else {
-                                "Cloud setup…"
-                            },
+                            "Cloud setup…",
                             "cloud-dither",
                             false,
                         )
@@ -1193,6 +1216,15 @@ impl Pickers {
     }
 }
 
+/// "4 vCPU · 16 GB": what a size gives, without the plan's name for it.
+fn size_resources(size: &zuse_protocol::cloud_billing::plans::SizeOption) -> String {
+    format!(
+        "{} vCPU · {} GB",
+        size.vcpus,
+        size.memory_mib.div_ceil(1024)
+    )
+}
+
 #[cfg(test)]
 mod project_selection_tests {
     use super::*;
@@ -1210,10 +1242,10 @@ mod project_selection_tests {
     struct ComputerRows(Entity<Pickers>);
     impl Render for ComputerRows {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            div().w(px(600.)).h(px(300.)).child(
-                self.0
-                    .update(cx, |pickers, cx| pickers.cloud_computer_rows(cx)),
-            )
+            div()
+                .w(px(600.))
+                .h(px(300.))
+                .child(self.0.update(cx, |pickers, cx| pickers.cloud_rows(cx)))
         }
     }
     struct UnlinkedComputerRows(Entity<Pickers>);
@@ -1340,14 +1372,14 @@ mod project_selection_tests {
                 let labels: Vec<_> = providers::sizes(&p.cloud.context)
                     .iter()
                     .map(providers::size_label)
-                    .chain([p.cloud_computer_title(cx)])
+                    .chain(p.cloud_size_meta(cx))
                     .collect();
                 assert_eq!(
                     labels,
                     [
                         "Standard · 4 vCPU · 16 GB",
                         "Large · 8 vCPU · 32 GB · Cloud Max",
-                        "Computer · Standard · 4 vCPU · 16 GB"
+                        "4 vCPU · 16 GB"
                     ]
                 );
                 for label in labels {
@@ -1383,16 +1415,217 @@ mod project_selection_tests {
             .read_with(cx, |host, cx| {
                 let p = host.0.read(cx);
                 assert_eq!(p.cloud_launch_size("e2b", cx).unwrap(), "large");
-                assert_eq!(
-                    p.cloud_computer_title(cx),
-                    "Computer · Large · 8 vCPU · 32 GB"
-                );
+                assert_eq!(p.cloud_size_meta(cx).as_deref(), Some("8 vCPU · 32 GB"));
             })
             .unwrap();
         handle
             .update(cx, |_, window, _| window.remove_window())
             .unwrap();
         cx.run_until_parked();
+    }
+    /// Cloud is chosen once, in the computer picker: this computer appears
+    /// once however many checkouts it holds, the Cloud row carries its size
+    /// with a submenu, and a chat bound for Cloud has no workspace chip.
+    #[gpui::test]
+    fn cloud_is_one_computer_picker_row_with_its_size_inline(cx: &mut gpui::TestAppContext) {
+        use super::super::workspace::WorkspaceChoice;
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+        });
+        let mut context = provider_context();
+        context["computerCapabilities"]["computerSizes"] = json!([
+            {"id":"default","label":"Standard · 4 vCPU · 16 GB","vcpus":4,"memoryMib":16384,"machineRate":4,"available":true},
+            {"id":"large","label":"Large · 8 vCPU · 32 GB","vcpus":8,"memoryMib":32768,"machineRate":8,"available":true}
+        ]);
+        let checkout = |id: &str| Space {
+            id: id.into(),
+            device_id: "mac".into(),
+            remote_repository: Some("github.com/o/zuse".into()),
+            path: format!("/mac/{id}"),
+            name: Some("zuse".into()),
+            git_detected: true,
+            git_checked_at: None,
+            checkout_id: None,
+            repository_id: Some("github.com/o/zuse".into()),
+            created_at: chrono::DateTime::<chrono::Utc>::UNIX_EPOCH,
+        };
+        let window = cx.add_window(|_, cx| {
+            let state = cx.new(|_| {
+                let mut s = AppState::new();
+                s.apply_cloud_account(json!({"user":{"id":"fixture-user"},"orgId":null}));
+                s.local_device_id = Some("mac".into());
+                s.devices = vec![
+                    serde_json::from_value(json!({
+                        "id":"mac","name":"Mac","platform":"macos","lastSeenAt":null
+                    }))
+                    .unwrap(),
+                ];
+                // This computer holds two checkouts of the project.
+                s.apply_spaces(vec![checkout("zuse"), checkout("zuse-copy")]);
+                s.selected_space = Some("zuse-copy".into());
+                s
+            });
+            UnlinkedComputerRows(cx.new(|cx| {
+                let mut p = Pickers::new(state, cx);
+                p.cloud.owner = Some("fixture-user".into());
+                p.cloud.loaded = true;
+                p.cloud.context = context;
+                p.cloud.rows = vec![json!({
+                    "projectId":"zuse","accountId":"fixture-user","providerId":"boxd",
+                    "repositoryIdentity":"github.com/o/zuse","displayName":"zuse"
+                })];
+                p
+            }))
+        });
+        window
+            .read_with(cx, |host, cx| {
+                let p = host.0.read(cx);
+                assert_eq!(
+                    p.workspace_choices(cx),
+                    [WorkspaceChoice::Worktree, WorkspaceChoice::Local]
+                );
+                assert!(p.shows_workspace_chip(cx));
+                // One row for this computer, on the checkout in use.
+                let rows = p.device_rows(cx);
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0].space.as_ref().unwrap().id, "zuse-copy");
+            })
+            .unwrap();
+        cx.update_window(window.into(), |_, w, cx| w.draw(cx).clear())
+            .unwrap();
+        {
+            let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+            let row = visual
+                .debug_bounds("cloud-destination")
+                .expect("Cloud row painted");
+            let size = visual
+                .debug_bounds("cloud-size-menu")
+                .expect("size sits on the Cloud row");
+            assert!(row.contains(&size.center()));
+            // No separate computer row, and setup isn't offered once set up.
+            assert!(visual.debug_bounds("cloud-computer-options").is_none());
+            assert!(visual.debug_bounds("connect-project-to-cloud").is_none());
+            assert!(visual.debug_bounds("cloud-computer-size-default").is_none());
+            visual.simulate_click(size.center(), gpui::Modifiers::default());
+        }
+        cx.run_until_parked();
+        window
+            .read_with(cx, |host, cx| {
+                let p = host.0.read(cx);
+                assert!(p.cloud.sizes_expanded);
+                assert!(
+                    p.state.read(cx).cloud_project.is_none(),
+                    "opening sizes doesn't pick Cloud"
+                );
+            })
+            .unwrap();
+        cx.update_window(window.into(), |_, w, cx| w.draw(cx).clear())
+            .unwrap();
+        {
+            let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+            assert!(visual.debug_bounds("cloud-computer-size-large").is_some());
+            let row = visual.debug_bounds("cloud-destination").unwrap();
+            visual.simulate_click(
+                gpui::point(row.left() + px(20.), row.center().y),
+                gpui::Modifiers::default(),
+            );
+        }
+        cx.run_until_parked();
+        window
+            .read_with(cx, |host, cx| {
+                let p = host.0.read(cx);
+                assert_eq!(
+                    p.state.read(cx).cloud_project.as_ref().unwrap()["projectId"],
+                    "zuse"
+                );
+                assert!(!p.shows_workspace_chip(cx), "Cloud has no workspace chip");
+            })
+            .unwrap();
+        window.update(cx, |_, w, _| w.remove_window()).unwrap();
+        cx.run_until_parked();
+    }
+    /// A connection that finishes after the chat moved to another project
+    /// lists the repository but leaves the chat where it is.
+    #[gpui::test]
+    fn a_late_connection_does_not_pull_another_project_onto_cloud(cx: &mut gpui::TestAppContext) {
+        let state = cx.new(|_| {
+            let mut s = AppState::new();
+            s.apply_cloud_account(json!({"user":{"id":"fixture-user"},"orgId":null}));
+            s.selected_space = Some("other".into());
+            s
+        });
+        let p = cx.new(|cx| {
+            let mut p = Pickers::new(state.clone(), cx);
+            p.cloud.owner = Some("fixture-user".into());
+            p.cloud.loaded = true;
+            p.cloud.context = provider_context();
+            p.cloud.connecting = true;
+            p
+        });
+        let project = || {
+            Ok(Some(
+                json!({"projectId":"zuse","repositoryIdentity":"github.com/o/zuse",
+                "displayName":"zuse","defaultBranch":"main"}),
+            ))
+        };
+        p.update(cx, |p, cx| {
+            p.finish_cloud_connect(Some("zuse".into()), "fixture-user".into(), project(), cx);
+            assert!(!p.cloud.connecting);
+            assert!(p.state.read(cx).cloud_project.is_none());
+            assert!(p.cloud.rows.iter().any(|r| r["projectId"] == "zuse"));
+            // Still on the project it started from: Cloud is picked.
+            p.cloud.connecting = true;
+            p.finish_cloud_connect(Some("other".into()), "fixture-user".into(), project(), cx);
+            assert!(!p.cloud.connecting);
+            assert_eq!(
+                p.state.read(cx).cloud_project.as_ref().unwrap()["projectId"],
+                "zuse"
+            );
+        });
+    }
+    /// Without remote access the computer chip still offers Cloud to a
+    /// subscriber's GitHub project before Cloud's destinations have loaded.
+    #[gpui::test]
+    fn computer_chip_offers_cloud_before_destinations_load(cx: &mut gpui::TestAppContext) {
+        let space = |remote: Option<&str>| Space {
+            id: "zuse".into(),
+            device_id: "mac".into(),
+            remote_repository: remote.map(str::to_owned),
+            path: "/mac/zuse".into(),
+            name: Some("zuse".into()),
+            git_detected: true,
+            git_checked_at: None,
+            checkout_id: None,
+            repository_id: None,
+            created_at: chrono::DateTime::<chrono::Utc>::UNIX_EPOCH,
+        };
+        for (remote, subscribed, shown) in [
+            (Some("github.com/o/zuse"), true, true),
+            (None, true, false),
+            (Some("github.com/o/zuse"), false, false),
+        ] {
+            let state = cx.new(|_| {
+                let mut s = AppState::new();
+                if subscribed {
+                    s.apply_cloud_account(json!({"user":{"id":"fixture-user"},"orgId":null}));
+                }
+                s.local_device_id = Some("mac".into());
+                s.apply_spaces(vec![space(remote)]);
+                s.selected_space = Some("zuse".into());
+                s
+            });
+            let p = cx.new(|cx| Pickers::new(state, cx));
+            p.update(cx, |p, cx| {
+                assert!(p.cloud.context.is_null());
+                assert_eq!(
+                    p.shows_device_chip(false, cx),
+                    shown,
+                    "{remote:?} {subscribed}"
+                );
+                assert!(p.shows_device_chip(true, cx));
+            });
+        }
     }
     #[gpui::test]
     fn bound_task_locks_provider_and_preserves_sleeping_model_choice(

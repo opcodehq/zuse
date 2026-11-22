@@ -107,6 +107,12 @@ pub(super) fn cloud_machine(state: Option<&str>) -> (Option<&'static str>, bool)
     }
 }
 
+/// Whether a listed cloud computer is up: running, and its runtime not
+/// reported offline. A sleeping, starting or archived one is not.
+pub(super) fn cloud_row_online(row: &serde_json::Value) -> bool {
+    cloud_machine(row["state"].as_str()).1 && row["runtimeState"].as_str() != Some("offline")
+}
+
 fn non_empty(text: Option<&str>) -> Option<String> {
     text.map(str::trim)
         .filter(|text| !text.is_empty())
@@ -440,6 +446,23 @@ mod tests {
         assert_eq!(bare.place_label(), "Cloud");
     }
 
+    #[test]
+    fn a_listed_cloud_computer_is_online_only_while_running() {
+        use serde_json::json;
+        assert!(cloud_row_online(
+            &json!({"state":"ready","runtimeState":"online"})
+        ));
+        assert!(cloud_row_online(&json!({"state":"ready"})));
+        assert!(!cloud_row_online(
+            &json!({"state":"ready","runtimeState":"offline"})
+        ));
+        for state in ["paused", "pausing", "archived", "provisioning", "failed"] {
+            assert!(
+                !cloud_row_online(&json!({"state":state,"runtimeState":"online"})),
+                "{state}"
+            );
+        }
+    }
     #[test]
     fn cloud_machines_read_online_only_while_running() {
         assert_eq!(cloud_machine(Some("ready")), (Some("Running"), true));

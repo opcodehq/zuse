@@ -66,7 +66,21 @@ pub(super) struct Catalog {
     /// shows the server recorded the archive, so a list read before the
     /// archive landed cannot put the row back.
     pending_archive: HashMap<String, PendingArchive>,
+    /// Chats this app just created, by workspace id, until a fresh list has
+    /// them. The account list is read on events; one read before the create
+    /// landed (or no event at all) must not leave a new chat out of the
+    /// sidebar after its pending row is gone.
+    created: Vec<CreatedWorkspace>,
 }
+/// A chat the server confirmed creating, shown until a fresh list has it.
+struct CreatedWorkspace {
+    row: Value,
+    at: std::time::Instant,
+}
+/// How long a created chat stays listed while fresh lists still omit it.
+/// Lists normally catch up within one read; past this the server's list
+/// wins (the chat was deleted elsewhere, say).
+const CREATED_CONFIRM_WINDOW: std::time::Duration = std::time::Duration::from_secs(120);
 /// A task hidden while its archive is in flight or not yet listed.
 struct PendingArchive {
     /// The row as it was listed, restored if the archive fails.
@@ -173,10 +187,69 @@ impl AppState {
             .as_ref()
             .is_some_and(|s| s.matches(self))
         {
-            self.cloud_sidebar.workspaces.clone()
+            let mut rows = self.cloud_sidebar.workspaces.clone();
+            rows.extend(self.unlisted_created().cloned());
+            rows
         } else {
             vec![]
         }
+    }
+    /// Created chats the current list does not have yet.
+    fn unlisted_created(&self) -> impl Iterator<Item = &Value> {
+        let catalog = &self.cloud_sidebar;
+        catalog
+            .created
+            .iter()
+            .map(|created| &created.row)
+            .filter(|row| {
+                !catalog
+                    .workspaces
+                    .iter()
+                    .any(|listed| listed["workspaceId"] == row["workspaceId"])
+                    && !row["workspaceId"]
+                        .as_str()
+                        .is_some_and(|id| catalog.pending_archive.contains_key(id))
+            })
+    }
+    /// The server confirmed creating a chat: list it now, from the create
+    /// response and its launch request, and read the account list again so
+    /// the server's own row replaces it. It stays until a fresh list has it.
+    pub(crate) fn note_created_cloud_workspace(
+        &mut self,
+        workspace: &Value,
+        launch: &Value,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(id) = workspace["workspaceId"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+        else {
+            return;
+        };
+        if self.cloud_sidebar.scope.is_none() {
+            return;
+        }
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut row = workspace.clone();
+        let fill = |row: &mut Value, key: &str, value: Value| {
+            if row[key].is_null() || row[key].as_str().is_some_and(|text| text.trim().is_empty()) {
+                row[key] = value;
+            }
+        };
+        fill(&mut row, "projectId", launch["projectId"].clone());
+        fill(&mut row, "title", launch["firstMessage"].clone());
+        fill(&mut row, "agent", launch["agent"].clone());
+        fill(&mut row, "state", json!("provisioning"));
+        fill(&mut row, "createdAt", json!(now));
+        fill(&mut row, "updatedAt", json!(now));
+        self.cloud_sidebar
+            .created
+            .retain(|created| created.row["workspaceId"].as_str() != Some(id));
+        self.cloud_sidebar.created.push(CreatedWorkspace {
+            row,
+            at: std::time::Instant::now(),
+        });
+        self.retry_cloud_sidebar(cx);
     }
     /// The listed task row for `workspace`, without cloning the catalog.
     pub(crate) fn cloud_sidebar_workspace(&self, workspace: &str) -> Option<&Value> {
@@ -189,6 +262,10 @@ impl AppState {
                     .workspaces
                     .iter()
                     .find(|row| row["workspaceId"].as_str() == Some(workspace))
+                    .or_else(|| {
+                        self.unlisted_created()
+                            .find(|row| row["workspaceId"].as_str() == Some(workspace))
+                    })
             })
             .flatten()
     }
@@ -215,15 +292,28 @@ impl AppState {
     /// Archiving `workspace` starts: drop its row at once and keep it out of
     /// every list until the server confirms. False when it is not listed.
     pub(crate) fn begin_cloud_sidebar_archive(&mut self, workspace: &str) -> bool {
-        let Some(index) = self
+        let listed = self
             .cloud_sidebar
             .workspaces
             .iter()
-            .position(|row| row["workspaceId"].as_str() == Some(workspace))
-        else {
-            return false;
+            .position(|row| row["workspaceId"].as_str() == Some(workspace));
+        let row = match listed {
+            Some(index) => self.cloud_sidebar.workspaces.remove(index),
+            // A chat created here that no list has yet. Its created record
+            // stays (hidden while the archive is pending), so a failed
+            // archive brings it back with its original retention.
+            None => {
+                let Some(created) = self
+                    .cloud_sidebar
+                    .created
+                    .iter()
+                    .find(|created| created.row["workspaceId"].as_str() == Some(workspace))
+                else {
+                    return false;
+                };
+                created.row.clone()
+            }
         };
-        let row = self.cloud_sidebar.workspaces.remove(index);
         self.cloud_sidebar.pending_archive.insert(
             workspace.to_owned(),
             PendingArchive {
@@ -245,6 +335,10 @@ impl AppState {
         if let Some(pending) = self.cloud_sidebar.pending_archive.get_mut(workspace) {
             pending.acknowledged = Some(std::time::Instant::now());
         }
+        // Archived for good: a created record must not bring it back.
+        self.cloud_sidebar
+            .created
+            .retain(|created| created.row["workspaceId"].as_str() != Some(workspace));
         self.cloud_sidebar.workspaces_revision =
             self.cloud_sidebar.workspaces_revision.wrapping_add(1);
         self.retry_cloud_sidebar(cx);
@@ -254,11 +348,19 @@ impl AppState {
         let Some(pending) = self.cloud_sidebar.pending_archive.remove(workspace) else {
             return false;
         };
-        if !self
+        // A created chat no list has yet shows again from its created
+        // record, which kept its retention.
+        let created = self
             .cloud_sidebar
-            .workspaces
+            .created
             .iter()
-            .any(|row| row["workspaceId"].as_str() == Some(workspace))
+            .any(|created| created.row["workspaceId"].as_str() == Some(workspace));
+        if !created
+            && !self
+                .cloud_sidebar
+                .workspaces
+                .iter()
+                .any(|row| row["workspaceId"].as_str() == Some(workspace))
         {
             self.cloud_sidebar.workspaces.push(pending.row);
         }
@@ -292,6 +394,7 @@ impl AppState {
         if access_denied(error) {
             self.cloud_sidebar.projects.clear();
             self.cloud_sidebar.workspaces.clear();
+            self.cloud_sidebar.created.clear();
             self.cloud_sidebar.denied = true;
             self.cloud_sidebar.projects_fresh = false;
             self.cloud_sidebar.workspaces_fresh = false;
@@ -383,6 +486,16 @@ impl AppState {
                             active && acknowledged.elapsed() < ARCHIVE_CONFIRM_WINDOW
                         });
                 }
+                // A fresh list that has a created chat takes over its row;
+                // one still missing it keeps the row for a while.
+                if !provisional {
+                    self.cloud_sidebar.created.retain(|created| {
+                        let listed = rows
+                            .iter()
+                            .any(|row| row["workspaceId"] == created.row["workspaceId"]);
+                        !listed && created.at.elapsed() < CREATED_CONFIRM_WINDOW
+                    });
+                }
                 let pending = &self.cloud_sidebar.pending_archive;
                 self.cloud_sidebar.workspaces = rows
                     .iter()
@@ -444,6 +557,12 @@ async fn request(
     let result = tokio::select! { result=&mut read=>result, _=executor.timer(std::time::Duration::from_secs(30))=>Err(RpcError::Failed("Cloud sidebar request timed out.".into())) };
     (part, provisional, result)
 }
+/// How often the sidebar's workspace list is read again without an event.
+const SIDEBAR_REVALIDATE: std::time::Duration = std::time::Duration::from_secs(60);
+/// What is left of the wait for the interval read due at `due`.
+fn revalidate_wait(due: std::time::Instant, now: std::time::Instant) -> std::time::Duration {
+    due.saturating_duration_since(now)
+}
 /// Account event kinds that can change the sidebar's projects or workspaces.
 /// Project rows change through `environment` events; there is no separate
 /// project or catalog kind.
@@ -491,6 +610,10 @@ pub(super) fn spawn(cx: &mut Context<AppState>, handle: EngineHandle) -> Task<()
                     }
                     if this.update(cx,|state,cx|{if scope.matches(state){state.cloud_sidebar.loading=false;cx.notify();}}).is_err(){return;}
                     let delay=retry_seconds;retry_seconds=if retry{(retry_seconds*2).min(30)}else{2};
+                    // The interval read's deadline is set once per read: a
+                    // failed or timed-out event connection, or an event that
+                    // needs no read, never postpones it.
+                    let revalidate_at=std::time::Instant::now()+SIDEBAR_REVALIDATE;
                     loop {
                         let manual=match this.update(cx,|state,_|state.cloud_sidebar.refresh.clone()){Ok(value)=>value,Err(_)=>return};
                         let executor=cx.background_executor().clone();
@@ -505,10 +628,16 @@ pub(super) fn spawn(cx: &mut Context<AppState>, handle: EngineHandle) -> Task<()
                         let event=async{match &mut events{Some(v)=>v.recv().await,None=>futures::future::pending::<Option<Value>>().await}};
                         let retry_executor=cx.background_executor().clone();
                         let retry_wait=async{if retry{retry_executor.timer(std::time::Duration::from_secs(delay)).await;}else{futures::future::pending::<()>().await;}};
+                        // A missed account event must not leave rows stale
+                        // (a sleeping computer shown running, a new chat
+                        // missing): the list is read again at an interval too.
+                        let revalidate_executor=cx.background_executor().clone();
+                        let revalidate=async{revalidate_executor.timer(revalidate_wait(revalidate_at,std::time::Instant::now())).await;};
                         tokio::select!{biased;
                             value=auth.recv()=>{let Some(value)=value else{continue 'reconnect;};if Scope::from_value(&value).as_ref()!=Some(&scope){pending=Some(value);continue 'account;}},
                             _=manual.notified()=>{load_projects=true;retry_seconds=2;break;},
                             _=retry_wait=>{load_projects=retry_projects;break;},
+                            _=revalidate=>{load_projects=false;break;},
                             connection=connect=>{if let Some(connection)=connection{events=Some(connection);}continue;},
                             value=event=>{
                                 let Some(value)=value else{events=None;continue;};
@@ -532,6 +661,33 @@ pub(super) fn spawn(cx: &mut Context<AppState>, handle: EngineHandle) -> Task<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Each pass of the event loop waits only for what is left until the
+    /// interval read: passes that end without a read (a failed connection,
+    /// an event needing none) never restart the 60 seconds.
+    #[test]
+    fn sidebar_interval_read_keeps_its_deadline_across_passes() {
+        let start = std::time::Instant::now();
+        let due = start + SIDEBAR_REVALIDATE;
+        let mut now = start;
+        let mut waited = std::time::Duration::ZERO;
+        // An unrelated event every 5 s, or a failed connection every 2 s.
+        for step in [5, 2, 5, 2, 5, 45] {
+            let wait = revalidate_wait(due, now);
+            assert!(wait <= SIDEBAR_REVALIDATE - waited);
+            let step = std::time::Duration::from_secs(step);
+            now += step;
+            waited += step;
+        }
+        assert_eq!(
+            revalidate_wait(due, start + SIDEBAR_REVALIDATE),
+            std::time::Duration::ZERO
+        );
+        assert_eq!(
+            revalidate_wait(due, now),
+            std::time::Duration::ZERO,
+            "past due: read now"
+        );
+    }
     #[test]
     fn sidebar_refreshes_only_on_kinds_the_server_sends() {
         for kind in [
@@ -571,6 +727,61 @@ mod tests {
         assert!(state.cloud_sidebar_projects().is_empty());
         assert!(state.cloud_sidebar_workspaces().is_empty());
         assert!(!state.apply_cloud_sidebar_catalog(&context, &list));
+    }
+    /// A chat created here keeps its created-row retention through a failed
+    /// archive, and leaves with everything else when access is denied.
+    #[gpui::test]
+    fn created_rows_survive_a_failed_archive_and_go_with_denied_access(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::AppContext as _;
+        let context = json!({"accountId":"owner","organizationId":null,"ownerId":"owner","projects":[{"projectId":"cloud-project","repositoryIdentity":"github.com/o/app"}]});
+        let empty = json!({"accountId":"owner","organizationId":null,"workspaces":[]});
+        let state = cx.new(|_| {
+            let mut state = AppState::new();
+            state.apply_cloud_account(json!({"user":{"id":"owner"},"orgId":null}));
+            assert!(state.apply_cloud_sidebar_catalog(&context, &empty));
+            state
+        });
+        state.update(cx, |state, cx| {
+            state.note_created_cloud_workspace(
+                &json!({"workspaceId":"fresh","initialSessionId":"fresh-session"}),
+                &json!({"projectId":"cloud-project","firstMessage":"hi"}),
+                cx,
+            );
+            assert!(state.cloud_sidebar_workspace("fresh").is_some());
+            // Archive, then it fails: the row is back as a created row...
+            assert!(state.begin_cloud_sidebar_archive("fresh"));
+            assert!(state.cloud_sidebar_workspace("fresh").is_none());
+            assert!(state.fail_cloud_sidebar_archive("fresh"));
+            assert_eq!(state.cloud_sidebar_workspaces().len(), 1);
+            // ...so a list that doesn't have it yet still keeps it.
+            assert!(state.apply_cloud_sidebar_catalog(&context, &empty));
+            assert!(
+                state.cloud_sidebar_workspace("fresh").is_some(),
+                "a failed archive keeps the created row's retention"
+            );
+            // A successful archive does not bring it back.
+            assert!(state.begin_cloud_sidebar_archive("fresh"));
+            state.acknowledge_cloud_sidebar_archive("fresh", cx);
+            assert!(state.apply_cloud_sidebar_catalog(&context, &empty));
+            assert!(state.cloud_sidebar_workspace("fresh").is_none());
+            // Access denied: a created row goes with the rest.
+            state.note_created_cloud_workspace(
+                &json!({"workspaceId":"other","initialSessionId":"other-session"}),
+                &json!({"projectId":"cloud-project","firstMessage":"hi"}),
+                cx,
+            );
+            assert!(state.cloud_sidebar_workspace("other").is_some());
+            let scope = Scope::from_value(&json!({"user":{"id":"owner"},"orgId":null})).unwrap();
+            state.sidebar_error(
+                &scope,
+                Part::Workspaces,
+                &RpcError::Capability("workspace_access_denied".into()),
+            );
+            assert!(state.cloud_sidebar_workspace("other").is_none());
+            assert!(state.cloud_sidebar_workspaces().is_empty());
+        });
     }
 }
 

@@ -739,7 +739,7 @@ impl Wizard {
                     .gap(px(12.))
                     .child(Self::point(
                         theme,
-                        icons::BOT,
+                        icons::AGENT,
                         tr(cx, msg::onboarding::flow_welcome_point_agents),
                     ))
                     .child(Self::point(

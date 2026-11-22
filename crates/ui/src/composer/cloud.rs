@@ -1707,6 +1707,16 @@ impl Composer {
         cx.emit(ComposerEvent::CloudLaunchChanged);
         cx.notify();
     }
+    /// The server admits this tab's pending creation, as its create response
+    /// does: the production hand-off to the shell.
+    #[cfg(test)]
+    pub(crate) fn admit_pending_cloud_creation_for_test(
+        &mut self,
+        workspace: Value,
+        cx: &mut Context<Self>,
+    ) {
+        self.finish_admitted_launch(workspace, "owner".into(), None, cx);
+    }
     /// Run `update` against the launch that `key`'s tab sent. While that tab
     /// is in front this is the composer's own launch; otherwise the parked
     /// launch is swapped in for the update and parked again after, so the

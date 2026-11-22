@@ -1272,3 +1272,26 @@ native-whats_new_menu = Neuerungen
 
 
 
+
+# Context: composer tray, Background work row: running subagents. $count (number).
+native-background_work_agents_plural =
+    { $count ->
+        [one] 1 Agent
+       *[other] { $count } Agenten
+    }
+
+# Context: composer tray, Background work row: running background processes. $count (number).
+native-background_work_tasks_plural =
+    { $count ->
+        [one] 1 Aufgabe
+       *[other] { $count } Aufgaben
+    }
+
+# Context: composer tray, accessible label of the Background work row while collapsed.
+native-background_work_expand = Hintergrundarbeit anzeigen
+
+# Context: composer tray, accessible label of the Background work row while expanded.
+native-background_work_collapse = Hintergrundarbeit ausblenden
+
+# Context: composer tray, accessible label of a running subagent row; opens its transcript.
+native-background_work_open_agent = Agent öffnen

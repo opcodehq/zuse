@@ -220,6 +220,13 @@ impl Store {
         for row in rows.into_iter().take(limit) {
             let text = |key: &str| row[key].as_str().map(str::to_owned).ok_or_else(invalid);
             let kind = text("resource_kind")?;
+            // Machine-image builds settle under their own kind; they are
+            // shown with the other image builds.
+            let kind = if kind == super::settlement::MACHINE_IMAGE {
+                "build".to_owned()
+            } else {
+                kind
+            };
             if !matches!(kind.as_str(), "workspace" | "build" | "other" | "snapshot") {
                 return Err(invalid());
             }
