@@ -23,6 +23,12 @@ pub(super) struct ZapperUi {
     /// Parsed Drive documents by path, with the version they were parsed at.
     documents: std::collections::HashMap<String, (u32, std::sync::Arc<crate::markdown::BlockTree>)>,
     pub(super) issues: Option<Entity<zuse_viewport::zapper_issues::IssuePanel>>,
+    /// The issue surface's selection when it last notified. Only a change
+    /// in it is the surface opening an issue; its other notifications (a
+    /// hover, a sync, the click that opened a pull request) leave the active
+    /// tab alone, since the surface keeps its last issue while another tab
+    /// shows.
+    issue_followed: Option<String>,
     pull_request_page: Option<(
         String,
         Entity<crate::pull_request_detail::PullRequestDetailPage>,
@@ -1768,10 +1774,13 @@ impl Shell {
             // issue). Each one becomes a tab instead of replacing the list.
             cx.observe(&panel, |this, panel, cx| {
                 let selected = panel.read(cx).selected_id().map(str::to_owned);
-                if let Some(id) = selected
-                    && this.zapper_ui.tabs.active_issue() != Some(id.as_str())
-                {
-                    this.show_zapper_page(ZapperPage::Issue(id), cx);
+                if selected != this.zapper_ui.issue_followed {
+                    this.zapper_ui.issue_followed = selected.clone();
+                    if let Some(id) = selected
+                        && this.zapper_ui.tabs.active_issue() != Some(id.as_str())
+                    {
+                        this.show_zapper_page(ZapperPage::Issue(id), cx);
+                    }
                 }
                 cx.notify();
             })

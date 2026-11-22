@@ -1038,3 +1038,90 @@ fn a_pull_request_and_a_diff_in_a_plain_chat_still_open_in_the_right_pane(cx: &m
         assert_eq!(shell.right_tabs["parent"].len(), 4);
     });
 }
+
+/// Give the setup's Zapper issue ZAP-18 with pull request `url` linked.
+fn add_issue_with_pull_request(shell: &mut Shell, url: &str, cx: &mut Context<Shell>) {
+    let issue: zuse_protocol::zappers::ZapperIssue = serde_json::from_value(serde_json::json!({
+        "id": "issue-18", "number": 18, "createdAt": 0, "updatedAt": 0,
+        "details": { "title": "Rename", "description": "", "dueDate": null },
+        "threads": [], "activity": [],
+        "pullRequests": [{ "url": url, "title": "Rename it" }]
+    }))
+    .unwrap();
+    shell
+        .state
+        .update(cx, |state, _| state.zappers[0].issues = vec![issue]);
+}
+
+/// The issue surface notifies for its own reasons (hover, a sync, the click
+/// that opened a pull request); none of them may pull the panel back to the
+/// issue it last showed.
+fn notify_issue_surface(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
+    let panel = shell.read_with(cx, |shell, _| shell.zapper_ui.issues.clone().unwrap());
+    panel.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear());
+}
+
+#[gpui::test]
+fn a_pull_request_tab_beside_its_issue_tab_shows_the_pull_request(cx: &mut TestAppContext) {
+    let (shell, cx) = zapper_chat(cx);
+    let url = "https://github.com/a/b/pull/315";
+    let pr = ZapperPage::PullRequest(url.into());
+    let issue = ZapperPage::Issue("issue-18".into());
+    shell.update(cx, |shell, cx| {
+        add_issue_with_pull_request(shell, url, cx);
+        shell.show_in_zapper_panel(issue.clone(), cx);
+    });
+    cx.update(|window, cx| window.draw(cx).clear());
+
+    // The pull request row on the issue page opens the pull request.
+    let panel = shell.read_with(cx, |shell, cx| {
+        let panel = shell.zapper_ui.issues.clone().expect("issue surface drawn");
+        assert_eq!(panel.read(cx).selected_id(), Some("issue-18"));
+        panel
+    });
+    panel.update(cx, |_, cx| {
+        cx.emit(zuse_viewport::zapper_issues::IssueEvent::OpenPullRequest(
+            url.into(),
+        ));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear());
+    notify_issue_surface(&shell, cx);
+    shell.read_with(cx, |shell, cx| {
+        assert_zapper_panel_hosts(shell, cx);
+        assert_eq!(shell.zapper_tabs().open_tabs(), [issue.clone(), pr.clone()]);
+        assert_eq!(shell.zapper_tabs().active(), &pr);
+    });
+
+    // The issue tab shows the issue again.
+    shell.update(cx, |shell, cx| shell.show_zapper_page(issue.clone(), cx));
+    cx.update(|window, cx| window.draw(cx).clear());
+    notify_issue_surface(&shell, cx);
+    shell.read_with(cx, |shell, cx| {
+        assert_eq!(shell.zapper_tabs().active(), &issue);
+        assert_eq!(panel.read(cx).selected_id(), Some("issue-18"));
+    });
+
+    // The pull request tab shows the pull request, and stays on it.
+    shell.update(cx, |shell, cx| shell.show_zapper_page(pr.clone(), cx));
+    cx.update(|window, cx| window.draw(cx).clear());
+    notify_issue_surface(&shell, cx);
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.zapper_tabs().active(), &pr);
+        assert_eq!(shell.zapper_tabs().open_tabs().len(), 2);
+    });
+
+    // A row in the issue surface still opens its issue as a tab.
+    shell.update(cx, |shell, cx| {
+        shell.show_zapper_page(ZapperPage::Section(zapper_panel::ZapperTab::Issues), cx)
+    });
+    cx.update(|window, cx| window.draw(cx).clear());
+    panel.update(cx, |panel, cx| panel.show_issue("issue-18".into(), cx));
+    cx.run_until_parked();
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.zapper_tabs().active(), &issue)
+    });
+}
