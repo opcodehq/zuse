@@ -8,13 +8,13 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-use zuse_protocol::presentation::zot_mascots::{self, Mood};
-use zuse_protocol::zots::*;
+use zuse_protocol::presentation::zapper_mascots::{self, Mood};
+use zuse_protocol::zappers::*;
 use zuse_ui::*;
 use zuse_viewport::zapper_avatar::{
     ZapperFace, person_avatar, prepare_image, unassigned_avatar, zapper_avatar, zapper_face,
 };
-use zuse_viewport::zot_issues::{IssuePanel, ThreadState};
+use zuse_viewport::zapper_issues::{IssuePanel, ThreadState};
 
 async fn pause(cx: &mut AsyncApp) {
     cx.background_executor()
@@ -41,36 +41,44 @@ async fn capture(window: AnyWindowHandle, cx: &mut AsyncApp, path: &Path) -> any
     Ok(())
 }
 
-fn issue(number: u32, title: &str, status: ZotIssueStatus, assigned: bool, pr: bool) -> ZotIssue {
+fn issue(
+    number: u32,
+    title: &str,
+    status: ZapperIssueStatus,
+    assigned: bool,
+    pr: bool,
+) -> ZapperIssue {
     let now = chrono::Utc::now().timestamp_millis();
-    ZotIssue {
+    ZapperIssue {
         id: format!("issue-{number}"),
         number,
-        details: ZotIssueDetails {
+        details: ZapperIssueDetails {
             title: title.into(),
             description: "Make the flow work end to end and verify it on staging.".into(),
             status,
             priority: if number % 3 == 0 {
-                ZotIssuePriority::High
+                ZapperIssuePriority::High
             } else {
-                ZotIssuePriority::Normal
+                ZapperIssuePriority::Normal
             },
             assigned,
             owner: Some(match status {
-                ZotIssueStatus::NeedsYou => ZotIssueOwner::User,
-                ZotIssueStatus::InProgress | ZotIssueStatus::InReview => ZotIssueOwner::Thread {
-                    chat_id: format!("zot-worker-{number}"),
-                },
-                _ => ZotIssueOwner::Zapper,
+                ZapperIssueStatus::NeedsYou => ZapperIssueOwner::User,
+                ZapperIssueStatus::InProgress | ZapperIssueStatus::InReview => {
+                    ZapperIssueOwner::Thread {
+                        chat_id: format!("zapper-worker-{number}"),
+                    }
+                }
+                _ => ZapperIssueOwner::Zapper,
             }),
             done_criteria: "Works end to end on staging with a passing smoke test.".into(),
             ..Default::default()
         },
         created_at: now - 54_000_000,
         updated_at: now - i64::from(number) * 3_600_000,
-        threads: vec![format!("zot-worker-{number}")],
+        threads: vec![format!("zapper-worker-{number}")],
         pull_requests: if pr {
-            vec![ZotIssuePullRequest {
+            vec![ZapperIssuePullRequest {
                 url: format!("https://github.com/acme/app/pull/{}", 120 + number),
                 title: title.into(),
             }]
@@ -81,35 +89,35 @@ fn issue(number: u32, title: &str, status: ZotIssueStatus, assigned: bool, pr: b
     }
 }
 
-fn sample_zapper(issues: Vec<ZotIssue>, workers: usize) -> Zot {
-    Zot {
+fn sample_zapper(issues: Vec<ZapperIssue>, workers: usize) -> Zapper {
+    Zapper {
         id: "release".into(),
         revision: 4,
         activity_revision: 0,
-        config: ZotConfig {
+        config: ZapperConfig {
             name: "Release".into(),
             purpose: "Keep staging healthy and ship the cloud chat work.".into(),
             home_device_id: "local".into(),
             repositories: vec![],
-            coordinator_model: ZotModel {
+            coordinator_model: ZapperModel {
                 harness: "claude-code".into(),
                 model: None,
             },
             worker_device_id: "local".into(),
             max_concurrent_workers: 3,
             max_followups: 3,
-            avatar: Some(ZotAvatar {
+            avatar: Some(ZapperAvatar {
                 mascot: "bolt".into(),
                 color: "violet".into(),
             }),
             avatar_image: None,
         },
-        status: ZotStatus::Active,
-        coordinator_chat_id: "zot-release-0".into(),
+        status: ZapperStatus::Active,
+        coordinator_chat_id: "zapper-release-0".into(),
         previous_coordinator_chats: vec![],
         workers: (1..=workers as u32)
-            .map(|n| ZotWorker {
-                chat_id: format!("zot-worker-{n}"),
+            .map(|n| ZapperWorker {
+                chat_id: format!("zapper-worker-{n}"),
                 device_id: "local".into(),
                 space_id: "project".into(),
                 objective: [
@@ -176,9 +184,9 @@ impl Render for Board {
         };
         let mut faces = div().flex().gap(px(18.)).items_end();
         let mut sidebar = div().flex().flex_col().gap(px(6.)).w(px(190.));
-        for (index, mascot) in zot_mascots::MASCOTS.iter().enumerate() {
-            let color = &zot_mascots::COLORS[(index * 3 + 4) % zot_mascots::COLORS.len()];
-            let avatar = ZotAvatar {
+        for (index, mascot) in zapper_mascots::MASCOTS.iter().enumerate() {
+            let color = &zapper_mascots::COLORS[(index * 3 + 4) % zapper_mascots::COLORS.len()];
+            let avatar = ZapperAvatar {
                 mascot: mascot.id.into(),
                 color: color.id.into(),
             };
@@ -268,7 +276,7 @@ impl Render for Board {
             .flex_col()
             .gap(px(10.))
             .child(header(
-                ZapperFace::mascot(ZotAvatar {
+                ZapperFace::mascot(ZapperAvatar {
                     mascot: "hex".into(),
                     color: "teal".into(),
                 }),
@@ -291,7 +299,7 @@ impl Render for Board {
             (Mood::NeedsYou, "Needs you"),
             (Mood::Awake, "Awake"),
         ] {
-            let face = ZapperFace::mascot(ZotAvatar {
+            let face = ZapperFace::mascot(ZapperAvatar {
                 mascot: "bolt".into(),
                 color: "violet".into(),
             })
@@ -369,50 +377,50 @@ fn main() -> anyhow::Result<()> {
                 issue(
                     1,
                     "Staging: test access mode and queued files on a new image",
-                    ZotIssueStatus::InProgress,
+                    ZapperIssueStatus::InProgress,
                     true,
                     false,
                 ),
                 issue(
                     2,
                     "Web app sends cloud chat files straight to the computer",
-                    ZotIssueStatus::Blocked,
+                    ZapperIssueStatus::Blocked,
                     true,
                     false,
                 ),
                 issue(
                     3,
                     "Pick the staging machine image to test",
-                    ZotIssueStatus::NeedsYou,
+                    ZapperIssueStatus::NeedsYou,
                     false,
                     false,
                 ),
                 issue(
                     4,
                     "Queue edits and the history window send files",
-                    ZotIssueStatus::InReview,
+                    ZapperIssueStatus::InReview,
                     true,
                     true,
                 ),
                 issue(
                     5,
                     "Keep the private key out of computers and workloads",
-                    ZotIssueStatus::InReview,
+                    ZapperIssueStatus::InReview,
                     true,
                     true,
                 ),
                 issue(
                     6,
                     "Remove the old upload path",
-                    ZotIssueStatus::Done,
+                    ZapperIssueStatus::Done,
                     true,
                     false,
                 ),
             ];
             let board = sample_zapper(issues, 3);
             let states = [
-                ("zot-worker-1".to_owned(), ThreadState::Working),
-                ("zot-worker-2".to_owned(), ThreadState::NeedsYou),
+                ("zapper-worker-1".to_owned(), ThreadState::Working),
+                ("zapper-worker-2".to_owned(), ThreadState::NeedsYou),
             ]
             .into_iter()
             .collect::<std::collections::HashMap<_, _>>();
@@ -426,10 +434,10 @@ fn main() -> anyhow::Result<()> {
                         ..Default::default()
                     },
                     |_, cx| {
-                        let make = |zot: Zot, overview: bool, cx: &mut gpui::App| {
+                        let make = |zapper: Zapper, overview: bool, cx: &mut gpui::App| {
                             let states = states.clone();
                             cx.new(|cx| {
-                                let mut panel = IssuePanel::new(zot, overview);
+                                let mut panel = IssuePanel::new(zapper, overview);
                                 panel.thread_states(states, cx);
                                 panel
                             })
@@ -439,7 +447,7 @@ fn main() -> anyhow::Result<()> {
                         let empty = make(sample_zapper(vec![], 0), true, cx);
                         cx.new(|_| Board {
                             picture: ZapperFace {
-                                avatar: ZotAvatar {
+                                avatar: ZapperAvatar {
                                     mascot: "bolt".into(),
                                     color: "coral".into(),
                                 },

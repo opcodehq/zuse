@@ -2,25 +2,25 @@
 use super::*;
 use crate::assets::icon;
 use crate::shell::{BORDER, FAINT, MUTED, RAISED, TEXT, column, icon_button, row};
-use zuse_protocol::presentation::zot_panel::{ZotTab, ZotTabs, zot_owns_chat};
-use zuse_protocol::{control as api, zots::*};
+use zuse_protocol::presentation::zapper_panel::{ZapperTab, ZapperTabs, zapper_owns_chat};
+use zuse_protocol::{control as api, zappers::*};
 
 /// The selected Zapper's inspector width; the shell reserves the same space.
-pub(crate) const ZOT_PANEL_WIDTH: f32 = 520.;
+pub(crate) const ZAPPER_PANEL_WIDTH: f32 = 520.;
 
 #[derive(Default)]
-pub(super) struct ZotView {
-    pub items: Vec<Zot>,
+pub(super) struct ZapperView {
+    pub items: Vec<Zapper>,
     pub watches: HashMap<u64, String>,
     pub form: Option<Form>,
     spaces: Vec<Value>,
     devices: Vec<Value>,
-    files: Vec<ZotFile>,
-    events: Vec<ZotEvent>,
-    tabs: ZotTabs,
-    issues: Option<Entity<crate::zot_issues::IssuePanel>>,
+    files: Vec<ZapperFile>,
+    events: Vec<ZapperEvent>,
+    tabs: ZapperTabs,
+    issues: Option<Entity<crate::zapper_issues::IssuePanel>>,
     pull_request: Option<String>,
-    document: Option<ZotFile>,
+    document: Option<ZapperFile>,
     history: bool,
     pending: Option<u64>,
     /// Whether the pending command came from the issue panel, so only its own
@@ -28,7 +28,7 @@ pub(super) struct ZotView {
     pending_issue: bool,
     issue_command: bool,
     selection: Option<String>,
-    retry: Option<ZotCommand>,
+    retry: Option<ZapperCommand>,
     file_request: Option<u64>,
     event_request: Option<u64>,
     /// Thread whose actions menu is open, and where it was opened.
@@ -36,45 +36,60 @@ pub(super) struct ZotView {
 }
 pub(super) struct Form {
     id: String,
-    zot: Option<Zot>,
+    zapper: Option<Zapper>,
     kind: FormKind,
     inputs: Vec<(&'static str, Entity<input::TextInput>)>,
-    repositories: Vec<ZotRepository>,
+    repositories: Vec<ZapperRepository>,
     home: String,
     worker_device: String,
 }
 enum FormKind {
     Config,
-    File(ZotFile),
+    File(ZapperFile),
     Worker(Option<String>),
-    Decision(ZotDecision),
+    Decision(ZapperDecision),
     Delete,
 }
 
 impl WorkspaceView {
-    pub(super) fn watch_zot_home(&mut self, home: String) {
-        if self.zots.watches.values().any(|id| id == &home) {
+    /// Send a Zapper call under its pre-rename name and fields: this hosted
+    /// client can reach an engine that predates the rename, and every engine
+    /// accepts the old names. Replies are still matched under the current
+    /// name. Legacy, remove after one release.
+    fn zapper_call(&mut self, method: &'static str, params: Value) -> u64 {
+        let wire = zuse_protocol::zappers::legacy::legacy_method(method).unwrap_or(method);
+        let id = self.call(
+            wire,
+            zuse_protocol::zappers::legacy::to_legacy_params(params),
+        );
+        if let Some(pending) = self.pending.get_mut(&id) {
+            *pending = method.into();
+        }
+        id
+    }
+    pub(super) fn watch_zapper_home(&mut self, home: String) {
+        if self.zappers.watches.values().any(|id| id == &home) {
             return;
         }
-        let id = self.call(api::WATCH_ZOTS, json!({"targetDeviceId":home}));
-        self.zots.watches.insert(id, home);
+        let id = self.zapper_call(api::WATCH_ZAPPERS, json!({"targetDeviceId":home}));
+        self.zappers.watches.insert(id, home);
     }
-    pub(super) fn selected_zot(&self) -> Option<Zot> {
+    pub(super) fn selected_zapper(&self) -> Option<Zapper> {
         let id = self.selected.as_ref()?.get("id")?.as_str()?;
-        self.zots
+        self.zappers
             .items
             .iter()
             .find(|z| z.coordinator_chat_id == id)
             .cloned()
     }
-    pub(super) fn refresh_zot(&mut self) {
-        if let Some(zot) = self.selected_zot() {
-            let params = json!({"zotId":zot.id,"targetDeviceId":zot.config.home_device_id,"history":self.zots.history});
-            self.zots.file_request = Some(self.call(api::ZOT_FILES, params.clone()));
-            self.zots.event_request = Some(self.call(api::ZOT_EVENTS, params));
+    pub(super) fn refresh_zapper(&mut self) {
+        if let Some(zapper) = self.selected_zapper() {
+            let params = json!({"zapperId":zapper.id,"targetDeviceId":zapper.config.home_device_id,"history":self.zappers.history});
+            self.zappers.file_request = Some(self.zapper_call(api::ZAPPER_FILES, params.clone()));
+            self.zappers.event_request = Some(self.zapper_call(api::ZAPPER_EVENTS, params));
         }
     }
-    pub(super) fn receive_zot(
+    pub(super) fn receive_zapper(
         &mut self,
         id: u64,
         method: &str,
@@ -83,13 +98,13 @@ impl WorkspaceView {
     ) -> bool {
         let value = frame.get("item").or_else(|| frame.get("ok"));
         if method == methods::WATCH_CHATS {
-            if let (Some(value), Some(selected)) = (value, self.zots.selection.clone()) {
+            if let (Some(value), Some(selected)) = (value, self.zappers.selection.clone()) {
                 if let Some(chat) = value
                     .as_array()
                     .and_then(|chats| chats.iter().find(|c| c["id"] == selected))
                     .cloned()
                 {
-                    self.zots.selection = None;
+                    self.zappers.selection = None;
                     self.select(chat, cx);
                 }
             }
@@ -97,34 +112,34 @@ impl WorkspaceView {
         }
         if !matches!(
             method,
-            api::WATCH_ZOTS
-                | api::ZOT_COMMAND
-                | api::ZOT_FILES
-                | api::ZOT_EVENTS
+            api::WATCH_ZAPPERS
+                | api::ZAPPER_COMMAND
+                | api::ZAPPER_FILES
+                | api::ZAPPER_EVENTS
                 | methods::WATCH_SPACES
                 | methods::WATCH_DEVICES
         ) {
             return false;
         }
         if let Some(error) = frame.get("err").and_then(Value::as_str) {
-            if method != api::WATCH_ZOTS {
+            if method != api::WATCH_ZAPPERS {
                 self.error = Some(error.into());
             }
-            if self.zots.pending == Some(id) {
+            if self.zappers.pending == Some(id) {
                 // The engine answered: nothing was written, so the next
                 // attempt is a new command at the current revision.
                 if !command_outcome_unknown(error) {
-                    self.zots.retry = None;
+                    self.zappers.retry = None;
                 }
                 if let Some(panel) = self
-                    .zots
+                    .zappers
                     .issues
                     .as_ref()
-                    .filter(|_| self.zots.pending_issue)
+                    .filter(|_| self.zappers.pending_issue)
                 {
                     panel.update(cx, |p, cx| p.failed(error.to_owned(), cx));
                 }
-                self.zots.pending = None;
+                self.zappers.pending = None;
             }
             self.pending.remove(&id);
             cx.notify();
@@ -132,64 +147,71 @@ impl WorkspaceView {
         }
         if let Some(value) = value {
             match method {
-                api::WATCH_ZOTS => {
-                    if let Ok(items) = serde_json::from_value::<Vec<Zot>>(value.clone()) {
-                        let home = self.zots.watches.get(&id).cloned().unwrap_or_default();
-                        let old = self.selected_zot();
-                        self.zots.items.retain(|z| z.config.home_device_id != home);
-                        crate::zapper_avatar::remember_zots(&items);
-                        self.zots.items.extend(items);
-                        if old != self.selected_zot() {
-                            self.refresh_zot();
+                api::WATCH_ZAPPERS => {
+                    if let Ok(items) = serde_json::from_value::<Vec<Zapper>>(value.clone()) {
+                        let home = self.zappers.watches.get(&id).cloned().unwrap_or_default();
+                        let old = self.selected_zapper();
+                        self.zappers
+                            .items
+                            .retain(|z| z.config.home_device_id != home);
+                        crate::zapper_avatar::remember_zappers(&items);
+                        self.zappers.items.extend(items);
+                        if old != self.selected_zapper() {
+                            self.refresh_zapper();
                         }
                     }
                 }
                 methods::WATCH_SPACES => {
-                    self.zots.spaces = value.as_array().cloned().unwrap_or_default()
+                    self.zappers.spaces = value.as_array().cloned().unwrap_or_default()
                 }
                 methods::WATCH_DEVICES => {
-                    self.zots.devices = value.as_array().cloned().unwrap_or_default();
+                    self.zappers.devices = value.as_array().cloned().unwrap_or_default();
                     let devices = self
-                        .zots
+                        .zappers
                         .devices
                         .iter()
                         .filter_map(|d| d["id"].as_str().map(str::to_owned))
                         .collect::<Vec<_>>();
                     for device in devices {
-                        self.watch_zot_home(device);
+                        self.watch_zapper_home(device);
                     }
                 }
-                api::ZOT_COMMAND if self.zots.pending == Some(id) => {
-                    self.zots.pending = None;
-                    self.zots.retry = None;
+                api::ZAPPER_COMMAND if self.zappers.pending == Some(id) => {
+                    self.zappers.pending = None;
+                    self.zappers.retry = None;
                     if let Some(panel) = self
-                        .zots
+                        .zappers
                         .issues
                         .as_ref()
-                        .filter(|_| self.zots.pending_issue)
+                        .filter(|_| self.zappers.pending_issue)
                     {
                         panel.update(cx, |p, cx| p.committed(cx));
                     }
-                    self.zots.form = None;
-                    if let Ok(Some(zot)) = serde_json::from_value::<Option<Zot>>(value.clone()) {
+                    self.zappers.form = None;
+                    if let Ok(Some(zapper)) =
+                        serde_json::from_value::<Option<Zapper>>(value.clone())
+                    {
                         if let Some(chat) = self
                             .chats
                             .iter()
-                            .find(|c| c["id"] == zot.coordinator_chat_id)
+                            .find(|c| c["id"] == zapper.coordinator_chat_id)
                             .cloned()
                         {
                             self.select(chat, cx);
                         } else {
-                            self.zots.selection = Some(zot.coordinator_chat_id);
+                            self.zappers.selection = Some(zapper.coordinator_chat_id);
                         }
                     }
-                    self.refresh_zot();
+                    self.refresh_zapper();
                 }
-                api::ZOT_FILES if self.zots.file_request == Some(id) => {
-                    self.zots.files = serde_json::from_value(value.clone()).unwrap_or_default()
+                api::ZAPPER_FILES if self.zappers.file_request == Some(id) => {
+                    self.zappers.files = serde_json::from_value(value.clone()).unwrap_or_default()
                 }
-                api::ZOT_EVENTS if self.zots.event_request == Some(id) => {
-                    self.zots.events = serde_json::from_value(value.clone()).unwrap_or_default()
+                api::ZAPPER_EVENTS if self.zappers.event_request == Some(id) => {
+                    self.zappers.events = serde_json::from_value(
+                        zuse_protocol::zappers::legacy::events_from_legacy(value.clone()),
+                    )
+                    .unwrap_or_default()
                 }
                 _ => {}
             }
@@ -205,7 +227,7 @@ impl WorkspaceView {
         cx.notify();
         true
     }
-    pub(super) fn zot_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn zapper_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let selected = self
             .selected
             .as_ref()
@@ -220,14 +242,14 @@ impl WorkspaceView {
                 .text_color(rgb(FAINT))
                 .child("Zappers")
                 .child(
-                    icon_button("new-zot", "plus", "New Zapper")
+                    icon_button("new-zapper", "plus", "New Zapper")
                         .size(px(20.))
                         .on_click(cx.listener(|this, _, window, cx| {
-                            this.open_zot_form(None, FormKind::Config, window, cx)
+                            this.open_zapper_form(None, FormKind::Config, window, cx)
                         })),
                 ),
         );
-        for z in &self.zots.items {
+        for z in &self.zappers.items {
             let id = z.coordinator_chat_id.clone();
             let active = selected.as_deref() == Some(id.as_str())
                 || z.previous_coordinator_chats
@@ -244,7 +266,7 @@ impl WorkspaceView {
                 .to_string();
             list = list.child(
                 row()
-                    .id(SharedString::from(format!("zot-{}", z.id)))
+                    .id(SharedString::from(format!("zapper-{}", z.id)))
                     .role(Role::Button)
                     .aria_label(SharedString::from(z.config.name.clone()))
                     .h(px(26.))
@@ -274,7 +296,7 @@ impl WorkspaceView {
                             .truncate()
                             .child(z.config.name.clone()),
                     )
-                    .when(z.status != ZotStatus::Active, |d| {
+                    .when(z.status != ZapperStatus::Active, |d| {
                         d.child(
                             div()
                                 .text_size(px(11.))
@@ -293,19 +315,19 @@ impl WorkspaceView {
                                 .child(count.to_string()),
                         )
                     })
-                    .on_click(cx.listener(move |this, _, _, cx| this.open_zot_chat(&id, cx))),
+                    .on_click(cx.listener(move |this, _, _, cx| this.open_zapper_chat(&id, cx))),
             );
-            // A Zot's threads live under it instead of under their projects.
+            // A Zapper's threads live under it instead of under their projects.
             let threads: Vec<_> = z
                 .workers
                 .iter()
-                .filter(|w| !self.zot_thread_archived(&w.chat_id))
+                .filter(|w| !self.zapper_thread_archived(&w.chat_id))
                 .collect();
             let total = threads.len();
             for (index, worker) in threads.into_iter().enumerate() {
                 let chat = worker.chat_id.clone();
                 let current = selected.as_deref() == Some(chat.as_str());
-                let (dot, _) = thread_state(self.zot_thread_status(&chat));
+                let (dot, _) = thread_state(self.zapper_thread_status(&chat));
                 let title = self
                     .chats
                     .iter()
@@ -315,7 +337,7 @@ impl WorkspaceView {
                     .unwrap_or_else(|| worker.objective.clone());
                 list = list.child(
                     row()
-                        .id(SharedString::from(format!("zot-thread-{chat}")))
+                        .id(SharedString::from(format!("zapper-thread-{chat}")))
                         .role(Role::Button)
                         .aria_label(SharedString::from(title.clone()))
                         .relative()
@@ -332,7 +354,7 @@ impl WorkspaceView {
                         .when(!current, |d| {
                             d.hover(|d| d.bg(rgb(RAISED)).text_color(rgb(TEXT)))
                         })
-                        // Tree guide joining the threads to their Zot.
+                        // Tree guide joining the threads to their Zapper.
                         .child(
                             div()
                                 .absolute()
@@ -353,29 +375,31 @@ impl WorkspaceView {
                         )
                         .child(div().flex_1().min_w_0().truncate().child(title))
                         .child(div().size(px(6.)).flex_none().rounded_full().bg(dot))
-                        .on_click(cx.listener(move |this, _, _, cx| this.open_zot_chat(&chat, cx))),
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.open_zapper_chat(&chat, cx)),
+                        ),
                 );
             }
         }
         list.into_any_element()
     }
-    fn open_zot_form(
+    fn open_zapper_form(
         &mut self,
-        zot: Option<Zot>,
+        zapper: Option<Zapper>,
         kind: FormKind,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let home = zot
+        let home = zapper
             .as_ref()
             .map(|z| z.config.home_device_id.clone())
             .or_else(|| self.device_id.clone())
             .unwrap_or_default();
-        let repositories = zot
+        let repositories = zapper
             .as_ref()
             .map(|z| z.config.repositories.clone())
             .unwrap_or_default();
-        let worker_device = zot
+        let worker_device = zapper
             .as_ref()
             .map(|z| z.config.worker_device_id.clone())
             .unwrap_or_else(|| home.clone());
@@ -383,13 +407,15 @@ impl WorkspaceView {
             FormKind::Config => vec![
                 (
                     "Name",
-                    zot.as_ref()
+                    zapper
+                        .as_ref()
                         .map(|z| z.config.name.clone())
                         .unwrap_or_default(),
                 ),
                 (
                     "Purpose",
-                    zot.as_ref()
+                    zapper
+                        .as_ref()
                         .map(|z| z.config.purpose.clone())
                         .unwrap_or_default(),
                 ),
@@ -425,12 +451,12 @@ impl WorkspaceView {
                 (name, input)
             })
             .collect();
-        self.zots.form = Some(Form {
-            id: zot
+        self.zappers.form = Some(Form {
+            id: zapper
                 .as_ref()
                 .map(|z| z.id.clone())
                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
-            zot,
+            zapper,
             kind,
             inputs,
             repositories,
@@ -441,56 +467,56 @@ impl WorkspaceView {
         self.project_picker = false;
         cx.notify();
     }
-    fn zot_action(&mut self, zot: &Zot, action: ZotAction, cx: &mut Context<Self>) {
-        self.send_zot(
-            zot.id.clone(),
-            Some(zot.revision),
-            zot.config.home_device_id.clone(),
+    fn zapper_action(&mut self, zapper: &Zapper, action: ZapperAction, cx: &mut Context<Self>) {
+        self.send_zapper(
+            zapper.id.clone(),
+            Some(zapper.revision),
+            zapper.config.home_device_id.clone(),
             action,
             cx,
         );
     }
-    fn send_zot(
+    fn send_zapper(
         &mut self,
         id: String,
         revision: Option<u32>,
         home: String,
-        action: ZotAction,
+        action: ZapperAction,
         cx: &mut Context<Self>,
     ) {
-        let from_issue_panel = std::mem::take(&mut self.zots.issue_command);
-        if self.zots.pending.is_some() || !self.require_connection(cx) {
+        let from_issue_panel = std::mem::take(&mut self.zappers.issue_command);
+        if self.zappers.pending.is_some() || !self.require_connection(cx) {
             return;
         }
-        let mut command = ZotCommand {
+        let mut command = ZapperCommand {
             command_id: uuid::Uuid::new_v4().to_string(),
-            zot_id: id,
+            zapper_id: id,
             expected_revision: revision,
             action,
         };
-        if let ZotAction::Delegate { worker, .. } = &mut command.action {
-            worker.chat_id = format!("zot-worker-{}", command.command_id);
+        if let ZapperAction::Delegate { worker, .. } = &mut command.action {
+            worker.chat_id = format!("zapper-worker-{}", command.command_id);
         }
-        if let Some(previous) = &self.zots.retry {
+        if let Some(previous) = &self.zappers.retry {
             let mut comparison = command.clone();
             comparison.command_id = previous.command_id.clone();
             comparison.expected_revision = previous.expected_revision;
-            if let ZotAction::Delegate { worker, .. } = &mut comparison.action {
-                worker.chat_id = format!("zot-worker-{}", previous.command_id);
+            if let ZapperAction::Delegate { worker, .. } = &mut comparison.action {
+                worker.chat_id = format!("zapper-worker-{}", previous.command_id);
             }
             if serde_json::to_value(comparison).ok() == serde_json::to_value(previous).ok() {
                 command = previous.clone();
             }
         }
-        self.zots.retry = Some(command.clone());
+        self.zappers.retry = Some(command.clone());
         let mut params = serde_json::to_value(command).unwrap();
         params["targetDeviceId"] = json!(home);
-        self.zots.pending = Some(self.call(api::ZOT_COMMAND, params));
-        self.zots.pending_issue = from_issue_panel;
+        self.zappers.pending = Some(self.zapper_call(api::ZAPPER_COMMAND, params));
+        self.zappers.pending_issue = from_issue_panel;
         cx.notify();
     }
-    fn save_zot(&mut self, cx: &mut Context<Self>) {
-        let Some(form) = &self.zots.form else {
+    fn save_zapper(&mut self, cx: &mut Context<Self>) {
+        let Some(form) = &self.zappers.form else {
             return;
         };
         let values = form
@@ -516,21 +542,21 @@ impl WorkspaceView {
                 // Model and limits aren't edited here: the coordinator's own
                 // conversation picks its model, and limits keep their values.
                 let composer = self.current_model_config();
-                let config = match &form.zot {
-                    Some(zot) => ZotConfig {
+                let config = match &form.zapper {
+                    Some(zapper) => ZapperConfig {
                         name,
                         purpose: get("Purpose"),
                         home_device_id: form.home.clone(),
                         repositories: form.repositories.clone(),
                         worker_device_id: form.worker_device.clone(),
-                        ..zot.config.clone()
+                        ..zapper.config.clone()
                     },
-                    None => ZotConfig {
+                    None => ZapperConfig {
                         name,
                         purpose: get("Purpose"),
                         home_device_id: form.home.clone(),
                         repositories: form.repositories.clone(),
-                        coordinator_model: ZotModel {
+                        coordinator_model: ZapperModel {
                             harness: composer
                                 .as_ref()
                                 .map(|c| c.provider.clone())
@@ -544,10 +570,10 @@ impl WorkspaceView {
                         avatar_image: None,
                     },
                 };
-                if form.zot.is_some() {
-                    ZotAction::Configure { config }
+                if form.zapper.is_some() {
+                    ZapperAction::Configure { config }
                 } else {
-                    ZotAction::Create { config }
+                    ZapperAction::Create { config }
                 }
             }
             FormKind::File(file) => {
@@ -561,7 +587,7 @@ impl WorkspaceView {
                     cx.notify();
                     return;
                 }
-                ZotAction::WriteFile {
+                ZapperAction::WriteFile {
                     path,
                     content,
                     expected_version: file.version,
@@ -570,9 +596,9 @@ impl WorkspaceView {
             FormKind::Decision(decision) => {
                 let mut decision = decision.clone();
                 decision.answer = Some(values[0].clone());
-                ZotAction::Decide { decision }
+                ZapperAction::Decide { decision }
             }
-            FormKind::Worker(Some(id)) => ZotAction::MessageWorker {
+            FormKind::Worker(Some(id)) => ZapperAction::MessageWorker {
                 chat_id: id.clone(),
                 text: values[0].clone(),
                 automatic: false,
@@ -587,9 +613,9 @@ impl WorkspaceView {
                     cx.notify();
                     return;
                 };
-                ZotAction::Delegate {
+                ZapperAction::Delegate {
                     issue_id: None,
-                    worker: ZotWorker {
+                    worker: ZapperWorker {
                         chat_id: String::new(),
                         device_id: repository.device_id.clone(),
                         space_id: repository.space_id.clone(),
@@ -602,22 +628,22 @@ impl WorkspaceView {
                         .chats
                         .iter()
                         .find(|c| {
-                            form.zot
+                            form.zapper
                                 .as_ref()
                                 .is_some_and(|z| c["id"] == z.coordinator_chat_id)
                         })
                         .and_then(|c| {
-                            Some(ZotModel {
+                            Some(ZapperModel {
                                 harness: c["config"]["harness"].as_str()?.to_owned(),
                                 model: c["config"]["model"].as_str().map(str::to_owned),
                             })
                         })
                         .or_else(|| {
-                            form.zot
+                            form.zapper
                                 .as_ref()
                                 .map(|z| z.config.coordinator_model.clone())
                         })
-                        .unwrap_or(ZotModel {
+                        .unwrap_or(ZapperModel {
                             harness: "claude-code".into(),
                             model: None,
                         }),
@@ -631,21 +657,21 @@ impl WorkspaceView {
                     },
                 }
             }
-            FormKind::Delete => ZotAction::Delete,
+            FormKind::Delete => ZapperAction::Delete,
         };
-        self.send_zot(
+        self.send_zapper(
             form.id.clone(),
-            form.zot.as_ref().map(|z| z.revision),
+            form.zapper.as_ref().map(|z| z.revision),
             form.home.clone(),
             action,
             cx,
         );
     }
-    /// Zot forms open as a dialog over the workspace instead of replacing it.
-    pub(super) fn zot_form(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// Zapper forms open as a dialog over the workspace instead of replacing it.
+    pub(super) fn zapper_form(&self, cx: &mut Context<Self>) -> AnyElement {
         use crate::popover::{self, Kind};
-        let form = self.zots.form.as_ref().unwrap();
-        let saving = self.zots.pending.is_some();
+        let form = self.zappers.form.as_ref().unwrap();
+        let saving = self.zappers.pending.is_some();
         let name = |key: &str| {
             form.inputs
                 .iter()
@@ -655,7 +681,7 @@ impl WorkspaceView {
         let title = match &form.kind {
             FormKind::File(file) if file.version == 0 => "New document".to_owned(),
             FormKind::File(file) => file.path.clone(),
-            FormKind::Config if form.zot.is_none() => "New Zapper".to_owned(),
+            FormKind::Config if form.zapper.is_none() => "New Zapper".to_owned(),
             FormKind::Config => "Zapper settings".to_owned(),
             FormKind::Worker(Some(_)) => "Message thread".to_owned(),
             FormKind::Worker(None) => "New thread".to_owned(),
@@ -663,14 +689,14 @@ impl WorkspaceView {
             FormKind::Delete => "Delete Zapper?".to_owned(),
         };
         let close = cx.listener(|this, _, _, cx| {
-            this.zots.form = None;
+            this.zappers.form = None;
             cx.notify();
         });
         let mut body = column().px(px(20.)).pb(px(18.)).gap(px(14.));
         match &form.kind {
             FormKind::Config => {
-                let zot_name = form
-                    .zot
+                let zapper_name = form
+                    .zapper
                     .as_ref()
                     .map(|z| z.config.name.clone())
                     .unwrap_or_default();
@@ -680,12 +706,12 @@ impl WorkspaceView {
                         .gap(px(10.))
                         .pt(px(4.))
                         .pb(px(6.))
-                        .child(match form.zot.as_ref() {
-                            Some(zot) => crate::zapper_avatar::zapper_face(
-                                &crate::zapper_avatar::ZapperFace::of(zot),
+                        .child(match form.zapper.as_ref() {
+                            Some(zapper) => crate::zapper_avatar::zapper_face(
+                                &crate::zapper_avatar::ZapperFace::of(zapper),
                                 56.,
                             ),
-                            None => avatar(&zot_name, 56.),
+                            None => avatar(&zapper_name, 56.),
                         })
                         .when_some(name("Name"), |d, input| {
                             d.child(
@@ -713,10 +739,10 @@ impl WorkspaceView {
                     column()
                         .gap(px(6.))
                         .child(caption("Repositories"))
-                        .child(self.zot_repository_list(cx)),
+                        .child(self.zapper_repository_list(cx)),
                 );
                 // Device choice only matters once there is more than one.
-                if self.zots.devices.len() > 1 {
+                if self.zappers.devices.len() > 1 {
                     body = body.child(
                         column()
                             .rounded(px(10.))
@@ -725,10 +751,10 @@ impl WorkspaceView {
                             .child(setting_row(
                                 "Runs on",
                                 "Where the coordinator lives",
-                                self.zot_device_chips(
+                                self.zapper_device_chips(
                                     form.home.clone(),
                                     true,
-                                    form.zot.is_some(),
+                                    form.zapper.is_some(),
                                     cx,
                                 ),
                                 true,
@@ -736,7 +762,12 @@ impl WorkspaceView {
                             .child(setting_row(
                                 "Threads run on",
                                 "Default for new threads",
-                                self.zot_device_chips(form.worker_device.clone(), false, false, cx),
+                                self.zapper_device_chips(
+                                    form.worker_device.clone(),
+                                    false,
+                                    false,
+                                    cx,
+                                ),
                                 false,
                             )),
                     );
@@ -771,16 +802,16 @@ impl WorkspaceView {
                     };
                     body = body.child(field(label, "", input.clone()));
                 }
-                if matches!(form.kind, FormKind::Worker(None)) && self.zots.devices.len() > 1 {
+                if matches!(form.kind, FormKind::Worker(None)) && self.zappers.devices.len() > 1 {
                     body = body.child(column().gap(px(6.)).child(caption("Runs on")).child(
-                        self.zot_device_chips(form.worker_device.clone(), false, false, cx),
+                        self.zapper_device_chips(form.worker_device.clone(), false, false, cx),
                     ));
                 }
             }
         }
         let delete = matches!(form.kind, FormKind::Delete);
-        let editing = matches!(form.kind, FormKind::Config) && form.zot.is_some();
-        let zot = form.zot.clone();
+        let editing = matches!(form.kind, FormKind::Config) && form.zapper.is_some();
+        let zapper = form.zapper.clone();
         let mut footer = row()
             .px(px(20.))
             .py(px(14.))
@@ -788,44 +819,44 @@ impl WorkspaceView {
             .border_t_1()
             .border_color(rgb(BORDER));
         if editing {
-            let z = zot.clone().unwrap();
+            let z = zapper.clone().unwrap();
             let archive = z.clone();
             footer = footer
                 .child(
-                    popover::button("zot-delete", "Delete", Kind::Destructive).on_click(
+                    popover::button("zapper-delete", "Delete", Kind::Destructive).on_click(
                         cx.listener(move |this, _, window, cx| {
-                            this.open_zot_form(Some(z.clone()), FormKind::Delete, window, cx)
+                            this.open_zapper_form(Some(z.clone()), FormKind::Delete, window, cx)
                         }),
                     ),
                 )
                 .child(
-                    popover::button("zot-archive", "Archive", Kind::Secondary).on_click(
+                    popover::button("zapper-archive", "Archive", Kind::Secondary).on_click(
                         cx.listener(move |this, _, _, cx| {
-                            this.zot_action(
+                            this.zapper_action(
                                 &archive,
-                                ZotAction::SetStatus {
-                                    status: ZotStatus::Archived,
+                                ZapperAction::SetStatus {
+                                    status: ZapperStatus::Archived,
                                 },
                                 cx,
                             );
-                            this.zots.form = None;
+                            this.zappers.form = None;
                         }),
                     ),
                 );
         }
         footer = footer
             .child(div().flex_1())
-            .child(popover::button("cancel-zot", "Cancel", Kind::Secondary).on_click(close))
+            .child(popover::button("cancel-zapper", "Cancel", Kind::Secondary).on_click(close))
             .child(
                 popover::button(
-                    "save-zot",
+                    "save-zapper",
                     if saving {
                         "Saving…"
                     } else if delete {
                         "Delete Zapper"
                     } else if matches!(form.kind, FormKind::Worker(_)) {
                         "Send"
-                    } else if matches!(form.kind, FormKind::Config) && form.zot.is_none() {
+                    } else if matches!(form.kind, FormKind::Config) && form.zapper.is_none() {
                         "Create"
                     } else {
                         "Save"
@@ -837,10 +868,10 @@ impl WorkspaceView {
                     },
                 )
                 .when(saving, |d| d.opacity(0.5))
-                .on_click(cx.listener(|this, _, _, cx| this.save_zot(cx))),
+                .on_click(cx.listener(|this, _, _, cx| this.save_zapper(cx))),
             );
         let (backdrop, card) = popover::dialog(
-            "zot-form",
+            "zapper-form",
             title.clone(),
             if matches!(form.kind, FormKind::Config) {
                 520.
@@ -865,16 +896,16 @@ impl WorkspaceView {
                                 .text_color(rgb(TEXT))
                                 .child(title),
                         )
-                        .child(icon_button("close-zot-form", "close", "Close").on_click(
+                        .child(icon_button("close-zapper-form", "close", "Close").on_click(
                             cx.listener(|this, _, _, cx| {
-                                this.zots.form = None;
+                                this.zappers.form = None;
                                 cx.notify();
                             }),
                         )),
                 )
                 .child(
                     div()
-                        .id("zot-form-body")
+                        .id("zapper-form-body")
                         .flex_1()
                         .min_h_0()
                         .overflow_y_scroll()
@@ -884,7 +915,7 @@ impl WorkspaceView {
             )
             .into_any_element()
     }
-    fn zot_device_chips(
+    fn zapper_device_chips(
         &self,
         selected: String,
         home: bool,
@@ -892,7 +923,7 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let mut chips = row().flex_wrap().justify_end().gap_1();
-        for device in &self.zots.devices {
+        for device in &self.zappers.devices {
             let id = device["id"].as_str().unwrap_or_default().to_owned();
             let name = device["name"]
                 .as_str()
@@ -908,15 +939,15 @@ impl WorkspaceView {
             let active = selected == id;
             chips = chips.child(
                 chip(
-                    SharedString::from(format!("zot-device-{home}-{id}")),
+                    SharedString::from(format!("zapper-device-{home}-{id}")),
                     name,
                     active,
                 )
                 .when(locked && !active, |d| d.opacity(0.4))
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    if let Some(form) = this.zots.form.as_mut() {
+                    if let Some(form) = this.zappers.form.as_mut() {
                         if home {
-                            if form.zot.is_none() {
+                            if form.zapper.is_none() {
                                 form.home = id.clone();
                             }
                         } else {
@@ -930,11 +961,11 @@ impl WorkspaceView {
         chips.into_any_element()
     }
     /// Projects as a checklist: name, location and a tick on the right.
-    fn zot_repository_list(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(form) = &self.zots.form else {
+    fn zapper_repository_list(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(form) = &self.zappers.form else {
             return Empty.into_any_element();
         };
-        if self.zots.spaces.is_empty() {
+        if self.zappers.spaces.is_empty() {
             return muted("Open a project first to give this Zapper a repository.")
                 .into_any_element();
         }
@@ -944,7 +975,7 @@ impl WorkspaceView {
             .rounded(px(10.))
             .border_1()
             .border_color(rgb(BORDER));
-        for space in &self.zots.spaces {
+        for space in &self.zappers.spaces {
             let id = space["id"].as_str().unwrap_or_default().to_owned();
             let device = space["deviceId"].as_str().unwrap_or_default().to_owned();
             let path = space["path"].as_str().unwrap_or_default().to_owned();
@@ -955,7 +986,7 @@ impl WorkspaceView {
             let checked = form.repositories.iter().any(|r| r.space_id == id);
             list = list.child(
                 row()
-                    .id(SharedString::from(format!("zot-repo-{id}")))
+                    .id(SharedString::from(format!("zapper-repo-{id}")))
                     .role(Role::CheckBox)
                     .aria_label(SharedString::from(name.clone()))
                     .h(px(40.))
@@ -1010,11 +1041,11 @@ impl WorkspaceView {
                             .when(!checked, |d| d.border_1().border_color(rgb(MUTED))),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(form) = this.zots.form.as_mut() {
+                        if let Some(form) = this.zappers.form.as_mut() {
                             if form.repositories.iter().any(|r| r.space_id == id) {
                                 form.repositories.retain(|r| r.space_id != id);
                             } else {
-                                form.repositories.push(ZotRepository {
+                                form.repositories.push(ZapperRepository {
                                     space_id: id.clone(),
                                     device_id: device.clone(),
                                 });
@@ -1027,12 +1058,12 @@ impl WorkspaceView {
         list.into_any_element()
     }
     /// Live run state of one thread, ignoring rows a crashed host left behind.
-    fn zot_thread_archived(&self, chat: &str) -> bool {
+    fn zapper_thread_archived(&self, chat: &str) -> bool {
         self.chats
             .iter()
             .any(|c| c["id"] == chat && c["archived"] == true)
     }
-    fn zot_thread_status(&self, chat: &str) -> &str {
+    fn zapper_thread_status(&self, chat: &str) -> &str {
         self.sessions
             .iter()
             .find(|s| s["chatId"] == chat)
@@ -1047,28 +1078,28 @@ impl WorkspaceView {
             .and_then(|s| s["status"].as_str())
             .unwrap_or("unknown")
     }
-    fn open_zot_chat(&mut self, id: &str, cx: &mut Context<Self>) {
+    fn open_zapper_chat(&mut self, id: &str, cx: &mut Context<Self>) {
         if let Some(chat) = self.chats.iter().find(|c| c["id"] == id).cloned() {
-            self.zots.form = None;
-            self.zots.menu = None;
+            self.zappers.form = None;
+            self.zappers.menu = None;
             self.select(chat, cx);
         }
     }
-    fn zot_tab_bar(&self, zot: &Zot, cx: &mut Context<Self>) -> AnyElement {
-        let tabs = self.zots.tabs;
-        let detail_open = self.zots.pull_request.is_some()
+    fn zapper_tab_bar(&self, zapper: &Zapper, cx: &mut Context<Self>) -> AnyElement {
+        let tabs = self.zappers.tabs;
+        let detail_open = self.zappers.pull_request.is_some()
             || self
-                .zots
+                .zappers
                 .issues
                 .as_ref()
                 .is_some_and(|p| p.read(cx).selected_code().is_some());
         let mut strip = row().gap(px(2.));
-        for tab in ZotTab::ALL {
+        for tab in ZapperTab::ALL {
             let active = tab == tabs.active && !detail_open;
             let name = tab.label();
             let color = rgb(if active { TEXT } else { FAINT });
             let base = row()
-                .id(SharedString::from(format!("zot-tab-{name}")))
+                .id(SharedString::from(format!("zapper-tab-{name}")))
                 .role(Role::Tab)
                 .aria_label(name)
                 .h(px(26.))
@@ -1079,8 +1110,8 @@ impl WorkspaceView {
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(color)
                 .when(!active, |d| d.hover(|d| d.text_color(rgb(MUTED))))
-                .child(if tab == ZotTab::Issues {
-                    crate::zot_issues::status_icon(ZotIssueStatus::Todo).into_any_element()
+                .child(if tab == ZapperTab::Issues {
+                    crate::zapper_issues::status_icon(ZapperIssueStatus::Todo).into_any_element()
                 } else {
                     icon(tab.icon())
                         .size(px(12.))
@@ -1088,41 +1119,44 @@ impl WorkspaceView {
                         .into_any_element()
                 })
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.zots.pull_request = None;
-                    if let Some(panel) = &this.zots.issues {
+                    this.zappers.pull_request = None;
+                    if let Some(panel) = &this.zappers.issues {
                         panel.update(cx, |p, cx| p.show_list(cx));
                     }
-                    if this.zots.tabs.select(tab) {
-                        let history = tab == ZotTab::History;
-                        if this.zots.history != history {
-                            this.zots.history = history;
-                            this.refresh_zot();
+                    if this.zappers.tabs.select(tab) {
+                        let history = tab == ZapperTab::History;
+                        if this.zappers.history != history {
+                            this.zappers.history = history;
+                            this.refresh_zapper();
                         }
-                        this.zots.menu = None;
+                        this.zappers.menu = None;
                         cx.notify();
                     }
                 }));
             strip = strip.child(
                 base.when(
-                    matches!(tab, ZotTab::Overview | ZotTab::Issues | ZotTab::Drive) || active,
+                    matches!(
+                        tab,
+                        ZapperTab::Overview | ZapperTab::Issues | ZapperTab::Drive
+                    ) || active,
                     |d| d.child(div().ml(px(6.)).child(name)),
                 )
                 .when(active, |d| d.bg(rgb(RAISED))),
             );
         }
         let extra = self
-            .zots
+            .zappers
             .pull_request
             .as_ref()
             .map(|u| format!("#{}", u.rsplit('/').next().unwrap_or("")))
             .or_else(|| {
-                self.zots
+                self.zappers
                     .issues
                     .as_ref()
                     .and_then(|p| p.read(cx).selected_code())
             });
         if let Some(code) =
-            extra.filter(|_| matches!(tabs.active, ZotTab::Issues | ZotTab::Overview))
+            extra.filter(|_| matches!(tabs.active, ZapperTab::Issues | ZapperTab::Overview))
         {
             strip = strip.child(
                 row()
@@ -1132,96 +1166,110 @@ impl WorkspaceView {
                     .rounded(px(7.))
                     .bg(rgb(RAISED))
                     .text_color(rgb(TEXT))
-                    .child(if self.zots.pull_request.is_some() {
+                    .child(if self.zappers.pull_request.is_some() {
                         icon("git-branch")
                             .size(px(12.))
                             .text_color(rgb(0xd9bf60))
                             .into_any_element()
                     } else {
-                        crate::zot_issues::status_icon(
-                            self.zots
+                        crate::zapper_issues::status_icon(
+                            self.zappers
                                 .issues
                                 .as_ref()
                                 .and_then(|p| p.read(cx).selected_status())
-                                .unwrap_or(ZotIssueStatus::Todo),
+                                .unwrap_or(ZapperIssueStatus::Todo),
                         )
                         .into_any_element()
                     })
                     .child(code),
             );
         }
-        let doc = zot.clone();
-        let settings = zot.clone();
+        let doc = zapper.clone();
+        let settings = zapper.clone();
         row()
             .h(px(44.))
             .flex_shrink_0()
             .px(px(8.))
             .child(strip)
             .child(div().flex_1())
-            .when(tabs.active == ZotTab::Drive, |d| {
+            .when(tabs.active == ZapperTab::Drive, |d| {
                 d.child(
-                    quiet_icon("zot-new-document", "document-add", "New document").on_click(
+                    quiet_icon("zapper-new-document", "document-add", "New document").on_click(
                         cx.listener(move |this, _, window, cx| {
-                            let file = ZotFile {
+                            let file = ZapperFile {
                                 path: String::new(),
                                 version: 0,
                                 content: String::new(),
                             };
-                            this.open_zot_form(Some(doc.clone()), FormKind::File(file), window, cx)
+                            this.open_zapper_form(
+                                Some(doc.clone()),
+                                FormKind::File(file),
+                                window,
+                                cx,
+                            )
                         }),
                     ),
                 )
             })
-            .when(tabs.active == ZotTab::Threads, |d| {
-                let z = zot.clone();
+            .when(tabs.active == ZapperTab::Threads, |d| {
+                let z = zapper.clone();
                 d.child(
-                    quiet_icon("new-zot-worker", "plus", "New thread").on_click(cx.listener(
+                    quiet_icon("new-zapper-worker", "plus", "New thread").on_click(cx.listener(
                         move |this, _, window, cx| {
-                            this.open_zot_form(Some(z.clone()), FormKind::Worker(None), window, cx)
+                            this.open_zapper_form(
+                                Some(z.clone()),
+                                FormKind::Worker(None),
+                                window,
+                                cx,
+                            )
                         },
                     )),
                 )
             })
             .child(
-                quiet_icon("zot-settings", "settings", "Zapper settings").on_click(cx.listener(
+                quiet_icon("zapper-settings", "settings", "Zapper settings").on_click(cx.listener(
                     move |this, _, window, cx| {
-                        this.open_zot_form(Some(settings.clone()), FormKind::Config, window, cx)
+                        this.open_zapper_form(Some(settings.clone()), FormKind::Config, window, cx)
                     },
                 )),
             )
             .into_any_element()
     }
     /// The panel floats as its own rounded surface beside the conversation.
-    pub(super) fn zot_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let Some(zot) = self.selected_zot() else {
+    pub(super) fn zapper_panel(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(zapper) = self.selected_zapper() else {
             return Empty.into_any_element();
         };
         if self
-            .zots
+            .zappers
             .issues
             .as_ref()
-            .is_some_and(|p| p.read(cx).zot_id() != zot.id)
+            .is_some_and(|p| p.read(cx).zapper_id() != zapper.id)
         {
-            self.zots.pull_request = None;
-            self.zots.document = None;
+            self.zappers.pull_request = None;
+            self.zappers.document = None;
         }
-        if let Some(file) = self.zots.document.take() {
-            self.open_zot_form(Some(zot.clone()), FormKind::File(file), window, cx);
+        if let Some(file) = self.zappers.document.take() {
+            self.open_zapper_form(Some(zapper.clone()), FormKind::File(file), window, cx);
         }
-        let body = match self.zots.tabs.active {
-            ZotTab::Issues => self.zot_issue_surface(&zot, false, cx),
-            ZotTab::Overview => self.zot_issue_surface(&zot, true, cx),
-            ZotTab::Threads => column()
+        let body = match self.zappers.tabs.active {
+            ZapperTab::Issues => self.zapper_issue_surface(&zapper, false, cx),
+            ZapperTab::Overview => self.zapper_issue_surface(&zapper, true, cx),
+            ZapperTab::Threads => column()
                 .gap(px(18.))
-                .child(self.zot_threads(&zot, cx))
-                .child(self.zot_overview(&zot, cx))
+                .child(self.zapper_threads(&zapper, cx))
+                .child(self.zapper_overview(&zapper, cx))
                 .into_any_element(),
-            ZotTab::Drive => self.zot_drive(&zot, cx),
-            ZotTab::History => self.zot_history(&zot, cx),
+            ZapperTab::Drive => self.zapper_drive(&zapper, cx),
+            ZapperTab::History => self.zapper_history(&zapper, cx),
         };
-        let body = if let Some(url) = self.zots.pull_request.clone() {
+        let body = if let Some(url) = self.zappers.pull_request.clone() {
             let mut pr = column().gap(px(12.));
-            if let Some(issue) = zot
+            if let Some(issue) = zapper
                 .issues
                 .iter()
                 .find(|i| i.pull_requests.iter().any(|p| p.url == url))
@@ -1235,8 +1283,8 @@ impl WorkspaceView {
                         .text_color(rgb(MUTED))
                         .child(format!("‹ {} · {}", issue.code(), issue.details.title))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.zots.pull_request = None;
-                            if let Some(panel) = &this.zots.issues {
+                            this.zappers.pull_request = None;
+                            if let Some(panel) = &this.zappers.issues {
                                 panel.update(cx, |p, cx| p.show_issue(id.clone(), cx));
                             }
                             cx.notify();
@@ -1251,7 +1299,7 @@ impl WorkspaceView {
                             .text_color(rgb(MUTED))
                             .child("Thread ↗")
                             .on_click(
-                                cx.listener(move |this, _, _, cx| this.open_zot_chat(&chat, cx)),
+                                cx.listener(move |this, _, _, cx| this.open_zapper_chat(&chat, cx)),
                             ),
                     );
                 }
@@ -1262,16 +1310,16 @@ impl WorkspaceView {
             body
         };
         crate::workspace_style::column()
-            .w(px(ZOT_PANEL_WIDTH))
+            .w(px(ZAPPER_PANEL_WIDTH))
             .flex_none()
             .pr(px(crate::workspace_style::GUTTER))
             .child(
                 crate::workspace_style::surface()
                     .bg(rgb(0x101010))
-                    .child(self.zot_tab_bar(&zot, cx))
+                    .child(self.zapper_tab_bar(&zapper, cx))
                     .child(
                         column()
-                            .id("zot-panel-body")
+                            .id("zapper-panel-body")
                             .flex_1()
                             .min_h_0()
                             .overflow_y_scroll()
@@ -1282,84 +1330,84 @@ impl WorkspaceView {
                             .child(body),
                     ),
             )
-            .children(self.zot_thread_menu(&zot, cx))
+            .children(self.zapper_thread_menu(&zapper, cx))
             .into_any_element()
     }
-    fn zot_issue_surface(
+    fn zapper_issue_surface(
         &mut self,
-        zot: &Zot,
+        zapper: &Zapper,
         overview: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        use crate::zot_issues::{IssueEvent, IssuePanel};
-        if self.zots.issues.is_none() {
-            let panel = cx.new(|_| IssuePanel::new(zot.clone(), overview));
+        use crate::zapper_issues::{IssueEvent, IssuePanel};
+        if self.zappers.issues.is_none() {
+            let panel = cx.new(|_| IssuePanel::new(zapper.clone(), overview));
             cx.subscribe(&panel, |this, _, event, cx| match event {
                 IssueEvent::Command(action, revision) => {
-                    if let Some(zot) = this.selected_zot() {
+                    if let Some(zapper) = this.selected_zapper() {
                         let mut action = action.clone();
-                        if let ZotAction::Delegate { model, .. } = &mut action {
+                        if let ZapperAction::Delegate { model, .. } = &mut action {
                             if let Some(config) = this
                                 .chats
                                 .iter()
-                                .find(|c| c["id"] == zot.coordinator_chat_id)
+                                .find(|c| c["id"] == zapper.coordinator_chat_id)
                                 .and_then(|c| c.get("config"))
                             {
                                 if let Some(harness) = config["harness"].as_str() {
-                                    *model = ZotModel {
+                                    *model = ZapperModel {
                                         harness: harness.into(),
                                         model: config["model"].as_str().map(str::to_owned),
                                     };
                                 }
                             }
                         }
-                        this.zots.issue_command = true;
-                        this.send_zot(
-                            zot.id,
+                        this.zappers.issue_command = true;
+                        this.send_zapper(
+                            zapper.id,
                             Some(*revision),
-                            zot.config.home_device_id,
+                            zapper.config.home_device_id,
                             action,
                             cx,
                         );
                     }
                 }
-                IssueEvent::OpenThread(id) => this.open_zot_chat(id, cx),
+                IssueEvent::OpenThread(id) => this.open_zapper_chat(id, cx),
                 IssueEvent::OpenDocument(file) => {
-                    this.zots.document = Some(file.clone());
+                    this.zappers.document = Some(file.clone());
                     cx.notify();
                 }
                 IssueEvent::OpenPullRequest(url) => {
-                    this.zots.pull_request = Some(url.clone());
+                    this.zappers.pull_request = Some(url.clone());
                     this.open_pr_url(url.clone(), String::new(), cx);
                 }
                 // The browser starts threads from the Threads page's own button.
                 IssueEvent::NewThread => {
-                    if this.zots.tabs.select(ZotTab::Threads) {
+                    if this.zappers.tabs.select(ZapperTab::Threads) {
                         cx.notify();
                     }
                 }
                 IssueEvent::ShowIssues => {
-                    if this.zots.tabs.select(ZotTab::Issues) {
+                    if this.zappers.tabs.select(ZapperTab::Issues) {
                         cx.notify();
                     }
                 }
             })
             .detach();
             cx.observe(&panel, |_, _, cx| cx.notify()).detach();
-            self.zots.issues = Some(panel);
+            self.zappers.issues = Some(panel);
         }
-        let panel = self.zots.issues.as_ref().unwrap().clone();
+        let panel = self.zappers.issues.as_ref().unwrap().clone();
         // Same inputs the native host supplies: each thread's live state and
         // the signed-in person's name for their comments.
-        let states: std::collections::HashMap<String, crate::zot_issues::ThreadState> = zot
+        let states: std::collections::HashMap<String, crate::zapper_issues::ThreadState> = zapper
             .workers
             .iter()
             .map(|w| {
-                use crate::zot_issues::ThreadState;
-                let state = if self.zot_thread_archived(&w.chat_id) {
+                use crate::zapper_issues::ThreadState;
+                let state = if self.zapper_thread_archived(&w.chat_id) {
                     ThreadState::Archived
                 } else {
-                    match self.zot_thread_status(&w.chat_id) {
+                    match self.zapper_thread_status(&w.chat_id) {
                         "working" => ThreadState::Working,
                         "awaitingInput" | "errored" => ThreadState::NeedsYou,
                         _ => ThreadState::Idle,
@@ -1378,8 +1426,8 @@ impl WorkspaceView {
         panel.update(cx, |p, cx| {
             p.thread_states(states, cx);
             p.user_name(user, cx);
-            p.sync(zot.clone(), overview, self.zots.pending.is_some(), cx);
-            p.files(self.zots.files.clone(), cx);
+            p.sync(zapper.clone(), overview, self.zappers.pending.is_some(), cx);
+            p.files(self.zappers.files.clone(), cx);
             p.thread_titles(
                 self.chats
                     .iter()
@@ -1395,33 +1443,35 @@ impl WorkspaceView {
         });
         panel.into_any_element()
     }
-    fn zot_overview(&self, zot: &Zot, cx: &mut Context<Self>) -> AnyElement {
-        let working = zot
+    fn zapper_overview(&self, zapper: &Zapper, cx: &mut Context<Self>) -> AnyElement {
+        let working = zapper
             .workers
             .iter()
-            .filter(|w| self.zot_thread_status(&w.chat_id) == "working")
+            .filter(|w| self.zapper_thread_status(&w.chat_id) == "working")
             .count();
-        let asks =
-            zuse_protocol::presentation::zot_panel::needs_you_items(&zot.issues, &zot.decisions);
-        let (color, status) = match zot.status {
-            ZotStatus::Active => (GREEN, "Active"),
-            ZotStatus::Paused => (AMBER, "Paused"),
-            ZotStatus::Stopped => (FAINT, "Stopped"),
-            ZotStatus::Archived => (FAINT, "Archived"),
+        let asks = zuse_protocol::presentation::zapper_panel::needs_you_items(
+            &zapper.issues,
+            &zapper.decisions,
+        );
+        let (color, status) = match zapper.status {
+            ZapperStatus::Active => (GREEN, "Active"),
+            ZapperStatus::Paused => (AMBER, "Paused"),
+            ZapperStatus::Stopped => (FAINT, "Stopped"),
+            ZapperStatus::Archived => (FAINT, "Archived"),
         };
-        let toggle = if zot.status == ZotStatus::Active {
-            ZotStatus::Paused
+        let toggle = if zapper.status == ZapperStatus::Active {
+            ZapperStatus::Paused
         } else {
-            ZotStatus::Active
+            ZapperStatus::Active
         };
-        let z = zot.clone();
+        let z = zapper.clone();
         let hero = row()
             .items_start()
             .gap(px(12.))
             .px(px(4.))
             .pt(px(6.))
             .child(crate::zapper_avatar::zapper_face(
-                &crate::zapper_avatar::ZapperFace::of(zot),
+                &crate::zapper_avatar::ZapperFace::of(zapper),
                 40.,
             ))
             .child(
@@ -1435,7 +1485,7 @@ impl WorkspaceView {
                             .text_size(px(15.))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(rgb(TEXT))
-                            .child(zot.config.name.clone()),
+                            .child(zapper.config.name.clone()),
                     )
                     .child(
                         row()
@@ -1447,12 +1497,12 @@ impl WorkspaceView {
                     ),
             )
             .when(
-                matches!(zot.status, ZotStatus::Active | ZotStatus::Paused),
+                matches!(zapper.status, ZapperStatus::Active | ZapperStatus::Paused),
                 |d| {
                     d.child(
                         crate::popover::button(
-                            "zot-pause",
-                            if toggle == ZotStatus::Paused {
+                            "zapper-pause",
+                            if toggle == ZapperStatus::Paused {
                                 "Pause"
                             } else {
                                 "Resume"
@@ -1463,7 +1513,7 @@ impl WorkspaceView {
                         .px(px(10.))
                         .text_size(px(12.))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.zot_action(&z, ZotAction::SetStatus { status: toggle }, cx)
+                            this.zapper_action(&z, ZapperAction::SetStatus { status: toggle }, cx)
                         })),
                     )
                 },
@@ -1474,9 +1524,10 @@ impl WorkspaceView {
             .border_color(rgb(BORDER))
             .child(stat(
                 "Threads",
-                zot.workers
+                zapper
+                    .workers
                     .iter()
-                    .filter(|w| !self.zot_thread_archived(&w.chat_id))
+                    .filter(|w| !self.zapper_thread_archived(&w.chat_id))
                     .count(),
                 false,
             ))
@@ -1487,26 +1538,26 @@ impl WorkspaceView {
         let mut view = column()
             .gap(px(16.))
             .child(hero)
-            .when(!zot.config.purpose.is_empty(), |d| {
+            .when(!zapper.config.purpose.is_empty(), |d| {
                 d.child(
                     div()
                         .px(px(4.))
                         .text_size(px(12.5))
                         .line_height(px(19.))
                         .text_color(rgb(MUTED))
-                        .child(zot.config.purpose.clone()),
+                        .child(zapper.config.purpose.clone()),
                 )
             })
             .child(stats);
         let mut needs = group();
         for item in &asks {
-            use zuse_protocol::presentation::zot_panel::{NeedsYouItem, NeedsYouTarget};
+            use zuse_protocol::presentation::zapper_panel::{NeedsYouItem, NeedsYouTarget};
             let (id, glyph) = match &item {
                 NeedsYouItem::Decision { id, .. } => (format!("decision-{id}"), "info-circle"),
                 NeedsYouItem::Issue { id, .. } => (format!("asked-{id}"), "info-circle"),
             };
-            let z = zot.clone();
-            let decisions = zot.decisions.clone();
+            let z = zapper.clone();
+            let decisions = zapper.decisions.clone();
             let target = item.target();
             needs = needs.child(
                 list_row(
@@ -1519,7 +1570,7 @@ impl WorkspaceView {
                 .on_click(cx.listener(move |this, _, window, cx| match &target {
                     NeedsYouTarget::DecisionForm(id) => {
                         if let Some(decision) = decisions.iter().find(|d| &d.id == id) {
-                            this.open_zot_form(
+                            this.open_zapper_form(
                                 Some(z.clone()),
                                 FormKind::Decision(decision.clone()),
                                 window,
@@ -1528,9 +1579,9 @@ impl WorkspaceView {
                         }
                     }
                     NeedsYouTarget::IssueTab(id) => {
-                        this.zots.tabs.select(ZotTab::Issues);
-                        this.zots.pull_request = None;
-                        if let Some(panel) = &this.zots.issues {
+                        this.zappers.tabs.select(ZapperTab::Issues);
+                        this.zappers.pull_request = None;
+                        if let Some(panel) = &this.zappers.issues {
                             panel.update(cx, |p, cx| p.show_issue(id.clone(), cx));
                         }
                         cx.notify();
@@ -1549,60 +1600,67 @@ impl WorkspaceView {
                 needs.into_any_element()
             },
         ));
-        let current = zot.coordinator_chat_id.clone();
+        let current = zapper.coordinator_chat_id.clone();
         view.child(
             column().gap(px(6.)).child(section("Coordinator")).child(
                 group()
                     .child(
                         list_row(
-                            "zot-current-conversation",
+                            "zapper-current-conversation",
                             "chat-round-line",
                             MUTED,
                             "Current conversation".into(),
                             None,
                         )
                         .on_click(
-                            cx.listener(move |this, _, _, cx| this.open_zot_chat(&current, cx)),
+                            cx.listener(move |this, _, _, cx| this.open_zapper_chat(&current, cx)),
                         ),
                     )
-                    .children(zot.previous_coordinator_chats.iter().enumerate().rev().map(
-                        |(index, id)| {
-                            let id = id.clone();
-                            list_row(
-                                SharedString::from(format!("zot-old-{id}")),
-                                "history",
-                                FAINT,
-                                format!("Earlier conversation {}", index + 1),
-                                None,
-                            )
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| this.open_zot_chat(&id, cx)),
-                            )
-                        },
-                    ))
+                    .children(
+                        zapper
+                            .previous_coordinator_chats
+                            .iter()
+                            .enumerate()
+                            .rev()
+                            .map(|(index, id)| {
+                                let id = id.clone();
+                                list_row(
+                                    SharedString::from(format!("zapper-old-{id}")),
+                                    "history",
+                                    FAINT,
+                                    format!("Earlier conversation {}", index + 1),
+                                    None,
+                                )
+                                .on_click(
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.open_zapper_chat(&id, cx)
+                                    }),
+                                )
+                            }),
+                    )
                     .child({
-                        let z = zot.clone();
+                        let z = zapper.clone();
                         list_row(
-                            "fresh-zot",
+                            "fresh-zapper",
                             "restart",
                             FAINT,
                             "Start a fresh conversation".into(),
                             None,
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.zot_action(&z, ZotAction::FreshConversation, cx)
+                            this.zapper_action(&z, ZapperAction::FreshConversation, cx)
                         }))
                     }),
             ),
         )
         .into_any_element()
     }
-    fn zot_threads(&self, zot: &Zot, cx: &mut Context<Self>) -> AnyElement {
+    fn zapper_threads(&self, zapper: &Zapper, cx: &mut Context<Self>) -> AnyElement {
         let mut threads = group();
-        let workers: Vec<_> = zot
+        let workers: Vec<_> = zapper
             .workers
             .iter()
-            .filter(|w| !self.zot_thread_archived(&w.chat_id))
+            .filter(|w| !self.zapper_thread_archived(&w.chat_id))
             .collect();
         let empty = workers.is_empty();
         let count = workers.len();
@@ -1611,7 +1669,7 @@ impl WorkspaceView {
             let (dot, status) = if worker.queued() {
                 (Hsla::from(rgb(FAINT)).opacity(0.5), "Queued")
             } else {
-                thread_state(self.zot_thread_status(&id))
+                thread_state(self.zapper_thread_status(&id))
             };
             let title = self
                 .chats
@@ -1622,7 +1680,7 @@ impl WorkspaceView {
                 .unwrap_or_else(|| worker.objective.clone());
             let open = id.clone();
             let menu = id.clone();
-            let open_menu = self.zots.menu.as_ref().is_some_and(|(m, _)| m == &id);
+            let open_menu = self.zappers.menu.as_ref().is_some_and(|(m, _)| m == &id);
             threads = threads.child(
                 row()
                     .id(SharedString::from(format!("worker-{id}")))
@@ -1675,18 +1733,22 @@ impl WorkspaceView {
                         .on_click(cx.listener(
                             move |this, _, window, cx| {
                                 cx.stop_propagation();
-                                this.zots.menu =
-                                    if this.zots.menu.as_ref().is_some_and(|(m, _)| m == &menu) {
-                                        None
-                                    } else {
-                                        Some((menu.clone(), window.mouse_position()))
-                                    };
+                                this.zappers.menu = if this
+                                    .zappers
+                                    .menu
+                                    .as_ref()
+                                    .is_some_and(|(m, _)| m == &menu)
+                                {
+                                    None
+                                } else {
+                                    Some((menu.clone(), window.mouse_position()))
+                                };
                                 cx.notify();
                             },
                         )),
                     )
                     .relative()
-                    .on_click(cx.listener(move |this, _, _, cx| this.open_zot_chat(&open, cx))),
+                    .on_click(cx.listener(move |this, _, _, cx| this.open_zapper_chat(&open, cx))),
             );
         }
         let mut view = column().gap(px(16.)).child(
@@ -1709,8 +1771,8 @@ impl WorkspaceView {
             .filter(|c| {
                 c["parentChatId"].is_null()
                     && c["archived"] != true
-                    && !zot_owns_chat(&self.zots.items, c["id"].as_str().unwrap_or_default())
-                    && zot
+                    && !zapper_owns_chat(&self.zappers.items, c["id"].as_str().unwrap_or_default())
+                    && zapper
                         .config
                         .repositories
                         .iter()
@@ -1722,7 +1784,7 @@ impl WorkspaceView {
         if !candidates.is_empty() {
             let mut adopt = group();
             for chat in candidates {
-                let z = zot.clone();
+                let z = zapper.clone();
                 let title = chat["title"].as_str().unwrap_or("Thread").to_owned();
                 adopt = adopt.child(
                     list_row(
@@ -1733,10 +1795,10 @@ impl WorkspaceView {
                         Some("Add"),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.zot_action(
+                        this.zapper_action(
                             &z,
-                            ZotAction::AdoptWorker {
-                                worker: ZotWorker {
+                            ZapperAction::AdoptWorker {
+                                worker: ZapperWorker {
                                     chat_id: chat["id"].as_str().unwrap_or_default().into(),
                                     device_id: chat["deviceId"].as_str().unwrap_or_default().into(),
                                     space_id: chat["spaceId"].as_str().unwrap_or_default().into(),
@@ -1760,28 +1822,32 @@ impl WorkspaceView {
         view.into_any_element()
     }
     /// Per-thread actions float beside the row instead of crowding it.
-    fn zot_thread_menu(&self, zot: &Zot, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn zapper_thread_menu(&self, zapper: &Zapper, cx: &mut Context<Self>) -> Option<AnyElement> {
         use crate::popover;
-        let (id, at) = self.zots.menu.clone()?;
-        zot.workers.iter().any(|w| w.chat_id == id).then_some(())?;
+        let (id, at) = self.zappers.menu.clone()?;
+        zapper
+            .workers
+            .iter()
+            .any(|w| w.chat_id == id)
+            .then_some(())?;
         let item = |key: &'static str,
                     glyph,
                     label,
                     destructive,
-                    action: Option<fn(String) -> ZotAction>| {
+                    action: Option<fn(String) -> ZapperAction>| {
             let id = id.clone();
-            let z = zot.clone();
+            let z = zapper.clone();
             popover::item(
-                SharedString::from(format!("zot-thread-{key}")),
+                SharedString::from(format!("zapper-thread-{key}")),
                 glyph,
                 label,
                 destructive,
             )
             .on_click(cx.listener(move |this, _, window, cx| {
-                this.zots.menu = None;
+                this.zappers.menu = None;
                 match action {
-                    Some(action) => this.zot_action(&z, action(id.clone()), cx),
-                    None => this.open_zot_form(
+                    Some(action) => this.zapper_action(&z, action(id.clone()), cx),
+                    None => this.open_zapper_form(
                         Some(z.clone()),
                         FormKind::Worker(Some(id.clone())),
                         window,
@@ -1792,14 +1858,14 @@ impl WorkspaceView {
             }))
         };
         let open = id.clone();
-        let menu = popover::menu("zot-thread-menu", 200.)
+        let menu = popover::menu("zapper-thread-menu", 200.)
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                this.zots.menu = None;
+                this.zappers.menu = None;
                 cx.notify();
             }))
             .child(
-                popover::item("zot-thread-open", "arrow-up-right", "Open thread", false)
-                    .on_click(cx.listener(move |this, _, _, cx| this.open_zot_chat(&open, cx))),
+                popover::item("zapper-thread-open", "arrow-up-right", "Open thread", false)
+                    .on_click(cx.listener(move |this, _, _, cx| this.open_zapper_chat(&open, cx))),
             )
             .child(item(
                 "message",
@@ -1814,33 +1880,33 @@ impl WorkspaceView {
                 "stop",
                 "Stop",
                 false,
-                Some(|chat_id| ZotAction::StopWorker { chat_id }),
+                Some(|chat_id| ZapperAction::StopWorker { chat_id }),
             ))
             .child(item(
                 "release",
                 "arrow-up-right",
                 "Release from Zapper",
                 false,
-                Some(|chat_id| ZotAction::ReleaseWorker { chat_id }),
+                Some(|chat_id| ZapperAction::ReleaseWorker { chat_id }),
             ))
             .child(item(
                 "archive",
                 "archive-minimalistic",
                 "Archive",
                 true,
-                Some(|chat_id| ZotAction::ArchiveWorker { chat_id }),
+                Some(|chat_id| ZapperAction::ArchiveWorker { chat_id }),
             ));
         Some(popover::anchored_at(at - point(px(180.), px(-10.)), menu))
     }
-    fn zot_drive(&self, zot: &Zot, cx: &mut Context<Self>) -> AnyElement {
-        let files = if self.zots.history {
+    fn zapper_drive(&self, zapper: &Zapper, cx: &mut Context<Self>) -> AnyElement {
+        let files = if self.zappers.history {
             vec![]
         } else {
-            self.zots.files.clone()
+            self.zappers.files.clone()
         };
         let mut list = group();
         for file in files.iter().cloned() {
-            let z = zot.clone();
+            let z = zapper.clone();
             let preview = file
                 .content
                 .lines()
@@ -1889,7 +1955,7 @@ impl WorkspaceView {
                             ),
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.open_zot_form(
+                        this.open_zapper_form(
                             Some(z.clone()),
                             FormKind::File(file.clone()),
                             window,
@@ -1912,9 +1978,9 @@ impl WorkspaceView {
             })
             .into_any_element()
     }
-    fn zot_history(&self, zot: &Zot, cx: &mut Context<Self>) -> AnyElement {
-        let mut files = if self.zots.history {
-            self.zots.files.clone()
+    fn zapper_history(&self, zapper: &Zapper, cx: &mut Context<Self>) -> AnyElement {
+        let mut files = if self.zappers.history {
+            self.zappers.files.clone()
         } else {
             vec![]
         };
@@ -1934,7 +2000,7 @@ impl WorkspaceView {
             let current = versions.iter().map(|f| f.version).max().unwrap_or(0);
             let mut list = group();
             for file in versions {
-                let z = zot.clone();
+                let z = zapper.clone();
                 let latest = file.version == current;
                 let group_id =
                     SharedString::from(format!("version-{}-{}", file.path, file.version));
@@ -1987,9 +2053,9 @@ impl WorkspaceView {
                                 .group_hover(group_id.clone(), |d| d.visible())
                                 .on_click(cx.listener(
                                     move |this, _, _, cx| {
-                                        this.zot_action(
+                                        this.zapper_action(
                                             &z,
-                                            ZotAction::RestoreFile {
+                                            ZapperAction::RestoreFile {
                                                 path: file.path.clone(),
                                                 version: file.version,
                                                 expected_version: current,
@@ -2030,7 +2096,7 @@ fn thread_state(state: &str) -> (Hsla, &'static str) {
         _ => (Hsla::from(rgb(FAINT)).opacity(0.5), "Not running"),
     }
 }
-/// The Zot's mark: its initial on a soft tile.
+/// The Zapper's mark: its initial on a soft tile.
 fn avatar(name: &str, size: f32) -> Div {
     row()
         .size(px(size))

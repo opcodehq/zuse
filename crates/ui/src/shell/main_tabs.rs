@@ -119,7 +119,7 @@ impl Shell {
     /// The current chat's review surface, if it is open in the right pane.
     pub(super) fn review_surface(&self, cx: &App) -> Option<u64> {
         if self.zapper_hosts_surfaces(cx) {
-            return self.zot_review_page(cx);
+            return self.zapper_review_page(cx);
         }
         self.right_tabs
             .get(&self.panel_key(cx))?

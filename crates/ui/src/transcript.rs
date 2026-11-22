@@ -1143,7 +1143,7 @@ pub enum RowKind {
         spec: Arc<str>,
     },
     User {
-        sender: Option<zuse_protocol::presentation::zot_message::ZotSender>,
+        sender: Option<zuse_protocol::presentation::zapper_message::ZapperSender>,
         /// Visible prompt (attachment-ref trailer already stripped). When the
         /// prompt carries file mentions this is the *projected* display text —
         /// chip labels in place of the raw Markdown links.
@@ -1512,7 +1512,8 @@ pub fn rows_for_entry(
         // Lifted before the mention projection, so a comment body's own
         // Markdown never lands in the bubble.
         let (body, badges) = crate::badges::split(&parsed.text);
-        let (sender, body) = match zuse_protocol::presentation::zot_message::parse_display(&body) {
+        let (sender, body) = match zuse_protocol::presentation::zapper_message::parse_display(&body)
+        {
             Some((sender, body)) => (Some(sender), body.to_owned()),
             None => (None, agent_message_display(&body)),
         };
@@ -9335,7 +9336,7 @@ impl Transcript {
                 // first, then attachments and mentioned files. A message with
                 // no text of its own shows no bubble at all.
                 if let Some(sender) = sender.as_ref().filter(|s| s.activity) {
-                    zuse_viewport::zot_issues::activity_notice(
+                    zuse_viewport::zapper_issues::activity_notice(
                         sender,
                         &text,
                         row.timestamp.unwrap_or_default(),
@@ -9413,12 +9414,12 @@ impl Transcript {
                                         .when(pending, |el| el.opacity(0.65))
                                         .when_some(sender.as_ref(), |d, sender| {
                                             d.child(if zapper {
-                                                zuse_viewport::zot_issues::sender_header_labeled(
+                                                zuse_viewport::zapper_issues::sender_header_labeled(
                                                     sender,
                                                     zuse_protocol::slack::MessageSource::ZAPPER_LABEL,
                                                 )
                                             } else {
-                                                zuse_viewport::zot_issues::sender_header(
+                                                zuse_viewport::zapper_issues::sender_header(
                                                     sender,
                                                     row.timestamp.unwrap_or_default(),
                                                 )
@@ -9442,7 +9443,7 @@ impl Transcript {
                         );
                     }
                     if sender.is_some() {
-                        column = column.child(zuse_viewport::zot_issues::sender_footer(
+                        column = column.child(zuse_viewport::zapper_issues::sender_footer(
                             text.to_string(),
                             row.timestamp.unwrap_or_default(),
                         ));
@@ -13078,10 +13079,10 @@ mod tests {
             "zapper_files",
             "zapper_issue",
             "zapper_acknowledge",
-            "zot_command",
-            "zot_events",
-            "zot_files",
-            "zot_acknowledge",
+            "zapper_command",
+            "zapper_events",
+            "zapper_files",
+            "zapper_acknowledge",
         ] {
             assert_eq!(
                 tool_icon_path(&mcp("zuse", tool)),
@@ -19908,7 +19909,7 @@ mod slack_tests {
         let entry = zapper_entry(Some(serde_json::json!({
             "_tag": "zapper",
             "text": "2 thread reports · ZAP-7 changed",
-            "sender": {"zotId": "release", "chatId": "coord", "name": "Release", "avatar": null},
+            "sender": {"zapperId": "release", "chatId": "coord", "name": "Release", "avatar": null},
         })));
         let rows = rows_for_entry(&entry, false, false, &mut |_, _| {
             panic!("User messages do not parse assistant markdown")
@@ -19939,7 +19940,7 @@ mod slack_tests {
         let entry = zapper_entry(Some(serde_json::json!({
             "_tag": "zapper",
             "text": "Ship the notes",
-            "sender": {"zotId": "release", "chatId": "coord", "name": "Release", "avatar": null},
+            "sender": {"zapperId": "release", "chatId": "coord", "name": "Release", "avatar": null},
             "typed": true,
         })));
         let rows = rows_for_entry(&entry, false, false, &mut |_, _| {
@@ -19965,8 +19966,8 @@ mod slack_tests {
     fn engine_turns_hide_the_disclosure_when_the_prompt_is_the_text() {
         let source = zuse_protocol::slack::MessageSource::Zapper {
             text: "Update from Build thread".into(),
-            sender: zuse_protocol::presentation::zot_message::ZotSender {
-                zot_id: "release".into(),
+            sender: zuse_protocol::presentation::zapper_message::ZapperSender {
+                zapper_id: "release".into(),
                 chat_id: "coord".into(),
                 name: "Release".into(),
                 avatar: None,

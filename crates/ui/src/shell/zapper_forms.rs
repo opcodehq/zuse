@@ -1,31 +1,31 @@
-//! Zot forms. New Zot and Zot settings are routed pages; documents, decisions
+//! Zapper forms. New Zapper and Zapper settings are routed pages; documents, decisions
 //! and threads float over the conversation they came from.
-use super::zot_avatar::ZapperFace;
-use super::zots::{zot_avatar, zot_mascot};
+use super::zapper_avatar::ZapperFace;
+use super::zappers::{zapper_avatar, zapper_mascot};
 use super::*;
 use crate::settings::plugins::catalog_ui;
 use crate::settings::widgets::{self, ActionTone};
-use zuse_protocol::presentation::zot_mascots;
-use zuse_protocol::zots::*;
+use zuse_protocol::presentation::zapper_mascots;
+use zuse_protocol::zappers::*;
 
 pub(super) enum Kind {
     Config,
-    File(ZotFile),
+    File(ZapperFile),
     Thread(Option<String>),
-    Decision(ZotDecision),
+    Decision(ZapperDecision),
 }
 
 pub(super) struct Form {
     pub(super) id: String,
-    zot: Option<Zot>,
+    zapper: Option<Zapper>,
     kind: Kind,
     inputs: Vec<Entity<ComposerInput>>,
-    repositories: Vec<ZotRepository>,
-    /// The project a new thread starts in, when the Zot has several.
+    repositories: Vec<ZapperRepository>,
+    /// The project a new thread starts in, when the Zapper has several.
     space: Option<String>,
     home: String,
     worker_device: String,
-    avatar: ZotAvatar,
+    avatar: ZapperAvatar,
     /// The user's own picture as a `data:` URL; shown instead of `avatar`.
     pub(super) image: Option<String>,
     /// Projects that existed when "Add" was pressed; a new one is switched on.
@@ -45,13 +45,13 @@ pub(super) struct Form {
 
 impl Form {
     fn target(&self) -> Option<String> {
-        self.zot.as_ref().map(|z| z.id.clone())
+        self.zapper.as_ref().map(|z| z.id.clone())
     }
 }
 
 /// What a successful command does to the surface that sent it.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum ZotAfter {
+pub(super) enum ZapperAfter {
     Stay,
     CloseDialog,
     /// The page's history entry becomes the new coordinator, so Back skips
@@ -70,17 +70,17 @@ enum Lines {
     Message,
 }
 
-fn fields(kind: &Kind, zot: Option<&Zot>) -> Vec<(&'static str, String, Lines)> {
+fn fields(kind: &Kind, zapper: Option<&Zapper>) -> Vec<(&'static str, String, Lines)> {
     match kind {
         Kind::Config => vec![
             (
                 "Name",
-                zot.map(|z| z.config.name.clone()).unwrap_or_default(),
+                zapper.map(|z| z.config.name.clone()).unwrap_or_default(),
                 Lines::Single,
             ),
             (
                 PURPOSE_HINT,
-                zot.map(|z| z.config.purpose.clone()).unwrap_or_default(),
+                zapper.map(|z| z.config.purpose.clone()).unwrap_or_default(),
                 Lines::Prose,
             ),
         ],
@@ -230,12 +230,12 @@ fn filter_repo_choices(query: &str, choices: &[RepoChoice]) -> Vec<usize> {
 }
 
 /// Switch a repository on or off. Returns whether it is now selected.
-fn toggle_repository(selected: &mut Vec<ZotRepository>, choice: &RepoChoice) -> bool {
+fn toggle_repository(selected: &mut Vec<ZapperRepository>, choice: &RepoChoice) -> bool {
     if selected.iter().any(|r| r.space_id == choice.space_id) {
         selected.retain(|r| r.space_id != choice.space_id);
         false
     } else {
-        selected.push(ZotRepository {
+        selected.push(ZapperRepository {
             space_id: choice.space_id.clone(),
             device_id: choice.device_id.clone(),
         });
@@ -303,70 +303,70 @@ fn chip(
 }
 
 impl Shell {
-    /// On the New Zot page.
-    pub(super) fn creating_zot(&self) -> bool {
-        matches!(self.route, Route::Zot)
+    /// On the New Zapper page.
+    pub(super) fn creating_zapper(&self) -> bool {
+        matches!(self.route, Route::Zapper)
     }
 
-    /// Whether the right panel is editing the selected Zot.
-    pub(super) fn zot_editor_open(&self, cx: &App) -> bool {
+    /// Whether the right panel is editing the selected Zapper.
+    pub(super) fn zapper_editor_open(&self, cx: &App) -> bool {
         matches!(self.route, Route::Chat)
-            && self.selected_zot(cx).is_some_and(|zot| {
-                self.zot_ui
+            && self.selected_zapper(cx).is_some_and(|zapper| {
+                self.zapper_ui
                     .page
                     .as_ref()
                     .and_then(|page| page.target())
-                    .is_some_and(|target| target == zot.id)
+                    .is_some_and(|target| target == zapper.id)
             })
     }
 
-    pub(super) fn open_zot_editor(&mut self, zot: Zot, cx: &mut Context<Self>) {
-        self.zot_ui.page = Some(self.build_zot_form(Some(zot), Kind::Config, false, cx));
+    pub(super) fn open_zapper_editor(&mut self, zapper: Zapper, cx: &mut Context<Self>) {
+        self.zapper_ui.page = Some(self.build_zapper_form(Some(zapper), Kind::Config, false, cx));
         cx.notify();
     }
 
-    fn build_zot_form(
+    fn build_zapper_form(
         &mut self,
-        zot: Option<Zot>,
+        zapper: Option<Zapper>,
         kind: Kind,
         dialog: bool,
         cx: &mut Context<Self>,
     ) -> Form {
         let state = self.state.read(cx);
-        let home = zot
+        let home = zapper
             .as_ref()
             .map(|z| z.config.home_device_id.clone())
             .or_else(|| state.local_device_id.clone())
             .unwrap_or_default();
-        let repositories = zot
+        let repositories = zapper
             .as_ref()
             .map(|z| z.config.repositories.clone())
             .unwrap_or_else(|| {
                 state
                     .selected_space_row()
                     .map(|s| {
-                        vec![ZotRepository {
+                        vec![ZapperRepository {
                             device_id: s.device_id.clone(),
                             space_id: s.id.clone(),
                         }]
                     })
                     .unwrap_or_default()
             });
-        let worker_device = zot
+        let worker_device = zapper
             .as_ref()
             .map(|z| z.config.worker_device_id.clone())
             .unwrap_or_else(|| home.clone());
-        let id = zot
+        let id = zapper
             .as_ref()
             .map(|z| z.id.clone())
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        let face = zot
+        let face = zapper
             .as_ref()
-            .map(zot_avatar)
-            .unwrap_or_else(|| ZapperFace::mascot(zot_mascots::default_avatar(&id)));
+            .map(zapper_avatar)
+            .unwrap_or_else(|| ZapperFace::mascot(zapper_mascots::default_avatar(&id)));
         let (avatar, image) = (face.avatar, face.image.map(String::from));
         let mut subscriptions = vec![];
-        let inputs = fields(&kind, zot.as_ref())
+        let inputs = fields(&kind, zapper.as_ref())
             .into_iter()
             .map(|(placeholder, value, lines)| {
                 let input = cx.new(|cx| {
@@ -384,7 +384,7 @@ impl Shell {
                 subscriptions.push(cx.subscribe(
                     &input,
                     move |this: &mut Shell, _, event: &ComposerInputEvent, cx| match event {
-                        ComposerInputEvent::Submitted => this.submit_zot_form(dialog, cx),
+                        ComposerInputEvent::Submitted => this.submit_zapper_form(dialog, cx),
                         ComposerInputEvent::Edited => cx.notify(),
                         _ => {}
                     },
@@ -405,7 +405,7 @@ impl Shell {
                 |this: &mut Shell, input, event: &ComposerInputEvent, cx| {
                     if matches!(event, ComposerInputEvent::Edited) {
                         let searching = !input.read(cx).text().trim().is_empty();
-                        if let Some(form) = this.zot_ui.page.as_mut() {
+                        if let Some(form) = this.zapper_ui.page.as_mut() {
                             // Typing highlights the best match, so Enter picks it.
                             form.repo_active = searching.then_some(0);
                             form.repo_scroll.scroll_to_item(0);
@@ -416,13 +416,13 @@ impl Shell {
             ));
             input
         });
-        let (max_workers, max_followups) = zot
+        let (max_workers, max_followups) = zapper
             .as_ref()
             .map(|z| (z.config.max_concurrent_workers, z.config.max_followups))
             .unwrap_or((4, 3));
         Form {
             id,
-            zot,
+            zapper,
             kind,
             inputs,
             repositories,
@@ -446,13 +446,13 @@ impl Shell {
 
     /// Visual fixture hook: open New Zapper.
     pub fn fixture_open_new_zapper(&mut self, cx: &mut Context<Self>) {
-        self.open_new_zot(cx);
+        self.open_new_zapper(cx);
     }
 
     /// Visual fixture hook: type into the repository search.
     pub fn fixture_search_repositories(&mut self, query: &str, cx: &mut Context<Self>) -> bool {
         let Some(input) = self
-            .zot_ui
+            .zapper_ui
             .page
             .as_ref()
             .and_then(|f| f.repo_search.clone())
@@ -465,7 +465,7 @@ impl Shell {
 
     /// Visual fixture hook: scroll New Zapper to its end.
     pub fn fixture_scroll_zapper_page(&mut self, cx: &mut Context<Self>) {
-        if let Some(form) = self.zot_ui.page.as_ref() {
+        if let Some(form) = self.zapper_ui.page.as_ref() {
             form.page_scroll.scroll_to_bottom();
         }
         cx.notify();
@@ -473,7 +473,7 @@ impl Shell {
 
     /// Visual fixture hook: expand Advanced.
     pub fn fixture_open_advanced(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(form) = self.zot_ui.page.as_mut() else {
+        let Some(form) = self.zapper_ui.page.as_mut() else {
             return false;
         };
         form.advanced_open = true;
@@ -481,27 +481,27 @@ impl Shell {
         true
     }
 
-    pub(super) fn open_new_zot(&mut self, cx: &mut Context<Self>) {
-        self.nav.push(NavEntry::NewZot);
-        self.show_new_zot(cx);
+    pub(super) fn open_new_zapper(&mut self, cx: &mut Context<Self>) {
+        self.nav.push(NavEntry::NewZapper);
+        self.show_new_zapper(cx);
     }
 
-    /// Land on New Zot, keeping a draft the user walked away from.
-    pub(super) fn show_new_zot(&mut self, cx: &mut Context<Self>) {
-        match self.zot_ui.page.as_mut() {
+    /// Land on New Zapper, keeping a draft the user walked away from.
+    pub(super) fn show_new_zapper(&mut self, cx: &mut Context<Self>) {
+        match self.zapper_ui.page.as_mut() {
             Some(page) if page.target().is_none() => page.focus_pending = true,
-            _ => self.zot_ui.page = Some(self.build_zot_form(None, Kind::Config, false, cx)),
+            _ => self.zapper_ui.page = Some(self.build_zapper_form(None, Kind::Config, false, cx)),
         }
-        self.zot_ui.dialog = None;
+        self.zapper_ui.dialog = None;
         self.set_voice_stage_open(false, cx);
-        self.set_route(Route::Zot, cx);
+        self.set_route(Route::Zapper, cx);
         cx.notify();
     }
 
     /// Discard the page and return to wherever it was opened from.
-    pub(super) fn leave_zot_page(&mut self, cx: &mut Context<Self>) {
-        self.zot_ui.page = None;
-        if !matches!(self.route, Route::Zot) {
+    pub(super) fn leave_zapper_page(&mut self, cx: &mut Context<Self>) {
+        self.zapper_ui.page = None;
+        if !matches!(self.route, Route::Zapper) {
             return;
         }
         if self.nav.can_back() {
@@ -511,49 +511,54 @@ impl Shell {
         }
     }
 
-    pub(super) fn open_zot_dialog(&mut self, zot: Zot, kind: Kind, cx: &mut Context<Self>) {
-        self.zot_ui.dialog = Some(self.build_zot_form(Some(zot), kind, true, cx));
+    pub(super) fn open_zapper_dialog(
+        &mut self,
+        zapper: Zapper,
+        kind: Kind,
+        cx: &mut Context<Self>,
+    ) {
+        self.zapper_ui.dialog = Some(self.build_zapper_form(Some(zapper), kind, true, cx));
         cx.notify();
     }
 
-    fn zot_default_model(&self, cx: &App) -> ZotModel {
-        let chosen = crate::settings::default_model(cx).map(|preferred| ZotModel {
+    fn zapper_default_model(&self, cx: &App) -> ZapperModel {
+        let chosen = crate::settings::default_model(cx).map(|preferred| ZapperModel {
             harness: String::from(preferred.provider.clone()),
             model: Some(preferred.model.clone()),
         });
         chosen
             .or_else(|| {
                 let config = self.state.read(cx).selected_chat_row()?.config.clone()?;
-                Some(ZotModel {
+                Some(ZapperModel {
                     harness: String::from(config.harness),
                     model: config.model,
                 })
             })
-            .unwrap_or_else(|| ZotModel {
+            .unwrap_or_else(|| ZapperModel {
                 harness: "claude-code".into(),
                 model: None,
             })
     }
 
-    pub(super) fn zot_thread_model(&self, zot: &Zot, cx: &App) -> ZotModel {
+    pub(super) fn zapper_thread_model(&self, zapper: &Zapper, cx: &App) -> ZapperModel {
         self.state
             .read(cx)
             .chats
             .iter()
-            .find(|c| c.id == zot.coordinator_chat_id)
+            .find(|c| c.id == zapper.coordinator_chat_id)
             .and_then(|c| c.config.clone())
-            .map(|config| ZotModel {
+            .map(|config| ZapperModel {
                 harness: String::from(config.harness),
                 model: config.model,
             })
-            .unwrap_or_else(|| zot.config.coordinator_model.clone())
+            .unwrap_or_else(|| zapper.config.coordinator_model.clone())
     }
 
-    pub(super) fn submit_zot_form(&mut self, dialog: bool, cx: &mut Context<Self>) {
+    pub(super) fn submit_zapper_form(&mut self, dialog: bool, cx: &mut Context<Self>) {
         let form = if dialog {
-            self.zot_ui.dialog.as_ref()
+            self.zapper_ui.dialog.as_ref()
         } else {
-            self.zot_ui.page.as_ref()
+            self.zapper_ui.page.as_ref()
         };
         let Some(form) = form else {
             return;
@@ -568,23 +573,23 @@ impl Shell {
         };
         // Revisions also move for decisions and worker activity, so a form that
         // has been open a while still writes against the current one.
-        let latest = form.zot.as_ref().and_then(|zot| {
+        let latest = form.zapper.as_ref().and_then(|zapper| {
             self.state
                 .read(cx)
-                .zots
+                .zappers
                 .iter()
-                .find(|z| z.id == zot.id)
+                .find(|z| z.id == zapper.id)
                 .cloned()
         });
-        if form.zot.is_some() && latest.is_none() {
+        if form.zapper.is_some() && latest.is_none() {
             error(self, "This Zapper no longer exists", cx);
             return;
         }
         let revision = latest.as_ref().map(|z| z.revision);
         let mut after = if dialog {
-            ZotAfter::CloseDialog
+            ZapperAfter::CloseDialog
         } else {
-            ZotAfter::LeavePage
+            ZapperAfter::LeavePage
         };
         let action = match &form.kind {
             Kind::Config => {
@@ -604,8 +609,8 @@ impl Shell {
                 let avatar = Some(form.avatar.clone());
                 let avatar_image = form.image.clone();
                 match latest {
-                    Some(zot) => ZotAction::Configure {
-                        config: ZotConfig {
+                    Some(zapper) => ZapperAction::Configure {
+                        config: ZapperConfig {
                             name,
                             purpose,
                             home_device_id,
@@ -615,19 +620,19 @@ impl Shell {
                             max_followups,
                             avatar,
                             avatar_image,
-                            ..zot.config
+                            ..zapper.config
                         },
                     },
                     None => {
-                        after = ZotAfter::Created;
-                        ZotAction::Create {
-                            config: ZotConfig {
+                        after = ZapperAfter::Created;
+                        ZapperAction::Create {
+                            config: ZapperConfig {
                                 name,
                                 purpose,
                                 home_device_id,
                                 repositories,
                                 // The coordinator's composer changes this later.
-                                coordinator_model: self.zot_default_model(cx),
+                                coordinator_model: self.zapper_default_model(cx),
                                 worker_device_id,
                                 max_concurrent_workers,
                                 max_followups,
@@ -648,7 +653,7 @@ impl Shell {
                     error(self, "Name the document", cx);
                     return;
                 }
-                ZotAction::WriteFile {
+                ZapperAction::WriteFile {
                     path,
                     content,
                     expected_version: file.version,
@@ -662,7 +667,7 @@ impl Shell {
                 }
                 let mut decision = decision.clone();
                 decision.answer = Some(answer);
-                ZotAction::Decide { decision }
+                ZapperAction::Decide { decision }
             }
             Kind::Thread(Some(chat_id)) => {
                 let text = values[0].trim().to_owned();
@@ -670,7 +675,7 @@ impl Shell {
                     error(self, "Write a message first", cx);
                     return;
                 }
-                ZotAction::MessageWorker {
+                ZapperAction::MessageWorker {
                     chat_id: chat_id.clone(),
                     text,
                     automatic: false,
@@ -696,11 +701,11 @@ impl Shell {
                     error(self, "Add a repository to this Zapper first", cx);
                     return;
                 };
-                let zot = latest.as_ref().or(form.zot.as_ref()).unwrap();
+                let zapper = latest.as_ref().or(form.zapper.as_ref()).unwrap();
                 let base = values[1].trim();
-                ZotAction::Delegate {
+                ZapperAction::Delegate {
                     issue_id: None,
-                    worker: ZotWorker {
+                    worker: ZapperWorker {
                         chat_id: String::new(),
                         device_id: repository.device_id.clone(),
                         space_id: repository.space_id.clone(),
@@ -708,7 +713,7 @@ impl Shell {
                         followups: 0,
                         queue_position: None,
                     },
-                    model: self.zot_thread_model(zot, cx),
+                    model: self.zapper_thread_model(zapper, cx),
                     base: if base.is_empty() {
                         "HEAD".into()
                     } else {
@@ -718,19 +723,19 @@ impl Shell {
             }
         };
         let id = form.id.clone();
-        self.send_zot_command(id, revision, action, after, cx);
+        self.send_zapper_command(id, revision, action, after, cx);
     }
 
-    pub(super) fn send_zot_command(
+    pub(super) fn send_zapper_command(
         &mut self,
         id: String,
         expected_revision: Option<u32>,
-        action: ZotAction,
-        after: ZotAfter,
+        action: ZapperAction,
+        after: ZapperAfter,
         cx: &mut Context<Self>,
     ) {
-        let from_issue_panel = std::mem::take(&mut self.zot_ui.issue_command);
-        if self.zot_ui.pending {
+        let from_issue_panel = std::mem::take(&mut self.zapper_ui.issue_command);
+        if self.zapper_ui.pending {
             return;
         }
         let Some(engine) = self.state.read(cx).engine().cloned() else {
@@ -739,73 +744,81 @@ impl Shell {
         let home = self
             .state
             .read(cx)
-            .zots
+            .zappers
             .iter()
             .find(|z| z.id == id)
             .map(|z| z.config.home_device_id.clone())
             .or_else(|| {
-                self.zot_ui
+                self.zapper_ui
                     .page
                     .as_ref()
                     .filter(|page| page.id == id)
                     .map(|page| page.home.clone())
             });
-        let mut command = ZotCommand {
+        let mut command = ZapperCommand {
             command_id: uuid::Uuid::new_v4().to_string(),
-            zot_id: id,
+            zapper_id: id,
             expected_revision,
             action,
         };
-        if let ZotAction::Delegate { worker, .. } = &mut command.action {
-            worker.chat_id = format!("zot-worker-{}", command.command_id);
+        if let ZapperAction::Delegate { worker, .. } = &mut command.action {
+            worker.chat_id = format!(
+                "{}{}",
+                zuse_protocol::zappers::WORKER_CHAT_PREFIX,
+                command.command_id
+            );
         }
-        if let Some(previous) = &self.zot_ui.retry {
+        if let Some(previous) = &self.zapper_ui.retry {
             let mut comparable = command.clone();
             comparable.command_id = previous.command_id.clone();
             comparable.expected_revision = previous.expected_revision;
-            if let ZotAction::Delegate { worker, .. } = &mut comparable.action {
-                worker.chat_id = format!("zot-worker-{}", previous.command_id);
+            if let ZapperAction::Delegate { worker, .. } = &mut comparable.action {
+                worker.chat_id = format!(
+                    "{}{}",
+                    zuse_protocol::zappers::WORKER_CHAT_PREFIX,
+                    previous.command_id
+                );
             }
             if serde_json::to_value(&comparable).ok() == serde_json::to_value(previous).ok() {
                 command = previous.clone();
             }
         }
-        self.zot_ui.retry = Some(command.clone());
+        self.zapper_ui.retry = Some(command.clone());
         let mut params = serde_json::to_value(command).unwrap();
         if let Some(home) = home {
             params["targetDeviceId"] = serde_json::json!(home);
         }
-        self.zot_ui.pending = true;
+        self.zapper_ui.pending = true;
         cx.spawn(async move |this, cx| {
             let result = engine
                 .client()
-                .call(zuse_protocol::control::ZOT_COMMAND, params)
+                .call(zuse_protocol::control::ZAPPER_COMMAND, params)
                 .await;
             let _ = this.update(cx, |this, cx| {
-                this.zot_ui.pending = false;
+                this.zapper_ui.pending = false;
                 match result {
                     Ok(value) => {
-                        this.zot_ui.retry = None;
+                        this.zapper_ui.retry = None;
                         if let Some(panel) =
-                            this.zot_ui.issues.as_ref().filter(|_| from_issue_panel)
+                            this.zapper_ui.issues.as_ref().filter(|_| from_issue_panel)
                         {
                             panel.update(cx, |p, cx| p.committed(cx));
                         }
-                        this.zot_ui.loaded = None;
-                        let coordinator = serde_json::from_value::<Option<Zot>>(value)
+                        this.zapper_ui.loaded = None;
+                        let coordinator = serde_json::from_value::<Option<Zapper>>(value)
                             .ok()
                             .flatten()
-                            .map(|zot| zot.coordinator_chat_id);
-                        this.finish_zot_command(after, coordinator, cx);
+                            .map(|zapper| zapper.coordinator_chat_id);
+                        this.finish_zapper_command(after, coordinator, cx);
                     }
                     Err(error) => {
                         // The engine answered: nothing was written, so the
                         // next attempt is a new command at the current revision.
-                        if !zuse_protocol::zots::command_outcome_unknown(&error.to_string()) {
-                            this.zot_ui.retry = None;
+                        if !zuse_protocol::zappers::command_outcome_unknown(&error.to_string()) {
+                            this.zapper_ui.retry = None;
                         }
                         if let Some(panel) =
-                            this.zot_ui.issues.as_ref().filter(|_| from_issue_panel)
+                            this.zapper_ui.issues.as_ref().filter(|_| from_issue_panel)
                         {
                             panel.update(cx, |p, cx| p.failed(error.to_string(), cx));
                         }
@@ -819,25 +832,25 @@ impl Shell {
         cx.notify();
     }
 
-    fn finish_zot_command(
+    fn finish_zapper_command(
         &mut self,
-        after: ZotAfter,
+        after: ZapperAfter,
         coordinator: Option<String>,
         cx: &mut Context<Self>,
     ) {
         match after {
-            ZotAfter::Stay => {}
-            ZotAfter::CloseDialog => self.zot_ui.dialog = None,
-            ZotAfter::LeavePage => self.leave_zot_page(cx),
-            ZotAfter::Created => {
-                self.zot_ui.page = None;
-                if let Some(chat) = coordinator.filter(|_| matches!(self.route, Route::Zot)) {
+            ZapperAfter::Stay => {}
+            ZapperAfter::CloseDialog => self.zapper_ui.dialog = None,
+            ZapperAfter::LeavePage => self.leave_zapper_page(cx),
+            ZapperAfter::Created => {
+                self.zapper_ui.page = None;
+                if let Some(chat) = coordinator.filter(|_| matches!(self.route, Route::Zapper)) {
                     let entry = NavEntry::Chat(chat);
                     self.nav.replace(entry.clone());
                     self.apply_nav(entry, cx);
                 }
             }
-            ZotAfter::OpenCoordinator => {
+            ZapperAfter::OpenCoordinator => {
                 if let Some(chat) = coordinator {
                     self.open_chat(chat, cx);
                 }
@@ -845,18 +858,18 @@ impl Shell {
         }
     }
 
-    fn zot_avatar_picker(
+    fn zapper_avatar_picker(
         &self,
-        current: &ZotAvatar,
+        current: &ZapperAvatar,
         image: bool,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         // Picking a robot or colour means "use the robot", so it also clears
         // a picture; the robot stays the fallback either way.
-        let set = |avatar: ZotAvatar| {
+        let set = |avatar: ZapperAvatar| {
             cx.listener(move |this: &mut Shell, _: &gpui::ClickEvent, _, cx| {
-                if let Some(form) = this.zot_ui.page.as_mut() {
+                if let Some(form) = this.zapper_ui.page.as_mut() {
                     form.avatar = avatar.clone();
                     form.image = None;
                 }
@@ -864,8 +877,8 @@ impl Shell {
             })
         };
         let mut mascots = div().flex().flex_wrap().gap(px(6.0));
-        for mascot in zot_mascots::MASCOTS {
-            let avatar = ZotAvatar {
+        for mascot in zapper_mascots::MASCOTS {
+            let avatar = ZapperAvatar {
                 mascot: mascot.id.into(),
                 color: current.color.clone(),
             };
@@ -873,7 +886,7 @@ impl Shell {
             let label = format!("{}: {}", mascot.name, mascot.about);
             mascots = mascots.child(
                 div()
-                    .id(SharedString::from(format!("zot-mascot-{}", mascot.id)))
+                    .id(SharedString::from(format!("zapper-mascot-{}", mascot.id)))
                     .role(gpui::Role::RadioButton)
                     .aria_label(SharedString::from(label.clone()))
                     .tip(label)
@@ -889,16 +902,16 @@ impl Shell {
                         d.border_color(gpui::transparent_black())
                             .hover(|d| d.border_color(theme.border_strong))
                     })
-                    .child(zot_mascot(&ZapperFace::mascot(avatar.clone()), 32.0))
+                    .child(zapper_mascot(&ZapperFace::mascot(avatar.clone()), 32.0))
                     .on_click(set(avatar.clone())),
             );
         }
         let mut colors = div().flex().items_center().gap(px(6.0));
-        for color in zot_mascots::COLORS {
+        for color in zapper_mascots::COLORS {
             let active = !image && color.id == current.color;
             colors = colors.child(
                 div()
-                    .id(SharedString::from(format!("zot-color-{}", color.id)))
+                    .id(SharedString::from(format!("zapper-color-{}", color.id)))
                     .role(gpui::Role::RadioButton)
                     .aria_label(color.id)
                     .size(px(22.0))
@@ -912,7 +925,7 @@ impl Shell {
                         gpui::transparent_black()
                     })
                     .child(div().size_full().rounded_full().bg(gpui::rgb(color.body)))
-                    .on_click(set(ZotAvatar {
+                    .on_click(set(ZapperAvatar {
                         mascot: current.mascot.clone(),
                         color: color.id.into(),
                     })),
@@ -924,7 +937,7 @@ impl Shell {
             .gap(px(6.0))
             .child(
                 widgets::ghost_action(theme)
-                    .id("zot-upload-image")
+                    .id("zapper-upload-image")
                     .role(gpui::Role::Button)
                     .child(
                         icon(icons::UPLOAD)
@@ -936,12 +949,12 @@ impl Shell {
                     } else {
                         "Upload image"
                     })
-                    .on_click(cx.listener(|this, _, _, cx| this.upload_zot_picture(cx))),
+                    .on_click(cx.listener(|this, _, _, cx| this.upload_zapper_picture(cx))),
             )
             .when(image, |d| {
                 d.child(
                     widgets::ghost_action(theme)
-                        .id("zot-remove-image")
+                        .id("zapper-remove-image")
                         .role(gpui::Role::Button)
                         .child(
                             icon(icons::CLOSE)
@@ -950,7 +963,7 @@ impl Shell {
                         )
                         .child("Use robot")
                         .on_click(cx.listener(|this, _, _, cx| {
-                            if let Some(form) = this.zot_ui.page.as_mut() {
+                            if let Some(form) = this.zapper_ui.page.as_mut() {
                                 form.image = None;
                             }
                             cx.notify();
@@ -970,7 +983,7 @@ impl Shell {
                     .child(colors)
                     .child(
                         widgets::ghost_action(theme)
-                            .id("zot-shuffle")
+                            .id("zapper-shuffle")
                             .role(gpui::Role::Button)
                             .child(
                                 icon(icons::REFRESH)
@@ -979,8 +992,8 @@ impl Shell {
                             )
                             .child("Shuffle")
                             .on_click(cx.listener(|this, _, _, cx| {
-                                if let Some(form) = this.zot_ui.page.as_mut() {
-                                    form.avatar = zot_mascots::default_avatar(
+                                if let Some(form) = this.zapper_ui.page.as_mut() {
+                                    form.avatar = zapper_mascots::default_avatar(
                                         &uuid::Uuid::new_v4().to_string(),
                                     );
                                     form.image = None;
@@ -993,14 +1006,14 @@ impl Shell {
             .into_any_element()
     }
 
-    fn zot_repo_choices(&self, cx: &App) -> Vec<RepoChoice> {
+    fn zapper_repo_choices(&self, cx: &App) -> Vec<RepoChoice> {
         let state = self.state.read(cx);
         repo_choices(&state.spaces, &state.devices)
     }
 
     /// The choices the repository search currently shows, in list order.
-    fn zot_visible_repos(&self, cx: &App) -> Vec<RepoChoice> {
-        let Some(form) = self.zot_ui.page.as_ref() else {
+    fn zapper_visible_repos(&self, cx: &App) -> Vec<RepoChoice> {
+        let Some(form) = self.zapper_ui.page.as_ref() else {
             return vec![];
         };
         let query = form
@@ -1008,15 +1021,15 @@ impl Shell {
             .as_ref()
             .map(|input| input.read(cx).text().to_owned())
             .unwrap_or_default();
-        let choices = self.zot_repo_choices(cx);
+        let choices = self.zapper_repo_choices(cx);
         filter_repo_choices(&query, &choices)
             .into_iter()
             .map(|index| choices[index].clone())
             .collect()
     }
 
-    fn toggle_zot_repository(&mut self, choice: &RepoChoice, cx: &mut Context<Self>) {
-        if let Some(form) = self.zot_ui.page.as_mut() {
+    fn toggle_zapper_repository(&mut self, choice: &RepoChoice, cx: &mut Context<Self>) {
+        if let Some(form) = self.zapper_ui.page.as_mut() {
             toggle_repository(&mut form.repositories, choice);
         }
         cx.notify();
@@ -1024,14 +1037,14 @@ impl Shell {
 
     /// Arrows move the highlight, Enter switches the highlighted repository
     /// and Escape clears the search. Other keys go on to the form.
-    fn zot_repo_key(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
+    fn zapper_repo_key(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
         let key = popover::classify_key(
             event.keystroke.key.as_str(),
             event.keystroke.modifiers.platform,
             event.keystroke.modifiers.control,
         );
-        let visible = self.zot_visible_repos(cx);
-        let Some(form) = self.zot_ui.page.as_mut() else {
+        let visible = self.zapper_visible_repos(cx);
+        let Some(form) = self.zapper_ui.page.as_mut() else {
             return;
         };
         match key {
@@ -1046,7 +1059,7 @@ impl Shell {
                 let Some(choice) = form.repo_active.and_then(|i| visible.get(i)).cloned() else {
                     return;
                 };
-                self.toggle_zot_repository(&choice, cx);
+                self.toggle_zapper_repository(&choice, cx);
             }
             popover::MenuKey::Escape => {
                 let Some(input) = form.repo_search.clone() else {
@@ -1064,13 +1077,13 @@ impl Shell {
         cx.notify();
     }
 
-    fn zot_repository_picker(
+    fn zapper_repository_picker(
         &self,
-        selected: &[ZotRepository],
+        selected: &[ZapperRepository],
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let choices = self.zot_repo_choices(cx);
+        let choices = self.zapper_repo_choices(cx);
         if choices.is_empty() {
             return widgets::section_card(theme)
                 .mt(px(0.0))
@@ -1080,7 +1093,7 @@ impl Shell {
                 .child("No projects yet. Add one from GitHub or a folder on this device.")
                 .into_any_element();
         }
-        let Some(form) = self.zot_ui.page.as_ref() else {
+        let Some(form) = self.zapper_ui.page.as_ref() else {
             return div().into_any_element();
         };
         let Some(search) = form.repo_search.clone() else {
@@ -1089,14 +1102,14 @@ impl Shell {
         let active = form.repo_active;
         let scroll = form.repo_scroll.clone();
         let query = search.read(cx).text().to_owned();
-        let visible = self.zot_visible_repos(cx);
+        let visible = self.zapper_visible_repos(cx);
 
         let search_row = catalog_ui::search_field(theme, None, search.into_any_element())
             .h(px(32.0))
             .when(!query.is_empty(), |field| {
                 field.child(
                     div()
-                        .id("zot-repo-search-clear")
+                        .id("zapper-repo-search-clear")
                         .role(gpui::Role::Button)
                         .aria_label("Clear search")
                         .flex_none()
@@ -1114,7 +1127,7 @@ impl Shell {
                                 .text_color(theme.text_muted),
                         )
                         .on_click(cx.listener(|this, _, _, cx| {
-                            if let Some(form) = this.zot_ui.page.as_mut() {
+                            if let Some(form) = this.zapper_ui.page.as_mut() {
                                 if let Some(input) = form.repo_search.clone() {
                                     input.update(cx, |input, cx| input.set_text("", cx));
                                 }
@@ -1159,7 +1172,7 @@ impl Shell {
                         )
                         .child(
                             div()
-                                .id(SharedString::from(format!("zot-repo-chip-{space_id}")))
+                                .id(SharedString::from(format!("zapper-repo-chip-{space_id}")))
                                 .role(gpui::Role::Button)
                                 .aria_label(SharedString::from(format!("Remove {label}")))
                                 .size(px(18.0))
@@ -1175,7 +1188,7 @@ impl Shell {
                                         .text_color(theme.text_muted),
                                 )
                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                    if let Some(form) = this.zot_ui.page.as_mut() {
+                                    if let Some(form) = this.zapper_ui.page.as_mut() {
                                         form.repositories.retain(|r| r.space_id != space_id);
                                     }
                                     cx.notify();
@@ -1209,7 +1222,7 @@ impl Shell {
         } else {
             let spaces = self.state.read(cx).spaces.clone();
             let mut rows = div()
-                .id("zot-repo-list")
+                .id("zapper-repo-list")
                 .role(gpui::Role::List)
                 .max_h(px(REPO_LIST_HEIGHT))
                 .p(px(4.0))
@@ -1237,7 +1250,10 @@ impl Shell {
                     .child(self.project_artwork(space, false, cx));
                 rows = rows.child(
                     div()
-                        .id(SharedString::from(format!("zot-repo-{}", choice.space_id)))
+                        .id(SharedString::from(format!(
+                            "zapper-repo-{}",
+                            choice.space_id
+                        )))
                         .role(gpui::Role::CheckBox)
                         .aria_label(SharedString::from(choice.name.clone()))
                         .aria_selected(checked)
@@ -1276,10 +1292,10 @@ impl Shell {
                         )
                         .child(widgets::select_check(theme, checked))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some(form) = this.zot_ui.page.as_mut() {
+                            if let Some(form) = this.zapper_ui.page.as_mut() {
                                 form.repo_active = Some(index);
                             }
-                            this.toggle_zot_repository(&choice, cx);
+                            this.toggle_zapper_repository(&choice, cx);
                         })),
                 );
             }
@@ -1291,13 +1307,13 @@ impl Shell {
         };
 
         div()
-            .id("zot-repo-picker")
+            .id("zapper-repo-picker")
             .flex()
             .flex_col()
             .gap(px(LABEL_GAP))
-            .on_key_down(
-                cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| this.zot_repo_key(event, cx)),
-            )
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                this.zapper_repo_key(event, cx)
+            }))
             .child(search_row)
             .children(chips)
             .child(list)
@@ -1305,7 +1321,7 @@ impl Shell {
     }
 
     /// A − value + control for a bounded count.
-    fn zot_stepper(
+    fn zapper_stepper(
         &self,
         id: &'static str,
         value: u32,
@@ -1334,7 +1350,7 @@ impl Shell {
                 .when(!enabled, |d| d.opacity(0.4))
                 .child(glyph)
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    if let Some(form) = this.zot_ui.page.as_mut() {
+                    if let Some(form) = this.zapper_ui.page.as_mut() {
                         set(form, step_limit(value, delta, &range));
                     }
                     cx.notify();
@@ -1359,7 +1375,7 @@ impl Shell {
             .into_any_element()
     }
 
-    fn zot_device_chips(
+    fn zapper_device_chips(
         &self,
         selected: &str,
         home: bool,
@@ -1374,17 +1390,17 @@ impl Shell {
             let id = device.id.clone();
             chips = chips.child(
                 chip(
-                    format!("zot-device-{home}-{id}"),
+                    format!("zapper-device-{home}-{id}"),
                     device.name,
                     active,
                     theme,
                 )
                 .when(locked && !active, |d| d.opacity(0.4))
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    if let Some(form) = this.zot_ui.page.as_mut() {
+                    if let Some(form) = this.zapper_ui.page.as_mut() {
                         if !home {
                             form.worker_device = id.clone();
-                        } else if form.zot.is_none() {
+                        } else if form.zapper.is_none() {
                             form.home = id.clone();
                         }
                     }
@@ -1396,10 +1412,10 @@ impl Shell {
     }
 
     /// How the coordinator's model reads in Advanced.
-    fn zot_model_label(&self, zot: Option<&Zot>, cx: &App) -> String {
-        let model = match zot {
-            Some(zot) => self.zot_thread_model(zot, cx),
-            None => self.zot_default_model(cx),
+    fn zapper_model_label(&self, zapper: Option<&Zapper>, cx: &App) -> String {
+        let model = match zapper {
+            Some(zapper) => self.zapper_thread_model(zapper, cx),
+            None => self.zapper_default_model(cx),
         };
         let harness = zuse_protocol::HarnessId::try_from(model.harness.clone())
             .map(|h| crate::pickers::harness_display_name(h).to_owned())
@@ -1413,9 +1429,9 @@ impl Shell {
         }
     }
 
-    /// The fields shared by the New Zot page and the panel editor: name,
+    /// The fields shared by the New Zapper page and the panel editor: name,
     /// what it should do, repositories, then Advanced (collapsed).
-    fn zot_form_fields(
+    fn zapper_form_fields(
         &mut self,
         compact: bool,
         window: &mut Window,
@@ -1423,7 +1439,7 @@ impl Shell {
     ) -> gpui::Div {
         let theme = Theme::of(cx).clone();
         let spaces = self.state.read(cx).spaces.clone();
-        let form = self.zot_ui.page.as_mut().unwrap();
+        let form = self.zapper_ui.page.as_mut().unwrap();
         if std::mem::take(&mut form.focus_pending) {
             window.focus(&form.inputs[0].focus_handle(cx), cx);
         }
@@ -1431,7 +1447,7 @@ impl Shell {
             let added: Vec<_> = spaces.iter().filter(|s| !known.contains(&s.id)).collect();
             if !added.is_empty() {
                 form.repositories
-                    .extend(added.into_iter().map(|space| ZotRepository {
+                    .extend(added.into_iter().map(|space| ZapperRepository {
                         space_id: space.id.clone(),
                         device_id: space.device_id.clone(),
                     }));
@@ -1446,18 +1462,18 @@ impl Shell {
         };
         let name = form.inputs[0].clone();
         let purpose = form.inputs[1].clone();
-        let editing = form.zot.is_some();
+        let editing = form.zapper.is_some();
         let selected = form.repositories.clone();
         let (home, worker_device) = (form.home.clone(), form.worker_device.clone());
         let (advanced_open, max_workers, max_followups) =
             (form.advanced_open, form.max_workers, form.max_followups);
-        let zot = form.zot.clone();
+        let zapper = form.zapper.clone();
         let multiple_devices = self.state.read(cx).devices.len() > 1;
         let identity = div()
             .flex()
             .items_center()
             .gap(px(14.0))
-            .child(zot_mascot(&face, if compact { 48.0 } else { 64.0 }))
+            .child(zapper_mascot(&face, if compact { 48.0 } else { 64.0 }))
             .child(
                 div()
                     .flex_1()
@@ -1469,7 +1485,7 @@ impl Shell {
             .flex_col()
             .gap(px(8.0))
             .child(widgets::field_label(&theme, "Character"))
-            .child(self.zot_avatar_picker(&avatar, face.image.is_some(), &theme, cx));
+            .child(self.zapper_avatar_picker(&avatar, face.image.is_some(), &theme, cx));
         let purpose = div()
             .flex()
             .flex_col()
@@ -1482,7 +1498,7 @@ impl Shell {
             ))
             .child(text_box(purpose, 96.0, cx));
         let add = widgets::action_button(&theme, ActionTone::Outlined)
-            .id("zot-add-project")
+            .id("zapper-add-project")
             .role(gpui::Role::Button)
             .child(icon(icons::PLUS).size(px(12.0)))
             .child(if compact { "Add" } else { "Add project" })
@@ -1494,7 +1510,7 @@ impl Shell {
                     .iter()
                     .map(|s| s.id.clone())
                     .collect();
-                if let Some(form) = this.zot_ui.page.as_mut() {
+                if let Some(form) = this.zapper_ui.page.as_mut() {
                     form.known_spaces = Some(known);
                 }
                 this.open_project_setup(None, cx);
@@ -1509,7 +1525,7 @@ impl Shell {
                 Some("Threads this Zapper starts work in the ones you pick."),
                 Some(add.into_any_element()),
             ))
-            .child(self.zot_repository_picker(&selected, &theme, cx));
+            .child(self.zapper_repository_picker(&selected, &theme, cx));
 
         let row = |title: &'static str, detail: &'static str, control: AnyElement, first| {
             widgets::card_row(&theme, first)
@@ -1525,10 +1541,10 @@ impl Shell {
                 )
                 .child(control)
         };
-        let model = self.zot_model_label(zot.as_ref(), cx);
+        let model = self.zapper_model_label(zapper.as_ref(), cx);
         let summary = format!("{model} · {max_workers} at once · {max_followups} follow-ups");
         let toggle = div()
-            .id("zot-advanced")
+            .id("zapper-advanced")
             .role(gpui::Role::Button)
             .aria_expanded(advanced_open)
             .flex()
@@ -1556,7 +1572,7 @@ impl Shell {
                 )
             })
             .on_click(cx.listener(|this, _, _, cx| {
-                if let Some(form) = this.zot_ui.page.as_mut() {
+                if let Some(form) = this.zapper_ui.page.as_mut() {
                     form.advanced_open = !form.advanced_open;
                 }
                 cx.notify();
@@ -1574,8 +1590,8 @@ impl Shell {
                 true,
             ));
             if multiple_devices {
-                let host = self.zot_device_chips(&home, true, editing, &theme, cx);
-                let workers = self.zot_device_chips(&worker_device, false, false, &theme, cx);
+                let host = self.zapper_device_chips(&home, true, editing, &theme, cx);
+                let workers = self.zapper_device_chips(&worker_device, false, false, &theme, cx);
                 card = card
                     .child(row("Runs on", "Where the Zapper itself lives", host, false))
                     .child(row(
@@ -1585,16 +1601,16 @@ impl Shell {
                         false,
                     ));
             }
-            let workers = self.zot_stepper(
-                "zot-max-workers",
+            let workers = self.zapper_stepper(
+                "zapper-max-workers",
                 max_workers,
                 MAX_WORKERS,
                 |form, value| form.max_workers = value,
                 &theme,
                 cx,
             );
-            let followups = self.zot_stepper(
-                "zot-max-followups",
+            let followups = self.zapper_stepper(
+                "zapper-max-followups",
                 max_followups,
                 MAX_FOLLOWUPS,
                 |form, value| form.max_followups = value,
@@ -1631,17 +1647,17 @@ impl Shell {
             .child(advanced)
     }
 
-    pub(super) fn render_zot_page(
+    pub(super) fn render_zapper_page(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if self.zot_ui.page.is_none() {
-            self.zot_ui.page = Some(self.build_zot_form(None, Kind::Config, false, cx));
+        if self.zapper_ui.page.is_none() {
+            self.zapper_ui.page = Some(self.build_zapper_form(None, Kind::Config, false, cx));
         }
         let theme = Theme::of(cx).clone();
-        let saving = self.zot_ui.pending;
-        let page_scroll = self.zot_ui.page.as_ref().map(|f| f.page_scroll.clone());
+        let saving = self.zapper_ui.pending;
+        let page_scroll = self.zapper_ui.page.as_ref().map(|f| f.page_scroll.clone());
         let column = || widgets::page_column().max_w(px(640.0));
         let header = div()
             .flex()
@@ -1651,15 +1667,15 @@ impl Shell {
                 &theme,
                 "A Zapper is your captain: it runs work across your repositories, asks when it needs a decision and keeps its notes between conversations.",
             ));
-        let fields = self.zot_form_fields(false, window, cx);
+        let fields = self.zapper_form_fields(false, window, cx);
         let submit = if saving {
             "Creating…"
         } else {
             "Create Zapper"
         };
         div()
-            .id("zot-page")
-            .debug_selector(|| "zot-page".into())
+            .id("zapper-page")
+            .debug_selector(|| "zapper-page".into())
             .flex_1()
             .min_w_0()
             .h_full()
@@ -1668,7 +1684,7 @@ impl Shell {
             .pt(px(Theme::TITLEBAR_HEIGHT))
             .child(
                 div()
-                    .id("zot-page-body")
+                    .id("zapper-page-body")
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
@@ -1697,19 +1713,19 @@ impl Shell {
                             .gap(px(8.0))
                             .child(
                                 widgets::text_action(&theme, ActionTone::Quiet, "Cancel")
-                                    .id("zot-cancel")
+                                    .id("zapper-cancel")
                                     .role(gpui::Role::Button)
                                     .on_click(
-                                        cx.listener(|this, _, _, cx| this.leave_zot_page(cx)),
+                                        cx.listener(|this, _, _, cx| this.leave_zapper_page(cx)),
                                     ),
                             )
                             .child(
                                 popover::btn_primary(&theme, submit)
-                                    .id("zot-save")
+                                    .id("zapper-save")
                                     .role(gpui::Role::Button)
                                     .when(saving, |d| d.opacity(0.6))
                                     .on_click(cx.listener(|this, _, _, cx| {
-                                        this.submit_zot_form(false, cx)
+                                        this.submit_zapper_form(false, cx)
                                     })),
                             ),
                     ),
@@ -1718,16 +1734,16 @@ impl Shell {
     }
 
     /// Editing lives in the right panel, beside the conversation it configures.
-    pub(super) fn render_zot_editor(
+    pub(super) fn render_zapper_editor(
         &mut self,
-        zot: &Zot,
+        zapper: &Zapper,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = Theme::of(cx).clone();
-        let saving = self.zot_ui.pending;
-        let fields = self.zot_form_fields(true, window, cx);
-        let manage = self.zot_manage(zot, &theme, cx);
+        let saving = self.zapper_ui.pending;
+        let fields = self.zapper_form_fields(true, window, cx);
+        let manage = self.zapper_manage(zapper, &theme, cx);
         div()
             .flex_1()
             .min_h_0()
@@ -1735,7 +1751,7 @@ impl Shell {
             .flex_col()
             .child(
                 div()
-                    .id("zot-editor-body")
+                    .id("zapper-editor-body")
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
@@ -1759,10 +1775,10 @@ impl Shell {
                     .border_color(theme.border)
                     .child(
                         widgets::text_action(&theme, ActionTone::Quiet, "Cancel")
-                            .id("zot-editor-cancel")
+                            .id("zapper-editor-cancel")
                             .role(gpui::Role::Button)
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.zot_ui.page = None;
+                                this.zapper_ui.page = None;
                                 cx.notify();
                             })),
                     )
@@ -1771,24 +1787,24 @@ impl Shell {
                             &theme,
                             if saving { "Saving…" } else { "Save changes" },
                         )
-                        .id("zot-editor-save")
+                        .id("zapper-editor-save")
                         .role(gpui::Role::Button)
                         .when(saving, |d| d.opacity(0.6))
-                        .on_click(cx.listener(|this, _, _, cx| this.submit_zot_form(false, cx))),
+                        .on_click(cx.listener(|this, _, _, cx| this.submit_zapper_form(false, cx))),
                     ),
             )
             .into_any_element()
     }
 
-    pub(super) fn render_zot_dialog(
+    pub(super) fn render_zapper_dialog(
         &mut self,
         viewport: gpui::Size<Pixels>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let theme = Theme::of(cx).for_popup();
-        let saving = self.zot_ui.pending;
-        let form = self.zot_ui.dialog.as_mut()?;
+        let saving = self.zapper_ui.pending;
+        let form = self.zapper_ui.dialog.as_mut()?;
         if std::mem::take(&mut form.focus_pending) {
             window.focus(&form.inputs[0].focus_handle(cx), cx);
         }
@@ -1841,9 +1857,9 @@ impl Shell {
             for (id, name) in names {
                 let active = current.as_ref() == Some(&id);
                 chips = chips.child(
-                    chip(format!("zot-thread-space-{id}"), name, active, &theme).on_click(
+                    chip(format!("zapper-thread-space-{id}"), name, active, &theme).on_click(
                         cx.listener(move |this, _, _, cx| {
-                            if let Some(form) = this.zot_ui.dialog.as_mut() {
+                            if let Some(form) = this.zapper_ui.dialog.as_mut() {
                                 form.space = Some(id.clone());
                             }
                             cx.notify();
@@ -1861,7 +1877,7 @@ impl Shell {
             );
         }
         let card = popover::dialog_card(&theme)
-            .id("zot-dialog-card")
+            .id("zapper-dialog-card")
             .role(gpui::Role::Dialog)
             .aria_label(SharedString::from(title.clone()))
             .w(px(width))
@@ -1883,23 +1899,25 @@ impl Shell {
                     .gap(px(8.0))
                     .child(
                         widgets::text_action(&theme, ActionTone::Quiet, "Cancel")
-                            .id("zot-dialog-cancel")
+                            .id("zapper-dialog-cancel")
                             .role(gpui::Role::Button)
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.zot_ui.dialog = None;
+                                this.zapper_ui.dialog = None;
                                 cx.notify();
                             })),
                     )
                     .child(
                         popover::btn_primary(&theme, submit)
-                            .id("zot-dialog-save")
+                            .id("zapper-dialog-save")
                             .role(gpui::Role::Button)
                             .when(saving, |d| d.opacity(0.6))
-                            .on_click(cx.listener(|this, _, _, cx| this.submit_zot_form(true, cx))),
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.submit_zapper_form(true, cx)),
+                            ),
                     ),
             )
             .into_any_element();
-        Some(popover::modal("zot-dialog", viewport, card))
+        Some(popover::modal("zapper-dialog", viewport, card))
     }
 }
 
@@ -1909,7 +1927,7 @@ mod tests {
 
     #[test]
     fn new_documents_are_named_but_existing_ones_edit_content() {
-        let file = |version| ZotFile {
+        let file = |version| ZapperFile {
             path: "NOTES.md".into(),
             version,
             content: "kept".into(),
@@ -2023,11 +2041,11 @@ mod tests {
         assert_eq!(
             selected,
             vec![
-                ZotRepository {
+                ZapperRepository {
                     space_id: "api".into(),
                     device_id: "local".into()
                 },
-                ZotRepository {
+                ZapperRepository {
                     space_id: "infra".into(),
                     device_id: "remote".into()
                 },

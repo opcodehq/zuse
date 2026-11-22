@@ -6,7 +6,7 @@
 //! same fixture captures before and after.
 use gpui::{AppContext, AsyncApp, Bounds, WindowBounds, WindowOptions, px, size};
 use std::{path::PathBuf, sync::Arc, time::Duration};
-use zuse_protocol::zots::*;
+use zuse_protocol::zappers::*;
 use zuse_ui::*;
 
 async fn pause(cx: &mut AsyncApp, ms: u64) {
@@ -46,37 +46,37 @@ fn port() -> u16 {
         .port()
 }
 
-const COORDINATOR: &str = "zot-release-0";
+const COORDINATOR: &str = "zapper-release-0";
 
 /// (chat, title, objective, queue position)
 const THREADS: [(&str, &str, &str, Option<u32>); 4] = [
     (
-        "zot-worker-tabs",
+        "zapper-worker-tabs",
         "Zapper Panel Tab Chrome",
         "Panel tabs close and reorder.",
         None,
     ),
     (
-        "zot-worker-avatars",
+        "zapper-worker-avatars",
         "Zapper Avatar Redesign",
         "Redraw the Zapper avatars.",
         None,
     ),
     (
-        "zot-worker-errors",
+        "zapper-worker-errors",
         "Fix ZAP-11 (zapper-command-errors)",
         "ZAP-11: make Zapper commands report what failed and how to fix it. Read the issue, reproduce the failing delegate and messageWorker calls, fix them, add tests, and open a draft PR.",
         Some(1),
     ),
     (
-        "zot-worker-icons",
+        "zapper-worker-icons",
         "ZAP-12 (zapper-tool-icons)",
         "ZAP-12: give Zapper tool calls their own icon.",
         Some(2),
     ),
 ];
 
-fn sample_zapper(device: &str) -> Zot {
+fn sample_zapper(device: &str) -> Zapper {
     // JSON so older protocol versions (without queuePosition) build too.
     let workers: Vec<_> = THREADS
         .iter()
@@ -193,7 +193,7 @@ fn main() -> anyhow::Result<()> {
             composer::init(cx, settings.composer_send_behavior);
             terminal::panel::init(cx);
             app_menus::init(cx);
-            let zot = sample_zapper(&device);
+            let zapper = sample_zapper(&device);
             let state = cx.new(|_| {
                 let mut s = state::AppState::new();
                 s.fixture_attachment_engine(handle);
@@ -202,7 +202,7 @@ fn main() -> anyhow::Result<()> {
                 s.local_device_id = Some(device.clone());
                 s.devices = vec![serde_json::from_value(serde_json::json!({"id":device,"name":"This device","platform":std::env::consts::OS,"lastSeenAt":null})).unwrap()];
                 s.chats = chats;
-                s.zots = vec![zot];
+                s.zappers = vec![zapper];
                 s.selected_chat = Some(THREADS[0].0.into());
                 s.auto_selected = true;
                 s.chats_synced = true;

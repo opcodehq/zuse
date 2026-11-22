@@ -776,18 +776,18 @@ impl WorkspaceView {
                                     "text" => {
                                         let text = if user {source.map(|s|s.text()).unwrap_or_else(||part["text"].as_str().unwrap_or_default())}else{part["text"].as_str().unwrap_or_default()};
                                         Some(if user {
-                                            let attribution = zuse_protocol::presentation::zot_message::parse_display(text).or_else(|| source.map(|s| (s.sender(), text)));
+                                            let attribution = zuse_protocol::presentation::zapper_message::parse_display(text).or_else(|| source.map(|s| (s.sender(), text)));
                                             let parsed = zuse_protocol::message_attachments::parse(attribution.as_ref().map(|(_,body)|*body).unwrap_or(text));
                                             if let Some((sender, body)) = attribution.as_ref().filter(|(s,_)|s.activity) {
-                                                crate::zot_issues::activity_notice(sender, body, entry.created_at).into_any_element()
+                                                crate::zapper_issues::activity_notice(sender, body, entry.created_at).into_any_element()
                                             } else { column().when(attribution.is_none(),|d|d.items_end()).gap_3()
 
                                                 .when(!parsed.text.is_empty(), |d|d.child(
                                                     div().max_w(relative(if attribution.is_some(){1.0}else{0.85})).px_4().py_3().rounded_xl()
                                                         .bg(rgb(0x1d1d1d)).text_size(px(if attribution.is_some(){13.}else{14.})).line_height(px(20.))
-                                                        .when_some(attribution.as_ref(),|d,(sender,_)|d.child(if matches!(source,Some(zuse_protocol::slack::MessageSource::Zapper{..})){crate::zot_issues::sender_header_labeled(sender,zuse_protocol::slack::MessageSource::ZAPPER_LABEL)}else{crate::zot_issues::sender_header(sender,entry.created_at)}))
+                                                        .when_some(attribution.as_ref(),|d,(sender,_)|d.child(if matches!(source,Some(zuse_protocol::slack::MessageSource::Zapper{..})){crate::zapper_issues::sender_header_labeled(sender,zuse_protocol::slack::MessageSource::ZAPPER_LABEL)}else{crate::zapper_issues::sender_header(sender,entry.created_at)}))
                                                         .child(parsed.text.clone())))
-                                                .when(attribution.is_some(),|d|d.child(crate::zot_issues::sender_footer(parsed.text.clone(),entry.created_at)))
+                                                .when(attribution.is_some(),|d|d.child(crate::zapper_issues::sender_footer(parsed.text.clone(),entry.created_at)))
                                                 .children(parsed.attachments.iter().map(|attachment| {
                                                     if zuse_protocol::attachment_mentions::is_image_path(&attachment.path) {
                                                         self.image_preview(&attachment.path,&attachment.name,384.,cx)
@@ -1303,29 +1303,29 @@ impl Render for WorkspaceView {
             panel.set_target(target, cx);
         });
 
-        let panel_width = if self.selected_zot().is_some() && !self.settings && !self.project_picker
-        {
-            crate::zots::ZOT_PANEL_WIDTH
-        } else if !self.right_open || self.settings || self.project_picker {
-            0.
-        } else if self.right_tab == "browser" {
-            (f32::from(window.viewport_size().width)
-                - if self.sidebar_open {
-                    self.sidebar_width()
-                } else {
-                    0.
-                }
-                - 380.)
-                .clamp(300., 640.)
-        } else if self.open_file.is_some()
-            || matches!(self.right_tab.as_str(), "history" | "pullRequests")
-        {
-            400.
-        } else if self.right_tab == "terminal" {
-            360.
-        } else {
-            320.
-        };
+        let panel_width =
+            if self.selected_zapper().is_some() && !self.settings && !self.project_picker {
+                crate::zappers::ZAPPER_PANEL_WIDTH
+            } else if !self.right_open || self.settings || self.project_picker {
+                0.
+            } else if self.right_tab == "browser" {
+                (f32::from(window.viewport_size().width)
+                    - if self.sidebar_open {
+                        self.sidebar_width()
+                    } else {
+                        0.
+                    }
+                    - 380.)
+                    .clamp(300., 640.)
+            } else if self.open_file.is_some()
+                || matches!(self.right_tab.as_str(), "history" | "pullRequests")
+            {
+                400.
+            } else if self.right_tab == "terminal" {
+                360.
+            } else {
+                320.
+            };
         self.viewport_width = f32::from(window.viewport_size().width);
         self.content_height = f32::from(window.viewport_size().height)
             - if self.settings {
@@ -1557,12 +1557,12 @@ impl Render for WorkspaceView {
                     && !self.project_picker
                     && self.project_archive.project.is_none()
                     && !self.usage_open
-                    && self.selected_zot().is_none(),
+                    && self.selected_zapper().is_none(),
                 |d| d.child(self.workspace_panel(panel_width, cx)),
             )
             .when(
-                self.selected_zot().is_some() && !self.settings && !self.project_picker,
-                |d| d.child(self.zot_panel(window, cx)),
+                self.selected_zapper().is_some() && !self.settings && !self.project_picker,
+                |d| d.child(self.zapper_panel(window, cx)),
             )
             .when(self.preview_open.is_some() && !self.settings, |d| {
                 d.child(self.preview_overlay(window, cx))
@@ -1571,7 +1571,9 @@ impl Render for WorkspaceView {
             .when(self.thread_dialog.is_some(), |d| {
                 d.child(self.thread_dialog_view(cx))
             })
-            .when(self.zots.form.is_some(), |d| d.child(self.zot_form(cx)))
+            .when(self.zappers.form.is_some(), |d| {
+                d.child(self.zapper_form(cx))
+            })
             .into_any_element()
     }
 }

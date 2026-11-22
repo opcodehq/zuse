@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use zuse_protocol::slack::{Channel, ChatLink};
 
 /// Hover-intent key of the Zapper menu's Slack row (its only submenu).
-pub(super) const ZOT_MENU_ROW_SLACK: u8 = 3;
+pub(super) const ZAPPER_MENU_ROW_SLACK: u8 = 3;
 /// A row key that owns no submenu: switching to it closes any open one.
 const NO_SUBMENU: u8 = u8::MAX;
 const COPY_SUBMENU_WIDTH: f32 = 232.0;
@@ -22,7 +22,7 @@ const SLACK_SUBMENU_WIDTH: f32 = 264.0;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum SubmenuHost {
     Chat,
-    Zot,
+    Zapper,
 }
 
 /// Pointer intent and geometry of a context menu's open submenu.
@@ -137,21 +137,21 @@ impl Shell {
     fn submenu(&mut self, host: SubmenuHost) -> &mut Submenu {
         match host {
             SubmenuHost::Chat => &mut self.chat_submenu,
-            SubmenuHost::Zot => &mut self.zot_ui.submenu,
+            SubmenuHost::Zapper => &mut self.zapper_ui.submenu,
         }
     }
 
     fn submenu_ref(&self, host: SubmenuHost) -> &Submenu {
         match host {
             SubmenuHost::Chat => &self.chat_submenu,
-            SubmenuHost::Zot => &self.zot_ui.submenu,
+            SubmenuHost::Zapper => &self.zapper_ui.submenu,
         }
     }
 
     fn host_menu_open(&self, host: SubmenuHost) -> bool {
         match host {
             SubmenuHost::Chat => self.chat_menu.is_open(),
-            SubmenuHost::Zot => self.zot_ui.menu.is_open(),
+            SubmenuHost::Zapper => self.zapper_ui.menu.is_open(),
         }
     }
 
@@ -163,12 +163,12 @@ impl Shell {
                 ChatMenuPage::Copy => Some(CHAT_MENU_ROW_COPY),
                 ChatMenuPage::Slack => Some(CHAT_MENU_ROW_SLACK),
             }),
-            SubmenuHost::Zot => self
-                .zot_ui
+            SubmenuHost::Zapper => self
+                .zapper_ui
                 .menu
                 .as_open()
-                .filter(|_| self.zot_ui.slack_open)
-                .map(|_| ZOT_MENU_ROW_SLACK),
+                .filter(|_| self.zapper_ui.slack_open)
+                .map(|_| ZAPPER_MENU_ROW_SLACK),
         }
     }
 
@@ -189,10 +189,10 @@ impl Shell {
                     _ => false,
                 }
             }
-            SubmenuHost::Zot => {
-                let open = key == ZOT_MENU_ROW_SLACK;
-                if self.zot_ui.menu.is_open() && self.zot_ui.slack_open != open {
-                    self.zot_ui.slack_open = open;
+            SubmenuHost::Zapper => {
+                let open = key == ZAPPER_MENU_ROW_SLACK;
+                if self.zapper_ui.menu.is_open() && self.zapper_ui.slack_open != open {
+                    self.zapper_ui.slack_open = open;
                     true
                 } else {
                     false
@@ -210,7 +210,7 @@ impl Shell {
     fn close_submenu_host(&mut self, host: SubmenuHost, cx: &mut Context<Self>) {
         match host {
             SubmenuHost::Chat => self.close_chat_menu(cx),
-            SubmenuHost::Zot => self.close_zot_menu(cx),
+            SubmenuHost::Zapper => self.close_zapper_menu(cx),
         }
     }
 
@@ -271,7 +271,7 @@ impl Shell {
     ) -> AnyElement {
         let id = match host {
             SubmenuHost::Chat => "chat-menu-hover",
-            SubmenuHost::Zot => "zot-menu-hover",
+            SubmenuHost::Zapper => "zapper-menu-hover",
         };
         div()
             .id((id, key as usize))
@@ -453,11 +453,11 @@ impl Shell {
         let submenu = open.then(|| self.render_slack_submenu(host, chat_id, theme, cx));
         let key = match host {
             SubmenuHost::Chat => CHAT_MENU_ROW_SLACK,
-            SubmenuHost::Zot => ZOT_MENU_ROW_SLACK,
+            SubmenuHost::Zapper => ZAPPER_MENU_ROW_SLACK,
         };
         let id = match host {
             SubmenuHost::Chat => "chat-menu-slack",
-            SubmenuHost::Zot => "zot-menu-slack",
+            SubmenuHost::Zapper => "zapper-menu-slack",
         };
         self.render_submenu_trigger(
             Trigger {
@@ -642,12 +642,12 @@ impl Shell {
             Some(menu) if self.open_submenu_key(SubmenuHost::Chat).is_some() => {
                 Some(menu.chat_id.clone())
             }
-            _ => self.zot_ui.menu.as_open().and_then(|(zot_id, _)| {
+            _ => self.zapper_ui.menu.as_open().and_then(|(zapper_id, _)| {
                 self.state
                     .read(cx)
-                    .zots
+                    .zappers
                     .iter()
-                    .find(|z| &z.id == zot_id)
+                    .find(|z| &z.id == zapper_id)
                     .map(|z| z.coordinator_chat_id.clone())
             }),
         };

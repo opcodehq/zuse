@@ -957,13 +957,13 @@ pub(crate) enum OptimisticState {
 /// are plain `&mut self` functions so tests construct the struct directly; gpui
 /// glue ([`Self::bootstrap`], [`Self::select_chat`]) layers subscriptions on top.
 pub struct AppState {
-    pub zots: Vec<zuse_protocol::zots::Zot>,
-    zot_watches: HashMap<String, Task<()>>,
+    pub zappers: Vec<zuse_protocol::zappers::Zapper>,
+    zapper_watches: HashMap<String, Task<()>>,
     /// Devices whose Zapper list has arrived since the runtime started.
-    zots_loaded: HashSet<String>,
+    zappers_loaded: HashSet<String>,
     /// When the Zapper watches started, bounding how long unloaded lists
-    /// may hide `zot-` conversations.
-    zots_watching_since: Option<std::time::Instant>,
+    /// may hide `zapper-` conversations.
+    zappers_watching_since: Option<std::time::Instant>,
     pub connection: ConnectionStatus,
     /// Fixed data boundary of the attached engine. Authentication may change
     /// in place, but changing this scope requires assembling a new runtime.
@@ -1205,10 +1205,10 @@ impl Default for AppState {
 impl AppState {
     pub fn new() -> Self {
         Self {
-            zots: Vec::new(),
-            zot_watches: HashMap::new(),
-            zots_loaded: HashSet::new(),
-            zots_watching_since: None,
+            zappers: Vec::new(),
+            zapper_watches: HashMap::new(),
+            zappers_loaded: HashSet::new(),
+            zappers_watching_since: None,
             connection: ConnectionStatus::Connecting,
             workspace_scope: None,
             auth: None,
@@ -1735,11 +1735,11 @@ impl AppState {
         changed || self.selected_space != previous_selection
     }
 
-    /// Whether the selected chat is a Zot's coordinator, current or earlier.
-    /// These run in the Zot's own folder, with no repository or checkout.
-    pub fn selected_chat_is_zot_coordinator(&self) -> bool {
+    /// Whether the selected chat is a Zapper's coordinator, current or earlier.
+    /// These run in the Zapper's own folder, with no repository or checkout.
+    pub fn selected_chat_is_zapper_coordinator(&self) -> bool {
         self.selected_chat.as_ref().is_some_and(|chat| {
-            self.zots.iter().any(|z| {
+            self.zappers.iter().any(|z| {
                 &z.coordinator_chat_id == chat || z.previous_coordinator_chats.contains(chat)
             })
         })
@@ -1749,11 +1749,11 @@ impl AppState {
         self.chats.iter().any(|c| c.id == chat_id && c.archived)
     }
 
-    /// Whether the selected chat is a Zot thread still waiting for the
+    /// Whether the selected chat is a Zapper thread still waiting for the
     /// worktree its first run creates. Until then its folder is the main repo.
-    pub fn selected_chat_awaits_zot_worktree(&self) -> bool {
+    pub fn selected_chat_awaits_zapper_worktree(&self) -> bool {
         self.selected_chat.as_ref().is_some_and(|id| {
-            self.zots
+            self.zappers
                 .iter()
                 .any(|z| z.workers.iter().any(|w| &w.chat_id == id))
                 && self
@@ -1769,10 +1769,10 @@ impl AppState {
     /// thread a Zapper started in any state (running, finished, released,
     /// stopped or archived), or a coordinator id the Zapper list hasn't
     /// reported yet (the list still loading after a reconnect).
-    pub fn zot_hides_chat(&self, chat: &Chat) -> bool {
-        use zuse_protocol::presentation::zot_panel::{zapper_chat_id, zapper_keeps_chat};
+    pub fn zapper_hides_chat(&self, chat: &Chat) -> bool {
+        use zuse_protocol::presentation::zapper_panel::{zapper_chat_id, zapper_keeps_chat};
         if zapper_keeps_chat(
-            &self.zots,
+            &self.zappers,
             &chat.id,
             chat.parent_chat_id.as_deref(),
             chat.thread_id.as_deref(),
@@ -1788,31 +1788,31 @@ impl AppState {
         // stop hiding anything after a short grace.
         let fresh = (Utc::now() - chat.created_at).num_minutes() < 5;
         let loading = !self
-            .zot_watches
+            .zapper_watches
             .keys()
-            .all(|device| self.zots_loaded.contains(device))
+            .all(|device| self.zappers_loaded.contains(device))
             && self
-                .zots_watching_since
+                .zappers_watching_since
                 .is_some_and(|since| since.elapsed() < std::time::Duration::from_secs(30));
         fresh || loading
     }
 
-    pub fn apply_zots(&mut self, zots: Vec<zuse_protocol::zots::Zot>) -> bool {
-        if self.zots == zots {
+    pub fn apply_zappers(&mut self, zappers: Vec<zuse_protocol::zappers::Zapper>) -> bool {
+        if self.zappers == zappers {
             return false;
         }
-        zuse_viewport::zapper_avatar::remember_zots(&zots);
-        self.zots = zots;
+        zuse_viewport::zapper_avatar::remember_zappers(&zappers);
+        self.zappers = zappers;
         true
     }
 
-    fn reconcile_zot_watches(&mut self, cx: &mut Context<Self>) {
+    fn reconcile_zapper_watches(&mut self, cx: &mut Context<Self>) {
         let Some(handle) = self.engine.clone() else {
             return;
         };
         if !handle
             .engine_info()
-            .supports(zuse_protocol::zots::CAPABILITY)
+            .supports(zuse_protocol::zappers::CAPABILITY)
         {
             return;
         }
@@ -1821,9 +1821,9 @@ impl AppState {
         if !devices.contains(&local) {
             devices.push(local);
         }
-        self.zot_watches.retain(|id, _| devices.contains(id));
+        self.zapper_watches.retain(|id, _| devices.contains(id));
         for device in devices {
-            if self.zot_watches.contains_key(&device) {
+            if self.zapper_watches.contains_key(&device) {
                 continue;
             }
             let engine = handle.clone();
@@ -1833,7 +1833,7 @@ impl AppState {
                     let mut stream = match engine
                         .client()
                         .subscribe_scoped(
-                            zuse_protocol::control::WATCH_ZOTS,
+                            zuse_protocol::control::WATCH_ZAPPERS,
                             serde_json::json!({"targetDeviceId":target}),
                         )
                         .await
@@ -1847,17 +1847,19 @@ impl AppState {
                         }
                     };
                     while let Some(value) = stream.recv().await {
-                        let Ok(zots) =
-                            serde_json::from_value::<Vec<zuse_protocol::zots::Zot>>(value)
+                        let Ok(zappers) =
+                            serde_json::from_value::<Vec<zuse_protocol::zappers::Zapper>>(value)
                         else {
                             continue;
                         };
                         if this
                             .update(cx, |state, cx| {
-                                state.zots.retain(|z| z.config.home_device_id != target);
-                                state.zots.extend(zots);
-                                state.zots_loaded.insert(target.clone());
-                                state.zots.sort_by(|a, b| a.config.name.cmp(&b.config.name));
+                                state.zappers.retain(|z| z.config.home_device_id != target);
+                                state.zappers.extend(zappers);
+                                state.zappers_loaded.insert(target.clone());
+                                state
+                                    .zappers
+                                    .sort_by(|a, b| a.config.name.cmp(&b.config.name));
                                 cx.notify();
                             })
                             .is_err()
@@ -1873,9 +1875,9 @@ impl AppState {
                         .await;
                 }
             });
-            self.zots_watching_since
+            self.zappers_watching_since
                 .get_or_insert_with(std::time::Instant::now);
-            self.zot_watches.insert(device, task);
+            self.zapper_watches.insert(device, task);
         }
     }
 
@@ -2952,7 +2954,7 @@ impl AppState {
         let mut chats: Vec<&Chat> = self
             .visible_chats()
             .filter(|c| c.space_id.as_deref() == Some(space_id))
-            .filter(|c| !self.zot_hides_chat(c))
+            .filter(|c| !self.zapper_hides_chat(c))
             .collect();
         sort_tabs(&mut chats);
         chats
@@ -3046,8 +3048,8 @@ impl AppState {
         }
         rows.into_iter()
             .filter(|(_, chat)| chat.thread_id.is_none() && in_filter(chat))
-            // Zots list their own threads; projects don't repeat them.
-            .filter(|(_, chat)| !self.zot_hides_chat(chat))
+            // Zappers list their own threads; projects don't repeat them.
+            .filter(|(_, chat)| !self.zapper_hides_chat(chat))
             .map(|(status, chat)| {
                 (
                     thread_status
@@ -3570,10 +3572,10 @@ impl AppState {
     /// stopped. The next bootstrap must never render rows from the previous
     /// account while the local profile is opening.
     pub fn prepare_runtime_replacement(&mut self, cx: &mut Context<Self>) {
-        self.zots.clear();
-        self.zot_watches.clear();
-        self.zots_loaded.clear();
-        self.zots_watching_since = None;
+        self.zappers.clear();
+        self.zapper_watches.clear();
+        self.zappers_loaded.clear();
+        self.zappers_watching_since = None;
         self.engine = None;
         *self.desktop_epoch.lock().unwrap() = None;
         self.desktop_events = None;
@@ -3958,7 +3960,7 @@ impl AppState {
             ));
         }
         self.watch_tasks = watch_tasks;
-        self.reconcile_zot_watches(cx);
+        self.reconcile_zapper_watches(cx);
         self.reconcile_change_request_watches(cx);
         // EngineInfo is part of the attachment boundary: views must know which
         // data profile they reached before they are allowed to render Ready.
@@ -4696,7 +4698,7 @@ fn spawn_watch<T: DeserializeOwned + 'static>(
                     let linked = state.apply_pending_deep_link(cx);
                     if changed && matches!(method, methods::WATCH_SPACES | methods::WATCH_DEVICES) {
                         state.reconcile_change_request_watches(cx);
-                        state.reconcile_zot_watches(cx);
+                        state.reconcile_zapper_watches(cx);
                     }
                     if changed || linked {
                         cx.notify();
@@ -6726,28 +6728,28 @@ mod tests {
         };
         state.apply_chats(vec![
             in_space("plain", None),
-            in_space("zot-worker-running", None),
+            in_space("zapper-worker-running", None),
             // Released: no longer a worker of any Zapper, long past creation.
-            in_space("zot-worker-delegate-zap11-ci-fix-1", None),
+            in_space("zapper-worker-delegate-zap11-ci-fix-1", None),
             in_space(
                 "side-of-released",
-                Some("zot-worker-delegate-zap11-ci-fix-1"),
+                Some("zapper-worker-delegate-zap11-ci-fix-1"),
             ),
             // An ordinary chat the Zapper adopted and then released.
             in_space("adopted-then-released", None),
         ]);
-        let zot: zuse_protocol::zots::Zot = serde_json::from_value(serde_json::json!({
+        let zapper: zuse_protocol::zappers::Zapper = serde_json::from_value(serde_json::json!({
             "id": "z", "revision": 3,
             "config": {"name": "n", "purpose": "", "homeDeviceId": "dev", "repositories": [],
                 "coordinatorModel": {"harness": "mock", "model": null},
                 "workerDeviceId": "dev", "maxConcurrentWorkers": 1, "maxFollowups": 1},
-            "status": "active", "coordinatorChatId": "zot-z-0", "previousCoordinatorChats": [],
-            "workers": [{"chatId": "zot-worker-running", "deviceId": "dev", "spaceId": "s1",
+            "status": "active", "coordinatorChatId": "zapper-z-0", "previousCoordinatorChats": [],
+            "workers": [{"chatId": "zapper-worker-running", "deviceId": "dev", "spaceId": "s1",
                 "objective": "o", "followups": 0}],
             "decisions": []
         }))
         .unwrap();
-        state.apply_zots(vec![zot]);
+        state.apply_zappers(vec![zapper]);
         let ids: Vec<&str> = state
             .chats_in_space("s1")
             .iter()
@@ -6762,7 +6764,7 @@ mod tests {
         sidebar.sort();
         assert_eq!(sidebar, ["adopted-then-released", "plain"]);
         // Still hidden with no Zapper list at all (e.g. the Zapper deleted).
-        state.apply_zots(vec![]);
+        state.apply_zappers(vec![]);
         let ids: Vec<&str> = state
             .chats_in_space("s1")
             .iter()

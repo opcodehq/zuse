@@ -3,7 +3,7 @@
 //! sent. Usage: `zapper-panel-fixture <capture directory>` (X11 display).
 use gpui::{AppContext, AsyncApp, Bounds, WindowBounds, WindowOptions, px, size};
 use std::{path::PathBuf, sync::Arc, time::Duration};
-use zuse_protocol::zots::*;
+use zuse_protocol::zappers::*;
 use zuse_ui::*;
 
 async fn pause(cx: &mut AsyncApp, ms: u64) {
@@ -43,20 +43,20 @@ fn port() -> u16 {
         .port()
 }
 
-const COORDINATOR: &str = "zot-release-0";
+const COORDINATOR: &str = "zapper-release-0";
 
-fn issue(number: u32, title: &str, status: ZotIssueStatus) -> ZotIssue {
+fn issue(number: u32, title: &str, status: ZapperIssueStatus) -> ZapperIssue {
     let now = chrono::Utc::now().timestamp_millis();
-    ZotIssue {
+    ZapperIssue {
         id: format!("issue-{number}"),
         number,
-        details: ZotIssueDetails {
+        details: ZapperIssueDetails {
             title: title.into(),
             description: "Make the flow work end to end and verify it on staging.".into(),
             status,
-            priority: ZotIssuePriority::High,
+            priority: ZapperIssuePriority::High,
             assigned: true,
-            owner: Some(ZotIssueOwner::User),
+            owner: Some(ZapperIssueOwner::User),
             done_criteria: "Works end to end on staging with a passing smoke test.".into(),
             ..Default::default()
         },
@@ -68,34 +68,34 @@ fn issue(number: u32, title: &str, status: ZotIssueStatus) -> ZotIssue {
     }
 }
 
-fn sample_zapper(device: &str) -> Zot {
-    Zot {
+fn sample_zapper(device: &str) -> Zapper {
+    Zapper {
         id: "release".into(),
         revision: 4,
         activity_revision: 0,
-        config: ZotConfig {
+        config: ZapperConfig {
             name: "Release".into(),
             purpose: "Keep staging healthy and ship the cloud chat work.".into(),
             home_device_id: device.into(),
             repositories: vec![],
-            coordinator_model: ZotModel {
+            coordinator_model: ZapperModel {
                 harness: "claude-code".into(),
                 model: None,
             },
             worker_device_id: device.into(),
             max_concurrent_workers: 3,
             max_followups: 3,
-            avatar: Some(ZotAvatar {
+            avatar: Some(ZapperAvatar {
                 mascot: "bolt".into(),
                 color: "violet".into(),
             }),
             avatar_image: None,
         },
-        status: ZotStatus::Active,
+        status: ZapperStatus::Active,
         coordinator_chat_id: COORDINATOR.into(),
         previous_coordinator_chats: vec![],
         workers: vec![],
-        decisions: vec![ZotDecision {
+        decisions: vec![ZapperDecision {
             id: "decision-1".into(),
             worker_chat_id: None,
             question: "Rebuild the base image before the release?".into(),
@@ -103,8 +103,8 @@ fn sample_zapper(device: &str) -> Zot {
         }],
         issues: vec![
             {
-                let mut asked = issue(6, "Improve Zappers", ZotIssueStatus::NeedsYou);
-                asked.activity.push(ZotIssueActivity {
+                let mut asked = issue(6, "Improve Zappers", ZapperIssueStatus::NeedsYou);
+                asked.activity.push(ZapperIssueActivity {
                     actor: Some("Release".into()),
                     id: "question-1".into(),
                     created_at: asked.created_at,
@@ -114,13 +114,13 @@ fn sample_zapper(device: &str) -> Zot {
                 });
                 asked
             },
-            issue(7, "Zapper panel: closable tabs", ZotIssueStatus::Todo),
+            issue(7, "Zapper panel: closable tabs", ZapperIssueStatus::Todo),
         ],
     }
 }
 
-fn files() -> Vec<ZotFile> {
-    let file = |path: &str, version, content: &str| ZotFile {
+fn files() -> Vec<ZapperFile> {
+    let file = |path: &str, version, content: &str| ZapperFile {
         path: path.into(),
         version,
         content: content.into(),
@@ -213,7 +213,7 @@ fn main() -> anyhow::Result<()> {
             composer::init(cx, settings.composer_send_behavior);
             terminal::panel::init(cx);
             app_menus::init(cx);
-            let zot = sample_zapper(&device);
+            let zapper = sample_zapper(&device);
             let state = cx.new(|_| {
                 let mut s = state::AppState::new();
                 s.fixture_attachment_engine(handle);
@@ -222,7 +222,7 @@ fn main() -> anyhow::Result<()> {
                 s.local_device_id = Some(device.clone());
                 s.devices = vec![serde_json::from_value(serde_json::json!({"id":device,"name":"This device","platform":std::env::consts::OS,"lastSeenAt":null})).unwrap()];
                 s.chats = chats;
-                s.zots = vec![zot];
+                s.zappers = vec![zapper];
                 s.selected_chat = Some(COORDINATOR.into());
                 s.auto_selected = true;
                 s.chats_synced = true;

@@ -1,11 +1,11 @@
-//! The same issue surface is embedded by the browser and native Zot inspectors.
+//! The same issue surface is embedded by the browser and native Zapper inspectors.
 use crate::tooltip::TooltipExt as _;
 use crate::zapper_avatar::{ZapperFace, known_face, person_avatar, unassigned_avatar, zapper_face};
 use crate::{assets::icon, input::TextInput, palette::rgb};
 use gpui::{prelude::*, *};
 use std::collections::{HashMap, HashSet};
-use zuse_protocol::presentation::zot_panel::{ThreadRank, ordered_zapper_threads};
-use zuse_protocol::zots::*;
+use zuse_protocol::presentation::zapper_panel::{ThreadRank, ordered_zapper_threads};
+use zuse_protocol::zappers::*;
 
 const TEXT: u32 = 0xe5e5e5;
 const MUTED: u32 = 0x777777;
@@ -15,9 +15,9 @@ const HOVER: u32 = 0x1f211f;
 const MENU: u32 = 0x1c1d19;
 #[derive(Clone)]
 pub enum IssueEvent {
-    Command(ZotAction, u32),
+    Command(ZapperAction, u32),
     OpenThread(String),
-    OpenDocument(ZotFile),
+    OpenDocument(ZapperFile),
     OpenPullRequest(String),
     /// The overview asks the host to start a thread for this Zapper.
     NewThread,
@@ -34,7 +34,7 @@ pub enum ThreadState {
     Archived,
 }
 pub struct IssuePanel {
-    zot: Zot,
+    zapper: Zapper,
     thread_titles: HashMap<String, String>,
     overview: bool,
     selected: Option<String>,
@@ -49,8 +49,8 @@ pub struct IssuePanel {
     searching: bool,
     pending: bool,
     error: Option<String>,
-    repository: Option<ZotRepository>,
-    files: Vec<ZotFile>,
+    repository: Option<ZapperRepository>,
+    files: Vec<ZapperFile>,
     activity_filter: u8,
     /// Activity cards opened past their preview length.
     expanded: HashSet<String>,
@@ -89,9 +89,9 @@ impl EditorKind {
 }
 impl EventEmitter<IssueEvent> for IssuePanel {}
 impl IssuePanel {
-    pub fn new(zot: Zot, overview: bool) -> Self {
+    pub fn new(zapper: Zapper, overview: bool) -> Self {
         Self {
-            zot,
+            zapper,
             thread_titles: HashMap::new(),
             overview,
             selected: None,
@@ -113,32 +113,32 @@ impl IssuePanel {
             expanded: HashSet::new(),
         }
     }
-    pub fn sync(&mut self, zot: Zot, overview: bool, pending: bool, cx: &mut Context<Self>) {
-        if self.zot != zot || self.overview != overview || self.pending != pending {
+    pub fn sync(&mut self, zapper: Zapper, overview: bool, pending: bool, cx: &mut Context<Self>) {
+        if self.zapper != zapper || self.overview != overview || self.pending != pending {
             // Tab switches reset the page through `show_list`; only a
             // different Zapper drops the open issue here, so "Answer" in
             // the overview can open an issue on the Issues page.
-            if self.zot.id != zot.id {
+            if self.zapper.id != zapper.id {
                 self.selected = None;
                 self.editor = None;
                 self.menu = None;
             } else if self.overview != overview {
                 self.menu = None;
             }
-            self.zot = zot;
+            self.zapper = zapper;
             self.overview = overview;
             self.pending = pending;
             cx.notify();
         }
     }
-    pub fn zot_id(&self) -> &str {
-        &self.zot.id
+    pub fn zapper_id(&self) -> &str {
+        &self.zapper.id
     }
     pub fn selected_code(&self) -> Option<String> {
         self.selected
             .as_ref()
-            .and_then(|id| self.zot.issues.iter().find(|i| i.id == *id))
-            .map(ZotIssue::code)
+            .and_then(|id| self.zapper.issues.iter().find(|i| i.id == *id))
+            .map(ZapperIssue::code)
     }
     /// The issue on show, by id. Hosts that open issues as tabs follow it.
     pub fn selected_id(&self) -> Option<&str> {
@@ -156,7 +156,7 @@ impl IssuePanel {
         self.menu = None;
         cx.notify();
     }
-    pub fn files(&mut self, files: Vec<ZotFile>, cx: &mut Context<Self>) {
+    pub fn files(&mut self, files: Vec<ZapperFile>, cx: &mut Context<Self>) {
         if self.files != files {
             self.files = files;
             cx.notify();
@@ -188,42 +188,46 @@ impl IssuePanel {
     }
     /// The owner's picture: you, this Zapper's face (also for its threads),
     /// or an empty ring.
-    fn owner_avatar(&self, owner: Option<&ZotIssueOwner>, size: f32) -> Div {
+    fn owner_avatar(&self, owner: Option<&ZapperIssueOwner>, size: f32) -> Div {
         match owner {
-            Some(ZotIssueOwner::User) => {
+            Some(ZapperIssueOwner::User) => {
                 person_avatar(self.user_name.as_deref().unwrap_or("You"), size)
             }
-            Some(ZotIssueOwner::Zapper | ZotIssueOwner::Thread { .. }) => {
+            Some(ZapperIssueOwner::Zapper | ZapperIssueOwner::Thread { .. }) => {
                 zapper_face(&self.avatar(), size)
             }
             None => unassigned_avatar(size),
         }
     }
-    fn owner_name(&self, owner: Option<&ZotIssueOwner>) -> String {
+    fn owner_name(&self, owner: Option<&ZapperIssueOwner>) -> String {
         match owner {
-            Some(ZotIssueOwner::User) => "You".into(),
-            Some(ZotIssueOwner::Zapper) => self.zot.config.name.clone(),
-            Some(ZotIssueOwner::Thread { chat_id }) => self.thread_title(chat_id),
+            Some(ZapperIssueOwner::User) => "You".into(),
+            Some(ZapperIssueOwner::Zapper) => self.zapper.config.name.clone(),
+            Some(ZapperIssueOwner::Thread { chat_id }) => self.thread_title(chat_id),
             None => "No owner".into(),
         }
     }
     fn avatar(&self) -> ZapperFace {
-        ZapperFace::of(&self.zot)
+        ZapperFace::of(&self.zapper)
     }
     fn thread_title(&self, id: &str) -> String {
         self.thread_titles
             .get(id)
             .cloned()
             .or_else(|| {
-                self.zot.workers.iter().find(|w| w.chat_id == id).map(|w| {
-                    w.objective
-                        .lines()
-                        .next()
-                        .unwrap_or("Worker thread")
-                        .chars()
-                        .take(80)
-                        .collect()
-                })
+                self.zapper
+                    .workers
+                    .iter()
+                    .find(|w| w.chat_id == id)
+                    .map(|w| {
+                        w.objective
+                            .lines()
+                            .next()
+                            .unwrap_or("Worker thread")
+                            .chars()
+                            .take(80)
+                            .collect()
+                    })
             })
             .unwrap_or_else(|| "Earlier thread".into())
     }
@@ -232,18 +236,18 @@ impl IssuePanel {
         self.pending = false;
         cx.notify();
     }
-    pub fn selected_status(&self) -> Option<ZotIssueStatus> {
+    pub fn selected_status(&self) -> Option<ZapperIssueStatus> {
         self.selected
             .as_ref()
-            .and_then(|id| self.zot.issues.iter().find(|i| i.id == *id))
+            .and_then(|id| self.zapper.issues.iter().find(|i| i.id == *id))
             .map(|i| i.details.status)
     }
-    fn emit(&mut self, action: ZotAction, cx: &mut Context<Self>) {
+    fn emit(&mut self, action: ZapperAction, cx: &mut Context<Self>) {
         if self.pending {
             return;
         }
         self.error = None;
-        cx.emit(IssueEvent::Command(action, self.zot.revision));
+        cx.emit(IssueEvent::Command(action, self.zapper.revision));
         cx.notify();
     }
     fn open(&mut self, kind: EditorKind, window: &mut Window, cx: &mut Context<Self>) {
@@ -255,7 +259,7 @@ impl IssuePanel {
             | EditorKind::PullRequest(id)
             | EditorKind::Delegate(id) => Some(id),
         };
-        let issue = issue_id.and_then(|id| self.zot.issues.iter().find(|i| i.id == *id));
+        let issue = issue_id.and_then(|id| self.zapper.issues.iter().find(|i| i.id == *id));
         let fields: Vec<(&str, String, bool)> = match &kind {
             EditorKind::Create => vec![
                 ("Issue title", String::new(), false),
@@ -362,9 +366,9 @@ impl IssuePanel {
                 }
                 let id = editor.create_id.clone();
                 self.selected = Some(id.clone());
-                ZotAction::CreateIssue {
+                ZapperAction::CreateIssue {
                     issue_id: id,
-                    details: ZotIssueDetails {
+                    details: ZapperIssueDetails {
                         title: values[0].trim().into(),
                         description: values[1].clone(),
                         done_criteria: values[2].trim().into(),
@@ -373,7 +377,7 @@ impl IssuePanel {
                 }
             }
             EditorKind::Field(id, field) => {
-                let Some(issue) = self.zot.issues.iter().find(|i| i.id == id) else {
+                let Some(issue) = self.zapper.issues.iter().find(|i| i.id == id) else {
                     return;
                 };
                 let value = values[0].trim();
@@ -415,7 +419,7 @@ impl IssuePanel {
                     cx.notify();
                     return;
                 }
-                ZotAction::EditIssue {
+                ZapperAction::EditIssue {
                     issue_id: id,
                     details,
                 }
@@ -423,24 +427,24 @@ impl IssuePanel {
             EditorKind::Comment(_) | EditorKind::Reply(..) if values[0].trim().is_empty() => {
                 return;
             }
-            EditorKind::Comment(id) => ZotAction::CommentIssue {
+            EditorKind::Comment(id) => ZapperAction::CommentIssue {
                 issue_id: id,
                 text: values[0].clone(),
                 reply_to: None,
             },
-            EditorKind::Reply(id, parent) => ZotAction::CommentIssue {
+            EditorKind::Reply(id, parent) => ZapperAction::CommentIssue {
                 issue_id: id,
                 text: values[0].clone(),
                 reply_to: Some(parent),
             },
-            EditorKind::PullRequest(id) => ZotAction::LinkIssuePullRequest {
+            EditorKind::PullRequest(id) => ZapperAction::LinkIssuePullRequest {
                 issue_id: id,
                 url: values[0].clone(),
                 title: values[1].clone(),
             },
             EditorKind::Delegate(id) => {
                 if !self
-                    .zot
+                    .zapper
                     .issues
                     .iter()
                     .any(|i| i.id == id && i.details.assigned && !i.details.status.terminal())
@@ -450,7 +454,7 @@ impl IssuePanel {
                     cx.notify();
                     return;
                 }
-                if self.zot.status != ZotStatus::Active {
+                if self.zapper.status != ZapperStatus::Active {
                     self.error =
                         Some("Resume this Zapper from Threads before starting work".into());
                     cx.notify();
@@ -459,16 +463,16 @@ impl IssuePanel {
                 let Some(repo) = self
                     .repository
                     .as_ref()
-                    .filter(|r| self.zot.config.repositories.contains(r))
-                    .or(self.zot.config.repositories.first())
+                    .filter(|r| self.zapper.config.repositories.contains(r))
+                    .or(self.zapper.config.repositories.first())
                 else {
                     self.error = Some("Add a repository to this Zapper first".into());
                     cx.notify();
                     return;
                 };
-                ZotAction::Delegate {
+                ZapperAction::Delegate {
                     issue_id: Some(id),
-                    worker: ZotWorker {
+                    worker: ZapperWorker {
                         chat_id: String::new(),
                         device_id: repo.device_id.clone(),
                         space_id: repo.space_id.clone(),
@@ -476,7 +480,7 @@ impl IssuePanel {
                         followups: 0,
                         queue_position: None,
                     },
-                    model: self.zot.config.coordinator_model.clone(),
+                    model: self.zapper.config.coordinator_model.clone(),
                     // Same fallback as the other delegation paths.
                     base: match values[1].trim() {
                         "" => "HEAD".into(),
@@ -488,12 +492,12 @@ impl IssuePanel {
         // Keep the draft until the authoritative watch confirms its write.
         self.emit(action, cx);
     }
-    fn issue_row(&self, issue: &ZotIssue, cx: &mut Context<Self>) -> AnyElement {
+    fn issue_row(&self, issue: &ZapperIssue, cx: &mut Context<Self>) -> AnyElement {
         let id = issue.id.clone();
         let owner = issue.details.current_owner();
         let assignee = self.owner_name(owner.as_ref());
         // Its thread waits for a slot: show Queued, not a running status.
-        let queued = self.zot.issue_queued_worker(issue).is_some();
+        let queued = self.zapper.issue_queued_worker(issue).is_some();
         row()
             .id(SharedString::from(format!("issue-row-{id}")))
             .role(Role::Button)
@@ -511,7 +515,7 @@ impl IssuePanel {
             .hover(|s| s.bg(rgb(HOVER)))
             .child(priority_icon(issue.details.priority))
             .child(status_icon(if queued {
-                ZotIssueStatus::Todo
+                ZapperIssueStatus::Todo
             } else {
                 issue.details.status
             }))
@@ -556,7 +560,7 @@ impl IssuePanel {
             }))
             .into_any_element()
     }
-    fn matches_query(&self, issue: &ZotIssue, query: &str) -> bool {
+    fn matches_query(&self, issue: &ZapperIssue, query: &str) -> bool {
         query.is_empty()
             || format!(
                 "{} {} {}",
@@ -574,14 +578,16 @@ impl IssuePanel {
         }
         let mut body = column().gap(px(2.));
         let waiting = self
-            .zot
+            .zapper
             .issues
             .iter()
-            .filter(|i| i.details.status == ZotIssueStatus::NeedsYou)
+            .filter(|i| i.details.status == ZapperIssueStatus::NeedsYou)
             .count();
         let mut tabs = row().gap(px(2.));
-        for (index, label, count) in [(0, "All", self.zot.issues.len()), (1, "Needs you", waiting)]
-        {
+        for (index, label, count) in [
+            (0, "All", self.zapper.issues.len()),
+            (1, "Needs you", waiting),
+        ] {
             let selected = (index == 1) == self.needs_you_only;
             tabs = tabs.child(
                 button(format!("issues-filter-{index}"), "")
@@ -594,7 +600,7 @@ impl IssuePanel {
                     .when(selected, |d| d.bg(rgb(HOVER)).text_color(rgb(TEXT)))
                     .when(!selected, |d| d.text_color(rgb(MUTED)))
                     .when(index == 1, |d| {
-                        d.child(self.owner_avatar(Some(&ZotIssueOwner::User), 14.))
+                        d.child(self.owner_avatar(Some(&ZapperIssueOwner::User), 14.))
                     })
                     .child(label)
                     .child(
@@ -648,7 +654,7 @@ impl IssuePanel {
                 body = body.child(div().pb(px(8.)).child(input_box(search.clone(), 34.)));
             }
         }
-        if self.zot.issues.is_empty() {
+        if self.zapper.issues.is_empty() {
             return body
                 .child(self.empty_state(
                     "No issues yet",
@@ -664,12 +670,12 @@ impl IssuePanel {
             .filter(|_| self.searching)
             .map(|i| i.read(cx).value(cx).to_lowercase())
             .unwrap_or_default();
-        for status in ZotIssueStatus::BOARD {
-            if self.needs_you_only && status != ZotIssueStatus::NeedsYou {
+        for status in ZapperIssueStatus::BOARD {
+            if self.needs_you_only && status != ZapperIssueStatus::NeedsYou {
                 continue;
             }
             let issues: Vec<_> = self
-                .zot
+                .zapper
                 .issues
                 .iter()
                 .filter(|i| i.details.status == status && self.matches_query(i, &query))
@@ -801,19 +807,19 @@ impl IssuePanel {
     /// The overview: open work first, then live threads, pull requests and
     /// documents. Empty blocks are left out instead of showing a zero.
     fn overview_page(&self, cx: &mut Context<Self>) -> AnyElement {
-        let open: Vec<&ZotIssue> = ZotIssueStatus::BOARD
+        let open: Vec<&ZapperIssue> = ZapperIssueStatus::BOARD
             .iter()
             .filter(|s| !s.terminal())
             .flat_map(|s| {
-                self.zot
+                self.zapper
                     .issues
                     .iter()
                     .filter(move |i| i.details.status == *s)
             })
             .collect();
-        let finished = self.zot.issues.len() - open.len();
+        let finished = self.zapper.issues.len() - open.len();
         let threads = ordered_zapper_threads(
-            self.zot
+            self.zapper
                 .workers
                 .iter()
                 .filter(|w| self.thread_state(&w.chat_id) != ThreadState::Archived),
@@ -824,7 +830,7 @@ impl IssuePanel {
             },
         );
         let prs: Vec<_> = self
-            .zot
+            .zapper
             .issues
             .iter()
             .filter(|i| !i.details.status.terminal())
@@ -892,11 +898,11 @@ impl IssuePanel {
                 let id = worker.chat_id.clone();
                 let state = self.thread_state(&id);
                 let codes = self
-                    .zot
+                    .zapper
                     .issues
                     .iter()
                     .filter(|i| i.threads.contains(&id))
-                    .map(ZotIssue::code)
+                    .map(ZapperIssue::code)
                     .collect::<Vec<_>>()
                     .join(", ");
                 let (dot, label) = match state {
@@ -1032,7 +1038,7 @@ impl IssuePanel {
         }
         body.into_any_element()
     }
-    fn detail(&self, issue: &ZotIssue, cx: &mut Context<Self>) -> AnyElement {
+    fn detail(&self, issue: &ZapperIssue, cx: &mut Context<Self>) -> AnyElement {
         let mut body = column().gap(px(8.)).pt(px(10.));
         let edit = issue.id.clone();
         // Click the title to edit it in place.
@@ -1073,7 +1079,7 @@ impl IssuePanel {
             (
                 "clock-circle",
                 "Status",
-                self.zot.issue_status_label(issue).to_owned(),
+                self.zapper.issue_status_label(issue).to_owned(),
                 "status",
             ),
             (
@@ -1142,7 +1148,7 @@ impl IssuePanel {
                 .text_size(px(12.))
                 .line_height(px(18.))
                 .child(if menu == "status" {
-                    status_icon(ZotIssueStatus::Todo).into_any_element()
+                    status_icon(ZapperIssueStatus::Todo).into_any_element()
                 } else {
                     icon(glyph)
                         .size(px(12.))
@@ -1190,31 +1196,34 @@ impl IssuePanel {
                     }),
                 );
                 // Owners: nobody, you, the Zapper, then threads on this issue.
-                let owners: Vec<Option<ZotIssueOwner>> =
-                    [None, Some(ZotIssueOwner::User), Some(ZotIssueOwner::Zapper)]
-                        .into_iter()
-                        .chain(
-                            issue
-                                .threads
-                                .iter()
-                                .filter(|id| self.zot.workers.iter().any(|w| w.chat_id == **id))
-                                .map(|id| {
-                                    Some(ZotIssueOwner::Thread {
-                                        chat_id: id.clone(),
-                                    })
-                                }),
-                        )
-                        .collect();
+                let owners: Vec<Option<ZapperIssueOwner>> = [
+                    None,
+                    Some(ZapperIssueOwner::User),
+                    Some(ZapperIssueOwner::Zapper),
+                ]
+                .into_iter()
+                .chain(
+                    issue
+                        .threads
+                        .iter()
+                        .filter(|id| self.zapper.workers.iter().any(|w| w.chat_id == **id))
+                        .map(|id| {
+                            Some(ZapperIssueOwner::Thread {
+                                chat_id: id.clone(),
+                            })
+                        }),
+                )
+                .collect();
                 let count = match menu {
-                    "status" => ZotIssueStatus::ALL.len(),
-                    "priority" => ZotIssuePriority::ALL.len(),
+                    "status" => ZapperIssueStatus::ALL.len(),
+                    "priority" => ZapperIssuePriority::ALL.len(),
                     _ => owners.len(),
                 };
                 for index in 0..count {
                     let mut details = issue.details.clone();
                     let (lead, label): (AnyElement, String) = match menu {
                         "status" => {
-                            let status = ZotIssueStatus::ALL[index];
+                            let status = ZapperIssueStatus::ALL[index];
                             details.status = status;
                             (
                                 status_icon(status).into_any_element(),
@@ -1222,7 +1231,7 @@ impl IssuePanel {
                             )
                         }
                         "priority" => {
-                            let priority = ZotIssuePriority::ALL[index];
+                            let priority = ZapperIssuePriority::ALL[index];
                             details.priority = priority;
                             (
                                 priority_icon(priority).into_any_element(),
@@ -1233,7 +1242,7 @@ impl IssuePanel {
                             let owner = owners[index].clone();
                             details.assigned = matches!(
                                 owner,
-                                Some(ZotIssueOwner::Zapper | ZotIssueOwner::Thread { .. })
+                                Some(ZapperIssueOwner::Zapper | ZapperIssueOwner::Thread { .. })
                             );
                             details.owner = owner.clone();
                             (
@@ -1257,7 +1266,7 @@ impl IssuePanel {
                                     return;
                                 }
                                 this.emit(
-                                    ZotAction::EditIssue {
+                                    ZapperAction::EditIssue {
                                         issue_id: id.clone(),
                                         details: details.clone(),
                                     },
@@ -1281,7 +1290,7 @@ impl IssuePanel {
             if kind == 0 {
                 for pr in &issue.pull_requests {
                     let url = pr.url.clone();
-                    let remove = ZotAction::UnlinkIssuePullRequest {
+                    let remove = ZapperAction::UnlinkIssuePullRequest {
                         issue_id: issue.id.clone(),
                         url: pr.url.clone(),
                     };
@@ -1360,7 +1369,7 @@ impl IssuePanel {
                             .child(remove_link(
                                 format!("unlink-thread-{chat}"),
                                 "Unlink thread",
-                                ZotAction::UnlinkIssueThread {
+                                ZapperAction::UnlinkIssueThread {
                                     issue_id: issue.id.clone(),
                                     chat_id: chat.clone(),
                                 },
@@ -1371,7 +1380,7 @@ impl IssuePanel {
             }
             if kind == 2 {
                 for id in &issue.details.relations {
-                    if let Some(related) = self.zot.issues.iter().find(|i| i.id == *id) {
+                    if let Some(related) = self.zapper.issues.iter().find(|i| i.id == *id) {
                         let target = id.clone();
                         let mut details = issue.details.clone();
                         details.relations.retain(|r| r != id);
@@ -1398,7 +1407,7 @@ impl IssuePanel {
                                 .child(remove_link(
                                     format!("unlink-relation-{id}"),
                                     "Remove relation",
-                                    ZotAction::EditIssue {
+                                    ZapperAction::EditIssue {
                                         issue_id: issue.id.clone(),
                                         details,
                                     },
@@ -1465,7 +1474,7 @@ impl IssuePanel {
                         cx.notify();
                     }));
                 if kind == 1 {
-                    for worker in &self.zot.workers {
+                    for worker in &self.zapper.workers {
                         let id = issue.id.clone();
                         let chat = worker.chat_id.clone();
                         if issue.threads.contains(&chat) {
@@ -1485,7 +1494,7 @@ impl IssuePanel {
                                 move |this, _, _, cx| {
                                     this.menu = None;
                                     this.emit(
-                                        ZotAction::LinkIssueThread {
+                                        ZapperAction::LinkIssueThread {
                                             issue_id: id.clone(),
                                             chat_id: chat.clone(),
                                         },
@@ -1511,7 +1520,7 @@ impl IssuePanel {
                         })),
                     );
                 } else {
-                    for other in &self.zot.issues {
+                    for other in &self.zapper.issues {
                         if other.id == issue.id || issue.details.relations.contains(&other.id) {
                             continue;
                         }
@@ -1529,7 +1538,7 @@ impl IssuePanel {
                                 move |this, _, _, cx| {
                                     this.menu = None;
                                     this.emit(
-                                        ZotAction::EditIssue {
+                                        ZapperAction::EditIssue {
                                             issue_id: id.clone(),
                                             details: details.clone(),
                                         },
@@ -1623,7 +1632,7 @@ impl IssuePanel {
                 .child(filters),
         );
         // Replies nest under the entry they answer.
-        let mut replies: HashMap<&str, Vec<&ZotIssueActivity>> = HashMap::new();
+        let mut replies: HashMap<&str, Vec<&ZapperIssueActivity>> = HashMap::new();
         for event in &issue.activity {
             if let Some(parent) = &event.reply_to {
                 replies.entry(parent.as_str()).or_default().push(event);
@@ -1710,7 +1719,7 @@ impl IssuePanel {
     /// A titled block of issue text that edits in place on click.
     fn text_section(
         &self,
-        issue: &ZotIssue,
+        issue: &ZapperIssue,
         field: Field,
         label: &'static str,
         placeholder: &'static str,
@@ -1751,16 +1760,16 @@ impl IssuePanel {
     }
     /// A face for comments: this Zapper's, or the signed-in person's initial.
     /// Worker threads keep their activity glyph.
-    fn actor_avatar(&self, event: &ZotIssueActivity, size: f32) -> Option<Div> {
+    fn actor_avatar(&self, event: &ZapperIssueActivity, size: f32) -> Option<Div> {
         match &event.actor {
             None => Some(person_avatar(
                 self.user_name.as_deref().unwrap_or("You"),
                 size,
             )),
             Some(id)
-                if *id == self.zot.coordinator_chat_id
-                    || self.zot.previous_coordinator_chats.contains(id)
-                    || *id == self.zot.config.name =>
+                if *id == self.zapper.coordinator_chat_id
+                    || self.zapper.previous_coordinator_chats.contains(id)
+                    || *id == self.zapper.config.name =>
             {
                 Some(zapper_face(&self.avatar(), size))
             }
@@ -1768,17 +1777,17 @@ impl IssuePanel {
         }
     }
     /// Who did it and what, with chat IDs and PR URLs swapped for readable names.
-    fn activity_text(&self, issue: &ZotIssue, event: &ZotIssueActivity) -> (String, String) {
+    fn activity_text(&self, issue: &ZapperIssue, event: &ZapperIssueActivity) -> (String, String) {
         let actor = event
             .actor
             .as_ref()
             .map(|id| {
-                if *id == self.zot.coordinator_chat_id
-                    || self.zot.previous_coordinator_chats.contains(id)
-                    || *id == self.zot.config.name
+                if *id == self.zapper.coordinator_chat_id
+                    || self.zapper.previous_coordinator_chats.contains(id)
+                    || *id == self.zapper.config.name
                 {
-                    self.zot.config.name.clone()
-                } else if self.zot.workers.iter().any(|w| w.chat_id == *id)
+                    self.zapper.config.name.clone()
+                } else if self.zapper.workers.iter().any(|w| w.chat_id == *id)
                     || self.thread_titles.contains_key(id)
                 {
                     self.thread_title(id)
@@ -1799,7 +1808,7 @@ impl IssuePanel {
         }
         // Longest IDs first, whole IDs only, so "issue-worker" never
         // rewrites the start of "issue-worker-attribution".
-        let mut workers: Vec<_> = self.zot.workers.iter().map(|w| &w.chat_id).collect();
+        let mut workers: Vec<_> = self.zapper.workers.iter().map(|w| &w.chat_id).collect();
         workers.sort_by_key(|id| std::cmp::Reverse(id.len()));
         for id in workers {
             text = replace_whole_id(&text, id, &self.thread_title(id));
@@ -1813,18 +1822,18 @@ impl IssuePanel {
     #[allow(clippy::too_many_arguments)]
     fn activity_card(
         &self,
-        issue: &ZotIssue,
-        event: &ZotIssueActivity,
+        issue: &ZapperIssue,
+        event: &ZapperIssueActivity,
         actor: String,
         mut text: String,
         (glyph, color): (&'static [&'static str], u32),
-        thread: &[&ZotIssueActivity],
+        thread: &[&ZapperIssueActivity],
         cx: &mut Context<Self>,
     ) -> AnyElement {
         // A routine "Worker update" label repeats the header; failures and
         // questions stay visible as a tag.
         let mut tag = (event.kind == "question").then(|| {
-            if issue.details.status == ZotIssueStatus::NeedsYou {
+            if issue.details.status == ZapperIssueStatus::NeedsYou {
                 "Needs your answer".to_owned()
             } else {
                 "Question".to_owned()
@@ -2055,12 +2064,12 @@ impl IssuePanel {
         }
         if matches!(editor.kind, EditorKind::Delegate(_)) {
             body=body.child(div().text_color(rgb(MUTED)).text_size(px(12.)).child("Assign this issue to the Zapper first. The thread starts in the repository selected below."));
-            // Put the chosen repository first without changing the Zot config.
-            for repo in &self.zot.config.repositories {
+            // Put the chosen repository first without changing the Zapper config.
+            for repo in &self.zapper.config.repositories {
                 let selected = self
                     .repository
                     .as_ref()
-                    .or(self.zot.config.repositories.first())
+                    .or(self.zapper.config.repositories.first())
                     == Some(repo);
                 let r = repo.clone();
                 body = body.child(
@@ -2118,7 +2127,7 @@ impl Render for IssuePanel {
         } else if let Some(issue) = self
             .selected
             .as_ref()
-            .and_then(|id| self.zot.issues.iter().find(|i| i.id == *id))
+            .and_then(|id| self.zapper.issues.iter().find(|i| i.id == *id))
             .cloned()
         {
             self.detail(&issue, cx)
@@ -2177,7 +2186,7 @@ fn button(id: impl Into<SharedString>, label: impl Into<SharedString>) -> Statef
 }
 /// A status group's header: its icon, name and count, folding on click.
 fn section(
-    status: ZotIssueStatus,
+    status: ZapperIssueStatus,
     count: usize,
     key: &str,
     closed: bool,
@@ -2280,15 +2289,17 @@ fn input_box(input: Entity<TextInput>, height: f32) -> Div {
 }
 /// The Needs-you amber, shared by its status, question cards and badges.
 pub const NEEDS_YOU: u32 = 0xf2a14a;
-pub fn status_color(status: ZotIssueStatus) -> u32 {
+pub fn status_color(status: ZapperIssueStatus) -> u32 {
     match status {
-        ZotIssueStatus::NeedsYou => NEEDS_YOU,
-        ZotIssueStatus::InProgress | ZotIssueStatus::InReview | ZotIssueStatus::Done => 0x00b80a,
-        ZotIssueStatus::Blocked => 0xd9bf60,
+        ZapperIssueStatus::NeedsYou => NEEDS_YOU,
+        ZapperIssueStatus::InProgress | ZapperIssueStatus::InReview | ZapperIssueStatus::Done => {
+            0x00b80a
+        }
+        ZapperIssueStatus::Blocked => 0xd9bf60,
         _ => MUTED,
     }
 }
-pub fn status_icon(status: ZotIssueStatus) -> Div {
+pub fn status_icon(status: ZapperIssueStatus) -> Div {
     let color = status_color(status);
     div()
         .size(px(12.))
@@ -2298,15 +2309,15 @@ pub fn status_icon(status: ZotIssueStatus) -> Div {
         .when(
             matches!(
                 status,
-                ZotIssueStatus::InProgress
-                    | ZotIssueStatus::InReview
-                    | ZotIssueStatus::Done
-                    | ZotIssueStatus::NeedsYou
+                ZapperIssueStatus::InProgress
+                    | ZapperIssueStatus::InReview
+                    | ZapperIssueStatus::Done
+                    | ZapperIssueStatus::NeedsYou
             ),
             |d| d.child(div().size(px(5.)).bg(rgb(color))),
         )
 }
-fn pr_badge(pr: &ZotIssuePullRequest) -> Div {
+fn pr_badge(pr: &ZapperIssuePullRequest) -> Div {
     row()
         .flex_none()
         .gap(px(4.))
@@ -2319,15 +2330,15 @@ fn pr_badge(pr: &ZotIssuePullRequest) -> Div {
         .child(icon("git-branch").size(px(11.)).text_color(rgb(0xd9bf60)))
         .child(format!("#{}", pr.url.rsplit('/').next().unwrap_or("")))
 }
-/// A report sent back to the Zot, shown like a chat-to-chat reply: a quiet
+/// A report sent back to the Zapper, shown like a chat-to-chat reply: a quiet
 /// "Sent by <thread>" bubble. The model-facing evidence label stays hidden.
 pub fn activity_notice(
-    sender: &zuse_protocol::presentation::zot_message::ZotSender,
+    sender: &zuse_protocol::presentation::zapper_message::ZapperSender,
     body: &str,
     timestamp: i64,
 ) -> Div {
     let mut sender = sender.clone();
-    // Notices saved before the source was recorded read "<Zot> · Activity".
+    // Notices saved before the source was recorded read "<Zapper> · Activity".
     if let Some(name) = sender.name.strip_suffix(" · Activity") {
         sender.name = name.to_owned();
     }
@@ -2365,9 +2376,9 @@ pub fn activity_notice(
         .child(sender_footer(text, timestamp))
 }
 
-/// Saved Zot identity above an agent-authored message, shared by both clients.
+/// Saved Zapper identity above an agent-authored message, shared by both clients.
 pub fn sender_header(
-    sender: &zuse_protocol::presentation::zot_message::ZotSender,
+    sender: &zuse_protocol::presentation::zapper_message::ZapperSender,
     timestamp: i64,
 ) -> Div {
     let _ = timestamp;
@@ -2376,13 +2387,13 @@ pub fn sender_header(
 
 /// The same header with its own wording, such as "Sent from Zapper".
 pub fn sender_header_labeled(
-    sender: &zuse_protocol::presentation::zot_message::ZotSender,
+    sender: &zuse_protocol::presentation::zapper_message::ZapperSender,
     label: &str,
 ) -> Div {
     // The Zapper's own messages carry its face; relayed thread activity
     // keeps the terminal mark so the two never read as the same author.
     let lead = match sender.avatar.as_ref().filter(|_| !sender.activity) {
-        Some(avatar) => zapper_face(&known_face(&sender.zot_id, avatar), 14.).into_any_element(),
+        Some(avatar) => zapper_face(&known_face(&sender.zapper_id, avatar), 14.).into_any_element(),
         None => icon("terminal").size(px(12.)).into_any_element(),
     };
     row()
@@ -2410,7 +2421,9 @@ pub fn sender_footer(body: String, timestamp: i64) -> Div {
         .text_color(rgb(0x858585))
         .child(
             div()
-                .id(SharedString::from(format!("copy-zot-message-{timestamp}")))
+                .id(SharedString::from(format!(
+                    "copy-zapper-message-{timestamp}"
+                )))
                 .role(Role::Button)
                 .aria_label("Copy message")
                 .cursor_pointer()
@@ -2425,7 +2438,7 @@ pub fn sender_footer(body: String, timestamp: i64) -> Div {
 fn remove_link(
     id: impl Into<SharedString>,
     label: &'static str,
-    action: ZotAction,
+    action: ZapperAction,
     cx: &Context<IssuePanel>,
 ) -> Stateful<Div> {
     button(id, "")
@@ -2519,7 +2532,7 @@ const GLYPH_BARS: &[&str] = &["....#", "..#.#", "..#.#", "#.#.#", "#.#.#"];
 const GLYPH_PENCIL: &[&str] = &["...##", "..##.", ".##..", "##...", "#...."];
 const GLYPH_REPLY: &[&str] = &["#....", "#....", "#...#", "#####", "....#"];
 
-fn activity_glyph(event: &ZotIssueActivity) -> (&'static [&'static str], u32) {
+fn activity_glyph(event: &ZapperIssueActivity) -> (&'static [&'static str], u32) {
     let text = event.text.as_str();
     match event.kind.as_str() {
         "created" => (GLYPH_PLUS, 0x8a8a8a),
@@ -2535,11 +2548,11 @@ fn activity_glyph(event: &ZotIssueActivity) -> (&'static [&'static str], u32) {
         "workerReport" if text.starts_with("Worker needs input") => (GLYPH_PROMPT, 0xd9bf60),
         "workerReport" => (GLYPH_PROMPT, 0x4fc1b0),
         "updated" if text.starts_with("Status changed to ") => {
-            let status = ZotIssueStatus::ALL
+            let status = ZapperIssueStatus::ALL
                 .iter()
                 .find(|s| text["Status changed to ".len()..].starts_with(s.label()))
                 .copied()
-                .unwrap_or(ZotIssueStatus::Todo);
+                .unwrap_or(ZapperIssueStatus::Todo);
             (GLYPH_DOT, status_color(status))
         }
         "updated" if text.starts_with("Priority") => (GLYPH_BARS, 0xe0965a),
@@ -2598,7 +2611,7 @@ fn replace_whole_id(text: &str, id: &str, with: &str) -> String {
     out.push_str(rest);
     out
 }
-fn pr_label(pr: &ZotIssuePullRequest) -> String {
+fn pr_label(pr: &ZapperIssuePullRequest) -> String {
     let parts: Vec<_> = pr.url.trim_end_matches('/').rsplit('/').collect();
     format!(
         "{}#{}",
@@ -2606,10 +2619,10 @@ fn pr_label(pr: &ZotIssuePullRequest) -> String {
         parts.first().unwrap_or(&"")
     )
 }
-fn priority_icon(priority: ZotIssuePriority) -> Div {
+fn priority_icon(priority: ZapperIssuePriority) -> Div {
     let count = match priority {
-        ZotIssuePriority::Low => 1,
-        ZotIssuePriority::Normal => 2,
+        ZapperIssuePriority::Low => 1,
+        ZapperIssuePriority::Normal => 2,
         _ => 3,
     };
     let mut bars = row().items_end().h(px(12.)).gap(px(2.));

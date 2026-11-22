@@ -12,7 +12,7 @@ use sqlx::Row;
 use std::collections::HashMap;
 use zuse_protocol::{
     slack::{Channel, ChatLink, LinkRequest, Persona, PostRequest, avatar_id_ok, mirror_text},
-    zots::ZotAvatar,
+    zappers::ZapperAvatar,
 };
 
 /// Largest accepted chat key, message ID or Slack identifier.
@@ -295,7 +295,7 @@ fn slack_error(error: &str) -> ApiError {
         _ => unavailable(),
     }
 }
-pub(super) fn avatar_url(base: &str, avatar: &ZotAvatar) -> String {
+pub(super) fn avatar_url(base: &str, avatar: &ZapperAvatar) -> String {
     format!(
         "{base}/slack/avatars/{}/{}.png",
         avatar.mascot, avatar.color
@@ -733,9 +733,9 @@ pub(super) async fn ack(
 pub(super) const AVATAR_SIZE: u32 = 512;
 const AVATAR_BACKGROUND: [u8; 3] = [0xF4, 0xF1, 0xEA];
 /// Render the current round-face mascot definitions without a window or GPU.
-pub(super) fn render_avatar(avatar: &ZotAvatar) -> Result<Vec<u8>, ApiError> {
-    use zuse_protocol::presentation::zot_mascots::{self, Face};
-    let (mascot, color) = zot_mascots::resolve(avatar);
+pub(super) fn render_avatar(avatar: &ZapperAvatar) -> Result<Vec<u8>, ApiError> {
+    use zuse_protocol::presentation::zapper_mascots::{self, Face};
+    let (mascot, color) = zapper_mascots::resolve(avatar);
     let size = AVATAR_SIZE as usize;
     let mut pixels = AVATAR_BACKGROUND.repeat(size * size);
     for py in 0..size {
@@ -834,7 +834,7 @@ pub(super) async fn avatar(Path((mascot, file)): Path<(String, String)>) -> Resp
     if !avatar_id_ok(&mascot) || !avatar_id_ok(color) {
         return StatusCode::NOT_FOUND.into_response();
     }
-    match render_avatar(&ZotAvatar {
+    match render_avatar(&ZapperAvatar {
         mascot,
         color: color.to_owned(),
     }) {

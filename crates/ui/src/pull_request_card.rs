@@ -1971,8 +1971,8 @@ pub fn composer_chips(
     auto_fix: Option<AnyElement>,
     cx: &App,
 ) -> Option<AnyElement> {
-    // A Zot's coordinator spans repositories; pull requests belong to its threads.
-    if state.selected_chat_is_zot_coordinator() {
+    // A Zapper's coordinator spans repositories; pull requests belong to its threads.
+    if state.selected_chat_is_zapper_coordinator() {
         return None;
     }
     let chat = state.selected_chat_row()?;

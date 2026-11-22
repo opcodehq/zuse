@@ -78,8 +78,8 @@ fn main() -> anyhow::Result<()> {
         );
     }
     let device = core.device_id.clone();
-    let zot: zuse_protocol::zots::Zot = serde_json::from_value(json!({
-        "id": "zot", "revision": 1, "status": "active",
+    let zapper: zuse_protocol::zappers::Zapper = serde_json::from_value(json!({
+        "id": "zapper", "revision": 1, "status": "active",
         "coordinatorChatId": "coordinator", "previousCoordinatorChats": [],
         "workers": [], "decisions": [],
         "config": {
@@ -162,7 +162,7 @@ fn main() -> anyhow::Result<()> {
                 ];
                 s.chats = chats;
                 if !plain {
-                    s.zots = vec![zot];
+                    s.zappers = vec![zapper];
                 }
                 s.selected_chat = Some("coordinator".into());
                 s.auto_selected = true;

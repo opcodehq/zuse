@@ -6,10 +6,10 @@
 //! Threads tab, Finished expanded). Needs an X11 display.
 use gpui::{AppContext, AsyncApp, Bounds, WindowBounds, WindowOptions, px, size};
 use std::{path::PathBuf, sync::Arc, time::Duration};
-use zuse_protocol::zots::*;
+use zuse_protocol::zappers::*;
 use zuse_ui::*;
 
-const COORDINATOR: &str = "zot-stuff-0";
+const COORDINATOR: &str = "zapper-stuff-0";
 const DEVICE: &str = "local";
 
 async fn pause(cx: &mut AsyncApp, ms: u64) {
@@ -54,28 +54,28 @@ fn chat(id: &str, title: &str, minutes_ago: i64) -> zuse_protocol::Chat {
 
 /// Threads the owner's screenshot showed leaking, all released.
 const RELEASED: [(&str, &str); 3] = [
-    ("zot-worker-delegate-zap11-ci-fix-1", "Get PR281 Green"),
+    ("zapper-worker-delegate-zap11-ci-fix-1", "Get PR281 Green"),
     (
-        "zot-worker-delegate-command-errors-1",
+        "zapper-worker-delegate-command-errors-1",
         "Fix Zapper Commands",
     ),
-    ("zot-worker-delegate-panel-tabs-1", "Zapper Panel Tabs"),
+    ("zapper-worker-delegate-panel-tabs-1", "Zapper Panel Tabs"),
 ];
 const RUNNING: (&str, &str) = (
-    "zot-worker-delegate-threads-leak-1",
+    "zapper-worker-delegate-threads-leak-1",
     "Keep threads in Zapper",
 );
 
-fn issue(number: u32, title: &str, status: ZotIssueStatus, threads: &[&str]) -> ZotIssue {
+fn issue(number: u32, title: &str, status: ZapperIssueStatus, threads: &[&str]) -> ZapperIssue {
     let now = chrono::Utc::now().timestamp_millis();
-    ZotIssue {
+    ZapperIssue {
         id: format!("issue-{number}"),
         number,
-        details: ZotIssueDetails {
+        details: ZapperIssueDetails {
             title: title.into(),
             status,
             assigned: true,
-            owner: Some(ZotIssueOwner::Zapper),
+            owner: Some(ZapperIssueOwner::Zapper),
             ..Default::default()
         },
         created_at: now - 54_000_000,
@@ -86,36 +86,36 @@ fn issue(number: u32, title: &str, status: ZotIssueStatus, threads: &[&str]) -> 
     }
 }
 
-fn sample_zapper() -> Zot {
-    Zot {
+fn sample_zapper() -> Zapper {
+    Zapper {
         id: "stuff".into(),
         revision: 9,
         activity_revision: 0,
-        config: ZotConfig {
+        config: ZapperConfig {
             name: "zappers stuff".into(),
             purpose: "Make Zappers solid.".into(),
             home_device_id: DEVICE.into(),
-            repositories: vec![ZotRepository {
+            repositories: vec![ZapperRepository {
                 device_id: DEVICE.into(),
                 space_id: "zuse".into(),
             }],
-            coordinator_model: ZotModel {
+            coordinator_model: ZapperModel {
                 harness: "claude-code".into(),
                 model: None,
             },
             worker_device_id: DEVICE.into(),
             max_concurrent_workers: 3,
             max_followups: 3,
-            avatar: Some(ZotAvatar {
+            avatar: Some(ZapperAvatar {
                 mascot: "ace".into(),
                 color: "violet".into(),
             }),
         },
-        status: ZotStatus::Active,
+        status: ZapperStatus::Active,
         coordinator_chat_id: COORDINATOR.into(),
         previous_coordinator_chats: vec![],
         // Only the running thread is still a worker; release removed the rest.
-        workers: vec![ZotWorker {
+        workers: vec![ZapperWorker {
             chat_id: RUNNING.0.into(),
             device_id: DEVICE.into(),
             space_id: "zuse".into(),
@@ -128,19 +128,19 @@ fn sample_zapper() -> Zot {
             issue(
                 11,
                 "Zapper commands keep failing",
-                ZotIssueStatus::Done,
+                ZapperIssueStatus::Done,
                 &[RELEASED[0].0, RELEASED[1].0],
             ),
             issue(
                 7,
                 "Zapper panel tabs",
-                ZotIssueStatus::InReview,
+                ZapperIssueStatus::InReview,
                 &[RELEASED[2].0],
             ),
             issue(
                 19,
                 "Finished Zapper threads leak",
-                ZotIssueStatus::InProgress,
+                ZapperIssueStatus::InProgress,
                 &[RUNNING.0],
             ),
         ],
@@ -219,7 +219,7 @@ fn main() -> anyhow::Result<()> {
                     chats.push(chat(id, title, 120 + 60 * n as i64));
                 }
                 s.chats = chats;
-                s.zots = vec![sample_zapper()];
+                s.zappers = vec![sample_zapper()];
                 s.selected_chat = Some("plain-1".into());
                 s.selected_space = Some("zuse".into());
                 s.auto_selected = true;

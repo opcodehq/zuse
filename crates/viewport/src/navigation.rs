@@ -157,10 +157,10 @@ impl WorkspaceView {
                     && c["parentChatId"].is_null()
                     && c["threadId"].is_null()
             })
-            // Zots list their own threads; projects don't repeat them.
+            // Zappers list their own threads; projects don't repeat them.
             .filter(|c| {
-                !zuse_protocol::presentation::zot_panel::zapper_keeps_chat(
-                    &self.zots.items,
+                !zuse_protocol::presentation::zapper_panel::zapper_keeps_chat(
+                    &self.zappers.items,
                     c["id"].as_str().unwrap_or_default(),
                     None,
                     None,
@@ -292,7 +292,7 @@ impl WorkspaceView {
                         )
                     }),
             )
-            .child(self.zot_sidebar(cx))
+            .child(self.zapper_sidebar(cx))
             .when(self.search_open, |d| {
                 d.child(
                     row()
@@ -315,7 +315,7 @@ impl WorkspaceView {
                 )
             })
             .child(
-                // Section header shares the Zots header's quiet style; its
+                // Section header shares the Zappers header's quiet style; its
                 // controls stay out of the way until the header is hovered.
                 row()
                     .id("threads-header")

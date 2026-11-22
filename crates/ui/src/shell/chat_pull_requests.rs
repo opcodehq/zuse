@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::pull_request_detail::PullRequestDetailPage;
-use zuse_protocol::presentation::zot_panel::ZotPage;
+use zuse_protocol::presentation::zapper_panel::ZapperPage;
 
 pub(super) struct ChatPullRequest {
     pub(super) url: String,
@@ -35,8 +35,8 @@ impl Shell {
         // A coordinator chat's right side is its Zapper panel: the pull
         // request opens as a tab in the panel's strip, like one linked from
         // an issue.
-        if self.selected_zot(cx).is_some() {
-            self.show_in_zot_panel(ZotPage::PullRequest(url), cx);
+        if self.selected_zapper(cx).is_some() {
+            self.show_in_zapper_panel(ZapperPage::PullRequest(url), cx);
             return;
         }
         let key = self.panel_key(cx);

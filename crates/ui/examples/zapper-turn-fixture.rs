@@ -5,7 +5,7 @@
 use gpui::{AppContext, Bounds, WindowBounds, WindowOptions, px, size};
 use serde_json::json;
 use std::sync::Arc;
-use zuse_protocol::presentation::zot_message::{EXECUTION_CONTEXT, PREFIX, ZotSender};
+use zuse_protocol::presentation::zapper_message::{EXECUTION_CONTEXT, PREFIX, ZapperSender};
 use zuse_ui::*;
 
 fn port() -> u16 {
@@ -19,7 +19,7 @@ fn port() -> u16 {
 /// A shortened stand-in for the coordinator brief the engine prepends.
 fn brief(message: &str) -> String {
     format!(
-        "You are zappers stuff, a Zapper: you run work across the user's repositories by delegating it to threads. Each thread is a worker conversation in its own isolated git worktree. Call yourself a Zapper or zappers stuff; never a \"Zot\".\n\n## How you work\n- You plan, delegate, check and report. Never edit code yourself.\n- Issues are how work is tracked, not chat.\n\n## Tools\nzapper_command makes every change: {{\"commandId\": …, \"zotId\": \"f918…\", \"action\": …}}\n\n## Current state (revision 42)\n{{\"issues\":[{{\"code\":\"ZAP-7\",\"title\":\"Panel tabs and pane\",\"status\":\"inReview\"}}]}}\n\n## Purpose\nShip the Zapper experience.\n\n## User message\n{message}"
+        "You are zappers stuff, a Zapper: you run work across the user's repositories by delegating it to threads. Each thread is a worker conversation in its own isolated git worktree. Call yourself a Zapper or zappers stuff; never a \"Zapper\".\n\n## How you work\n- You plan, delegate, check and report. Never edit code yourself.\n- Issues are how work is tracked, not chat.\n\n## Tools\nzapper_command makes every change: {{\"commandId\": …, \"zapperId\": \"f918…\", \"action\": …}}\n\n## Current state (revision 42)\n{{\"issues\":[{{\"code\":\"ZAP-7\",\"title\":\"Panel tabs and pane\",\"status\":\"inReview\"}}]}}\n\n## Purpose\nShip the Zapper experience.\n\n## User message\n{message}"
     )
 }
 
@@ -64,8 +64,8 @@ fn main() -> anyhow::Result<()> {
     let chats = core.workspace.read_chats()?;
     let device = core.device_id.clone();
 
-    let sender = ZotSender {
-        zot_id: "f91804b1".into(),
+    let sender = ZapperSender {
+        zapper_id: "f91804b1".into(),
         chat_id: "zapper".into(),
         name: "zappers stuff".into(),
         avatar: None,
@@ -76,7 +76,7 @@ fn main() -> anyhow::Result<()> {
                "source": {"_tag": "zapper", "text": text, "sender": sender}})
     };
     let user_text = "Can the coordinator chat show my message instead of the whole brief?";
-    let activity = ZotSender {
+    let activity = ZapperSender {
         name: "zappers stuff".into(),
         activity: true,
         ..sender.clone()

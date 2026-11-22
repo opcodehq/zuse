@@ -253,8 +253,8 @@ impl WorkspaceView {
             "Local engine connected"
         }
         .into();
-        self.zots.watches.clear();
-        self.watch_zot_home(device.to_owned());
+        self.zappers.watches.clear();
+        self.watch_zapper_home(device.to_owned());
         self.call(methods::ENGINE_INFO, json!({}));
         for method in [
             methods::AUTH_STATUS,
@@ -649,7 +649,7 @@ mod hosted_session_tests {
                         if let Some(method)=frame["method"].as_str(){
                             // Retry classification is deliberately more conservative
                             // than read-only startup metadata (e.g. WatchDevices).
-                            let bootstrap = matches!(method,methods::WATCH_DEVICES|methods::WATCH_HARNESS_UPDATES|methods::LIST_PAIRINGS|methods::BROWSER_ACCESS_STATUS|methods::RELAY_ACCESS_STATUS|methods::GET_TITLE_SETTINGS|methods::GET_WORKTREE_SETTINGS|methods::PLUGINS|methods::ENGINE_INFO|zuse_protocol::control::WATCH_ZOTS);
+                            let bootstrap = matches!(method,methods::WATCH_DEVICES|methods::WATCH_HARNESS_UPDATES|methods::LIST_PAIRINGS|methods::BROWSER_ACCESS_STATUS|methods::RELAY_ACCESS_STATUS|methods::GET_TITLE_SETTINGS|methods::GET_WORKTREE_SETTINGS|methods::PLUGINS|methods::ENGINE_INFO|zuse_protocol::control::WATCH_ZAPPERS) || zuse_protocol::zappers::legacy::current_method(method)==Some(zuse_protocol::control::WATCH_ZAPPERS);
                             assert!(methods::retryable_read(method,&frame["params"])||bootstrap,"unexpected startup RPC: {method}");
                         }
                     }

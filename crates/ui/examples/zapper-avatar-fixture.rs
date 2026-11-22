@@ -70,7 +70,7 @@ fn sample_zapper(
 ) -> serde_json::Value {
     serde_json::json!({
         "id": id, "revision": 3, "status": "active",
-        "coordinatorChatId": format!("zot-{id}-0"), "previousCoordinatorChats": [],
+        "coordinatorChatId": format!("zapper-{id}-0"), "previousCoordinatorChats": [],
         "workers": [], "decisions": [], "issues": [],
         "config": {
             "name": name, "purpose": "Keep staging healthy and ship the release.",
@@ -141,19 +141,19 @@ fn main() -> anyhow::Result<()> {
             s.spaces_synced = true;
             s.selected_space = Some("project".into());
             s.spaces = vec![serde_json::from_value(serde_json::json!({"id":"project","deviceId":"local","path":"/tmp/fieldnotes","createdAt":"2026-09-08T00:00:00Z"})).unwrap()];
-            let zots = [
+            let zappers = [
                 sample_zapper("release", "Release", "hex", "teal", None),
                 sample_zapper("photo", "Photo Zapper", "bolt", "coral", Some(photo.clone())),
                 sample_zapper("docs", "Docs", "squire", "violet", None),
                 sample_zapper("triage", "Triage", "brawler", "yellow", None),
                 sample_zapper("night", "Night shift", "viking", "blue", None),
             ];
-            s.zots = zots
+            s.zappers = zappers
                 .iter()
                 .map(|z| serde_json::from_value(z.clone()).unwrap())
                 .collect();
-            zuse_viewport::zapper_avatar::remember_zots(&s.zots);
-            s.chats = zots
+            zuse_viewport::zapper_avatar::remember_zappers(&s.zappers);
+            s.chats = zappers
                 .iter()
                 .map(|z| {
                     serde_json::from_value(serde_json::json!({
@@ -165,7 +165,7 @@ fn main() -> anyhow::Result<()> {
                     .unwrap()
                 })
                 .collect();
-            s.selected_chat = Some("zot-release-0".into());
+            s.selected_chat = Some("zapper-release-0".into());
             s
         });
         let boot = EngineBootConfig {
@@ -201,15 +201,15 @@ fn main() -> anyhow::Result<()> {
             let run: anyhow::Result<()> = async {
                 pause(cx, 1200).await;
                 capture(window.into(), cx, &output.join("shell-mascot.png")).await?;
-                window.update(cx, |_, _, cx| select("zot-photo-0", cx))?;
+                window.update(cx, |_, _, cx| select("zapper-photo-0", cx))?;
                 pause(cx, 300).await;
                 capture(window.into(), cx, &output.join("shell-image.png")).await?;
-                window.update(cx, |_, _, cx| select("zot-release-0", cx))?;
-                window.update(cx, |shell, _, cx| shell.fixture_open_zot_editor("release", cx))?;
+                window.update(cx, |_, _, cx| select("zapper-release-0", cx))?;
+                window.update(cx, |shell, _, cx| shell.fixture_open_zapper_editor("release", cx))?;
                 pause(cx, 300).await;
                 capture(window.into(), cx, &output.join("picker-mascot.png")).await?;
-                window.update(cx, |_, _, cx| select("zot-photo-0", cx))?;
-                window.update(cx, |shell, _, cx| shell.fixture_open_zot_editor("photo", cx))?;
+                window.update(cx, |_, _, cx| select("zapper-photo-0", cx))?;
+                window.update(cx, |shell, _, cx| shell.fixture_open_zapper_editor("photo", cx))?;
                 pause(cx, 300).await;
                 capture(window.into(), cx, &output.join("picker-image.png")).await?;
                 Ok(())

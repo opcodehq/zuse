@@ -13,7 +13,7 @@ impl Shell {
                 | Route::Plugins
                 | Route::Archives
                 | Route::Usage
-                | Route::Zot
+                | Route::Zapper
         ) {
             layout::GUTTER
         } else {

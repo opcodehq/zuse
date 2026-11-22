@@ -29,7 +29,7 @@ use gpui_tokio::Tokio;
 use zuse_engine::InstanceLock;
 #[cfg(test)]
 use zuse_protocol::HarnessId;
-use zuse_protocol::presentation::zot_panel;
+use zuse_protocol::presentation::zapper_panel;
 use zuse_protocol::{AuthState, WorkspaceScope};
 use zuse_rpc::methods;
 
@@ -115,9 +115,9 @@ mod thread_search;
 mod usage_dashboard;
 mod workspace_layout;
 mod workspace_storage;
-mod zot_avatar;
-mod zot_forms;
-mod zots;
+mod zapper_avatar;
+mod zapper_forms;
+mod zappers;
 use side_chats::SideChatTab;
 mod cloud_conversation;
 mod cloud_info;
@@ -826,8 +826,8 @@ pub enum Route {
     Plugins,
     Archives,
     Usage,
-    /// The New Zot page; [`zots::ZotUi`] holds the form.
-    Zot,
+    /// The New Zapper page; [`zappers::ZapperUi`] holds the form.
+    Zapper,
     Settings(SettingsSection),
 }
 
@@ -1025,7 +1025,7 @@ pub enum NavEntry {
     Settings(SettingsSection),
     Plugins,
     Archives(String),
-    NewZot,
+    NewZapper,
     Usage {
         project: Option<String>,
         project_scope: bool,
@@ -2188,7 +2188,7 @@ fn dismiss_update_prompt(cx: &mut App) {
 pub struct Shell {
     update_restart: Option<update_restart::RestartPlan>,
     update_restart_task: Option<Task<()>>,
-    zot_ui: zots::ZotUi,
+    zapper_ui: zappers::ZapperUi,
     state: Entity<AppState>,
     cloud_conversation: Option<Entity<cloud_conversation::CloudConversation>>,
     cloud_conversation_events: Option<Subscription>,
@@ -2876,7 +2876,7 @@ impl Shell {
         let route = match open_route.as_deref() {
             Some("pull-requests") => Route::PullRequests,
             Some("plugins") => Route::Plugins,
-            Some("zots/new") => Route::Zot,
+            Some("zappers/new") => Route::Zapper,
             Some(route) if route == "settings" || route.starts_with("settings/") => {
                 match settings_open_route(
                     route,
@@ -2925,7 +2925,7 @@ impl Shell {
             Route::PullRequests => NavEntry::PullRequests,
             Route::Plugins => NavEntry::Plugins,
             Route::Archives => NavEntry::Archives(String::new()),
-            Route::Zot => NavEntry::NewZot,
+            Route::Zapper => NavEntry::NewZapper,
             Route::Usage => NavEntry::Usage {
                 project: None,
                 project_scope: false,
@@ -2951,7 +2951,7 @@ impl Shell {
             desktop_import,
             onboarding,
             pending_open_chat: None,
-            zot_ui: zots::ZotUi::default(),
+            zapper_ui: zappers::ZapperUi::default(),
             sidebar_pane,
             sidebar_controls,
             workspace_sidebar_focus: cx.focus_handle().tab_stop(true),
@@ -3854,9 +3854,9 @@ impl Shell {
     /// Open surface tabs (a subagent chip's transcript) take the side over
     /// until they close, so the titlebar's surface strip always lists what
     /// the pane below it shows.
-    fn zot_panel_on_right(&self, cx: &App) -> bool {
+    fn zapper_panel_on_right(&self, cx: &App) -> bool {
         matches!(self.route, Route::Chat)
-            && self.selected_zot(cx).is_some()
+            && self.selected_zapper(cx).is_some()
             && !self.right_pane_shown(cx)
     }
 
@@ -3931,14 +3931,14 @@ impl Shell {
     /// it opens the surface host beside it, and it never hides the explorer —
     /// only the explorer's own toggle undocks that portion.
     fn toggle_right_pane(&mut self, cx: &mut Context<Self>) {
-        if matches!(self.route, Route::Chat) && self.selected_zot(cx).is_some() {
+        if matches!(self.route, Route::Chat) && self.selected_zapper(cx).is_some() {
             // Surface tabs (a subagent opened from a chip) stand in for the
             // Zapper panel; the toggle closes them back to it first.
             if self.right_pane_open(cx) {
                 self.set_surfaces_open(false, cx);
                 return;
             }
-            self.zot_ui.panel_hidden = !self.zot_ui.panel_hidden;
+            self.zapper_ui.panel_hidden = !self.zapper_ui.panel_hidden;
             cx.notify();
             return;
         }
@@ -4303,19 +4303,19 @@ impl Shell {
     /// Whether the focused chat is a Zapper coordinator, whose right side is
     /// the Zapper panel.
     fn zapper_hosts_surfaces(&self, cx: &App) -> bool {
-        matches!(self.route, Route::Chat) && self.selected_zot(cx).is_some()
+        matches!(self.route, Route::Chat) && self.selected_zapper(cx).is_some()
     }
 
     /// The Zapper panel page that hosts `surface` in a coordinator chat:
     /// its subagents and diffs open as tabs in the panel's own strip, beside
     /// Overview and the issues, instead of in the surface host.
-    fn zapper_page_for(&self, surface: RightSurface, cx: &App) -> Option<zot_panel::ZotPage> {
+    fn zapper_page_for(&self, surface: RightSurface, cx: &App) -> Option<zapper_panel::ZapperPage> {
         if !self.zapper_hosts_surfaces(cx) {
             return None;
         }
         match surface {
-            RightSurface::Subagent(id) => Some(zot_panel::ZotPage::Subagent(id)),
-            RightSurface::Diff(id) => Some(zot_panel::ZotPage::Diff(id)),
+            RightSurface::Subagent(id) => Some(zapper_panel::ZapperPage::Subagent(id)),
+            RightSurface::Diff(id) => Some(zapper_panel::ZapperPage::Diff(id)),
             _ => None,
         }
     }
@@ -4341,7 +4341,7 @@ impl Shell {
                 self.state
                     .update(cx, |state, cx| state.focus_subagent_sync(&doc_id, cx));
             }
-            self.show_in_zot_panel(page, cx);
+            self.show_in_zapper_panel(page, cx);
             return;
         }
         self.set_surfaces_open(true, cx);
@@ -4351,9 +4351,9 @@ impl Shell {
     /// Drop what a closed Zapper panel tab held: a subagent's transcript
     /// (and its doc watch) unless a surface strip still lists it, a diff and
     /// its watch.
-    fn release_zot_page(&mut self, page: &zot_panel::ZotPage, cx: &mut Context<Self>) {
+    fn release_zapper_page(&mut self, page: &zapper_panel::ZapperPage, cx: &mut Context<Self>) {
         match *page {
-            zot_panel::ZotPage::Subagent(id) => {
+            zapper_panel::ZapperPage::Subagent(id) => {
                 let surface = RightSurface::Subagent(id);
                 if !self.right_tabs.values().any(|tabs| tabs.contains(&surface))
                     && let Some(tab) = self.subagent_tabs.remove(&id)
@@ -4362,7 +4362,7 @@ impl Shell {
                         .update(cx, |s, _| s.unwatch_subagent_doc(&tab.doc_id));
                 }
             }
-            zot_panel::ZotPage::Diff(id) => {
+            zapper_panel::ZapperPage::Diff(id) => {
                 self.diffs.remove(&id);
                 self.diff_subs.remove(&id);
             }
@@ -6013,7 +6013,7 @@ impl Shell {
             Route::Plugins => (Screen::Plugins, None),
             Route::Archives => (Screen::Archives, None),
             Route::Usage => (Screen::Usage, None),
-            Route::Zot => (Screen::Zot, None),
+            Route::Zapper => (Screen::Zapper, None),
             Route::Settings(section) => (
                 Screen::Settings,
                 Some(match section.canonical() {
@@ -6559,7 +6559,7 @@ impl Shell {
                 self.pending_pull_request = Some((url, device));
             }
             NavEntry::Plugins => self.set_route(Route::Plugins, cx),
-            NavEntry::NewZot => self.show_new_zot(cx),
+            NavEntry::NewZapper => self.show_new_zapper(cx),
             NavEntry::Usage {
                 project,
                 project_scope,
@@ -7464,14 +7464,14 @@ impl Shell {
         };
         // Take a Zapper thread off its Zapper first, so the Zapper stops
         // counting it and sending it work.
-        if let Some(zot) = self.zot_of_thread(&chat_id, cx) {
-            self.send_zot_command(
-                zot.id.clone(),
-                Some(zot.revision),
-                zuse_protocol::zots::ZotAction::ReleaseWorker {
+        if let Some(zapper) = self.zapper_of_thread(&chat_id, cx) {
+            self.send_zapper_command(
+                zapper.id.clone(),
+                Some(zapper.revision),
+                zuse_protocol::zappers::ZapperAction::ReleaseWorker {
                     chat_id: chat_id.clone(),
                 },
-                zot_forms::ZotAfter::Stay,
+                zapper_forms::ZapperAfter::Stay,
                 cx,
             );
         }
@@ -8389,7 +8389,7 @@ impl Shell {
                 .titlebar_drag_region("plugins-titlebar", div().size_full(), cx)
                 .into_any_element();
         }
-        if matches!(self.route, Route::Archives | Route::Usage | Route::Zot) {
+        if matches!(self.route, Route::Archives | Route::Usage | Route::Zapper) {
             return self
                 .titlebar_drag_region("plugins-titlebar", div().size_full(), cx)
                 .into_any_element();
@@ -9397,7 +9397,7 @@ impl Shell {
         let selected = selected
             && !matches!(
                 self.route,
-                Route::Plugins | Route::Archives | Route::Usage | Route::Zot
+                Route::Plugins | Route::Archives | Route::Usage | Route::Zapper
             );
         // Activity, not position: status is a small colored
         // word + glyph in the row's top-right corner — Working animates the
@@ -11087,7 +11087,7 @@ impl Shell {
             // (No titlebar strip: the unified window titlebar spans the whole
             // window above this column.)
             .child(self.render_sidebar_nav(theme, cx))
-            .child(self.render_zot_sidebar(theme, cx))
+            .child(self.render_zapper_sidebar(theme, cx))
             .child(self.render_sidebar_modes(theme, cx))
             .children(self.render_cloud_sidebar_status(theme, cx))
             .child(filter_row)
@@ -12488,11 +12488,11 @@ impl Shell {
         {
             return true;
         }
-        if self.zot_ui.dialog.take().is_some() {
+        if self.zapper_ui.dialog.take().is_some() {
             cx.notify();
             return true;
         }
-        if self.dismiss_zot_overlay(cx) {
+        if self.dismiss_zapper_overlay(cx) {
             return true;
         }
         if self.harness_update_expanded {
@@ -12555,8 +12555,8 @@ impl Shell {
             self.close_conversation_history(cx);
             return true;
         }
-        if matches!(self.route, Route::Zot) || self.zot_editor_open(cx) {
-            self.leave_zot_page(cx);
+        if matches!(self.route, Route::Zapper) || self.zapper_editor_open(cx) {
+            self.leave_zapper_page(cx);
             return true;
         }
         self.active_changes(cx)
@@ -12733,8 +12733,8 @@ impl Shell {
         let mut overlays: Vec<AnyElement> = Vec::new();
         overlays.push(self.desktop_import.clone().into_any_element());
         overlays.extend(self.render_shortcuts_panel(viewport, cx));
-        overlays.extend(self.render_zot_dialog(viewport, window, cx));
-        overlays.extend(self.render_zot_overlays(viewport, cx));
+        overlays.extend(self.render_zapper_dialog(viewport, window, cx));
+        overlays.extend(self.render_zapper_overlays(viewport, cx));
 
         if let Some(menu_state) = self.chat_menu.get().cloned() {
             let chat_id = menu_state.chat_id;
@@ -12750,7 +12750,7 @@ impl Shell {
             let is_pinned = self.active_sidebar_pins(cx).contains(&chat_id);
             // A Zapper thread lives under its Zapper, so it has no pin, and
             // archiving goes through the Zapper so it stops sending work.
-            let thread_zot = self.zot_of_thread(&chat_id, cx);
+            let thread_zapper = self.zapper_of_thread(&chat_id, cx);
             let rename_id = chat_id.clone();
             let pin_id = chat_id.clone();
             let archive_id = chat_id.clone();
@@ -12815,11 +12815,11 @@ impl Shell {
                         popover::menu_row(&theme, false, format!("chat-menu-archive-{chat_id}"))
                             .id("chat-menu-archive")
                             .on_click({
-                                let thread_zot = thread_zot.clone();
-                                cx.listener(move |this, _, _, cx| match &thread_zot {
-                                    Some(zot) => {
+                                let thread_zapper = thread_zapper.clone();
+                                cx.listener(move |this, _, _, cx| match &thread_zapper {
+                                    Some(zapper) => {
                                         this.close_chat_menu(cx);
-                                        this.archive_zot_thread(zot, archive_id.clone(), cx);
+                                        this.archive_zapper_thread(zapper, archive_id.clone(), cx);
                                     }
                                     None => this.archive_chat(archive_id.clone(), cx),
                                 })
@@ -12838,7 +12838,7 @@ impl Shell {
                         &theme,
                         cx,
                     );
-                    let menu = if thread_zot.is_some() {
+                    let menu = if thread_zapper.is_some() {
                         menu
                     } else {
                         menu.child(self.chat_menu_hover_row(CHAT_MENU_ROW_PIN, pin, cx))
@@ -13190,8 +13190,8 @@ impl Shell {
         // Cloud setup is offered to Cloud subscribers.
         let cloud_subscribed = self.state.read(cx).cloud_access().subscribed();
 
-        if matches!(self.route, Route::Zot) {
-            return self.render_zot_page(window, cx);
+        if matches!(self.route, Route::Zapper) {
+            return self.render_zapper_page(window, cx);
         }
 
         if matches!(self.route, Route::PullRequests) {
@@ -13368,14 +13368,14 @@ impl Shell {
         let session_reveal = self.session_info_reveal(has_selection);
         // Panel open/close glides the composer width; a window resize or a
         // seam drag is direct manipulation, so the width tracks the pointer.
-        // The Zot panel leaves a narrow column; keep the composer off its edges.
-        let zot_coordinator = self.state.read(cx).selected_chat_is_zot_coordinator();
+        // The Zapper panel leaves a narrow column; keep the composer off its edges.
+        let zapper_coordinator = self.state.read(cx).selected_chat_is_zapper_coordinator();
         let direct_width =
             self.reduced_motion || self.viewport_resized || self.pane_resize_dragging.is_some();
         let composer_width = self.composer_dock.borrow_mut().layout_width(
             composer_target_width(
                 main_content_width
-                    - if (has_selection && !zot_coordinator) || cloud_starting {
+                    - if (has_selection && !zapper_coordinator) || cloud_starting {
                         0.
                     } else {
                         2. * if self.viewport_width <= 800. {
@@ -13767,7 +13767,7 @@ impl Shell {
                                     .w(px(composer_width))
                                     .pb(px(if cloud_starting {
                                         16.
-                                    } else if zot_coordinator {
+                                    } else if zapper_coordinator {
                                         12.
                                     } else {
                                         0.
@@ -16219,13 +16219,13 @@ impl Render for Shell {
                 } else {
                     0.0
                 };
-                // The Zot panel replaces the right pane but takes the same room.
-                let on_zot_panel = on_chat && self.zot_panel_on_right(cx);
-                let right_target_width = if on_zot_panel {
-                    if self.zot_ui.panel_hidden {
+                // The Zapper panel replaces the right pane but takes the same room.
+                let on_zapper_panel = on_chat && self.zapper_panel_on_right(cx);
+                let right_target_width = if on_zapper_panel {
+                    if self.zapper_ui.panel_hidden {
                         0.0
                     } else {
-                        zots::ZOT_PANEL_WIDTH
+                        zappers::ZAPPER_PANEL_WIDTH
                     }
                 } else {
                     right_target_width
@@ -16299,7 +16299,7 @@ impl Render for Shell {
                 // never renders it (zuse __root.tsx `!isSettings && activeChat`
                 // around the diff column) — the per-session open flags stay
                 // intact for the return trip.
-                let right_open = on_chat && !on_zot_panel && self.right_pane_shown(cx);
+                let right_open = on_chat && !on_zapper_panel && self.right_pane_shown(cx);
                 // Takeover mode derives its width from the viewport, so a
                 // manual drag handle would fight the expanded target.
                 let right_handle = (right_open
@@ -16323,10 +16323,10 @@ impl Render for Shell {
                         .then(|| self.pull_request_pane_handle(cx))
                         .flatten()
                 });
-                let right: AnyElement = if on_zot_panel && self.zot_ui.panel_hidden {
+                let right: AnyElement = if on_zapper_panel && self.zapper_ui.panel_hidden {
                     Empty.into_any_element()
-                } else if on_zot_panel {
-                    self.render_zot_inspector(window, cx)
+                } else if on_zapper_panel {
+                    self.render_zapper_inspector(window, cx)
                 } else if on_chat {
                     self.render_right_pane(window, cx)
                 } else if on_pull_requests {

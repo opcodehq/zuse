@@ -3039,8 +3039,8 @@ impl Shell {
     /// Open the new-session canvas in a just-added space, preserving the
     /// sidebar's current project filter.
     pub(super) fn land_in_space(&mut self, space_id: String, cx: &mut Context<Self>) {
-        // A project added from a Zot form stays on the form, which adopts it.
-        if matches!(self.route, Route::Zot) {
+        // A project added from a Zapper form stays on the form, which adopts it.
+        if matches!(self.route, Route::Zapper) {
             cx.notify();
             return;
         }

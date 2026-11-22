@@ -1,36 +1,36 @@
 //! Coordinator chrome; commands use the same engine authority as external clients.
-use super::zot_forms::{Form, Kind, ZotAfter};
+use super::zapper_forms::{Form, Kind, ZapperAfter};
 use super::*;
-use zuse_protocol::presentation::zot_panel::{
-    NeedsYouItem, NeedsYouTarget, ThreadRank, ZOT_SECTIONS, ZotPage, ZotPanelTabs, ZotTab,
-    finished_zapper_threads, needs_you_items, ordered_zapper_threads,
+use zuse_protocol::presentation::zapper_panel::{
+    NeedsYouItem, NeedsYouTarget, ThreadRank, ZAPPER_SECTIONS, ZapperPage, ZapperPanelTabs,
+    ZapperTab, finished_zapper_threads, needs_you_items, ordered_zapper_threads,
 };
-use zuse_protocol::zots::*;
+use zuse_protocol::zappers::*;
 
 #[derive(Default)]
-pub(super) struct ZotUi {
-    /// New Zot or Zot settings. Outlives the route so Back returns to the draft.
+pub(super) struct ZapperUi {
+    /// New Zapper or Zapper settings. Outlives the route so Back returns to the draft.
     pub(super) page: Option<Form>,
     pub(super) dialog: Option<Form>,
     pub(super) panel_hidden: bool,
-    tabs: ZotPanelTabs,
+    tabs: ZapperPanelTabs,
     /// The Zapper `tabs` belong to; another Zapper starts on a bare Overview.
-    tabs_zot: Option<String>,
+    tabs_zapper: Option<String>,
     /// The strip's `…` menu.
     overflow: popover::Popup<()>,
     /// Scroll of the open tabs, so a newly shown tab is brought into view.
     open_scroll: gpui::ScrollHandle,
     /// Parsed Drive documents by path, with the version they were parsed at.
     documents: std::collections::HashMap<String, (u32, std::sync::Arc<crate::markdown::BlockTree>)>,
-    pub(super) issues: Option<Entity<zuse_viewport::zot_issues::IssuePanel>>,
+    pub(super) issues: Option<Entity<zuse_viewport::zapper_issues::IssuePanel>>,
     pull_request_page: Option<(
         String,
         Entity<crate::pull_request_detail::PullRequestDetailPage>,
     )>,
     pull_request_subscription: Option<Subscription>,
-    files: Vec<ZotFile>,
-    /// The Zot `files` came from, kept while a reload is in flight.
-    files_zot: Option<String>,
+    files: Vec<ZapperFile>,
+    /// The Zapper `files` came from, kept while a reload is in flight.
+    files_zapper: Option<String>,
     /// Threads just archived here. The engine applies it on its next pass, a
     /// few seconds later; until then the row should already be gone.
     archiving: std::collections::HashMap<String, std::time::Instant>,
@@ -44,11 +44,11 @@ pub(super) struct ZotUi {
     /// The Zapper waiting on "Delete Zapper?" confirmation.
     pub(super) delete_confirm: Option<String>,
     pub(super) loaded: Option<(String, u32, u32)>,
-    events: Vec<ZotEvent>,
+    events: Vec<ZapperEvent>,
     loading: bool,
     pub(super) pending: bool,
-    pub(super) retry: Option<ZotCommand>,
-    /// Set while the issue panel hands a command to `send_zot_command`, so
+    pub(super) retry: Option<ZapperCommand>,
+    /// Set while the issue panel hands a command to `send_zapper_command`, so
     /// only its own results close or fail its editor.
     pub(super) issue_command: bool,
     confirm_delete: bool,
@@ -165,33 +165,35 @@ fn thread_action(
         .into_any_element()
 }
 
-pub(super) use super::zot_avatar::{zot_avatar, zot_mascot};
+pub(super) use super::zapper_avatar::{zapper_avatar, zapper_mascot};
 
-pub(super) const ZOT_PANEL_WIDTH: f32 = 520.0;
+pub(super) const ZAPPER_PANEL_WIDTH: f32 = 520.0;
 
 /// A document worth listing: seeded placeholders stay empty, and the
 /// instructions file only appears once rewritten. Until then it holds just
 /// the purpose the Overview already shows.
-fn is_document(file: &ZotFile) -> bool {
+fn is_document(file: &ZapperFile) -> bool {
     (file.path != "INSTRUCTIONS.md" || file.version > 1) && !file.content.trim().is_empty()
 }
 
 /// Drive only appears once it has something to show. `keep` holds the open
 /// section while its files are still loading.
-fn visible_tabs(files: &[ZotFile], keep: Option<ZotTab>) -> Vec<ZotTab> {
-    ZOT_SECTIONS
+fn visible_tabs(files: &[ZapperFile], keep: Option<ZapperTab>) -> Vec<ZapperTab> {
+    ZAPPER_SECTIONS
         .into_iter()
-        .filter(|tab| Some(*tab) == keep || *tab != ZotTab::Drive || files.iter().any(is_document))
+        .filter(|tab| {
+            Some(*tab) == keep || *tab != ZapperTab::Drive || files.iter().any(is_document)
+        })
         .collect()
 }
 
-fn section_icon(tab: ZotTab) -> &'static str {
+fn section_icon(tab: ZapperTab) -> &'static str {
     match tab {
-        ZotTab::Overview => icons::WIDGET,
-        ZotTab::Issues => icons::CHECKLIST,
-        ZotTab::Threads => icons::CHAT_ROUND_LINE,
-        ZotTab::Drive => icons::FOLDER_OPEN,
-        ZotTab::History => icons::HISTORY,
+        ZapperTab::Overview => icons::WIDGET,
+        ZapperTab::Issues => icons::CHECKLIST,
+        ZapperTab::Threads => icons::CHAT_ROUND_LINE,
+        ZapperTab::Drive => icons::FOLDER_OPEN,
+        ZapperTab::History => icons::HISTORY,
     }
 }
 
@@ -203,14 +205,14 @@ const SECTION_GAP: f32 = 2.0;
 
 /// Width of the expanded section button, sized for the longest visible
 /// label so the group keeps one width whichever section is open.
-fn section_width(visible: &[ZotTab]) -> f32 {
+fn section_width(visible: &[ZapperTab]) -> f32 {
     let label = visible.iter().map(|t| t.label_width()).fold(0.0, f32::max);
     // Padding, the 13px icon and the gap before the label.
     10.0 + 13.0 + 6.0 + label + 10.0
 }
 
 /// The newest version of `path`; history listings carry several.
-fn latest_file<'a>(files: &'a [ZotFile], path: &str) -> Option<&'a ZotFile> {
+fn latest_file<'a>(files: &'a [ZapperFile], path: &str) -> Option<&'a ZapperFile> {
     files
         .iter()
         .filter(|f| f.path == path)
@@ -222,7 +224,7 @@ fn pull_request_label(url: &str) -> String {
     format!("#{}", url.rsplit('/').next().unwrap_or(""))
 }
 
-/// Where one Zot conversation stands in the sidebar.
+/// Where one Zapper conversation stands in the sidebar.
 #[derive(Clone, Copy)]
 enum ThreadPhase {
     Working,
@@ -237,7 +239,7 @@ enum ThreadPhase {
 
 /// A Zapper thread row's phase. A thread waiting in the start queue has no
 /// chat yet, so the queue decides, not the (absent) conversation.
-fn worker_phase(worker: &ZotWorker, chat: ThreadPhase) -> ThreadPhase {
+fn worker_phase(worker: &ZapperWorker, chat: ThreadPhase) -> ThreadPhase {
     if worker.queued() {
         ThreadPhase::Queued
     } else {
@@ -256,11 +258,11 @@ pub(super) enum ThreadPlaceholder {
 }
 
 pub(super) fn thread_placeholder(
-    zots: &[Zot],
+    zappers: &[Zapper],
     chat_exists: impl Fn(&str) -> bool,
     selected: &str,
 ) -> Option<ThreadPlaceholder> {
-    let worker = zots
+    let worker = zappers
         .iter()
         .flat_map(|z| &z.workers)
         .find(|w| w.chat_id == selected)?;
@@ -346,7 +348,7 @@ impl Shell {
         let state = self.state.read(cx);
         let selected = state.selected_chat.as_deref()?;
         thread_placeholder(
-            &state.zots,
+            &state.zappers,
             |id| state.chats.iter().any(|c| c.id == id),
             selected,
         )
@@ -386,7 +388,7 @@ impl Shell {
             objective
         };
         div()
-            .debug_selector(|| "zot-thread-placeholder".into())
+            .debug_selector(|| "zapper-thread-placeholder".into())
             .flex_1()
             .min_w_0()
             .h_full()
@@ -431,10 +433,10 @@ impl Shell {
             .into_any_element()
     }
 
-    pub(super) fn selected_zot(&self, cx: &App) -> Option<Zot> {
+    pub(super) fn selected_zapper(&self, cx: &App) -> Option<Zapper> {
         let state = self.state.read(cx);
         state
-            .zots
+            .zappers
             .iter()
             .find(|z| {
                 let selected = state.selected_chat.as_ref();
@@ -445,7 +447,7 @@ impl Shell {
             })
             .cloned()
     }
-    pub(super) fn render_zot_sidebar(
+    pub(super) fn render_zapper_sidebar(
         &mut self,
         theme: &Theme,
         cx: &mut Context<Self>,
@@ -453,13 +455,13 @@ impl Shell {
         let state = self.state.read(cx);
         if !state
             .engine()
-            .is_some_and(|e| e.engine_info().supports(zuse_protocol::zots::CAPABILITY))
+            .is_some_and(|e| e.engine_info().supports(zuse_protocol::zappers::CAPABILITY))
         {
             return Empty.into_any_element();
         }
-        let zots = state.zots.clone();
-        // A Zot page owns the main area, so no conversation reads as current.
-        let creating = self.creating_zot();
+        let zappers = state.zappers.clone();
+        // A Zapper page owns the main area, so no conversation reads as current.
+        let creating = self.creating_zapper();
         let selected = state.selected_chat.clone().filter(|_| !creating);
         let titles: std::collections::HashMap<String, String> = state
             .chats
@@ -468,36 +470,40 @@ impl Shell {
             .collect();
         let header = spaces::sidebar_section_heading(theme, "Zappers", "sidebar-zappers-label")
             .child(
-                spaces::sidebar_header_button("new-zot", icons::PLUS, theme)
-                    .debug_selector(|| "new-zot".into())
+                spaces::sidebar_header_button("new-zapper", icons::PLUS, theme)
+                    .debug_selector(|| "new-zapper".into())
                     .aria_label("New Zapper")
                     .when(creating, |d| d.bg(theme.bg_selected))
                     .tip("New Zapper")
-                    .on_click(cx.listener(|this, _, _, cx| this.open_new_zot(cx))),
+                    .on_click(cx.listener(|this, _, _, cx| this.open_new_zapper(cx))),
             );
         let mut list = div().flex().flex_col().px(px(8.0)).pb(px(8.0)).gap(px(1.0));
-        for zot in zots {
-            let id = zot.coordinator_chat_id.clone();
+        for zapper in zappers {
+            let id = zapper.coordinator_chat_id.clone();
             let active = selected.as_deref() == Some(id.as_str())
-                || zot
+                || zapper
                     .previous_coordinator_chats
                     .iter()
                     .any(|c| Some(c) == selected.as_ref());
             // Open decisions plus issues the Zapper handed to the user.
-            let needs = zot.decisions.iter().filter(|d| d.answer.is_none()).count()
-                + zot
+            let needs = zapper
+                .decisions
+                .iter()
+                .filter(|d| d.answer.is_none())
+                .count()
+                + zapper
                     .issues
                     .iter()
-                    .filter(|i| i.details.status == ZotIssueStatus::NeedsYou)
+                    .filter(|i| i.details.status == ZapperIssueStatus::NeedsYou)
                     .count();
-            let (coordinator, _) = self.zot_thread_phase(&id, cx);
+            let (coordinator, _) = self.zapper_thread_phase(&id, cx);
             // Finished threads leave the sidebar and stay under the Threads tab.
-            let threads: Vec<_> = zot
+            let threads: Vec<_> = zapper
                 .workers
                 .iter()
-                .filter(|worker| !self.zot_thread_archived(&worker.chat_id, cx))
+                .filter(|worker| !self.zapper_thread_archived(&worker.chat_id, cx))
                 .map(|worker| {
-                    let (phase, awaiting) = self.zot_thread_phase(&worker.chat_id, cx);
+                    let (phase, awaiting) = self.zapper_thread_phase(&worker.chat_id, cx);
                     (worker, worker_phase(worker, phase), awaiting)
                 })
                 .filter(|(worker, phase, _)| {
@@ -515,15 +521,15 @@ impl Shell {
             };
             // Stays lit while its right-click menu is open.
             let menu_open = self
-                .zot_ui
+                .zapper_ui
                 .menu
                 .get()
-                .is_some_and(|(menu_zot, _)| menu_zot == &zot.id);
+                .is_some_and(|(menu_zapper, _)| menu_zapper == &zapper.id);
             list = list.child(
                 div()
-                    .id(SharedString::from(format!("zot-{}", zot.id)))
+                    .id(SharedString::from(format!("zapper-{}", zapper.id)))
                     .role(gpui::Role::Button)
-                    .aria_label(SharedString::from(zot.config.name.clone()))
+                    .aria_label(SharedString::from(zapper.config.name.clone()))
                     .h(px(26.0))
                     .px(px(6.0))
                     .flex()
@@ -540,25 +546,25 @@ impl Shell {
                     .when(active, |d| d.bg(theme.bg_selected))
                     .when(!active && menu_open, |d| d.bg(theme.element_hover))
                     .when(!active, |d| d.hover(|d| d.bg(theme.element_hover)))
-                    .child(zot_mascot(&self.zot_face(&zot, cx), 16.0))
+                    .child(zapper_mascot(&self.zapper_face(&zapper, cx), 16.0))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .child(zot.config.name.clone()),
+                            .child(zapper.config.name.clone()),
                     )
-                    .when(zot.status != ZotStatus::Active, |d| {
+                    .when(zapper.status != ZapperStatus::Active, |d| {
                         d.child(
                             div()
                                 .text_size(crate::typography::ui_rems(11.0))
                                 .text_color(theme.text_faint)
-                                .child(format!("{:?}", zot.status)),
+                                .child(format!("{:?}", zapper.status)),
                         )
                     })
                     .when(working, |d| {
                         d.child(thread_mark(
-                            format!("zot-working-{}", zot.id),
+                            format!("zapper-working-{}", zapper.id),
                             ThreadPhase::Working,
                             None,
                             theme,
@@ -567,7 +573,10 @@ impl Shell {
                     .when(!working && needs > 0, |d| {
                         d.child(
                             div()
-                                .id(SharedString::from(format!("zot-decisions-{}", zot.id)))
+                                .id(SharedString::from(format!(
+                                    "zapper-decisions-{}",
+                                    zapper.id
+                                )))
                                 .aria_label(SharedString::from(waiting.clone()))
                                 .tip(waiting.clone())
                                 .size(px(MARK))
@@ -579,20 +588,22 @@ impl Shell {
                     })
                     .on_click(cx.listener(move |this, _, _, cx| this.open_chat(id.clone(), cx)))
                     .on_mouse_down(MouseButton::Right, {
-                        let zot_id = zot.id.clone();
+                        let zapper_id = zapper.id.clone();
                         cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                            if this.zot_ui.menu.is_open() {
+                            if this.zapper_ui.menu.is_open() {
                                 this.slack_links.menu_closed();
                             }
-                            this.zot_ui.slack_open = false;
-                            this.zot_ui.submenu.reset();
-                            this.zot_ui.menu.open((zot_id.clone(), event.position));
+                            this.zapper_ui.slack_open = false;
+                            this.zapper_ui.submenu.reset();
+                            this.zapper_ui
+                                .menu
+                                .open((zapper_id.clone(), event.position));
                             cx.stop_propagation();
                             cx.notify();
                         })
                     }),
             );
-            // A Zot's threads live under it instead of under their projects.
+            // A Zapper's threads live under it instead of under their projects.
             for (worker, phase, awaiting) in threads {
                 let chat = worker.chat_id.clone();
                 let current = selected.as_deref() == Some(chat.as_str());
@@ -600,22 +611,22 @@ impl Shell {
                     .get(&chat)
                     .cloned()
                     .unwrap_or_else(|| worker.objective.clone());
-                let row_group = SharedString::from(format!("zot-sidebar-thread-{chat}"));
+                let row_group = SharedString::from(format!("zapper-sidebar-thread-{chat}"));
                 let archive = {
-                    let zot = zot.clone();
+                    let zapper = zapper.clone();
                     let chat = chat.clone();
                     thread_action(
-                        format!("zot-sidebar-archive-{chat}"),
+                        format!("zapper-sidebar-archive-{chat}"),
                         icons::ARCHIVE_MINIMALISTIC,
                         "Archive",
                         theme,
-                        move |this, _, _, cx| this.archive_zot_thread(&zot, chat.clone(), cx),
+                        move |this, _, _, cx| this.archive_zapper_thread(&zapper, chat.clone(), cx),
                         cx,
                     )
                 };
                 list = list.child(
                     div()
-                        .id(SharedString::from(format!("zot-thread-{chat}")))
+                        .id(SharedString::from(format!("zapper-thread-{chat}")))
                         .group(row_group.clone())
                         .role(gpui::Role::Button)
                         .aria_label(SharedString::from(title.clone()))
@@ -643,7 +654,7 @@ impl Shell {
                             d.hover(|d| d.bg(theme.element_hover).text_color(theme.text))
                         })
                         .child(thread_mark(
-                            format!("zot-thread-working-{chat}"),
+                            format!("zapper-thread-working-{chat}"),
                             phase,
                             awaiting,
                             theme,
@@ -701,112 +712,112 @@ impl Shell {
             .into_any_element()
     }
     /// Archived threads leave every Zapper list and live under Archived.
-    fn zot_thread_archived(&self, chat: &str, cx: &App) -> bool {
+    fn zapper_thread_archived(&self, chat: &str, cx: &App) -> bool {
         self.state.read(cx).chat_is_archived(chat)
             || self
-                .zot_ui
+                .zapper_ui
                 .archiving
                 .get(chat)
                 .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(10))
     }
 
     /// The Zapper a thread works for, if any.
-    pub(super) fn zot_of_thread(&self, chat_id: &str, cx: &App) -> Option<Zot> {
+    pub(super) fn zapper_of_thread(&self, chat_id: &str, cx: &App) -> Option<Zapper> {
         self.state
             .read(cx)
-            .zots
+            .zappers
             .iter()
             .find(|z| z.workers.iter().any(|w| w.chat_id == chat_id))
             .cloned()
     }
 
-    pub(super) fn close_zot_menu(&mut self, cx: &mut Context<Self>) {
-        self.zot_ui.submenu.reset();
-        if self.zot_ui.menu.is_open() {
+    pub(super) fn close_zapper_menu(&mut self, cx: &mut Context<Self>) {
+        self.zapper_ui.submenu.reset();
+        if self.zapper_ui.menu.is_open() {
             self.slack_links.menu_closed();
         }
-        if self.zot_ui.menu.begin_close() {
-            popover::reap_popup(cx, |shell: &mut Self| &mut shell.zot_ui.menu);
+        if self.zapper_ui.menu.begin_close() {
+            popover::reap_popup(cx, |shell: &mut Self| &mut shell.zapper_ui.menu);
             cx.notify();
         }
     }
 
     /// Escape closes the panel's `…` menu, the Zapper menu, then its delete
     /// confirmation.
-    pub(super) fn dismiss_zot_overlay(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.zot_ui.overflow.is_open() {
-            self.close_zot_overflow(cx);
+    pub(super) fn dismiss_zapper_overlay(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.zapper_ui.overflow.is_open() {
+            self.close_zapper_overflow(cx);
             return true;
         }
-        if self.zot_ui.menu.is_open() {
-            self.close_zot_menu(cx);
+        if self.zapper_ui.menu.is_open() {
+            self.close_zapper_menu(cx);
             return true;
         }
-        if self.zot_ui.delete_confirm.take().is_some() {
+        if self.zapper_ui.delete_confirm.take().is_some() {
             cx.notify();
             return true;
         }
         false
     }
 
-    pub(super) fn zot_overlay_open(&self) -> bool {
-        self.zot_ui.menu.get().is_some()
-            || self.zot_ui.overflow.get().is_some()
-            || self.zot_ui.delete_confirm.is_some()
+    pub(super) fn zapper_overlay_open(&self) -> bool {
+        self.zapper_ui.menu.get().is_some()
+            || self.zapper_ui.overflow.get().is_some()
+            || self.zapper_ui.delete_confirm.is_some()
     }
 
-    /// The settings page of `zot` closes when the Zapper itself goes away.
-    fn after_removing(&self, zot: &Zot) -> ZotAfter {
+    /// The settings page of `zapper` closes when the Zapper itself goes away.
+    fn after_removing(&self, zapper: &Zapper) -> ZapperAfter {
         if self
-            .zot_ui
+            .zapper_ui
             .page
             .as_ref()
-            .is_some_and(|page| page.id == zot.id)
+            .is_some_and(|page| page.id == zapper.id)
         {
-            ZotAfter::LeavePage
+            ZapperAfter::LeavePage
         } else {
-            ZotAfter::Stay
+            ZapperAfter::Stay
         }
     }
 
-    pub(super) fn render_zot_overlays(
+    pub(super) fn render_zapper_overlays(
         &mut self,
         viewport: gpui::Size<Pixels>,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = Theme::of(cx).for_popup();
-        let zots = self.state.read(cx).zots.clone();
+        let zappers = self.state.read(cx).zappers.clone();
         let mut overlays = Vec::new();
-        if let Some((zot_id, position)) = self.zot_ui.menu.get().cloned() {
-            match zots.iter().find(|z| z.id == zot_id).cloned() {
-                Some(zot) => {
+        if let Some((zapper_id, position)) = self.zapper_ui.menu.get().cloned() {
+            match zappers.iter().find(|z| z.id == zapper_id).cloned() {
+                Some(zapper) => {
                     let row = |key: &str, glyph: &'static str, label: &str, danger: bool| {
                         let tone = if danger {
                             theme.danger
                         } else {
                             theme.text_muted
                         };
-                        popover::menu_row(&theme, false, format!("zot-menu-{key}-{zot_id}"))
-                            .id(SharedString::from(format!("zot-menu-{key}")))
+                        popover::menu_row(&theme, false, format!("zapper-menu-{key}-{zapper_id}"))
+                            .id(SharedString::from(format!("zapper-menu-{key}")))
                             .when(danger, |d| d.text_color(theme.danger))
                             .child(icon(glyph).size(px(16.0)).text_color(tone))
                             .child(SharedString::from(label.to_owned()))
                     };
-                    let z = zot.clone();
+                    let z = zapper.clone();
                     let new_thread = row("thread", icons::PLUS, "New thread", false).on_click(
                         cx.listener(move |this, _, _, cx| {
-                            this.close_zot_menu(cx);
-                            this.open_zot_dialog(z.clone(), Kind::Thread(None), cx);
+                            this.close_zapper_menu(cx);
+                            this.open_zapper_dialog(z.clone(), Kind::Thread(None), cx);
                         }),
                     );
-                    let z = zot.clone();
+                    let z = zapper.clone();
                     let settings = row("settings", icons::SETTINGS, "Settings", false).on_click(
                         cx.listener(move |this, _, _, cx| {
-                            this.close_zot_menu(cx);
-                            this.open_zot_editor(z.clone(), cx);
+                            this.close_zapper_menu(cx);
+                            this.open_zapper_editor(z.clone(), cx);
                         }),
                     );
-                    let z = zot.clone();
+                    let z = zapper.clone();
                     let archive = row(
                         "archive",
                         icons::ARCHIVE_MINIMALISTIC,
@@ -814,38 +825,38 @@ impl Shell {
                         false,
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.close_zot_menu(cx);
+                        this.close_zapper_menu(cx);
                         let after = this.after_removing(&z);
-                        this.send_zot_command(
+                        this.send_zapper_command(
                             z.id.clone(),
                             Some(z.revision),
-                            ZotAction::SetStatus {
-                                status: ZotStatus::Archived,
+                            ZapperAction::SetStatus {
+                                status: ZapperStatus::Archived,
                             },
                             after,
                             cx,
                         );
                     }));
-                    let z = zot.clone();
+                    let z = zapper.clone();
                     let delete = row("delete", icons::TRASH_BIN_MINIMALISTIC, "Delete…", true)
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.close_zot_menu(cx);
-                            this.zot_ui.delete_confirm = Some(z.id.clone());
+                            this.close_zapper_menu(cx);
+                            this.zapper_ui.delete_confirm = Some(z.id.clone());
                             cx.notify();
                         }));
-                    use super::slack_link::{SubmenuHost, ZOT_MENU_ROW_SLACK};
+                    use super::slack_link::{SubmenuHost, ZAPPER_MENU_ROW_SLACK};
                     let slack = self.render_slack_trigger(
-                        SubmenuHost::Zot,
-                        &zot.coordinator_chat_id,
-                        self.zot_ui.slack_open,
+                        SubmenuHost::Zapper,
+                        &zapper.coordinator_chat_id,
+                        self.zapper_ui.slack_open,
                         &theme,
                         cx,
                     );
-                    let host = SubmenuHost::Zot;
+                    let host = SubmenuHost::Zapper;
                     let new_thread = self.submenu_hover_row(host, 0, new_thread, cx);
                     let settings = self.submenu_hover_row(host, 1, settings, cx);
                     let archive = self.submenu_hover_row(host, 2, archive, cx);
-                    let slack = self.submenu_hover_row(host, ZOT_MENU_ROW_SLACK, slack, cx);
+                    let slack = self.submenu_hover_row(host, ZAPPER_MENU_ROW_SLACK, slack, cx);
                     let delete = self.submenu_hover_row(host, 4, delete, cx);
                     let menu = popover::popover_card(&theme)
                         .w(px(216.0))
@@ -854,18 +865,18 @@ impl Shell {
                         .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
                             // The Slack submenu floats outside this card.
                             if this
-                                .zot_ui
+                                .zapper_ui
                                 .submenu
                                 .bounds
                                 .is_some_and(|bounds| bounds.contains(&event.position))
                             {
                                 return;
                             }
-                            this.close_zot_menu(cx)
+                            this.close_zapper_menu(cx)
                         }))
                         .child(new_thread)
                         .child(settings)
-                        .when(zot.status != ZotStatus::Archived, |menu| {
+                        .when(zapper.status != ZapperStatus::Archived, |menu| {
                             menu.child(archive)
                         })
                         .child(slack)
@@ -873,22 +884,22 @@ impl Shell {
                         .child(delete)
                         .into_any_element();
                     overlays.push(popover::menu_at(
-                        "zot-context-menu",
+                        "zapper-context-menu",
                         position,
                         menu,
-                        self.zot_ui.menu.closing_since(),
+                        self.zapper_ui.menu.closing_since(),
                     ));
                 }
                 // The Zapper vanished under the open menu.
-                None => self.close_zot_menu(cx),
+                None => self.close_zapper_menu(cx),
             }
         }
-        if let Some(zot_id) = self.zot_ui.delete_confirm.clone() {
-            let Some(zot) = zots.into_iter().find(|z| z.id == zot_id) else {
-                self.zot_ui.delete_confirm = None;
+        if let Some(zapper_id) = self.zapper_ui.delete_confirm.clone() {
+            let Some(zapper) = zappers.into_iter().find(|z| z.id == zapper_id) else {
+                self.zapper_ui.delete_confirm = None;
                 return overlays;
             };
-            let name = crate::transcript::single_line(&zot.config.name);
+            let name = crate::transcript::single_line(&zapper.config.name);
             let card = popover::dialog_card(&theme)
                 .child(popover::dialog_title(&theme, "Delete Zapper?"))
                 .child(div().mt(px(6.0)).child(popover::dialog_body(
@@ -903,24 +914,24 @@ impl Shell {
                             popover::btn_ghost(
                                 &theme,
                                 &tr(cx, msg::common::cancel),
-                                "delete-zot-cancel",
+                                "delete-zapper-cancel",
                             )
-                            .id("delete-zot-cancel")
+                            .id("delete-zapper-cancel")
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.zot_ui.delete_confirm = None;
+                                this.zapper_ui.delete_confirm = None;
                                 cx.notify();
                             })),
                         )
                         .child(
                             popover::btn_danger(&theme, "Delete")
-                                .id("delete-zot-confirm")
+                                .id("delete-zapper-confirm")
                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.zot_ui.delete_confirm = None;
-                                    let after = this.after_removing(&zot);
-                                    this.send_zot_command(
-                                        zot.id.clone(),
-                                        Some(zot.revision),
-                                        ZotAction::Delete,
+                                    this.zapper_ui.delete_confirm = None;
+                                    let after = this.after_removing(&zapper);
+                                    this.send_zapper_command(
+                                        zapper.id.clone(),
+                                        Some(zapper.revision),
+                                        ZapperAction::Delete,
                                         after,
                                         cx,
                                     );
@@ -928,40 +939,40 @@ impl Shell {
                         ),
                 )
                 .into_any_element();
-            overlays.push(popover::modal("delete-zot-dialog", viewport, card));
+            overlays.push(popover::modal("delete-zapper-dialog", viewport, card));
         }
         overlays
     }
 
-    pub(super) fn archive_zot_thread(
+    pub(super) fn archive_zapper_thread(
         &mut self,
-        zot: &Zot,
+        zapper: &Zapper,
         chat_id: String,
         cx: &mut Context<Self>,
     ) {
-        if self.zot_ui.pending {
+        if self.zapper_ui.pending {
             return;
         }
         // By id: a queued thread has no chat row yet.
         let viewing = self.state.read(cx).selected_chat.as_deref() == Some(chat_id.as_str());
         // Don't leave the user on a thread that just left the list.
         if viewing {
-            self.open_chat(zot.coordinator_chat_id.clone(), cx);
+            self.open_chat(zapper.coordinator_chat_id.clone(), cx);
         }
-        self.zot_ui
+        self.zapper_ui
             .archiving
             .insert(chat_id.clone(), std::time::Instant::now());
-        self.send_zot_command(
-            zot.id.clone(),
-            Some(zot.revision),
-            ZotAction::ArchiveWorker { chat_id },
-            ZotAfter::Stay,
+        self.send_zapper_command(
+            zapper.id.clone(),
+            Some(zapper.revision),
+            ZapperAction::ArchiveWorker { chat_id },
+            ZapperAfter::Stay,
             cx,
         );
         cx.notify();
     }
 
-    fn zot_thread_phase(
+    fn zapper_thread_phase(
         &self,
         chat: &str,
         cx: &App,
@@ -978,7 +989,7 @@ impl Shell {
         )
     }
     /// Live run state of one thread, ignoring rows a crashed host left behind.
-    fn zot_thread_status(&self, chat: &str, cx: &App) -> Option<zuse_protocol::SessionStatus> {
+    fn zapper_thread_status(&self, chat: &str, cx: &App) -> Option<zuse_protocol::SessionStatus> {
         self.state
             .read(cx)
             .sessions
@@ -986,74 +997,74 @@ impl Shell {
             .find(|s| s.chat_id == chat && (chrono::Utc::now() - s.updated_at).num_seconds() < 45)
             .map(|s| s.status.clone())
     }
-    fn zot_status_color(&self, chat: &str, theme: &Theme, cx: &App) -> gpui::Hsla {
+    fn zapper_status_color(&self, chat: &str, theme: &Theme, cx: &App) -> gpui::Hsla {
         use zuse_protocol::SessionStatus as S;
-        match self.zot_thread_status(chat, cx) {
+        match self.zapper_thread_status(chat, cx) {
             Some(S::Working) => theme.busy,
             Some(S::AwaitingInput) => theme.warning,
             Some(S::Errored) => theme.danger,
             _ => theme.text_faint.opacity(0.5),
         }
     }
-    fn zot_history_view(&self) -> bool {
-        *self.zot_ui.tabs.active() == ZotPage::History
+    fn zapper_history_view(&self) -> bool {
+        *self.zapper_ui.tabs.active() == ZapperPage::History
     }
 
     /// Show `page`, opening it as a tab when it is an issue, document, pull
     /// request or the history. Leaves the Zapper's settings if they are open.
-    pub(super) fn show_zot_page(&mut self, page: ZotPage, cx: &mut Context<Self>) {
-        if self.zot_editor_open(cx) {
-            self.zot_ui.page = None;
+    pub(super) fn show_zapper_page(&mut self, page: ZapperPage, cx: &mut Context<Self>) {
+        if self.zapper_editor_open(cx) {
+            self.zapper_ui.page = None;
         }
-        let history = self.zot_history_view();
+        let history = self.zapper_history_view();
         // Reopening a pull request reloads details that may be out of date.
-        if let (ZotPage::PullRequest(url), Some((loaded, existing))) =
-            (&page, &self.zot_ui.pull_request_page)
+        if let (ZapperPage::PullRequest(url), Some((loaded, existing))) =
+            (&page, &self.zapper_ui.pull_request_page)
             && url == loaded
         {
             existing.update(cx, |existing, cx| existing.refresh_if_stale(cx));
         }
-        self.zot_ui.tabs.show(page);
-        self.zot_page_changed(history);
-        self.reveal_active_zot_tab();
+        self.zapper_ui.tabs.show(page);
+        self.zapper_page_changed(history);
+        self.reveal_active_zapper_tab();
         cx.notify();
     }
 
     /// Start a different Zapper's panel on a bare Overview, releasing what
     /// the previous one's tabs held.
-    fn sync_zot_tabs(&mut self, zot_id: &str, cx: &mut Context<Self>) {
-        if self.zot_ui.tabs_zot.as_deref() == Some(zot_id) {
+    fn sync_zapper_tabs(&mut self, zapper_id: &str, cx: &mut Context<Self>) {
+        if self.zapper_ui.tabs_zapper.as_deref() == Some(zapper_id) {
             return;
         }
-        let history = self.zot_history_view();
-        for page in self.zot_ui.tabs.open_tabs().to_vec() {
-            self.release_zot_page(&page, cx);
+        let history = self.zapper_history_view();
+        for page in self.zapper_ui.tabs.open_tabs().to_vec() {
+            self.release_zapper_page(&page, cx);
         }
-        self.zot_ui.tabs.reset();
-        self.zot_page_changed(history);
-        self.zot_ui.tabs_zot = Some(zot_id.to_owned());
+        self.zapper_ui.tabs.reset();
+        self.zapper_page_changed(history);
+        self.zapper_ui.tabs_zapper = Some(zapper_id.to_owned());
     }
 
     /// A coordinator chat's opener (a pull request link, a subagent chip, a
     /// diff): show `page` as a tab in the Zapper panel, bringing the panel
     /// back if it was hidden.
-    pub(super) fn show_in_zot_panel(&mut self, page: ZotPage, cx: &mut Context<Self>) {
-        let Some(zot) = self.selected_zot(cx) else {
+    pub(super) fn show_in_zapper_panel(&mut self, page: ZapperPage, cx: &mut Context<Self>) {
+        let Some(zapper) = self.selected_zapper(cx) else {
             return;
         };
-        self.sync_zot_tabs(&zot.id, cx);
-        self.zot_ui.panel_hidden = false;
-        self.show_zot_page(page, cx);
+        self.sync_zapper_tabs(&zapper.id, cx);
+        self.zapper_ui.panel_hidden = false;
+        self.show_zapper_page(page, cx);
     }
 
     /// The checkout review open as a Zapper panel tab, if any.
-    pub(super) fn zot_review_page(&self, cx: &App) -> Option<u64> {
-        self.zot_ui
+    pub(super) fn zapper_review_page(&self, cx: &App) -> Option<u64> {
+        self.zapper_ui
             .tabs
             .open_tabs()
             .iter()
             .find_map(|page| match page {
-                ZotPage::Diff(id) => self
+                ZapperPage::Diff(id) => self
                     .diffs
                     .get(id)
                     .filter(|changes| changes.read(cx).is_review())
@@ -1063,42 +1074,42 @@ impl Shell {
     }
 
     #[cfg(test)]
-    pub(super) fn zot_tabs(&self) -> &ZotPanelTabs {
-        &self.zot_ui.tabs
+    pub(super) fn zapper_tabs(&self) -> &ZapperPanelTabs {
+        &self.zapper_ui.tabs
     }
 
     /// Close a tab and return to the page shown before it.
-    pub(super) fn close_zot_page(&mut self, page: &ZotPage, cx: &mut Context<Self>) {
-        let history = self.zot_history_view();
-        if self.zot_ui.tabs.close(page) {
-            self.release_zot_page(page, cx);
-            self.zot_page_changed(history);
-            self.reveal_active_zot_tab();
+    pub(super) fn close_zapper_page(&mut self, page: &ZapperPage, cx: &mut Context<Self>) {
+        let history = self.zapper_history_view();
+        if self.zapper_ui.tabs.close(page) {
+            self.release_zapper_page(page, cx);
+            self.zapper_page_changed(history);
+            self.reveal_active_zapper_tab();
             cx.notify();
         }
     }
 
     /// Bring the active tab into view; with a section active, return the
     /// open tabs to their start so a shrunk strip isn't left scrolled.
-    fn reveal_active_zot_tab(&self) {
-        let tabs = &self.zot_ui.tabs;
+    fn reveal_active_zapper_tab(&self) {
+        let tabs = &self.zapper_ui.tabs;
         let ix = tabs.open_tabs().iter().position(|p| tabs.is_active(p));
         if !tabs.open_tabs().is_empty() {
-            self.zot_ui.open_scroll.scroll_to_item(ix.unwrap_or(0));
+            self.zapper_ui.open_scroll.scroll_to_item(ix.unwrap_or(0));
         }
     }
 
     /// History lists every version, the other pages only the latest: moving
     /// in or out of it reloads the files.
-    fn zot_page_changed(&mut self, history: bool) {
-        if history != self.zot_history_view() {
-            self.zot_ui.loaded = None;
+    fn zapper_page_changed(&mut self, history: bool) {
+        if history != self.zapper_history_view() {
+            self.zapper_ui.loaded = None;
         }
     }
 
-    fn close_zot_overflow(&mut self, cx: &mut Context<Self>) {
-        if self.zot_ui.overflow.begin_close() {
-            popover::reap_popup(cx, |shell: &mut Self| &mut shell.zot_ui.overflow);
+    fn close_zapper_overflow(&mut self, cx: &mut Context<Self>) {
+        if self.zapper_ui.overflow.begin_close() {
+            popover::reap_popup(cx, |shell: &mut Self| &mut shell.zapper_ui.overflow);
             cx.notify();
         }
     }
@@ -1106,15 +1117,15 @@ impl Shell {
     /// Fixed section buttons, the open tabs, then the page actions and the
     /// `…` menu. Sections are icons; the current one shows its label at a
     /// fixed width so nothing after it moves when switching.
-    fn zot_tab_bar(
+    fn zapper_tab_bar(
         &self,
-        zot: &Zot,
-        visible: &[ZotTab],
+        zapper: &Zapper,
+        visible: &[ZapperTab],
         editing: bool,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let tabs = &self.zot_ui.tabs;
+        let tabs = &self.zapper_ui.tabs;
         let expanded_section = tabs.expanded_section().filter(|_| !editing);
         let expanded_width = crate::typography::ui_rems(section_width(visible));
         let mut sections = div()
@@ -1135,14 +1146,14 @@ impl Shell {
                 theme.text_muted
             };
             let button = crate::surface_chrome::workspace_tab(
-                SharedString::from(format!("zot-tab-{label}")),
+                SharedString::from(format!("zapper-tab-{label}")),
                 active,
                 theme,
             )
             .role(gpui::Role::Tab)
             .aria_label(label)
             .aria_selected(active)
-            .debug_selector(move || format!("zot-tab-{label}"))
+            .debug_selector(move || format!("zapper-tab-{label}"))
             .h(px(SECTION_BUTTON))
             .flex_none()
             .flex()
@@ -1168,23 +1179,23 @@ impl Shell {
                 }
             })
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.show_zot_page(ZotPage::Section(tab), cx);
+                this.show_zapper_page(ZapperPage::Section(tab), cx);
             }));
             sections = sections.child(button);
         }
 
         let mut open = div()
-            .id("zot-open-tabs")
+            .id("zapper-open-tabs")
             .flex_1()
             .min_w_0()
             .flex()
             .items_center()
             .gap(px(2.0))
             .overflow_x_scroll()
-            .track_scroll(&self.zot_ui.open_scroll);
+            .track_scroll(&self.zapper_ui.open_scroll);
         for page in tabs.open_tabs() {
-            open = open.child(self.zot_page_tab(
-                zot,
+            open = open.child(self.zapper_page_tab(
+                zapper,
                 page,
                 !editing && tabs.is_active(page),
                 theme,
@@ -1208,34 +1219,34 @@ impl Shell {
                 .tip(tip)
                 .child(icon(path).size(px(13.0)).text_color(theme.text_muted))
         };
-        let overflow_open = self.zot_ui.overflow.get().is_some();
-        let overflow = icon_button("zot-more", icons::MORE_HORIZONTAL, "More")
-            .debug_selector(|| "zot-more".into())
+        let overflow_open = self.zapper_ui.overflow.get().is_some();
+        let overflow = icon_button("zapper-more", icons::MORE_HORIZONTAL, "More")
+            .debug_selector(|| "zapper-more".into())
             .aria_expanded(overflow_open)
             .when(overflow_open, |d| d.bg(theme.element_hover))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, _| {
                     window.prevent_default();
-                    this.zot_ui.overflow.note_trigger_press();
+                    this.zapper_ui.overflow.note_trigger_press();
                 }),
             )
             .on_click(cx.listener(|this, _, _, cx| {
                 cx.stop_propagation();
-                if this.zot_ui.overflow.take_press_was_open() {
-                    this.close_zot_overflow(cx);
+                if this.zapper_ui.overflow.take_press_was_open() {
+                    this.close_zapper_overflow(cx);
                 } else {
-                    this.zot_ui.overflow.open(());
+                    this.zapper_ui.overflow.open(());
                     cx.notify();
                 }
             }));
         let overflow = if overflow_open {
-            let closing = self.zot_ui.overflow.closing_since();
-            let menu = self.zot_overflow_menu(theme, cx);
+            let closing = self.zapper_ui.overflow.closing_since();
+            let menu = self.zapper_overflow_menu(theme, cx);
             overflow
                 .relative()
                 .child(popover::anchored_menu_below_end(
-                    "zot-more-menu",
+                    "zapper-more-menu",
                     menu,
                     closing,
                 ))
@@ -1243,8 +1254,8 @@ impl Shell {
         } else {
             overflow.into_any_element()
         };
-        let new_doc = zot.clone();
-        let edit = zot.clone();
+        let new_doc = zapper.clone();
+        let edit = zapper.clone();
         div()
             .flex()
             .items_center()
@@ -1265,31 +1276,31 @@ impl Shell {
             )
             .child(open)
             .when(
-                *tabs.active() == ZotPage::Section(ZotTab::Drive) && !editing,
+                *tabs.active() == ZapperPage::Section(ZapperTab::Drive) && !editing,
                 |d| {
                     d.child(
-                        icon_button("zot-new-document", icons::DOCUMENT_ADD, "New document")
+                        icon_button("zapper-new-document", icons::DOCUMENT_ADD, "New document")
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                let file = ZotFile {
+                                let file = ZapperFile {
                                     path: String::new(),
                                     version: 0,
                                     content: String::new(),
                                 };
-                                this.open_zot_dialog(new_doc.clone(), Kind::File(file), cx)
+                                this.open_zapper_dialog(new_doc.clone(), Kind::File(file), cx)
                             })),
                     )
                 },
             )
             .child(overflow)
             .child(
-                icon_button("zot-edit", icons::PEN, "Edit Zapper")
+                icon_button("zapper-edit", icons::PEN, "Edit Zapper")
                     .when(editing, |d| d.bg(theme.element_active))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if this.zot_editor_open(cx) {
-                            this.zot_ui.page = None;
+                        if this.zapper_editor_open(cx) {
+                            this.zapper_ui.page = None;
                             cx.notify();
                         } else {
-                            this.open_zot_editor(edit.clone(), cx);
+                            this.open_zapper_editor(edit.clone(), cx);
                         }
                     })),
             )
@@ -1297,10 +1308,10 @@ impl Shell {
     }
 
     /// One closable tab: a glyph, a short title and the shared close button.
-    fn zot_page_tab(
+    fn zapper_page_tab(
         &self,
-        zot: &Zot,
-        page: &ZotPage,
+        zapper: &Zapper,
+        page: &ZapperPage,
         active: bool,
         theme: &Theme,
         cx: &mut Context<Self>,
@@ -1313,38 +1324,38 @@ impl Shell {
                 .into_any_element()
         };
         let (key, title, tip, leading) = match page {
-            ZotPage::Issue(id) => {
-                let issue = zot.issues.iter().find(|i| &i.id == id);
+            ZapperPage::Issue(id) => {
+                let issue = zapper.issues.iter().find(|i| &i.id == id);
                 (
                     format!("issue-{id}"),
-                    issue.map_or_else(|| "New issue".to_owned(), ZotIssue::code),
+                    issue.map_or_else(|| "New issue".to_owned(), ZapperIssue::code),
                     issue.map(|i| i.details.title.clone()),
-                    zuse_viewport::zot_issues::status_icon(
-                        issue.map_or(ZotIssueStatus::Todo, |i| i.details.status),
+                    zuse_viewport::zapper_issues::status_icon(
+                        issue.map_or(ZapperIssueStatus::Todo, |i| i.details.status),
                     )
                     .flex_none()
                     .into_any_element(),
                 )
             }
-            ZotPage::File(path) => (
+            ZapperPage::File(path) => (
                 format!("file-{path}"),
                 path.clone(),
                 None,
                 glyph(icons::DOCUMENT),
             ),
-            ZotPage::PullRequest(url) => (
+            ZapperPage::PullRequest(url) => (
                 format!("pr-{url}"),
                 pull_request_label(url),
                 Some(url.clone()),
                 glyph(icons::PULL_REQUEST),
             ),
-            ZotPage::History => (
+            ZapperPage::History => (
                 "history".into(),
                 "History".into(),
                 None,
                 glyph(icons::HISTORY),
             ),
-            ZotPage::Subagent(id) => {
+            ZapperPage::Subagent(id) => {
                 let tab = self.subagent_tabs.get(id);
                 (
                     format!("subagent-{id}"),
@@ -1353,15 +1364,15 @@ impl Shell {
                     glyph(icons::BOT),
                 )
             }
-            ZotPage::Diff(id) => (
+            ZapperPage::Diff(id) => (
                 format!("diff-{id}"),
                 "Diff".into(),
                 None,
                 glyph(icons::GIT_COMPARE),
             ),
-            ZotPage::Section(_) => return Empty.into_any_element(),
+            ZapperPage::Section(_) => return Empty.into_any_element(),
         };
-        let group = SharedString::from(format!("zot-page-{key}"));
+        let group = SharedString::from(format!("zapper-page-{key}"));
         let selector = group.to_string();
         let (show, close, middle) = (page.clone(), page.clone(), page.clone());
         crate::surface_chrome::workspace_tab(group.clone(), active, theme)
@@ -1394,7 +1405,7 @@ impl Shell {
             .child(div().min_w_0().truncate().child(title))
             .child(
                 super::tabs::tab_close_button(
-                    SharedString::from(format!("zot-page-close-{key}")),
+                    SharedString::from(format!("zapper-page-close-{key}")),
                     "Close tab",
                     active,
                     group,
@@ -1402,28 +1413,28 @@ impl Shell {
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
-                    this.close_zot_page(&close, cx);
+                    this.close_zapper_page(&close, cx);
                 })),
             )
             .on_mouse_down(
                 MouseButton::Middle,
                 cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
-                    this.close_zot_page(&middle, cx);
+                    this.close_zapper_page(&middle, cx);
                 }),
             )
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.show_zot_page(show.clone(), cx);
+                this.show_zapper_page(show.clone(), cx);
             }))
             .into_any_element()
     }
 
     /// The `…` menu: pages that don't need a permanent tab.
-    fn zot_overflow_menu(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+    fn zapper_overflow_menu(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let theme = theme.for_popup();
-        let history = popover::menu_row(&theme, false, "zot-more-history")
-            .id("zot-more-history-row")
-            .debug_selector(|| "zot-more-history-row".into())
+        let history = popover::menu_row(&theme, false, "zapper-more-history")
+            .id("zapper-more-history-row")
+            .debug_selector(|| "zapper-more-history-row".into())
             .role(gpui::Role::MenuItem)
             .aria_label("History")
             .gap(px(10.0))
@@ -1443,58 +1454,58 @@ impl Shell {
                     .child("Document versions"),
             )
             .on_click(cx.listener(|this, _, _, cx| {
-                this.close_zot_overflow(cx);
-                this.show_zot_page(ZotPage::History, cx);
+                this.close_zapper_overflow(cx);
+                this.show_zapper_page(ZapperPage::History, cx);
             }));
         popover::popover_card(&theme)
             .w(px(240.0))
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_zot_overflow(cx)))
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_zapper_overflow(cx)))
             .child(div().flex().flex_col().child(history))
             .into_any_element()
     }
 
-    pub(super) fn render_zot_inspector(
+    pub(super) fn render_zapper_inspector(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let Some(zot) = self.selected_zot(cx) else {
+        let Some(zapper) = self.selected_zapper(cx) else {
             return Empty.into_any_element();
         };
         let theme = Theme::of(cx).clone();
-        self.sync_zot_tabs(&zot.id, cx);
-        let key = (zot.id.clone(), zot.revision, zot.activity_revision);
-        if self.zot_ui.loaded.as_ref() != Some(&key) && !self.zot_ui.loading {
+        self.sync_zapper_tabs(&zapper.id, cx);
+        let key = (zapper.id.clone(), zapper.revision, zapper.activity_revision);
+        if self.zapper_ui.loaded.as_ref() != Some(&key) && !self.zapper_ui.loading {
             if let Some(engine) = self.state.read(cx).engine().cloned() {
-                self.zot_ui.loading = true;
-                let requested_history = self.zot_history_view();
-                let requested_zot = zot.id.clone();
-                let request = serde_json::json!({"zotId":zot.id,"targetDeviceId":zot.config.home_device_id,"history":requested_history});
+                self.zapper_ui.loading = true;
+                let requested_history = self.zapper_history_view();
+                let requested_zapper = zapper.id.clone();
+                let request = serde_json::json!({"zapperId":zapper.id,"targetDeviceId":zapper.config.home_device_id,"history":requested_history});
                 cx.spawn(async move |this, cx| {
                     let result = engine
                         .client()
-                        .call(zuse_protocol::control::ZOT_FILES, request.clone())
+                        .call(zuse_protocol::control::ZAPPER_FILES, request.clone())
                         .await;
                     let events = engine
                         .client()
-                        .call(zuse_protocol::control::ZOT_EVENTS, request)
+                        .call(zuse_protocol::control::ZAPPER_EVENTS, request)
                         .await;
                     let _ = this.update(cx, |this, cx| {
-                        this.zot_ui.loading = false;
+                        this.zapper_ui.loading = false;
                         if let Ok(value) = events {
                             if let Ok(events) = serde_json::from_value(value) {
-                                this.zot_ui.events = events;
+                                this.zapper_ui.events = events;
                             }
                         }
                         // A tab switch mid-flight wants the other file set;
                         // leaving `loaded` unset makes the next render fetch it.
-                        if this.zot_history_view() == requested_history
+                        if this.zapper_history_view() == requested_history
                             && let Ok(value) = result
                             && let Ok(files) = serde_json::from_value(value)
                         {
-                            this.zot_ui.files = files;
-                            this.zot_ui.files_zot = Some(requested_zot);
-                            this.zot_ui.loaded = Some(key);
+                            this.zapper_ui.files = files;
+                            this.zapper_ui.files_zapper = Some(requested_zapper);
+                            this.zapper_ui.loaded = Some(key);
                         }
                         cx.notify();
                     });
@@ -1504,43 +1515,43 @@ impl Shell {
         }
         // A reload must not read as "no files": that used to hide the tab just
         // clicked and bounce the panel to Overview.
-        let files = if self.zot_ui.files_zot.as_deref() == Some(zot.id.as_str()) {
-            self.zot_ui.files.clone()
+        let files = if self.zapper_ui.files_zapper.as_deref() == Some(zapper.id.as_str()) {
+            self.zapper_ui.files.clone()
         } else {
             vec![]
         };
         let settled = self
-            .zot_ui
+            .zapper_ui
             .loaded
             .as_ref()
-            .is_some_and(|(id, _, _)| id == &zot.id);
-        let section = self.zot_ui.tabs.section();
+            .is_some_and(|(id, _, _)| id == &zapper.id);
+        let section = self.zapper_ui.tabs.section();
         let visible = visible_tabs(&files, (!settled).then_some(section));
         if !visible.contains(&section) {
-            self.zot_ui.tabs.hide_section(section);
+            self.zapper_ui.tabs.hide_section(section);
         }
-        let editing = self.zot_editor_open(cx);
-        let tab_bar = self.zot_tab_bar(&zot, &visible, editing, &theme, cx);
+        let editing = self.zapper_editor_open(cx);
+        let tab_bar = self.zapper_tab_bar(&zapper, &visible, editing, &theme, cx);
         if editing {
-            let editor = self.render_zot_editor(&zot, window, cx);
-            return self.zot_inspector_frame(&theme, tab_bar, editor);
+            let editor = self.render_zapper_editor(&zapper, window, cx);
+            return self.zapper_inspector_frame(&theme, tab_bar, editor);
         }
         // A subagent or a diff opened from the coordinator chat fills the
         // panel below its strip, as it would the surface host.
-        let surface = match *self.zot_ui.tabs.active() {
-            ZotPage::Subagent(id) => Some(RightSurface::Subagent(id)),
-            ZotPage::Diff(id) => Some(RightSurface::Diff(id)),
+        let surface = match *self.zapper_ui.tabs.active() {
+            ZapperPage::Subagent(id) => Some(RightSurface::Subagent(id)),
+            ZapperPage::Diff(id) => Some(RightSurface::Diff(id)),
             _ => None,
         };
         if let Some(surface) = surface {
             let content = self
                 .render_surface_body(surface, cx)
                 .unwrap_or_else(|| Empty.into_any_element());
-            return self.zot_inspector_frame(&theme, tab_bar, content);
+            return self.zapper_inspector_frame(&theme, tab_bar, content);
         }
-        if let ZotPage::PullRequest(url) = self.zot_ui.tabs.active().clone() {
+        if let ZapperPage::PullRequest(url) = self.zapper_ui.tabs.active().clone() {
             let page = self
-                .zot_ui
+                .zapper_ui
                 .pull_request_page
                 .as_ref()
                 .filter(|(loaded, _)| loaded == &url)
@@ -1554,7 +1565,7 @@ impl Shell {
                     .flex()
                     .flex_col()
                     .child(crate::surface_chrome::flowing_header().child(toolbar));
-                if let Some(issue) = zot
+                if let Some(issue) = zapper
                     .issues
                     .iter()
                     .find(|i| i.pull_requests.iter().any(|p| p.url == url))
@@ -1571,7 +1582,7 @@ impl Shell {
                             format!("‹ {} · {}", issue.code(), issue.details.title),
                             &theme,
                             move |this, _, _, cx| {
-                                this.show_zot_page(ZotPage::Issue(id.clone()), cx);
+                                this.show_zapper_page(ZapperPage::Issue(id.clone()), cx);
                             },
                             cx,
                         ));
@@ -1586,19 +1597,19 @@ impl Shell {
                     }
                     content = content.child(links);
                 }
-                return self.zot_inspector_frame(
+                return self.zapper_inspector_frame(
                     &theme,
                     tab_bar,
                     content.child(page).into_any_element(),
                 );
             }
-            let device = zot.config.home_device_id.clone();
+            let device = zapper.config.home_device_id.clone();
             // Page construction starts RPC reads. Defer it until this render
-            // finishes, and keep it inside the Zot inspector's own navigation.
+            // finishes, and keep it inside the Zapper inspector's own navigation.
             cx.defer_in(window, move |this, window, cx| {
-                if *this.zot_ui.tabs.active() != ZotPage::PullRequest(url.clone())
+                if *this.zapper_ui.tabs.active() != ZapperPage::PullRequest(url.clone())
                     || this
-                        .zot_ui
+                        .zapper_ui
                         .pull_request_page
                         .as_ref()
                         .is_some_and(|(loaded, _)| loaded == &url)
@@ -1616,12 +1627,12 @@ impl Shell {
                         cx,
                     )
                 });
-                this.zot_ui.pull_request_subscription =
+                this.zapper_ui.pull_request_subscription =
                     Some(cx.observe(&page, |_, _, cx| cx.notify()));
-                this.zot_ui.pull_request_page = Some((url, page));
+                this.zapper_ui.pull_request_page = Some((url, page));
                 cx.notify();
             });
-            return self.zot_inspector_frame(
+            return self.zapper_inspector_frame(
                 &theme,
                 tab_bar,
                 div()
@@ -1631,11 +1642,11 @@ impl Shell {
                     .into_any_element(),
             );
         }
-        let body = match self.zot_ui.tabs.active().clone() {
-            ZotPage::Section(ZotTab::Overview) => {
-                let header = self.zot_overview(&zot, &theme, cx);
-                let work = self.zot_issue_surface(&zot, true, cx);
-                let repositories = self.zot_repositories(&zot, &theme, cx);
+        let body = match self.zapper_ui.tabs.active().clone() {
+            ZapperPage::Section(ZapperTab::Overview) => {
+                let header = self.zapper_overview(&zapper, &theme, cx);
+                let work = self.zapper_issue_surface(&zapper, true, cx);
+                let repositories = self.zapper_repositories(&zapper, &theme, cx);
                 div()
                     .flex()
                     .flex_col()
@@ -1645,20 +1656,22 @@ impl Shell {
                     .child(repositories)
                     .into_any_element()
             }
-            ZotPage::Section(ZotTab::Issues) | ZotPage::Issue(_) => {
-                self.zot_issue_surface(&zot, false, cx)
+            ZapperPage::Section(ZapperTab::Issues) | ZapperPage::Issue(_) => {
+                self.zapper_issue_surface(&zapper, false, cx)
             }
-            ZotPage::Section(ZotTab::Threads) => self.zot_threads(&zot, &theme, cx),
-            ZotPage::Section(ZotTab::Drive) => self.zot_drive(files, &theme, cx),
-            ZotPage::File(path) => self.zot_document(&zot, &path, &files, &theme, window, cx),
-            ZotPage::Section(ZotTab::History)
-            | ZotPage::History
-            | ZotPage::PullRequest(_)
-            | ZotPage::Subagent(_)
-            | ZotPage::Diff(_) => self.zot_history(&zot, files, &theme, cx),
+            ZapperPage::Section(ZapperTab::Threads) => self.zapper_threads(&zapper, &theme, cx),
+            ZapperPage::Section(ZapperTab::Drive) => self.zapper_drive(files, &theme, cx),
+            ZapperPage::File(path) => {
+                self.zapper_document(&zapper, &path, &files, &theme, window, cx)
+            }
+            ZapperPage::Section(ZapperTab::History)
+            | ZapperPage::History
+            | ZapperPage::PullRequest(_)
+            | ZapperPage::Subagent(_)
+            | ZapperPage::Diff(_) => self.zapper_history(&zapper, files, &theme, cx),
         };
         let body = div()
-            .id("zot-inspector-body")
+            .id("zapper-inspector-body")
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
@@ -1669,11 +1682,11 @@ impl Shell {
             .gap(px(18.0))
             .child(body)
             .into_any_element();
-        self.zot_inspector_frame(&theme, tab_bar, body)
+        self.zapper_inspector_frame(&theme, tab_bar, body)
     }
 
     /// The panel sits in the same inset card as a chat's right pane.
-    fn zot_inspector_frame(
+    fn zapper_inspector_frame(
         &self,
         theme: &Theme,
         tab_bar: AnyElement,
@@ -1681,8 +1694,8 @@ impl Shell {
     ) -> AnyElement {
         let gutter = self.workspace_gutter();
         let card = div()
-            .id("zot-inspector")
-            .debug_selector(|| "zot-inspector".into())
+            .id("zapper-inspector")
+            .debug_selector(|| "zapper-inspector".into())
             .size_full()
             .flex()
             .flex_col()
@@ -1700,7 +1713,7 @@ impl Shell {
             .child(tab_bar)
             .child(body);
         div()
-            .w(px(ZOT_PANEL_WIDTH))
+            .w(px(ZAPPER_PANEL_WIDTH))
             .h_full()
             .flex_none()
             .map(|frame| Self::inset_pane_frame(frame, gutter))
@@ -1708,40 +1721,46 @@ impl Shell {
             .into_any_element()
     }
 
-    fn zot_issue_surface(
+    fn zapper_issue_surface(
         &mut self,
-        zot: &Zot,
+        zapper: &Zapper,
         overview: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        use zuse_viewport::zot_issues::{IssueEvent, IssuePanel, ThreadState};
-        if self.zot_ui.issues.is_none() {
-            let panel = cx.new(|_| IssuePanel::new(zot.clone(), overview));
+        use zuse_viewport::zapper_issues::{IssueEvent, IssuePanel, ThreadState};
+        if self.zapper_ui.issues.is_none() {
+            let panel = cx.new(|_| IssuePanel::new(zapper.clone(), overview));
             cx.subscribe(&panel, |this, _, event, cx| match event {
                 IssueEvent::Command(action, revision) => {
-                    if let Some(zot) = this.selected_zot(cx) {
+                    if let Some(zapper) = this.selected_zapper(cx) {
                         let mut action = action.clone();
-                        if let ZotAction::Delegate { model, .. } = &mut action {
-                            *model = this.zot_thread_model(&zot, cx);
+                        if let ZapperAction::Delegate { model, .. } = &mut action {
+                            *model = this.zapper_thread_model(&zapper, cx);
                         }
-                        this.zot_ui.issue_command = true;
-                        this.send_zot_command(zot.id, Some(*revision), action, ZotAfter::Stay, cx);
+                        this.zapper_ui.issue_command = true;
+                        this.send_zapper_command(
+                            zapper.id,
+                            Some(*revision),
+                            action,
+                            ZapperAfter::Stay,
+                            cx,
+                        );
                     }
                 }
                 IssueEvent::OpenThread(id) => this.open_chat(id.clone(), cx),
                 IssueEvent::OpenDocument(file) => {
-                    this.show_zot_page(ZotPage::File(file.path.clone()), cx);
+                    this.show_zapper_page(ZapperPage::File(file.path.clone()), cx);
                 }
                 IssueEvent::OpenPullRequest(url) => {
-                    this.show_zot_page(ZotPage::PullRequest(url.clone()), cx);
+                    this.show_zapper_page(ZapperPage::PullRequest(url.clone()), cx);
                 }
                 IssueEvent::NewThread => {
-                    if let Some(zot) = this.selected_zot(cx) {
-                        this.open_zot_dialog(zot, Kind::Thread(None), cx);
+                    if let Some(zapper) = this.selected_zapper(cx) {
+                        this.open_zapper_dialog(zapper, Kind::Thread(None), cx);
                     }
                 }
                 IssueEvent::ShowIssues => {
-                    this.show_zot_page(ZotPage::Section(ZotTab::Issues), cx);
+                    this.show_zapper_page(ZapperPage::Section(ZapperTab::Issues), cx);
                 }
             })
             .detach();
@@ -1750,32 +1769,32 @@ impl Shell {
             cx.observe(&panel, |this, panel, cx| {
                 let selected = panel.read(cx).selected_id().map(str::to_owned);
                 if let Some(id) = selected
-                    && this.zot_ui.tabs.active_issue() != Some(id.as_str())
+                    && this.zapper_ui.tabs.active_issue() != Some(id.as_str())
                 {
-                    this.show_zot_page(ZotPage::Issue(id), cx);
+                    this.show_zapper_page(ZapperPage::Issue(id), cx);
                 }
                 cx.notify();
             })
             .detach();
-            self.zot_ui.issues = Some(panel);
+            self.zapper_ui.issues = Some(panel);
         }
-        let panel = self.zot_ui.issues.as_ref().unwrap().clone();
+        let panel = self.zapper_ui.issues.as_ref().unwrap().clone();
         // The tab decides which issue the shared surface shows.
-        let wanted = self.zot_ui.tabs.active_issue().map(str::to_owned);
+        let wanted = self.zapper_ui.tabs.active_issue().map(str::to_owned);
         if panel.read(cx).selected_id() != wanted.as_deref() {
             panel.update(cx, |p, cx| match wanted {
                 Some(id) => p.show_issue(id, cx),
                 None => p.show_list(cx),
             });
         }
-        let states: std::collections::HashMap<String, ThreadState> = zot
+        let states: std::collections::HashMap<String, ThreadState> = zapper
             .workers
             .iter()
             .map(|w| {
-                let state = if self.zot_thread_archived(&w.chat_id, cx) {
+                let state = if self.zapper_thread_archived(&w.chat_id, cx) {
                     ThreadState::Archived
                 } else {
-                    match worker_phase(w, self.zot_thread_phase(&w.chat_id, cx).0) {
+                    match worker_phase(w, self.zapper_thread_phase(&w.chat_id, cx).0) {
                         ThreadPhase::Working => ThreadState::Working,
                         ThreadPhase::NeedsYou(_) => ThreadState::NeedsYou,
                         ThreadPhase::NotStarted | ThreadPhase::Queued | ThreadPhase::Done => {
@@ -1797,8 +1816,8 @@ impl Shell {
         panel.update(cx, |p, cx| {
             p.thread_states(states, cx);
             p.user_name(user, cx);
-            p.sync(zot.clone(), overview, self.zot_ui.pending, cx);
-            p.files(self.zot_ui.files.clone(), cx);
+            p.sync(zapper.clone(), overview, self.zapper_ui.pending, cx);
+            p.files(self.zapper_ui.files.clone(), cx);
             p.thread_titles(
                 self.state
                     .read(cx)
@@ -1813,15 +1832,20 @@ impl Shell {
     }
     /// The Overview's header: face, name and state, the purpose, and anything
     /// waiting on the user. Open work follows from the shared issue surface.
-    fn zot_overview(&mut self, zot: &Zot, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+    fn zapper_overview(
+        &mut self,
+        zapper: &Zapper,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         use zuse_protocol::SessionStatus as S;
-        let working = zot
+        let working = zapper
             .workers
             .iter()
-            .filter(|w| self.zot_thread_status(&w.chat_id, cx) == Some(S::Working))
+            .filter(|w| self.zapper_thread_status(&w.chat_id, cx) == Some(S::Working))
             .count();
-        let (status_color, status) = match zot.status {
-            ZotStatus::Active if working > 0 => (
+        let (status_color, status) = match zapper.status {
+            ZapperStatus::Active if working > 0 => (
                 theme.success,
                 if working == 1 {
                     "1 thread working".to_owned()
@@ -1829,22 +1853,22 @@ impl Shell {
                     format!("{working} threads working")
                 },
             ),
-            ZotStatus::Active => (theme.success, "Active".to_owned()),
-            ZotStatus::Paused => (theme.warning, "Paused".to_owned()),
-            ZotStatus::Stopped => (theme.text_faint, "Stopped".to_owned()),
-            ZotStatus::Archived => (theme.text_faint, "Archived".to_owned()),
+            ZapperStatus::Active => (theme.success, "Active".to_owned()),
+            ZapperStatus::Paused => (theme.warning, "Paused".to_owned()),
+            ZapperStatus::Stopped => (theme.text_faint, "Stopped".to_owned()),
+            ZapperStatus::Archived => (theme.text_faint, "Archived".to_owned()),
         };
-        let toggle = if zot.status == ZotStatus::Active {
-            ZotStatus::Paused
+        let toggle = if zapper.status == ZapperStatus::Active {
+            ZapperStatus::Paused
         } else {
-            ZotStatus::Active
+            ZapperStatus::Active
         };
-        let (id, rev) = (zot.id.clone(), zot.revision);
+        let (id, rev) = (zapper.id.clone(), zapper.revision);
         let hero = div()
             .flex()
             .items_center()
             .gap(px(12.0))
-            .child(zot_mascot(&self.zot_face(zot, cx), 40.0))
+            .child(zapper_mascot(&self.zapper_face(zapper, cx), 40.0))
             .child(
                 div()
                     .flex_1()
@@ -1858,7 +1882,7 @@ impl Shell {
                             .text_size(crate::typography::ui_rems(15.0))
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(theme.text_strong)
-                            .child(zot.config.name.clone()),
+                            .child(zapper.config.name.clone()),
                     )
                     .child(
                         div()
@@ -1872,11 +1896,11 @@ impl Shell {
                     ),
             )
             .when(
-                matches!(zot.status, ZotStatus::Active | ZotStatus::Paused),
+                matches!(zapper.status, ZapperStatus::Active | ZapperStatus::Paused),
                 |d| {
                     d.child(
                         div()
-                            .id("zot-pause")
+                            .id("zapper-pause")
                             .role(gpui::Role::Button)
                             .h(px(26.0))
                             .px(px(10.0))
@@ -1890,26 +1914,26 @@ impl Shell {
                             .text_size(crate::typography::ui_rems(12.0))
                             .text_color(theme.text)
                             .hover(|d| d.bg(theme.element_hover))
-                            .child(if toggle == ZotStatus::Paused {
+                            .child(if toggle == ZapperStatus::Paused {
                                 "Pause"
                             } else {
                                 "Resume"
                             })
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.send_zot_command(
+                                this.send_zapper_command(
                                     id.clone(),
                                     Some(rev),
-                                    ZotAction::SetStatus { status: toggle },
-                                    ZotAfter::Stay,
+                                    ZapperAction::SetStatus { status: toggle },
+                                    ZapperAfter::Stay,
                                     cx,
                                 )
                             })),
                     )
                 },
             );
-        let asks = needs_you_items(&zot.issues, &zot.decisions);
+        let asks = needs_you_items(&zapper.issues, &zapper.decisions);
         let mut view = div().flex().flex_col().gap(px(14.0)).child(hero).when(
-            !zot.config.purpose.trim().is_empty(),
+            !zapper.config.purpose.trim().is_empty(),
             |d| {
                 d.child(
                     div()
@@ -1917,7 +1941,7 @@ impl Shell {
                         .line_height(crate::typography::ui_rems(18.0))
                         .text_color(theme.text_muted)
                         .line_clamp(3)
-                        .child(zot.config.purpose.clone()),
+                        .child(zapper.config.purpose.clone()),
                 )
             },
         );
@@ -1942,14 +1966,14 @@ impl Shell {
             for item in asks {
                 let (glyph, id) = match &item {
                     NeedsYouItem::Decision { id, .. } => {
-                        (icons::INFO_CIRCLE, format!("zot-decision-{id}"))
+                        (icons::INFO_CIRCLE, format!("zapper-decision-{id}"))
                     }
                     NeedsYouItem::Issue { id, .. } => {
-                        (icons::STATUS_QUESTION, format!("zot-asked-{id}"))
+                        (icons::STATUS_QUESTION, format!("zapper-asked-{id}"))
                     }
                 };
-                let z = zot.clone();
-                let decisions = zot.decisions.clone();
+                let z = zapper.clone();
+                let decisions = zapper.decisions.clone();
                 let title = item.title();
                 let target = item.target();
                 needs = needs.child(list_row(
@@ -1961,11 +1985,11 @@ impl Shell {
                     theme,
                     move |this, _, _, cx| match &target {
                         NeedsYouTarget::IssueTab(id) => {
-                            this.show_zot_page(ZotPage::Issue(id.clone()), cx)
+                            this.show_zapper_page(ZapperPage::Issue(id.clone()), cx)
                         }
                         NeedsYouTarget::DecisionForm(id) => {
                             if let Some(decision) = decisions.iter().find(|d| &d.id == id) {
-                                this.open_zot_dialog(
+                                this.open_zapper_dialog(
                                     z.clone(),
                                     Kind::Decision(decision.clone()),
                                     cx,
@@ -1982,10 +2006,16 @@ impl Shell {
     }
 
     /// The repositories this Zapper works in, as a quiet line of chips.
-    fn zot_repositories(&mut self, zot: &Zot, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+    fn zapper_repositories(
+        &mut self,
+        zapper: &Zapper,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let names: Vec<(String, String)> = {
             let state = self.state.read(cx);
-            zot.config
+            zapper
+                .config
                 .repositories
                 .iter()
                 .filter_map(|repository| {
@@ -2013,9 +2043,9 @@ impl Shell {
         };
         let mut chips = div().flex().flex_wrap().gap(px(6.0));
         if names.is_empty() {
-            let z = zot.clone();
+            let z = zapper.clone();
             chips = chips.child(
-                chip("zot-add-repositories".into())
+                chip("zapper-add-repositories".into())
                     .role(gpui::Role::Button)
                     .cursor_pointer()
                     .text_color(theme.text_muted)
@@ -2023,13 +2053,13 @@ impl Shell {
                     .child(icon(icons::PLUS).size(px(11.0)))
                     .child("Choose repositories")
                     .on_click(
-                        cx.listener(move |this, _, _, cx| this.open_zot_editor(z.clone(), cx)),
+                        cx.listener(move |this, _, _, cx| this.open_zapper_editor(z.clone(), cx)),
                     ),
             );
         }
         for (id, name) in names {
             chips = chips.child(
-                chip(SharedString::from(format!("zot-overview-repo-{id}")))
+                chip(SharedString::from(format!("zapper-overview-repo-{id}")))
                     .child(
                         icon(icons::FOLDER)
                             .size(px(12.0))
@@ -2053,9 +2083,9 @@ impl Shell {
             .into_any_element()
     }
 
-    pub(super) fn zot_manage(
+    pub(super) fn zapper_manage(
         &mut self,
-        zot: &Zot,
+        zapper: &Zapper,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -2065,16 +2095,21 @@ impl Shell {
             .gap(px(2.0))
             .child(section("Manage", theme));
         for (key, glyph, label, kind) in [
-            ("zot-fresh", icons::RESTART, "Start a fresh conversation", 0),
-            ("zot-stop", icons::STOP, "Stop Zapper", 1),
             (
-                "zot-archive",
+                "zapper-fresh",
+                icons::RESTART,
+                "Start a fresh conversation",
+                0,
+            ),
+            ("zapper-stop", icons::STOP, "Stop Zapper", 1),
+            (
+                "zapper-archive",
                 icons::ARCHIVE_MINIMALISTIC,
                 "Archive Zapper and threads",
                 2,
             ),
         ] {
-            let z = zot.clone();
+            let z = zapper.clone();
             manage = manage.child(list_row(
                 key,
                 glyph,
@@ -2084,46 +2119,49 @@ impl Shell {
                 theme,
                 move |this, _, _, cx| {
                     let (action, after) = match kind {
-                        0 => (ZotAction::FreshConversation, ZotAfter::OpenCoordinator),
+                        0 => (
+                            ZapperAction::FreshConversation,
+                            ZapperAfter::OpenCoordinator,
+                        ),
                         1 => (
-                            ZotAction::SetStatus {
-                                status: ZotStatus::Stopped,
+                            ZapperAction::SetStatus {
+                                status: ZapperStatus::Stopped,
                             },
-                            ZotAfter::LeavePage,
+                            ZapperAfter::LeavePage,
                         ),
                         _ => (
-                            ZotAction::SetStatus {
-                                status: ZotStatus::Archived,
+                            ZapperAction::SetStatus {
+                                status: ZapperStatus::Archived,
                             },
-                            ZotAfter::LeavePage,
+                            ZapperAfter::LeavePage,
                         ),
                     };
-                    this.send_zot_command(z.id.clone(), Some(z.revision), action, after, cx)
+                    this.send_zapper_command(z.id.clone(), Some(z.revision), action, after, cx)
                 },
                 cx,
             ));
         }
-        let z = zot.clone();
-        if self.zot_ui.confirm_delete {
+        let z = zapper.clone();
+        if self.zapper_ui.confirm_delete {
             manage = manage
                 .child(muted(
                     "Delete this Zapper? Its threads and documents are kept.",
                     theme,
                 ))
                 .child(list_row(
-                    "zot-delete-confirm",
+                    "zapper-delete-confirm",
                     icons::TRASH_BIN_MINIMALISTIC,
                     theme.danger,
                     "Delete Zapper".to_owned(),
                     None,
                     theme,
                     move |this, _, _, cx| {
-                        this.zot_ui.confirm_delete = false;
-                        this.send_zot_command(
+                        this.zapper_ui.confirm_delete = false;
+                        this.send_zapper_command(
                             z.id.clone(),
                             Some(z.revision),
-                            ZotAction::Delete,
-                            ZotAfter::LeavePage,
+                            ZapperAction::Delete,
+                            ZapperAfter::LeavePage,
                             cx,
                         );
                     },
@@ -2131,14 +2169,14 @@ impl Shell {
                 ));
         } else {
             manage = manage.child(list_row(
-                "zot-delete",
+                "zapper-delete",
                 icons::TRASH_BIN_MINIMALISTIC,
                 theme.danger,
                 "Delete…".to_owned(),
                 None,
                 theme,
                 |this, _, _, cx| {
-                    this.zot_ui.confirm_delete = true;
+                    this.zapper_ui.confirm_delete = true;
                     cx.notify();
                 },
                 cx,
@@ -2147,21 +2185,27 @@ impl Shell {
         manage.into_any_element()
     }
 
-    fn zot_threads(&mut self, zot: &Zot, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+    fn zapper_threads(
+        &mut self,
+        zapper: &Zapper,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let workers = ordered_zapper_threads(
-            zot.workers
+            zapper
+                .workers
                 .iter()
-                .filter(|w| !self.zot_thread_archived(&w.chat_id, cx)),
+                .filter(|w| !self.zapper_thread_archived(&w.chat_id, cx)),
             |w| {
                 use zuse_protocol::SessionStatus as S;
-                match self.zot_thread_status(&w.chat_id, cx) {
+                match self.zapper_thread_status(&w.chat_id, cx) {
                     Some(S::Working) => ThreadRank::Working,
                     Some(S::AwaitingInput | S::Errored) => ThreadRank::NeedsYou,
                     Some(S::Idle) | None => ThreadRank::Idle,
                 }
             },
         );
-        let new_zot = zot.clone();
+        let new_zapper = zapper.clone();
         let mut threads = div().flex().flex_col().gap(px(2.0)).child(
             div()
                 .flex()
@@ -2169,11 +2213,11 @@ impl Shell {
                 .justify_between()
                 .child(section(format!("Threads · {}", workers.len()), theme))
                 .child(action(
-                    "zot-new-worker",
+                    "zapper-new-worker",
                     "New thread",
                     theme,
                     move |this, _, _, cx| {
-                        this.open_zot_dialog(new_zot.clone(), Kind::Thread(None), cx)
+                        this.open_zapper_dialog(new_zapper.clone(), Kind::Thread(None), cx)
                     },
                     cx,
                 )),
@@ -2187,16 +2231,16 @@ impl Shell {
         for worker in workers {
             let id = worker.chat_id.clone();
             use zuse_protocol::SessionStatus as S;
-            let status = match self.zot_thread_status(&id, cx) {
+            let status = match self.zapper_thread_status(&id, cx) {
                 Some(S::Working) => "Working",
                 Some(S::AwaitingInput) => "Waiting for input",
                 Some(S::Errored) => "Failed",
                 Some(S::Idle) => "Idle",
                 None => "Not running",
             };
-            let dot = self.zot_status_color(&id, theme, cx);
+            let dot = self.zapper_status_color(&id, theme, cx);
             let open = id.clone();
-            let row_group = SharedString::from(format!("zot-thread-row-{id}"));
+            let row_group = SharedString::from(format!("zapper-thread-row-{id}"));
             let mut actions = div()
                 .absolute()
                 .right(px(4.0))
@@ -2207,15 +2251,15 @@ impl Shell {
                 .gap(px(1.0))
                 .invisible()
                 .group_hover(row_group.clone(), |d| d.visible());
-            let z = zot.clone();
+            let z = zapper.clone();
             let message = id.clone();
             actions = actions.child(thread_action(
-                format!("zot-message-{id}"),
+                format!("zapper-message-{id}"),
                 icons::CHAT_ROUND_LINE,
                 "Send a message",
                 theme,
                 move |this, _, _, cx| {
-                    this.open_zot_dialog(z.clone(), Kind::Thread(Some(message.clone())), cx)
+                    this.open_zapper_dialog(z.clone(), Kind::Thread(Some(message.clone())), cx)
                 },
                 cx,
             ));
@@ -2225,28 +2269,28 @@ impl Shell {
                 ("Archive", icons::ARCHIVE_MINIMALISTIC, 1),
             ] {
                 let chat_id = id.clone();
-                let z = zot.clone();
+                let z = zapper.clone();
                 actions = actions.child(thread_action(
-                    format!("zot-worker-{kind}-{id}"),
+                    format!("zapper-worker-{kind}-{id}"),
                     glyph,
                     label,
                     theme,
                     move |this, _, _, cx| {
                         let chat_id = chat_id.clone();
                         if kind == 1 {
-                            this.archive_zot_thread(&z, chat_id, cx);
+                            this.archive_zapper_thread(&z, chat_id, cx);
                             return;
                         }
                         let action = if kind == 0 {
-                            ZotAction::StopWorker { chat_id }
+                            ZapperAction::StopWorker { chat_id }
                         } else {
-                            ZotAction::ReleaseWorker { chat_id }
+                            ZapperAction::ReleaseWorker { chat_id }
                         };
-                        this.send_zot_command(
+                        this.send_zapper_command(
                             z.id.clone(),
                             Some(z.revision),
                             action,
-                            ZotAfter::Stay,
+                            ZapperAfter::Stay,
                             cx,
                         );
                     },
@@ -2255,7 +2299,7 @@ impl Shell {
             }
             threads = threads.child(
                 div()
-                    .id(SharedString::from(format!("zot-open-{id}")))
+                    .id(SharedString::from(format!("zapper-open-{id}")))
                     .group(row_group)
                     .role(gpui::Role::Button)
                     .aria_label(SharedString::from(worker.objective.clone()))
@@ -2295,7 +2339,7 @@ impl Shell {
             );
         }
         let mut view = div().flex().flex_col().gap(px(14.0)).child(threads);
-        if let Some(finished) = self.zot_finished_threads(zot, theme, cx) {
+        if let Some(finished) = self.zapper_finished_threads(zapper, theme, cx) {
             view = view.child(finished);
         }
         let mut coordinator = div()
@@ -2303,9 +2347,9 @@ impl Shell {
             .flex_col()
             .gap(px(2.0))
             .child(section("Coordinator conversations", theme));
-        let current = zot.coordinator_chat_id.clone();
+        let current = zapper.coordinator_chat_id.clone();
         coordinator = coordinator.child(list_row(
-            "zot-current-conversation",
+            "zapper-current-conversation",
             icons::CHAT_ROUND_LINE,
             theme.text_muted,
             "Current conversation".to_owned(),
@@ -2316,10 +2360,10 @@ impl Shell {
             },
             cx,
         ));
-        for (index, id) in zot.previous_coordinator_chats.iter().enumerate().rev() {
+        for (index, id) in zapper.previous_coordinator_chats.iter().enumerate().rev() {
             let id = id.clone();
             coordinator = coordinator.child(list_row(
-                format!("zot-history-{id}"),
+                format!("zapper-history-{id}"),
                 icons::HISTORY,
                 theme.text_faint,
                 format!("Conversation {}", index + 1),
@@ -2337,23 +2381,23 @@ impl Shell {
 
     /// Threads this Zapper started and later released. They stay out of
     /// project lists, so this collapsed group keeps them a click away.
-    fn zot_finished_threads(
+    fn zapper_finished_threads(
         &mut self,
-        zot: &Zot,
+        zapper: &Zapper,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let finished: Vec<String> = finished_zapper_threads(zot)
+        let finished: Vec<String> = finished_zapper_threads(zapper)
             .into_iter()
-            .filter(|id| !self.zot_thread_archived(id, cx))
+            .filter(|id| !self.zapper_thread_archived(id, cx))
             .collect();
         if finished.is_empty() {
             return None;
         }
-        let open = self.zot_ui.finished_open;
+        let open = self.zapper_ui.finished_open;
         let mut group = div().flex().flex_col().gap(px(2.0)).child(
             div()
-                .id("zot-finished-threads")
+                .id("zapper-finished-threads")
                 .role(gpui::Role::Button)
                 .aria_label(SharedString::from(format!(
                     "Finished threads, {}",
@@ -2375,7 +2419,7 @@ impl Shell {
                     .text_color(theme.text_faint),
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
-                    this.zot_ui.finished_open = !this.zot_ui.finished_open;
+                    this.zapper_ui.finished_open = !this.zapper_ui.finished_open;
                     cx.notify();
                 })),
         );
@@ -2392,14 +2436,14 @@ impl Shell {
                 .and_then(|c| c.title.clone())
                 .filter(|t| !t.trim().is_empty())
                 .unwrap_or_else(|| id.clone());
-            let code = zot
+            let code = zapper
                 .issues
                 .iter()
                 .find(|i| i.threads.contains(&id))
                 .map(|i| i.code());
             let open = id.clone();
             group = group.child(list_row(
-                format!("zot-finished-{id}"),
+                format!("zapper-finished-{id}"),
                 icons::CHAT_ROUND_LINE,
                 theme.text_faint,
                 title,
@@ -2412,9 +2456,9 @@ impl Shell {
         Some(group.into_any_element())
     }
 
-    fn zot_drive(
+    fn zapper_drive(
         &mut self,
-        files: Vec<ZotFile>,
+        files: Vec<ZapperFile>,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -2426,7 +2470,7 @@ impl Shell {
             .child(section(format!("Drive · {}", files.len()), theme));
         if files.is_empty() {
             view = view.child(muted(
-                if self.zot_ui.loading {
+                if self.zapper_ui.loading {
                     "Loading documents…"
                 } else {
                     "Rules, notes and the digest this Zapper keeps live here."
@@ -2438,7 +2482,7 @@ impl Shell {
             let preview: String = file.content.lines().take(6).collect::<Vec<_>>().join("\n");
             view = view.child(
                 div()
-                    .id(SharedString::from(format!("zot-edit-{}", file.path)))
+                    .id(SharedString::from(format!("zapper-edit-{}", file.path)))
                     .role(gpui::Role::Button)
                     .aria_label(SharedString::from(file.path.clone()))
                     .p(px(10.0))
@@ -2486,7 +2530,7 @@ impl Shell {
                         )
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.show_zot_page(ZotPage::File(file.path.clone()), cx)
+                        this.show_zapper_page(ZapperPage::File(file.path.clone()), cx)
                     })),
             );
         }
@@ -2495,18 +2539,18 @@ impl Shell {
 
     /// A Drive document in its own tab, rendered as markdown. Edit opens the
     /// document editor.
-    fn zot_document(
+    fn zapper_document(
         &mut self,
-        zot: &Zot,
+        zapper: &Zapper,
         path: &str,
-        files: &[ZotFile],
+        files: &[ZapperFile],
         theme: &Theme,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let Some(file) = latest_file(files, path).cloned() else {
             return muted(
-                if self.zot_ui.loading || self.zot_history_view() {
+                if self.zapper_ui.loading || self.zapper_history_view() {
                     "Loading document…"
                 } else {
                     "This document is empty."
@@ -2515,11 +2559,11 @@ impl Shell {
             )
             .into_any_element();
         };
-        let tree = match self.zot_ui.documents.get(path) {
+        let tree = match self.zapper_ui.documents.get(path) {
             Some((version, tree)) if *version == file.version => tree.clone(),
             _ => {
                 let tree = std::sync::Arc::new(crate::markdown::parse_full(&file.content));
-                self.zot_ui
+                self.zapper_ui
                     .documents
                     .insert(path.to_owned(), (file.version, tree.clone()));
                 tree
@@ -2528,7 +2572,7 @@ impl Shell {
         let options = crate::markdown::render::RenderOptions {
             tasks: None,
             media: None,
-            row_key: format!("zot-document-{path}").into(),
+            row_key: format!("zapper-document-{path}").into(),
             veil: None,
             cache: None,
             now: std::time::Instant::now(),
@@ -2537,7 +2581,7 @@ impl Shell {
             workspace_root: None,
             code: None,
         };
-        let z = zot.clone();
+        let z = zapper.clone();
         let header = div()
             .flex()
             .items_center()
@@ -2565,10 +2609,12 @@ impl Shell {
                     .child(format!("v{}", file.version)),
             )
             .child(action(
-                "zot-document-edit",
+                "zapper-document-edit",
                 "Edit",
                 theme,
-                move |this, _, _, cx| this.open_zot_dialog(z.clone(), Kind::File(file.clone()), cx),
+                move |this, _, _, cx| {
+                    this.open_zapper_dialog(z.clone(), Kind::File(file.clone()), cx)
+                },
                 cx,
             ));
         div()
@@ -2591,10 +2637,10 @@ impl Shell {
             .into_any_element()
     }
 
-    fn zot_history(
+    fn zapper_history(
         &mut self,
-        zot: &Zot,
-        files: Vec<ZotFile>,
+        zapper: &Zapper,
+        files: Vec<ZapperFile>,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -2615,7 +2661,7 @@ impl Shell {
             .child(section("Document versions", theme));
         if files.is_empty() {
             view = view.child(muted(
-                if self.zot_ui.loading {
+                if self.zapper_ui.loading {
                     "Loading history…"
                 } else {
                     "No versions yet."
@@ -2627,7 +2673,7 @@ impl Shell {
         files.sort_by(|a, b| a.path.cmp(&b.path).then(b.version.cmp(&a.version)));
         for file in files {
             let current = *latest.get(&file.path).unwrap_or(&file.version);
-            let z = zot.clone();
+            let z = zapper.clone();
             view = view.child(
                 div()
                     .flex()
@@ -2661,19 +2707,19 @@ impl Shell {
                     )
                     .when(current > file.version, |d| {
                         d.child(action(
-                            format!("zot-restore-{}-{}", file.path, file.version),
+                            format!("zapper-restore-{}-{}", file.path, file.version),
                             "Restore",
                             theme,
                             move |this, _, _, cx| {
-                                this.send_zot_command(
+                                this.send_zapper_command(
                                     z.id.clone(),
                                     Some(z.revision),
-                                    ZotAction::RestoreFile {
+                                    ZapperAction::RestoreFile {
                                         path: file.path.clone(),
                                         version: file.version,
                                         expected_version: current,
                                     },
-                                    ZotAfter::Stay,
+                                    ZapperAfter::Stay,
                                     cx,
                                 )
                             },
@@ -2690,16 +2736,16 @@ impl Shell {
 mod tests {
     use super::*;
 
-    fn file(path: &str, version: u32, content: &str) -> ZotFile {
-        ZotFile {
+    fn file(path: &str, version: u32, content: &str) -> ZapperFile {
+        ZapperFile {
             path: path.into(),
             version,
             content: content.into(),
         }
     }
 
-    fn queued_zot() -> Zot {
-        let worker = |chat: &str, queue_position| ZotWorker {
+    fn queued_zapper() -> Zapper {
+        let worker = |chat: &str, queue_position| ZapperWorker {
             chat_id: chat.into(),
             device_id: "local".into(),
             space_id: "repo".into(),
@@ -2714,7 +2760,7 @@ mod tests {
                 "coordinatorModel": {"harness": "mock", "model": null},
                 "workerDeviceId": "local", "maxConcurrentWorkers": 1, "maxFollowups": 3
             },
-            "status": "active", "coordinatorChatId": "zot-z-0",
+            "status": "active", "coordinatorChatId": "zapper-z-0",
             "previousCoordinatorChats": [], "decisions": [],
             "workers": [
                 worker("running", None),
@@ -2728,9 +2774,9 @@ mod tests {
     #[test]
     fn queued_threads_read_queued_in_the_sidebar() {
         use zuse_protocol::ChatIndicator as C;
-        let zot = queued_zot();
+        let zapper = queued_zapper();
         let phase = |chat: &str, chat_phase| {
-            let worker = zot.workers.iter().find(|w| w.chat_id == chat).unwrap();
+            let worker = zapper.workers.iter().find(|w| w.chat_id == chat).unwrap();
             worker_phase(worker, chat_phase)
         };
         // No chat yet reads as NotStarted; the queue says why.
@@ -2750,10 +2796,10 @@ mod tests {
 
     #[test]
     fn threads_without_a_conversation_get_a_placeholder_not_an_empty_pane() {
-        let zots = vec![queued_zot()];
-        let exists = |chat: &str| chat == "running" || chat == "zot-z-0" || chat == "other";
+        let zappers = vec![queued_zapper()];
+        let exists = |chat: &str| chat == "running" || chat == "zapper-z-0" || chat == "other";
         assert_eq!(
-            thread_placeholder(&zots, exists, "queued"),
+            thread_placeholder(&zappers, exists, "queued"),
             Some(ThreadPlaceholder::Queued {
                 objective: "Objective of queued".into(),
                 position: 2,
@@ -2761,15 +2807,15 @@ mod tests {
         );
         // Delegated, its chat not reported yet: still never a blank pane.
         assert_eq!(
-            thread_placeholder(&zots, exists, "starting"),
+            thread_placeholder(&zappers, exists, "starting"),
             Some(ThreadPlaceholder::Starting {
                 objective: "Objective of starting".into(),
             })
         );
         // Real conversations, and chats that aren't Zapper threads, render as usual.
-        assert_eq!(thread_placeholder(&zots, exists, "running"), None);
-        assert_eq!(thread_placeholder(&zots, exists, "zot-z-0"), None);
-        assert_eq!(thread_placeholder(&zots, exists, "other"), None);
+        assert_eq!(thread_placeholder(&zappers, exists, "running"), None);
+        assert_eq!(thread_placeholder(&zappers, exists, "zapper-z-0"), None);
+        assert_eq!(thread_placeholder(&zappers, exists, "other"), None);
     }
 
     #[test]
@@ -2802,25 +2848,25 @@ mod tests {
         ];
         assert_eq!(
             visible_tabs(&seeded, None),
-            [ZotTab::Overview, ZotTab::Issues, ZotTab::Threads]
+            [ZapperTab::Overview, ZapperTab::Issues, ZapperTab::Threads]
         );
-        assert!(visible_tabs(&[], Some(ZotTab::Drive)).contains(&ZotTab::Drive));
+        assert!(visible_tabs(&[], Some(ZapperTab::Drive)).contains(&ZapperTab::Drive));
         let written = [file("NOTES.md", 2, "Decided on Tuesday")];
-        assert_eq!(visible_tabs(&written, None), ZOT_SECTIONS);
+        assert_eq!(visible_tabs(&written, None), ZAPPER_SECTIONS);
         let rewritten = [file("INSTRUCTIONS.md", 2, "I keep the release moving.")];
-        assert_eq!(visible_tabs(&rewritten, None), ZOT_SECTIONS);
+        assert_eq!(visible_tabs(&rewritten, None), ZAPPER_SECTIONS);
     }
 
     #[test]
     fn history_lives_in_the_menu_not_the_strip() {
         let written = [file("NOTES.md", 4, "Decided on Tuesday")];
-        assert!(!visible_tabs(&written, None).contains(&ZotTab::History));
+        assert!(!visible_tabs(&written, None).contains(&ZapperTab::History));
     }
 
     #[test]
     fn the_expanded_section_fits_every_label() {
-        let width = section_width(&ZOT_SECTIONS);
-        for tab in ZOT_SECTIONS {
+        let width = section_width(&ZAPPER_SECTIONS);
+        for tab in ZAPPER_SECTIONS {
             assert!(width >= 39.0 + tab.label_width());
         }
     }
@@ -2847,7 +2893,7 @@ impl Shell {
     /// Keep a seeded pull request tab offline once its page exists.
     /// A `-menu` step also opens Merge's menu.
     pub fn fixture_zapper_settle(&mut self, step: &str, cx: &mut Context<Self>) {
-        if let Some((_, page)) = &self.zot_ui.pull_request_page {
+        if let Some((_, page)) = &self.zapper_ui.pull_request_page {
             let menu = step.ends_with("-menu");
             page.update(cx, |page, cx| page.fixture_offline(menu, cx));
         }
@@ -2856,27 +2902,31 @@ impl Shell {
 
     pub fn fixture_zapper_panel(
         &mut self,
-        files: Vec<ZotFile>,
+        files: Vec<ZapperFile>,
         step: &str,
         cx: &mut Context<Self>,
     ) {
-        let Some(zot) = self.selected_zot(cx) else {
+        let Some(zapper) = self.selected_zapper(cx) else {
             return;
         };
-        self.zot_ui.files = files;
-        self.zot_ui.files_zot = Some(zot.id.clone());
-        self.zot_ui.loaded = Some((zot.id.clone(), zot.revision, zot.activity_revision));
-        self.zot_ui.dialog = None;
-        self.close_zot_overflow(cx);
-        let issue = zot.issues.first().map(|i| ZotPage::Issue(i.id.clone()));
+        self.zapper_ui.files = files;
+        self.zapper_ui.files_zapper = Some(zapper.id.clone());
+        self.zapper_ui.loaded =
+            Some((zapper.id.clone(), zapper.revision, zapper.activity_revision));
+        self.zapper_ui.dialog = None;
+        self.close_zapper_overflow(cx);
+        let issue = zapper
+            .issues
+            .first()
+            .map(|i| ZapperPage::Issue(i.id.clone()));
         let file = self
-            .zot_ui
+            .zapper_ui
             .files
             .iter()
             .find(|f| is_document(f))
-            .map(|f| ZotPage::File(f.path.clone()));
+            .map(|f| ZapperPage::File(f.path.clone()));
         // Coordinator events: the card must not list them.
-        self.zot_ui.events = [
+        self.zapper_ui.events = [
             (
                 "e1",
                 "thread",
@@ -2886,13 +2936,13 @@ impl Shell {
             ("e3", "thread", "ZAP-8 Thread report: tests pass"),
         ]
         .into_iter()
-        .map(|(id, kind, summary)| ZotEvent {
+        .map(|(id, kind, summary)| ZapperEvent {
             id: id.into(),
-            zot_id: zot.id.clone(),
+            zapper_id: zapper.id.clone(),
             worker_chat_id: if kind == "issueChanged" {
                 String::new()
             } else {
-                "zot-worker-1".into()
+                "zapper-worker-1".into()
             },
             kind: kind.into(),
             summary: summary.into(),
@@ -2900,17 +2950,17 @@ impl Shell {
         })
         .collect();
         match step {
-            "overview" => self.show_zot_page(ZotPage::Section(ZotTab::Overview), cx),
+            "overview" => self.show_zapper_page(ZapperPage::Section(ZapperTab::Overview), cx),
             "issue" => {
-                self.show_zot_page(ZotPage::Section(ZotTab::Issues), cx);
+                self.show_zapper_page(ZapperPage::Section(ZapperTab::Issues), cx);
                 if let Some(page) = issue {
-                    self.show_zot_page(page, cx);
+                    self.show_zapper_page(page, cx);
                 }
             }
-            "drive" => self.show_zot_page(ZotPage::Section(ZotTab::Drive), cx),
+            "drive" => self.show_zapper_page(ZapperPage::Section(ZapperTab::Drive), cx),
             "file" => {
                 if let Some(page) = file {
-                    self.show_zot_page(page, cx);
+                    self.show_zapper_page(page, cx);
                 }
             }
             // `pr-ready`, `pr-blocked`, `pr-draft`: the PR tab on seeded,
@@ -2919,42 +2969,43 @@ impl Shell {
                 let url = "https://github.com/zuse-fixture/zapper/pull/42".to_owned();
                 crate::pull_request_detail::fixture_seed_zapper_pull_request(
                     &self.pull_request_cache,
-                    Some(zot.config.home_device_id.clone()),
+                    Some(zapper.config.home_device_id.clone()),
                     &url,
                     step["pr-".len()..].trim_end_matches("-menu"),
                 );
-                self.zot_ui.pull_request_page = None;
-                self.zot_ui.pull_request_subscription = None;
-                let link = ZotIssuePullRequest {
+                self.zapper_ui.pull_request_page = None;
+                self.zapper_ui.pull_request_subscription = None;
+                let link = ZapperIssuePullRequest {
                     url: url.clone(),
                     title: "Zapper panel: closable tabs".into(),
                 };
                 self.state.update(cx, |state, _| {
                     if let Some(issue) = state
-                        .zots
+                        .zappers
                         .iter_mut()
-                        .find(|z| z.id == zot.id)
+                        .find(|z| z.id == zapper.id)
                         .and_then(|z| z.issues.get_mut(1))
                     {
                         issue.pull_requests = vec![link];
                     }
                 });
-                self.show_zot_page(ZotPage::PullRequest(url), cx);
+                self.show_zapper_page(ZapperPage::PullRequest(url), cx);
             }
             "threads" => {
-                self.zot_ui.finished_open = true;
-                self.show_zot_page(ZotPage::Section(ZotTab::Threads), cx);
+                self.zapper_ui.finished_open = true;
+                self.show_zapper_page(ZapperPage::Section(ZapperTab::Threads), cx);
             }
-            "history-menu" => self.zot_ui.overflow.open(()),
-            "history" => self.show_zot_page(ZotPage::History, cx),
+            "history-menu" => self.zapper_ui.overflow.open(()),
+            "history" => self.show_zapper_page(ZapperPage::History, cx),
             "close" => {
-                let active = self.zot_ui.tabs.active().clone();
-                self.close_zot_page(&active, cx);
+                let active = self.zapper_ui.tabs.active().clone();
+                self.close_zapper_page(&active, cx);
             }
-            _ => self.show_zot_page(ZotPage::Section(ZotTab::Overview), cx),
+            _ => self.show_zapper_page(ZapperPage::Section(ZapperTab::Overview), cx),
         }
         // Page changes ask for a reload; the seeded files stand in for it.
-        self.zot_ui.loaded = Some((zot.id.clone(), zot.revision, zot.activity_revision));
+        self.zapper_ui.loaded =
+            Some((zapper.id.clone(), zapper.revision, zapper.activity_revision));
         cx.notify();
     }
 }

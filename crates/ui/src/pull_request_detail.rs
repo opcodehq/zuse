@@ -2548,7 +2548,7 @@ pub(crate) fn fixture_seed_zapper_pull_request(
     let thread = |id: &str, resolved: bool| zuse_protocol::ChangeRequestReviewThread {
         id: id.into(),
         is_resolved: resolved,
-        path: "crates/ui/src/shell/zots.rs".into(),
+        path: "crates/ui/src/shell/zappers.rs".into(),
         line: Some(42),
         ..Default::default()
     };
@@ -2603,8 +2603,8 @@ pub(crate) fn fixture_seed_zapper_pull_request(
         additions: 184,
         deletions: 37,
         files: [
-            "crates/ui/src/shell/zots.rs",
-            "crates/ui/src/shell/zot_tabs.rs",
+            "crates/ui/src/shell/zappers.rs",
+            "crates/ui/src/shell/zapper_tabs.rs",
         ]
         .into_iter()
         .map(|path| ChangeRequestFile {

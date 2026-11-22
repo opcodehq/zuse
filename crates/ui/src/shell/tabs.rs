@@ -199,8 +199,8 @@ impl Shell {
         self.overlay_owns_keyboard(cx)
             || self.sync_flow.has_visible_overlay()
             || self.delete_confirm.is_some()
-            || self.zot_ui.dialog.is_some()
-            || self.zot_overlay_open()
+            || self.zapper_ui.dialog.is_some()
+            || self.zapper_overlay_open()
             || self.delete_space_confirm.is_some()
             || self.chat_rename.is_some()
             || self.rename_space_dialog.is_some()
@@ -1298,10 +1298,10 @@ impl Shell {
                                 icons::sidebar_glyph(
                                     motion::state_t(
                                         "toggle-changes",
-                                        self.selected_zot(cx).map_or(
+                                        self.selected_zapper(cx).map_or(
                                             self.right_pane_open(cx) && fit.right,
                                             |_| {
-                                                !self.zot_ui.panel_hidden
+                                                !self.zapper_ui.panel_hidden
                                                     || self.right_pane_open(cx)
                                             },
                                         ),
@@ -1326,11 +1326,11 @@ impl Shell {
         // The conversation's own top-bar actions, in the reference order:
         // Open in, the environment summary, then the bottom terminal; the
         // right pane's toggle anchors the far edge.
-        // A Zot's coordinator has no repository, branch or environment to show.
-        let zot_coordinator = self.state.read(cx).selected_chat_is_zot_coordinator();
-        // Neither does a Zot thread that hasn't created its worktree yet.
+        // A Zapper's coordinator has no repository, branch or environment to show.
+        let zapper_coordinator = self.state.read(cx).selected_chat_is_zapper_coordinator();
+        // Neither does a Zapper thread that hasn't created its worktree yet.
         let no_checkout =
-            zot_coordinator || self.state.read(cx).selected_chat_awaits_zot_worktree();
+            zapper_coordinator || self.state.read(cx).selected_chat_awaits_zapper_worktree();
         let session_info_toggle = (!takeover && !on_canvas && !no_checkout).then(|| {
             let open = self.session_info_visible();
             header_icon_button(

@@ -138,7 +138,7 @@ impl Shell {
     pub(super) fn conversation_tab_row_visible(&self, cx: &App) -> bool {
         matches!(self.route, Route::Chat)
             && self.has_conversation(cx)
-            && !self.state.read(cx).selected_chat_is_zot_coordinator()
+            && !self.state.read(cx).selected_chat_is_zapper_coordinator()
             && self.titlebar_trailing_layout(false, cx).takeover
     }
 

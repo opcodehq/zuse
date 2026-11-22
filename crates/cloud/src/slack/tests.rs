@@ -1169,8 +1169,8 @@ fn linked_thread_replies_route_only_for_the_linked_member() {
 }
 #[test]
 fn personas_titles_and_text_are_bounded_and_cannot_mention_everyone() {
-    use zuse_protocol::{slack::Persona, zots::ZotAvatar};
-    let avatar = ZotAvatar {
+    use zuse_protocol::{slack::Persona, zappers::ZapperAvatar};
+    let avatar = ZapperAvatar {
         mascot: "robot".into(),
         color: "teal".into(),
     };
@@ -1193,7 +1193,7 @@ fn personas_titles_and_text_are_bounded_and_cannot_mention_everyone() {
     assert!(
         !Persona {
             name: "Ada".into(),
-            avatar: Some(ZotAvatar {
+            avatar: Some(ZapperAvatar {
                 mascot: "../etc".into(),
                 color: "teal".into()
             })
@@ -1213,7 +1213,7 @@ fn personas_titles_and_text_are_bounded_and_cannot_mention_everyone() {
 }
 #[test]
 fn avatars_render_as_square_pngs() {
-    let bytes = links::render_avatar(&zuse_protocol::zots::ZotAvatar {
+    let bytes = links::render_avatar(&zuse_protocol::zappers::ZapperAvatar {
         mascot: "unknown-falls-back".into(),
         color: "unknown".into(),
     })
@@ -1225,11 +1225,11 @@ fn avatars_render_as_square_pngs() {
 }
 #[test]
 fn avatars_render_every_current_face_distinctly() {
-    use zuse_protocol::{presentation::zot_mascots::MASCOTS, zots::ZotAvatar};
+    use zuse_protocol::{presentation::zapper_mascots::MASCOTS, zappers::ZapperAvatar};
     let images: std::collections::HashSet<_> = MASCOTS
         .iter()
         .map(|mascot| {
-            links::render_avatar(&ZotAvatar {
+            links::render_avatar(&ZapperAvatar {
                 mascot: mascot.id.into(),
                 color: "teal".into(),
             })

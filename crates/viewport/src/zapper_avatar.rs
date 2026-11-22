@@ -1,7 +1,7 @@
 //! Profile pictures for Zappers and the people working with them.
 //!
 //! A Zapper is either the user's own picture or one of the soft pixel
-//! mascots in [`zot_mascots`], drawn on a transparent ground as runs of flat
+//! mascots in [`zapper_mascots`], drawn on a transparent ground as runs of flat
 //! quads snapped to device pixels. Mascots turn their heads toward the
 //! pointer, sway, blink and glance around. A shared sampler re-poses every
 //! live mascot a few times a second and re-renders a view only when one of
@@ -14,21 +14,21 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use zuse_protocol::presentation::zot_mascots::{self, Cell, Mascot, Mood, Pose};
-use zuse_protocol::zots::{AVATAR_IMAGE_MAX_LEN, Zot, ZotAvatar, avatar_image_ok};
+use zuse_protocol::presentation::zapper_mascots::{self, Cell, Mascot, Mood, Pose};
+use zuse_protocol::zappers::{AVATAR_IMAGE_MAX_LEN, Zapper, ZapperAvatar, avatar_image_ok};
 
 /// Everything needed to draw one Zapper: its mascot, which is also the
 /// fallback, and the user's picture when it has one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ZapperFace {
-    pub avatar: ZotAvatar,
+    pub avatar: ZapperAvatar,
     pub image: Option<SharedString>,
     /// What the Zapper is doing, shown by its mascot.
     pub mood: Mood,
 }
 
 impl ZapperFace {
-    pub fn mascot(avatar: ZotAvatar) -> Self {
+    pub fn mascot(avatar: ZapperAvatar) -> Self {
         Self {
             avatar,
             image: None,
@@ -36,14 +36,14 @@ impl ZapperFace {
         }
     }
 
-    pub fn of(zot: &Zot) -> Self {
+    pub fn of(zapper: &Zapper) -> Self {
         Self {
-            avatar: zot
+            avatar: zapper
                 .config
                 .avatar
                 .clone()
-                .unwrap_or_else(|| zot_mascots::default_avatar(&zot.id)),
-            image: zot.config.avatar_image.clone().map(SharedString::from),
+                .unwrap_or_else(|| zapper_mascots::default_avatar(&zapper.id)),
+            image: zapper.config.avatar_image.clone().map(SharedString::from),
             mood: Mood::Awake,
         }
     }
@@ -54,7 +54,7 @@ impl ZapperFace {
 }
 
 /// A Zapper's mascot, `size` logical pixels across.
-pub fn zapper_avatar(avatar: &ZotAvatar, size: f32) -> Div {
+pub fn zapper_avatar(avatar: &ZapperAvatar, size: f32) -> Div {
     zapper_face(&ZapperFace::mascot(avatar.clone()), size)
 }
 
@@ -70,20 +70,20 @@ pub fn zapper_face(face: &ZapperFace, size: f32) -> Div {
                 .object_fit(ObjectFit::Cover),
         );
     }
-    let (mascot, color) = zot_mascots::resolve(&face.avatar);
+    let (mascot, color) = zapper_mascots::resolve(&face.avatar);
     let body = color.body;
     let mood = face.mood;
     div().size(px(size)).flex_none().child(
         canvas(
             |_, _, _| {},
             move |bounds, _, window, cx| {
-                let grid = zot_mascots::grid_for(size);
+                let grid = zapper_mascots::grid_for(size);
                 let pose = if cx.reduce_motion() {
-                    zot_mascots::still_pose(mood)
+                    zapper_mascots::still_pose(mood)
                 } else {
                     live_pose(mascot, mood, size, bounds, window, cx)
                 };
-                let cells = zot_mascots::raster(mascot, grid, pose);
+                let cells = zapper_mascots::raster(mascot, grid, pose);
                 paint_cells(&cells, grid, body, bounds, window);
             },
         )
@@ -93,15 +93,15 @@ pub fn zapper_face(face: &ZapperFace, size: f32) -> Div {
 
 /// Remember the pictures of these Zappers, so surfaces that only know a
 /// Zapper's id (a message's sender line) can show its picture too.
-pub fn remember_zots<'a>(zots: impl IntoIterator<Item = &'a Zot>) {
+pub fn remember_zappers<'a>(zappers: impl IntoIterator<Item = &'a Zapper>) {
     KNOWN.with_borrow_mut(|known| {
-        for zot in zots {
-            match &zot.config.avatar_image {
+        for zapper in zappers {
+            match &zapper.config.avatar_image {
                 Some(image) => {
-                    known.insert(zot.id.clone(), SharedString::from(image.clone()));
+                    known.insert(zapper.id.clone(), SharedString::from(image.clone()));
                 }
                 None => {
-                    known.remove(&zot.id);
+                    known.remove(&zapper.id);
                 }
             }
         }
@@ -109,10 +109,10 @@ pub fn remember_zots<'a>(zots: impl IntoIterator<Item = &'a Zot>) {
 }
 
 /// The face for a Zapper known by id, preferring its remembered picture.
-pub fn known_face(zot_id: &str, avatar: &ZotAvatar) -> ZapperFace {
+pub fn known_face(zapper_id: &str, avatar: &ZapperAvatar) -> ZapperFace {
     ZapperFace {
         avatar: avatar.clone(),
-        image: KNOWN.with_borrow(|known| known.get(zot_id).cloned()),
+        image: KNOWN.with_borrow(|known| known.get(zapper_id).cloned()),
         mood: Mood::Awake,
     }
 }
@@ -290,7 +290,7 @@ fn digest(value: impl std::hash::Hash) -> u64 {
 }
 
 fn pose_of(live: &Live, ms: u64) -> Pose {
-    zot_mascots::idle_pose(live.mascot, live.mood, ms, live.eyes, live.head)
+    zapper_mascots::idle_pose(live.mascot, live.mood, ms, live.eyes, live.head)
 }
 
 /// Pose a mascot being painted, registering it with the sampler.
@@ -319,7 +319,7 @@ fn live_pose(
         centre,
         mascot,
         mood,
-        grid: zot_mascots::grid_for(size),
+        grid: zapper_mascots::grid_for(size),
         eyes: (0., 0.),
         head: (0., 0.),
         sampled: Instant::now(),
@@ -329,7 +329,7 @@ fn live_pose(
     live.asked = None;
     live.mood = mood;
     let pose = pose_of(live, ms);
-    live.drawn = digest(zot_mascots::raster(mascot, live.grid, pose));
+    live.drawn = digest(zapper_mascots::raster(mascot, live.grid, pose));
     if !motion.running {
         motion.running = true;
         cx.spawn(async move |cx| {
@@ -404,9 +404,9 @@ fn sample(cx: &mut App) -> bool {
                 from.1 + (target.1 - from.1) * k,
             )
         };
-        live.eyes = ease(live.eyes, zot_mascots::EYES_FOLLOW_MS);
-        live.head = ease(live.head, zot_mascots::HEAD_FOLLOW_MS);
-        let drawn = digest(zot_mascots::raster(
+        live.eyes = ease(live.eyes, zapper_mascots::EYES_FOLLOW_MS);
+        live.head = ease(live.head, zapper_mascots::HEAD_FOLLOW_MS);
+        let drawn = digest(zapper_mascots::raster(
             live.mascot,
             live.grid,
             pose_of(live, ms),
@@ -456,7 +456,7 @@ fn paint_cells(
             let (left, right) = (edge(origin.x, start), edge(origin.x, x));
             let color = match cell {
                 Cell::Body => body,
-                Cell::Eye => zot_mascots::EYE,
+                Cell::Eye => zapper_mascots::EYE,
             };
             window.paint_quad(fill(
                 Bounds::new(
@@ -558,7 +558,7 @@ mod tests {
 
     #[test]
     fn faces_prefer_a_readable_picture_and_fall_back_to_the_mascot() {
-        let avatar = ZotAvatar {
+        let avatar = ZapperAvatar {
             mascot: "hex".into(),
             color: "teal".into(),
         };
@@ -566,7 +566,7 @@ mod tests {
         let url = prepare_image(&picture(64, 64, false)).unwrap();
         assert!(decoded(&url).is_some());
 
-        let mut zot: Zot = serde_json::from_str(
+        let mut zapper: Zapper = serde_json::from_str(
             r#"{"id": "z1", "revision": 1,
             "config": {"name": "Ops", "purpose": "", "homeDeviceId": "d", "repositories": [],
                 "coordinatorModel": {"harness": "claude-code", "model": null},
@@ -576,16 +576,16 @@ mod tests {
             "workers": [], "decisions": []}"#,
         )
         .unwrap();
-        assert_eq!(ZapperFace::of(&zot), ZapperFace::mascot(avatar.clone()));
-        zot.config.avatar_image = Some(url.clone());
-        remember_zots([&zot]);
+        assert_eq!(ZapperFace::of(&zapper), ZapperFace::mascot(avatar.clone()));
+        zapper.config.avatar_image = Some(url.clone());
+        remember_zappers([&zapper]);
         assert_eq!(
             known_face("z1", &avatar).image.as_deref(),
             Some(url.as_str())
         );
-        assert_eq!(ZapperFace::of(&zot).image.as_deref(), Some(url.as_str()));
-        zot.config.avatar_image = None;
-        remember_zots([&zot]);
+        assert_eq!(ZapperFace::of(&zapper).image.as_deref(), Some(url.as_str()));
+        zapper.config.avatar_image = None;
+        remember_zappers([&zapper]);
         assert_eq!(known_face("z1", &avatar).image, None);
     }
 }
