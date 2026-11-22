@@ -34,6 +34,32 @@ pub struct ZotConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub avatar: Option<ZotAvatar>,
+    /// The user's own picture, shown instead of the mascot: a small square
+    /// PNG or JPEG as a `data:` URL (see [`AVATAR_IMAGE_MAX_LEN`]). It lives
+    /// beside `avatar` so the mascot stays the fallback for clients, Slack
+    /// personas and prompt envelopes that never carry image bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub avatar_image: Option<String>,
+}
+
+/// Longest accepted `avatar_image`, in bytes of the `data:` URL. Clients crop
+/// to a 128px square first, which lands well under this.
+pub const AVATAR_IMAGE_MAX_LEN: usize = 96 * 1024;
+
+/// Whether `value` is an avatar image this version knows how to store.
+pub fn avatar_image_ok(value: &str) -> bool {
+    value.len() <= AVATAR_IMAGE_MAX_LEN
+        && ["data:image/png;base64,", "data:image/jpeg;base64,"]
+            .iter()
+            .any(|prefix| {
+                value.strip_prefix(prefix).is_some_and(|data| {
+                    !data.is_empty()
+                        && data
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'='))
+                })
+            })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
@@ -1011,6 +1037,7 @@ mod tests {
                 max_concurrent_workers: 1,
                 max_followups: 1,
                 avatar: None,
+                avatar_image: None,
             },
             status: ZotStatus::Active,
             coordinator_chat_id: "zot-z-0".into(),

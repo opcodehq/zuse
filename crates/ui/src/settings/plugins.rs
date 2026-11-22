@@ -1883,8 +1883,14 @@ impl PluginsCard {
             colors: Colors {
                 text: theme.text,
                 muted: theme.text_muted,
+                frame: theme.settings_frame_bg(),
                 background: theme.surface_card,
                 border: theme.border,
+                card_border: if theme.variant_id.as_ref() == "zuse-dark" {
+                    gpui::white().opacity(0.08)
+                } else {
+                    theme.border
+                },
                 danger: zuse_viewport::settings_style::destructive_text(),
             },
         };

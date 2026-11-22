@@ -310,6 +310,7 @@ mod tests {
             max_concurrent_workers: 1,
             max_followups: 3,
             avatar: None,
+            avatar_image: None,
         };
         value(&service,"ZotCommand",serde_json::json!({"commandId":"create","zotId":"release","expectedRevision":null,"action":{"type":"create","config":config}})).await;
         let launch = serde_json::json!({"commandId":"launch","zotId":"release","expectedRevision":null,"action":{"type":"delegate","worker":{"chatId":"zot-worker-launch","deviceId":core.device_id,"spaceId":"repo","objective":"Inspect the repository","followups":0},"model":{"harness":"mock","model":null},"base":"main"}});
@@ -400,6 +401,7 @@ mod tests {
             max_concurrent_workers: 4,
             max_followups: 3,
             avatar: None,
+            avatar_image: None,
         };
         let command = ZotCommand {
             command_id: "create".into(),

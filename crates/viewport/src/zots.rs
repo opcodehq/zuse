@@ -137,6 +137,7 @@ impl WorkspaceView {
                         let home = self.zots.watches.get(&id).cloned().unwrap_or_default();
                         let old = self.selected_zot();
                         self.zots.items.retain(|z| z.config.home_device_id != home);
+                        crate::zapper_avatar::remember_zots(&items);
                         self.zots.items.extend(items);
                         if old != self.selected_zot() {
                             self.refresh_zot();
@@ -540,6 +541,7 @@ impl WorkspaceView {
                         max_concurrent_workers: 4,
                         max_followups: 3,
                         avatar: None,
+                        avatar_image: None,
                     },
                 };
                 if form.zot.is_some() {
@@ -678,7 +680,13 @@ impl WorkspaceView {
                         .gap(px(10.))
                         .pt(px(4.))
                         .pb(px(6.))
-                        .child(avatar(&zot_name, 56.))
+                        .child(match form.zot.as_ref() {
+                            Some(zot) => crate::zapper_avatar::zapper_face(
+                                &crate::zapper_avatar::ZapperFace::of(zot),
+                                56.,
+                            ),
+                            None => avatar(&zot_name, 56.),
+                        })
                         .when_some(name("Name"), |d, input| {
                             d.child(
                                 div()
@@ -1412,7 +1420,10 @@ impl WorkspaceView {
             .gap(px(12.))
             .px(px(4.))
             .pt(px(6.))
-            .child(avatar(&zot.config.name, 40.))
+            .child(crate::zapper_avatar::zapper_face(
+                &crate::zapper_avatar::ZapperFace::of(zot),
+                40.,
+            ))
             .child(
                 column()
                     .flex_1()

@@ -1,5 +1,6 @@
 //! Zot forms. New Zot and Zot settings are routed pages; documents, decisions
 //! and threads float over the conversation they came from.
+use super::zot_avatar::ZapperFace;
 use super::zots::{zot_avatar, zot_mascot};
 use super::*;
 use crate::settings::plugins::catalog_ui;
@@ -25,6 +26,8 @@ pub(super) struct Form {
     home: String,
     worker_device: String,
     avatar: ZotAvatar,
+    /// The user's own picture as a `data:` URL; shown instead of `avatar`.
+    pub(super) image: Option<String>,
     /// Projects that existed when "Add" was pressed; a new one is switched on.
     known_spaces: Option<Vec<String>>,
     /// Filters the repository list on New Zapper and the Zapper editor.
@@ -357,10 +360,11 @@ impl Shell {
             .as_ref()
             .map(|z| z.id.clone())
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        let avatar = zot
+        let face = zot
             .as_ref()
             .map(zot_avatar)
-            .unwrap_or_else(|| zot_mascots::default_avatar(&id));
+            .unwrap_or_else(|| ZapperFace::mascot(zot_mascots::default_avatar(&id)));
+        let (avatar, image) = (face.avatar, face.image.map(String::from));
         let mut subscriptions = vec![];
         let inputs = fields(&kind, zot.as_ref())
             .into_iter()
@@ -426,6 +430,7 @@ impl Shell {
             home,
             worker_device,
             avatar,
+            image,
             known_spaces: None,
             repo_search,
             repo_active: None,
@@ -597,6 +602,7 @@ impl Shell {
                     (form.max_workers, form.max_followups);
                 let purpose = values[1].clone();
                 let avatar = Some(form.avatar.clone());
+                let avatar_image = form.image.clone();
                 match latest {
                     Some(zot) => ZotAction::Configure {
                         config: ZotConfig {
@@ -608,6 +614,7 @@ impl Shell {
                             max_concurrent_workers,
                             max_followups,
                             avatar,
+                            avatar_image,
                             ..zot.config
                         },
                     },
@@ -625,6 +632,7 @@ impl Shell {
                                 max_concurrent_workers,
                                 max_followups,
                                 avatar,
+                                avatar_image,
                             },
                         }
                     }
@@ -840,13 +848,17 @@ impl Shell {
     fn zot_avatar_picker(
         &self,
         current: &ZotAvatar,
+        image: bool,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        // Picking a robot or colour means "use the robot", so it also clears
+        // a picture; the robot stays the fallback either way.
         let set = |avatar: ZotAvatar| {
             cx.listener(move |this: &mut Shell, _: &gpui::ClickEvent, _, cx| {
                 if let Some(form) = this.zot_ui.page.as_mut() {
                     form.avatar = avatar.clone();
+                    form.image = None;
                 }
                 cx.notify();
             })
@@ -857,18 +869,19 @@ impl Shell {
                 mascot: mascot.id.into(),
                 color: current.color.clone(),
             };
-            let active = mascot.id == current.mascot;
+            let active = !image && mascot.id == current.mascot;
+            let label = format!("{}: {}", mascot.name, mascot.about);
             mascots = mascots.child(
                 div()
                     .id(SharedString::from(format!("zot-mascot-{}", mascot.id)))
                     .role(gpui::Role::RadioButton)
-                    .aria_label(mascot.name)
-                    .tip(mascot.name)
-                    .size(px(40.0))
+                    .aria_label(SharedString::from(label.clone()))
+                    .tip(label)
+                    .size(px(42.0))
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded_full()
+                    .rounded(px(10.0))
                     .border_2()
                     .cursor_pointer()
                     .when(active, |d| d.border_color(theme.text_strong))
@@ -876,13 +889,13 @@ impl Shell {
                         d.border_color(gpui::transparent_black())
                             .hover(|d| d.border_color(theme.border_strong))
                     })
-                    .child(zot_mascot(&avatar, 32.0))
+                    .child(zot_mascot(&ZapperFace::mascot(avatar.clone()), 32.0))
                     .on_click(set(avatar.clone())),
             );
         }
         let mut colors = div().flex().items_center().gap(px(6.0));
         for color in zot_mascots::COLORS {
-            let active = color.id == current.color;
+            let active = !image && color.id == current.color;
             colors = colors.child(
                 div()
                     .id(SharedString::from(format!("zot-color-{}", color.id)))
@@ -905,6 +918,45 @@ impl Shell {
                     })),
             );
         }
+        let picture = div()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .child(
+                widgets::ghost_action(theme)
+                    .id("zot-upload-image")
+                    .role(gpui::Role::Button)
+                    .child(
+                        icon(icons::UPLOAD)
+                            .size(px(13.0))
+                            .text_color(theme.text_muted),
+                    )
+                    .child(if image {
+                        "Replace image"
+                    } else {
+                        "Upload image"
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| this.upload_zot_picture(cx))),
+            )
+            .when(image, |d| {
+                d.child(
+                    widgets::ghost_action(theme)
+                        .id("zot-remove-image")
+                        .role(gpui::Role::Button)
+                        .child(
+                            icon(icons::CLOSE)
+                                .size(px(13.0))
+                                .text_color(theme.text_muted),
+                        )
+                        .child("Use robot")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(form) = this.zot_ui.page.as_mut() {
+                                form.image = None;
+                            }
+                            cx.notify();
+                        })),
+                )
+            });
         div()
             .flex()
             .flex_col()
@@ -920,18 +972,24 @@ impl Shell {
                         widgets::ghost_action(theme)
                             .id("zot-shuffle")
                             .role(gpui::Role::Button)
-                            .child(icon(icons::REFRESH).size(px(13.0)))
+                            .child(
+                                icon(icons::REFRESH)
+                                    .size(px(13.0))
+                                    .text_color(theme.text_muted),
+                            )
                             .child("Shuffle")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if let Some(form) = this.zot_ui.page.as_mut() {
                                     form.avatar = zot_mascots::default_avatar(
                                         &uuid::Uuid::new_v4().to_string(),
                                     );
+                                    form.image = None;
                                 }
                                 cx.notify();
                             })),
                     ),
             )
+            .child(picture)
             .into_any_element()
     }
 
@@ -1381,6 +1439,11 @@ impl Shell {
             }
         }
         let avatar = form.avatar.clone();
+        let face = ZapperFace {
+            avatar: avatar.clone(),
+            image: form.image.clone().map(SharedString::from),
+            mood: Default::default(),
+        };
         let name = form.inputs[0].clone();
         let purpose = form.inputs[1].clone();
         let editing = form.zot.is_some();
@@ -1394,7 +1457,7 @@ impl Shell {
             .flex()
             .items_center()
             .gap(px(14.0))
-            .child(zot_mascot(&avatar, if compact { 48.0 } else { 64.0 }))
+            .child(zot_mascot(&face, if compact { 48.0 } else { 64.0 }))
             .child(
                 div()
                     .flex_1()
@@ -1406,7 +1469,7 @@ impl Shell {
             .flex_col()
             .gap(px(8.0))
             .child(widgets::field_label(&theme, "Character"))
-            .child(self.zot_avatar_picker(&avatar, &theme, cx));
+            .child(self.zot_avatar_picker(&avatar, face.image.is_some(), &theme, cx));
         let purpose = div()
             .flex()
             .flex_col()

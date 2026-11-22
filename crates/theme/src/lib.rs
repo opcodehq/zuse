@@ -6,6 +6,7 @@
 
 mod builtins;
 mod library;
+mod t3;
 pub mod vscode;
 
 use std::collections::{BTreeMap, HashSet};
@@ -626,6 +627,20 @@ pub struct ThemeRegistry {
     pub families: Vec<ThemeFamily>,
 }
 
+/// Built-in variants that were retired, mapped to their closest remaining
+/// theme, so a saved selection keeps its character instead of falling back to
+/// Zuse.
+fn retired_variant_successor(id: &str) -> Option<&'static str> {
+    Some(match id {
+        "vscode-dark-plus" | "atom-one-dark" => "one-dark-pro",
+        "vscode-light-plus" | "night-owl-light" | "winter-light" => "github-light",
+        "ayu-mirage" => "ayu-dark",
+        "night-owl" | "winter-dark-blue" | "palenight" | "cobalt2" => "tokyo-night",
+        "synthwave-84" | "andromeda" => "dracula",
+        _ => return None,
+    })
+}
+
 impl ThemeRegistry {
     pub fn builtin() -> &'static Self {
         builtin_registry()
@@ -658,8 +673,17 @@ impl ThemeRegistry {
             .filter(move |variant| variant.appearance == appearance)
     }
 
+    /// The variant a saved `id` should show in `appearance`: the variant
+    /// itself, or a retired built-in's successor, but never one of the other
+    /// scheme. `None` means callers fall back to a default.
+    pub fn variant_for(&self, id: &str, appearance: Appearance) -> Option<&ThemeVariant> {
+        self.variant(id)
+            .or_else(|| self.variant(retired_variant_successor(id)?))
+            .filter(|variant| variant.appearance == appearance)
+    }
+
     pub fn resolve(&self, selection: &ThemeSelection, appearance: Appearance) -> &ThemeVariant {
-        self.variant(selection.variant_id(appearance))
+        self.variant_for(selection.variant_id(appearance), appearance)
             .or_else(|| {
                 self.variant(if appearance.is_dark() {
                     "zuse-dark"
@@ -870,6 +894,38 @@ impl VisualFixture {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retired_builtin_selections_resolve_to_their_successor() {
+        let registry = ThemeRegistry::builtin();
+        let mut selection = ThemeSelection::default();
+        selection.set_variant(Appearance::Dark, "night-owl");
+        selection.set_variant(Appearance::Light, "vscode-light-plus");
+        assert_eq!(
+            registry.resolve(&selection, Appearance::Dark).id,
+            "tokyo-night"
+        );
+        assert_eq!(
+            registry.resolve(&selection, Appearance::Light).id,
+            "github-light"
+        );
+        // Valid selections are untouched.
+        assert_eq!(
+            registry.variant_for("nord", Appearance::Dark).unwrap().id,
+            "nord"
+        );
+        // An id of the other scheme, retired or not, never installs.
+        assert!(
+            registry
+                .variant_for("night-owl", Appearance::Light)
+                .is_none()
+        );
+        assert!(
+            registry
+                .variant_for("tokyo-night", Appearance::Light)
+                .is_none()
+        );
+    }
 
     #[test]
     fn colors_round_trip_all_supported_css_hex_lengths() {

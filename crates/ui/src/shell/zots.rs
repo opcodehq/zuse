@@ -1,7 +1,6 @@
 //! Coordinator chrome; commands use the same engine authority as external clients.
 use super::zot_forms::{Form, Kind, ZotAfter};
 use super::*;
-use zuse_protocol::presentation::zot_mascots;
 use zuse_protocol::presentation::zot_panel::{
     NeedsYouItem, NeedsYouTarget, ZOT_SECTIONS, ZotPage, ZotPanelTabs, ZotTab,
     finished_zapper_threads, needs_you_items,
@@ -166,17 +165,7 @@ fn thread_action(
         .into_any_element()
 }
 
-/// A Zapper's profile picture, `size` logical pixels across.
-pub(super) fn zot_mascot(avatar: &ZotAvatar, size: f32) -> gpui::Div {
-    zuse_viewport::zapper_avatar::zapper_avatar(avatar, size)
-}
-
-pub(super) fn zot_avatar(zot: &Zot) -> ZotAvatar {
-    zot.config
-        .avatar
-        .clone()
-        .unwrap_or_else(|| zot_mascots::default_avatar(&zot.id))
-}
+pub(super) use super::zot_avatar::{zot_avatar, zot_mascot};
 
 pub(super) const ZOT_PANEL_WIDTH: f32 = 520.0;
 
@@ -560,7 +549,7 @@ impl Shell {
                     .when(active, |d| d.bg(theme.bg_selected))
                     .when(!active && menu_open, |d| d.bg(theme.element_hover))
                     .when(!active, |d| d.hover(|d| d.bg(theme.element_hover)))
-                    .child(zot_mascot(&zot_avatar(&zot), 16.0))
+                    .child(zot_mascot(&self.zot_face(&zot, cx), 16.0))
                     .child(
                         div()
                             .flex_1()
@@ -1774,7 +1763,7 @@ impl Shell {
             .flex()
             .items_center()
             .gap(px(12.0))
-            .child(zot_mascot(&zot_avatar(zot), 40.0))
+            .child(zot_mascot(&self.zot_face(zot, cx), 40.0))
             .child(
                 div()
                     .flex_1()

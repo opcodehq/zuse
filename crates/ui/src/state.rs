@@ -1798,6 +1798,7 @@ impl AppState {
         if self.zots == zots {
             return false;
         }
+        zuse_viewport::zapper_avatar::remember_zots(&zots);
         self.zots = zots;
         true
     }

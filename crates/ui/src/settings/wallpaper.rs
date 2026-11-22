@@ -120,7 +120,10 @@ impl Candidate {
             .ok_or_else(|| "Choose a wallpaper folder in Appearance first.".to_string())?;
         let (source, staged, image) = choose(folder, history)?;
         let artwork = crate::new_thread_background_effects::PreloadedArtwork::load(
-            &image, key.effect, key.light,
+            staged.bytes(),
+            &image,
+            key.effect,
+            key.light,
         );
         drop(image);
         let color = artwork.color();
@@ -306,7 +309,7 @@ mod tests {
             cx.set_global(crate::theme::Theme::default());
             let settings = super::super::UiSettings {
                 wallpaper_folder: Some(folder.clone()),
-                new_thread_background_effect: super::super::NewThreadBackgroundEffect::Ascii,
+                new_thread_background_effect: super::super::NewThreadBackgroundEffect::Scanlines,
                 ..Default::default()
             };
             super::super::init(settings, dir.path().join("data"), cx);
@@ -351,6 +354,7 @@ mod tests {
                         settings.new_thread_background_effect,
                         &theme,
                         &path,
+                        0,
                         cx,
                     )
                     .is_some(),
@@ -390,6 +394,7 @@ mod tests {
                     focal_x: 0.2,
                     focal_y: 0.8,
                     zoom: 2.0,
+                    ..Default::default()
                 },
                 cx,
             );

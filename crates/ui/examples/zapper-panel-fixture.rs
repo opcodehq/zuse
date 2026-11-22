@@ -89,6 +89,7 @@ fn zapper(device: &str) -> Zot {
                 mascot: "bolt".into(),
                 color: "violet".into(),
             }),
+            avatar_image: None,
         },
         status: ZotStatus::Active,
         coordinator_chat_id: COORDINATOR.into(),

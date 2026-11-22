@@ -114,6 +114,7 @@ mod thread_search;
 mod usage_dashboard;
 mod workspace_layout;
 mod workspace_storage;
+mod zot_avatar;
 mod zot_forms;
 mod zots;
 use side_chats::SideChatTab;
@@ -557,20 +558,10 @@ pub enum SettingsSection {
 
 impl SettingsSection {
     /// Sections shown in Settings. `Agents` is a legacy Accounts route alias.
-    /// Grouped by where things run: agents on this computer, the cloud
-    /// computer, what it all costs, then the app itself. See [`Self::heading`].
+    /// App settings first, followed by plan, local agents and cloud computer.
+    /// See [`Self::heading`].
     pub const ALL: [SettingsSection; 19] = [
         SettingsSection::General,
-        SettingsSection::Harnesses,
-        SettingsSection::Defaults,
-        SettingsSection::Plugins,
-        SettingsSection::Cloud,
-        SettingsSection::CloudRepositories,
-        SettingsSection::CloudEnvironments,
-        SettingsSection::CloudMachine,
-        SettingsSection::CloudAgents,
-        SettingsSection::Usage,
-        SettingsSection::Billing,
         SettingsSection::Appearance,
         SettingsSection::Notifications,
         SettingsSection::Voice,
@@ -579,6 +570,16 @@ impl SettingsSection {
         SettingsSection::Devices,
         SettingsSection::Appshots,
         SettingsSection::Archived,
+        SettingsSection::Usage,
+        SettingsSection::Billing,
+        SettingsSection::Harnesses,
+        SettingsSection::Defaults,
+        SettingsSection::Plugins,
+        SettingsSection::Cloud,
+        SettingsSection::CloudRepositories,
+        SettingsSection::CloudEnvironments,
+        SettingsSection::CloudMachine,
+        SettingsSection::CloudAgents,
     ];
 
     /// The sidebar heading this section opens, if it starts a group.
@@ -587,7 +588,7 @@ impl SettingsSection {
             SettingsSection::Harnesses => Some("Local agents"),
             SettingsSection::Cloud => Some("Cloud computer"),
             SettingsSection::Usage => Some("Plan & usage"),
-            SettingsSection::Appearance => Some("App"),
+            SettingsSection::General => Some("App"),
             _ => None,
         }
     }
@@ -1337,8 +1338,8 @@ const GITHUB_REPO_URL: &str = "https://github.com/opcodehq/zuse";
 /// hero reaches below the composer, giving its lower mask room to dissolve
 /// gradually into the otherwise empty lower canvas.
 const NEW_THREAD_BACKGROUND_FROSTED_OPACITY: f32 = 0.84;
-const NEW_THREAD_BACKGROUND_VIEWPORT_RATIO: f32 = 0.72;
-const NEW_THREAD_BACKGROUND_MAX_HEIGHT: f32 = 760.0;
+const NEW_THREAD_BACKGROUND_VIEWPORT_RATIO: f32 = 0.91;
+const NEW_THREAD_BACKGROUND_MAX_HEIGHT: f32 = 960.0;
 
 /// Drag marker for the sidebar resize handle.
 struct SidebarResize;
@@ -1605,7 +1606,7 @@ fn bottom_stack_measurement_matches(
     measured_has_composer == expected_has_composer
 }
 
-fn new_thread_background_opacity(is_frost: bool) -> f32 {
+pub(crate) fn new_thread_background_opacity(is_frost: bool) -> f32 {
     if is_frost {
         NEW_THREAD_BACKGROUND_FROSTED_OPACITY
     } else {
@@ -1618,14 +1619,17 @@ pub(crate) fn new_thread_background_height(viewport_height: f32) -> f32 {
         .min(NEW_THREAD_BACKGROUND_MAX_HEIGHT)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn new_thread_background(
     artwork: Option<std::sync::Arc<gpui::RenderImage>>,
+    frame: crate::new_thread_background_mask::AnimationFrame,
     adjustment: settings::NewThreadBackgroundAdjustment,
     viewport_height: f32,
     hero_width: f32,
     composer_bounds: crate::new_thread_background_mask::SurfaceBounds,
     dissolve: f32,
     opacity: f32,
+    look: settings::WallpaperLook,
 ) -> AnyElement {
     let Some(artwork) = artwork else {
         return Empty.into_any_element();
@@ -1642,40 +1646,14 @@ fn new_thread_background(
         .w(px(hero_width))
         .h(px(hero_height))
         .overflow_hidden()
-        .opacity((1.0 - dissolve) * opacity)
-        // Alpha resolves into the real canvas, including translucent themes;
-        // no theme-colored overlay bleaches or darkens the source pixels.
-        .children([false, true].into_iter().map(|cutout| {
-            let artwork = artwork.clone();
-            let composer_bounds = composer_bounds.clone();
-            div()
-                .absolute()
-                .inset_0()
-                .opacity(if cutout {
-                    1.0
-                } else {
-                    crate::new_thread_background_mask::CUTOUT_REVEAL_OPACITY
-                })
-                .child(
-                    gpui::canvas(
-                        |_, _, _| {},
-                        move |bounds, _, window, _cx| {
-                            if let Some(composer) = composer_bounds.get() {
-                                crate::new_thread_background_mask::paint(
-                                    artwork.clone(),
-                                    bounds,
-                                    composer,
-                                    adjustment,
-                                    cutout,
-                                    window,
-                                );
-                            }
-                        },
-                    )
-                    .absolute()
-                    .inset_0(),
-                )
-        }))
+        .child(crate::new_thread_background_mask::artwork(
+            artwork,
+            adjustment,
+            look,
+            composer_bounds,
+            (1.0 - dissolve) * opacity,
+            Some(frame),
+        ))
         .into_any_element()
 }
 
@@ -2347,6 +2325,7 @@ pub struct Shell {
     cloud_first_chat: Option<settings_cloud::FirstCloudChat>,
     /// Settings → Usage shows Cloud compute instead of model usage.
     usage_settings_compute: bool,
+    usage_settings_scroll: settings::widgets::PageScroll,
     /// The account was last seen signed in without a subscription, so the
     /// next subscribed answer is a fresh purchase (see `follow_cloud_access`).
     cloud_seen_unsubscribed: bool,
@@ -3032,6 +3011,7 @@ impl Shell {
             cloud_page_sub: None,
             cloud_first_chat: None,
             usage_settings_compute: false,
+            usage_settings_scroll: settings::widgets::PageScroll::default(),
             cloud_seen_unsubscribed: false,
             devices_page: None,
             archived_page: None,
@@ -6026,6 +6006,9 @@ impl Shell {
             || matches!(route, Route::Usage) && !matches!(self.route, Route::Usage)
         {
             self.usage_pending = true;
+        }
+        if route == Route::Settings(SettingsSection::Usage) && self.route != route {
+            self.usage_settings_scroll.reset();
         }
         self.route = route;
         if !was_pull_requests && will_show_pull_requests {
@@ -13226,6 +13209,7 @@ impl Shell {
         let ui_settings = settings::current(cx);
         let new_thread_background_setting = ui_settings.new_thread_composer_background;
         let new_thread_background_effect = ui_settings.new_thread_background_effect;
+        let wallpaper_look = ui_settings.wallpaper_look;
         let new_thread_background_adjustment = new_thread_background_setting
             .as_ref()
             .map(|background| background.adjustment)
@@ -13236,10 +13220,12 @@ impl Shell {
         let artwork = new_thread_background_setting
             .as_ref()
             .and_then(|background| {
-                crate::new_thread_background_effects::prepare(
+                crate::new_thread_background_effects::prepare_look_with_contrast(
                     new_thread_background_effect,
                     theme,
                     std::path::Path::new(&background.path),
+                    wallpaper_look,
+                    background.adjustment.quarter_turns,
                     cx,
                 )
             });
@@ -13258,6 +13244,48 @@ impl Shell {
             self.reduced_motion,
             frame_time,
         );
+        let sample_artwork = |raster: &Option<
+            std::sync::Arc<crate::new_thread_background_effects::WallpaperRaster>,
+        >| {
+            raster.as_ref().map_or_else(Default::default, |raster| {
+                crate::new_thread_background_mask::animation_frame(
+                    &raster.image,
+                    !self.reduced_motion,
+                    frame_time,
+                )
+            })
+        };
+        let previous_frame = sample_artwork(&artwork_frame.previous);
+        let current_frame = sample_artwork(&artwork_frame.current);
+        // The heading uses the same prepared layers and animation frames as
+        // the painter, including the plain fallback and visible crossfade.
+        let hero_ink = artwork_frame
+            .backdrop_is_dark(
+                gpui::Bounds::new(
+                    gpui::point(px(self.sidebar_now()), px(0.0)),
+                    gpui::size(
+                        px((self.viewport_width - self.sidebar_now()).max(1.0)),
+                        px(new_thread_background_height(self.viewport_height)),
+                    ),
+                ),
+                self.composer.read(cx).surface_bounds().get(),
+                wallpaper_look,
+                theme.bg,
+                new_thread_background_opacity(theme.is_frost())
+                    * (1.0 - dock_frame.dissolve())
+                    * f32::from(wallpaper_look.opacity)
+                    / 100.0,
+                previous_frame,
+                current_frame,
+            )
+            .map(|dark| {
+                let ink = if dark {
+                    gpui::white()
+                } else {
+                    gpui::hsla(0.0, 0.0, 0.08, 1.0)
+                };
+                (ink, ink.opacity(0.72))
+            });
         if dock_frame.active {
             self.motion_active.set(true);
         }
@@ -13308,7 +13336,8 @@ impl Shell {
         let term_h = self.terminal_geometry.get().height;
         let new_thread_background_layer =
             (!cloud_starting && (!has_selection || dock_frame.active)).then(|| {
-                if artwork_frame.active {
+                if artwork_frame.active && wallpaper_look.opacity > 0 && dock_frame.dissolve() < 1.0
+                {
                     window.request_animation_frame();
                 }
                 let width = (self.viewport_width - self.sidebar_now()).max(0.0);
@@ -13319,22 +13348,26 @@ impl Shell {
                     .absolute()
                     .inset_0()
                     .child(new_thread_background(
-                        artwork_frame.previous,
+                        artwork_frame.previous.map(|raster| raster.image.clone()),
+                        previous_frame,
                         artwork_frame.previous_adjustment,
                         self.viewport_height,
                         width,
                         bounds.clone(),
                         dock_frame.dissolve(),
                         (1.0 - artwork_frame.mix) * opacity,
+                        wallpaper_look,
                     ))
                     .child(new_thread_background(
-                        artwork_frame.current,
+                        artwork_frame.current.map(|raster| raster.image.clone()),
+                        current_frame,
                         artwork_frame.current_adjustment,
                         self.viewport_height,
                         width,
                         bounds,
                         dock_frame.dissolve(),
                         artwork_frame.mix * opacity,
+                        wallpaper_look,
                     ))
                     // Without artwork, invaders march across a dim band
                     // under the titlebar; it leaves with the canvas on send.
@@ -13508,7 +13541,7 @@ impl Shell {
                         .relative()
                         .top(px(-1.))
                         .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(theme.text_strong)
+                        .text_color(hero_ink.map_or(theme.text_strong, |ink| ink.0))
                         .child(project.as_ref().map_or_else(
                             || "What should we build today?".to_owned(),
                             |name| format!("What should we build in {name}?"),
@@ -13520,10 +13553,12 @@ impl Shell {
                         div()
                             .id("landing-without-project")
                             .role(gpui::Role::Button)
+                            // Sit closer to the heading than the stack's gap.
+                            .mt(px(-4.))
                             .cursor_pointer()
                             .text_size(px(12.))
-                            .text_color(theme.text_muted)
-                            .hover(|d| d.text_color(theme.text))
+                            .text_color(hero_ink.map_or(theme.text_muted, |ink| ink.1))
+                            .hover(move |d| d.text_color(hero_ink.map_or(theme.text, |ink| ink.0)))
                             .child(tr(cx, msg::chat::start_without_project))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 let pickers = this.composer.read(cx).pickers().clone();
@@ -22226,13 +22261,13 @@ mod settings_modal_regressions {
             .collect();
         assert_eq!(
             headings,
-            ["Local agents", "Cloud computer", "Plan & usage", "App"]
+            ["App", "Plan & usage", "Local agents", "Cloud computer"]
         );
         let headings: Vec<_> = listed(CloudAccess::SignedIn)
             .into_iter()
             .filter_map(SettingsSection::heading)
             .collect();
-        assert_eq!(headings, ["Local agents", "Plan & usage", "App"]);
+        assert_eq!(headings, ["App", "Plan & usage", "Local agents"]);
     }
 
     #[test]

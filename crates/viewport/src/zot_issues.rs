@@ -1,6 +1,6 @@
 //! The same issue surface is embedded by the browser and native Zot inspectors.
 use crate::tooltip::TooltipExt as _;
-use crate::zapper_avatar::{person_avatar, unassigned_avatar, zapper_avatar};
+use crate::zapper_avatar::{ZapperFace, known_face, person_avatar, unassigned_avatar, zapper_face};
 use crate::{assets::icon, input::TextInput, palette::rgb};
 use gpui::{prelude::*, *};
 use std::collections::{HashMap, HashSet};
@@ -193,7 +193,7 @@ impl IssuePanel {
                 person_avatar(self.user_name.as_deref().unwrap_or("You"), size)
             }
             Some(ZotIssueOwner::Zapper | ZotIssueOwner::Thread { .. }) => {
-                zapper_avatar(&self.avatar(), size)
+                zapper_face(&self.avatar(), size)
             }
             None => unassigned_avatar(size),
         }
@@ -206,10 +206,8 @@ impl IssuePanel {
             None => "No owner".into(),
         }
     }
-    fn avatar(&self) -> ZotAvatar {
-        self.zot.config.avatar.clone().unwrap_or_else(|| {
-            zuse_protocol::presentation::zot_mascots::default_avatar(&self.zot.id)
-        })
+    fn avatar(&self) -> ZapperFace {
+        ZapperFace::of(&self.zot)
     }
     fn thread_title(&self, id: &str) -> String {
         self.thread_titles
@@ -716,7 +714,7 @@ impl IssuePanel {
             .border_1()
             .border_dashed()
             .border_color(rgb(0x2a2a2a))
-            .child(zapper_avatar(&self.avatar(), 36.).mb(px(6.)))
+            .child(zapper_face(&self.avatar(), 36.).mb(px(6.)))
             .child(
                 div()
                     .text_size(px(14.))
@@ -1758,7 +1756,7 @@ impl IssuePanel {
                     || self.zot.previous_coordinator_chats.contains(id)
                     || *id == self.zot.config.name =>
             {
-                Some(zapper_avatar(&self.avatar(), size))
+                Some(zapper_face(&self.avatar(), size))
             }
             Some(_) => None,
         }
@@ -2378,7 +2376,7 @@ pub fn sender_header_labeled(
     // The Zapper's own messages carry its face; relayed thread activity
     // keeps the terminal mark so the two never read as the same author.
     let lead = match sender.avatar.as_ref().filter(|_| !sender.activity) {
-        Some(avatar) => zapper_avatar(avatar, 14.).into_any_element(),
+        Some(avatar) => zapper_face(&known_face(&sender.zot_id, avatar), 14.).into_any_element(),
         None => icon("terminal").size(px(12.)).into_any_element(),
     };
     row()

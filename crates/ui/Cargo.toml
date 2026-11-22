@@ -53,6 +53,10 @@ name = "zapper-fixture"
 required-features = ["browser-fixture"]
 
 [[example]]
+name = "zapper-avatar-fixture"
+required-features = ["browser-fixture"]
+
+[[example]]
 name = "windows-render-fixture"
 required-features = ["windows-render-fixture"]
 

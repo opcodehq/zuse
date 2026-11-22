@@ -7,7 +7,14 @@ export type ZotConfig = { name: string, purpose: string, homeDeviceId: string, r
 /**
  * Saved pixel character; absent uses one derived from the Zot's id.
  */
-avatar?: ZotAvatar, };
+avatar?: ZotAvatar,
+/**
+ * The user's own picture, shown instead of the mascot: a small square
+ * PNG or JPEG as a `data:` URL (see [`AVATAR_IMAGE_MAX_LEN`]). It lives
+ * beside `avatar` so the mascot stays the fallback for clients, Slack
+ * personas and prompt envelopes that never carry image bytes.
+ */
+avatarImage?: string, };
 export type ZotStatus = "active" | "paused" | "stopped" | "archived";
 export type ZotWorker = { chatId: string, deviceId: string, spaceId: string, objective: string, followups: number,
 /**

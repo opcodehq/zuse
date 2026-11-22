@@ -165,6 +165,14 @@ impl UsageDashboard {
             .child(plot)
             .id("usage-chart")
             .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
+                if event.pressed_button.is_some() {
+                    let had_hover = this.hovered.take().is_some();
+                    let had_cursor = this.hover_cursor.take().is_some();
+                    if had_hover || had_cursor {
+                        cx.notify();
+                    }
+                    return;
+                }
                 let b = hover.get();
                 if !b.contains(&event.position) {
                     return;
@@ -346,7 +354,7 @@ impl UsageDashboard {
                 let cursor = self.hover_cursor.unwrap();
                 let plot_width = (f32::from(bounds.get().size.width) - 84.).max(1.);
                 let highest = values[index].iter().copied().fold(0., f64::max);
-                chart = chart.child(deferred(
+                chart = chart.child(
                     div()
                         .absolute()
                         .left(px(cursor.min(plot_width + 24.).max(48.) - tip_width / 2.))
@@ -354,7 +362,7 @@ impl UsageDashboard {
                             (10. + 224. * (1. - highest / max) as f32).max(54.) - tip_height * 1.15
                         ))
                         .child(tip),
-                ));
+                );
             }
         }
         chart.into_any_element()

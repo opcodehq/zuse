@@ -1236,6 +1236,13 @@ fn validate_config(config: &ZotConfig, device: &str) -> Result<()> {
             .is_none_or(|a| a.mascot.len() <= 32 && a.color.len() <= 32),
         "Zapper avatar is too large"
     );
+    ensure!(
+        config
+            .avatar_image
+            .as_deref()
+            .is_none_or(zuse_protocol::zots::avatar_image_ok),
+        "Zapper picture must be a PNG or JPEG under 96 KB"
+    );
     Ok(())
 }
 /// Why a thread is held from automatic follow-ups. Only a pause the user
@@ -2077,6 +2084,7 @@ mod tests {
             max_concurrent_workers: 4,
             max_followups: 3,
             avatar: None,
+            avatar_image: None,
         }
     }
     pub(super) fn command(zot: &str, id: &str, action: ZotAction) -> ZotCommand {
@@ -2338,6 +2346,50 @@ mod tests {
         let fresh = store.command(input).unwrap().unwrap();
         assert_eq!(fresh.workers.len(), 1);
         assert_eq!(fresh.previous_coordinator_chats.len(), 1);
+    }
+    #[test]
+    fn avatar_pictures_are_validated_stored_and_kept_out_of_envelopes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Zots::open(dir.path(), "local").unwrap();
+        create(&store, "release");
+        let configure = |id: &str, image: &str| {
+            store.command(command(
+                "release",
+                id,
+                ZotAction::Configure {
+                    config: ZotConfig {
+                        avatar: Some(ZotAvatar {
+                            mascot: "hex".into(),
+                            color: "teal".into(),
+                        }),
+                        avatar_image: Some(image.into()),
+                        ..config()
+                    },
+                },
+            ))
+        };
+        for bad in [
+            "https://example.com/me.png",
+            "data:image/svg+xml;base64,PHN2Zz4=",
+            &format!(
+                "data:image/png;base64,{}",
+                "A".repeat(zuse_protocol::zots::AVATAR_IMAGE_MAX_LEN)
+            ),
+        ] {
+            assert!(configure(&format!("bad-{}", bad.len()), bad).is_err());
+        }
+        let image = "data:image/png;base64,iVBORw0KGgo=";
+        configure("good", image).unwrap();
+        // Survives a restart, as every client reads it from here.
+        let zot = Zots::open(dir.path(), "local")
+            .unwrap()
+            .get("release")
+            .unwrap();
+        assert_eq!(zot.config.avatar_image.as_deref(), Some(image));
+        // Prompt envelopes carry the mascot only, never image bytes.
+        let envelope = zuse_protocol::presentation::zot_message::envelope(&zot, "hi");
+        assert!(envelope.contains(r#""avatar":{"mascot":"hex","color":"teal"}"#));
+        assert!(!envelope.contains("base64"));
     }
     #[test]
     fn storage_is_profile_scoped_and_paths_cannot_escape() {
