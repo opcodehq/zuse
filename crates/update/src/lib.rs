@@ -2605,6 +2605,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn download_reports_received_bytes_and_content_length() {
+        let tmp = tempfile::tempdir().unwrap();
+        let payload = b"download progress payload".to_vec();
+        let (base, server) = serve_forever(payload.clone()).await;
+        let manifest = Manifest {
+            version: "9.9.9".into(),
+            files: BTreeMap::new(),
+        };
+        let destination = tmp.path().join("artifact");
+        let (sender, receiver) = watch::channel(DownloadProgress::default());
+        DOWNLOAD_PROGRESS
+            .scope(sender, download_release_file(&base, &manifest, "artifact", &destination))
+            .await
+            .unwrap();
+        assert_eq!(
+            *receiver.borrow(),
+            DownloadProgress {
+                downloaded: payload.len() as u64,
+                total: Some(payload.len() as u64),
+            }
+        );
+        assert_eq!(std::fs::read(destination).unwrap(), payload);
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn download_refuses_an_artifact_missing_from_published_checksums() {
         let tmp = tempfile::tempdir().unwrap();
         let (base, server) = serve_forever(b"payload".to_vec()).await;
