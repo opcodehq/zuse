@@ -12,6 +12,7 @@ use crate::settings::keybindings::Command;
 use crate::tooltip::TooltipExt as _;
 use zuse_i18n::messages as msg;
 mod add_menu;
+mod background_tray;
 mod archive;
 pub(crate) mod file_preview;
 mod permission_inspector;
@@ -5923,6 +5924,12 @@ impl Render for ComposerInput {
 #[derive(Debug, Clone)]
 pub enum ComposerEvent {
     CloudLaunchChanged,
+    /// The Background work row asked to open a running subagent's transcript.
+    OpenSubagent {
+        chat_id: String,
+        doc_id: String,
+        title: String,
+    },
     /// Only a verified foreground Run receipt may reattach execution passively.
     CloudForegroundAdmitted,
     /// The conversation's computer needs attention and Retry was pressed.

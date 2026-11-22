@@ -529,6 +529,10 @@ pub(crate) struct TrayState {
     annotations: AnnotationPreview,
     login: Option<TrayLogin>,
     login_attempts: u64,
+    /// Chats whose Background work row is expanded.
+    pub(super) background_open: std::collections::HashSet<String>,
+    /// Background processes with a stop request on its way.
+    pub(super) background_stops: std::collections::HashSet<String>,
 }
 
 #[derive(Default)]
@@ -616,6 +620,7 @@ impl Composer {
         let (sign_in, error) = self.provider_rows(&theme, cx);
         rows.extend(sign_in.map(TrayRow::Pill));
         rows.extend(error.map(TrayRow::Pill));
+        rows.extend(self.background_work_pill(cx).map(TrayRow::Pill));
         rows.extend(self.todo_tray_pill(window, cx).map(TrayRow::Pill));
         rows.extend(
             self.render_queue_panel(show_queue_latest_shortcut, window, cx)
@@ -2114,6 +2119,8 @@ impl Composer {
                 self.tray.annotations.pinned = true;
             }
             "attachments" => self.fixture_attachments(cx),
+            "background" => self.fixture_background(false, cx),
+            "background-open" => self.fixture_background(true, cx),
             "todo" => self.fixture_todo(false, cx),
             "todo-open" => self.fixture_todo(true, cx),
             "queue" => self.fixture_queue(cx),
@@ -2185,6 +2192,51 @@ impl Composer {
             }],
             cx,
         );
+    }
+
+    /// Two running subagents and a background test run on the selected chat.
+    fn fixture_background(&mut self, expand: bool, cx: &mut Context<Self>) {
+        let now = chrono::Utc::now();
+        let Some(chat_id) = self.state.read(cx).selected_chat.clone() else {
+            return;
+        };
+        let spawn = |id: &str, name: &str| {
+            serde_json::json!({
+                "kind": "tool", "id": id, "resolved": false,
+                "call": {"kind": "unknown", "name": name},
+                "subagentRef": format!("{chat_id}--sub--{id}"), "subagentStatus": "running",
+            })
+        };
+        let entry = serde_json::from_value::<SessionMessageEntry>(serde_json::json!({
+            "id": "fixture-background", "role": "assistant", "deviceId": "local",
+            "createdAt": now.timestamp_millis() - 734_000, "status": "complete",
+            "parts": [
+                spawn("bg1", "Agent: One cloud choice in composer pickers"),
+                spawn("bg2", "Agent: Pin the first cloud message"),
+                {"kind": "text", "id": "bg-text", "text": "Two agents are on it; the UI tests run in the background."},
+            ],
+        }))
+        .expect("fixture entry");
+        let session = serde_json::from_value::<zuse_protocol::Session>(serde_json::json!({
+            "chatId": chat_id, "deviceId": "local", "status": "working",
+            "startedAt": now - chrono::TimeDelta::seconds(734), "updatedAt": now,
+            "runningSubagents": 2,
+            "backgroundTasks": [{
+                "id": "bg-tests", "kind": "shell", "description": "UI test suite",
+                "command": "cargo test -p zuse-ui --lib",
+                "startedAt": now - chrono::TimeDelta::seconds(192), "stoppable": true,
+            }],
+        }))
+        .expect("fixture session");
+        self.state.update(cx, |state, _| {
+            let mut entries = state.transcript.clone();
+            entries.push(entry);
+            state.apply_transcript(entries);
+            state.apply_sessions(vec![session]);
+        });
+        if expand {
+            self.tray.background_open.insert(chat_id);
+        }
     }
 
     fn fixture_todo(&mut self, expand: bool, cx: &mut Context<Self>) {

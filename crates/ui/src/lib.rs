@@ -92,6 +92,7 @@ pub mod terminal;
 pub mod theme;
 pub mod theme_library;
 pub mod toast;
+mod background_work;
 mod todo_panel;
 pub(crate) mod tool_images;
 pub mod tooltip;

@@ -4245,7 +4245,7 @@ impl Shell {
             icons::CALENDAR,
             icons::GIT_BRANCH,
             icons::PULL_REQUEST,
-            icons::BOT,
+            icons::AGENT,
             icons::PROJECT_DEFAULT,
             // Location names the host: the remote glyph sidebar rows wear.
             icons::REMOTE_SERVER,

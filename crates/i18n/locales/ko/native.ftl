@@ -1272,3 +1272,26 @@ native-whats_new_menu = 새로운 기능
 
 
 
+
+# Context: composer tray, Background work row: running subagents. $count (number).
+native-background_work_agents_plural =
+    { $count ->
+        [one] 에이전트 1개
+       *[other] 에이전트 { $count }개
+    }
+
+# Context: composer tray, Background work row: running background processes. $count (number).
+native-background_work_tasks_plural =
+    { $count ->
+        [one] 작업 1개
+       *[other] 작업 { $count }개
+    }
+
+# Context: composer tray, accessible label of the Background work row while collapsed.
+native-background_work_expand = 백그라운드 작업 보기
+
+# Context: composer tray, accessible label of the Background work row while expanded.
+native-background_work_collapse = 백그라운드 작업 숨기기
+
+# Context: composer tray, accessible label of a running subagent row; opens its transcript.
+native-background_work_open_agent = 에이전트 열기

@@ -106,6 +106,9 @@ fn main() -> anyhow::Result<()> {
                 Some(Err(_)) => shell.show_whats_new(cx),
                 None => {}
             }
+            // ZUSE_SIDEBAR_ROUTE runs a review route, e.g. `main:tray-background-open`.
+            #[cfg(feature = "browser-fixture")]
+            if let Ok(route) = std::env::var("ZUSE_SIDEBAR_ROUTE") { shell.fixture_review_route(&route, cx); }
             shell
         })).unwrap();
         appearance::reapply_window_background(cx);

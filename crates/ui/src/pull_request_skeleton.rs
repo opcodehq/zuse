@@ -227,7 +227,7 @@ pub(crate) fn summary(view: EntityId, theme: &Theme, cx: &mut App) -> AnyElement
         (crate::icons::CHECKLIST, "Checks", 120.0),
         (crate::icons::INFO_CIRCLE, "Status", 140.0),
         (crate::icons::GIT_BRANCH, "Commit", 56.0),
-        (crate::icons::BOT, "Hand off", 180.0),
+        (crate::icons::AGENT, "Hand off", 180.0),
         (crate::icons::CHECKLIST, "Verify on", 220.0),
     ]
     .into_iter()

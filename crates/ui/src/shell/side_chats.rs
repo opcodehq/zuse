@@ -401,6 +401,17 @@ impl Shell {
                         | ComposerEvent::NewThreadTransitionStarted
                         | ComposerEvent::WorktreeSetup { .. }
                         | ComposerEvent::OpenFile(_) => {}
+                        ComposerEvent::OpenSubagent {
+                            chat_id,
+                            doc_id,
+                            title,
+                        } => this.add_subagent_surface(
+                            chat_id.clone(),
+                            doc_id.clone(),
+                            title.clone(),
+                            false,
+                            cx,
+                        ),
                         ComposerEvent::Sent {
                             chat_id,
                             message_id,

@@ -87,7 +87,7 @@ pub(super) fn named_icon(name: &str) -> Option<&'static str> {
         "pull-request" => icons::PULL_REQUEST,
         "settings" => icons::SETTINGS_MINIMALISTIC,
         "chat" => icons::CHAT_ROUND_LINE,
-        "bot" => icons::BOT,
+        "agent" | "bot" => icons::AGENT,
         "monitor" => icons::MONITOR,
         "keyboard" => icons::KEYBOARD,
         "branch" => icons::GIT_BRANCH,

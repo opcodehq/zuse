@@ -2791,6 +2791,17 @@ impl Shell {
                     // Route observation drives the dock once selection commits.
                     cx.notify();
                 }
+                ComposerEvent::OpenSubagent {
+                    chat_id,
+                    doc_id,
+                    title,
+                } => this.add_subagent_surface(
+                    chat_id.clone(),
+                    doc_id.clone(),
+                    title.clone(),
+                    false,
+                    cx,
+                ),
                 ComposerEvent::Sent {
                     chat_id,
                     message_id,
@@ -14432,7 +14443,7 @@ impl Shell {
                     })
                     .unwrap_or(icons::LIST),
                 RightSurface::SideChat(_) => icons::CHAT_ROUND_LINE,
-                RightSurface::Subagent(_) => icons::BOT,
+                RightSurface::Subagent(_) => icons::AGENT,
                 RightSurface::Terminal(_) => icons::TERMINAL,
                 RightSurface::Simulator(_) => icons::SMARTPHONE,
                 RightSurface::Browser(_) => icons::GLOBE,
