@@ -76,10 +76,10 @@ impl Client {
 }
 
 macro_rules! catalog {
-    ($name:ident { $($variant:ident),* $(,)? }) => {
+    ($name:ident { $($(#[$meta:meta])* $variant:ident),* $(,)? }) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
         #[serde(rename_all = "snake_case")]
-        pub enum $name { $($variant),* }
+        pub enum $name { $($(#[$meta])* $variant),* }
     };
 }
 catalog!(Screen {
@@ -88,7 +88,10 @@ catalog!(Screen {
     Plugins,
     Archives,
     Usage,
-    Zot,
+    // Recorded as `zot`, its name before the rename, so the route's history
+    // stays one series in analytics. Legacy value; "zapper" is accepted too.
+    #[serde(rename = "zot", alias = "zapper")]
+    Zapper,
     Settings
 });
 catalog!(SettingsPage {

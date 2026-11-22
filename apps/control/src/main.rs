@@ -51,10 +51,18 @@ fn discovery_path(explicit: Option<PathBuf>) -> Result<PathBuf> {
         return Ok(path);
     }
     let home = PathBuf::from(std::env::var_os("HOME").context("HOME or --discovery is required")?);
+    // `zots` is the folder engines from before the rename write (legacy,
+    // remove after one release).
     for root in [".zuse", ".zuse-native"] {
-        let path = home.join(root).join("profiles/local/zots/control.json");
-        if path.is_file() {
-            return Ok(path);
+        for folder in ["zappers", "zots"] {
+            let path = home
+                .join(root)
+                .join("profiles/local")
+                .join(folder)
+                .join("control.json");
+            if path.is_file() {
+                return Ok(path);
+            }
         }
     }
     anyhow::bail!(
@@ -231,7 +239,7 @@ async fn serve_mcp(client: zuse_rpc::RpcClient, token: String) -> Result<()> {
             let response = match method.as_str() {
                 "initialize" => json!({"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"zuse-control","version":env!("CARGO_PKG_VERSION")}}}),
                 "ping" => json!({"result":{}}),
-                "tools/list" => json!({"result":{"tools":METHODS.iter().filter(|m| !is_stream(m)).map(|method| json!({"name":method,"description":format!("Zuse application operation {method}"),"inputSchema":if *method=="ZotCommand" {zuse_protocol::zots::command_schema()} else {json!({"type":"object","additionalProperties":true})}})).collect::<Vec<_>>()}}),
+                "tools/list" => json!({"result":{"tools":METHODS.iter().filter(|m| !is_stream(m)).map(|method| json!({"name":method,"description":format!("Zuse application operation {method}"),"inputSchema":if *method=="ZapperCommand" {zuse_protocol::zappers::command_schema()} else {json!({"type":"object","additionalProperties":true})}})).collect::<Vec<_>>()}}),
                 "tools/call" => {
                     let method = params.get("name").and_then(Value::as_str).unwrap_or_default();
                     let result = client.call_scoped(CALL, envelope(&token, method, params.get("arguments").cloned().unwrap_or(json!({})))).await;
@@ -284,10 +292,10 @@ mod tests {
 
     #[test]
     fn subscription_catalog_includes_update_status() {
-        assert!(is_stream("WatchZots"));
+        assert!(is_stream("WatchZappers"));
         assert!(is_stream("SubscribeTerminal"));
         assert!(is_stream("UpdateStatus"));
         assert!(!is_stream("ControlUpdateStatus"));
-        assert!(!is_stream("ZotCommand"));
+        assert!(!is_stream("ZapperCommand"));
     }
 }

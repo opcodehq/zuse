@@ -45,22 +45,16 @@ pub struct Tools {
     pending_turns: tokio::sync::Mutex<HashMap<String, Arc<PendingTurn>>>,
 }
 
-/// Zapper tools are named `zapper_*`; the older `zot_*` names still route to
-/// the same operations for sessions that listed tools before the rename.
+/// Zapper tools are named `zapper_*`; the pre-rename names in
+/// `zappers::legacy::TOOLS` still route to the same operations for sessions
+/// that listed tools before the rename (legacy, remove after one release).
 fn zapper_tool(name: &str) -> bool {
-    name.starts_with("zapper_") || name.starts_with("zot_")
+    name.starts_with("zapper_") || zuse_protocol::zappers::legacy::current_tool(name).is_some()
 }
 
-/// The current name of a tool listed under its pre-rename `zot_*` name.
+/// The current name of a tool listed under its pre-rename name.
 fn renamed(name: &str) -> &str {
-    match name {
-        "zot_command" => "zapper_command",
-        "zot_files" => "zapper_files",
-        "zot_events" => "zapper_events",
-        "zot_issue" => "zapper_issue",
-        "zot_acknowledge" => "zapper_acknowledge",
-        other => other,
-    }
+    zuse_protocol::zappers::legacy::current_tool(name).unwrap_or(name)
 }
 
 /// The zapper_command description. Its action list is generated from the
@@ -70,18 +64,18 @@ fn zapper_command_description() -> &'static str {
     static DESCRIPTION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     DESCRIPTION.get_or_init(|| {
         format!(
-            "Apply one Zapper command: commandId (new and unique; reuse only to retry a lost result), zotId, expectedRevision (optional: the revision you read; it only conflicts when what the action depends on changed since, such as the issue you edit) and action {{type, ...fields}} (an object, or the same object as a JSON string). \
+            "Apply one Zapper command: commandId (new and unique; reuse only to retry a lost result), zapperId, expectedRevision (optional: the revision you read; it only conflicts when what the action depends on changed since, such as the issue you edit) and action {{type, ...fields}} (an object, or the same object as a JSON string). \
 Actions (? = optional): {}. \
-Shapes: details = {{title, description, doneCriteria, outOfScope, status, priority, owner {{type: zapper | thread (chatId)}}, assigned, parent, dueDate, labels, relations}}; editIssue replaces every field. askUser hands the issue to the user. closeIssue outcome is merged | dropped. delegate worker = {{chatId: zot-worker-<commandId>, deviceId, spaceId, objective, followups: 0}}, model = {{harness, model}}, base = a ref such as origin/main. The optional worker.queuePosition is computed by the engine (1 = next); omit it from commands. decide decision = {{id, workerChatId, question, answer: null}}. writeFile expectedVersion is the file's current version; INSTRUCTIONS.md is the Zapper's purpose and working rules, and writing it also sets the purpose the app shows, from its first paragraph. \
+Shapes: details = {{title, description, doneCriteria, outOfScope, status, priority, owner {{type: zapper | thread (chatId)}}, assigned, parent, dueDate, labels, relations}}; editIssue replaces every field. askUser hands the issue to the user. closeIssue outcome is merged | dropped. delegate worker = {{chatId: zapper-worker-<commandId>, deviceId, spaceId, objective, followups: 0}}, model = {{harness, model}}, base = a ref such as origin/main. The optional worker.queuePosition is computed by the engine (1 = next); omit it from commands. decide decision = {{id, workerChatId, question, answer: null}}. writeFile expectedVersion is the file's current version; INSTRUCTIONS.md is the Zapper's purpose and working rules, and writing it also sets the purpose the app shows, from its first paragraph. \
 Returns a compact result: the new revision, the changed issue, worker, decision or file, and a one-line summary. Pass fullState: true to get the whole Zapper state instead.",
-            zuse_protocol::zots::action_catalog()
+            zuse_protocol::zappers::action_catalog()
         )
     })
 }
 
 /// The command schema plus the tool-only `fullState` flag.
 fn zapper_command_schema() -> Value {
-    let mut schema = zuse_protocol::zots::command_schema();
+    let mut schema = zuse_protocol::zappers::command_schema();
     if let Some(properties) = schema["properties"].as_object_mut() {
         properties.insert(
             "fullState".into(),
@@ -93,11 +87,11 @@ fn zapper_command_schema() -> Value {
 
 /// Compact a command's full-state reply. Anything unexpected passes through.
 fn compact_command_result(args: &Value, result: Value) -> Value {
-    let Ok(command) = zuse_protocol::zots::parse_command(args.clone()) else {
+    let Ok(command) = zuse_protocol::zappers::parse_command(args.clone()) else {
         return result;
     };
-    match serde_json::from_value::<Option<zuse_protocol::zots::Zot>>(result.clone()) {
-        Ok(zot) => zuse_protocol::zots::command_summary(&command, zot.as_ref()),
+    match serde_json::from_value::<Option<zuse_protocol::zappers::Zapper>>(result.clone()) {
+        Ok(zapper) => zuse_protocol::zappers::command_summary(&command, zapper.as_ref()),
         Err(_) => result,
     }
 }
@@ -871,25 +865,25 @@ impl Tools {
             ("zapper_command", zapper_command_description()),
             (
                 "zapper_files",
-                "Read this Zapper's versioned files (rules, notes, digest, reports) with their current versions. Supply zotId and optional history, or zotId and path to read one file, including the read-only guides under guide/.",
+                "Read this Zapper's versioned files (rules, notes, digest, reports) with their current versions. Supply zapperId and optional history, or zapperId and path to read one file, including the read-only guides under guide/.",
             ),
             (
                 "zapper_events",
-                "Read durable thread reports and blockers for this Zapper. Supply zotId.",
+                "Read durable thread reports and blockers for this Zapper. Supply zapperId.",
             ),
             (
                 "zapper_issue",
-                "Read one issue in full, including its whole description and older activity: supply zotId and issueId (or its code, such as ZAP-3). Supply only zotId to read the whole board: every issue, thread and decision.",
+                "Read one issue in full, including its whole description and older activity: supply zapperId and issueId (or its code, such as ZAP-3). Supply only zapperId to read the whole board: every issue, thread and decision.",
             ),
             (
                 "zapper_acknowledge",
-                "Acknowledge handled thread reports. Supply zotId and eventIds; unresolved human decisions remain separate.",
+                "Acknowledge handled thread reports. Supply zapperId and eventIds; unresolved human decisions remain separate.",
             ),
         ] {
             all.push(ToolDef {
                 name,
                 description,
-                input_schema: if name=="zapper_command" {zapper_command_schema()}else if name=="zapper_issue" {json!({"type":"object","properties":{"zotId":{"type":"string"},"issueId":{"type":"string"}},"required":["zotId"]})}else{json!({"type":"object","properties":{"zotId":{"type":"string"},"history":{"type":"boolean"},"path":{"type":"string"},"eventIds":{"type":"array","items":{"type":"string"}}},"required":["zotId"]})},
+                input_schema: if name=="zapper_command" {zapper_command_schema()}else if name=="zapper_issue" {json!({"type":"object","properties":{"zapperId":{"type":"string"},"issueId":{"type":"string"}},"required":["zapperId"]})}else{json!({"type":"object","properties":{"zapperId":{"type":"string"},"history":{"type":"boolean"},"path":{"type":"string"},"eventIds":{"type":"array","items":{"type":"string"}}},"required":["zapperId"]})},
             });
         }
         all.into_iter()
@@ -903,7 +897,7 @@ impl Tools {
                     && (!self.zuse.is_coordinator() || coordinator_tool(tool.name))
                     && (!zapper_tool(tool.name)
                         || self.zuse.is_coordinator()
-                        || (self.zuse.is_zot_worker() && tool.name == "zapper_command"))
+                        || (self.zuse.is_zapper_worker() && tool.name == "zapper_command"))
             })
             .collect()
     }
@@ -929,25 +923,25 @@ impl Tools {
                     .ok_or("Private secrets require an originating chat")?;
                 self.zuse.call_once(zuse_rpc::methods::REQUEST_PRIVATE_OPERATION, json!({"chatId":chat,"targetDeviceId":self.zuse.origin().device_id,"operation":args})).await
             }
-            "zapper_command" | "zot_command" => self.zapper_command(args).await,
-            "zapper_files" | "zot_files" => {
+            "zapper_command" => self.zapper_command(args).await,
+            "zapper_files" => {
                 self.zuse
-                    .control(zuse_protocol::control::ZOT_FILES, args)
+                    .control(zuse_protocol::control::ZAPPER_FILES, args)
                     .await
             }
-            "zapper_events" | "zot_events" => {
+            "zapper_events" => {
                 self.zuse
-                    .control(zuse_protocol::control::ZOT_EVENTS, args)
+                    .control(zuse_protocol::control::ZAPPER_EVENTS, args)
                     .await
             }
-            "zapper_issue" | "zot_issue" => {
+            "zapper_issue" => {
                 self.zuse
-                    .control(zuse_protocol::control::ZOT_ISSUE, args)
+                    .control(zuse_protocol::control::ZAPPER_ISSUE, args)
                     .await
             }
-            "zapper_acknowledge" | "zot_acknowledge" => {
+            "zapper_acknowledge" => {
                 self.zuse
-                    .control(zuse_protocol::control::ACK_ZOT_EVENTS, args)
+                    .control(zuse_protocol::control::ACK_ZAPPER_EVENTS, args)
                     .await
             }
             PLUGINS_CONNECT => self.plugins_connect(parse(args)?).await,
@@ -980,7 +974,7 @@ impl Tools {
     }
 
     /// Agents get a compact result (new revision, the changed entity and a
-    /// one-line summary); `fullState: true` returns the whole Zot as before.
+    /// one-line summary); `fullState: true` returns the whole Zapper as before.
     async fn zapper_command(&self, mut args: Value) -> anyhow::Result<Value> {
         let full_state = args
             .as_object_mut()
@@ -989,7 +983,7 @@ impl Tools {
             .unwrap_or(false);
         let result = self
             .zuse
-            .control(zuse_protocol::control::ZOT_COMMAND, args.clone())
+            .control(zuse_protocol::control::ZAPPER_COMMAND, args.clone())
             .await?;
         Ok(if full_state {
             result
@@ -1923,7 +1917,8 @@ mod tests {
             "zapper_events" | "zapper_files" | "zapper_acknowledge"
         )));
         assert!(tools.iter().any(|t| t.name == "list_projects"));
-        assert_eq!(super::renamed("zot_command"), "zapper_command");
+        assert_eq!(super::renamed("zot_command"), "zapper_command"); // legacy name, remove after one release
+        assert_eq!(super::renamed("zapper_command"), "zapper_command");
         assert_eq!(super::renamed("list_projects"), "list_projects");
     }
 
@@ -1931,12 +1926,12 @@ mod tests {
     fn zapper_command_tool_cannot_drift_from_the_command_schema() {
         let description = super::zapper_command_description();
         let schema = super::zapper_command_schema();
-        let defs = zuse_protocol::zots::command_schema()["$defs"].clone();
-        let action = &defs["ZotAction"];
+        let defs = zuse_protocol::zappers::command_schema()["$defs"].clone();
+        let action = &defs["ZapperAction"];
         // Every variant the engine accepts, with each required field.
         for variant in action["oneOf"].as_array().unwrap() {
             let kind = variant["properties"]["type"]["const"].as_str().unwrap();
-            let shape = zuse_protocol::zots::action_shapes()
+            let shape = zuse_protocol::zappers::action_shapes()
                 .into_iter()
                 .find(|s| s.kind == kind)
                 .unwrap();
@@ -1948,9 +1943,9 @@ mod tests {
         }
         // The nested shapes the prose spells out name every field.
         for (name, value) in [
-            ("details", &defs["ZotIssueDetails"]),
-            ("worker", &defs["ZotWorker"]),
-            ("decision", &defs["ZotDecision"]),
+            ("details", &defs["ZapperIssueDetails"]),
+            ("worker", &defs["ZapperWorker"]),
+            ("decision", &defs["ZapperDecision"]),
         ] {
             for field in value["properties"].as_object().unwrap().keys() {
                 assert!(
@@ -1968,17 +1963,17 @@ mod tests {
 
     #[test]
     fn zapper_command_results_are_compact_unless_full_state_is_asked() {
-        use zuse_protocol::zots::*;
-        let zot = Zot {
+        use zuse_protocol::zappers::*;
+        let zapper = Zapper {
             id: "z".into(),
             revision: 12,
             activity_revision: 0,
-            config: ZotConfig {
+            config: ZapperConfig {
                 name: "n".into(),
                 purpose: "p".repeat(20_000),
                 home_device_id: "d".into(),
                 repositories: vec![],
-                coordinator_model: ZotModel {
+                coordinator_model: ZapperModel {
                     harness: "mock".into(),
                     model: None,
                 },
@@ -1988,15 +1983,15 @@ mod tests {
                 avatar: None,
                 avatar_image: None,
             },
-            status: ZotStatus::Active,
-            coordinator_chat_id: "zot-z-0".into(),
+            status: ZapperStatus::Active,
+            coordinator_chat_id: "zapper-z-0".into(),
             previous_coordinator_chats: vec![],
             workers: vec![],
             decisions: vec![],
-            issues: vec![ZotIssue {
+            issues: vec![ZapperIssue {
                 id: "fix".into(),
                 number: 4,
-                details: ZotIssueDetails {
+                details: ZapperIssueDetails {
                     title: "Fix".into(),
                     description: "d".repeat(20_000),
                     ..Default::default()
@@ -2008,9 +2003,9 @@ mod tests {
                 activity: vec![],
             }],
         };
-        let full = serde_json::to_value(Some(&zot)).unwrap();
+        let full = serde_json::to_value(Some(&zapper)).unwrap();
         let args = json!({
-            "commandId": "c", "zotId": "z", "expectedRevision": 11,
+            "commandId": "c", "zapperId": "z", "expectedRevision": 11,
             "action": {"type": "commentIssue", "issueId": "fix", "text": "hi"}
         });
         let compact = super::compact_command_result(&args, full.clone());

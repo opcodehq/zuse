@@ -113,14 +113,24 @@ pub struct Zuse {
     rpc: Mutex<Option<Arc<RpcClient>>>,
 }
 
+/// Whether any of `names` is set and non-empty. The legacy names are what
+/// engines from before the rename set (legacy, remove after one release).
+fn env_set(names: &[&str]) -> bool {
+    names
+        .iter()
+        .any(|name| std::env::var(name).is_ok_and(|v| !v.is_empty()))
+}
+
+use zuse_protocol::zappers::legacy;
+
 impl Zuse {
     /// Lazy dialer: nothing connects until the first tool call, so `zuse
     /// mcp` starts (and answers `initialize`) even before the engine is up.
     pub fn new(url: String, origin: Origin) -> Self {
         Self {
             control_token: std::env::var("ZUSE_CONTROL_TOKEN").ok(),
-            coordinator: std::env::var("ZUSE_ZOT_ID").is_ok_and(|id| !id.is_empty()),
-            worker: std::env::var("ZUSE_ZOT_WORKER_ID").is_ok_and(|id| !id.is_empty()),
+            coordinator: env_set(&["ZUSE_ZAPPER_ID", legacy::COORDINATOR_ENV]),
+            worker: env_set(&["ZUSE_ZAPPER_WORKER_ID", legacy::WORKER_ENV]),
             url,
             origin,
             rpc: Mutex::new(None),
@@ -152,7 +162,7 @@ impl Zuse {
         self.worker = worker;
         self
     }
-    pub fn is_zot_worker(&self) -> bool {
+    pub fn is_zapper_worker(&self) -> bool {
         self.worker
     }
     pub fn is_coordinator(&self) -> bool {
