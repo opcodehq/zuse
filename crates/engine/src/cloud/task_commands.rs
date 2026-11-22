@@ -504,6 +504,9 @@ async fn queue(
     scoped(auth, account, organization)?;
     let token = auth.access_token().await?;
     scoped(auth, account, organization)?;
+    // When this read was sent: the app drops a message it saw saved only
+    // when a read sent after the save no longer lists it.
+    let sent_at = chrono::Utc::now().timestamp_millis();
     let result = api
         .request_scoped(
             &token,
@@ -521,7 +524,23 @@ async fn queue(
         )
         .await?;
     scoped(auth, account, organization)?;
-    queue_shape(result)
+    let mut page = queue_shape(result)?;
+    page["readAt"] = json!(sent_at);
+    Ok(page)
+}
+/// Whether a queue read reaches the app. A read prompted by an event is sent
+/// only when the queue changed; an interval read is always sent, with its
+/// read time, so a message saved and claimed between two reads (which leaves
+/// the rows unchanged) still leaves the app's queue.
+fn deliver_queue_page(page: &Value, previous: &Value, periodic: bool) -> bool {
+    let rows = |page: &Value| {
+        let mut page = page.clone();
+        if let Some(page) = page.as_object_mut() {
+            page.remove("readAt");
+        }
+        page
+    };
+    periodic || rows(page) != rows(previous)
 }
 /// How often an open queue is read again without an account event.
 const QUEUE_REVALIDATE: std::time::Duration = std::time::Duration::from_secs(15);
@@ -611,32 +630,42 @@ pub(super) async fn maybe_forward(
             // Subscribe first; invalidations committed during the initial read remain queued.
             let (feed,receiver)=api.account_events.subscribe(api.clone(),auth.clone())?;
             let first=queue(&api,&auth,&account,organization.as_deref(),&workspace,&session).await?;
-            let stream=futures::stream::unfold((api,auth,account,organization,workspace,session,feed,receiver,Some(first.clone()),first),move|(api,auth,account,organization,workspace,session,feed,mut receiver,initial,mut previous)|async move{
-                if let Some(page)=initial{return Some((json!({"id":id,"item":page}),(api,auth,account,organization,workspace,session,feed,receiver,None,previous)));}
+            // The interval read's deadline lives outside the event loop, so
+            // events for other computers never postpone it; any read resets it.
+            let next_read=tokio::time::Instant::now()+QUEUE_REVALIDATE;
+            let stream=futures::stream::unfold((api,auth,account,organization,workspace,session,feed,receiver,Some(first.clone()),first,next_read),move|(api,auth,account,organization,workspace,session,feed,mut receiver,initial,mut previous,mut next_read)|async move{
+                if let Some(page)=initial{return Some((json!({"id":id,"item":page}),(api,auth,account,organization,workspace,session,feed,receiver,None,previous,next_read)));}
                 loop{
                     // A missed or late account event must not leave the panel
                     // showing a stale queue: read it again at an interval too.
-                    let Ok(next)=tokio::time::timeout(QUEUE_REVALIDATE,receiver.recv()).await else{
-                        match queue(&api,&auth,&account,organization.as_deref(),&workspace,&session).await{
-                            Ok(page)=>{if page==previous{continue;}previous=page.clone();return Some((json!({"id":id,"item":page}),(api,auth,account,organization,workspace,session,feed,receiver,None,previous)));}
-                            Err(_)=>continue,
-                        }
+                    let next=match tokio::time::timeout_at(next_read,receiver.recv()).await{
+                        Ok(next)=>Some(next),
+                        Err(_)=>None,
                     };
-                    let dirty=match next{
-                        Ok(frame)=>{
-                            if frame["accountId"]!=account||frame["organizationId"].as_str()!=organization.as_deref(){continue;}
-                            if frame["data"]["cacheRevoked"]==true||frame["data"]["revokedWorkspaceIds"].as_array().is_some_and(|ids|ids.iter().any(|v|v==&workspace)){
-                                return Some((json!({"id":id,"err":"Cloud access changed. Reopen this computer."}),(api,auth,account,organization,workspace,session,feed,receiver,None,previous)));
-                            }
-                            queue_hint(&frame,&workspace)
-                        },
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_))=>true,
-                        Err(_)=>return None,
-                    };
-                    if !dirty{continue;}
+                    let periodic=next.is_none();
+                    if let Some(next)=next{
+                        let dirty=match next{
+                            Ok(frame)=>{
+                                if frame["accountId"]!=account||frame["organizationId"].as_str()!=organization.as_deref(){continue;}
+                                if frame["data"]["cacheRevoked"]==true||frame["data"]["revokedWorkspaceIds"].as_array().is_some_and(|ids|ids.iter().any(|v|v==&workspace)){
+                                    return Some((json!({"id":id,"err":"Cloud access changed. Reopen this computer."}),(api,auth,account,organization,workspace,session,feed,receiver,None,previous,next_read)));
+                                }
+                                queue_hint(&frame,&workspace)
+                            },
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_))=>true,
+                            Err(_)=>return None,
+                        };
+                        if !dirty{continue;}
+                    }
+                    next_read=tokio::time::Instant::now()+QUEUE_REVALIDATE;
                     match queue(&api,&auth,&account,organization.as_deref(),&workspace,&session).await{
-                        Ok(page)=>{if page==previous{continue;}previous=page.clone();return Some((json!({"id":id,"item":page}),(api,auth,account,organization,workspace,session,feed,receiver,None,previous)));}
-                        Err(_)=>return Some((json!({"id":id,"err":"Cloud queue could not be revalidated. Reopen this computer."}),(api,auth,account,organization,workspace,session,feed,receiver,None,previous))),
+                        Ok(page)=>{
+                            if !deliver_queue_page(&page,&previous,periodic){continue;}
+                            previous=page.clone();
+                            return Some((json!({"id":id,"item":page}),(api,auth,account,organization,workspace,session,feed,receiver,None,previous,next_read)));
+                        }
+                        Err(_) if periodic=>continue,
+                        Err(_)=>return Some((json!({"id":id,"err":"Cloud queue could not be revalidated. Reopen this computer."}),(api,auth,account,organization,workspace,session,feed,receiver,None,previous,next_read))),
                     }
                 }
             }).boxed();
@@ -828,5 +857,45 @@ mod queue_hint_tests {
         }
         assert!(!queue_hint(&frame("billing", "w"), "w"));
         assert!(queue_hint(&json!({"data":{"type":"revalidate"}}), "w"));
+    }
+    #[test]
+    fn unchanged_reads_reach_the_app_only_on_the_interval() {
+        let page = |read: i64, ids: &[&str]| json!({"items":ids.iter().map(|id|json!({"id":id})).collect::<Vec<_>>(),"paused":false,"readAt":read});
+        // A newer read time alone is not a change for an event-driven read.
+        assert!(!deliver_queue_page(
+            &page(2, &["a"]),
+            &page(1, &["a"]),
+            false
+        ));
+        assert!(deliver_queue_page(
+            &page(2, &["b"]),
+            &page(1, &["a"]),
+            false
+        ));
+        // The interval read always goes out, so a stale saved row can leave.
+        assert!(deliver_queue_page(&page(2, &["a"]), &page(1, &["a"]), true));
+    }
+    /// Events for other computers never postpone the interval read.
+    #[tokio::test(start_paused = true)]
+    async fn unrelated_events_do_not_postpone_the_interval_read() {
+        let (send, mut receiver) = tokio::sync::broadcast::channel::<u32>(8);
+        let next_read = tokio::time::Instant::now() + QUEUE_REVALIDATE;
+        let start = tokio::time::Instant::now();
+        let feeder = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                if send.send(1).is_err() {
+                    return;
+                }
+            }
+        });
+        loop {
+            match tokio::time::timeout_at(next_read, receiver.recv()).await {
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
+        assert_eq!(start.elapsed(), QUEUE_REVALIDATE);
+        feeder.abort();
     }
 }

@@ -4987,6 +4987,11 @@ impl Transcript {
     ) {
         self.on_own_send(chat_id, message_id, cx);
         self.own_turn_follows_first = true;
+        // The launch view already showed the message at the top: hold it
+        // there from the first frame instead of gliding up from below.
+        if let Some(anchor) = self.own_turn.as_mut() {
+            anchor.positioned = true;
+        }
     }
 
     #[cfg(test)]
@@ -5219,7 +5224,12 @@ impl Transcript {
             return;
         }
         let inset = Self::own_send_inset(anchor_ix);
-        if self.is_glued() && self.own_turn.as_ref().is_some_and(|anchor| anchor.held) {
+        // A new chat's first message is held at the top from its first frame
+        // (it never glides), so it needs no glide runway.
+        if !self.own_turn_follows_first
+            && self.is_glued()
+            && self.own_turn.as_ref().is_some_and(|anchor| anchor.held)
+        {
             self.list.scroll_by(px(-viewport_height));
         }
         let anchor_bounds = self.list.bounds_for_item(anchor_ix);
@@ -5285,6 +5295,15 @@ impl Transcript {
                 // (user report). Bounds-less flicker still snaps — there is
                 // nothing to ease against.
                 match anchor_bounds {
+                    // A new chat's first message stays exactly where the
+                    // launch view showed it: snap, never ease into place.
+                    _ if self.own_turn_follows_first => {
+                        self.list.scroll_to(ListOffset {
+                            item_ix: anchor_ix,
+                            offset_in_item: px(-inset),
+                        });
+                        self.own_turn_last_tick = None;
+                    }
                     Some(b) => {
                         let err = f32::from(b.top()) - (f32::from(viewport.top()) + inset);
                         let now = Instant::now();
@@ -16843,6 +16862,36 @@ mod tests {
                     previous = top;
                 }
                 assert!(previous.abs() < px(1.0));
+            });
+        }
+
+        /// A new chat's first message is already at the top in the launch
+        /// view: the conversation holds it there from its first step instead
+        /// of gliding up from the bottom-aligned position.
+        #[test]
+        fn first_send_holds_the_prompt_at_the_top_without_a_glide() {
+            with_window(|transcript, window, cx| {
+                transcript.update(cx, |this, cx| {
+                    this.rows = vec![viewport_row("prompt", "prompt")];
+                    this.list.reset(1);
+                    this.rail_enabled = false;
+                    cx.notify();
+                });
+                draw(window, cx);
+                transcript.update(cx, |this, cx| {
+                    this.on_own_first_send("chat".into(), "prompt".into(), cx)
+                });
+                draw(window, cx);
+                transcript.update(cx, |this, cx| this.step_own_turn(cx));
+                draw(window, cx);
+                let top = transcript.read(cx).list.bounds_for_item(0).unwrap().top();
+                assert!(top.abs() < px(1.0), "held at the top at once, got {top:?}");
+                for _ in 0..5 {
+                    transcript.update(cx, |this, cx| this.step_own_turn(cx));
+                    draw(window, cx);
+                    let next = transcript.read(cx).list.bounds_for_item(0).unwrap().top();
+                    assert!(next.abs() < px(1.0), "stays put, got {next:?}");
+                }
             });
         }
 

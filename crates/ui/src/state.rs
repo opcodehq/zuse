@@ -927,11 +927,6 @@ struct PendingChatArchive {
     accepted: bool,
 }
 
-/// A queue read this long after the server saved a message lists it if the
-/// server still holds it; one that doesn't means it was sent or claimed.
-/// Until such a read arrives the message keeps showing: the queue mirrors
-/// the server, and a message never vanishes on a timer alone.
-const OPTIMISTIC_LIST_LAG_MS: i64 = 2_000;
 /// How long a row removed here stays hidden from older queue frames.
 const REMOVED_QUEUED_GRACE_MS: i64 = 10_000;
 /// How long an echo a transcript frame confirmed comes back if a newer
@@ -1057,8 +1052,8 @@ pub struct AppState {
     /// The queue the chat's host last reported; [`Self::queue`] adds the
     /// messages this app sent that it doesn't list yet.
     host_queue: Vec<zuse_doc::QueuedMessage>,
-    /// When [`Self::host_queue`] last arrived (epoch millis), for the chat
-    /// it belongs to.
+    /// When the read behind [`Self::host_queue`] was sent (epoch millis),
+    /// for the chat it belongs to; `None` when its read time is unknown.
     host_queue_at: Option<i64>,
     /// Cloud messages queued from this app, per chat, until the server's
     /// queue lists them (see [`OptimisticQueued`]).
@@ -2644,6 +2639,14 @@ impl AppState {
     /// A send the host held for the next turn shows as its queue row, not
     /// as an echo: drop echoes (and the pending-send overlay) for queued ids.
     pub fn apply_queue(&mut self, items: Vec<zuse_doc::QueuedMessage>) {
+        self.apply_queue_read(items, None);
+    }
+
+    /// [`Self::apply_queue`] for a read sent at `read_at` (epoch millis). A
+    /// message saved here leaves the queue by omission only when a read sent
+    /// after its save no longer lists it; an older read, or one whose time is
+    /// unknown, never drops it.
+    pub fn apply_queue_read(&mut self, items: Vec<zuse_doc::QueuedMessage>, read_at: Option<i64>) {
         if let Some(chat_id) = self.selected_chat.as_deref() {
             if let Some(echoes) = self.echoes.get_mut(chat_id) {
                 let before = echoes.len();
@@ -2661,7 +2664,7 @@ impl AppState {
             }
         }
         self.host_queue = items;
-        self.host_queue_at = Some(chrono::Utc::now().timestamp_millis());
+        self.host_queue_at = read_at;
         self.rebuild_queue();
     }
 
@@ -2669,9 +2672,9 @@ impl AppState {
     /// this app's queued cloud messages the host doesn't list yet, in the
     /// order they were sent. A message leaves the optimistic list once the
     /// host lists it, or, after the server saved it, once it reached the
-    /// transcript (it was sent at once) or a queue read made at least
-    /// [`OPTIMISTIC_LIST_LAG_MS`] after the save no longer has it (claimed or
-    /// sent). Without such a read it stays: no timer drops a queued message.
+    /// transcript (it was sent at once) or a queue read sent after the save
+    /// no longer has it (claimed or sent). Without such a read it stays: no
+    /// timer drops a queued message.
     fn rebuild_queue(&mut self) {
         let now = chrono::Utc::now().timestamp_millis();
         self.removed_queued
@@ -2695,7 +2698,7 @@ impl AppState {
                 }
                 match row.state {
                     OptimisticState::Saved(at) => {
-                        host_at.is_none_or(|read| read - at < OPTIMISTIC_LIST_LAG_MS)
+                        host_at.is_none_or(|read| read < at)
                             && !transcript.iter().any(|entry| entry.id == row.message_id)
                     }
                     _ => true,
@@ -4899,6 +4902,9 @@ fn spawn_queue_watch(
         /// Whether Stop holds the queue; absent from older hosts.
         #[serde(default)]
         paused: Option<bool>,
+        /// When a cloud queue's read was sent (epoch millis).
+        #[serde(default, rename = "readAt")]
+        read_at: Option<i64>,
     }
     cx.spawn(async move |this, cx| {
         const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
@@ -4953,7 +4959,7 @@ fn spawn_queue_watch(
                         if let Some(paused) = frame.paused {
                             state.set_queue_paused(&chat_id, paused);
                         }
-                        state.apply_queue(frame.items);
+                        state.apply_queue_read(frame.items, frame.read_at);
                         cx.notify();
                     }
                 });
@@ -7514,8 +7520,11 @@ mod tests {
             OptimisticState::Saved(Utc::now().timestamp_millis() - 10 * 60_000),
         );
         assert_eq!(queue_ids(&state), vec!["q2"]);
-        // ...and leaves once a later read no longer lists it (claimed).
+        // A read whose send time is unknown never drops it...
         state.apply_queue(vec![]);
+        assert_eq!(queue_ids(&state), vec!["q2"]);
+        // ...one sent after the save that no longer lists it does (claimed).
+        state.apply_queue_read(vec![], Some(Utc::now().timestamp_millis()));
         assert!(state.queue.is_empty());
     }
 
@@ -7584,14 +7593,22 @@ mod tests {
             OptimisticState::Saved(Utc::now().timestamp_millis()),
         );
         assert_eq!(queue_ids(&state), vec!["first", "yo", "third"]);
-        // A read made before the third was saved still keeps it.
-        state.apply_queue(vec![queued_row("first", "first"), queued_row("yo", "yo")]);
+        // A read sent before the third was saved, arriving after the save,
+        // still keeps it.
+        let saved_at = match state.optimistic_queued("third").map(|row| &row.state) {
+            Some(OptimisticState::Saved(at)) => *at,
+            other => panic!("saved row expected, got {other:?}"),
+        };
+        state.apply_queue_read(
+            vec![queued_row("first", "first"), queued_row("yo", "yo")],
+            Some(saved_at - 1),
+        );
         assert_eq!(queue_ids(&state), vec!["first", "yo", "third"]);
         // The running turn claims the first: it leaves, the rest stay in order.
-        state.apply_queue(vec![
-            queued_row("yo", "yo"),
-            queued_row("third", "and this"),
-        ]);
+        state.apply_queue_read(
+            vec![queued_row("yo", "yo"), queued_row("third", "and this")],
+            Some(saved_at + 1),
+        );
         assert_eq!(queue_ids(&state), vec!["yo", "third"]);
         // Its message runs and the server lists only the rest.
         state.apply_queue(vec![queued_row("third", "and this")]);
