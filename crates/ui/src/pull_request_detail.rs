@@ -573,6 +573,7 @@ struct DetailSnapshot {
     body: crate::markdown::BlockTree,
     activity: Vec<crate::markdown::BlockTree>,
     fetched: Instant,
+    detail_fetched: Option<Instant>,
     diff: Option<Arc<ParsedDiff>>,
     /// Keep the engine-cache invalidation alive across closing/reopening.
     diff_refresh_owed: bool,
@@ -692,6 +693,7 @@ pub struct PullRequestDetailPage {
     error: Option<String>,
     loading: bool,
     fetched: Option<Instant>,
+    detail_fetched: Option<Instant>,
     task: Option<Task<()>>,
     diff_task: Option<Task<()>>,
     more_open: bool,
@@ -790,6 +792,7 @@ impl PullRequestDetailPage {
             error: None,
             loading: false,
             fetched: None,
+            detail_fetched: None,
             task: None,
             diff_task: None,
             more_open: false,
@@ -938,6 +941,7 @@ impl PullRequestDetailPage {
         if let Some(snapshot) = cached.filter(|_| !stale) {
             page.discussion_loaded = snapshot.discussion_loaded;
             page.fetched = Some(snapshot.fetched);
+            page.detail_fetched = snapshot.detail_fetched;
             page.detail = Some(snapshot.detail);
             page.body = Some(snapshot.body);
             page.activity_bodies = snapshot.activity;
@@ -1496,7 +1500,7 @@ impl PullRequestDetailPage {
             return;
         }
         if self
-            .fetched
+            .detail_fetched
             .is_none_or(|fetched| fetched.elapsed() >= REOPEN_REFRESH)
         {
             self.refresh(cx);
@@ -1588,7 +1592,7 @@ impl PullRequestDetailPage {
                     body: super::pull_request_media::parse_description(&detail.body),
                     activity: detail.activity_comments()
                         .map(|comment| super::pull_request_media::parse_description(&comment.body)).collect(),
-                    detail, fetched: Instant::now(), diff: None, diff_refresh_owed: false,
+                    detail, fetched: Instant::now(), detail_fetched: Some(Instant::now()), diff: None, diff_refresh_owed: false,
                 })
             }).await;
             let _ = this.update(cx, |page, cx| page.accept_snapshot(result, cx));
@@ -1626,6 +1630,7 @@ impl PullRequestDetailPage {
                 }
                 self.discussion_loaded = snapshot.discussion_loaded;
                 self.fetched = Some(snapshot.fetched);
+                self.detail_fetched = snapshot.detail_fetched;
                 if self.selected_commit.is_none() {
                     snapshot.diff = self.diff.clone();
                 } else if let Some(cached) = self.cache.borrow_mut().get(&self.target, &self.url)
@@ -1769,9 +1774,21 @@ impl PullRequestDetailPage {
                                             && old.comments == detail.comments
                                             && old.reviews == detail.reviews
                                     });
-                                (detail, page.loading, discussion_loaded, threads_stale)
+                                (
+                                    detail,
+                                    page.loading,
+                                    discussion_loaded,
+                                    threads_stale,
+                                    page.detail_fetched,
+                                )
                             });
-                            let Ok((detail, loading, discussion_loaded, threads_stale)) = prepared
+                            let Ok((
+                                detail,
+                                loading,
+                                discussion_loaded,
+                                threads_stale,
+                                detail_fetched,
+                            )) = prepared
                             else {
                                 return;
                             };
@@ -1794,6 +1811,7 @@ impl PullRequestDetailPage {
                                             .collect(),
                                         detail,
                                         fetched: Instant::now(),
+                                        detail_fetched,
                                         diff: None,
                                         diff_refresh_owed: false,
                                     };
@@ -2501,6 +2519,7 @@ pub(crate) fn fixture_seed_cache(cache: &Rc<RefCell<PullRequestCache>>) -> Strin
             .collect(),
         detail,
         fetched: Instant::now(),
+        detail_fetched: Some(Instant::now()),
         diff: Some(ParsedDiff::new(patch)),
         diff_refresh_owed: false,
     };
@@ -2609,6 +2628,7 @@ pub(crate) fn fixture_seed_zapper_pull_request(
         activity: Vec::new(),
         detail,
         fetched: Instant::now(),
+        detail_fetched: Some(Instant::now()),
         diff: None,
         diff_refresh_owed: false,
     };
@@ -3569,6 +3589,7 @@ mod tests {
             body: crate::markdown::parse_full("**Rich description**"),
             activity: vec![crate::markdown::parse_full("### Review\n\n- **important**")],
             fetched: Instant::now(),
+            detail_fetched: Some(Instant::now()),
             diff: None,
             diff_refresh_owed: false,
         }
@@ -3736,7 +3757,11 @@ mod tests {
                 PullRequestDetailPage::new(state, url.into(), None, cache, None, window, cx);
             page.refresh_if_stale(cx);
             assert!(page.error.is_none(), "fresh details are not reloaded");
-            page.fetched = Some(Instant::now() - REOPEN_REFRESH);
+            page.detail_fetched = Some(Instant::now() - REOPEN_REFRESH);
+            let mut watched = snapshot("Already loaded");
+            watched.detail_fetched = page.detail_fetched;
+            page.accept_snapshot(Ok(watched), cx);
+            assert!(page.fetched.unwrap().elapsed() < REOPEN_REFRESH);
             page.refresh_if_stale(cx);
             // No engine exists in this fixture, so the attempted read reports it.
             assert!(page.error.is_some(), "stale details are reloaded");

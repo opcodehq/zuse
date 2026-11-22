@@ -919,7 +919,10 @@ impl PullRequestDetailPage {
             .debug_selector(|| "pr-review-summary".into())
             .role(gpui::Role::Button)
             .tab_index(0)
-            .aria_label(format!("Reviews, {review_label}"))
+            .aria_label(match unresolved_label(detail) {
+                Some(unresolved) => format!("Reviews, {review_label}, {unresolved}"),
+                None => format!("Reviews, {review_label}"),
+            })
             .min_w_0()
             .flex()
             .items_center()
@@ -1759,9 +1762,13 @@ pub(super) fn unresolved_label(detail: &ChangeRequestDetail) -> Option<String> {
     }
 }
 
-/// "1 file", "6 files".
+/// GitHub CLI summary file lists may be capped at 100 entries.
 pub(super) fn files_label(count: usize) -> String {
-    format!("{count} {}", if count == 1 { "file" } else { "files" })
+    if count >= 100 {
+        format!("{count}+ files")
+    } else {
+        format!("{count} {}", if count == 1 { "file" } else { "files" })
+    }
 }
 
 pub(super) fn can_merge(detail: &ChangeRequestDetail) -> bool {
@@ -1977,6 +1984,8 @@ mod tests {
         );
         assert_eq!(files_label(1), "1 file");
         assert_eq!(files_label(6), "6 files");
+        assert_eq!(files_label(99), "99 files");
+        assert_eq!(files_label(100), "100+ files");
     }
 
     #[gpui::test]
@@ -2008,6 +2017,7 @@ mod tests {
                         body: crate::markdown::parse_full(""),
                         activity: vec![],
                         fetched: Instant::now(),
+                        detail_fetched: Some(Instant::now()),
                         diff: None,
                         diff_refresh_owed: false,
                     }),
@@ -2053,6 +2063,7 @@ mod tests {
             body: crate::markdown::parse_full(""),
             activity: vec![],
             fetched: Instant::now(),
+            detail_fetched: Some(Instant::now()),
             diff: None,
             diff_refresh_owed: false,
         };
