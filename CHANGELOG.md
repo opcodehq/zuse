@@ -7,6 +7,18 @@
 - Add opt-in Slack cloud tasks with threaded status/results, sender/channel attribution, and a workspace/repository connection flow in Cloud settings. Server credentials stay encrypted; enablement requires the Slack migration and a rebuilt compatible runtime image.
 - Link a chat or a Zapper to a Slack channel from its right-click menu. Finished replies post into a Slack thread, your replies in that thread come back to the chat, and Zappers post under their own name and avatar. Their worker threads get their own threads in the same channel. Requires the new Slack migration and re-authorizing the Slack app for its added scopes.
 
+## 0.27.6 - 2026-11-22
+
+### Added
+
+- Model picker with a provider rail, search, favorites and a hover card per model: set reasoning with a slider, fast mode and other options, add to favorites, or make it the default.
+
+### Changed
+
+- One composer chip shows the model and its reasoning level; the separate reasoning menu is gone.
+- The access picker is a single icon with a short three-level menu; saved permission rules open with `/permissions`.
+- Zapper chats open PRs, diffs and subagents as Zapper panel tabs, Threads lists show working threads first, and your own messages in a Zapper chat read as normal messages.
+
 ## 0.27.5 - 2026-11-22
 
 ### Changed
