@@ -14,25 +14,25 @@ async function control(method, params) {
     ws.send(JSON.stringify({id:1,method:'ControlCall',params:{token:env.ZUSE_CONTROL_TOKEN,method,params}}));
   });
 }
-const command = (id,action) => control('ZotCommand',{commandId:id,zotId:env.ZUSE_ZOT_ID??env.ZUSE_ZOT_WORKER_ID,expectedRevision:null,action});
+const command = (id,action) => control('ZapperCommand',{commandId:id,zapperId:env.ZUSE_ZAPPER_ID??env.ZUSE_ZAPPER_WORKER_ID,expectedRevision:null,action});
 for await (const line of readline.createInterface({input:process.stdin})) {
   const frame=JSON.parse(line);let result={};
   try {
     if(frame.method==='initialize')result={protocolVersion:1,agentCapabilities:{loadSession:true}};
     else if(frame.method==='session/new'||frame.method==='session/load'){
       env=Object.fromEntries((frame.params.mcpServers?.find(s=>s.name==='zuse')?.env??[]).map(e=>[e.name,e.value]));
-      result={sessionId:'zot-issues-fixture',models:{currentModelId:'fixture/model',availableModels:[{modelId:'fixture/model',name:'Fixture'}]}};
+      result={sessionId:'zapper-issues-fixture',models:{currentModelId:'fixture/model',availableModels:[{modelId:'fixture/model',name:'Fixture'}]}};
     } else if(frame.method==='session/prompt'){
       const text=(frame.params.prompt??[]).map(p=>p.text??'').join('\n');
       const parsed=text.match(/Current state:\n([\s\S]*?)\nPurpose:/);
       const current=parsed?JSON.parse(parsed[1]):null;
-      if(env.ZUSE_ZOT_ID){
+      if(env.ZUSE_ZAPPER_ID){
         if(!proof().created){
           const first=await command('fixture-create-issue',{type:'createIssue',issueId:'work',details:{title:'Deliver a tracked change',description:'Implement and verify the requested change.',status:'todo',priority:'normal',assigned:true,dueDate:null,labels:[],relations:[]}});
           await command('fixture-unrelated-issue',{type:'createIssue',issueId:'unrelated',details:{title:'Unrelated backlog',description:'Not assigned to this worker.',dueDate:null}});
           record({created:true});
           const repository=first.config.repositories[0];
-          await command('fixture-delegate',{type:'delegate',issueId:'work',worker:{chatId:'zot-worker-fixture-delegate',deviceId:repository.deviceId,spaceId:repository.spaceId,objective:'Implement the issue and record verification and its pull request.',followups:0},model:first.config.coordinatorModel,base:'main'});
+          await command('fixture-delegate',{type:'delegate',issueId:'work',worker:{chatId:'zapper-worker-fixture-delegate',deviceId:repository.deviceId,spaceId:repository.spaceId,objective:'Implement the issue and record verification and its pull request.',followups:0},model:first.config.coordinatorModel,base:'main'});
           record({delegated:true});
         } else if(current?.issues.find(i=>i.id==='work')?.pullRequests.length){
           const issue=current.issues.find(i=>i.id==='work');
@@ -41,17 +41,17 @@ for await (const line of readline.createInterface({input:process.stdin})) {
           await command('fixture-report',{type:'writeFile',path:'reports/work.md',content:'Verification passed; linked PR recorded. Completion requires user acceptance.',expectedVersion:0});
           record(accepted?{accepted:true}:{reviewed:true});
         }
-        const events=await control('ZotEvents',{zotId:env.ZUSE_ZOT_ID});
-        await control('AckZotEvents',{zotId:env.ZUSE_ZOT_ID,eventIds:events.map(e=>e.id)});
-      }else if(env.ZUSE_ZOT_WORKER_ID){
+        const events=await control('ZapperEvents',{zapperId:env.ZUSE_ZAPPER_ID});
+        await control('AckZapperEvents',{zapperId:env.ZUSE_ZAPPER_ID,eventIds:events.map(e=>e.id)});
+      }else if(env.ZUSE_ZAPPER_WORKER_ID){
         await command('fixture-worker-report',{type:'commentIssue',issueId:'work',text:'Verification passed in the isolated checkout.'});
         await command('fixture-worker-pr',{type:'linkIssuePullRequest',issueId:'work',url:'https://github.com/example/project/pull/123',title:'Deliver tracked change'});
         let unrelatedDenied=false,completionDenied=false;
         try{await command('fixture-forbidden-unrelated',{type:'commentIssue',issueId:'unrelated',text:'Should be rejected'});}catch{unrelatedDenied=true;}
         try{await command('fixture-forbidden-done',{type:'editIssue',issueId:'work',details:{title:'Forbidden',description:'',status:'done',dueDate:null}});}catch{completionDenied=true;}
         record({workerReported:true,unrelatedDenied,completionDenied,workerReceivedIssueContext:text.includes('Implement and verify the requested change.')&&text.includes('\"issueId\":\"work\"')});
-      } else throw new Error('Missing engine-stamped Zot scope');
-      process.stdout.write(JSON.stringify({jsonrpc:'2.0',method:'session/update',params:{sessionId:'zot-issues-fixture',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'Tracked issue update completed.'}}}})+'\n');
+      } else throw new Error('Missing engine-stamped Zapper scope');
+      process.stdout.write(JSON.stringify({jsonrpc:'2.0',method:'session/update',params:{sessionId:'zapper-issues-fixture',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'Tracked issue update completed.'}}}})+'\n');
       result={stopReason:'end_turn'};
     }
     if(frame.id!==undefined)process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:frame.id,result})+'\n');

@@ -57,7 +57,7 @@ Source: [architecture](https://github.com/swarajbachu/zuse/blob/2016cf4f0cc240e6
 
 UI entrypoints: `apps/renderer/src/components/{chat-composer,top-bar,cloud-workspace-info,cloud-connection-notice,cloud-device-selector,cloud-chat-sharing-dialog}.tsx`.
 Settings: `components/settings/{cloud-workspace-pool,cloud-hosting-settings,cloud-image-build-history,cloud-snapshot-settings,cloud-machines-pane,cloud-device-access-card}.tsx`.
-Latest reference includes device access split, stopped-runtime recovery, stale hosting fixes, Zots coordination, background tasks and question/private-input composer changes.
+Latest reference includes device access split, stopped-runtime recovery, stale hosting fixes, Zappers coordination, background tasks and question/private-input composer changes.
 
 Source: [renderer components](https://github.com/swarajbachu/zuse/tree/2016cf4f0cc240e6797916dd5cab1d8bebab89ae/apps/renderer/src/components), [user guide](https://github.com/swarajbachu/zuse/blob/2016cf4f0cc240e6797916dd5cab1d8bebab89ae/internal-docs/cloud/user-guide.md).
 

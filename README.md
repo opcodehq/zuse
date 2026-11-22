@@ -81,7 +81,7 @@ distinguishes verified hosting from the remaining real-agent launch work.
 Rust dependencies and versions are managed in the root Cargo workspace. JavaScript is used for provider SDK bridges, the public npm client, generated browser bindings, and the native browser’s element-selection helper.
 
 Persistent coordinators and the application control surface are documented in
-[Zots and application control](internal-docs/zots.md). The standalone
+[Zappers and application control](internal-docs/zappers.md). The standalone
 `zuse-control` client and [`@zuse/sdk`](packages/sdk/README.md) share the engine's
 versioned operations across local and paired cloud environments.
 
