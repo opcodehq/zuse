@@ -29,7 +29,7 @@ pub(super) struct ZapperUi {
     /// tab alone, since the surface keeps its last issue while another tab
     /// shows.
     issue_followed: Option<String>,
-    pull_request_page: Option<(
+    pub(super) pull_request_page: Option<(
         String,
         Entity<crate::pull_request_detail::PullRequestDetailPage>,
     )>,

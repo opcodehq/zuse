@@ -2530,6 +2530,36 @@ pub(crate) fn fixture_seed_cache(cache: &Rc<RefCell<PullRequestCache>>) -> Strin
 /// Seed one offline pull request for the Zapper panel fixture: `ready`
 /// (approved, green), `blocked` (a failing check and conflicts) or `draft`.
 /// Nothing is fetched or written; the URL points at a fixture repository.
+/// Cache loaded details for `url` in GitHub `state` (`OPEN`, `MERGED`), so a
+/// test's page opens on them without an engine.
+#[cfg(test)]
+pub(crate) fn test_seed_pull_request(
+    cache: &Rc<RefCell<PullRequestCache>>,
+    target: Option<String>,
+    url: &str,
+    state: &str,
+) {
+    let detail = ChangeRequestDetail {
+        title: "Rename it".into(),
+        body: "Body".into(),
+        url: url.into(),
+        number: 315,
+        state: state.into(),
+        ..Default::default()
+    };
+    let snapshot = DetailSnapshot {
+        discussion_loaded: true,
+        body: super::pull_request_media::parse_description(&detail.body),
+        activity: Vec::new(),
+        detail,
+        fetched: Instant::now(),
+        detail_fetched: Some(Instant::now()),
+        diff: None,
+        diff_refresh_owed: false,
+    };
+    cache.borrow_mut().put(target, url.into(), snapshot);
+}
+
 #[cfg(feature = "appshots-fixture")]
 pub(crate) fn fixture_seed_zapper_pull_request(
     cache: &Rc<RefCell<PullRequestCache>>,

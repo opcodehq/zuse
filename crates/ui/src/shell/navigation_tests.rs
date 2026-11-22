@@ -1125,3 +1125,71 @@ fn a_pull_request_tab_beside_its_issue_tab_shows_the_pull_request(cx: &mut TestA
         assert_eq!(shell.zapper_tabs().active(), &issue)
     });
 }
+
+/// ZAP-25 leads: a merged pull request, an open one and one whose details
+/// never load (no engine here, so its fetch fails) all render their page in
+/// the PR tab, and a real click on the tab keeps it there. The linked-issue
+/// row sits below the page's toolbar, out of reach of a click on the strip.
+#[gpui::test]
+fn a_pull_request_tab_shows_its_page_whatever_the_pull_request_state(cx: &mut TestAppContext) {
+    for state in [Some("MERGED"), Some("OPEN"), None] {
+        let (shell, cx) = zapper_chat(cx);
+        let url = "https://github.com/a/b/pull/315";
+        let pr = ZapperPage::PullRequest(url.into());
+        let issue = ZapperPage::Issue("issue-18".into());
+        shell.update(cx, |shell, cx| {
+            add_issue_with_pull_request(shell, url, cx);
+            if let Some(state) = state {
+                crate::pull_request_detail::test_seed_pull_request(
+                    &shell.pull_request_cache,
+                    Some("d".into()),
+                    url,
+                    state,
+                );
+            }
+            shell.show_in_zapper_panel(issue.clone(), cx);
+            shell.show_zapper_page(pr.clone(), cx);
+        });
+        // The first draw shows "Loading…" and builds the page after it.
+        for _ in 0..3 {
+            cx.update(|window, cx| window.draw(cx).clear());
+            cx.run_until_parked();
+        }
+        cx.update(|window, cx| window.draw(cx).clear());
+        shell.read_with(cx, |shell, _| {
+            assert_eq!(shell.zapper_tabs().active(), &pr, "{state:?}");
+            assert!(
+                shell
+                    .zapper_ui
+                    .pull_request_page
+                    .as_ref()
+                    .is_some_and(|(loaded, _)| loaded == url),
+                "{state:?}: the page is built"
+            );
+        });
+        let tab = cx
+            .debug_bounds("zapper-page-pr-https://github.com/a/b/pull/315")
+            .expect("the pull request tab is drawn");
+        let toolbar = cx
+            .debug_bounds("pr-toolbar-title")
+            .unwrap_or_else(|| panic!("{state:?}: the pull request toolbar is drawn"));
+        assert!(tab.bottom() <= toolbar.top(), "{state:?}");
+        if state.is_some() {
+            assert!(
+                cx.debug_bounds("pr-content-column").is_some(),
+                "{state:?}: the pull request body is drawn"
+            );
+        }
+
+        // Back on the issue, a real click on the PR tab shows the PR.
+        shell.update(cx, |shell, cx| shell.show_zapper_page(issue.clone(), cx));
+        cx.update(|window, cx| window.draw(cx).clear());
+        cx.simulate_click(tab.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear());
+        notify_issue_surface(&shell, cx);
+        shell.read_with(cx, |shell, _| {
+            assert_eq!(shell.zapper_tabs().active(), &pr, "{state:?}: after click");
+        });
+    }
+}
