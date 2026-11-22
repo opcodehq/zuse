@@ -8072,12 +8072,52 @@ impl Transcript {
 
     /// Media wiring for settled Markdown: Mermaid fences become diagrams
     /// once rendered and keep their source until then (or on failure).
-    /// Inline images keep their ordinary chat rendering.
+    /// Local inline images open through the attachment viewer on the chat's host.
     fn diagram_media(&mut self, cx: &Context<Self>) -> render::MediaUi {
         let cache = self.diagrams.clone();
         let owner = cx.weak_entity();
+        let image_owner = owner.clone();
         let media = self.diagram_media.get_or_insert_with(|| render::MediaUi {
-            image: None,
+            image: Some(Rc::new(move |image, id, theme| {
+                let source = image.source.clone();
+                let owner = image_owner.clone();
+                let label = if image.alt.is_empty() {
+                    "Preview image".to_owned()
+                } else {
+                    image.alt.clone()
+                };
+                div()
+                    .id(id)
+                    .role(gpui::Role::Button)
+                    .aria_label(SharedString::from(format!("Preview {label}")))
+                    .tab_index(0)
+                    .cursor_pointer()
+                    .text_color(theme.accent)
+                    .hover(|style| style.underline())
+                    .child(label)
+                    .on_click(move |_, window, cx| {
+                        let _ = owner.update(cx, |this, cx| {
+                            // Web images retain normal validated web navigation.
+                            // Local paths must be read on the chat's device, never
+                            // interpreted as paths on the desktop running the UI.
+                            if let Ok(url) = crate::browser::model::transcript_address(&source) {
+                                cx.open_url(&url);
+                                return;
+                            }
+                            let devices = this.attachment_device_ids(cx);
+                            this.open_gallery_entries(
+                                vec![GalleryEntry {
+                                    source: Some((devices, source.clone())),
+                                    preview: None,
+                                }],
+                                0,
+                                window,
+                                cx,
+                            );
+                        });
+                    })
+                    .into_any_element()
+            })),
             diagram: Some(Rc::new(move |code, id, _theme| {
                 let lookup = cache.borrow_mut().request(code, &id);
                 match lookup {
@@ -14802,6 +14842,64 @@ mod tests {
         cx.simulate_keystrokes("escape");
         transcript.read_with(cx, |this, _| assert!(this.attachment_preview.is_none()));
         cx.update(|window, _| assert!(return_focus.is_focused(window)));
+    }
+
+    #[gpui::test]
+    fn markdown_image_click_opens_host_image_in_lightbox(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+            crate::settings::init(crate::settings::UiSettings::default(), dir.path(), cx);
+        });
+        let state = cx.new(|_| {
+            let mut state = AppState::new();
+            state.local_device_id = Some("markdown-image-host".into());
+            state
+        });
+        let transcript = cx.new(|cx| Transcript::new(state, cx));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(64, 48)
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        crate::attachments::store_loaded_for(
+            &crate::attachments::AttachmentKey::new(
+                "markdown-image-host",
+                "/tmp/update-preview/update-states.png",
+                None,
+            ),
+            "update-states.png".into(),
+            Arc::new(gpui::Image::from_bytes(
+                gpui::ImageFormat::Png,
+                bytes.into_inner(),
+            )),
+        );
+        struct MarkdownImageFixture(Entity<Transcript>);
+        impl Render for MarkdownImageFixture {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                self.0.update(cx, |this, cx| {
+                    let media = this.diagram_media(cx);
+                    (media.image.unwrap())(
+                        &crate::markdown::parser::InlineImage {
+                            source: "/tmp/update-preview/update-states.png".into(),
+                            alt: "Downloading and ready-to-restart preview".into(),
+                            title: String::new(),
+                            link: None,
+                        },
+                        "markdown-image-preview".into(),
+                        Theme::of(cx),
+                    )
+                })
+            }
+        }
+        let (_, cx) = cx.add_window_view(|_, _| MarkdownImageFixture(transcript.clone()));
+        cx.run_until_parked();
+        cx.simulate_click(gpui::point(px(10.0), px(10.0)), gpui::Modifiers::default());
+        transcript.read_with(cx, |this, _| {
+            assert!(this.attachment_preview.is_some());
+            assert_eq!(this.attachment_gallery.len(), 1);
+            assert!(!this.gallery_opening);
+        });
     }
 
     #[gpui::test]
