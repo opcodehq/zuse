@@ -63,7 +63,8 @@ impl Pickers {
 
     /// What picking `row` would run with — the same resolution
     /// [`Self::pick_harness`] and [`Self::pick_model`] apply: an existing
-    /// chat keeps its level (clamped) on the same provider and takes the
+    /// chat (or bound cloud task) keeps its resolved level, clamped, on the
+    /// same provider and takes the
     /// provider's remembered picks on another; a new chat takes the level
     /// and options last used with that model.
     fn predicted_settings(
@@ -75,11 +76,12 @@ impl Pickers {
         Option<ReasoningLevel>,
         serde_json::Map<String, serde_json::Value>,
     ) {
-        let existing =
-            self.state.read(cx).selected_chat.is_some() || self.cloud.task_binding.is_some();
+        let existing = self.edits_saved_choice(cx);
         let same_provider = self.effective_harness(cx) == Some(row.harness);
         let (reasoning, options) = if existing && same_provider {
-            (self.explicit_reasoning(cx), self.explicit_options(cx))
+            // A pick restages the resolved configuration, then clamps it.
+            let resolved = self.resolved(cx);
+            (resolved.reasoning, resolved.model_options)
         } else if existing {
             let remembered = self.defaults.model_for(row.harness).map(|m| m.id.as_str());
             (
@@ -724,8 +726,9 @@ impl Pickers {
             .into_any_element()
     }
 
-    /// One more option of the card's model: a switch for two-state options,
-    /// otherwise a compact segmented choice.
+    /// One more option of the card's model: a switch for an on/off option,
+    /// otherwise a compact segmented choice (a context window reads
+    /// "200K | 1M", not a switch).
     fn detail_option(
         &self,
         gx: usize,
@@ -744,7 +747,7 @@ impl Pickers {
             .truncate()
             .text_color(theme.text)
             .child(SharedString::from(group.label.clone()));
-        if is_toggle(group) {
+        if is_toggle(group) && is_on_off(group) {
             let on = toggle_group_is_on(group);
             let next = zuse_protocol::presentation::model_option_switch_values(
                 &option,
@@ -792,6 +795,9 @@ impl Pickers {
                 ))
                 .into_any_element();
         }
+        // Two choices sit beside the label (Context window  200K | 1M);
+        // longer lists take their own line.
+        let inline = group.choices.len() <= 2;
         let segments = group.choices.iter().enumerate().map(|(cx_ix, choice)| {
             let model = model.clone();
             let option = option.clone();
@@ -805,10 +811,10 @@ impl Pickers {
                 .aria_label(SharedString::from(choice.label.clone()))
                 .aria_selected(choice.selected)
                 .tab_index(0)
-                .flex_1()
-                .min_w_0()
+                .when(inline, |el| el.flex_none().min_w(px(52.)))
+                .when(!inline, |el| el.flex_1().min_w_0())
                 .h(px(22.))
-                .px(px(6.))
+                .px(px(8.))
                 .rounded(px(6.))
                 .flex()
                 .items_center()
@@ -842,12 +848,13 @@ impl Pickers {
         });
         div()
             .flex()
-            .flex_col()
-            .gap(px(6.))
+            .when(inline, |el| el.items_center().gap(px(12.)))
+            .when(!inline, |el| el.flex_col().gap(px(6.)))
             .text_size(crate::typography::text_xs())
             .child(label)
             .child(
                 div()
+                    .when(inline, |el| el.flex_none())
                     .p(px(2.))
                     .rounded(px(8.))
                     .bg(theme.muted_fill().opacity(0.45))
@@ -857,6 +864,17 @@ impl Pickers {
             )
             .into_any_element()
     }
+}
+
+/// Whether an option's two choices read as off and on, so a switch says it
+/// all; named values (sizes, tiers) stay visible as segments.
+fn is_on_off(group: &SettingGroup) -> bool {
+    group.choices.iter().all(|choice| {
+        matches!(
+            choice.label.trim().to_ascii_lowercase().as_str(),
+            "on" | "off" | "enabled" | "disabled" | "true" | "false" | "yes" | "no"
+        )
+    })
 }
 
 #[cfg(test)]
@@ -1111,5 +1129,206 @@ mod tests {
                 assert_eq!(picker.resolved(cx).model.as_deref(), Some("gpt-a"));
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn card_preview_matches_what_a_pick_restages_in_an_existing_chat(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (_dir, handle) = picker_window(cx);
+        handle
+            .update(cx, |picker, _, cx| {
+                // Model A offers only Medium; B offers Medium and High.
+                let mut a = bare_model("a", "A");
+                a.reasoning_levels = vec![ReasoningLevel::Medium];
+                let mut b = bare_model("b", "B");
+                b.reasoning_levels = vec![ReasoningLevel::Medium, ReasoningLevel::High];
+                picker
+                    .models
+                    .insert(HarnessId::Codex, Loadable::Ready(vec![a, b]));
+                picker.catalog_rev += 1;
+                picker.state.update(cx, |state, cx| {
+                    state.chats = vec![
+                        serde_json::from_value(serde_json::json!({
+                            "id":"saved", "deviceId":"local", "archived":false,
+                            "createdAt":"2026-01-01T00:00:00Z",
+                            "config":{"harness":"codex","model":"a","sandbox":"workspace-write"}
+                        }))
+                        .unwrap(),
+                    ];
+                    state.selected_chat = Some("saved".into());
+                    cx.notify();
+                });
+                picker.config = DraftConfig::default();
+                assert_eq!(picker.resolved(cx).reasoning, Some(ReasoningLevel::Medium));
+                picker.active = row_index(picker, "b", cx);
+                let effort = picker.model_detail(cx).unwrap().effort.unwrap();
+                // Not B's own default (High): the chat's resolved Medium.
+                assert_eq!(effort.labels[effort.selected].as_ref(), "Medium");
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn a_card_pick_on_a_bound_cloud_task_updates_its_saved_choice(cx: &mut gpui::TestAppContext) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let (send, _requests) = tokio::sync::mpsc::channel(1);
+        let (_responses, receive) = tokio::sync::mpsc::channel(1);
+        let controller =
+            crate::state::EngineHandle::from_test_client(zuse_rpc::RpcClient::new(send, receive));
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            cx.set_global(Theme::dark());
+            crate::settings::init(crate::settings::UiSettings::default(), dir.path(), cx);
+        });
+        // No selected chat: the task's saved choice is all that names a model.
+        let state = cx.new(|_| AppState::new());
+        let pickers = cx.new(|cx| Pickers::new(state, cx));
+        pickers.update(cx, |picker, cx| {
+            let target = crate::state::CloudTarget {
+                controller,
+                subject: "owner".into(),
+                organization: None,
+                workspace: "task".into(),
+                initial_session: "session".into(),
+            };
+            let choice = ChatConfig {
+                harness: HarnessId::Codex,
+                model: Some("bound".into()),
+                reasoning: Some(ReasoningLevel::High),
+                model_options: Default::default(),
+                sandbox: SandboxLevel::WorkspaceWrite,
+                plan: false,
+            };
+            picker.bind_cloud_task(target, "boxd".into(), Some(choice), cx);
+            picker.receive_cloud_models(
+                serde_json::json!({"providers":[{"id":"codex","name":"Codex","defaultModel":"bound",
+                "models":[
+                    {"id":"bound","label":"Bound","reasoningLevels":["low","high"]},
+                    {"id":"other","label":"Other","reasoningLevels":["low","medium","high"]}
+                ]}]}),
+                cx,
+            );
+            assert_eq!(picker.effective_model_id(cx), Some("bound"));
+            picker.active = row_index(picker, "other", cx);
+            assert_eq!(picker.detail_row(cx).unwrap().model.id, "other");
+            picker.set_detail_effort(HarnessId::Codex, "other", 0, cx);
+            let saved = picker.cloud_task_choice().unwrap();
+            assert_eq!(saved.model.as_deref(), Some("other"));
+            assert_eq!(saved.reasoning, Some(ReasoningLevel::Low));
+            assert_eq!(picker.effective_model_id(cx), Some("other"));
+            assert_eq!(picker.resolved(cx).model.as_deref(), Some("other"));
+        });
+    }
+
+    #[gpui::test]
+    fn a_deferred_hover_never_lands_on_a_model_that_moved_into_its_row(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (_dir, handle) = picker_window(cx);
+        let start = handle
+            .update(cx, |picker, window, cx| {
+                picker.open_model_menu(window, cx);
+                picker.model_menu.card_left = false;
+                picker.model_menu.card_bounds = Some(gpui::Bounds::new(
+                    gpui::point(px(400.), px(0.)),
+                    gpui::size(px(272.), px(300.)),
+                ));
+                let opus = row_index(picker, "opus", cx);
+                let gpt = row_index(picker, "gpt-a", cx);
+                picker.hover_model_row(opus, gpui::point(px(100.), px(10.)), true, cx);
+                picker.hover_model_row(gpt, gpui::point(px(160.), px(30.)), true, cx);
+                assert_eq!(picker.model_menu.hover.pending(), Some(&gpt));
+                // A refresh moves another model into the pending row.
+                picker.models.insert(
+                    HarnessId::Codex,
+                    Loadable::Ready(vec![
+                        bare_model("gpt-new", "GPT New"),
+                        laddered("gpt-a", "GPT A", false),
+                        bare_model("gpt-plain", "GPT Plain"),
+                    ]),
+                );
+                picker.catalog_rev += 1;
+                picker.active
+            })
+            .unwrap();
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(400));
+        cx.run_until_parked();
+        handle
+            .update(cx, |picker, _, cx| {
+                assert_eq!(picker.active, start, "the card did not jump");
+                assert_ne!(picker.detail_row(cx).unwrap().model.id, "gpt-new");
+
+                // A catalog landing cancels any pending hover outright.
+                let gpt = row_index(picker, "gpt-a", cx);
+                let current = picker.active;
+                picker.model_menu.card_left = false;
+                picker.model_menu.card_bounds = Some(gpui::Bounds::new(
+                    gpui::point(px(400.), px(0.)),
+                    gpui::size(px(272.), px(300.)),
+                ));
+                picker.hover_model_row(current, gpui::point(px(100.), px(10.)), true, cx);
+                picker.hover_model_row(gpt, gpui::point(px(160.), px(30.)), true, cx);
+                assert_eq!(picker.model_menu.hover.pending(), Some(&gpt));
+                picker.apply_model_catalog(
+                    HarnessId::Codex,
+                    Loadable::Ready(vec![laddered("gpt-a", "GPT A", false)]),
+                    cx,
+                );
+                assert!(picker.model_menu.hover.pending().is_none());
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn a_vanished_provider_scope_falls_back_to_every_model(cx: &mut gpui::TestAppContext) {
+        let (_dir, handle) = picker_window(cx);
+        handle
+            .update(cx, |picker, window, cx| {
+                picker.open_model_menu(window, cx);
+                picker.scope_model_menu(Some(HarnessId::ClaudeCode), cx);
+                assert!(
+                    picker
+                        .model_rows(cx)
+                        .iter()
+                        .all(|r| r.harness == HarnessId::ClaudeCode)
+                );
+                // The refreshed catalog no longer offers the scoped provider.
+                picker.harnesses = Loadable::Ready(vec![descriptor(HarnessId::Codex, "Codex")]);
+                picker.catalog_rev += 1;
+                picker.heal_model_scope(cx);
+                assert_eq!(picker.model_scope, None);
+                assert_eq!(picker.model_rail, ModelRail::All);
+                assert!(picker.model_rows(cx).iter().any(|r| r.model.id == "gpt-a"));
+                picker
+                    .search
+                    .update(cx, |input, cx| input.set_text("plain", cx));
+                assert_eq!(picker.model_rows(cx).len(), 1);
+                assert_eq!(picker.model_rows(cx)[0].model.id, "gpt-plain");
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn named_two_value_options_stay_segments_and_on_off_options_are_switches() {
+        let group = |labels: [&str; 2]| SettingGroup {
+            id: ModelSetting::Option("x".into()),
+            label: "X".into(),
+            choices: labels
+                .iter()
+                .map(|label| SettingChoice {
+                    label: (*label).into(),
+                    reasoning: None,
+                    value: label.to_lowercase(),
+                    selected: false,
+                    default: false,
+                })
+                .collect(),
+        };
+        assert!(!is_on_off(&group(["200K", "1M"])));
+        assert!(!is_on_off(&group(["Standard", "1M tokens"])));
+        assert!(is_on_off(&group(["Off", "On"])));
     }
 }

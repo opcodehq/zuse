@@ -6348,7 +6348,7 @@ pub enum WorkspaceCommand {
 
 impl WorkspaceCommand {
     /// Provider command names Zuse's own commands replace.
-    const OVERRIDES: &'static [&'static str] = &["mcp"];
+    const OVERRIDES: &'static [&'static str] = &["mcp", "permissions"];
 
     fn catalog() -> &'static [(Self, &'static str, &'static str, bool)] {
         &[
@@ -6400,7 +6400,14 @@ fn with_workspace_commands(
     // Zuse answers these better than providers do in a non-interactive
     // session (Claude Code's `/mcp` prints one summary line there), so
     // Zuse's take the plain name.
-    rows.retain(|row| !WorkspaceCommand::OVERRIDES.contains(&row.name.as_str()));
+    // An override only replaces the provider's row where Zuse offers its own
+    // (`/permissions` belongs to an existing chat).
+    rows.retain(|row| {
+        !WorkspaceCommand::OVERRIDES.contains(&row.name.as_str())
+            || !WorkspaceCommand::catalog()
+                .iter()
+                .any(|&(_, name, _, needs_chat)| name == row.name && (in_chat || !needs_chat))
+    });
     for &(command, name, description, needs_chat) in WorkspaceCommand::catalog() {
         if needs_chat && !in_chat {
             continue;
@@ -6676,6 +6683,9 @@ pub struct Composer {
     add_button_focus: FocusHandle,
     permission_open: bool,
     permission_inspector: Option<permission_inspector::Inspector>,
+    /// `/permissions` opened the inspector without a window at hand; the next
+    /// render moves keyboard focus into it (Escape and its controls work).
+    focus_permission_inspector: bool,
     permission_rules_task: Option<Task<()>>,
     permission_active: usize,
     permission_focus: FocusHandle,
@@ -7519,6 +7529,7 @@ impl Composer {
             add_button_focus: cx.focus_handle().tab_stop(true),
             permission_open: false,
             permission_inspector: None,
+            focus_permission_inspector: false,
             permission_rules_task: None,
             permission_active: 0,
             permission_focus: cx.focus_handle(),
@@ -10191,6 +10202,7 @@ impl Composer {
         self.failure_key = None;
         if command == WorkspaceCommand::Permissions {
             self.open_permission_inspector(cx);
+            self.focus_permission_inspector = self.permission_inspector.is_some();
             cx.notify();
             return;
         }
@@ -13609,6 +13621,11 @@ impl Render for Composer {
                 }),
                 |view| view.child(self.render_permission_inspector(window.viewport_size(), cx)),
             );
+        if std::mem::take(&mut self.focus_permission_inspector)
+            && self.permission_inspector.is_some()
+        {
+            window.focus(&self.permission_focus, cx);
+        }
 
         if wizard_active {
             let wizard = self.render_wizard(window, cx);
@@ -15622,6 +15639,30 @@ mod tests {
         assert_eq!(
             workspace_command_for_text("/permissions", &draft_rows),
             None
+        );
+        // A provider's own `/permissions` never shadows the saved-rules
+        // inspector in a chat, and stays available in a new conversation.
+        let provider = || {
+            invocation_candidates(
+                vec![SlashCommand {
+                    name: "permissions".into(),
+                    description: "Provider permissions".into(),
+                    input_hint: None,
+                }],
+                vec![],
+            )
+        };
+        let in_chat = with_workspace_commands(provider(), true);
+        assert_eq!(
+            workspace_command_for_text("/permissions", &in_chat),
+            Some(WorkspaceCommand::Permissions)
+        );
+        assert!(!in_chat.iter().any(|row| row.name == "zuse:permissions"));
+        let draft = with_workspace_commands(provider(), false);
+        assert!(
+            draft
+                .iter()
+                .any(|row| row.name == "permissions" && row.workspace_command.is_none())
         );
         assert_eq!(
             workspace_command_for_text("/model  ", &draft_rows),

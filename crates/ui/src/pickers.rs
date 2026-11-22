@@ -1860,9 +1860,10 @@ impl Pickers {
             self.model_rail = ModelRail::Harness;
         } else if kind == PickerKind::HarnessModel && self.compact_model_picker(cx) {
             // Every model, favorites first; the rail narrows to a provider.
+            // The forced prefetch below loads every provider once the menu
+            // is open; a second one here would race it for stale slots.
             self.model_rail = ModelRail::All;
             self.model_scope = None;
-            self.prefetch_models(false, cx);
         } else if kind == PickerKind::HarnessModel {
             let locked = self.harness_locked(cx);
             let effective = self.effective_harness(cx);
@@ -2181,6 +2182,8 @@ impl Pickers {
         loaded: Loadable<Vec<Model>>,
         cx: &mut Context<Self>,
     ) {
+        // Rows may move under a pending hover; it must not land elsewhere.
+        self.model_menu.hover.cancel();
         if let Loadable::Error(error) = &loaded {
             self.model_refresh_errors.insert(harness, error.clone());
         } else {
@@ -2412,9 +2415,7 @@ impl Pickers {
             cx.notify();
             return;
         }
-        if self.state.read(cx).selected_chat.is_some()
-            && self.effective_harness(cx) != Some(harness)
-        {
+        if self.edits_saved_choice(cx) && self.effective_harness(cx) != Some(harness) {
             // Each conversation owns its provider and model settings.
             // Clear the old provider's traits before applying its replacement.
             let model = self.defaults.model_for(harness).map(|m| m.id.clone());
@@ -2472,7 +2473,7 @@ impl Pickers {
         // The card stays open on a pick (user request): model and traits
         // share one popover now, and adjusting the tray right after choosing
         // a model is the expected flow. Esc, click-out, or the chip close it.
-        if self.state.read(cx).selected_chat.is_some() {
+        if self.edits_saved_choice(cx) {
             // Existing chat: persist to the chat row (Mutate setChatConfig) —
             // survives restarts and syncs; next runs in this chat use it.
             self.update_chat_config(cx, move |config| config.model = Some(model_id));
@@ -2501,7 +2502,7 @@ impl Pickers {
             return;
         }
         // Always a concrete selection (no toggle-back-to-default).
-        if self.state.read(cx).selected_chat.is_some() {
+        if self.edits_saved_choice(cx) {
             self.update_chat_config(cx, move |config| config.reasoning = Some(level));
         } else {
             self.config.reasoning = Some(level);
@@ -2527,7 +2528,7 @@ impl Pickers {
         if self.cloud_launch_frozen() {
             return;
         }
-        if self.state.read(cx).selected_chat.is_some() {
+        if self.edits_saved_choice(cx) {
             self.update_chat_config(cx, move |config| {
                 if default {
                     config.model_options.remove(&option_id);
@@ -2556,6 +2557,50 @@ impl Pickers {
         cx.notify();
     }
 
+    /// Picks edit a saved choice — the selected chat's, or a bound cloud
+    /// task's (which [`Self::effective_model_id`] reads first) — rather than
+    /// the new-chat draft.
+    fn edits_saved_choice(&self, cx: &App) -> bool {
+        self.state.read(cx).selected_chat.is_some() || self.cloud.task_binding.is_some()
+    }
+
+    /// Keep reasoning and options valid for whatever model `config` names —
+    /// the same ladder resolution as [`Self::trait_ladder`] (model levels,
+    /// else the provider's advertised ladder).
+    fn clamp_to_catalog(&self, config: &mut ChatConfig, cx: &App) {
+        let Some(models) = self
+            .model_catalog(cx)
+            .get(&config.harness)
+            .and_then(|l| l.ready())
+        else {
+            return;
+        };
+        let model = config
+            .model
+            .as_deref()
+            .and_then(|id| models.iter().find(|m| m.id == id));
+        let mut ladder = model
+            .map(|m| m.reasoning_levels.clone())
+            .unwrap_or_default();
+        if ladder.is_empty()
+            && let Some(descriptor) = self
+                .harness_catalog(cx)
+                .ready()
+                .and_then(|list| list.iter().find(|d| d.id == config.harness))
+        {
+            ladder = descriptor.reasoning_levels.clone();
+        }
+        if !ladder.is_empty() {
+            config.reasoning = clamp_reasoning(config.reasoning, &ladder);
+        }
+        // A model switch must not carry picks the new model doesn't offer
+        // (e.g. a 1M context onto Haiku).
+        if let Some(model) = model {
+            config.model_options =
+                offered_options(model, std::mem::take(&mut config.model_options));
+        }
+    }
+
     /// Stage model, reasoning and option fields with the shared coordinator.
     /// Reasoning and options are clamped to the chosen model's catalog.
     fn update_chat_config(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut ChatConfig)) {
@@ -2568,6 +2613,7 @@ impl Pickers {
                 .or_else(|| self.resolved(cx).chat_config())
             {
                 change(&mut choice);
+                self.clamp_to_catalog(&mut choice, cx);
                 self.set_cloud_task_choice(choice, cx);
             }
             return;
@@ -2590,38 +2636,7 @@ impl Pickers {
             config.plan = existing.plan;
         }
         change(&mut config);
-        // Reasoning must stay concrete for whatever model the row now names —
-        // same ladder resolution as [`Self::trait_ladder`] (model levels, else
-        // the harness's advertised ladder).
-        if let Some(models) = self.models.get(&config.harness).and_then(|l| l.ready()) {
-            let mut ladder = config
-                .model
-                .as_deref()
-                .and_then(|id| models.iter().find(|m| m.id == id))
-                .map(|m| m.reasoning_levels.clone())
-                .unwrap_or_default();
-            if ladder.is_empty()
-                && let Some(descriptor) = self
-                    .harnesses
-                    .ready()
-                    .and_then(|list| list.iter().find(|d| d.id == config.harness))
-            {
-                ladder = descriptor.reasoning_levels.clone();
-            }
-            if !ladder.is_empty() {
-                config.reasoning = clamp_reasoning(config.reasoning, &ladder);
-            }
-            // Options likewise: a model switch must not carry picks the new
-            // model doesn't offer (e.g. a 1M context onto Haiku).
-            if let Some(model) = config
-                .model
-                .as_deref()
-                .and_then(|id| models.iter().find(|m| m.id == id))
-            {
-                config.model_options =
-                    offered_options(model, std::mem::take(&mut config.model_options));
-            }
-        }
+        self.clamp_to_catalog(&mut config, cx);
         self.state.update(cx, |state, cx| {
             state.stage_chat_configuration(
                 zuse_protocol::ChatConfigPatch::model(config.clone()),

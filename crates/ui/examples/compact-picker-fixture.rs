@@ -150,6 +150,11 @@ fn main() -> anyhow::Result<()> {
     let _guard = runtime.enter();
     let output = PathBuf::from(std::env::args().nth(1).expect("output directory"));
     std::fs::create_dir_all(&output)?;
+    // A reused directory must not keep an earlier run's success marker.
+    match std::fs::remove_file(output.join("result.txt")) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+        _ => {}
+    }
     let temp = tempfile::tempdir()?;
     let data = temp.path().to_path_buf();
     gpui_platform::application()
@@ -255,6 +260,8 @@ fn main() -> anyhow::Result<()> {
                 .await;
                 if let Err(error) = result {
                     eprintln!("model picker fixture failed: {error:#}");
+                    // Fail the run: shutdown would otherwise report success.
+                    std::process::exit(1);
                 }
                 cx.update(|cx| cx.quit());
             })

@@ -136,6 +136,7 @@ impl Pickers {
     }
 
     pub(super) fn receive_cloud_models(&mut self, value: Value, cx: &mut Context<Self>) {
+        self.model_menu.hover.cancel();
         match serde_json::from_value::<CloudAgentCatalog>(value) {
             Ok(catalog) => {
                 self.cloud.model_error = None;

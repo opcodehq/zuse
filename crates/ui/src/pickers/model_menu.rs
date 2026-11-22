@@ -279,10 +279,22 @@ impl Pickers {
                 }
             }
             popover::HoverAction::Defer => {
+                // The row's identity, checked again when the grace ends: a
+                // catalog refresh can move another model to this index.
+                let hovered = self
+                    .model_rows(cx)
+                    .get(index)
+                    .map(|row| (row.harness, row.model.id.clone()));
                 self.model_menu.hover.defer(cx, move |this, cx| {
+                    let still_there = this
+                        .model_rows(cx)
+                        .get(index)
+                        .map(|row| (row.harness, row.model.id.clone()))
+                        == hovered;
                     if this.is_open()
                         && this.active == current
                         && this.model_menu.hover.pending() == Some(&index)
+                        && still_there
                     {
                         this.model_menu.hover.record_origin(pointer);
                         this.active = index;
@@ -372,10 +384,12 @@ impl Pickers {
         let item = div()
             .id(("model-row", index))
             .role(gpui::Role::ListBoxOption)
-            .aria_label(SharedString::from(format!(
-                "{} · {}",
-                row.model.label, row.harness_name
-            )))
+            .aria_label(SharedString::from(match &attribution {
+                Some(attribution) => {
+                    format!("{} ({attribution}) · {}", row.model.label, row.harness_name)
+                }
+                None => format!("{} · {}", row.model.label, row.harness_name),
+            }))
             .aria_selected(selected)
             .tab_index(0)
             .relative()
@@ -458,6 +472,25 @@ impl Pickers {
             .into_any_element()
     }
 
+    /// A provider picked on the rail that the refreshed catalog no longer
+    /// offers would hide every other model (search included): fall back to
+    /// listing every model.
+    pub(super) fn heal_model_scope(&mut self, cx: &mut Context<Self>) {
+        let Some(scope) = self.model_scope else {
+            return;
+        };
+        if !matches!(self.harness_catalog(cx), Loadable::Ready(_)) {
+            return;
+        }
+        if !self.rail_descriptors(cx).iter().any(|p| p.id == scope) {
+            self.model_scope = None;
+            self.model_rail = ModelRail::All;
+            self.model_menu.hover.reset();
+            self.active = self.selected_model_index(cx);
+            cx.notify();
+        }
+    }
+
     /// Narrow the list to one provider, or (`None`) list every model.
     pub(super) fn scope_model_menu(&mut self, scope: Option<HarnessId>, cx: &mut Context<Self>) {
         self.model_scope = scope;
@@ -512,6 +545,7 @@ impl Pickers {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         self.compact_model_list = true;
+        self.heal_model_scope(cx);
         let theme = Theme::of(cx).for_popup();
         let items = self.reference_items(cx);
         let empty = items.is_empty();
@@ -536,7 +570,8 @@ impl Pickers {
             });
         let providers = self.rail_descriptors(cx);
         self.compact_motion.frame_height = MENU_HEIGHT.min(self.menu_geometry().height);
-        let rail = (providers.len() > 1).then(|| {
+        // A narrowed list always keeps its way back to every model.
+        let rail = (providers.len() > 1 || self.model_scope.is_some()).then(|| {
             let mut rail = div()
                 .id("model-provider-rail")
                 .overflow_y_scroll()
