@@ -61,7 +61,7 @@ fn sample_photo() -> String {
     zuse_viewport::zapper_avatar::prepare_image(&bytes).unwrap()
 }
 
-fn zapper(
+fn sample_zapper(
     id: &str,
     name: &str,
     mascot: &str,
@@ -142,11 +142,11 @@ fn main() -> anyhow::Result<()> {
             s.selected_space = Some("project".into());
             s.spaces = vec![serde_json::from_value(serde_json::json!({"id":"project","deviceId":"local","path":"/tmp/fieldnotes","createdAt":"2026-09-08T00:00:00Z"})).unwrap()];
             let zots = [
-                zapper("release", "Release", "hex", "teal", None),
-                zapper("photo", "Photo Zapper", "bolt", "coral", Some(photo.clone())),
-                zapper("docs", "Docs", "squire", "violet", None),
-                zapper("triage", "Triage", "brawler", "yellow", None),
-                zapper("night", "Night shift", "viking", "blue", None),
+                sample_zapper("release", "Release", "hex", "teal", None),
+                sample_zapper("photo", "Photo Zapper", "bolt", "coral", Some(photo.clone())),
+                sample_zapper("docs", "Docs", "squire", "violet", None),
+                sample_zapper("triage", "Triage", "brawler", "yellow", None),
+                sample_zapper("night", "Night shift", "viking", "blue", None),
             ];
             s.zots = zots
                 .iter()

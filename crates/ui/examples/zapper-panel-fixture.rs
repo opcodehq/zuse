@@ -68,7 +68,7 @@ fn issue(number: u32, title: &str, status: ZotIssueStatus) -> ZotIssue {
     }
 }
 
-fn zapper(device: &str) -> Zot {
+fn sample_zapper(device: &str) -> Zot {
     Zot {
         id: "release".into(),
         revision: 4,
@@ -213,7 +213,7 @@ fn main() -> anyhow::Result<()> {
             composer::init(cx, settings.composer_send_behavior);
             terminal::panel::init(cx);
             app_menus::init(cx);
-            let zot = zapper(&device);
+            let zot = sample_zapper(&device);
             let state = cx.new(|_| {
                 let mut s = state::AppState::new();
                 s.fixture_attachment_engine(handle);

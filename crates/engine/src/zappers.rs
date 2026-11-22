@@ -1556,14 +1556,14 @@ fn linked_issue(issue: &ZotIssue) -> serde_json::Value {
 
 /// What every thread working for a Zapper reads first. `name` is absent for a
 /// thread hosted on another device whose Zapper list isn't local.
-fn worker_brief(zot: &str, home: &str, name: Option<&str>) -> String {
+fn worker_brief(id: &str, home: &str, name: Option<&str>) -> String {
     let zapper = name
         .map(str::trim)
         .filter(|n| !n.is_empty())
         .map(|n| format!("the Zapper \"{n}\""))
         .unwrap_or_else(|| "a Zapper".to_owned());
     format!(
-        r#"You are a thread working for {zapper} (zotId {zot}, home device {home}), which coordinates this work and reviews your report. You run in your own git worktree; keep every change inside it.
+        r#"You are a thread working for {zapper} (zotId {id}, home device {home}), which coordinates this work and reviews your report. You run in your own git worktree; keep every change inside it.
 - Finish the objective and stay within it. Don't stop at a plan or a partial change when you can complete it.
 - Verify before you report: build, run the relevant tests or checks, and try the change the way a user would where you can. Say plainly what you could not verify.
 - For issues linked to this thread, record a pull request with zapper_command action linkIssuePullRequest {{issueId, url, title}}, and blockers or meaningful progress with commentIssue {{issueId, text}}. Use zotId "{zot}" and a new unique commandId for each command.

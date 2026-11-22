@@ -76,7 +76,7 @@ const THREADS: [(&str, &str, &str, Option<u32>); 4] = [
     ),
 ];
 
-fn zapper(device: &str) -> Zot {
+fn sample_zapper(device: &str) -> Zot {
     // JSON so older protocol versions (without queuePosition) build too.
     let workers: Vec<_> = THREADS
         .iter()
@@ -193,7 +193,7 @@ fn main() -> anyhow::Result<()> {
             composer::init(cx, settings.composer_send_behavior);
             terminal::panel::init(cx);
             app_menus::init(cx);
-            let zot = zapper(&device);
+            let zot = sample_zapper(&device);
             let state = cx.new(|_| {
                 let mut s = state::AppState::new();
                 s.fixture_attachment_engine(handle);

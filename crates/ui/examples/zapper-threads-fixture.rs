@@ -86,7 +86,7 @@ fn issue(number: u32, title: &str, status: ZotIssueStatus, threads: &[&str]) -> 
     }
 }
 
-fn zapper() -> Zot {
+fn sample_zapper() -> Zot {
     Zot {
         id: "stuff".into(),
         revision: 9,
@@ -219,7 +219,7 @@ fn main() -> anyhow::Result<()> {
                     chats.push(chat(id, title, 120 + 60 * n as i64));
                 }
                 s.chats = chats;
-                s.zots = vec![zapper()];
+                s.zots = vec![sample_zapper()];
                 s.selected_chat = Some("plain-1".into());
                 s.selected_space = Some("zuse".into());
                 s.auto_selected = true;

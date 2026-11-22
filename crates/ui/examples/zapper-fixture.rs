@@ -81,7 +81,7 @@ fn issue(number: u32, title: &str, status: ZotIssueStatus, assigned: bool, pr: b
     }
 }
 
-fn zapper(issues: Vec<ZotIssue>, workers: usize) -> Zot {
+fn sample_zapper(issues: Vec<ZotIssue>, workers: usize) -> Zot {
     Zot {
         id: "release".into(),
         revision: 4,
@@ -409,7 +409,7 @@ fn main() -> anyhow::Result<()> {
                     false,
                 ),
             ];
-            let board = zapper(issues, 3);
+            let board = sample_zapper(issues, 3);
             let states = [
                 ("zot-worker-1".to_owned(), ThreadState::Working),
                 ("zot-worker-2".to_owned(), ThreadState::NeedsYou),
@@ -436,7 +436,7 @@ fn main() -> anyhow::Result<()> {
                         };
                         let issues = make(board.clone(), false, cx);
                         let overview = make(board.clone(), true, cx);
-                        let empty = make(zapper(vec![], 0), true, cx);
+                        let empty = make(sample_zapper(vec![], 0), true, cx);
                         cx.new(|_| Board {
                             picture: ZapperFace {
                                 avatar: ZotAvatar {

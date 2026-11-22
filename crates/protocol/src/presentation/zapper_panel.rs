@@ -580,7 +580,7 @@ mod tests {
         }
     }
 
-    fn zapper(workers: &[&str], issue_threads: &[&[&str]]) -> crate::zots::Zot {
+    fn sample_zapper(workers: &[&str], issue_threads: &[&[&str]]) -> crate::zots::Zot {
         use crate::zots::*;
         Zot {
             id: "z".into(),
@@ -630,7 +630,7 @@ mod tests {
 
     #[test]
     fn threads_list_working_then_queued_then_idle_newest_first() {
-        let mut zot = zapper(&["a", "b", "c", "d", "e", "f"], &[]);
+        let mut zot = sample_zapper(&["a", "b", "c", "d", "e", "f"], &[]);
         zot.workers[1].queue_position = Some(2);
         zot.workers[4].queue_position = Some(1);
         let rank = |w: &crate::zots::ZotWorker| match w.chat_id.as_str() {
@@ -649,7 +649,7 @@ mod tests {
 
     #[test]
     fn zapper_threads_stay_out_of_projects_once_released() {
-        let zots = [zapper(&["zot-worker-running", "adopted"], &[])];
+        let zots = [sample_zapper(&["zot-worker-running", "adopted"], &[])];
         let keeps = |id: &str| zapper_keeps_chat(&zots, id, None, None);
         // Running threads and every coordinator conversation.
         assert!(keeps("zot-worker-running"));
@@ -689,7 +689,7 @@ mod tests {
 
     #[test]
     fn finished_threads_are_released_issue_threads_newest_first() {
-        let zot = zapper(
+        let zot = sample_zapper(
             &["zot-worker-running"],
             &[
                 &["zot-worker-a", "zot-worker-running"],
@@ -701,7 +701,7 @@ mod tests {
             ["zot-worker-c", "zot-worker-a", "zot-worker-b"]
         );
         assert!(
-            finished_zapper_threads(&zapper(&["zot-worker-a"], &[&["zot-worker-a"]])).is_empty()
+            finished_zapper_threads(&sample_zapper(&["zot-worker-a"], &[&["zot-worker-a"]])).is_empty()
         );
     }
 
