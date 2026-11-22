@@ -614,6 +614,19 @@ impl InstallKind {
         }
     }
 
+    /// Report real archive bytes while retaining the normal staging and verification path.
+    pub async fn stage_desktop_with_progress(
+        &self,
+        edge_url: &str,
+        manifest: &Manifest,
+        data_dir: &Path,
+        progress: watch::Sender<DownloadProgress>,
+    ) -> anyhow::Result<PathBuf> {
+        DOWNLOAD_PROGRESS
+            .scope(progress, self.stage_desktop(edge_url, manifest, data_dir))
+            .await
+    }
+
     pub async fn stage_desktop(
         &self,
         edge_url: &str,
@@ -814,9 +827,18 @@ fn bundle_short_version(plist: &str) -> Option<String> {
 // Download + verify
 // ---------------------------------------------------------------------------
 
-/// Stream a release artifact to `dest`, verifying the manifest sha256 when
-/// present. Writes through a `.partial` sidecar so an interrupted download never
-/// leaves a plausible-looking artifact behind.
+/// Bytes received for the current desktop update artifact.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DownloadProgress {
+    pub downloaded: u64,
+    pub total: Option<u64>,
+}
+
+tokio::task_local! {
+    static DOWNLOAD_PROGRESS: watch::Sender<DownloadProgress>;
+}
+
+/// Stream and verify an artifact, reporting bytes to a scoped desktop observer.
 pub async fn download_release_file(
     edge_url: &str,
     manifest: &Manifest,
@@ -850,11 +872,21 @@ pub async fn download_release_file(
         .await
         .with_context(|| format!("creating {}", partial.display()))?;
     let mut hasher = Sha256::new();
+    let total = resp.content_length().filter(|total| *total > 0);
+    let mut downloaded = 0;
+    let report = |downloaded| {
+        let _ = DOWNLOAD_PROGRESS.try_with(|sender| {
+            sender.send_replace(DownloadProgress { downloaded, total });
+        });
+    };
+    report(0);
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.context("reading download stream")?;
         hasher.update(&chunk);
         out.write_all(&chunk).await.context("writing download")?;
+        downloaded += chunk.len() as u64;
+        report(downloaded);
     }
     out.flush().await.context("flushing download")?;
     drop(out);
@@ -2541,6 +2573,35 @@ mod tests {
             .await
             .unwrap();
         assert!(staged.join("libexec/web/index.html").is_file());
+    }
+
+    #[tokio::test]
+    async fn download_reports_received_bytes_and_content_length() {
+        let tmp = tempfile::tempdir().unwrap();
+        let payload = b"download progress payload".to_vec();
+        let (base, server) = serve_forever(payload.clone()).await;
+        let manifest = Manifest {
+            version: "9.9.9".into(),
+            files: BTreeMap::new(),
+        };
+        let (sender, receiver) = watch::channel(DownloadProgress::default());
+        DOWNLOAD_PROGRESS
+            .scope(sender, download_release_file(
+                &base,
+                &manifest,
+                "progress.tar.gz",
+                &tmp.path().join("progress.tar.gz"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            *receiver.borrow(),
+            DownloadProgress {
+                downloaded: payload.len() as u64,
+                total: Some(payload.len() as u64),
+            }
+        );
+        server.abort();
     }
 
     #[tokio::test]

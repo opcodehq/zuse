@@ -160,6 +160,8 @@ pub struct AppUpdate {
     dismissed: Option<String>,
     _status_watch: Task<()>,
     download: Option<Task<()>>,
+    download_progress: zuse_update::DownloadProgress,
+    download_progress_task: Option<Task<()>>,
     user_check: Option<Task<()>>,
     /// The offered release's changelog, keyed by its version.
     release_notes: Option<(String, Vec<zuse_update::ReleaseNotesSection>)>,
@@ -276,6 +278,8 @@ impl AppUpdate {
             dismissed: None,
             _status_watch: status_watch,
             download: None,
+            download_progress: zuse_update::DownloadProgress::default(),
+            download_progress_task: None,
             user_check: None,
             release_notes: None,
             notes_fetch: None,
@@ -476,6 +480,11 @@ impl AppUpdate {
         self.notes_fetch = Some((version, task));
     }
 
+    /// Bytes received for the current update download.
+    pub fn download_progress(&self) -> zuse_update::DownloadProgress {
+        self.download_progress
+    }
+
     /// Whether this app downloads and installs updates itself right now.
     pub fn self_updating(&self) -> bool {
         self.install.supports_desktop_update() && self.blocker.is_none()
@@ -543,6 +552,28 @@ impl AppUpdate {
                 version: version.clone(),
             };
         }
+        self.download_progress = zuse_update::DownloadProgress::default();
+        let (progress_tx, progress_rx) = tokio::sync::watch::channel(self.download_progress);
+        self.download_progress_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                let progress = *progress_rx.borrow();
+                if this
+                    .update(cx, |this, cx| {
+                        if this.download_progress != progress {
+                            this.download_progress = progress;
+                            cx.notify();
+                        }
+                    })
+                    .is_err()
+                    || progress_rx.has_changed().is_err()
+                {
+                    break;
+                }
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(100))
+                    .await;
+            }
+        }));
         let stage = Tokio::spawn(cx, async move {
             // Re-read the manifest so a long-lived status still downloads the
             // newest release, with that release's checksums.
@@ -552,7 +583,7 @@ impl AppUpdate {
                 "the release feed no longer offers a newer version"
             );
             let staged = install
-                .stage_desktop(&edge_url, &manifest, &data_dir)
+                .stage_desktop_with_progress(&edge_url, &manifest, &data_dir, progress_tx)
                 .await?;
             anyhow::Ok((manifest.version, staged))
         });
