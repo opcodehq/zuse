@@ -1,7 +1,7 @@
 //! The coordinator's reference: what used to ride in every brief (action
 //! shapes, lifecycle, the failure playbook, issue writing, reporting) as
 //! guides it opens when it acts in that area. Every coordinator reads them
-//! with `zapper_files {zotId, path}`; on Claude Code they are also project
+//! with `zapper_files {zapperId, path}`; on Claude Code they are also project
 //! skills in the Zapper's workspace. Action shapes come from the command
 //! schema, so the guide can't drift from what the engine accepts.
 use super::*;
@@ -55,11 +55,11 @@ pub(super) fn guides() -> Vec<Guide> {
 }
 
 /// One guide as a read-only Zapper file.
-pub(super) fn file(path: &str) -> Option<ZotFile> {
+pub(super) fn file(path: &str) -> Option<ZapperFile> {
     guides()
         .into_iter()
         .find(|g| g.path == path)
-        .map(|g| ZotFile {
+        .map(|g| ZapperFile {
             path: g.path.to_owned(),
             version: 0,
             content: g.body,
@@ -96,14 +96,14 @@ fn commands() -> String {
     format!(
         r#"# Zapper commands
 
-zapper_command makes every change: {{"commandId": a new unique id per command (reuse it only to retry a command whose result was lost), "zotId", "expectedRevision": the revision you read, "action": {{"type": ..., fields}}}}. Its tool schema is the source of truth for shapes.
+zapper_command makes every change: {{"commandId": a new unique id per command (reuse it only to retry a command whose result was lost), "zapperId", "expectedRevision": the revision you read, "action": {{"type": ..., fields}}}}. Its tool schema is the source of truth for shapes.
 
 Actions (? = optional): {catalog}.
 
 ## Fields
 - details (createIssue, editIssue) = {{title, description, doneCriteria, outOfScope, status: "todo" or "backlog", priority, owner: {{"type": "zapper"}}, assigned: true, parent: issue id or null, dueDate: null or "YYYY-MM-DD", labels: [], relations: [issue ids]}}.
 - editIssue: details replaces the whole record, so send every field. If the board marks the issue descriptionClipped, read it with zapper_issue first. Owners: {{"type": "zapper"}} or {{"type": "thread", "chatId": ...}}; hand an issue to the user only with askUser.
-- delegate {{issueId, worker: {{chatId: "zot-worker-<commandId>", deviceId, spaceId, objective, followups: 0}}, model: {{harness, model}}, base: a ref such as "origin/main"}}. Pick deviceId, spaceId and model with list_projects, list_harnesses and list_models. Use a cheaper model for mechanical work. Run issues in parallel only when they touch separate parts of the code; otherwise base the next one on the previous branch. Beyond maxConcurrentWorkers running threads, a delegated thread is queued: its worker shows queuePosition (1 starts next) and its issue queued, and it starts by itself when a running thread finishes. Don't re-delegate it.
+- delegate {{issueId, worker: {{chatId: "zapper-worker-<commandId>", deviceId, spaceId, objective, followups: 0}}, model: {{harness, model}}, base: a ref such as "origin/main"}}. Pick deviceId, spaceId and model with list_projects, list_harnesses and list_models. Use a cheaper model for mechanical work. Run issues in parallel only when they touch separate parts of the code; otherwise base the next one on the previous branch. Beyond maxConcurrentWorkers running threads, a delegated thread is queued: its worker shows queuePosition (1 starts next) and its issue queued, and it starts by itself when a running thread finishes. Don't re-delegate it.
 - linkIssuePullRequest url: "https://github.com/owner/repo/pull/N".
 - messageWorker {{chatId, text, automatic: true}}.
 - writeFile expectedVersion: the file's current version from zapper_files. Seeded files start at version 1; a new file is 0. Writing INSTRUCTIONS.md also sets the purpose the app shows, from its first paragraph. Paths under guide/ are read-only.
@@ -113,12 +113,12 @@ Actions (? = optional): {catalog}.
 
 ## Results and reads
 zapper_command returns a compact result (new revision, the changed issue, worker, decision or file, and a summary); add "fullState": true to a command only if you need the whole state back.
-zapper_issue {{zotId}} reads the whole board; zapper_issue {{zotId, issueId}} reads one issue in full (issueId or its code, such as ZAP-3).
-zapper_files {{zotId, history?}} reads your files with versions; zapper_files {{zotId, path}} reads one, including these guides.
-zapper_events {{zotId}} lists thread reports and blockers; zapper_acknowledge {{zotId, eventIds}} once handled. Several updates can arrive in one message, each with its event id.
+zapper_issue {{zapperId}} reads the whole board; zapper_issue {{zapperId, issueId}} reads one issue in full (issueId or its code, such as ZAP-3).
+zapper_files {{zapperId, history?}} reads your files with versions; zapper_files {{zapperId, path}} reads one, including these guides.
+zapper_events {{zapperId}} lists thread reports and blockers; zapper_acknowledge {{zapperId, eventIds}} once handled. Several updates can arrive in one message, each with its event id.
 For issueChanged events, inspect the issue, do what it needs, then acknowledge. Don't comment just to acknowledge.
 "#,
-        catalog = zuse_protocol::zots::action_catalog()
+        catalog = zuse_protocol::zappers::action_catalog()
     )
 }
 

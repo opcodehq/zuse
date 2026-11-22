@@ -309,7 +309,7 @@ struct Inner {
     turn_listener: OnceLock<TurnListener>,
     provider_context: OnceLock<ProviderContext>,
     execution_observer: OnceLock<crate::execution_progress::Observer>,
-    zots: OnceLock<crate::zots::Zots>,
+    zappers: OnceLock<crate::zappers::Zappers>,
     /// Host settings a run must carry before it is routed (which Claude
     /// connection it launches against). Absent in bare tests.
     request_stamp: OnceLock<RequestStamp>,
@@ -506,7 +506,7 @@ impl SessionsEngine {
                 turn_listener: OnceLock::new(),
                 provider_context: OnceLock::new(),
                 execution_observer: OnceLock::new(),
-                zots: OnceLock::new(),
+                zappers: OnceLock::new(),
                 request_stamp: OnceLock::new(),
             }),
         }
@@ -516,8 +516,8 @@ impl SessionsEngine {
         self.inner.voice.clone()
     }
 
-    pub fn set_zots(&self, zots: crate::zots::Zots) {
-        let _ = self.inner.zots.set(zots);
+    pub fn set_zappers(&self, zappers: crate::zappers::Zappers) {
+        let _ = self.inner.zappers.set(zappers);
     }
 
     /// Record the loopback IPC port this engine serves. Runs started after
@@ -532,8 +532,8 @@ impl SessionsEngine {
         let _ = self.inner.secret_filter.set(filter);
     }
     pub fn set_ipc_port(&self, port: u16) {
-        if let Some(zots) = self.inner.zots.get() {
-            if let Err(error) = zots.publish_discovery(port) {
+        if let Some(zappers) = self.inner.zappers.get() {
+            if let Err(error) = zappers.publish_discovery(port) {
                 tracing::warn!(%error, "control discovery publication failed");
             }
         }
@@ -1017,8 +1017,8 @@ impl SessionsEngine {
         // A Zapper turn that never started was never seen: its next turn
         // carries the brief and full state again instead of a delta.
         if dispatched.is_err()
-            && let Some(zots) = self.inner.zots.get()
-            && let Err(err) = zots.forget_coordinator_turn(chat_id)
+            && let Some(zappers) = self.inner.zappers.get()
+            && let Err(err) = zappers.forget_coordinator_turn(chat_id)
         {
             tracing::warn!(chat = %chat_id, error = %err, "Zapper turn ledger reset failed");
         }
@@ -1039,13 +1039,14 @@ impl SessionsEngine {
         let _activity = self.claim_filesystem_admission(chat_id);
         drop(admission);
         let mut turn_source = None;
-        if let Some(zots) = self.inner.zots.get() {
+        if let Some(zappers) = self.inner.zappers.get() {
             let original = request.prompt.clone();
-            zots.prepare_request(chat_id, harness_id, &mut request)
+            zappers
+                .prepare_request(chat_id, harness_id, &mut request)
                 .map_err(|e| EngineError::Other(e.to_string()))?;
             // A coordinator turn shows its user text or update summary, not
             // the assembled brief. Never fail a send over the label.
-            turn_source = zots
+            turn_source = zappers
                 .turn_source(chat_id, &original, message_id.as_deref())
                 .unwrap_or_else(|error| {
                     tracing::warn!(chat = %chat_id, %error, "Zapper turn summary unavailable");
@@ -1056,7 +1057,7 @@ impl SessionsEngine {
             {
                 *text = filter.mask(text);
             }
-            if zots
+            if zappers
                 .coordinator(chat_id)
                 .map_err(|e| EngineError::Other(e.to_string()))?
                 .is_some()
@@ -2694,21 +2695,21 @@ impl Inner {
             ]
             .into_iter()
             .chain(
-                self.zots
+                self.zappers
                     .get()
-                    .map(|zots| ("ZUSE_CONTROL_TOKEN".to_owned(), zots.grant(chat_id))),
+                    .map(|zappers| ("ZUSE_CONTROL_TOKEN".to_owned(), zappers.grant(chat_id))),
             )
             .chain(
-                self.zots
+                self.zappers
                     .get()
-                    .and_then(|zots| zots.coordinator(chat_id).ok().flatten())
-                    .map(|zot| ("ZUSE_ZOT_ID".into(), zot.id)),
+                    .and_then(|zappers| zappers.coordinator(chat_id).ok().flatten())
+                    .map(|zapper| ("ZUSE_ZAPPER_ID".into(), zapper.id)),
             )
             .chain(
-                self.zots
+                self.zappers
                     .get()
-                    .and_then(|zots| zots.worker_home(chat_id).ok().flatten())
-                    .map(|(id, _)| ("ZUSE_ZOT_WORKER_ID".into(), id)),
+                    .and_then(|zappers| zappers.worker_home(chat_id).ok().flatten())
+                    .map(|(id, _)| ("ZUSE_ZAPPER_WORKER_ID".into(), id)),
             )
             .collect(),
         })

@@ -110,7 +110,7 @@ pub mod workspace_files;
 pub mod workspace_host;
 pub mod workspace_search;
 mod worktree_settings;
-pub mod zots;
+pub mod zappers;
 
 pub use agent_accounts::{AgentAccounts, AgentAccountsConfig};
 pub use auth::{Auth, AuthConfig, AuthState, AuthUser, OrgMembership, TerminalSignIn};
@@ -201,8 +201,8 @@ pub struct EngineCore {
     pub browser_access: browser_access::Owner,
     pub relay_access: relay_access::Owner,
     pub direct_access: direct_access::Owner,
-    pub zots: zots::Zots,
-    _zot_supervisor: Option<zots::ZotSupervisor>,
+    pub zappers: zappers::Zappers,
+    _zapper_supervisor: Option<zappers::ZapperSupervisor>,
     _memory_watchdog: Option<memory_watchdog::MemoryWatchdog>,
     slack_links: slack_links::SlackLinks,
     pub account: account::Account,
@@ -320,7 +320,7 @@ impl EngineCore {
         } else {
             DocsStore::open(profile.store_root())?
         });
-        let zots = zots::Zots::open(profile.store_root(), &device_id)
+        let zappers = zappers::Zappers::open(profile.store_root(), &device_id)
             .map_err(|e| EngineError::Other(e.to_string()))?;
         let store_for_import = store.clone();
         let journal = Arc::new(RunJournal::open(profile.store_root().join("journals"))?);
@@ -328,7 +328,7 @@ impl EngineCore {
         if profile.preparation_pending() {
             sessions.require_preparation();
         }
-        sessions.set_zots(zots.clone());
+        sessions.set_zappers(zappers.clone());
         let doc_host = DocHost::new(
             store.clone(),
             DocHostConfig {
@@ -553,15 +553,15 @@ impl EngineCore {
         analytics.capture("app opened", serde_json::json!({}));
         let memory_watchdog =
             memory_watchdog::MemoryWatchdog::start(sessions.clone(), doc_host.clone());
-        let zot_supervisor = zots::ZotSupervisor::start(
-            zots.clone(),
+        let zapper_supervisor = zappers::ZapperSupervisor::start(
+            zappers.clone(),
             sessions.clone(),
             workspace.clone(),
             doc_host.clone(),
         );
         let slack_links = slack_links::SlackLinks::new(
             profile.store_root(),
-            zots.clone(),
+            zappers.clone(),
             workspace.clone(),
             doc_host.clone(),
             sessions.clone(),
@@ -574,10 +574,10 @@ impl EngineCore {
             direct_access,
             browser_access,
             pairings,
-            _zot_supervisor: zot_supervisor,
+            _zapper_supervisor: zapper_supervisor,
             _memory_watchdog: memory_watchdog,
             slack_links,
-            zots,
+            zappers,
             harness_models,
             model_connections,
             account,
@@ -665,7 +665,7 @@ impl EngineCore {
     /// Attach the peer link cache — enables `targetDeviceId` routing,
     /// [`Self::dial_device`], and the doc host's queued-attachment transfers.
     pub fn set_links(&self, links: Arc<zuse_rpc::LinkCache>) {
-        self.zots.set_peers(links.clone());
+        self.zappers.set_peers(links.clone());
         self.doc_host.set_links(links.clone());
         *self
             .links
@@ -775,7 +775,7 @@ impl EngineCore {
         .with_browser_access(self.browser_access.control())
         .with_relay_access(self.relay_access.control())
         .with_direct_access(self.direct_access.control())
-        .with_zots(self.zots.clone())
+        .with_zappers(self.zappers.clone())
         .with_model_connections(self.model_connections.clone())
         .with_account(self.account.clone(), self.plugins.clone())
         .with_managed_access(self.managed_access.clone())
@@ -818,7 +818,7 @@ impl EngineCore {
         self.browser_access.begin_close();
         self.relay_access.begin_close();
         self.pairings.close();
-        if let Some(supervisor) = &self._zot_supervisor {
+        if let Some(supervisor) = &self._zapper_supervisor {
             supervisor.stop();
         }
         // Freeze admission before any awaited cleanup: an Idle transition must

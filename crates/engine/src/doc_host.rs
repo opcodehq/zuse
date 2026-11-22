@@ -7229,7 +7229,7 @@ impl DocHost {
     /// [`Self::request_from_chat_row`] for continuing the user's own chat
     /// after a restart. The row saves the sandbox but not `auto_approve`, so
     /// derive it the way the composer does; otherwise a Full access chat
-    /// comes back asking for approval. Automated runs (Zots, CI repair,
+    /// comes back asking for approval. Automated runs (Zappers, CI repair,
     /// voice) keep using the row as-is and never gain the bypass here.
     pub(crate) fn continuation_request_from_chat_row(
         &self,

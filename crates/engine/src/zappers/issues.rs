@@ -1,46 +1,46 @@
-//! Issue changes share the Zot receipt transaction and revision check.
+//! Issue changes share the Zapper receipt transaction and revision check.
 use super::*;
 
 pub(super) fn apply(
-    zot: &mut Zot,
-    command: &ZotCommand,
+    zapper: &mut Zapper,
+    command: &ZapperCommand,
     tx: &rusqlite::Transaction<'_>,
     actor: Option<&str>,
     coordinator: bool,
 ) -> Result<()> {
     let now = chrono::Utc::now().timestamp_millis();
-    let zot_workers: Vec<String> = zot.workers.iter().map(|w| w.chat_id.clone()).collect();
+    let zapper_workers: Vec<String> = zapper.workers.iter().map(|w| w.chat_id.clone()).collect();
     let mut notify = false;
     let mut reply: Option<String> = None;
     let (id, kind, text) = match &command.action {
-        ZotAction::CreateIssue { issue_id, details } => {
+        ZapperAction::CreateIssue { issue_id, details } => {
             valid_id(issue_id)?;
             ensure!(
-                !zot.issues.iter().any(|i| i.id == *issue_id),
+                !zapper.issues.iter().any(|i| i.id == *issue_id),
                 "issue already exists"
             );
-            validate(zot, issue_id, details)?;
+            validate(zapper, issue_id, details)?;
             let mut details = details.clone();
             if coordinator {
                 ensure!(
-                    details.status == ZotIssueStatus::Backlog
+                    details.status == ZapperIssueStatus::Backlog
                         || !details.done_criteria.trim().is_empty(),
                     "add doneCriteria: what must be true for this issue to be done"
                 );
                 ensure!(
-                    !matches!(details.current_owner(), Some(ZotIssueOwner::User)),
+                    !matches!(details.current_owner(), Some(ZapperIssueOwner::User)),
                     "create the issue for yourself, then hand it over with askUser"
                 );
                 ensure!(
                     matches!(
                         details.status,
-                        ZotIssueStatus::Backlog | ZotIssueStatus::Todo
+                        ZapperIssueStatus::Backlog | ZapperIssueStatus::Todo
                     ),
                     "new issues start in backlog or todo; delegate moves one to inProgress"
                 );
             }
             details.normalize(false);
-            let number = zot
+            let number = zapper
                 .issues
                 .iter()
                 .map(|i| i.number)
@@ -49,7 +49,7 @@ pub(super) fn apply(
                 .checked_add(1)
                 .context("issue numbers exhausted")?;
             notify = details.assigned && !details.status.terminal();
-            zot.issues.push(ZotIssue {
+            zapper.issues.push(ZapperIssue {
                 id: issue_id.clone(),
                 number,
                 details,
@@ -61,13 +61,13 @@ pub(super) fn apply(
             });
             (issue_id, "created", "Created the issue".to_owned())
         }
-        ZotAction::EditIssue { issue_id, details } => {
-            validate(zot, issue_id, details)?;
-            let child_in_progress = zot.issues.iter().any(|i| {
+        ZapperAction::EditIssue { issue_id, details } => {
+            validate(zapper, issue_id, details)?;
+            let child_in_progress = zapper.issues.iter().any(|i| {
                 i.details.parent.as_deref() == Some(issue_id.as_str())
-                    && i.details.status == ZotIssueStatus::InProgress
+                    && i.details.status == ZapperIssueStatus::InProgress
             });
-            let issue = find(zot, issue_id)?;
+            let issue = find(zapper, issue_id)?;
             let mut details = details.clone();
             if coordinator {
                 transition(issue, &details, child_in_progress)?;
@@ -84,7 +84,7 @@ pub(super) fn apply(
                     Some(owner) => format!("Owner: {}", owner_label(owner)),
                     None => "Removed owner".to_owned(),
                 });
-                if before == Some(ZotIssueOwner::User) {
+                if before == Some(ZapperIssueOwner::User) {
                     changes.push("Decision received".to_owned());
                 }
             }
@@ -100,19 +100,19 @@ pub(super) fn apply(
             issue.details = details;
             (issue_id, "updated", changes.join(" · "))
         }
-        ZotAction::LinkIssueThread { issue_id, chat_id } => {
+        ZapperAction::LinkIssueThread { issue_id, chat_id } => {
             ensure!(
-                zot.workers.iter().any(|w| w.chat_id == *chat_id),
+                zapper.workers.iter().any(|w| w.chat_id == *chat_id),
                 "thread must belong to this Zapper"
             );
-            let issue = find(zot, issue_id)?;
+            let issue = find(zapper, issue_id)?;
             if issue.threads.contains(chat_id) {
                 return Ok(());
             }
             issue.threads.push(chat_id.clone());
             (issue_id, "thread", "Linked thread".to_owned())
         }
-        ZotAction::LinkIssuePullRequest {
+        ZapperAction::LinkIssuePullRequest {
             issue_id,
             url,
             title,
@@ -121,12 +121,12 @@ pub(super) fn apply(
             // executable schemes, credentials, query parameters or fragments.
             let url = canonical_pr(url)?;
             ensure!(title.len() <= 500, "pull request title exceeds 500 bytes");
-            let issue = find(zot, issue_id)?;
+            let issue = find(zapper, issue_id)?;
             if issue.pull_requests.iter().any(|pr| pr.url == url) {
                 return Ok(());
             }
             notify = true;
-            issue.pull_requests.push(ZotIssuePullRequest {
+            issue.pull_requests.push(ZapperIssuePullRequest {
                 url: url.clone(),
                 title: title.trim().to_owned(),
             });
@@ -136,24 +136,24 @@ pub(super) fn apply(
                 format!("Linked pull request {url}"),
             )
         }
-        ZotAction::UnlinkIssueThread { issue_id, chat_id } => {
-            let issue = find(zot, issue_id)?;
+        ZapperAction::UnlinkIssueThread { issue_id, chat_id } => {
+            let issue = find(zapper, issue_id)?;
             if !issue.threads.contains(chat_id) {
                 return Ok(());
             }
             issue.threads.retain(|id| id != chat_id);
             (issue_id, "thread", "Unlinked thread".to_owned())
         }
-        ZotAction::UnlinkIssuePullRequest { issue_id, url } => {
+        ZapperAction::UnlinkIssuePullRequest { issue_id, url } => {
             let url = canonical_pr(url)?;
-            let issue = find(zot, issue_id)?;
+            let issue = find(zapper, issue_id)?;
             if !issue.pull_requests.iter().any(|pr| pr.url == url) {
                 return Ok(());
             }
             issue.pull_requests.retain(|pr| pr.url != url);
             (issue_id, "pullRequest", "Unlinked pull request".to_owned())
         }
-        ZotAction::CommentIssue {
+        ZapperAction::CommentIssue {
             issue_id,
             text,
             reply_to,
@@ -162,7 +162,7 @@ pub(super) fn apply(
                 !text.trim().is_empty() && text.len() <= 65536,
                 "comment must contain 1–65536 bytes"
             );
-            let issue = find(zot, issue_id)?;
+            let issue = find(zapper, issue_id)?;
             if let Some(parent) = reply_to {
                 // Replies stay one level deep: answering a reply answers its thread.
                 let target = issue
@@ -175,12 +175,12 @@ pub(super) fn apply(
             notify = true;
             // A person answering an issue that waits on them hands it back:
             // to the thread doing the work, else to the Zapper.
-            if !coordinator && issue.details.status == ZotIssueStatus::NeedsYou {
-                hand_back(issue, &zot_workers);
+            if !coordinator && issue.details.status == ZapperIssueStatus::NeedsYou {
+                hand_back(issue, &zapper_workers);
             }
             (issue_id, "comment", text.trim().to_owned())
         }
-        ZotAction::AskUser {
+        ZapperAction::AskUser {
             issue_id,
             question,
             recommendation,
@@ -189,12 +189,12 @@ pub(super) fn apply(
                 !question.trim().is_empty() && question.len() <= 8192,
                 "question must contain 1–8192 bytes"
             );
-            let issue = find(zot, issue_id)?;
+            let issue = find(zapper, issue_id)?;
             ensure!(
                 !issue.details.status.terminal(),
                 "reopen the issue before asking about it"
             );
-            issue.details.owner = Some(ZotIssueOwner::User);
+            issue.details.owner = Some(ZapperIssueOwner::User);
             issue.details.normalize(!issue.threads.is_empty());
             notify = !coordinator;
             let text = match recommendation.as_deref().map(str::trim) {
@@ -205,7 +205,7 @@ pub(super) fn apply(
             };
             (issue_id, "question", text)
         }
-        ZotAction::CloseIssue {
+        ZapperAction::CloseIssue {
             issue_id,
             outcome,
             note,
@@ -214,27 +214,27 @@ pub(super) fn apply(
                 !note.trim().is_empty() && note.len() <= 8192,
                 "say what happened in the note (1–8192 bytes)"
             );
-            let issue = find(zot, issue_id)?;
+            let issue = find(zapper, issue_id)?;
             let (status, verb) = match outcome {
-                ZotIssueOutcome::Merged => {
+                ZapperIssueOutcome::Merged => {
                     ensure!(
                         !issue.pull_requests.is_empty(),
                         "link the merged pull request before closing the issue as merged"
                     );
-                    (ZotIssueStatus::Done, "Merged")
+                    (ZapperIssueStatus::Done, "Merged")
                 }
-                ZotIssueOutcome::Dropped => (ZotIssueStatus::Canceled, "Dropped"),
+                ZapperIssueOutcome::Dropped => (ZapperIssueStatus::Canceled, "Dropped"),
             };
             issue.details.status = status;
             notify = !coordinator;
             (issue_id, "closed", format!("{verb} · {}", note.trim()))
         }
-        ZotAction::Delegate {
+        ZapperAction::Delegate {
             issue_id: Some(issue_id),
             worker,
             ..
         } => {
-            let issue = find(zot, issue_id)?;
+            let issue = find(zapper, issue_id)?;
             ensure!(
                 !issue.details.status.terminal(),
                 "reopen the issue before starting work"
@@ -244,10 +244,10 @@ pub(super) fn apply(
                 "assign the issue to this Zapper before starting work"
             );
             issue.threads.push(worker.chat_id.clone());
-            issue.details.owner = Some(ZotIssueOwner::Thread {
+            issue.details.owner = Some(ZapperIssueOwner::Thread {
                 chat_id: worker.chat_id.clone(),
             });
-            issue.details.status = ZotIssueStatus::InProgress;
+            issue.details.status = ZapperIssueStatus::InProgress;
             issue.details.normalize(true);
             (
                 issue_id,
@@ -257,9 +257,9 @@ pub(super) fn apply(
         }
         _ => return Ok(()),
     };
-    let issue = find(zot, id)?;
+    let issue = find(zapper, id)?;
     issue.updated_at = now;
-    issue.activity.push(ZotIssueActivity {
+    issue.activity.push(ZapperIssueActivity {
         actor: actor.map(str::to_owned),
         id: command.command_id.clone(),
         created_at: now,
@@ -268,7 +268,7 @@ pub(super) fn apply(
         reply_to: reply.clone(),
     });
     if notify && !coordinator {
-        // A reply carries what it answers, so the Zot can act without a lookup.
+        // A reply carries what it answers, so the Zapper can act without a lookup.
         let context = reply
             .as_ref()
             .and_then(|parent| issue.activity.iter().find(|a| a.id == *parent))
@@ -285,16 +285,16 @@ pub(super) fn apply(
             context
         );
         tx.execute(
-            "INSERT INTO zot_events(id,zot,worker,kind,summary) VALUES(?1,?2,'','issueChanged',?3)",
-            params![format!("issue-{}", command.command_id), zot.id, summary],
+            "INSERT INTO zapper_events(id,zapper,worker,kind,summary) VALUES(?1,?2,'','issueChanged',?3)",
+            params![format!("issue-{}", command.command_id), zapper.id, summary],
         )?;
     }
     Ok(())
 }
-/// The Zot as the coordinator prompt sees it. Issues carry only their recent
+/// The Zapper as the coordinator prompt sees it. Issues carry only their recent
 /// activity and a bounded description; storage keeps everything, and the
-/// coordinator reads a full issue through `zot_issue`.
-pub(super) fn coordinator_view(zot: &Zot) -> Result<serde_json::Value> {
+/// coordinator reads a full issue through `zapper_issue`.
+pub(super) fn coordinator_view(zapper: &Zapper) -> Result<serde_json::Value> {
     const RECENT_ACTIVITY: usize = 6;
     const ACTIVITY_TEXT: usize = 600;
     const DESCRIPTION: usize = 4000;
@@ -308,12 +308,12 @@ pub(super) fn coordinator_view(zot: &Zot) -> Result<serde_json::Value> {
             (text.to_owned(), false)
         }
     };
-    let mut view = serde_json::to_value(zot)?;
+    let mut view = serde_json::to_value(zapper)?;
     // The purpose reaches the prompt as INSTRUCTIONS.md; once is enough.
     if let Some(config) = view["config"].as_object_mut() {
         config.remove("purpose");
     }
-    view["issues"] = zot
+    view["issues"] = zapper
         .issues
         .iter()
         .map(|issue| -> Result<serde_json::Value> {
@@ -353,7 +353,7 @@ pub(super) fn coordinator_view(zot: &Zot) -> Result<serde_json::Value> {
                 "recentActivity": recent,
             });
             // Its thread waits for a slot: the stored inProgress isn't running yet.
-            if let Some(worker) = zot.issue_queued_worker(issue) {
+            if let Some(worker) = zapper.issue_queued_worker(issue) {
                 view["queued"] = serde_json::json!(true);
                 view["queuePosition"] = serde_json::json!(worker.queue_position);
             }
@@ -366,7 +366,11 @@ pub(super) fn coordinator_view(zot: &Zot) -> Result<serde_json::Value> {
 /// Status moves the coordinator may make itself. Each one needs the evidence
 /// that makes it true, so the board can't drift ahead of the work.
 /// A parent issue is in progress while one of its children is.
-fn transition(issue: &ZotIssue, next: &ZotIssueDetails, child_in_progress: bool) -> Result<()> {
+fn transition(
+    issue: &ZapperIssue,
+    next: &ZapperIssueDetails,
+    child_in_progress: bool,
+) -> Result<()> {
     let before = &issue.details;
     if next.status != before.status {
         ensure!(
@@ -374,17 +378,17 @@ fn transition(issue: &ZotIssue, next: &ZotIssueDetails, child_in_progress: bool)
             "close issues with closeIssue (outcome merged or dropped, plus a note)"
         );
         match next.status {
-            ZotIssueStatus::InReview => ensure!(
+            ZapperIssueStatus::InReview => ensure!(
                 !issue.pull_requests.is_empty(),
                 "link the pull request before moving the issue to inReview"
             ),
-            ZotIssueStatus::InProgress => ensure!(
+            ZapperIssueStatus::InProgress => ensure!(
                 !issue.threads.is_empty() || child_in_progress,
                 "an issue is inProgress only while a thread works on it: delegate {{issueId: \"{}\"}} (which moves it to inProgress for you), or, for a parent issue, start a thread on one of its child issues (details.parent: \"{}\") first",
                 issue.id,
                 issue.id
             ),
-            ZotIssueStatus::NeedsYou => {
+            ZapperIssueStatus::NeedsYou => {
                 bail!("hand the issue to the user with askUser")
             }
             _ => {}
@@ -392,7 +396,7 @@ fn transition(issue: &ZotIssue, next: &ZotIssueDetails, child_in_progress: bool)
     }
     ensure!(
         next.current_owner() == before.current_owner()
-            || next.current_owner() != Some(ZotIssueOwner::User),
+            || next.current_owner() != Some(ZapperIssueOwner::User),
         "hand the issue to the user with askUser"
     );
     ensure!(
@@ -403,7 +407,7 @@ fn transition(issue: &ZotIssue, next: &ZotIssueDetails, child_in_progress: bool)
 }
 /// The user answered: the newest linked thread still working for the Zapper
 /// takes the issue back, else the Zapper does.
-fn hand_back(issue: &mut ZotIssue, workers: &[String]) {
+fn hand_back(issue: &mut ZapperIssue, workers: &[String]) {
     let thread = issue
         .threads
         .iter()
@@ -411,25 +415,26 @@ fn hand_back(issue: &mut ZotIssue, workers: &[String]) {
         .find(|id| workers.contains(id))
         .cloned();
     issue.details.owner = Some(match thread {
-        Some(chat_id) => ZotIssueOwner::Thread { chat_id },
-        None => ZotIssueOwner::Zapper,
+        Some(chat_id) => ZapperIssueOwner::Thread { chat_id },
+        None => ZapperIssueOwner::Zapper,
     });
     issue.details.normalize(!issue.threads.is_empty());
 }
-fn owner_label(owner: &ZotIssueOwner) -> &'static str {
+fn owner_label(owner: &ZapperIssueOwner) -> &'static str {
     match owner {
-        ZotIssueOwner::Zapper => "Zapper",
-        ZotIssueOwner::User => "You",
-        ZotIssueOwner::Thread { .. } => "Thread",
+        ZapperIssueOwner::Zapper => "Zapper",
+        ZapperIssueOwner::User => "You",
+        ZapperIssueOwner::Thread { .. } => "Thread",
     }
 }
-fn find<'a>(zot: &'a mut Zot, id: &str) -> Result<&'a mut ZotIssue> {
-    zot.issues
+fn find<'a>(zapper: &'a mut Zapper, id: &str) -> Result<&'a mut ZapperIssue> {
+    zapper
+        .issues
         .iter_mut()
         .find(|i| i.id == id)
         .context("issue not found")
 }
-fn validate(zot: &Zot, id: &str, details: &ZotIssueDetails) -> Result<()> {
+fn validate(zapper: &Zapper, id: &str, details: &ZapperIssueDetails) -> Result<()> {
     ensure!(
         !details.title.trim().is_empty() && details.title.len() <= 500,
         "issue title must contain 1–500 bytes"
@@ -459,7 +464,7 @@ fn validate(zot: &Zot, id: &str, details: &ZotIssueDetails) -> Result<()> {
     let unknown: Vec<&str> = details
         .relations
         .iter()
-        .filter(|r| !zot.issues.iter().any(|i| i.id == **r))
+        .filter(|r| !zapper.issues.iter().any(|i| i.id == **r))
         .map(String::as_str)
         .collect();
     ensure!(
@@ -467,16 +472,16 @@ fn validate(zot: &Zot, id: &str, details: &ZotIssueDetails) -> Result<()> {
         "relations must reference existing issues in this Zapper; unknown: {}. Create those issues first (createIssue, one command each), then add the relation with editIssue, or leave relations empty for now",
         unknown.join(", ")
     );
-    if let Some(ZotIssueOwner::Thread { chat_id }) = &details.owner {
+    if let Some(ZapperIssueOwner::Thread { chat_id }) = &details.owner {
         ensure!(
-            zot.workers.iter().any(|w| w.chat_id == *chat_id),
+            zapper.workers.iter().any(|w| w.chat_id == *chat_id),
             "an owning thread must belong to this Zapper"
         );
     }
     if let Some(parent) = &details.parent {
         ensure!(parent != id, "an issue can't be its own parent");
         ensure!(
-            zot.issues.iter().any(|i| i.id == *parent),
+            zapper.issues.iter().any(|i| i.id == *parent),
             "parent issue {parent} doesn't exist yet: create it first (createIssue), then create or edit this issue with details.parent"
         );
     }
@@ -536,20 +541,21 @@ pub(super) fn report_status(summary: &str) -> Option<ReportStatus> {
 }
 /// Deduplicated worker reports are also persisted in every linked issue. A
 /// report never claims the objective is done; failures surface as blockers.
-pub(super) fn report(tx: &rusqlite::Transaction<'_>, event: &ZotEvent) -> Result<()> {
-    let state: String =
-        tx.query_row("SELECT state FROM zots WHERE id=?1", [&event.zot_id], |r| {
-            r.get(0)
-        })?;
-    let mut zot: Zot = serde_json::from_str(&state)?;
-    let before = zot.clone();
+pub(super) fn report(tx: &rusqlite::Transaction<'_>, event: &ZapperEvent) -> Result<()> {
+    let state: String = tx.query_row(
+        "SELECT state FROM zappers WHERE id=?1",
+        [&event.zapper_id],
+        |r| r.get(0),
+    )?;
+    let mut zapper: Zapper = serde_json::from_str(&state)?;
+    let before = zapper.clone();
     let mut changed = false;
-    for issue in &mut zot.issues {
+    for issue in &mut zapper.issues {
         if !issue.threads.contains(&event.worker_chat_id) {
             continue;
         }
         let now = chrono::Utc::now().timestamp_millis();
-        issue.activity.push(ZotIssueActivity {
+        issue.activity.push(ZapperIssueActivity {
             actor: Some(event.worker_chat_id.clone()),
             id: event.id.clone(),
             created_at: now,
@@ -570,28 +576,28 @@ pub(super) fn report(tx: &rusqlite::Transaction<'_>, event: &ZotEvent) -> Result
         issue.updated_at = now;
         let reported = report_status(&event.summary);
         if !issue.details.status.terminal()
-            && issue.details.status != ZotIssueStatus::NeedsYou
+            && issue.details.status != ZapperIssueStatus::NeedsYou
             && (matches!(
                 event.kind.as_str(),
                 "failed" | "interrupted" | "needsInput" | "bindingPending"
             ) || matches!(reported, Some(ReportStatus::Blocked)))
         {
             // A blocked thread hands the issue back to the Zapper to unblock.
-            issue.details.status = ZotIssueStatus::Blocked;
-            issue.details.owner = Some(ZotIssueOwner::Zapper);
+            issue.details.status = ZapperIssueStatus::Blocked;
+            issue.details.owner = Some(ZapperIssueOwner::Zapper);
             issue.details.normalize(true);
         }
         changed = true;
     }
     if changed {
-        zot.revision = zot
+        zapper.revision = zapper
             .revision
             .checked_add(1)
             .context("Zapper revision exhausted")?;
-        record_changes(tx, &before, &zot)?;
+        record_changes(tx, &before, &zapper)?;
         tx.execute(
-            "UPDATE zots SET state=?2 WHERE id=?1",
-            params![zot.id, serde_json::to_string(&zot)?],
+            "UPDATE zappers SET state=?2 WHERE id=?1",
+            params![zapper.id, serde_json::to_string(&zapper)?],
         )?;
     }
     Ok(())
@@ -600,24 +606,24 @@ pub(super) fn report(tx: &rusqlite::Transaction<'_>, event: &ZotEvent) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::zots::tests::{command, config, create, worker};
-    fn details() -> ZotIssueDetails {
-        ZotIssueDetails {
+    use crate::zappers::tests::{command, config, create, worker};
+    fn details() -> ZapperIssueDetails {
+        ZapperIssueDetails {
             title: "Ship the fix".into(),
             description: "Pass acceptance".into(),
             assigned: true,
             ..Default::default()
         }
     }
-    fn issue(store: &Zots) -> ZotIssue {
+    fn issue(store: &Zappers) -> ZapperIssue {
         store.get("release").unwrap().issues[0].clone()
     }
-    fn add(store: &Zots) {
+    fn add(store: &Zappers) {
         store
             .command(command(
                 "release",
                 "issue",
-                ZotAction::CreateIssue {
+                ZapperAction::CreateIssue {
                     issue_id: "fix".into(),
                     details: details(),
                 },
@@ -627,7 +633,7 @@ mod tests {
     #[test]
     fn coordinator_view_keeps_recent_activity_and_flags_clipped_descriptions() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         add(&store);
         let mut long = details();
@@ -636,7 +642,7 @@ mod tests {
             .command(command(
                 "release",
                 "long",
-                ZotAction::EditIssue {
+                ZapperAction::EditIssue {
                     issue_id: "fix".into(),
                     details: long,
                 },
@@ -647,7 +653,7 @@ mod tests {
                 .command(command(
                     "release",
                     &format!("comment-{n}"),
-                    ZotAction::CommentIssue {
+                    ZapperAction::CommentIssue {
                         issue_id: "fix".into(),
                         text: format!("note {n} {}", "y".repeat(900)),
                         reply_to: None,
@@ -660,7 +666,7 @@ mod tests {
             .command(command(
                 "release",
                 "reply",
-                ZotAction::CommentIssue {
+                ZapperAction::CommentIssue {
                     issue_id: "fix".into(),
                     text: "Answering".into(),
                     reply_to: Some(first.clone()),
@@ -678,7 +684,7 @@ mod tests {
             .command(command(
                 "release",
                 "reply-to-reply",
-                ZotAction::CommentIssue {
+                ZapperAction::CommentIssue {
                     issue_id: "fix".into(),
                     text: "Again".into(),
                     reply_to: Some(reply),
@@ -714,21 +720,21 @@ mod tests {
     #[test]
     fn unlinking_is_reversible_without_releasing_workers_or_duplicate_activity() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         add(&store);
         store
             .command(command(
                 "release",
                 "adopt",
-                ZotAction::AdoptWorker { worker: worker() },
+                ZapperAction::AdoptWorker { worker: worker() },
             ))
             .unwrap();
         store
             .command(command(
                 "release",
                 "link",
-                ZotAction::LinkIssueThread {
+                ZapperAction::LinkIssueThread {
                     issue_id: "fix".into(),
                     chat_id: "worker".into(),
                 },
@@ -738,7 +744,7 @@ mod tests {
             .command(command(
                 "release",
                 "pr",
-                ZotAction::LinkIssuePullRequest {
+                ZapperAction::LinkIssuePullRequest {
                     issue_id: "fix".into(),
                     url: "https://github.com/team/repo/pull/123".into(),
                     title: "Fix".into(),
@@ -748,7 +754,7 @@ mod tests {
         let unlink = command(
             "release",
             "unlink",
-            ZotAction::UnlinkIssueThread {
+            ZapperAction::UnlinkIssueThread {
                 issue_id: "fix".into(),
                 chat_id: "worker".into(),
             },
@@ -759,7 +765,7 @@ mod tests {
             .command(command(
                 "release",
                 "unlink-pr",
-                ZotAction::UnlinkIssuePullRequest {
+                ZapperAction::UnlinkIssuePullRequest {
                     issue_id: "fix".into(),
                     url: "https://github.com/team/repo/pull/123".into(),
                 },
@@ -773,7 +779,7 @@ mod tests {
             .command(command(
                 "release",
                 "unlink-again",
-                ZotAction::UnlinkIssueThread {
+                ZapperAction::UnlinkIssueThread {
                     issue_id: "fix".into(),
                     chat_id: "worker".into(),
                 },
@@ -781,21 +787,21 @@ mod tests {
             .unwrap();
         assert_eq!(issue(&store).activity.len(), activity);
     }
-    fn as_zapper(store: &Zots, id: &str, action: ZotAction) -> Result<Option<Zot>> {
+    fn as_zapper(store: &Zappers, id: &str, action: ZapperAction) -> Result<Option<Zapper>> {
         store.command_as(command("release", id, action), Some("Release"), true)
     }
     #[test]
     fn coordinator_status_moves_need_their_evidence() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         let mut todo = details();
-        todo.status = ZotIssueStatus::Todo;
-        let create_fix = |id: &str, details: ZotIssueDetails| {
+        todo.status = ZapperIssueStatus::Todo;
+        let create_fix = |id: &str, details: ZapperIssueDetails| {
             as_zapper(
                 &store,
                 id,
-                ZotAction::CreateIssue {
+                ZapperAction::CreateIssue {
                     issue_id: "fix".into(),
                     details,
                 },
@@ -807,25 +813,25 @@ mod tests {
         create_fix("with-criteria", todo.clone()).unwrap();
         assert_eq!(
             issue(&store).details.current_owner(),
-            Some(ZotIssueOwner::Zapper)
+            Some(ZapperIssueOwner::Zapper)
         );
-        let edit = |id: &str, status: ZotIssueStatus| {
+        let edit = |id: &str, status: ZapperIssueStatus| {
             let mut next = issue(&store).details;
             next.status = status;
             as_zapper(
                 &store,
                 id,
-                ZotAction::EditIssue {
+                ZapperAction::EditIssue {
                     issue_id: "fix".into(),
                     details: next,
                 },
             )
         };
         for (status, expected) in [
-            (ZotIssueStatus::InReview, "link the pull request"),
-            (ZotIssueStatus::InProgress, "start a thread"),
-            (ZotIssueStatus::Done, "closeIssue"),
-            (ZotIssueStatus::NeedsYou, "askUser"),
+            (ZapperIssueStatus::InReview, "link the pull request"),
+            (ZapperIssueStatus::InProgress, "start a thread"),
+            (ZapperIssueStatus::Done, "closeIssue"),
+            (ZapperIssueStatus::NeedsYou, "askUser"),
         ] {
             let err = edit(&format!("to-{status:?}"), status).unwrap_err();
             assert!(err.to_string().contains(expected), "{status:?}: {err}");
@@ -833,9 +839,9 @@ mod tests {
         let err = as_zapper(
             &store,
             "merge-without-pr",
-            ZotAction::CloseIssue {
+            ZapperAction::CloseIssue {
                 issue_id: "fix".into(),
-                outcome: ZotIssueOutcome::Merged,
+                outcome: ZapperIssueOutcome::Merged,
                 note: "Shipped".into(),
             },
         )
@@ -844,15 +850,15 @@ mod tests {
         as_zapper(
             &store,
             "drop",
-            ZotAction::CloseIssue {
+            ZapperAction::CloseIssue {
                 issue_id: "fix".into(),
-                outcome: ZotIssueOutcome::Dropped,
+                outcome: ZapperIssueOutcome::Dropped,
                 note: "Superseded by the new login flow".into(),
             },
         )
         .unwrap();
         let closed = issue(&store);
-        assert_eq!(closed.details.status, ZotIssueStatus::Canceled);
+        assert_eq!(closed.details.status, ZapperIssueStatus::Canceled);
         assert!(
             closed
                 .activity
@@ -865,15 +871,15 @@ mod tests {
     #[test]
     fn a_parent_shows_in_progress_while_a_child_is() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         let mut parent = details();
-        parent.status = ZotIssueStatus::Todo;
+        parent.status = ZapperIssueStatus::Todo;
         parent.done_criteria = "Both parts ship".into();
         as_zapper(
             &store,
             "parent",
-            ZotAction::CreateIssue {
+            ZapperAction::CreateIssue {
                 issue_id: "parent".into(),
                 details: parent.clone(),
             },
@@ -884,19 +890,19 @@ mod tests {
         as_zapper(
             &store,
             "child",
-            ZotAction::CreateIssue {
+            ZapperAction::CreateIssue {
                 issue_id: "child".into(),
                 details: child,
             },
         )
         .unwrap();
         let mut moving = parent.clone();
-        moving.status = ZotIssueStatus::InProgress;
+        moving.status = ZapperIssueStatus::InProgress;
         let move_parent = |id: &str| {
             as_zapper(
                 &store,
                 id,
-                ZotAction::EditIssue {
+                ZapperAction::EditIssue {
                     issue_id: "parent".into(),
                     details: moving.clone(),
                 },
@@ -907,11 +913,11 @@ mod tests {
         assert!(err.contains("child issues"), "{err}");
         as_zapper(
             &store,
-            "zot-worker-start",
-            ZotAction::Delegate {
+            "zapper-worker-start",
+            ZapperAction::Delegate {
                 issue_id: Some("child".into()),
-                worker: ZotWorker {
-                    chat_id: "zot-worker-start".into(),
+                worker: ZapperWorker {
+                    chat_id: "zapper-worker-start".into(),
                     ..worker()
                 },
                 model: config().coordinator_model,
@@ -920,14 +926,14 @@ mod tests {
         )
         .unwrap();
         move_parent("with-child").unwrap();
-        let zot = store.get("release").unwrap();
-        let parent = zot.issues.iter().find(|i| i.id == "parent").unwrap();
-        assert_eq!(parent.details.status, ZotIssueStatus::InProgress);
+        let zapper = store.get("release").unwrap();
+        let parent = zapper.issues.iter().find(|i| i.id == "parent").unwrap();
+        assert_eq!(parent.details.status, ZapperIssueStatus::InProgress);
     }
     #[test]
     fn unknown_relations_and_parents_say_to_create_them_first() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         let mut related = details();
         related.relations = vec!["later".into()];
@@ -935,7 +941,7 @@ mod tests {
             .command(command(
                 "release",
                 "related",
-                ZotAction::CreateIssue {
+                ZapperAction::CreateIssue {
                     issue_id: "fix".into(),
                     details: related,
                 },
@@ -950,7 +956,7 @@ mod tests {
             .command(command(
                 "release",
                 "child",
-                ZotAction::CreateIssue {
+                ZapperAction::CreateIssue {
                     issue_id: "fix".into(),
                     details: child,
                 },
@@ -965,21 +971,21 @@ mod tests {
     #[test]
     fn asking_the_user_hands_over_the_issue_and_their_answer_hands_it_back() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         add(&store);
         store
             .command(command(
                 "release",
                 "adopt",
-                ZotAction::AdoptWorker { worker: worker() },
+                ZapperAction::AdoptWorker { worker: worker() },
             ))
             .unwrap();
         store
             .command(command(
                 "release",
                 "link",
-                ZotAction::LinkIssueThread {
+                ZapperAction::LinkIssueThread {
                     issue_id: "fix".into(),
                     chat_id: "worker".into(),
                 },
@@ -989,7 +995,7 @@ mod tests {
         as_zapper(
             &store,
             "ask",
-            ZotAction::AskUser {
+            ZapperAction::AskUser {
                 issue_id: "fix".into(),
                 question: "Return 401 or 403 for a failed login?".into(),
                 recommendation: Some("401, matching the API".into()),
@@ -997,8 +1003,8 @@ mod tests {
         )
         .unwrap();
         let asked = issue(&store);
-        assert_eq!(asked.details.current_owner(), Some(ZotIssueOwner::User));
-        assert_eq!(asked.details.status, ZotIssueStatus::NeedsYou);
+        assert_eq!(asked.details.current_owner(), Some(ZapperIssueOwner::User));
+        assert_eq!(asked.details.status, ZapperIssueStatus::NeedsYou);
         assert!(!asked.details.assigned);
         assert_eq!(asked.activity.last().unwrap().kind, "question");
         assert_eq!(store.events("release").unwrap().len(), before);
@@ -1006,7 +1012,7 @@ mod tests {
             .command(command(
                 "release",
                 "answer",
-                ZotAction::CommentIssue {
+                ZapperAction::CommentIssue {
                     issue_id: "fix".into(),
                     text: "401".into(),
                     reply_to: None,
@@ -1016,11 +1022,11 @@ mod tests {
         let answered = issue(&store);
         assert_eq!(
             answered.details.current_owner(),
-            Some(ZotIssueOwner::Thread {
+            Some(ZapperIssueOwner::Thread {
                 chat_id: "worker".into()
             })
         );
-        assert_eq!(answered.details.status, ZotIssueStatus::InProgress);
+        assert_eq!(answered.details.status, ZapperIssueStatus::InProgress);
         assert!(answered.details.assigned);
         assert_eq!(store.events("release").unwrap().len(), before + 1);
     }
@@ -1042,24 +1048,24 @@ mod tests {
     }
     #[test]
     fn issues_saved_before_owners_read_assigned_as_the_zapper() {
-        let legacy: ZotIssueDetails = serde_json::from_str(
+        let legacy: ZapperIssueDetails = serde_json::from_str(
             r#"{"title":"Old","description":"","assigned":true,"dueDate":null}"#,
         )
         .unwrap();
-        assert_eq!(legacy.current_owner(), Some(ZotIssueOwner::Zapper));
+        assert_eq!(legacy.current_owner(), Some(ZapperIssueOwner::Zapper));
         assert!(legacy.done_criteria.is_empty());
     }
     #[test]
     fn coordinator_mutations_do_not_create_self_notification_loops() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         store
             .command_as(
                 command(
                     "release",
                     "self-issue",
-                    ZotAction::CreateIssue {
+                    ZapperAction::CreateIssue {
                         issue_id: "fix".into(),
                         details: details(),
                     },
@@ -1072,7 +1078,7 @@ mod tests {
         let comment = command(
             "release",
             "worker-report",
-            ZotAction::CommentIssue {
+            ZapperAction::CommentIssue {
                 issue_id: "fix".into(),
                 text: "Ready for review".into(),
                 reply_to: None,
@@ -1088,16 +1094,16 @@ mod tests {
     #[test]
     fn issues_persist_with_receipts_and_reject_stale_edits() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         add(&store);
         let rev = store.get("release").unwrap().revision;
         let mut changed = details();
-        changed.status = ZotIssueStatus::InReview;
+        changed.status = ZapperIssueStatus::InReview;
         let mut edit = command(
             "release",
             "edit",
-            ZotAction::EditIssue {
+            ZapperAction::EditIssue {
                 issue_id: "fix".into(),
                 details: changed.clone(),
             },
@@ -1107,9 +1113,9 @@ mod tests {
         let mut stale = edit.clone();
         stale.command_id = "stale".into();
         assert!(store.command(stale).is_err());
-        assert_eq!(issue(&store).details.status, ZotIssueStatus::InReview);
+        assert_eq!(issue(&store).details.status, ZapperIssueStatus::InReview);
         drop(store);
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         assert_eq!(store.command(edit).unwrap(), result);
         assert_eq!(issue(&store).number, 1);
         assert_eq!(issue(&store).activity.len(), 2);
@@ -1118,13 +1124,13 @@ mod tests {
     #[test]
     fn delegation_links_atomically_and_worker_reports_never_finish_issues() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         add(&store);
         let delegate = command(
             "release",
             "delegate",
-            ZotAction::Delegate {
+            ZapperAction::Delegate {
                 issue_id: Some("fix".into()),
                 worker: worker(),
                 model: config().coordinator_model,
@@ -1134,11 +1140,11 @@ mod tests {
         store.command(delegate.clone()).unwrap();
         store.command(delegate).unwrap();
         assert_eq!(issue(&store).threads, vec!["worker"]);
-        assert_eq!(issue(&store).details.status, ZotIssueStatus::InProgress);
+        assert_eq!(issue(&store).details.status, ZapperIssueStatus::InProgress);
         assert_eq!(store.outbox().unwrap().len(), 1);
-        let mut event = ZotEvent {
+        let mut event = ZapperEvent {
             id: "report".into(),
-            zot_id: "release".into(),
+            zapper_id: "release".into(),
             worker_chat_id: "worker".into(),
             kind: "settled".into(),
             summary: "Tests passed".into(),
@@ -1147,16 +1153,16 @@ mod tests {
         store.record_event(&event).unwrap();
         store.record_event(&event).unwrap();
         assert_eq!(issue(&store).activity.len(), 3);
-        assert_eq!(issue(&store).details.status, ZotIssueStatus::InProgress);
+        assert_eq!(issue(&store).details.status, ZapperIssueStatus::InProgress);
         event.id = "failure".into();
         event.kind = "failed".into();
         store.record_event(&event).unwrap();
-        assert_eq!(issue(&store).details.status, ZotIssueStatus::Blocked);
+        assert_eq!(issue(&store).details.status, ZapperIssueStatus::Blocked);
     }
     #[test]
     fn invalid_links_and_delegations_do_not_partially_mutate_issues() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         add(&store);
         let before = store.get("release").unwrap();
@@ -1165,7 +1171,7 @@ mod tests {
                 .command(command(
                     "release",
                     "bad-thread",
-                    ZotAction::LinkIssueThread {
+                    ZapperAction::LinkIssueThread {
                         issue_id: "fix".into(),
                         chat_id: "foreign".into()
                     }
@@ -1183,7 +1189,7 @@ mod tests {
                     .command(command(
                         "release",
                         "bad-pr",
-                        ZotAction::LinkIssuePullRequest {
+                        ZapperAction::LinkIssuePullRequest {
                             issue_id: "fix".into(),
                             url: url.into(),
                             title: "PR".into()
@@ -1199,7 +1205,7 @@ mod tests {
                 .command(command(
                     "release",
                     "bad-delegate",
-                    ZotAction::Delegate {
+                    ZapperAction::Delegate {
                         issue_id: Some("fix".into()),
                         worker: outside,
                         model: config().coordinator_model,
@@ -1214,7 +1220,7 @@ mod tests {
             .command(command(
                 "release",
                 "pr",
-                ZotAction::LinkIssuePullRequest {
+                ZapperAction::LinkIssuePullRequest {
                     issue_id: "fix".into(),
                     url: "https://github.com/team/repo/pull/123/".into(),
                     title: "The fix".into(),
@@ -1227,14 +1233,14 @@ mod tests {
         );
     }
     #[test]
-    fn old_zots_default_to_no_issues_and_relations_stay_scoped() {
+    fn old_zappers_default_to_no_issues_and_relations_stay_scoped() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         let mut json = serde_json::to_value(store.get("release").unwrap()).unwrap();
         json.as_object_mut().unwrap().remove("issues");
         assert!(
-            serde_json::from_value::<Zot>(json)
+            serde_json::from_value::<Zapper>(json)
                 .unwrap()
                 .issues
                 .is_empty()
@@ -1246,7 +1252,7 @@ mod tests {
                 .command(command(
                     "release",
                     "relation",
-                    ZotAction::CreateIssue {
+                    ZapperAction::CreateIssue {
                         issue_id: "fix".into(),
                         details: invalid
                     }
@@ -1261,7 +1267,7 @@ mod tests {
                 .command(command(
                     "release",
                     "date",
-                    ZotAction::EditIssue {
+                    ZapperAction::EditIssue {
                         issue_id: "fix".into(),
                         details: invalid
                     }
@@ -1274,26 +1280,26 @@ mod tests {
 #[cfg(test)]
 mod attribution_tests {
     use super::*;
-    use crate::zots::tests::{command, create, worker};
+    use crate::zappers::tests::{command, create, worker};
     #[test]
     fn activity_notices_keep_host_instructions_out_of_the_visible_message() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
-        let zot = store.get("release").unwrap();
+        let zapper = store.get("release").unwrap();
         let mut request: zuse_protocol::RunRequest = serde_json::from_value(serde_json::json!({
-            "prompt": zuse_protocol::presentation::zot_message::activity_from(&zot, "Implementation thread", "Activity update\nVerification passed; ready for review."),
+            "prompt": zuse_protocol::presentation::zapper_message::activity_from(&zapper, "Implementation thread", "Activity update\nVerification passed; ready for review."),
             "cwd": "/tmp", "sandbox": "workspace-write"
         })).unwrap();
         store
             .prepare_request(
-                &zot.coordinator_chat_id,
+                &zapper.coordinator_chat_id,
                 zuse_protocol::HarnessId::ClaudeCode,
                 &mut request,
             )
             .unwrap();
         let (sender, visible) =
-            zuse_protocol::presentation::zot_message::parse(&request.prompt).unwrap();
+            zuse_protocol::presentation::zapper_message::parse(&request.prompt).unwrap();
         assert_eq!(sender.name, "Implementation thread");
         assert!(sender.activity);
         assert_eq!(
@@ -1311,30 +1317,34 @@ mod attribution_tests {
     #[test]
     fn worker_context_keeps_attribution_and_hides_engine_instructions() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         store
             .command(command(
                 "release",
                 "adopt",
-                ZotAction::AdoptWorker { worker: worker() },
+                ZapperAction::AdoptWorker { worker: worker() },
             ))
             .unwrap();
-        let zot = store.get("release").unwrap();
-        let mut request: zuse_protocol::RunRequest=serde_json::from_value(serde_json::json!({"prompt":zuse_protocol::presentation::zot_message::envelope(&zot,"Implement the issue"),"cwd":"/tmp","sandbox":"workspace-write"})).unwrap();
+        let zapper = store.get("release").unwrap();
+        let mut request: zuse_protocol::RunRequest=serde_json::from_value(serde_json::json!({"prompt":zuse_protocol::presentation::zapper_message::envelope(&zapper,"Implement the issue"),"cwd":"/tmp","sandbox":"workspace-write"})).unwrap();
         store
             .prepare_request("worker", zuse_protocol::HarnessId::ClaudeCode, &mut request)
             .unwrap();
         let (sender, display) =
-            zuse_protocol::presentation::zot_message::parse(&request.prompt).unwrap();
+            zuse_protocol::presentation::zapper_message::parse(&request.prompt).unwrap();
         assert_eq!(sender.name, "Release");
         assert_eq!(display, "Implement the issue");
         assert!(
             request
                 .prompt
-                .contains("You are a thread working for the Zapper \"Release\" (zotId release")
+                .contains("You are a thread working for the Zapper \"Release\" (zapperId release")
         );
-        assert!(!request.prompt.contains("Zot "));
+        assert!(
+            !request
+                .prompt
+                .contains(zuse_protocol::zappers::legacy::ID_FIELD)
+        );
         let once = request.prompt.clone();
         store
             .prepare_request("worker", zuse_protocol::HarnessId::ClaudeCode, &mut request)

@@ -3,14 +3,14 @@
 //! message); the doc entry gets a [`MessageSource::Zapper`] part naming the
 //! Zapper and carrying the user's own words or a one-line update summary.
 use super::*;
-use zuse_protocol::presentation::zot_message::{self, ZotSender};
+use zuse_protocol::presentation::zapper_message::{self, ZapperSender};
 use zuse_protocol::slack::MessageSource;
 
 /// Summaries kept for event wakes still waiting to dispatch. Older rows only
 /// matter for a retried dispatch, which falls back to a generic summary.
 const KEPT_SUMMARIES: i64 = 500;
 
-impl Zots {
+impl Zappers {
     /// Remember the short summary for an event wake queued under `message_id`.
     pub(crate) fn record_turn_summary(&self, message_id: &str, summary: &str) -> Result<()> {
         let db = self
@@ -19,11 +19,11 @@ impl Zots {
             .lock()
             .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?;
         db.execute(
-            "INSERT OR REPLACE INTO zot_turn_summaries(id, summary) VALUES(?1,?2)",
+            "INSERT OR REPLACE INTO zapper_turn_summaries(id, summary) VALUES(?1,?2)",
             params![message_id, summary],
         )?;
         db.execute(
-            "DELETE FROM zot_turn_summaries WHERE rowid <= (SELECT MAX(rowid) FROM zot_turn_summaries) - ?1",
+            "DELETE FROM zapper_turn_summaries WHERE rowid <= (SELECT MAX(rowid) FROM zapper_turn_summaries) - ?1",
             [KEPT_SUMMARIES],
         )?;
         Ok(())
@@ -36,7 +36,7 @@ impl Zots {
             .lock()
             .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?
             .query_row(
-                "SELECT summary FROM zot_turn_summaries WHERE id=?1",
+                "SELECT summary FROM zapper_turn_summaries WHERE id=?1",
                 [message_id],
                 |r| r.get(0),
             )
@@ -45,19 +45,19 @@ impl Zots {
 
     /// The source to attach to a coordinator turn's doc entry, or `None` for
     /// any other chat. `original` is the prompt as sent, before
-    /// [`Zots::prepare_request`] wrapped it in the brief.
+    /// [`Zappers::prepare_request`] wrapped it in the brief.
     pub fn turn_source(
         &self,
         chat: &str,
         original: &str,
         message_id: Option<&str>,
     ) -> Result<Option<MessageSource>> {
-        let Some(zot) = self.coordinator(chat)? else {
+        let Some(zapper) = self.coordinator(chat)? else {
             return Ok(None);
         };
         // Only an unattributed prompt is the owner's own message; activity
         // wakes and thread reports arrive attributed to their sender.
-        let (text, typed) = match zot_message::parse(original) {
+        let (text, typed) = match zapper_message::parse(original) {
             Some((sender, body)) if sender.activity => {
                 let text = match message_id.map(|id| self.turn_summary_for(id)).transpose()? {
                     Some(Some(summary)) => summary,
@@ -71,11 +71,11 @@ impl Zots {
         Ok(Some(MessageSource::Zapper {
             text,
             typed,
-            sender: ZotSender {
-                zot_id: zot.id.clone(),
-                chat_id: zot.coordinator_chat_id.clone(),
-                name: zot.config.name.clone(),
-                avatar: zot.config.avatar.clone(),
+            sender: ZapperSender {
+                zapper_id: zapper.id.clone(),
+                chat_id: zapper.coordinator_chat_id.clone(),
+                name: zapper.config.name.clone(),
+                avatar: zapper.config.avatar.clone(),
                 activity: false,
             },
         }))
@@ -83,7 +83,7 @@ impl Zots {
 }
 
 /// A summary for an activity wake whose recorded summary is gone.
-fn activity_fallback(sender: &ZotSender, body: &str) -> String {
+fn activity_fallback(sender: &ZapperSender, body: &str) -> String {
     let heading = body.lines().next().unwrap_or_default();
     match heading
         .strip_prefix("Activity update: ")
@@ -112,7 +112,7 @@ fn issue_code(summary: &str) -> Option<&str> {
 
 /// One line for the updates a wake carries, such as
 /// "2 thread reports · ZAP-7 changed".
-pub(crate) fn turn_summary(events: &[ZotEvent]) -> String {
+pub(crate) fn turn_summary(events: &[ZapperEvent]) -> String {
     let count = |kind: &str| events.iter().filter(|e| e.kind == kind).count();
     let mut codes: Vec<&str> = Vec::new();
     let mut unnamed_issues = 0;
@@ -172,12 +172,12 @@ pub(crate) fn turn_summary(events: &[ZotEvent]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::zots::tests::{create, worker};
+    use crate::zappers::tests::{create, worker};
 
-    fn event(kind: &str, summary: &str) -> ZotEvent {
-        ZotEvent {
+    fn event(kind: &str, summary: &str) -> ZapperEvent {
+        ZapperEvent {
             id: format!("{kind}-{summary}"),
-            zot_id: "release".into(),
+            zapper_id: "release".into(),
             worker_chat_id: "worker".into(),
             kind: kind.into(),
             summary: summary.into(),
@@ -228,10 +228,10 @@ mod tests {
     #[test]
     fn coordinator_turns_are_tagged_with_the_user_text_or_a_summary() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
-        let zot = store.get("release").unwrap();
-        let chat = zot.coordinator_chat_id.clone();
+        let zapper = store.get("release").unwrap();
+        let chat = zapper.coordinator_chat_id.clone();
 
         // A user's own message: the summary is exactly what they typed.
         let source = store
@@ -248,13 +248,14 @@ mod tests {
         };
         assert_eq!(text, "Ship the release notes");
         assert!(typed, "the owner's message shows as their own");
-        assert_eq!(sender.zot_id, "release");
+        assert_eq!(sender.zapper_id, "release");
         assert_eq!(sender.chat_id, chat);
-        assert_eq!(sender.name, zot.config.name);
+        assert_eq!(sender.name, zapper.config.name);
         assert!(!sender.activity);
 
         // An event wake: the summary recorded when it was queued.
-        let notice = zot_message::activity_from(&zot, "Thread", "Activity update: 2 updates\n…");
+        let notice =
+            zapper_message::activity_from(&zapper, "Thread", "Activity update: 2 updates\n…");
         store
             .record_turn_summary("wake-1", "2 thread reports")
             .unwrap();
@@ -283,7 +284,8 @@ mod tests {
                 .text(),
             "2 updates"
         );
-        let single = zot_message::activity_from(&zot, "Build thread", "Activity update\nDone");
+        let single =
+            zapper_message::activity_from(&zapper, "Build thread", "Activity update\nDone");
         assert_eq!(
             store
                 .turn_source(&chat, &single, None)
@@ -295,10 +297,10 @@ mod tests {
 
         // Threads and ordinary chats are left alone.
         store
-            .command(crate::zots::tests::command(
+            .command(crate::zappers::tests::command(
                 "release",
                 "adopt",
-                ZotAction::AdoptWorker { worker: worker() },
+                ZapperAction::AdoptWorker { worker: worker() },
             ))
             .unwrap();
         assert!(store.turn_source("worker", "Hi", None).unwrap().is_none());
@@ -308,7 +310,7 @@ mod tests {
     #[test]
     fn the_prompt_sent_to_the_coordinator_is_unchanged() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         let chat = store.get("release").unwrap().coordinator_chat_id;
         let mut request: zuse_protocol::RunRequest = serde_json::from_value(

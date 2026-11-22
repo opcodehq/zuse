@@ -1,29 +1,29 @@
 use super::*;
-use zuse_protocol::zots::ZotAction;
+use zuse_protocol::zappers::ZapperAction;
 
 impl EngineRpc {
-    pub(super) async fn zot_command(
+    pub(super) async fn zapper_command(
         &self,
         params: serde_json::Value,
     ) -> Result<RpcReply, RpcError> {
-        let actor = params["_zotActor"].as_str().map(str::to_owned);
-        let worker = params["_zotWorkerChatId"].as_str().map(str::to_owned);
-        let command = zuse_protocol::zots::parse_command(params).map_err(RpcError::BadParams)?;
-        let zots = self
-            .zots
+        let actor = params["_zapperActor"].as_str().map(str::to_owned);
+        let worker = params["_zapperWorkerChatId"].as_str().map(str::to_owned);
+        let command = zuse_protocol::zappers::parse_command(params).map_err(RpcError::BadParams)?;
+        let zappers = self
+            .zappers
             .as_ref()
-            .ok_or_else(|| RpcError::Capability("zots.v1".into()))?;
+            .ok_or_else(|| RpcError::Capability("zappers.v1".into()))?;
         let failed = |e: anyhow::Error| RpcError::Failed(e.to_string());
         let from_coordinator = actor.is_some() && worker.is_none();
         if let Some(worker) = worker {
             let issue_id = match &command.action {
-                ZotAction::CommentIssue { issue_id, .. }
-                | ZotAction::LinkIssuePullRequest { issue_id, .. } => issue_id,
+                ZapperAction::CommentIssue { issue_id, .. }
+                | ZapperAction::LinkIssuePullRequest { issue_id, .. } => issue_id,
                 _ => return Err(RpcError::Capability("worker.issue_scope".into())),
             };
-            let zot = zots.get(&command.zot_id).map_err(failed)?;
-            if !zot.workers.iter().any(|w| w.chat_id == worker)
-                || !zot
+            let zapper = zappers.get(&command.zapper_id).map_err(failed)?;
+            if !zapper.workers.iter().any(|w| w.chat_id == worker)
+                || !zapper
                     .issues
                     .iter()
                     .any(|i| i.id == *issue_id && i.threads.contains(&worker))
@@ -32,10 +32,12 @@ impl EngineRpc {
             }
         }
 
-        if let Some(result) = zots.receipt(&command).map_err(failed)? {
+        if let Some(result) = zappers.receipt(&command).map_err(failed)? {
             return RpcReply::value(&result);
         }
-        if let ZotAction::Create { config } | ZotAction::Configure { config } = &command.action {
+        if let ZapperAction::Create { config } | ZapperAction::Configure { config } =
+            &command.action
+        {
             let _: HarnessId =
                 serde_json::from_value(serde_json::json!(config.coordinator_model.harness))
                     .map_err(|e| RpcError::BadParams(e.to_string()))?;
@@ -50,7 +52,7 @@ impl EngineRpc {
                 }
             }
         }
-        if let ZotAction::AdoptWorker { worker } = &command.action {
+        if let ZapperAction::AdoptWorker { worker } = &command.action {
             let chat = self
                 .workspace
                 .chat(&worker.chat_id)
@@ -59,14 +61,14 @@ impl EngineRpc {
             if chat.device_id != worker.device_id
                 || chat.space_id.as_deref() != Some(&worker.space_id)
                 || chat.parent_chat_id.is_some()
-                || zots.coordinator(&chat.id).map_err(failed)?.is_some()
+                || zappers.coordinator(&chat.id).map_err(failed)?.is_some()
             {
                 return Err(RpcError::BadParams(
                     "worker must be an ordinary conversation in the selected repository".into(),
                 ));
             }
         }
-        if let ZotAction::Delegate {
+        if let ZapperAction::Delegate {
             worker,
             model,
             base,
@@ -83,21 +85,21 @@ impl EngineRpc {
                     "delegation requires a new conversation identity".into(),
                 ));
             }
-            if worker.chat_id != format!("zot-worker-{}", command.command_id)
+            if !zuse_protocol::zappers::worker_chat_id_for(&worker.chat_id, &command.command_id)
                 || base.trim().is_empty()
             {
                 return Err(RpcError::BadParams(
-                    "delegate chatId must be zot-worker-<commandId>, with an explicit base ref"
+                    "delegate chatId must be zapper-worker-<commandId>, with an explicit base ref"
                         .into(),
                 ));
             }
             let _: HarnessId = serde_json::from_value(serde_json::json!(model.harness))
                 .map_err(|e| RpcError::BadParams(e.to_string()))?;
         }
-        let old = zots.get(&command.zot_id).ok();
+        let old = zappers.get(&command.zapper_id).ok();
         if matches!(
             command.action,
-            ZotAction::FreshConversation | ZotAction::Delete
+            ZapperAction::FreshConversation | ZapperAction::Delete
         ) && old
             .as_ref()
             .is_some_and(|z| self.sessions.turn_in_flight(&z.coordinator_chat_id))
@@ -106,32 +108,32 @@ impl EngineRpc {
                 "stop the active coordinator turn first".into(),
             ));
         }
-        let result = zots
+        let result = zappers
             .command_as(command.clone(), actor.as_deref(), from_coordinator)
             .map_err(failed)?;
-        let current = result.as_ref().and_then(|z| zots.get(&z.id).ok());
-        if let Some(zot) = &current {
+        let current = result.as_ref().and_then(|z| zappers.get(&z.id).ok());
+        if let Some(zapper) = &current {
             let harness: HarnessId =
-                serde_json::from_value(serde_json::json!(zot.config.coordinator_model.harness))
+                serde_json::from_value(serde_json::json!(zapper.config.coordinator_model.harness))
                     .map_err(|e| RpcError::BadParams(e.to_string()))?;
-            let cwd = zots
-                .workspace(&zot.id)
+            let cwd = zappers
+                .workspace(&zapper.id)
                 .map_err(failed)?
                 .to_string_lossy()
                 .into_owned();
             let previous = old
                 .as_ref()
-                .filter(|o| o.coordinator_chat_id != zot.coordinator_chat_id)
+                .filter(|o| o.coordinator_chat_id != zapper.coordinator_chat_id)
                 .and_then(|o| self.workspace.chat_config(&o.coordinator_chat_id));
             self.workspace
                 .create_chat_with_parent(
-                    &zot.coordinator_chat_id,
+                    &zapper.coordinator_chat_id,
                     None,
-                    Some(&zot.config.home_device_id),
+                    Some(&zapper.config.home_device_id),
                     Some(zuse_protocol::ChatConfig {
                         harness: previous.as_ref().map_or(harness, |c| c.harness),
                         model: previous.as_ref().map_or_else(
-                            || zot.config.coordinator_model.model.clone(),
+                            || zapper.config.coordinator_model.model.clone(),
                             |c| c.model.clone(),
                         ),
                         reasoning: None,
@@ -144,11 +146,11 @@ impl EngineRpc {
                 )
                 .map_err(|e| RpcError::Failed(e.to_string()))?;
             self.workspace
-                .rename_chat(&zot.coordinator_chat_id, &zot.config.name)
+                .rename_chat(&zapper.coordinator_chat_id, &zapper.config.name)
                 .map_err(|e| RpcError::Failed(e.to_string()))?;
             let mut config = self
                 .workspace
-                .chat_config(&zot.coordinator_chat_id)
+                .chat_config(&zapper.coordinator_chat_id)
                 .unwrap_or(zuse_protocol::ChatConfig {
                     harness,
                     model: None,
@@ -159,19 +161,19 @@ impl EngineRpc {
                 });
             // The conversation's own model picker chooses the model after
             // creation; only an explicit model change through the API applies.
-            if let ZotAction::Configure { config: wanted } = &command.action {
+            if let ZapperAction::Configure { config: wanted } = &command.action {
                 if old
                     .as_ref()
                     .is_some_and(|o| o.config.coordinator_model != wanted.coordinator_model)
                 {
                     config.harness = harness;
-                    config.model = zot.config.coordinator_model.model.clone();
+                    config.model = zapper.config.coordinator_model.model.clone();
                 }
             }
             config.sandbox = zuse_protocol::SandboxLevel::Auto;
             config.plan = false;
             self.workspace
-                .set_chat_config(&zot.coordinator_chat_id, &config)
+                .set_chat_config(&zapper.coordinator_chat_id, &config)
                 .map_err(|e| RpcError::Failed(e.to_string()))?;
         }
         RpcReply::value(&result)
@@ -182,7 +184,7 @@ impl EngineRpc {
 mod tests {
     use super::*;
     use crate::{EngineCore, EngineProfile};
-    use zuse_protocol::zots::*;
+    use zuse_protocol::zappers::*;
 
     #[tokio::test]
     async fn worker_issue_commands_are_limited_to_linked_issues() {
@@ -205,29 +207,132 @@ mod tests {
             .unwrap();
         let service = core.rpc_service();
         value(&service, "Mutate", serde_json::json!({"op":"createChat","chatId":"worker","deviceId":core.device_id,"spaceId":"repo"})).await;
-        value(&service, "ZotCommand", serde_json::json!({"commandId":"create","zotId":"release","expectedRevision":null,"action":{"type":"create","config":{"name":"Release","purpose":"Coordinate","homeDeviceId":core.device_id,"repositories":[{"deviceId":core.device_id,"spaceId":"repo"}],"coordinatorModel":{"harness":"mock","model":null},"workerDeviceId":core.device_id,"maxConcurrentWorkers":1,"maxFollowups":3}}})).await;
-        value(&service, "ZotCommand", serde_json::json!({"commandId":"adopt","zotId":"release","expectedRevision":null,"action":{"type":"adoptWorker","worker":{"chatId":"worker","deviceId":core.device_id,"spaceId":"repo","objective":"Work","followups":0}}})).await;
+        value(&service, "ZapperCommand", serde_json::json!({"commandId":"create","zapperId":"release","expectedRevision":null,"action":{"type":"create","config":{"name":"Release","purpose":"Coordinate","homeDeviceId":core.device_id,"repositories":[{"deviceId":core.device_id,"spaceId":"repo"}],"coordinatorModel":{"harness":"mock","model":null},"workerDeviceId":core.device_id,"maxConcurrentWorkers":1,"maxFollowups":3}}})).await;
+        value(&service, "ZapperCommand", serde_json::json!({"commandId":"adopt","zapperId":"release","expectedRevision":null,"action":{"type":"adoptWorker","worker":{"chatId":"worker","deviceId":core.device_id,"spaceId":"repo","objective":"Work","followups":0}}})).await;
         for id in ["linked", "unlinked"] {
-            value(&service,"ZotCommand",serde_json::json!({"commandId":format!("create-{id}"),"zotId":"release","expectedRevision":null,"action":{"type":"createIssue","issueId":id,"details":{"title":"Work","description":"","dueDate":null}}})).await;
+            value(&service,"ZapperCommand",serde_json::json!({"commandId":format!("create-{id}"),"zapperId":"release","expectedRevision":null,"action":{"type":"createIssue","issueId":id,"details":{"title":"Work","description":"","dueDate":null}}})).await;
         }
-        value(&service,"ZotCommand",serde_json::json!({"commandId":"link","zotId":"release","expectedRevision":null,"action":{"type":"linkIssueThread","issueId":"linked","chatId":"worker"}})).await;
-        let worker_command = |id: &str, issue: &str| serde_json::json!({"commandId":id,"zotId":"release","expectedRevision":null,"_zotActor":"worker","_zotWorkerChatId":"worker","action":{"type":"commentIssue","issueId":issue,"text":"Tests passed"}});
-        value(&service, "ZotCommand", worker_command("report", "linked")).await;
+        value(&service,"ZapperCommand",serde_json::json!({"commandId":"link","zapperId":"release","expectedRevision":null,"action":{"type":"linkIssueThread","issueId":"linked","chatId":"worker"}})).await;
+        let worker_command = |id: &str, issue: &str| serde_json::json!({"commandId":id,"zapperId":"release","expectedRevision":null,"_zapperActor":"worker","_zapperWorkerChatId":"worker","action":{"type":"commentIssue","issueId":issue,"text":"Tests passed"}});
+        value(
+            &service,
+            "ZapperCommand",
+            worker_command("report", "linked"),
+        )
+        .await;
         assert!(
             service
-                .handle("ZotCommand", worker_command("foreign", "unlinked"))
+                .handle("ZapperCommand", worker_command("foreign", "unlinked"))
                 .await
                 .is_err()
         );
         let mut forbidden = worker_command("close", "linked");
         forbidden["action"] = serde_json::json!({"type":"editIssue","issueId":"linked","details":{"title":"Closed","description":"","status":"done","dueDate":null}});
-        assert!(service.handle("ZotCommand", forbidden).await.is_err());
-        let zot = core.zots.get("release").unwrap();
+        assert!(service.handle("ZapperCommand", forbidden).await.is_err());
+        let zapper = core.zappers.get("release").unwrap();
         assert_eq!(
-            zot.issues[0].activity.last().unwrap().actor.as_deref(),
+            zapper.issues[0].activity.last().unwrap().actor.as_deref(),
             Some("worker")
         );
-        assert_eq!(zot.issues[1].activity.len(), 1);
+        assert_eq!(zapper.issues[1].activity.len(), 1);
+        core.shutdown().await;
+    }
+
+    /// Clients, peers and coordinators from before the rename keep working:
+    /// old method names, `zotId` and the old internal fields are served as
+    /// current ones (legacy, remove after one release).
+    #[tokio::test]
+    async fn pre_rename_method_names_and_fields_are_still_served() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = EngineProfile::local(dir.path()).unwrap();
+        let store_root = profile.store_root().to_path_buf();
+        let core = EngineCore::assemble_with_profile(
+            profile,
+            std::sync::Arc::new(HarnessRegistry::new()),
+            HarnessId::Mock,
+            None,
+        )
+        .unwrap();
+        core.workspace
+            .create_space(
+                "repo",
+                &core.device_id,
+                dir.path().to_str().unwrap(),
+                None,
+                false,
+            )
+            .unwrap();
+        let service = core.rpc_service();
+        value(&service, "Mutate", serde_json::json!({"op":"createChat","chatId":"worker","deviceId":core.device_id,"spaceId":"repo"})).await;
+        let created = value(&service, "ZotCommand", serde_json::json!({"commandId":"create","zotId":"release","expectedRevision":null,"action":{"type":"create","config":{"name":"Release","purpose":"Coordinate","homeDeviceId":core.device_id,"repositories":[{"deviceId":core.device_id,"spaceId":"repo"}],"coordinatorModel":{"harness":"mock","model":null},"workerDeviceId":core.device_id,"maxConcurrentWorkers":1,"maxFollowups":3}}})).await;
+        assert_eq!(created["coordinatorChatId"], "zapper-release-0");
+        value(&service, "ZotCommand", serde_json::json!({"commandId":"adopt","zotId":"release","expectedRevision":null,"action":{"type":"adoptWorker","worker":{"chatId":"worker","deviceId":core.device_id,"spaceId":"repo","objective":"Work","followups":0}}})).await;
+        value(&service, "ZotCommand", serde_json::json!({"commandId":"issue","zotId":"release","expectedRevision":null,"action":{"type":"createIssue","issueId":"linked","details":{"title":"Work","description":"","dueDate":null}}})).await;
+        value(&service, "ZotCommand", serde_json::json!({"commandId":"link","zotId":"release","expectedRevision":null,"action":{"type":"linkIssueThread","issueId":"linked","chatId":"worker"}})).await;
+        // A worker's report as an older peer engine forwards it.
+        value(&service, "ZotCommand", serde_json::json!({"commandId":"report","zotId":"release","expectedRevision":null,"_zotActor":"worker","_zotWorkerChatId":"worker","action":{"type":"commentIssue","issueId":"linked","text":"Tests passed"}})).await;
+        let zapper = core.zappers.get("release").unwrap();
+        assert_eq!(
+            zapper.issues[0].activity.last().unwrap().actor.as_deref(),
+            Some("worker")
+        );
+        // Old names read the same data, in the shape older clients parse.
+        let files = value(&service, "ZotFiles", serde_json::json!({"zotId":"release"})).await;
+        assert!(!files.as_array().unwrap().is_empty());
+        let events = value(
+            &service,
+            "ZotEvents",
+            serde_json::json!({"zotId":"release"}),
+        )
+        .await;
+        let current = value(
+            &service,
+            "ZapperEvents",
+            serde_json::json!({"zapperId":"release"}),
+        )
+        .await;
+        assert_eq!(
+            events.as_array().unwrap().len(),
+            current.as_array().unwrap().len()
+        );
+        for (old, new) in events
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(current.as_array().unwrap())
+        {
+            assert_eq!(old["zotId"], "release");
+            assert!(old.get("zapperId").is_none());
+            assert_eq!(new["zapperId"], "release");
+        }
+        let board = value(
+            &service,
+            "ZotIssue",
+            serde_json::json!({"zotId":"release","issueId":"ZAP-1"}),
+        )
+        .await;
+        assert_eq!(board["id"], "linked");
+        // Control calls from tools started before the rename.
+        let token = std::fs::read_to_string(store_root.join("zappers/control-token")).unwrap();
+        let info = value(
+            &service,
+            zuse_protocol::control::API_INFO,
+            serde_json::json!({}),
+        )
+        .await;
+        assert!(
+            info["capabilities"]
+                .as_array()
+                .unwrap()
+                .contains(&"zots.v1".into())
+        );
+        let via_call = value(
+            &service,
+            zuse_protocol::control::CALL,
+            serde_json::json!({"token":token,"method":"ZotFiles","params":{"zotId":"release"}}),
+        )
+        .await;
+        assert_eq!(via_call, files);
         core.shutdown().await;
     }
 
@@ -294,15 +399,15 @@ mod tests {
             .create_space("repo", &core.device_id, repo.to_str().unwrap(), None, true)
             .unwrap();
         let service = core.rpc_service();
-        let config = ZotConfig {
+        let config = ZapperConfig {
             name: "Release".into(),
             purpose: "Coordinate".into(),
             home_device_id: core.device_id.clone(),
-            repositories: vec![ZotRepository {
+            repositories: vec![ZapperRepository {
                 device_id: core.device_id.clone(),
                 space_id: "repo".into(),
             }],
-            coordinator_model: ZotModel {
+            coordinator_model: ZapperModel {
                 harness: "mock".into(),
                 model: None,
             },
@@ -312,14 +417,14 @@ mod tests {
             avatar: None,
             avatar_image: None,
         };
-        value(&service,"ZotCommand",serde_json::json!({"commandId":"create","zotId":"release","expectedRevision":null,"action":{"type":"create","config":config}})).await;
-        let launch = serde_json::json!({"commandId":"launch","zotId":"release","expectedRevision":null,"action":{"type":"delegate","worker":{"chatId":"zot-worker-launch","deviceId":core.device_id,"spaceId":"repo","objective":"Inspect the repository","followups":0},"model":{"harness":"mock","model":null},"base":"main"}});
-        value(&service, "ZotCommand", launch.clone()).await;
-        value(&service, "ZotCommand", launch).await;
+        value(&service,"ZapperCommand",serde_json::json!({"commandId":"create","zapperId":"release","expectedRevision":null,"action":{"type":"create","config":config}})).await;
+        let launch = serde_json::json!({"commandId":"launch","zapperId":"release","expectedRevision":null,"action":{"type":"delegate","worker":{"chatId":"zapper-worker-launch","deviceId":core.device_id,"spaceId":"repo","objective":"Inspect the repository","followups":0},"model":{"harness":"mock","model":null},"base":"main"}});
+        value(&service, "ZapperCommand", launch.clone()).await;
+        value(&service, "ZapperCommand", launch).await;
         tokio::time::timeout(std::time::Duration::from_secs(20), async {
             loop {
                 if core
-                    .zots
+                    .zappers
                     .events("release")
                     .unwrap()
                     .iter()
@@ -332,19 +437,23 @@ mod tests {
         })
         .await
         .expect("worker should finish and produce a durable report");
-        let chat = core.workspace.chat("zot-worker-launch").unwrap().unwrap();
+        let chat = core
+            .workspace
+            .chat("zapper-worker-launch")
+            .unwrap()
+            .unwrap();
         let cwd = std::path::PathBuf::from(chat.cwd.unwrap());
         assert_ne!(cwd, repo);
         assert!(cwd.starts_with(worktrees));
         let reports = core
-            .zots
+            .zappers
             .events("release")
             .unwrap()
             .into_iter()
             .filter(|e| e.kind == "settled")
             .count();
         assert_eq!(reports, 1);
-        assert_eq!(core.zots.get("release").unwrap().workers.len(), 1);
+        assert_eq!(core.zappers.get("release").unwrap().workers.len(), 1);
         core.shutdown().await;
     }
 
@@ -359,7 +468,7 @@ mod tests {
         }
     }
     #[tokio::test]
-    async fn zot_api_receipts_files_and_auth_share_engine_authority() {
+    async fn zapper_api_receipts_files_and_auth_share_engine_authority() {
         let dir = tempfile::tempdir().unwrap();
         let profile = EngineProfile::local(dir.path()).unwrap();
         let store_root = profile.store_root().to_path_buf();
@@ -380,7 +489,7 @@ mod tests {
                 .await
                 .is_err()
         );
-        let token = std::fs::read_to_string(store_root.join("zots/control-token")).unwrap();
+        let token = std::fs::read_to_string(store_root.join("zappers/control-token")).unwrap();
         let info = value(
             &service,
             zuse_protocol::control::CALL,
@@ -388,12 +497,12 @@ mod tests {
         )
         .await;
         assert_eq!(info["apiVersion"], 1);
-        let config = ZotConfig {
+        let config = ZapperConfig {
             name: "Release".into(),
             purpose: "Coordinate".into(),
             home_device_id: core.device_id.clone(),
             repositories: vec![],
-            coordinator_model: ZotModel {
+            coordinator_model: ZapperModel {
                 harness: "mock".into(),
                 model: None,
             },
@@ -403,13 +512,13 @@ mod tests {
             avatar: None,
             avatar_image: None,
         };
-        let command = ZotCommand {
+        let command = ZapperCommand {
             command_id: "create".into(),
-            zot_id: "release".into(),
+            zapper_id: "release".into(),
             expected_revision: None,
-            action: ZotAction::Create { config },
+            action: ZapperAction::Create { config },
         };
-        let envelope = serde_json::json!({"token":token,"method":"ZotCommand","params":command});
+        let envelope = serde_json::json!({"token":token,"method":"ZapperCommand","params":command});
         let first = value(&service, zuse_protocol::control::CALL, envelope.clone()).await;
         assert_eq!(
             value(&service, zuse_protocol::control::CALL, envelope).await,
@@ -420,21 +529,21 @@ mod tests {
         let config = row.config.unwrap();
         assert!(!config.plan, "coordinators must be able to act");
         assert_eq!(config.sandbox, zuse_protocol::SandboxLevel::Auto);
-        let grant = core.zots.grant(coordinator);
-        assert!(service.handle(zuse_protocol::control::CALL,serde_json::json!({"token":grant,"method":"ZotFiles","params":{"zotId":"release"}})).await.is_err(),"idle sessions cannot use retained credentials");
+        let grant = core.zappers.grant(coordinator);
+        assert!(service.handle(zuse_protocol::control::CALL,serde_json::json!({"token":grant,"method":"ZapperFiles","params":{"zapperId":"release"}})).await.is_err(),"idle sessions cannot use retained credentials");
         let files = value(
             &service,
             zuse_protocol::control::CALL,
-            serde_json::json!({"token":token,"method":"ZotFiles","params":{"zotId":"release"}}),
+            serde_json::json!({"token":token,"method":"ZapperFiles","params":{"zapperId":"release"}}),
         )
         .await;
         assert_eq!(files.as_array().unwrap().len(), 4);
-        value(&service,"ZotCommand",serde_json::json!({"commandId":"issue","zotId":"release","action":{"type":"createIssue","issueId":"fix","details":{"title":"Fix it","description":"d","doneCriteria":"c","outOfScope":"","status":"todo","priority":"normal","owner":{"type":"zapper"},"assigned":true,"parent":null,"dueDate":null,"labels":[],"relations":[]}}})).await;
+        value(&service,"ZapperCommand",serde_json::json!({"commandId":"issue","zapperId":"release","action":{"type":"createIssue","issueId":"fix","details":{"title":"Fix it","description":"d","doneCriteria":"c","outOfScope":"","status":"todo","priority":"normal","owner":{"type":"zapper"},"assigned":true,"parent":null,"dueDate":null,"labels":[],"relations":[]}}})).await;
         // Later coordinator turns carry deltas; the board is a read away.
         let board = value(
             &service,
             zuse_protocol::control::CALL,
-            serde_json::json!({"token":token,"method":"ZotIssue","params":{"zotId":"release"}}),
+            serde_json::json!({"token":token,"method":"ZapperIssue","params":{"zapperId":"release"}}),
         )
         .await;
         assert_eq!(board["issues"][0]["code"], "ZAP-1");
@@ -442,17 +551,17 @@ mod tests {
         let by_code = value(
             &service,
             zuse_protocol::control::CALL,
-            serde_json::json!({"token":token,"method":"ZotIssue","params":{"zotId":"release","issueId":"ZAP-1"}}),
+            serde_json::json!({"token":token,"method":"ZapperIssue","params":{"zapperId":"release","issueId":"ZAP-1"}}),
         )
         .await;
         assert_eq!(by_code["id"], "fix");
-        let mut changed = core.zots.get("release").unwrap().config;
+        let mut changed = core.zappers.get("release").unwrap().config;
         changed.coordinator_model.model = Some("selected-model".into());
-        value(&service,"ZotCommand",serde_json::json!({"commandId":"configure","zotId":"release","expectedRevision":null,"action":{"type":"configure","config":changed}})).await;
+        value(&service,"ZapperCommand",serde_json::json!({"commandId":"configure","zapperId":"release","expectedRevision":null,"action":{"type":"configure","config":changed}})).await;
         value(
             &service,
             zuse_protocol::control::CALL,
-            serde_json::json!({"token":token,"method":"ZotCommand","params":command}),
+            serde_json::json!({"token":token,"method":"ZapperCommand","params":command}),
         )
         .await;
         assert_eq!(

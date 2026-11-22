@@ -63,7 +63,7 @@ mod transcript_window;
 mod visuals;
 mod voice_chat;
 mod voice_remote;
-mod zots;
+mod zappers;
 use async_trait::async_trait;
 use base64::Engine as _;
 use futures::StreamExt;
@@ -745,7 +745,7 @@ pub struct EngineRpc {
     browser_access: Option<crate::browser_access::BrowserAccess>,
     relay_access: Option<crate::relay_access::RelayAccess>,
     direct_access: Option<crate::direct_access::DirectAccess>,
-    zots: Option<crate::zots::Zots>,
+    zappers: Option<crate::zappers::Zappers>,
     slack_links: Option<crate::slack_links::SlackLinks>,
     model_connections: Option<crate::model_connections::ModelConnections>,
     account: Option<crate::account::Account>,
@@ -814,7 +814,7 @@ impl EngineRpc {
             browser_access: None,
             relay_access: None,
             direct_access: None,
-            zots: None,
+            zappers: None,
             slack_links: None,
             model_connections: None,
             account: None,
@@ -884,8 +884,8 @@ impl EngineRpc {
         self
     }
 
-    pub fn with_zots(mut self, zots: crate::zots::Zots) -> Self {
-        self.zots = Some(zots);
+    pub fn with_zappers(mut self, zappers: crate::zappers::Zappers) -> Self {
+        self.zappers = Some(zappers);
         self
     }
 
@@ -1317,6 +1317,15 @@ impl EngineRpc {
             )));
         };
         let client = links.client(target).await?;
+        // Legacy, remove after one release: the peer may predate the rename,
+        // and every engine still reads the old Zapper names.
+        let (wire, params) = match zuse_protocol::zappers::legacy::legacy_method(method) {
+            Some(old) => (
+                old,
+                zuse_protocol::zappers::legacy::to_legacy_params(params),
+            ),
+            None => (method, params),
+        };
         if is_stream_method(method) {
             // Streams are unbounded by design (a quiet WATCH_* is healthy);
             // only unary calls below get the reply deadline.
@@ -1331,7 +1340,7 @@ impl EngineRpc {
                     | methods::WATCH_HARNESS_UPDATES
                     | methods::WATCH_CHAT_CONFIG
             ) {
-                let rx = match client.subscribe_checked(method, params).await {
+                let rx = match client.subscribe_checked(wire, params).await {
                     Ok(rx) => rx,
                     Err(err) => {
                         if should_invalidate_link(&err) {
@@ -1345,7 +1354,7 @@ impl EngineRpc {
                 });
                 return Ok(RpcReply::Stream(stream.boxed()));
             }
-            let rx = match client.subscribe_scoped(method, params).await {
+            let rx = match client.subscribe_scoped(wire, params).await {
                 Ok(rx) => rx,
                 Err(err) => {
                     if should_invalidate_link(&err) {
@@ -1371,7 +1380,11 @@ impl EngineRpc {
         } else {
             forward_deadline(method)
         };
-        match tokio::time::timeout(deadline, client.call(method, params)).await {
+        match tokio::time::timeout(deadline, client.call(wire, params)).await {
+            // Legacy, remove after one release: answered in the old shape.
+            Ok(Ok(events)) if method == zuse_protocol::control::ZAPPER_EVENTS => Ok(
+                RpcReply::Value(zuse_protocol::zappers::legacy::events_from_legacy(events)),
+            ),
             Ok(Ok(value)) => Ok(RpcReply::Value(value)),
             Ok(Err(err)) => {
                 if should_invalidate_link(&err) {
@@ -1551,9 +1564,9 @@ impl EngineRpc {
                 expected_config,
             } => {
                 if self
-                    .zots
+                    .zappers
                     .as_ref()
-                    .is_some_and(|zots| zots.coordinator(&chat_id).ok().flatten().is_some())
+                    .is_some_and(|zappers| zappers.coordinator(&chat_id).ok().flatten().is_some())
                 {
                     config.sandbox = zuse_protocol::SandboxLevel::WorkspaceWrite;
                     config.plan = true;
@@ -1582,8 +1595,8 @@ impl EngineRpc {
                         .map_err(failed)
                         .map(drop)?;
                 }
-                if let Some(zots) = &self.zots {
-                    if let Some(mut zot) = zots
+                if let Some(zappers) = &self.zappers {
+                    if let Some(mut zapper) = zappers
                         .coordinator(&chat_id)
                         .map_err(|e| RpcError::Failed(e.to_string()))?
                     {
@@ -1592,22 +1605,23 @@ impl EngineRpc {
                             .as_str()
                             .unwrap_or_default()
                             .to_owned();
-                        if zot.config.coordinator_model.harness != harness
-                            || zot.config.coordinator_model.model != config.model
+                        if zapper.config.coordinator_model.harness != harness
+                            || zapper.config.coordinator_model.model != config.model
                         {
-                            zot.config.coordinator_model = zuse_protocol::zots::ZotModel {
+                            zapper.config.coordinator_model = zuse_protocol::zappers::ZapperModel {
                                 harness,
                                 model: config.model.clone(),
                             };
-                            zots.command(zuse_protocol::zots::ZotCommand {
-                                command_id: uuid::Uuid::new_v4().to_string(),
-                                zot_id: zot.id,
-                                expected_revision: Some(zot.revision),
-                                action: zuse_protocol::zots::ZotAction::Configure {
-                                    config: zot.config,
-                                },
-                            })
-                            .map_err(|e| RpcError::Failed(e.to_string()))?;
+                            zappers
+                                .command(zuse_protocol::zappers::ZapperCommand {
+                                    command_id: uuid::Uuid::new_v4().to_string(),
+                                    zapper_id: zapper.id,
+                                    expected_revision: Some(zapper.revision),
+                                    action: zuse_protocol::zappers::ZapperAction::Configure {
+                                        config: zapper.config,
+                                    },
+                                })
+                                .map_err(|e| RpcError::Failed(e.to_string()))?;
                         }
                     }
                 }
@@ -1814,18 +1828,18 @@ fn forwardable_request(method: &str, params: &serde_json::Value) -> bool {
 }
 
 fn forwardable(method: &str) -> bool {
-    if method == "BindZotWorker" {
+    if method == zuse_protocol::control::BIND_ZAPPER_WORKER {
         return true;
     }
     if matches!(
         method,
         zuse_protocol::control::API_INFO
-            | zuse_protocol::control::ZOT_COMMAND
-            | zuse_protocol::control::WATCH_ZOTS
-            | zuse_protocol::control::ZOT_FILES
-            | zuse_protocol::control::ZOT_EVENTS
-            | zuse_protocol::control::ZOT_ISSUE
-            | zuse_protocol::control::ACK_ZOT_EVENTS
+            | zuse_protocol::control::ZAPPER_COMMAND
+            | zuse_protocol::control::WATCH_ZAPPERS
+            | zuse_protocol::control::ZAPPER_FILES
+            | zuse_protocol::control::ZAPPER_EVENTS
+            | zuse_protocol::control::ZAPPER_ISSUE
+            | zuse_protocol::control::ACK_ZAPPER_EVENTS
     ) {
         return true;
     }
@@ -1984,7 +1998,7 @@ fn forwardable(method: &str) -> bool {
 
 /// Forwardable methods whose reply is a stream (proxied item-by-item).
 fn is_stream_method(method: &str) -> bool {
-    if method == zuse_protocol::control::WATCH_ZOTS {
+    if method == zuse_protocol::control::WATCH_ZAPPERS {
         return true;
     }
     if method == methods::SIMULATOR_FRAMES || method == methods::OWN_VOICE_V2 {
@@ -2512,6 +2526,18 @@ fn feature_rpc_refused(method: &str, reply: &RpcReply) -> bool {
 #[async_trait]
 impl RpcService for EngineRpc {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
+        // Legacy, remove after one release: clients and peer engines from
+        // before the rename call Zapper methods by their old names and fields.
+        // Serve them as current calls, answering in the shape they read.
+        if let Some(current) = zuse_protocol::zappers::legacy::current_method(method) {
+            let params = zuse_protocol::zappers::legacy::from_legacy_params(params);
+            return match self.handle(current, params).await? {
+                RpcReply::Value(events) if current == zuse_protocol::control::ZAPPER_EVENTS => Ok(
+                    RpcReply::Value(zuse_protocol::zappers::legacy::events_to_legacy(events)),
+                ),
+                reply => Ok(reply),
+            };
+        }
         if let Some(analytics) = &self.analytics {
             let id = self
                 .account
@@ -2912,8 +2938,8 @@ impl EngineRpc {
         // Device-addressed routing: forward calls that target another device over its
         // relay. The target compares the id to its own, so forwards cannot loop.
         if method == zuse_protocol::control::CALL {
-            let zots = self
-                .zots
+            let zappers = self
+                .zappers
                 .as_ref()
                 .ok_or_else(|| RpcError::Capability("control.v1".into()))?;
             let token = params
@@ -2924,72 +2950,81 @@ impl EngineRpc {
                 .get("method")
                 .and_then(|v| v.as_str())
                 .unwrap_or_default();
-            let mut operation_params = params
-                .get("params")
-                .cloned()
-                .unwrap_or(serde_json::json!({}));
-            if !zots.authorize(token) {
+            // Legacy, remove after one release: coordinators started before
+            // the rename still send `zotId`.
+            let operation =
+                zuse_protocol::zappers::legacy::current_method(operation).unwrap_or(operation);
+            let mut operation_params = zuse_protocol::zappers::legacy::from_legacy_params(
+                params
+                    .get("params")
+                    .cloned()
+                    .unwrap_or(serde_json::json!({})),
+            );
+            if !zappers.authorize(token) {
                 let denied = || RpcError::Capability("control.unauthorized".into());
-                let chat = zots.grant_owner(token).ok_or_else(denied)?;
+                let chat = zappers.grant_owner(token).ok_or_else(denied)?;
                 if !self.sessions.turn_in_flight(&chat) {
                     return Err(denied());
                 }
-                let coordinator = zots
+                let coordinator = zappers
                     .coordinator(&chat)
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
-                if let Some(zot) = coordinator {
+                if let Some(zapper) = coordinator {
                     let args = operation_params.clone();
                     if operation != zuse_protocol::control::API_INFO
-                        && args.get("zotId").and_then(|v| v.as_str()) != Some(zot.id.as_str())
+                        && args.get("zapperId").and_then(|v| v.as_str()) != Some(zapper.id.as_str())
                     {
                         return Err(denied());
                     }
-                    if operation == zuse_protocol::control::ZOT_COMMAND {
-                        let mut command = zuse_protocol::zots::parse_command(args)
+                    if operation == zuse_protocol::control::ZAPPER_COMMAND {
+                        let mut command = zuse_protocol::zappers::parse_command(args)
                             .map_err(RpcError::BadParams)?;
                         if matches!(
                             command.action,
-                            zuse_protocol::zots::ZotAction::Create { .. }
-                                | zuse_protocol::zots::ZotAction::Configure { .. }
-                                | zuse_protocol::zots::ZotAction::Delete
-                                | zuse_protocol::zots::ZotAction::SetStatus { .. }
-                                | zuse_protocol::zots::ZotAction::AdoptWorker { .. }
+                            zuse_protocol::zappers::ZapperAction::Create { .. }
+                                | zuse_protocol::zappers::ZapperAction::Configure { .. }
+                                | zuse_protocol::zappers::ZapperAction::Delete
+                                | zuse_protocol::zappers::ZapperAction::SetStatus { .. }
+                                | zuse_protocol::zappers::ZapperAction::AdoptWorker { .. }
                         ) {
                             return Err(denied());
                         }
-                        if let zuse_protocol::zots::ZotAction::MessageWorker { automatic, .. } =
-                            &mut command.action
+                        if let zuse_protocol::zappers::ZapperAction::MessageWorker {
+                            automatic,
+                            ..
+                        } = &mut command.action
                         {
                             *automatic = true;
                         }
                         operation_params = serde_json::to_value(command)
                             .map_err(|e| RpcError::BadParams(e.to_string()))?;
-                        operation_params["_zotActor"] = serde_json::json!(zot.coordinator_chat_id);
+                        operation_params["_zapperActor"] =
+                            serde_json::json!(zapper.coordinator_chat_id);
                     } else if !matches!(
                         operation,
                         zuse_protocol::control::API_INFO
-                            | zuse_protocol::control::ZOT_FILES
-                            | zuse_protocol::control::ZOT_EVENTS
-                            | zuse_protocol::control::ZOT_ISSUE
-                            | zuse_protocol::control::ACK_ZOT_EVENTS
+                            | zuse_protocol::control::ZAPPER_FILES
+                            | zuse_protocol::control::ZAPPER_EVENTS
+                            | zuse_protocol::control::ZAPPER_ISSUE
+                            | zuse_protocol::control::ACK_ZAPPER_EVENTS
                     ) {
                         return Err(denied());
                     }
                 } else {
-                    let (zot, home) = zots
+                    let (zapper, home) = zappers
                         .worker_home(&chat)
                         .map_err(|e| RpcError::Failed(e.to_string()))?
                         .ok_or_else(denied)?;
-                    if operation != zuse_protocol::control::ZOT_COMMAND {
+                    if operation != zuse_protocol::control::ZAPPER_COMMAND {
                         return Err(denied());
                     }
-                    let command = zuse_protocol::zots::parse_command(operation_params.clone())
+                    let command = zuse_protocol::zappers::parse_command(operation_params.clone())
                         .map_err(RpcError::BadParams)?;
-                    if command.zot_id != zot
+                    if command.zapper_id != zapper
                         || !matches!(
                             command.action,
-                            zuse_protocol::zots::ZotAction::CommentIssue { .. }
-                                | zuse_protocol::zots::ZotAction::LinkIssuePullRequest { .. }
+                            zuse_protocol::zappers::ZapperAction::CommentIssue { .. }
+                                | zuse_protocol::zappers::ZapperAction::LinkIssuePullRequest { .. }
                         )
                     {
                         return Err(denied());
@@ -2997,8 +3032,8 @@ impl EngineRpc {
                     operation_params = serde_json::to_value(command)
                         .map_err(|e| RpcError::BadParams(e.to_string()))?;
                     operation_params["targetDeviceId"] = serde_json::json!(home);
-                    operation_params["_zotWorkerChatId"] = serde_json::json!(chat);
-                    operation_params["_zotActor"] = serde_json::json!(chat);
+                    operation_params["_zapperWorkerChatId"] = serde_json::json!(chat);
+                    operation_params["_zapperActor"] = serde_json::json!(chat);
                 }
             }
             if !zuse_protocol::control::METHODS.contains(&operation) {
@@ -3233,9 +3268,13 @@ impl EngineRpc {
                 RpcReply::value(&zuse_protocol::control::ControlInfo {
                     api_version: zuse_protocol::control::API_VERSION,
                     app_version: env!("CARGO_PKG_VERSION").into(),
-                    schemas: serde_json::json!({"ZotCommand":zuse_protocol::zots::command_schema()}),
-                    capabilities: if self.zots.is_some() {
-                        vec![zuse_protocol::zots::CAPABILITY.into()]
+                    schemas: serde_json::json!({"ZapperCommand":zuse_protocol::zappers::command_schema()}),
+                    capabilities: if self.zappers.is_some() {
+                        vec![
+                            zuse_protocol::zappers::CAPABILITY.into(),
+                            // Legacy, remove after one release.
+                            zuse_protocol::zappers::legacy::CAPABILITY.into(),
+                        ]
                     } else {
                         vec![]
                     },
@@ -3253,54 +3292,56 @@ impl EngineRpc {
                     .await
                     .map_err(|e| RpcError::Failed(e.to_string()))?,
             ),
-            "BindZotWorker" => {
-                let binding: crate::zots::WorkerBinding = parse_params(params)?;
-                self.zots
+            zuse_protocol::control::BIND_ZAPPER_WORKER => {
+                let binding: crate::zappers::WorkerBinding = parse_params(params)?;
+                self.zappers
                     .as_ref()
-                    .ok_or_else(|| RpcError::Capability("zots.v1".into()))?
+                    .ok_or_else(|| RpcError::Capability("zappers.v1".into()))?
                     .bind_worker(&binding)
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&serde_json::json!({"ok":true}))
             }
-            zuse_protocol::control::WATCH_ZOTS => {
-                let zots = self
-                    .zots
+            zuse_protocol::control::WATCH_ZAPPERS => {
+                let zappers = self
+                    .zappers
                     .clone()
-                    .ok_or_else(|| RpcError::Capability("zots.v1".into()))?;
-                let rx = zots.watch();
-                let stream =
-                    futures::stream::unfold((zots, rx, true), |(zots, mut rx, first)| async move {
+                    .ok_or_else(|| RpcError::Capability("zappers.v1".into()))?;
+                let rx = zappers.watch();
+                let stream = futures::stream::unfold(
+                    (zappers, rx, true),
+                    |(zappers, mut rx, first)| async move {
                         if !first {
                             rx.changed().await.ok()?;
                         }
                         rx.borrow_and_update();
-                        let value = serde_json::to_value(zots.list().ok()?).ok()?;
-                        Some((value, (zots, rx, false)))
-                    });
+                        let value = serde_json::to_value(zappers.list().ok()?).ok()?;
+                        Some((value, (zappers, rx, false)))
+                    },
+                );
                 Ok(RpcReply::Stream(stream.boxed()))
             }
-            zuse_protocol::control::ZOT_COMMAND => self.zot_command(params).await,
-            zuse_protocol::control::ZOT_FILES
-            | zuse_protocol::control::ZOT_EVENTS
-            | zuse_protocol::control::ZOT_ISSUE
-            | zuse_protocol::control::ACK_ZOT_EVENTS => {
-                let zots = self
-                    .zots
+            zuse_protocol::control::ZAPPER_COMMAND => self.zapper_command(params).await,
+            zuse_protocol::control::ZAPPER_FILES
+            | zuse_protocol::control::ZAPPER_EVENTS
+            | zuse_protocol::control::ZAPPER_ISSUE
+            | zuse_protocol::control::ACK_ZAPPER_EVENTS => {
+                let zappers = self
+                    .zappers
                     .as_ref()
-                    .ok_or_else(|| RpcError::Capability("zots.v1".into()))?;
+                    .ok_or_else(|| RpcError::Capability("zappers.v1".into()))?;
                 let id = params
-                    .get("zotId")
+                    .get("zapperId")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| RpcError::BadParams("zotId is required".into()))?;
+                    .ok_or_else(|| RpcError::BadParams("zapperId is required".into()))?;
                 let failure = |e: anyhow::Error| RpcError::Failed(e.to_string());
                 match method {
-                    zuse_protocol::control::ZOT_FILES
+                    zuse_protocol::control::ZAPPER_FILES
                         if let Some(path) = params.get("path").and_then(|v| v.as_str()) =>
                     {
-                        RpcReply::value(&zots.file(id, path).map_err(failure)?)
+                        RpcReply::value(&zappers.file(id, path).map_err(failure)?)
                     }
-                    zuse_protocol::control::ZOT_FILES => RpcReply::value(
-                        &zots
+                    zuse_protocol::control::ZAPPER_FILES => RpcReply::value(
+                        &zappers
                             .files(
                                 id,
                                 params
@@ -3310,18 +3351,21 @@ impl EngineRpc {
                             )
                             .map_err(failure)?,
                     ),
-                    zuse_protocol::control::ZOT_EVENTS => {
-                        RpcReply::value(&zots.events(id).map_err(failure)?)
+                    zuse_protocol::control::ZAPPER_EVENTS => {
+                        RpcReply::value(&zappers.events(id).map_err(failure)?)
                     }
-                    zuse_protocol::control::ZOT_ISSUE => {
+                    zuse_protocol::control::ZAPPER_ISSUE => {
                         // Without an issue, the whole board as a coordinator's
                         // first turn shows it; later turns carry only deltas.
                         let Some(issue) = params.get("issueId").and_then(|v| v.as_str()) else {
-                            return RpcReply::value(&zots.coordinator_state(id).map_err(failure)?);
+                            return RpcReply::value(
+                                &zappers.coordinator_state(id).map_err(failure)?,
+                            );
                         };
-                        let zot = zots.get(id).map_err(failure)?;
+                        let zapper = zappers.get(id).map_err(failure)?;
                         RpcReply::value(
-                            zot.issues
+                            zapper
+                                .issues
                                 .iter()
                                 .find(|i| i.id == issue || i.code() == issue)
                                 .ok_or_else(|| RpcError::Failed("issue not found".into()))?,
@@ -3335,7 +3379,7 @@ impl EngineRpc {
                                 .unwrap_or(serde_json::json!([])),
                         )
                         .map_err(|e| RpcError::BadParams(e.to_string()))?;
-                        zots.acknowledge(id, &ids).map_err(failure)?;
+                        zappers.acknowledge(id, &ids).map_err(failure)?;
                         RpcReply::value(&serde_json::json!({"ok":true}))
                     }
                 }

@@ -36,7 +36,7 @@ pub struct SlackLinks {
 struct Inner {
     path: PathBuf,
     state: Mutex<State>,
-    zots: crate::zots::Zots,
+    zappers: crate::zappers::Zappers,
     workspace: WorkspaceHost,
     docs: DocHost,
     sessions: SessionsEngine,
@@ -101,7 +101,7 @@ pub fn handles(method: &str) -> bool {
 impl SlackLinks {
     pub fn new(
         store_root: &std::path::Path,
-        zots: crate::zots::Zots,
+        zappers: crate::zappers::Zappers,
         workspace: WorkspaceHost,
         docs: DocHost,
         sessions: SessionsEngine,
@@ -115,7 +115,7 @@ impl SlackLinks {
             inner: Arc::new(Inner {
                 path,
                 state: Mutex::new(state),
-                zots,
+                zappers,
                 workspace,
                 docs,
                 sessions,
@@ -309,18 +309,18 @@ impl SlackLinks {
 
     /// Chats that belong to a Zapper post under its name and avatar.
     fn persona(&self, chat: &str) -> Option<Persona> {
-        let zot = self.zapper_of(chat)?;
+        let zapper = self.zapper_of(chat)?;
         Some(Persona {
-            name: zot.config.name.chars().take(80).collect(),
-            avatar: Some(zot.config.avatar.clone().unwrap_or_else(|| {
-                zuse_protocol::presentation::zot_mascots::default_avatar(&zot.id)
+            name: zapper.config.name.chars().take(80).collect(),
+            avatar: Some(zapper.config.avatar.clone().unwrap_or_else(|| {
+                zuse_protocol::presentation::zapper_mascots::default_avatar(&zapper.id)
             })),
         })
     }
 
-    fn zapper_of(&self, chat: &str) -> Option<zuse_protocol::zots::Zot> {
-        self.inner.zots.list().ok()?.into_iter().find(|zot| {
-            zot.coordinator_chat_id == chat || zot.workers.iter().any(|w| w.chat_id == chat)
+    fn zapper_of(&self, chat: &str) -> Option<zuse_protocol::zappers::Zapper> {
+        self.inner.zappers.list().ok()?.into_iter().find(|zapper| {
+            zapper.coordinator_chat_id == chat || zapper.workers.iter().any(|w| w.chat_id == chat)
         })
     }
 
@@ -332,8 +332,8 @@ impl SlackLinks {
             .filter(|t| !t.trim().is_empty())
             .or_else(|| {
                 self.zapper_of(chat)
-                    .filter(|zot| zot.coordinator_chat_id == chat)
-                    .map(|zot| zot.config.name)
+                    .filter(|zapper| zapper.coordinator_chat_id == chat)
+                    .map(|zapper| zapper.config.name)
             })
             .unwrap_or_else(|| "Zuse chat".into());
         match persona {
@@ -467,20 +467,20 @@ impl SlackLinks {
 
     /// Worker threads of a linked Zapper get their own thread in the Zapper's channel.
     async fn link_zapper_workers(&self, identity: &CloudIdentity) {
-        let Ok(zots) = self.inner.zots.list() else {
+        let Ok(zappers) = self.inner.zappers.list() else {
             return;
         };
         let device = self.inner.docs.device_id().to_owned();
-        for zot in zots {
+        for zapper in zappers {
             let Some(home) = lock(&self.inner.state)
                 .chats
-                .get(&zot.coordinator_chat_id)
+                .get(&zapper.coordinator_chat_id)
                 .filter(|local| local.sync)
                 .cloned()
             else {
                 continue;
             };
-            for worker in zot.workers.iter().filter(|w| w.device_id == device) {
+            for worker in zapper.workers.iter().filter(|w| w.device_id == device) {
                 if lock(&self.inner.state).chats.contains_key(&worker.chat_id)
                     || lock(&self.inner.auto_link_failed).contains(&worker.chat_id)
                 {

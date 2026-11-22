@@ -75,19 +75,19 @@ impl IssueLine {
 }
 
 impl Board {
-    fn of(zot: &Zot, holds: &BTreeMap<String, String>, files: &[ZotFile]) -> Self {
+    fn of(zapper: &Zapper, holds: &BTreeMap<String, String>, files: &[ZapperFile]) -> Self {
         let text = |v: serde_json::Value| v.as_str().unwrap_or_default().to_owned();
         Self {
-            revision: zot.revision,
-            issues: zot
+            revision: zapper.revision,
+            issues: zapper
                 .issues
                 .iter()
                 .map(|i| {
                     let owner = match &i.details.owner {
                         None => "none".to_owned(),
-                        Some(ZotIssueOwner::Zapper) => "zapper".to_owned(),
-                        Some(ZotIssueOwner::User) => "user".to_owned(),
-                        Some(ZotIssueOwner::Thread { chat_id }) => format!("thread {chat_id}"),
+                        Some(ZapperIssueOwner::Zapper) => "zapper".to_owned(),
+                        Some(ZapperIssueOwner::User) => "user".to_owned(),
+                        Some(ZapperIssueOwner::Thread { chat_id }) => format!("thread {chat_id}"),
                     };
                     let line = IssueLine {
                         code: i.code(),
@@ -98,12 +98,12 @@ impl Board {
                     (i.id.clone(), line)
                 })
                 .collect(),
-            workers: zot
+            workers: zapper
                 .workers
                 .iter()
                 .map(|w| (w.chat_id.clone(), holds.get(&w.chat_id).cloned()))
                 .collect(),
-            decisions: zot
+            decisions: zapper
                 .decisions
                 .iter()
                 .filter(|d| d.answer.is_none())
@@ -183,15 +183,15 @@ fn list(lines: Vec<String>) -> String {
         .map(|l| format!("- {l}\n"))
         .collect();
     if more > 0 {
-        out.push_str(&format!("- {more} more: zapper_issue {{zotId}}\n"));
+        out.push_str(&format!("- {more} more: zapper_issue {{zapperId}}\n"));
     }
     out
 }
 
 /// The first turn's few lines about the board: open issues and decisions,
 /// counts and file versions. The rest is a zapper_issue read away.
-fn summary(zot: &Zot, board: &Board) -> String {
-    let open: Vec<_> = zot
+fn summary(zapper: &Zapper, board: &Board) -> String {
+    let open: Vec<_> = zapper
         .issues
         .iter()
         .filter(|i| !i.details.status.terminal())
@@ -215,37 +215,37 @@ fn summary(zot: &Zot, board: &Board) -> String {
         .join(", ");
     format!(
         "## Board (revision {})\n{}{} open issues, {} closed; {} threads ({stopped} stopped).\nFiles: {files}.",
-        zot.revision,
+        zapper.revision,
         list(lines),
         open.len(),
-        zot.issues.len() - open.len(),
+        zapper.issues.len() - open.len(),
         board.workers.len(),
     )
 }
 
 /// The brief as it stands, purpose doc included.
-fn brief(zot: &Zot, files: &[ZotFile]) -> String {
+fn brief(zapper: &Zapper, files: &[ZapperFile]) -> String {
     let soul = files.iter().find(|f| f.path == PURPOSE_FILE);
-    coordinator_brief(zot, &purpose_section(zot, soul))
+    coordinator_brief(zapper, &purpose_section(zapper, soul))
 }
 
 /// Builds the turn for `message`.
 pub(super) fn compose(
-    zot: &Zot,
+    zapper: &Zapper,
     harness: HarnessId,
     previous: Option<&Ledger>,
     holds: &BTreeMap<String, String>,
-    files: &[ZotFile],
+    files: &[ZapperFile],
     message: &str,
 ) -> Turn {
-    let brief = brief(zot, files);
+    let brief = brief(zapper, files);
     let hook = takes_system_prompt(harness) && brief.len() <= SYSTEM_PROMPT_MAX;
     let key = format!(
         "{}:{:x}",
         if hook { "system" } else { "turn" },
         Sha256::digest(brief.as_bytes())
     );
-    let board = Board::of(zot, holds, files);
+    let board = Board::of(zapper, holds, files);
     let mut prompt = String::new();
     match previous.filter(|p| p.harness == harness) {
         None => {
@@ -253,7 +253,7 @@ pub(super) fn compose(
                 prompt.push_str(&brief);
                 prompt.push_str("\n\n");
             }
-            prompt.push_str(&summary(zot, &board));
+            prompt.push_str(&summary(zapper, &board));
         }
         Some(previous) => {
             if previous.brief != key {
@@ -270,12 +270,12 @@ pub(super) fn compose(
             if changes.is_empty() {
                 prompt.push_str(&format!(
                     "## Since your last turn\nNo changes (revision {}).",
-                    zot.revision
+                    zapper.revision
                 ));
             } else {
                 prompt.push_str(&format!(
-                    "## Since your last turn (revision {}, was {})\n{}Details: zapper_issue {{zotId, issueId}}.",
-                    zot.revision,
+                    "## Since your last turn (revision {}, was {})\n{}Details: zapper_issue {{zapperId, issueId}}.",
+                    zapper.revision,
                     previous.board.revision,
                     list(changes)
                 ));
@@ -295,18 +295,18 @@ pub(super) fn compose(
     }
 }
 
-impl Zots {
+impl Zappers {
     /// Wraps a coordinator's message as its turn and stamps the system
     /// prompt on harnesses that take one.
     pub(super) fn prepare_coordinator_turn(
         &self,
-        zot: &Zot,
+        zapper: &Zapper,
         chat: &str,
         harness: HarnessId,
         request: &mut zuse_protocol::RunRequest,
     ) -> Result<()> {
         let files: Vec<_> = self
-            .files(&zot.id, false)?
+            .files(&zapper.id, false)?
             .into_iter()
             .filter(|f| CONTEXT_FILES.contains(&f.path.as_str()))
             .collect();
@@ -317,12 +317,12 @@ impl Zots {
                 .lock()
                 .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?;
             let holds = db
-                .prepare("SELECT chat,reason FROM zot_worker_holds WHERE zot=?1")?
-                .query_map([&zot.id], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .prepare("SELECT chat,reason FROM zapper_worker_holds WHERE zapper=?1")?
+                .query_map([&zapper.id], |r| Ok((r.get(0)?, r.get(1)?)))?
                 .collect::<rusqlite::Result<BTreeMap<String, String>>>()?;
             let previous: Option<String> = db
                 .query_row(
-                    "SELECT ledger FROM zot_coordinator_turns WHERE chat=?1",
+                    "SELECT ledger FROM zapper_coordinator_turns WHERE chat=?1",
                     [chat],
                     |r| r.get(0),
                 )
@@ -331,7 +331,7 @@ impl Zots {
             (holds, previous.and_then(|l| serde_json::from_str(&l).ok()))
         };
         let turn = compose(
-            zot,
+            zapper,
             harness,
             previous.as_ref(),
             &holds,
@@ -339,7 +339,7 @@ impl Zots {
             &request.prompt,
         );
         if turn.system_prompt.is_some() {
-            guide::install_skills(&self.workspace(&zot.id)?)?;
+            guide::install_skills(&self.workspace(&zapper.id)?)?;
         }
         request.prompt = turn.prompt;
         let option = zuse_providers::claude::SYSTEM_PROMPT_OPTION;
@@ -356,8 +356,8 @@ impl Zots {
             .lock()
             .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?
             .execute(
-                "INSERT OR REPLACE INTO zot_coordinator_turns(chat,zot,ledger) VALUES(?1,?2,?3)",
-                params![chat, zot.id, serde_json::to_string(&turn.ledger)?],
+                "INSERT OR REPLACE INTO zapper_coordinator_turns(chat,zapper,ledger) VALUES(?1,?2,?3)",
+                params![chat, zapper.id, serde_json::to_string(&turn.ledger)?],
             )?;
         Ok(())
     }
@@ -369,12 +369,12 @@ impl Zots {
             .db
             .lock()
             .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?
-            .execute("DELETE FROM zot_coordinator_turns WHERE chat=?1", [chat])?;
+            .execute("DELETE FROM zapper_coordinator_turns WHERE chat=?1", [chat])?;
         Ok(())
     }
 
     /// One Zapper file, or one of the engine's read-only guides.
-    pub fn file(&self, id: &str, path: &str) -> Result<ZotFile> {
+    pub fn file(&self, id: &str, path: &str) -> Result<ZapperFile> {
         if path.starts_with(guide::GUIDE_DIR) {
             self.get(id)?;
             return guide::file(path).with_context(|| format!("no guide at {path}"));
@@ -394,7 +394,7 @@ impl Zots {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::zots::tests::{command, create, worker};
+    use crate::zappers::tests::{command, create, worker};
 
     fn request(prompt: &str) -> zuse_protocol::RunRequest {
         serde_json::from_value(serde_json::json!({
@@ -403,11 +403,11 @@ mod tests {
         .unwrap()
     }
 
-    fn turn(store: &Zots, harness: HarnessId, text: &str) -> zuse_protocol::RunRequest {
-        let zot = store.get("release").unwrap();
+    fn turn(store: &Zappers, harness: HarnessId, text: &str) -> zuse_protocol::RunRequest {
+        let zapper = store.get("release").unwrap();
         let mut request = request(text);
         store
-            .prepare_request(&zot.coordinator_chat_id, harness, &mut request)
+            .prepare_request(&zapper.coordinator_chat_id, harness, &mut request)
             .unwrap();
         request
     }
@@ -422,7 +422,7 @@ mod tests {
     #[test]
     fn claude_gets_the_brief_as_its_system_prompt_and_later_turns_only_the_delta() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         let first = turn(&store, HarnessId::ClaudeCode, "Plan the release");
         let brief = system_prompt(&first).unwrap();
@@ -440,7 +440,7 @@ mod tests {
             .join(".claude/skills/zapper-commands/SKILL.md");
         let skill = std::fs::read_to_string(skill).unwrap();
         assert!(skill.starts_with("---\nname: zapper-commands\n"));
-        assert!(skill.contains(&zuse_protocol::zots::action_catalog()));
+        assert!(skill.contains(&zuse_protocol::zappers::action_catalog()));
 
         let second = turn(&store, HarnessId::ClaudeCode, "Anything new?");
         assert_eq!(system_prompt(&second), Some(brief));
@@ -458,7 +458,7 @@ mod tests {
     #[test]
     fn harnesses_without_a_system_prompt_get_the_brief_once_as_the_first_turn() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         let first = turn(&store, HarnessId::Codex, "Plan the release");
         assert_eq!(system_prompt(&first), None);
@@ -478,17 +478,17 @@ mod tests {
     #[test]
     fn later_turns_list_what_changed_since_the_last_one() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         turn(&store, HarnessId::ClaudeCode, "Start");
         store
             .command(command(
                 "release",
                 "adopt",
-                ZotAction::AdoptWorker { worker: worker() },
+                ZapperAction::AdoptWorker { worker: worker() },
             ))
             .unwrap();
-        let zot = store.get("release").unwrap();
+        let zapper = store.get("release").unwrap();
         let notes = store
             .files("release", false)
             .unwrap()
@@ -499,7 +499,7 @@ mod tests {
             .command(command(
                 "release",
                 "notes",
-                ZotAction::WriteFile {
+                ZapperAction::WriteFile {
                     path: "NOTES.md".into(),
                     content: "plan".into(),
                     expected_version: notes.version,
@@ -511,7 +511,7 @@ mod tests {
         assert!(
             next.prompt.starts_with(&format!(
                 "## Since your last turn (revision {revision}, was {})",
-                zot.revision - 1
+                zapper.revision - 1
             )),
             "{}",
             next.prompt
@@ -523,14 +523,14 @@ mod tests {
         )));
         assert!(
             next.prompt
-                .contains("Details: zapper_issue {zotId, issueId}.")
+                .contains("Details: zapper_issue {zapperId, issueId}.")
         );
 
         store
             .command(command(
                 "release",
                 "stop",
-                ZotAction::StopWorker {
+                ZapperAction::StopWorker {
                     chat_id: "worker".into(),
                 },
             ))
@@ -548,12 +548,12 @@ mod tests {
     #[test]
     fn a_changed_brief_is_sent_again() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         let mut config = store.get("release").unwrap().config;
         let first = turn(&store, HarnessId::Codex, "Start");
         let claude_dir = tempfile::tempdir().unwrap();
-        let claude = Zots::open(claude_dir.path(), "local").unwrap();
+        let claude = Zappers::open(claude_dir.path(), "local").unwrap();
         create(&claude, "release");
         let claude_first = turn(&claude, HarnessId::ClaudeCode, "Start");
         config.purpose = "Ship the new installer".into();
@@ -562,7 +562,7 @@ mod tests {
                 .command(command(
                     "release",
                     "purpose",
-                    ZotAction::Configure {
+                    ZapperAction::Configure {
                         config: config.clone(),
                     },
                 ))
@@ -591,7 +591,7 @@ mod tests {
     #[test]
     fn a_fresh_conversation_or_a_lost_turn_starts_over() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         turn(&store, HarnessId::Codex, "Start");
         assert!(
@@ -600,7 +600,7 @@ mod tests {
                 .starts_with("## Since")
         );
         store
-            .command(command("release", "fresh", ZotAction::FreshConversation))
+            .command(command("release", "fresh", ZapperAction::FreshConversation))
             .unwrap();
         let fresh = turn(&store, HarnessId::Codex, "Hello again");
         assert!(fresh.prompt.starts_with("You are Release, a Zapper"));
@@ -615,35 +615,35 @@ mod tests {
     #[test]
     fn the_brief_and_later_turns_stay_small() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         for n in 0..30 {
             store
                 .command(command(
                     "release",
                     &format!("issue-{n}"),
-                    ZotAction::CreateIssue {
+                    ZapperAction::CreateIssue {
                         issue_id: format!("issue-{n}"),
-                        details: ZotIssueDetails {
+                        details: ZapperIssueDetails {
                             title: format!("Issue {n}"),
                             description: "A long description. ".repeat(100),
                             done_criteria: "Tests pass.".into(),
                             assigned: true,
-                            owner: Some(ZotIssueOwner::Zapper),
+                            owner: Some(ZapperIssueOwner::Zapper),
                             ..Default::default()
                         },
                     },
                 ))
                 .unwrap();
         }
-        let zot = store.get("release").unwrap();
+        let zapper = store.get("release").unwrap();
         let files = store.files("release", false).unwrap();
         let soul = files.iter().find(|f| f.path == PURPOSE_FILE);
-        let purpose = purpose_section(&zot, soul).len();
-        let brief = brief(&zot, &files);
+        let purpose = purpose_section(&zapper, soul).len();
+        let brief = brief(&zapper, &files);
         assert!(brief.len() - purpose < 3 * 1024, "{}", brief.len());
         let first = turn(&store, HarnessId::ClaudeCode, "Start");
-        assert!(first.prompt.contains("- 18 more: zapper_issue {zotId}"));
+        assert!(first.prompt.contains("- 18 more: zapper_issue {zapperId}"));
         assert!(first.prompt.len() < 2 * 1024, "{}", first.prompt.len());
         // Every issue changes at once: the turn still lists only a few.
         for n in 0..30 {
@@ -653,7 +653,7 @@ mod tests {
                 .command(command(
                     "release",
                     &format!("rename-{n}"),
-                    ZotAction::EditIssue {
+                    ZapperAction::EditIssue {
                         issue_id: format!("issue-{n}"),
                         details,
                     },
@@ -667,13 +667,13 @@ mod tests {
     #[test]
     fn guides_are_read_only_files_built_from_the_command_schema() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         let commands = store.file("release", "guide/commands.md").unwrap();
         assert!(
             commands
                 .content
-                .contains(&zuse_protocol::zots::action_catalog())
+                .contains(&zuse_protocol::zappers::action_catalog())
         );
         for guide in guide::guides() {
             let files = store.files("release", false).unwrap();
@@ -686,7 +686,7 @@ mod tests {
             .command(command(
                 "release",
                 "overwrite-guide",
-                ZotAction::WriteFile {
+                ZapperAction::WriteFile {
                     path: "guide/commands.md".into(),
                     content: "x".into(),
                     expected_version: 0,

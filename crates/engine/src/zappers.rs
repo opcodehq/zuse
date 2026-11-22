@@ -6,16 +6,17 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tokio::sync::watch;
-use zuse_protocol::zots::*;
+use zuse_protocol::zappers::*;
 mod guide;
 mod issues;
+mod migrate;
 mod supervision;
 mod turn_prompt;
 mod turns;
-pub use supervision::ZotSupervisor;
+pub use supervision::ZapperSupervisor;
 
 #[derive(Clone)]
-pub struct Zots {
+pub struct Zappers {
     inner: Arc<Inner>,
 }
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -23,7 +24,9 @@ pub struct Zots {
 pub struct WorkerBinding {
     pub chat_id: String,
     pub home_device_id: String,
-    pub zot_id: String,
+    // Legacy, remove after one release: homes from before the rename send `zotId`.
+    #[serde(alias = "zotId")]
+    pub zapper_id: String,
     pub revision: u32,
     pub instructions: String,
     pub release: bool,
@@ -31,6 +34,8 @@ pub struct WorkerBinding {
 struct Inner {
     db: Mutex<Connection>,
     root: PathBuf,
+    /// The pre-rename folder, while one exists (see [`Zappers::workspace`]).
+    legacy_root: Option<PathBuf>,
     device: String,
     changed: watch::Sender<u64>,
     token: String,
@@ -39,7 +44,7 @@ struct Inner {
     peers: Mutex<Option<Arc<zuse_rpc::LinkCache>>>,
 }
 
-impl Zots {
+impl Zappers {
     pub fn set_peers(&self, peers: Arc<zuse_rpc::LinkCache>) {
         *self
             .inner
@@ -55,7 +60,7 @@ impl Zots {
             );
         }
         valid_id(&binding.chat_id)?;
-        valid_id(&binding.zot_id)?;
+        valid_id(&binding.zapper_id)?;
         ensure!(
             binding.instructions.len() <= 1024 * 1024,
             "worker instructions exceed 1 MiB"
@@ -68,8 +73,8 @@ impl Zots {
         let tx = db.transaction()?;
         let previous: Option<u32> = tx
             .query_row(
-                "SELECT revision FROM zot_binding_versions WHERE chat=?1 AND home=?2 AND zot=?3",
-                params![binding.chat_id, binding.home_device_id, binding.zot_id],
+                "SELECT revision FROM zapper_binding_versions WHERE chat=?1 AND home=?2 AND zapper=?3",
+                params![binding.chat_id, binding.home_device_id, binding.zapper_id],
                 |r| r.get(0),
             )
             .optional()?;
@@ -81,57 +86,62 @@ impl Zots {
         );
         if binding.release {
             tx.execute(
-                "DELETE FROM zot_worker_context WHERE chat=?1 AND home=?2 AND zot=?3",
-                params![binding.chat_id, binding.home_device_id, binding.zot_id],
+                "DELETE FROM zapper_worker_context WHERE chat=?1 AND home=?2 AND zapper=?3",
+                params![binding.chat_id, binding.home_device_id, binding.zapper_id],
             )?;
             // A release tombstone sorts after a same-revision claim.
             tx.execute(
-                "INSERT OR REPLACE INTO zot_binding_versions VALUES(?1,?2,?3,?4)",
+                "INSERT OR REPLACE INTO zapper_binding_versions VALUES(?1,?2,?3,?4)",
                 params![
                     binding.chat_id,
                     binding.home_device_id,
-                    binding.zot_id,
+                    binding.zapper_id,
                     binding.revision.saturating_add(1)
                 ],
             )?;
         } else {
             let local: Option<String> = tx
                 .query_row(
-                    "SELECT zot FROM zot_workers WHERE chat=?1 AND device=?2",
+                    "SELECT zapper FROM zapper_workers WHERE chat=?1 AND device=?2",
                     params![binding.chat_id, self.inner.device],
                     |r| r.get(0),
                 )
                 .optional()?;
             ensure!(
                 local.is_none_or(
-                    |id| binding.home_device_id == self.inner.device && id == binding.zot_id
+                    |id| binding.home_device_id == self.inner.device && id == binding.zapper_id
                 ),
                 "worker already has a local Zapper"
             );
             let owner: Option<(String, String)> = tx
                 .query_row(
-                    "SELECT home,zot FROM zot_worker_context WHERE chat=?1",
+                    "SELECT home,zapper FROM zapper_worker_context WHERE chat=?1",
                     [&binding.chat_id],
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .optional()?;
-            ensure!(owner.is_none_or(|(home,id)|home==binding.home_device_id&&id==binding.zot_id),"worker already belongs to another Zapper home");
+            ensure!(
+                owner.is_none_or(
+                    |(home, id)| home == binding.home_device_id && id == binding.zapper_id
+                ),
+                "worker already belongs to another Zapper home"
+            );
             tx.execute(
-                "INSERT OR REPLACE INTO zot_worker_context VALUES(?1,?2,?3,?4,?5)",
+                "INSERT OR REPLACE INTO zapper_worker_context VALUES(?1,?2,?3,?4,?5)",
                 params![
                     binding.chat_id,
                     binding.home_device_id,
-                    binding.zot_id,
+                    binding.zapper_id,
                     binding.revision,
                     binding.instructions
                 ],
             )?;
             tx.execute(
-                "INSERT OR REPLACE INTO zot_binding_versions VALUES(?1,?2,?3,?4)",
+                "INSERT OR REPLACE INTO zapper_binding_versions VALUES(?1,?2,?3,?4)",
                 params![
                     binding.chat_id,
                     binding.home_device_id,
-                    binding.zot_id,
+                    binding.zapper_id,
                     binding.revision
                 ],
             )?;
@@ -154,7 +164,7 @@ impl Zots {
                 .db
                 .lock()
                 .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?;
-            let mut stmt = db.prepare("SELECT chat,device,zot,revision FROM zot_releases")?;
+            let mut stmt = db.prepare("SELECT chat,device,zapper,revision FROM zapper_releases")?;
             stmt.query_map([], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
@@ -167,39 +177,40 @@ impl Zots {
         };
         let mut ready = std::collections::HashSet::new();
         let mut work = Vec::new();
-        for (chat, device, zot, revision) in releases {
+        for (chat, device, zapper, revision) in releases {
             work.push((
                 device,
                 WorkerBinding {
                     chat_id: chat,
                     home_device_id: self.inner.device.clone(),
-                    zot_id: zot,
+                    zapper_id: zapper,
                     revision,
                     instructions: String::new(),
                     release: true,
                 },
             ));
         }
-        for zot in self.list()? {
+        for zapper in self.list()? {
             let instructions = self
-                .files(&zot.id, false)?
+                .files(&zapper.id, false)?
                 .into_iter()
                 .find(|f| f.path == "WORKERS.md")
                 .map(|f| f.content)
                 .unwrap_or_default();
-            for worker in zot.workers {
+            for worker in zapper.workers {
                 work.push((
                     worker.device_id,
                     WorkerBinding {
                         chat_id: worker.chat_id.clone(),
                         home_device_id: self.inner.device.clone(),
-                        zot_id: zot.id.clone(),
-                        revision: zot.revision,
+                        zapper_id: zapper.id.clone(),
+                        revision: zapper.revision,
                         instructions: format!(
                             "{}\n\nLinked issues: {}",
                             instructions,
                             serde_json::to_string(
-                                &zot.issues
+                                &zapper
+                                    .issues
                                     .iter()
                                     .filter(|i| i.threads.contains(&worker.chat_id))
                                     .map(|i| linked_issue(i))
@@ -214,7 +225,7 @@ impl Zots {
         for (device, binding) in work {
             if device == self.inner.device {
                 if binding.release {
-                    self.inner.db.lock().map_err(|_|anyhow::anyhow!("Zapper storage unavailable"))?.execute("DELETE FROM zot_releases WHERE chat=?1 AND device=?2 AND zot=?3 AND revision=?4",params![binding.chat_id,device,binding.zot_id,binding.revision])?;
+                    self.inner.db.lock().map_err(|_|anyhow::anyhow!("Zapper storage unavailable"))?.execute("DELETE FROM zapper_releases WHERE chat=?1 AND device=?2 AND zapper=?3 AND revision=?4",params![binding.chat_id,device,binding.zapper_id,binding.revision])?;
                 } else {
                     ready.insert((device, binding.chat_id));
                 }
@@ -225,10 +236,15 @@ impl Zots {
                     peers
                         .client(&device)
                         .await?
+                        // Legacy, remove after one release: the worker's
+                        // engine may predate the rename, so use the old names
+                        // every engine reads.
                         .call_scoped(
-                            "BindZotWorker",
-                            serde_json::to_value(&binding)
-                                .map_err(|e| zuse_rpc::RpcError::BadParams(e.to_string()))?,
+                            legacy::BIND_WORKER,
+                            legacy::to_legacy_params(
+                                serde_json::to_value(&binding)
+                                    .map_err(|e| zuse_rpc::RpcError::BadParams(e.to_string()))?,
+                            ),
                         )
                         .await
                 })
@@ -241,52 +257,58 @@ impl Zots {
             };
             if result {
                 if binding.release {
-                    self.inner.db.lock().map_err(|_|anyhow::anyhow!("Zapper storage unavailable"))?.execute("DELETE FROM zot_releases WHERE chat=?1 AND device=?2 AND zot=?3 AND revision=?4",params![binding.chat_id,device,binding.zot_id,binding.revision])?;
+                    self.inner.db.lock().map_err(|_|anyhow::anyhow!("Zapper storage unavailable"))?.execute("DELETE FROM zapper_releases WHERE chat=?1 AND device=?2 AND zapper=?3 AND revision=?4",params![binding.chat_id,device,binding.zapper_id,binding.revision])?;
                 } else {
                     ready.insert((device, binding.chat_id));
                 }
-            } else if !binding.release && self.get(&binding.zot_id).is_ok() {
-                let event=ZotEvent{id:format!("binding-{}-{}",binding.zot_id,binding.chat_id),zot_id:binding.zot_id,worker_chat_id:binding.chat_id,kind:"bindingPending".into(),summary:"Worker placement is pending: its environment is unavailable or its conversation belongs to another Zapper.".into(),acknowledged:false};
+            } else if !binding.release && self.get(&binding.zapper_id).is_ok() {
+                let event=ZapperEvent{id:format!("binding-{}-{}",binding.zapper_id,binding.chat_id),zapper_id:binding.zapper_id,worker_chat_id:binding.chat_id,kind:"bindingPending".into(),summary:"Worker placement is pending: its environment is unavailable or its conversation belongs to another Zapper.".into(),acknowledged:false};
                 self.record_event(&event)?;
             }
         }
         Ok(ready)
     }
     pub fn open(profile: &Path, device: &str) -> Result<Self> {
-        let root = profile.join("zots");
+        let root = profile.join("zappers");
         std::fs::create_dir_all(&root)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))?;
         }
-        let db = Connection::open(root.join("state.sqlite"))?;
+        let legacy_root = profile.join(legacy::DATA_DIR);
+        let legacy_root = legacy_root.is_dir().then_some(legacy_root);
+        if let Some(legacy) = &legacy_root {
+            migrate::move_state(legacy, &root)?;
+        }
+        let mut db = Connection::open(root.join("state.sqlite"))?;
+        migrate::rename_tables(&mut db)?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
-            CREATE TABLE IF NOT EXISTS zots(id TEXT PRIMARY KEY, state TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS zot_receipts(id TEXT PRIMARY KEY, input TEXT NOT NULL, result TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS zot_workers(chat TEXT NOT NULL, device TEXT NOT NULL, zot TEXT NOT NULL,
+            CREATE TABLE IF NOT EXISTS zappers(id TEXT PRIMARY KEY, state TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS zapper_receipts(id TEXT PRIMARY KEY, input TEXT NOT NULL, result TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS zapper_workers(chat TEXT NOT NULL, device TEXT NOT NULL, zapper TEXT NOT NULL,
                 PRIMARY KEY(device,chat));
-            CREATE TABLE IF NOT EXISTS zot_files(zot TEXT NOT NULL, path TEXT NOT NULL, version INTEGER NOT NULL,
-                content TEXT NOT NULL, PRIMARY KEY(zot,path,version));
-            CREATE TABLE IF NOT EXISTS zot_events(id TEXT PRIMARY KEY, zot TEXT NOT NULL, worker TEXT NOT NULL,
+            CREATE TABLE IF NOT EXISTS zapper_files(zapper TEXT NOT NULL, path TEXT NOT NULL, version INTEGER NOT NULL,
+                content TEXT NOT NULL, PRIMARY KEY(zapper,path,version));
+            CREATE TABLE IF NOT EXISTS zapper_events(id TEXT PRIMARY KEY, zapper TEXT NOT NULL, worker TEXT NOT NULL,
                 kind TEXT NOT NULL, summary TEXT NOT NULL, acknowledged INTEGER NOT NULL DEFAULT 0);
-            CREATE TABLE IF NOT EXISTS zot_outbox(id TEXT PRIMARY KEY, zot TEXT NOT NULL, chat TEXT NOT NULL,
+            CREATE TABLE IF NOT EXISTS zapper_outbox(id TEXT PRIMARY KEY, zapper TEXT NOT NULL, chat TEXT NOT NULL,
                 action TEXT NOT NULL, phase TEXT NOT NULL DEFAULT 'pending', error TEXT);
-            CREATE TABLE IF NOT EXISTS zot_delivery(id TEXT PRIMARY KEY, baseline TEXT, sent_at INTEGER NOT NULL);
-            CREATE TABLE IF NOT EXISTS zot_notifications(id TEXT PRIMARY KEY);
-            CREATE TABLE IF NOT EXISTS zot_turn_summaries(id TEXT PRIMARY KEY, summary TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS zot_worker_context(chat TEXT PRIMARY KEY, home TEXT NOT NULL, zot TEXT NOT NULL, revision INTEGER NOT NULL, instructions TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS zot_binding_versions(chat TEXT NOT NULL, home TEXT NOT NULL, zot TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(chat,home,zot));
-            CREATE TABLE IF NOT EXISTS zot_releases(chat TEXT NOT NULL, device TEXT NOT NULL, zot TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(chat,device,zot));
-            CREATE TABLE IF NOT EXISTS zot_worker_holds(zot TEXT NOT NULL, chat TEXT NOT NULL, reason TEXT NOT NULL, PRIMARY KEY(zot,chat));
-            CREATE TABLE IF NOT EXISTS zot_targets(zot TEXT NOT NULL, target TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(zot,target));
-            CREATE TABLE IF NOT EXISTS zot_coordinator_turns(chat TEXT PRIMARY KEY, zot TEXT NOT NULL, ledger TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS zot_queue(id TEXT PRIMARY KEY);")?;
+            CREATE TABLE IF NOT EXISTS zapper_delivery(id TEXT PRIMARY KEY, baseline TEXT, sent_at INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS zapper_notifications(id TEXT PRIMARY KEY);
+            CREATE TABLE IF NOT EXISTS zapper_turn_summaries(id TEXT PRIMARY KEY, summary TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS zapper_worker_context(chat TEXT PRIMARY KEY, home TEXT NOT NULL, zapper TEXT NOT NULL, revision INTEGER NOT NULL, instructions TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS zapper_binding_versions(chat TEXT NOT NULL, home TEXT NOT NULL, zapper TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(chat,home,zapper));
+            CREATE TABLE IF NOT EXISTS zapper_releases(chat TEXT NOT NULL, device TEXT NOT NULL, zapper TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(chat,device,zapper));
+            CREATE TABLE IF NOT EXISTS zapper_worker_holds(zapper TEXT NOT NULL, chat TEXT NOT NULL, reason TEXT NOT NULL, PRIMARY KEY(zapper,chat));
+            CREATE TABLE IF NOT EXISTS zapper_targets(zapper TEXT NOT NULL, target TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(zapper,target));
+            CREATE TABLE IF NOT EXISTS zapper_coordinator_turns(chat TEXT PRIMARY KEY, zapper TEXT NOT NULL, ledger TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS zapper_queue(id TEXT PRIMARY KEY);")?;
         // Holds note the thread's last finished turn once it is seen stopped,
         // so a turn the user starts afterwards releases the hold.
         for column in ["stamped INTEGER NOT NULL DEFAULT 0", "turn TEXT"] {
             if let Err(error) = db.execute(
-                &format!("ALTER TABLE zot_worker_holds ADD COLUMN {column}"),
+                &format!("ALTER TABLE zapper_worker_holds ADD COLUMN {column}"),
                 [],
             ) && !error.to_string().contains("duplicate column")
             {
@@ -324,6 +346,7 @@ impl Zots {
             inner: Arc::new(Inner {
                 db: Mutex::new(db),
                 root,
+                legacy_root,
                 device: device.into(),
                 changed: watch::channel(0).0,
                 token,
@@ -375,11 +398,28 @@ impl Zots {
         file.write_all(serde_json::to_string(&value)?.as_bytes())?;
         file.as_file().sync_all()?;
         file.persist(self.inner.root.join("control.json"))?;
+        // Legacy, remove after one release: SDKs and `zuse-control` from
+        // before the rename look for discovery in the old folder.
+        if let Some(legacy) = &self.inner.legacy_root {
+            let mut file = tempfile::NamedTempFile::new_in(legacy)?;
+            file.write_all(serde_json::to_string(&value)?.as_bytes())?;
+            file.as_file().sync_all()?;
+            file.persist(legacy.join("control.json"))?;
+        }
         Ok(())
     }
 
+    /// A Zapper's own folder, where its coordinator runs. Zappers created
+    /// before the rename keep theirs under the legacy folder: harnesses key
+    /// saved conversations by working directory, so moving it would lose the
+    /// coordinator's conversation. Legacy, remove after one release.
     pub fn workspace(&self, id: &str) -> Result<PathBuf> {
         valid_id(id)?;
+        if let Some(legacy) = &self.inner.legacy_root
+            && legacy.join(id).is_dir()
+        {
+            return Ok(legacy.join(id));
+        }
         let path = self.inner.root.join(id);
         std::fs::create_dir_all(&path)?;
         Ok(path)
@@ -389,35 +429,35 @@ impl Zots {
         self.inner.changed.subscribe()
     }
 
-    pub fn list(&self) -> Result<Vec<Zot>> {
+    pub fn list(&self) -> Result<Vec<Zapper>> {
         let db = self
             .inner
             .db
             .lock()
             .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?;
-        let mut stmt = db.prepare("SELECT state FROM zots ORDER BY id")?;
+        let mut stmt = db.prepare("SELECT state FROM zappers ORDER BY id")?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         rows.map(|row| {
-            let mut zot: Zot = serde_json::from_str(&row?)?;
-            zot.activity_revision = db.query_row(
-                "SELECT COUNT(*)+COALESCE(SUM(acknowledged),0) FROM zot_events WHERE zot=?1",
-                [&zot.id],
+            let mut zapper: Zapper = serde_json::from_str(&row?)?;
+            zapper.activity_revision = db.query_row(
+                "SELECT COUNT(*)+COALESCE(SUM(acknowledged),0) FROM zapper_events WHERE zapper=?1",
+                [&zapper.id],
                 |r| r.get(0),
             )?;
-            mark_queue(&db, &mut zot)?;
-            Ok(zot)
+            mark_queue(&db, &mut zapper)?;
+            Ok(zapper)
         })
         .collect()
     }
 
-    pub fn get(&self, id: &str) -> Result<Zot> {
+    pub fn get(&self, id: &str) -> Result<Zapper> {
         self.list()?
             .into_iter()
             .find(|z| z.id == id)
             .context("Zapper not found")
     }
 
-    pub fn coordinator(&self, chat: &str) -> Result<Option<Zot>> {
+    pub fn coordinator(&self, chat: &str) -> Result<Option<Zapper>> {
         Ok(self
             .list()?
             .into_iter()
@@ -425,12 +465,12 @@ impl Zots {
     }
 
     pub fn worker_home(&self, chat: &str) -> Result<Option<(String, String)>> {
-        if let Some(zot) = self.list()?.into_iter().find(|z| {
+        if let Some(zapper) = self.list()?.into_iter().find(|z| {
             z.workers
                 .iter()
                 .any(|w| w.chat_id == chat && w.device_id == self.inner.device)
         }) {
-            return Ok(Some((zot.id, self.inner.device.clone())));
+            return Ok(Some((zapper.id, self.inner.device.clone())));
         }
         let db = self
             .inner
@@ -439,7 +479,7 @@ impl Zots {
             .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?;
         Ok(db
             .query_row(
-                "SELECT zot,home FROM zot_worker_context WHERE chat=?1",
+                "SELECT zapper,home FROM zapper_worker_context WHERE chat=?1",
                 [chat],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
@@ -454,20 +494,20 @@ impl Zots {
         harness: zuse_protocol::HarnessId,
         request: &mut zuse_protocol::RunRequest,
     ) -> Result<()> {
-        let attributed = zuse_protocol::presentation::zot_message::parse(&request.prompt)
+        let attributed = zuse_protocol::presentation::zapper_message::parse(&request.prompt)
             .map(|(sender, body)| (sender, body.to_owned()));
         if let Some((_, body)) = &attributed {
             request.prompt = body.clone();
         }
-        if let Some((zot, home)) = self.worker_home(chat)? {
+        if let Some((zapper, home)) = self.worker_home(chat)? {
             let name = self
                 .list()?
                 .into_iter()
-                .find(|z| z.id == zot)
+                .find(|z| z.id == zapper)
                 .map(|z| z.config.name);
             request.prompt = format!(
                 "{}\n\n{}",
-                worker_brief(&zot, &home, name.as_deref()),
+                worker_brief(&zapper, &home, name.as_deref()),
                 request.prompt
             );
         }
@@ -477,7 +517,7 @@ impl Zots {
             .lock()
             .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?
             .query_row(
-                "SELECT instructions FROM zot_worker_context WHERE chat=?1",
+                "SELECT instructions FROM zapper_worker_context WHERE chat=?1",
                 [chat],
                 |r| r.get(0),
             )
@@ -490,23 +530,23 @@ impl Zots {
                 );
             }
         }
-        for zot in self.list()? {
-            if zot.coordinator_chat_id == chat {
+        for zapper in self.list()? {
+            if zapper.coordinator_chat_id == chat {
                 ensure!(
-                    zot.status == ZotStatus::Active,
+                    zapper.status == ZapperStatus::Active,
                     "resume the Zapper before sending work"
                 );
-                request.cwd = self.workspace(&zot.id)?.to_string_lossy().into_owned();
+                request.cwd = self.workspace(&zapper.id)?.to_string_lossy().into_owned();
                 request.worktree = None;
                 request.plan = false;
                 let harness = request.harness.unwrap_or(harness);
-                self.prepare_coordinator_turn(&zot, chat, harness, request)?;
-            } else if zot
+                self.prepare_coordinator_turn(&zapper, chat, harness, request)?;
+            } else if zapper
                 .workers
                 .iter()
                 .any(|w| w.chat_id == chat && w.device_id == self.inner.device)
             {
-                let linked: Vec<_> = zot
+                let linked: Vec<_> = zapper
                     .issues
                     .iter()
                     .filter(|i| i.threads.iter().any(|id| id == chat))
@@ -518,7 +558,7 @@ impl Zots {
                     request.prompt
                 );
                 let instructions = self
-                    .files(&zot.id, false)?
+                    .files(&zapper.id, false)?
                     .into_iter()
                     .find(|f| f.path == "WORKERS.md")
                     .map(|f| f.content)
@@ -539,18 +579,18 @@ impl Zots {
                 .trim_end();
             request.prompt = format!(
                 "{}{}]\n\n{}{}{}",
-                zuse_protocol::presentation::zot_message::PREFIX,
+                zuse_protocol::presentation::zapper_message::PREFIX,
                 serde_json::to_string(&sender)?,
                 body,
-                zuse_protocol::presentation::zot_message::EXECUTION_CONTEXT,
+                zuse_protocol::presentation::zapper_message::EXECUTION_CONTEXT,
                 context
             );
         }
         Ok(())
     }
 
-    /// A retry returns its original result, even if later commands changed the Zot.
-    pub fn receipt(&self, command: &ZotCommand) -> Result<Option<Option<Zot>>> {
+    /// A retry returns its original result, even if later commands changed the Zapper.
+    pub fn receipt(&self, command: &ZapperCommand) -> Result<Option<Option<Zapper>>> {
         let db = self
             .inner
             .db
@@ -558,14 +598,14 @@ impl Zots {
             .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?;
         let receipt: Option<(String, String)> = db
             .query_row(
-                "SELECT input,result FROM zot_receipts WHERE id=?1",
+                "SELECT input,result FROM zapper_receipts WHERE id=?1",
                 [&command.command_id],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
         if let Some((input, result)) = receipt {
             ensure!(
-                input == serde_json::to_string(command)?,
+                same_input(&input, &serde_json::to_string(command)?),
                 "command ID was already used with different input"
             );
             return Ok(Some(serde_json::from_str(&result)?));
@@ -573,21 +613,21 @@ impl Zots {
         Ok(None)
     }
 
-    pub fn command(&self, command: ZotCommand) -> Result<Option<Zot>> {
+    pub fn command(&self, command: ZapperCommand) -> Result<Option<Zapper>> {
         self.command_as(command, None, false)
     }
     pub(crate) fn command_as(
         &self,
-        command: ZotCommand,
+        command: ZapperCommand,
         actor: Option<&str>,
         coordinator: bool,
-    ) -> Result<Option<Zot>> {
+    ) -> Result<Option<Zapper>> {
         let _admission = self
             .inner
             .admission
             .lock()
             .map_err(|_| anyhow::anyhow!("Zapper admission unavailable"))?;
-        valid_id(&command.zot_id)?;
+        valid_id(&command.zapper_id)?;
         valid_id(&command.command_id)?;
         let input = serde_json::to_string(&command)?;
         let mut db = self
@@ -598,108 +638,116 @@ impl Zots {
         let tx = db.transaction()?;
         let receipt: Option<(String, String)> = tx
             .query_row(
-                "SELECT input,result FROM zot_receipts WHERE id=?1",
+                "SELECT input,result FROM zapper_receipts WHERE id=?1",
                 [&command.command_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
         if let Some((original, result)) = receipt {
             ensure!(
-                original == input,
+                same_input(&original, &input),
                 "command ID was already used with different input"
             );
             return Ok(serde_json::from_str(&result)?);
         }
         let stored: Option<String> = tx
             .query_row(
-                "SELECT state FROM zots WHERE id=?1",
-                [&command.zot_id],
+                "SELECT state FROM zappers WHERE id=?1",
+                [&command.zapper_id],
                 |row| row.get(0),
             )
             .optional()?;
-        let mut zot = match (&command.action, stored) {
-            (ZotAction::Create { config }, None) => {
+        let mut zapper = match (&command.action, stored) {
+            (ZapperAction::Create { config }, None) => {
                 validate_config(config, &self.inner.device)?;
-                Zot {
-                    id: command.zot_id.clone(),
+                Zapper {
+                    id: command.zapper_id.clone(),
                     revision: 0,
                     activity_revision: 0,
                     config: config.clone(),
-                    status: ZotStatus::Active,
-                    coordinator_chat_id: format!("zot-{}-0", command.zot_id),
+                    status: ZapperStatus::Active,
+                    coordinator_chat_id: format!(
+                        "{COORDINATOR_CHAT_PREFIX}{}-0",
+                        command.zapper_id
+                    ),
                     previous_coordinator_chats: vec![],
                     workers: vec![],
                     decisions: vec![],
                     issues: vec![],
                 }
             }
-            (ZotAction::Create { .. }, Some(_)) => bail!("Zapper already exists"),
+            (ZapperAction::Create { .. }, Some(_)) => bail!("Zapper already exists"),
             (_, Some(state)) => serde_json::from_str(&state)?,
             (_, None) => bail!("Zapper not found"),
         };
-        let before = zot.clone();
-        check_revision(&tx, &zot, &command)?;
-        issues::apply(&mut zot, &command, &tx, actor, coordinator)?;
+        let before = zapper.clone();
+        check_revision(&tx, &zapper, &command)?;
+        issues::apply(&mut zapper, &command, &tx, actor, coordinator)?;
         match &command.action {
-            ZotAction::CreateIssue { .. }
-            | ZotAction::EditIssue { .. }
-            | ZotAction::LinkIssueThread { .. }
-            | ZotAction::LinkIssuePullRequest { .. }
-            | ZotAction::CommentIssue { .. }
-            | ZotAction::UnlinkIssueThread { .. }
-            | ZotAction::UnlinkIssuePullRequest { .. }
-            | ZotAction::AskUser { .. }
-            | ZotAction::CloseIssue { .. } => {}
-            ZotAction::Create { .. } => {
+            ZapperAction::CreateIssue { .. }
+            | ZapperAction::EditIssue { .. }
+            | ZapperAction::LinkIssueThread { .. }
+            | ZapperAction::LinkIssuePullRequest { .. }
+            | ZapperAction::CommentIssue { .. }
+            | ZapperAction::UnlinkIssueThread { .. }
+            | ZapperAction::UnlinkIssuePullRequest { .. }
+            | ZapperAction::AskUser { .. }
+            | ZapperAction::CloseIssue { .. } => {}
+            ZapperAction::Create { .. } => {
                 for (path, content) in [
-                    (PURPOSE_FILE, zot.config.purpose.as_str()),
+                    (PURPOSE_FILE, zapper.config.purpose.as_str()),
                     ("WORKERS.md", ""),
                     ("NOTES.md", ""),
                     ("DIGEST.md", ""),
                 ] {
                     tx.execute(
-                        "INSERT INTO zot_files VALUES(?1,?2,1,?3)",
-                        params![zot.id, path, content],
+                        "INSERT INTO zapper_files VALUES(?1,?2,1,?3)",
+                        params![zapper.id, path, content],
                     )?;
                 }
             }
-            ZotAction::Configure { config } => {
+            ZapperAction::Configure { config } => {
                 validate_config(config, &self.inner.device)?;
                 ensure!(
-                    zot.workers.iter().all(|w| config
+                    zapper.workers.iter().all(|w| config
                         .repositories
                         .iter()
                         .any(|r| r.device_id == w.device_id && r.space_id == w.space_id)),
                     "release affected workers before removing repositories"
                 );
-                let (version, doc) = latest_file(&tx, &zot.id, PURPOSE_FILE)?;
-                if let Some(doc) = reseed_purpose(&doc, &zot.config.purpose, &config.purpose) {
-                    write_file(&tx, &zot.id, PURPOSE_FILE, &doc, version)?;
+                let (version, doc) = latest_file(&tx, &zapper.id, PURPOSE_FILE)?;
+                if let Some(doc) = reseed_purpose(&doc, &zapper.config.purpose, &config.purpose) {
+                    write_file(&tx, &zapper.id, PURPOSE_FILE, &doc, version)?;
                 }
-                zot.config = config.clone();
+                zapper.config = config.clone();
             }
-            ZotAction::SetStatus { status } => zot.status = *status,
-            ZotAction::AdoptWorker { worker } | ZotAction::Delegate { worker, .. } => {
+            ZapperAction::SetStatus { status } => zapper.status = *status,
+            ZapperAction::AdoptWorker { worker } | ZapperAction::Delegate { worker, .. } => {
                 if worker.device_id == self.inner.device {
                     let foreign: Option<(String, String)> = tx
                         .query_row(
-                            "SELECT home,zot FROM zot_worker_context WHERE chat=?1",
+                            "SELECT home,zapper FROM zapper_worker_context WHERE chat=?1",
                             [&worker.chat_id],
                             |r| Ok((r.get(0)?, r.get(1)?)),
                         )
                         .optional()?;
                     ensure!(
-                        foreign.is_none_or(|(home, id)| home == self.inner.device && id == zot.id),
+                        foreign
+                            .is_none_or(|(home, id)| home == self.inner.device && id == zapper.id),
                         "worker already belongs to another Zapper home"
                     );
                 }
-                ensure!(zot.status == ZotStatus::Active, "Zapper is not active");
                 ensure!(
-                    worker.chat_id != zot.coordinator_chat_id,
+                    zapper.status == ZapperStatus::Active,
+                    "Zapper is not active"
+                );
+                ensure!(
+                    worker.chat_id != zapper.coordinator_chat_id,
                     "coordinator cannot be a worker"
                 );
                 ensure!(
-                    zot.config
+                    zapper
+                        .config
                         .repositories
                         .iter()
                         .any(|r| r.device_id == worker.device_id && r.space_id == worker.space_id),
@@ -710,39 +758,42 @@ impl Zots {
                     "worker objective is required"
                 );
                 tx.execute(
-                    "INSERT INTO zot_workers(chat,device,zot) VALUES(?1,?2,?3)",
-                    params![worker.chat_id, worker.device_id, zot.id],
+                    "INSERT INTO zapper_workers(chat,device,zapper) VALUES(?1,?2,?3)",
+                    params![worker.chat_id, worker.device_id, zapper.id],
                 )
                 .context("worker already belongs to a Zapper")?;
                 // The queue position is derived on read, never stored.
-                zot.workers.push(ZotWorker {
+                zapper.workers.push(ZapperWorker {
                     queue_position: None,
                     ..worker.clone()
                 });
-                if matches!(command.action, ZotAction::Delegate { .. }) {
+                if matches!(command.action, ZapperAction::Delegate { .. }) {
                     ensure!(
                         worker.followups == 0,
                         "new workers cannot have prior follow-ups"
                     );
                     tx.execute(
-                        "INSERT INTO zot_outbox(id,zot,chat,action) VALUES(?1,?2,?3,?4)",
+                        "INSERT INTO zapper_outbox(id,zapper,chat,action) VALUES(?1,?2,?3,?4)",
                         params![
                             command.command_id,
-                            zot.id,
+                            zapper.id,
                             worker.chat_id,
                             serde_json::to_string(&command.action)?
                         ],
                     )?;
                 }
             }
-            ZotAction::MessageWorker {
+            ZapperAction::MessageWorker {
                 chat_id,
                 text,
                 automatic,
             } => {
-                ensure!(zot.status == ZotStatus::Active, "Zapper is not active");
+                ensure!(
+                    zapper.status == ZapperStatus::Active,
+                    "Zapper is not active"
+                );
                 ensure!(!text.trim().is_empty(), "message is empty");
-                let worker = zot
+                let worker = zapper
                     .workers
                     .iter_mut()
                     .find(|w| w.chat_id == *chat_id)
@@ -750,8 +801,8 @@ impl Zots {
                 if *automatic {
                     let hold: Option<String> = tx
                         .query_row(
-                            "SELECT reason FROM zot_worker_holds WHERE zot=?1 AND chat=?2",
-                            params![zot.id, chat_id],
+                            "SELECT reason FROM zapper_worker_holds WHERE zapper=?1 AND chat=?2",
+                            params![zapper.id, chat_id],
                             |r| r.get(0),
                         )
                         .optional()?;
@@ -760,176 +811,194 @@ impl Zots {
                         "worker needs explicit user continuation: the user stopped this thread, so only they can restart it. Don't retry; askUser on its issue (or record a decision) asking whether to continue it. If they continue it in its own chat, this clears once it runs again"
                     );
                     ensure!(
-                        worker.followups < zot.config.max_followups,
+                        worker.followups < zapper.config.max_followups,
                         "automatic follow-up limit reached ({} of {}); askUser before sending this thread more work",
                         worker.followups,
-                        zot.config.max_followups
+                        zapper.config.max_followups
                     );
                     worker.followups += 1;
                     // The Zapper may resume a thread that it stopped, or that
                     // stopped or failed by itself.
                     tx.execute(
-                        "DELETE FROM zot_worker_holds WHERE zot=?1 AND chat=?2",
-                        params![zot.id, chat_id],
+                        "DELETE FROM zapper_worker_holds WHERE zapper=?1 AND chat=?2",
+                        params![zapper.id, chat_id],
                     )?;
                 } else {
                     tx.execute(
-                        "DELETE FROM zot_worker_holds WHERE zot=?1 AND chat=?2",
-                        params![zot.id, chat_id],
+                        "DELETE FROM zapper_worker_holds WHERE zapper=?1 AND chat=?2",
+                        params![zapper.id, chat_id],
                     )?;
                     worker.followups = 0;
                     worker.objective = text.clone();
                 }
                 tx.execute(
-                    "INSERT INTO zot_outbox(id,zot,chat,action) VALUES(?1,?2,?3,?4)",
+                    "INSERT INTO zapper_outbox(id,zapper,chat,action) VALUES(?1,?2,?3,?4)",
                     params![
                         command.command_id,
-                        zot.id,
+                        zapper.id,
                         chat_id,
                         serde_json::to_string(&command.action)?
                     ],
                 )?;
             }
-            ZotAction::StopWorker { chat_id } | ZotAction::ArchiveWorker { chat_id } => {
+            ZapperAction::StopWorker { chat_id } | ZapperAction::ArchiveWorker { chat_id } => {
                 tx.execute(
-                    "INSERT OR REPLACE INTO zot_worker_holds(zot,chat,reason) VALUES(?1,?2,?3)",
+                    "INSERT OR REPLACE INTO zapper_worker_holds(zapper,chat,reason) VALUES(?1,?2,?3)",
                     params![
-                        zot.id,
+                        zapper.id,
                         chat_id,
                         if coordinator { HOLD_ZAPPER } else { HOLD_USER }
                     ],
                 )?;
                 ensure!(
-                    zot.workers.iter().any(|w| w.chat_id == *chat_id),
+                    zapper.workers.iter().any(|w| w.chat_id == *chat_id),
                     "worker not found"
                 );
-                tx.execute("UPDATE zot_outbox SET phase='cancelled' WHERE zot=?1 AND chat=?2 AND phase IN ('pending','sending')", params![zot.id,chat_id])?;
+                tx.execute("UPDATE zapper_outbox SET phase='cancelled' WHERE zapper=?1 AND chat=?2 AND phase IN ('pending','sending')", params![zapper.id,chat_id])?;
                 tx.execute(
-                    "INSERT INTO zot_outbox(id,zot,chat,action) VALUES(?1,?2,?3,?4)",
+                    "INSERT INTO zapper_outbox(id,zapper,chat,action) VALUES(?1,?2,?3,?4)",
                     params![
                         command.command_id,
-                        zot.id,
+                        zapper.id,
                         chat_id,
                         serde_json::to_string(&command.action)?
                     ],
                 )?;
             }
-            ZotAction::ReleaseWorker { chat_id } => {
-                if let Some(worker) = zot.workers.iter().find(|w| w.chat_id == *chat_id) {
+            ZapperAction::ReleaseWorker { chat_id } => {
+                if let Some(worker) = zapper.workers.iter().find(|w| w.chat_id == *chat_id) {
                     tx.execute(
-                        "INSERT OR REPLACE INTO zot_releases VALUES(?1,?2,?3,?4)",
-                        params![worker.chat_id, worker.device_id, zot.id, zot.revision + 1],
+                        "INSERT OR REPLACE INTO zapper_releases VALUES(?1,?2,?3,?4)",
+                        params![
+                            worker.chat_id,
+                            worker.device_id,
+                            zapper.id,
+                            zapper.revision + 1
+                        ],
                     )?;
                 }
-                tx.execute("UPDATE zot_outbox SET phase='cancelled' WHERE zot=?1 AND chat=?2 AND phase IN ('pending','sending')", params![zot.id,chat_id])?;
-                zot.workers.retain(|w| &w.chat_id != chat_id);
+                tx.execute("UPDATE zapper_outbox SET phase='cancelled' WHERE zapper=?1 AND chat=?2 AND phase IN ('pending','sending')", params![zapper.id,chat_id])?;
+                zapper.workers.retain(|w| &w.chat_id != chat_id);
                 tx.execute(
-                    "DELETE FROM zot_workers WHERE zot=?1 AND chat=?2",
-                    params![zot.id, chat_id],
+                    "DELETE FROM zapper_workers WHERE zapper=?1 AND chat=?2",
+                    params![zapper.id, chat_id],
                 )?;
             }
-            ZotAction::Decide { decision } => {
+            ZapperAction::Decide { decision } => {
                 valid_id(&decision.id)?;
                 ensure!(
                     !decision.question.trim().is_empty(),
                     "decision question is required"
                 );
-                if let Some(existing) = zot.decisions.iter_mut().find(|d| d.id == decision.id) {
+                if let Some(existing) = zapper.decisions.iter_mut().find(|d| d.id == decision.id) {
                     *existing = decision.clone();
                 } else {
-                    zot.decisions.push(decision.clone());
+                    zapper.decisions.push(decision.clone());
                 }
             }
-            ZotAction::WriteFile {
+            ZapperAction::WriteFile {
                 path,
                 content,
                 expected_version,
             } => {
-                write_file(&tx, &zot.id, path, content, *expected_version)?;
+                write_file(&tx, &zapper.id, path, content, *expected_version)?;
                 if path == PURPOSE_FILE {
-                    zot.config.purpose = purpose_line(content);
+                    zapper.config.purpose = purpose_line(content);
                 }
             }
-            ZotAction::RestoreFile {
+            ZapperAction::RestoreFile {
                 path,
                 version,
                 expected_version,
             } => {
                 let content: String = tx.query_row(
-                    "SELECT content FROM zot_files WHERE zot=?1 AND path=?2 AND version=?3",
-                    params![zot.id, path, version],
+                    "SELECT content FROM zapper_files WHERE zapper=?1 AND path=?2 AND version=?3",
+                    params![zapper.id, path, version],
                     |row| row.get(0),
                 )?;
-                write_file(&tx, &zot.id, path, &content, *expected_version)?;
+                write_file(&tx, &zapper.id, path, &content, *expected_version)?;
                 if path == PURPOSE_FILE {
-                    zot.config.purpose = purpose_line(&content);
+                    zapper.config.purpose = purpose_line(&content);
                 }
             }
-            ZotAction::FreshConversation => {
-                zot.previous_coordinator_chats
-                    .push(zot.coordinator_chat_id.clone());
-                zot.coordinator_chat_id = format!("zot-{}-{}", zot.id, zot.revision + 1);
+            ZapperAction::FreshConversation => {
+                zapper
+                    .previous_coordinator_chats
+                    .push(zapper.coordinator_chat_id.clone());
+                zapper.coordinator_chat_id = format!(
+                    "{COORDINATOR_CHAT_PREFIX}{}-{}",
+                    zapper.id,
+                    zapper.revision + 1
+                );
             }
-            ZotAction::Delete => {
-                for worker in &zot.workers {
+            ZapperAction::Delete => {
+                for worker in &zapper.workers {
                     tx.execute(
-                        "INSERT OR REPLACE INTO zot_releases VALUES(?1,?2,?3,?4)",
-                        params![worker.chat_id, worker.device_id, zot.id, zot.revision + 1],
+                        "INSERT OR REPLACE INTO zapper_releases VALUES(?1,?2,?3,?4)",
+                        params![
+                            worker.chat_id,
+                            worker.device_id,
+                            zapper.id,
+                            zapper.revision + 1
+                        ],
                     )?;
                 }
                 tx.execute(
-                    "UPDATE zot_outbox SET phase='cancelled' WHERE zot=?1 AND phase IN ('pending','sending')",
-                    [&zot.id],
+                    "UPDATE zapper_outbox SET phase='cancelled' WHERE zapper=?1 AND phase IN ('pending','sending')",
+                    [&zapper.id],
                 )?;
-                tx.execute("DELETE FROM zot_workers WHERE zot=?1", [&zot.id])?;
-                tx.execute("DELETE FROM zot_targets WHERE zot=?1", [&zot.id])?;
-                tx.execute("DELETE FROM zot_coordinator_turns WHERE zot=?1", [&zot.id])?;
-                tx.execute("DELETE FROM zots WHERE id=?1", [&zot.id])?;
+                tx.execute("DELETE FROM zapper_workers WHERE zapper=?1", [&zapper.id])?;
+                tx.execute("DELETE FROM zapper_targets WHERE zapper=?1", [&zapper.id])?;
+                tx.execute(
+                    "DELETE FROM zapper_coordinator_turns WHERE zapper=?1",
+                    [&zapper.id],
+                )?;
+                tx.execute("DELETE FROM zappers WHERE id=?1", [&zapper.id])?;
             }
         }
         if matches!(
             command.action,
-            ZotAction::SetStatus {
-                status: ZotStatus::Stopped | ZotStatus::Archived
+            ZapperAction::SetStatus {
+                status: ZapperStatus::Stopped | ZapperStatus::Archived
             }
         ) {
             tx.execute(
-                "UPDATE zot_outbox SET phase='cancelled' WHERE zot=?1 AND phase IN ('pending','sending')",
-                [&zot.id],
+                "UPDATE zapper_outbox SET phase='cancelled' WHERE zapper=?1 AND phase IN ('pending','sending')",
+                [&zapper.id],
             )?;
-            for worker in &zot.workers {
+            for worker in &zapper.workers {
                 let id = format!("{}-stop-{}", command.command_id, worker.chat_id);
-                let action = if zot.status == ZotStatus::Archived {
-                    ZotAction::ArchiveWorker {
+                let action = if zapper.status == ZapperStatus::Archived {
+                    ZapperAction::ArchiveWorker {
                         chat_id: worker.chat_id.clone(),
                     }
                 } else {
-                    ZotAction::StopWorker {
+                    ZapperAction::StopWorker {
                         chat_id: worker.chat_id.clone(),
                     }
                 };
                 tx.execute(
-                    "INSERT OR IGNORE INTO zot_outbox(id,zot,chat,action) VALUES(?1,?2,?3,?4)",
-                    params![id, zot.id, worker.chat_id, serde_json::to_string(&action)?],
+                    "INSERT OR IGNORE INTO zapper_outbox(id,zapper,chat,action) VALUES(?1,?2,?3,?4)",
+                    params![id, zapper.id, worker.chat_id, serde_json::to_string(&action)?],
                 )?;
             }
         }
-        let result = if matches!(command.action, ZotAction::Delete) {
+        let result = if matches!(command.action, ZapperAction::Delete) {
             None
         } else {
-            zot.revision = zot
+            zapper.revision = zapper
                 .revision
                 .checked_add(1)
                 .context("Zapper revision exhausted")?;
-            record_changes(&tx, &before, &zot)?;
+            record_changes(&tx, &before, &zapper)?;
             tx.execute(
-                "INSERT OR REPLACE INTO zots VALUES(?1,?2)",
-                params![zot.id, serde_json::to_string(&zot)?],
+                "INSERT OR REPLACE INTO zappers VALUES(?1,?2)",
+                params![zapper.id, serde_json::to_string(&zapper)?],
             )?;
-            Some(zot)
+            Some(zapper)
         };
         tx.execute(
-            "INSERT INTO zot_receipts VALUES(?1,?2,?3)",
+            "INSERT INTO zapper_receipts VALUES(?1,?2,?3)",
             params![command.command_id, input, serde_json::to_string(&result)?],
         )?;
         tx.commit()?;
@@ -946,7 +1015,7 @@ impl Zots {
     /// hold was released.
     pub(crate) fn settle_hold(
         &self,
-        zot: &str,
+        zapper: &str,
         chat: &str,
         working: bool,
         last_completed_turn: Option<&str>,
@@ -959,8 +1028,8 @@ impl Zots {
         let tx = db.transaction()?;
         let hold: Option<(bool, Option<String>)> = tx
             .query_row(
-                "SELECT stamped,turn FROM zot_worker_holds WHERE zot=?1 AND chat=?2",
-                params![zot, chat],
+                "SELECT stamped,turn FROM zapper_worker_holds WHERE zapper=?1 AND chat=?2",
+                params![zapper, chat],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
@@ -969,8 +1038,8 @@ impl Zots {
             Some((false, _)) => {
                 if !working {
                     tx.execute(
-                        "UPDATE zot_worker_holds SET stamped=1, turn=?3 WHERE zot=?1 AND chat=?2",
-                        params![zot, chat, last_completed_turn],
+                        "UPDATE zapper_worker_holds SET stamped=1, turn=?3 WHERE zapper=?1 AND chat=?2",
+                        params![zapper, chat, last_completed_turn],
                     )?;
                 }
                 false
@@ -979,12 +1048,12 @@ impl Zots {
                 let resumed = working || turn.as_deref() != last_completed_turn;
                 if resumed {
                     tx.execute(
-                        "DELETE FROM zot_worker_holds WHERE zot=?1 AND chat=?2",
-                        params![zot, chat],
+                        "DELETE FROM zapper_worker_holds WHERE zapper=?1 AND chat=?2",
+                        params![zapper, chat],
                     )?;
                     tx.execute(
-                        "UPDATE zot_events SET acknowledged=1 WHERE zot=?1 AND worker=?2 AND acknowledged=0 AND kind IN ('interrupted','failed')",
-                        params![zot, chat],
+                        "UPDATE zapper_events SET acknowledged=1 WHERE zapper=?1 AND worker=?2 AND acknowledged=0 AND kind IN ('interrupted','failed')",
+                        params![zapper, chat],
                     )?;
                 }
                 resumed
@@ -998,18 +1067,18 @@ impl Zots {
         Ok(released)
     }
 
-    pub fn files(&self, id: &str, history: bool) -> Result<Vec<ZotFile>> {
+    pub fn files(&self, id: &str, history: bool) -> Result<Vec<ZapperFile>> {
         self.get(id)?;
         let db = self
             .inner
             .db
             .lock()
             .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?;
-        let mut stmt = db.prepare(if history { "SELECT path,version,content FROM zot_files WHERE zot=?1 ORDER BY path,version DESC" }
-            else { "SELECT f.path,f.version,f.content FROM zot_files f WHERE zot=?1 AND version=(SELECT MAX(version) FROM zot_files WHERE zot=f.zot AND path=f.path) ORDER BY path" })?;
+        let mut stmt = db.prepare(if history { "SELECT path,version,content FROM zapper_files WHERE zapper=?1 ORDER BY path,version DESC" }
+            else { "SELECT f.path,f.version,f.content FROM zapper_files f WHERE zapper=?1 AND version=(SELECT MAX(version) FROM zapper_files WHERE zapper=f.zapper AND path=f.path) ORDER BY path" })?;
         Ok(stmt
             .query_map([id], |r| {
-                Ok(ZotFile {
+                Ok(ZapperFile {
                     path: r.get(0)?,
                     version: r.get(1)?,
                     content: r.get(2)?,
@@ -1018,8 +1087,8 @@ impl Zots {
             .collect::<rusqlite::Result<_>>()?)
     }
 
-    pub fn record_event(&self, event: &ZotEvent) -> Result<()> {
-        self.get(&event.zot_id)?;
+    pub fn record_event(&self, event: &ZapperEvent) -> Result<()> {
+        self.get(&event.zapper_id)?;
         let mut db = self
             .inner
             .db
@@ -1027,10 +1096,10 @@ impl Zots {
             .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?;
         let tx = db.transaction()?;
         let inserted = tx.execute(
-            "INSERT OR IGNORE INTO zot_events VALUES(?1,?2,?3,?4,?5,0)",
+            "INSERT OR IGNORE INTO zapper_events VALUES(?1,?2,?3,?4,?5,0)",
             params![
                 event.id,
-                event.zot_id,
+                event.zapper_id,
                 event.worker_chat_id,
                 event.kind,
                 event.summary
@@ -1046,19 +1115,19 @@ impl Zots {
         Ok(())
     }
 
-    pub fn events(&self, id: &str) -> Result<Vec<ZotEvent>> {
+    pub fn events(&self, id: &str) -> Result<Vec<ZapperEvent>> {
         self.get(id)?;
         let db = self
             .inner
             .db
             .lock()
             .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?;
-        let mut stmt = db.prepare("SELECT id,worker,kind,summary,acknowledged FROM zot_events WHERE zot=?1 ORDER BY rowid")?;
+        let mut stmt = db.prepare("SELECT id,worker,kind,summary,acknowledged FROM zapper_events WHERE zapper=?1 ORDER BY rowid")?;
         Ok(stmt
             .query_map([id], |r| {
-                Ok(ZotEvent {
+                Ok(ZapperEvent {
                     id: r.get(0)?,
-                    zot_id: id.into(),
+                    zapper_id: id.into(),
                     worker_chat_id: r.get(1)?,
                     kind: r.get(2)?,
                     summary: r.get(3)?,
@@ -1078,7 +1147,7 @@ impl Zots {
         let tx = db.transaction()?;
         for event in events {
             tx.execute(
-                "UPDATE zot_events SET acknowledged=1 WHERE zot=?1 AND id=?2",
+                "UPDATE zapper_events SET acknowledged=1 WHERE zapper=?1 AND id=?2",
                 params![id, event],
             )?;
         }
@@ -1087,13 +1156,13 @@ impl Zots {
         Ok(())
     }
 
-    pub fn outbox(&self) -> Result<Vec<(String, String, String, ZotAction, String)>> {
+    pub fn outbox(&self) -> Result<Vec<(String, String, String, ZapperAction, String)>> {
         let db = self
             .inner
             .db
             .lock()
             .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?;
-        let mut stmt = db.prepare("SELECT id,zot,chat,action,phase FROM zot_outbox WHERE phase IN ('pending','sending') ORDER BY rowid")?;
+        let mut stmt = db.prepare("SELECT id,zapper,chat,action,phase FROM zapper_outbox WHERE phase IN ('pending','sending') ORDER BY rowid")?;
         let rows = stmt.query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -1104,8 +1173,8 @@ impl Zots {
             ))
         })?;
         rows.map(|row| {
-            let (id, zot, chat, action, phase) = row?;
-            Ok((id, zot, chat, serde_json::from_str(&action)?, phase))
+            let (id, zapper, chat, action, phase) = row?;
+            Ok((id, zapper, chat, serde_json::from_str(&action)?, phase))
         })
         .collect()
     }
@@ -1115,35 +1184,35 @@ impl Zots {
             .lock()
             .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?
             .execute(
-                "UPDATE zot_outbox SET phase=?2,error=?3 WHERE id=?1",
+                "UPDATE zapper_outbox SET phase=?2,error=?3 WHERE id=?1",
                 params![id, phase, error],
             )?;
         Ok(())
     }
-    pub fn active_dispatches(&self, zot: &str) -> Result<u32> {
+    pub fn active_dispatches(&self, zapper: &str) -> Result<u32> {
         Ok(self
             .inner
             .db
             .lock()
             .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?
             .query_row(
-                "SELECT COUNT(*) FROM zot_outbox WHERE zot=?1 AND phase IN ('sending','sent')",
-                [zot],
+                "SELECT COUNT(*) FROM zapper_outbox WHERE zapper=?1 AND phase IN ('sending','sent')",
+                [zapper],
                 |r| r.get(0),
             )?)
     }
 
-    pub fn reserved_workers(&self, zot: &str) -> Result<std::collections::HashSet<String>> {
+    pub fn reserved_workers(&self, zapper: &str) -> Result<std::collections::HashSet<String>> {
         let db = self
             .inner
             .db
             .lock()
             .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?;
         let mut stmt = db.prepare(
-            "SELECT DISTINCT chat FROM zot_outbox WHERE zot=?1 AND phase IN ('sending','sent')",
+            "SELECT DISTINCT chat FROM zapper_outbox WHERE zapper=?1 AND phase IN ('sending','sent')",
         )?;
         Ok(stmt
-            .query_map([zot], |r| r.get::<_, String>(0))?
+            .query_map([zapper], |r| r.get::<_, String>(0))?
             .collect::<rusqlite::Result<_>>()?)
     }
     /// Note that a delegate waits for a free slot. Returns whether it is
@@ -1154,7 +1223,7 @@ impl Zots {
             .db
             .lock()
             .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?
-            .execute("INSERT OR IGNORE INTO zot_queue VALUES(?1)", [outbox_id])?
+            .execute("INSERT OR IGNORE INTO zapper_queue VALUES(?1)", [outbox_id])?
             > 0;
         if added {
             self.inner.changed.send_modify(|n| *n = n.wrapping_add(1));
@@ -1167,7 +1236,7 @@ impl Zots {
             .lock()
             .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?
             .execute(
-                "UPDATE zot_outbox SET phase='settled' WHERE chat=?1 AND phase='sent'",
+                "UPDATE zapper_outbox SET phase='settled' WHERE chat=?1 AND phase='sent'",
                 [chat],
             )?;
         Ok(())
@@ -1178,25 +1247,36 @@ impl Zots {
 /// frees, and the supervisor starts them in the order they were delegated.
 /// Their chats don't exist yet, so mark those workers with their place in
 /// that order. Stopped, archived or started delegates leave the queue.
-fn mark_queue(db: &Connection, zot: &mut Zot) -> Result<()> {
+fn mark_queue(db: &Connection, zapper: &mut Zapper) -> Result<()> {
     let mut stmt = db.prepare_cached(
-        "SELECT o.chat FROM zot_outbox o JOIN zot_queue q ON q.id=o.id
-         WHERE o.zot=?1 AND o.phase='pending' ORDER BY o.rowid",
+        "SELECT o.chat FROM zapper_outbox o JOIN zapper_queue q ON q.id=o.id
+         WHERE o.zapper=?1 AND o.phase='pending' ORDER BY o.rowid",
     )?;
     let mut queue: Vec<String> = Vec::new();
-    for chat in stmt.query_map([&zot.id], |r| r.get::<_, String>(0))? {
+    for chat in stmt.query_map([&zapper.id], |r| r.get::<_, String>(0))? {
         let chat = chat?;
         if !queue.contains(&chat) {
             queue.push(chat);
         }
     }
-    for worker in &mut zot.workers {
+    for worker in &mut zapper.workers {
         worker.queue_position = queue
             .iter()
             .position(|c| *c == worker.chat_id)
             .map(|i| i as u32 + 1);
     }
     Ok(())
+}
+
+/// Whether a retried command matches the receipt of its first attempt.
+/// Receipts saved before the rename spell the Zapper id `zotId`, so compare
+/// them as the command they parse to. Legacy, remove after one release.
+fn same_input(stored: &str, input: &str) -> bool {
+    stored == input
+        || serde_json::from_str::<ZapperCommand>(stored)
+            .ok()
+            .and_then(|command| serde_json::to_string(&command).ok())
+            .is_some_and(|stored| stored == input)
 }
 
 fn valid_id(value: &str) -> Result<()> {
@@ -1210,7 +1290,7 @@ fn valid_id(value: &str) -> Result<()> {
     );
     Ok(())
 }
-fn validate_config(config: &ZotConfig, device: &str) -> Result<()> {
+fn validate_config(config: &ZapperConfig, device: &str) -> Result<()> {
     ensure!(
         config.home_device_id == device,
         "Zapper must be created on its authoritative home"
@@ -1240,7 +1320,7 @@ fn validate_config(config: &ZotConfig, device: &str) -> Result<()> {
         config
             .avatar_image
             .as_deref()
-            .is_none_or(zuse_protocol::zots::avatar_image_ok),
+            .is_none_or(zuse_protocol::zappers::avatar_image_ok),
         "Zapper picture must be a PNG or JPEG under 96 KB"
     );
     Ok(())
@@ -1272,22 +1352,26 @@ impl HoldSource {
     }
 }
 
-/// `expectedRevision` guards what a command depends on, not the whole Zot:
+/// `expectedRevision` guards what a command depends on, not the whole Zapper:
 /// thread reports and changes to other issues land between a caller's read
 /// and its write all the time. Actions whose order matters stay strict.
-fn check_revision(tx: &rusqlite::Transaction<'_>, zot: &Zot, command: &ZotCommand) -> Result<()> {
+fn check_revision(
+    tx: &rusqlite::Transaction<'_>,
+    zapper: &Zapper,
+    command: &ZapperCommand,
+) -> Result<()> {
     let Some(expected) = command.expected_revision else {
         return Ok(());
     };
     // Changes are tracked from the first command this engine version saw.
     tx.execute(
-        "INSERT OR IGNORE INTO zot_targets VALUES(?1,'',?2)",
-        params![zot.id, zot.revision],
+        "INSERT OR IGNORE INTO zapper_targets VALUES(?1,'',?2)",
+        params![zapper.id, zapper.revision],
     )?;
-    if expected == zot.revision {
+    if expected == zapper.revision {
         return Ok(());
     }
-    let current = zot.revision;
+    let current = zapper.revision;
     let strict = || {
         anyhow::anyhow!(
             "Zapper revision conflict: expected {expected}, current revision is {current}. {} needs the exact current revision. Re-read the state, then retry with expectedRevision {current} and a new commandId",
@@ -1302,8 +1386,8 @@ fn check_revision(tx: &rusqlite::Transaction<'_>, zot: &Zot, command: &ZotComman
     };
     let since: Option<u32> = tx
         .query_row(
-            "SELECT revision FROM zot_targets WHERE zot=?1 AND target=''",
-            [&zot.id],
+            "SELECT revision FROM zapper_targets WHERE zapper=?1 AND target=''",
+            [&zapper.id],
             |r| r.get(0),
         )
         .optional()?;
@@ -1313,8 +1397,8 @@ fn check_revision(tx: &rusqlite::Transaction<'_>, zot: &Zot, command: &ZotComman
     for target in targets {
         let changed: Option<u32> = tx
             .query_row(
-                "SELECT revision FROM zot_targets WHERE zot=?1 AND target=?2",
-                params![zot.id, target],
+                "SELECT revision FROM zapper_targets WHERE zapper=?1 AND target=?2",
+                params![zapper.id, target],
                 |r| r.get(0),
             )
             .optional()?;
@@ -1335,9 +1419,9 @@ fn check_revision(tx: &rusqlite::Transaction<'_>, zot: &Zot, command: &ZotComman
 
 /// Note the revision at which each issue's details and each decision last
 /// changed, for [`check_revision`].
-fn record_changes(tx: &rusqlite::Transaction<'_>, before: &Zot, after: &Zot) -> Result<()> {
+fn record_changes(tx: &rusqlite::Transaction<'_>, before: &Zapper, after: &Zapper) -> Result<()> {
     tx.execute(
-        "INSERT OR IGNORE INTO zot_targets VALUES(?1,'',?2)",
+        "INSERT OR IGNORE INTO zapper_targets VALUES(?1,'',?2)",
         params![after.id, before.revision],
     )?;
     let mut changed = vec![];
@@ -1368,7 +1452,7 @@ fn record_changes(tx: &rusqlite::Transaction<'_>, before: &Zot, after: &Zot) -> 
     }
     for target in changed {
         tx.execute(
-            "INSERT OR REPLACE INTO zot_targets VALUES(?1,?2,?3)",
+            "INSERT OR REPLACE INTO zapper_targets VALUES(?1,?2,?3)",
             params![after.id, target, after.revision],
         )?;
     }
@@ -1377,7 +1461,7 @@ fn record_changes(tx: &rusqlite::Transaction<'_>, before: &Zot, after: &Zot) -> 
 
 fn write_file(
     tx: &rusqlite::Transaction<'_>,
-    zot: &str,
+    zapper: &str,
     path: &str,
     content: &str,
     expected: u32,
@@ -1397,8 +1481,8 @@ fn write_file(
     );
     ensure!(content.len() <= 1024 * 1024, "Zapper file exceeds 1 MiB");
     let version: u32 = tx.query_row(
-        "SELECT COALESCE(MAX(version),0) FROM zot_files WHERE zot=?1 AND path=?2",
-        params![zot, path],
+        "SELECT COALESCE(MAX(version),0) FROM zapper_files WHERE zapper=?1 AND path=?2",
+        params![zapper, path],
         |r| r.get(0),
     )?;
     ensure!(
@@ -1406,8 +1490,8 @@ fn write_file(
         "Zapper file version conflict on {path}: expected {expected}, current version is {version}. Re-read it with zapper_files and merge before writing"
     );
     tx.execute(
-        "INSERT INTO zot_files VALUES(?1,?2,?3,?4)",
-        params![zot, path, version + 1, content],
+        "INSERT INTO zapper_files VALUES(?1,?2,?3,?4)",
+        params![zapper, path, version + 1, content],
     )?;
     Ok(())
 }
@@ -1419,11 +1503,11 @@ fn write_file(
 pub(crate) const PURPOSE_FILE: &str = "INSTRUCTIONS.md";
 const PURPOSE_LINE_MAX: usize = 500;
 
-fn latest_file(tx: &rusqlite::Transaction<'_>, zot: &str, path: &str) -> Result<(u32, String)> {
+fn latest_file(tx: &rusqlite::Transaction<'_>, zapper: &str, path: &str) -> Result<(u32, String)> {
     Ok(tx
         .query_row(
-            "SELECT version,content FROM zot_files WHERE zot=?1 AND path=?2 ORDER BY version DESC LIMIT 1",
-            params![zot, path],
+            "SELECT version,content FROM zapper_files WHERE zapper=?1 AND path=?2 ORDER BY version DESC LIMIT 1",
+            params![zapper, path],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?
@@ -1485,7 +1569,7 @@ fn reseed_purpose(doc: &str, old: &str, new: &str) -> Option<String> {
 
 /// What the coordinator is for. An empty doc and purpose means nobody has told
 /// it yet, so it runs the first-run interview until it has written the doc.
-fn purpose_section(zot: &Zot, soul: Option<&ZotFile>) -> String {
+fn purpose_section(zapper: &Zapper, soul: Option<&ZapperFile>) -> String {
     if let Some(file) = soul.filter(|f| !f.content.trim().is_empty()) {
         return format!(
             "## Purpose ({PURPOSE_FILE}, version {})\n{}",
@@ -1493,7 +1577,7 @@ fn purpose_section(zot: &Zot, soul: Option<&ZotFile>) -> String {
             file.content.trim()
         );
     }
-    let purpose = zot.config.purpose.trim();
+    let purpose = zapper.config.purpose.trim();
     if !purpose.is_empty() {
         return format!("## Purpose\n{purpose}");
     }
@@ -1516,12 +1600,12 @@ Once you have the answers, or the user wants to skip the rest, write {PURPOSE_FI
 /// conversation (see [`turn_prompt`]), not with every message, and stays small:
 /// shapes, lifecycle, the failure playbook and reporting style live in the
 /// guides.
-fn coordinator_brief(zot: &Zot, purpose: &str) -> String {
-    let name = zot.config.name.trim();
-    let id = &zot.id;
+fn coordinator_brief(zapper: &Zapper, purpose: &str) -> String {
+    let name = zapper.config.name.trim();
+    let id = &zapper.id;
     let index = guide::index();
     format!(
-        r#"You are {name}, a Zapper: you run work across the user's repositories by delegating it to threads. Each thread is a worker conversation in its own isolated git worktree. Call yourself a Zapper or {name}; never a "Zot". Your zotId is "{id}".
+        r#"You are {name}, a Zapper: you run work across the user's repositories by delegating it to threads. Each thread is a worker conversation in its own isolated git worktree. Call yourself a Zapper or {name}; never a "Zapper". Your zapperId is "{id}".
 
 ## Hard rules
 - You plan, delegate, check and report. Never edit code, run git, or change files in a repository checkout yourself, including the user's main checkout, and never point a thread at the main checkout. Every repository change goes to a thread through delegate.
@@ -1532,17 +1616,17 @@ fn coordinator_brief(zot: &Zot, purpose: &str) -> String {
 - Reply to the user with what needs them first, then what is done, in progress and blocked, with issue codes and PR links. Say exactly what is unverified.
 
 ## Guides
-Open the guide before you act in its area: zapper_files {{zotId, path}}. On Claude Code each is also a skill of the name in brackets.
+Open the guide before you act in its area: zapper_files {{zapperId, path}}. On Claude Code each is also a skill of the name in brackets.
 {index}
 ## Board and files
-Each turn starts with what changed since your last one. Thread reports and events arrive as messages: handle each, then zapper_acknowledge it. zapper_issue {{zotId}} reads the whole board; zapper_issue {{zotId, issueId}} one issue. Your files, read with zapper_files and written with writeFile: NOTES.md (your private memory), DIGEST.md (the user's short status summary), WORKERS.md (standing rules prepended to every thread's prompt, never a log) and INSTRUCTIONS.md, your purpose and working rules in your words: the Purpose below is its current text. Keep its first sentence your job in plain words; the app shows it as your purpose. When what the user wants from you changes, rewrite it whole with writeFile and tell them in a line what changed.
+Each turn starts with what changed since your last one. Thread reports and events arrive as messages: handle each, then zapper_acknowledge it. zapper_issue {{zapperId}} reads the whole board; zapper_issue {{zapperId, issueId}} one issue. Your files, read with zapper_files and written with writeFile: NOTES.md (your private memory), DIGEST.md (the user's short status summary), WORKERS.md (standing rules prepended to every thread's prompt, never a log) and INSTRUCTIONS.md, your purpose and working rules in your words: the Purpose below is its current text. Keep its first sentence your job in plain words; the app shows it as your purpose. When what the user wants from you changes, rewrite it whole with writeFile and tell them in a line what changed.
 
 {purpose}"#
     )
 }
 
 /// An issue as the thread working on it sees it: the brief it builds to.
-fn linked_issue(issue: &ZotIssue) -> serde_json::Value {
+fn linked_issue(issue: &ZapperIssue) -> serde_json::Value {
     serde_json::json!({
         "issueId": issue.id,
         "code": issue.code(),
@@ -1563,10 +1647,10 @@ fn worker_brief(id: &str, home: &str, name: Option<&str>) -> String {
         .map(|n| format!("the Zapper \"{n}\""))
         .unwrap_or_else(|| "a Zapper".to_owned());
     format!(
-        r#"You are a thread working for {zapper} (zotId {id}, home device {home}), which coordinates this work and reviews your report. You run in your own git worktree; keep every change inside it.
+        r#"You are a thread working for {zapper} (zapperId {id}, home device {home}), which coordinates this work and reviews your report. You run in your own git worktree; keep every change inside it.
 - Finish the objective and stay within it. Don't stop at a plan or a partial change when you can complete it.
 - Verify before you report: build, run the relevant tests or checks, and try the change the way a user would where you can. Say plainly what you could not verify.
-- For issues linked to this thread, record a pull request with zapper_command action linkIssuePullRequest {{issueId, url, title}}, and blockers or meaningful progress with commentIssue {{issueId, text}}. Use zotId "{zot}" and a new unique commandId for each command.
+- For issues linked to this thread, record a pull request with zapper_command action linkIssuePullRequest {{issueId, url, title}}, and blockers or meaningful progress with commentIssue {{issueId, text}}. Use zapperId "{zapper}" and a new unique commandId for each command.
 - Build to the linked issue: its doneCriteria is the target and its outOfScope is off limits. If the work needs something out of scope, stop and say so in your report instead of widening it. Make the bounded change, not a broad rewrite.
 - Only the Zapper decides when an issue is done, so leave issue status alone. Never merge.
 - End with a short report the Zapper can act on. Its first line is exactly "Status: done" or "Status: blocked". Then: what changed (files, PR link), how you verified it, and anything left, unverified or risky. If blocked, say exactly what would unblock you. No filler, no "should work"."#
@@ -1579,11 +1663,11 @@ mod tests {
     #[test]
     fn remote_worker_claims_are_exclusive_and_late_claims_cannot_undo_release() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "worker-host").unwrap();
+        let store = Zappers::open(dir.path(), "worker-host").unwrap();
         let binding = WorkerBinding {
             chat_id: "worker".into(),
             home_device_id: "first-home".into(),
-            zot_id: "one".into(),
+            zapper_id: "one".into(),
             revision: 1,
             instructions: "Run tests".into(),
             release: false,
@@ -1592,7 +1676,7 @@ mod tests {
         store.bind_worker(&binding).unwrap();
         let other = WorkerBinding {
             home_device_id: "second-home".into(),
-            zot_id: "two".into(),
+            zapper_id: "two".into(),
             ..binding.clone()
         };
         assert!(store.bind_worker(&other).is_err());
@@ -1610,20 +1694,20 @@ mod tests {
     #[test]
     fn stopped_workers_require_human_continuation_before_automatic_followups() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         store
             .command(command(
                 "release",
                 "adopt",
-                ZotAction::AdoptWorker { worker: worker() },
+                ZapperAction::AdoptWorker { worker: worker() },
             ))
             .unwrap();
         store
             .command(command(
                 "release",
                 "stop-worker",
-                ZotAction::StopWorker {
+                ZapperAction::StopWorker {
                     chat_id: "worker".into(),
                 },
             ))
@@ -1633,7 +1717,7 @@ mod tests {
                 .command(command(
                     "release",
                     "auto",
-                    ZotAction::MessageWorker {
+                    ZapperAction::MessageWorker {
                         chat_id: "worker".into(),
                         text: "Continue".into(),
                         automatic: true
@@ -1645,7 +1729,7 @@ mod tests {
             .command(command(
                 "release",
                 "human",
-                ZotAction::MessageWorker {
+                ZapperAction::MessageWorker {
                     chat_id: "worker".into(),
                     text: "Continue".into(),
                     automatic: false,
@@ -1656,7 +1740,7 @@ mod tests {
             .command(command(
                 "release",
                 "auto",
-                ZotAction::MessageWorker {
+                ZapperAction::MessageWorker {
                     chat_id: "worker".into(),
                     text: "Continue".into(),
                     automatic: true,
@@ -1664,14 +1748,14 @@ mod tests {
             ))
             .unwrap();
     }
-    fn at(zot: &str, id: &str, revision: u32, action: ZotAction) -> ZotCommand {
-        ZotCommand {
+    fn at(zapper: &str, id: &str, revision: u32, action: ZapperAction) -> ZapperCommand {
+        ZapperCommand {
             expected_revision: Some(revision),
-            ..command(zot, id, action)
+            ..command(zapper, id, action)
         }
     }
-    fn issue_details(title: &str) -> ZotIssueDetails {
-        ZotIssueDetails {
+    fn issue_details(title: &str) -> ZapperIssueDetails {
+        ZapperIssueDetails {
             title: title.into(),
             description: "d".into(),
             assigned: true,
@@ -1681,14 +1765,14 @@ mod tests {
     #[test]
     fn revision_checks_only_reject_commands_whose_target_changed() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         for id in ["a", "b"] {
             store
                 .command(command(
                     "release",
                     &format!("create-{id}"),
-                    ZotAction::CreateIssue {
+                    ZapperAction::CreateIssue {
                         issue_id: id.into(),
                         details: issue_details(id),
                     },
@@ -1701,7 +1785,7 @@ mod tests {
             .command(command(
                 "release",
                 "comment-a",
-                ZotAction::CommentIssue {
+                ZapperAction::CommentIssue {
                     issue_id: "a".into(),
                     text: "progress".into(),
                     reply_to: None,
@@ -1714,7 +1798,7 @@ mod tests {
                 "release",
                 "edit-b",
                 read,
-                ZotAction::EditIssue {
+                ZapperAction::EditIssue {
                     issue_id: "b".into(),
                     details: issue_details("b, renamed"),
                 },
@@ -1726,7 +1810,7 @@ mod tests {
                 "release",
                 "edit-b-again",
                 read,
-                ZotAction::EditIssue {
+                ZapperAction::EditIssue {
                     issue_id: "b".into(),
                     details: issue_details("b, other"),
                 },
@@ -1739,7 +1823,7 @@ mod tests {
         for (id, action) in [
             (
                 "stale-comment",
-                ZotAction::CommentIssue {
+                ZapperAction::CommentIssue {
                     issue_id: "b".into(),
                     text: "note".into(),
                     reply_to: None,
@@ -1747,14 +1831,14 @@ mod tests {
             ),
             (
                 "stale-create",
-                ZotAction::CreateIssue {
+                ZapperAction::CreateIssue {
                     issue_id: "c".into(),
                     details: issue_details("c"),
                 },
             ),
             (
                 "stale-link",
-                ZotAction::LinkIssuePullRequest {
+                ZapperAction::LinkIssuePullRequest {
                     issue_id: "b".into(),
                     url: "https://github.com/o/r/pull/1".into(),
                     title: "PR".into(),
@@ -1762,7 +1846,7 @@ mod tests {
             ),
             (
                 "stale-write",
-                ZotAction::WriteFile {
+                ZapperAction::WriteFile {
                     path: "NOTES.md".into(),
                     content: "notes".into(),
                     expected_version: 1,
@@ -1770,8 +1854,8 @@ mod tests {
             ),
             (
                 "stale-decide",
-                ZotAction::Decide {
-                    decision: ZotDecision {
+                ZapperAction::Decide {
+                    decision: ZapperDecision {
                         id: "ship".into(),
                         worker_chat_id: None,
                         question: "Ship?".into(),
@@ -1790,7 +1874,7 @@ mod tests {
                 "release",
                 "stale-write-2",
                 read,
-                ZotAction::WriteFile {
+                ZapperAction::WriteFile {
                     path: "NOTES.md".into(),
                     content: "other".into(),
                     expected_version: 1,
@@ -1805,8 +1889,8 @@ mod tests {
                 "release",
                 "stale-decide-2",
                 read,
-                ZotAction::Decide {
-                    decision: ZotDecision {
+                ZapperAction::Decide {
+                    decision: ZapperDecision {
                         id: "ship".into(),
                         worker_chat_id: None,
                         question: "Ship now?".into(),
@@ -1825,8 +1909,8 @@ mod tests {
                     "release",
                     id,
                     revision,
-                    ZotAction::SetStatus {
-                        status: ZotStatus::Paused,
+                    ZapperAction::SetStatus {
+                        status: ZapperStatus::Paused,
                     },
                 ))
                 .unwrap_err()
@@ -1838,8 +1922,8 @@ mod tests {
                 "release",
                 "current-status",
                 current,
-                ZotAction::SetStatus {
-                    status: ZotStatus::Paused,
+                ZapperAction::SetStatus {
+                    status: ZapperStatus::Paused,
                 },
             ))
             .unwrap();
@@ -1847,25 +1931,25 @@ mod tests {
     #[test]
     fn revisions_from_before_change_tracking_stay_strict() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         store
             .command(command(
                 "release",
                 "create-a",
-                ZotAction::CreateIssue {
+                ZapperAction::CreateIssue {
                     issue_id: "a".into(),
                     details: issue_details("a"),
                 },
             ))
             .unwrap();
-        // As if the Zot predates the targets table.
+        // As if the Zapper predates the targets table.
         store
             .inner
             .db
             .lock()
             .unwrap()
-            .execute("DELETE FROM zot_targets", [])
+            .execute("DELETE FROM zapper_targets", [])
             .unwrap();
         let stale = store.get("release").unwrap().revision - 1;
         let err = store
@@ -1873,7 +1957,7 @@ mod tests {
                 "release",
                 "edit-a",
                 stale,
-                ZotAction::EditIssue {
+                ZapperAction::EditIssue {
                     issue_id: "a".into(),
                     details: issue_details("a2"),
                 },
@@ -1885,22 +1969,26 @@ mod tests {
     #[test]
     fn the_zapper_may_resume_threads_it_or_the_thread_stopped() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         store
             .command(command(
                 "release",
                 "adopt",
-                ZotAction::AdoptWorker { worker: worker() },
+                ZapperAction::AdoptWorker { worker: worker() },
             ))
             .unwrap();
-        let as_zapper = |id: &str, action: ZotAction| {
-            store.command_as(command("release", id, action), Some("zot-release-0"), true)
+        let as_zapper = |id: &str, action: ZapperAction| {
+            store.command_as(
+                command("release", id, action),
+                Some("zapper-release-0"),
+                true,
+            )
         };
         let resume = |id: &str| {
             as_zapper(
                 id,
-                ZotAction::MessageWorker {
+                ZapperAction::MessageWorker {
                     chat_id: "worker".into(),
                     text: "Carry on".into(),
                     automatic: true,
@@ -1913,13 +2001,13 @@ mod tests {
                 .db
                 .lock()
                 .unwrap()
-                .query_row("SELECT reason FROM zot_worker_holds", [], |r| r.get(0))
+                .query_row("SELECT reason FROM zapper_worker_holds", [], |r| r.get(0))
                 .optional()
                 .unwrap()
         };
         as_zapper(
             "zapper-stop",
-            ZotAction::StopWorker {
+            ZapperAction::StopWorker {
                 chat_id: "worker".into(),
             },
         )
@@ -1934,7 +2022,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .execute(
-                    "INSERT INTO zot_worker_holds(zot,chat,reason) VALUES('release','worker',?1)",
+                    "INSERT INTO zapper_worker_holds(zapper,chat,reason) VALUES('release','worker',?1)",
                     [reason],
                 )
                 .unwrap();
@@ -1956,7 +2044,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .execute(
-                    "INSERT OR REPLACE INTO zot_worker_holds(zot,chat,reason) VALUES('release','worker',?1)",
+                    "INSERT OR REPLACE INTO zapper_worker_holds(zapper,chat,reason) VALUES('release','worker',?1)",
                     [reason],
                 )
                 .unwrap();
@@ -1967,13 +2055,13 @@ mod tests {
     #[test]
     fn continuing_a_held_thread_in_its_chat_releases_it() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         store
             .command(command(
                 "release",
                 "adopt",
-                ZotAction::AdoptWorker { worker: worker() },
+                ZapperAction::AdoptWorker { worker: worker() },
             ))
             .unwrap();
         // The user stops the thread from the app while its turn still runs.
@@ -1981,15 +2069,15 @@ mod tests {
             .command(command(
                 "release",
                 "user-stop",
-                ZotAction::StopWorker {
+                ZapperAction::StopWorker {
                     chat_id: "worker".into(),
                 },
             ))
             .unwrap();
         store
-            .record_event(&ZotEvent {
+            .record_event(&ZapperEvent {
                 id: "interrupted-1".into(),
-                zot_id: "release".into(),
+                zapper_id: "release".into(),
                 worker_chat_id: "worker".into(),
                 kind: "interrupted".into(),
                 summary: "Worker was stopped by the user.".into(),
@@ -2001,17 +2089,17 @@ mod tests {
                 command(
                     "release",
                     id,
-                    ZotAction::MessageWorker {
+                    ZapperAction::MessageWorker {
                         chat_id: "worker".into(),
                         text: "Carry on".into(),
                         automatic: true,
                     },
                 ),
-                Some("zot-release-0"),
+                Some("zapper-release-0"),
                 true,
             )
         };
-        let pending = |store: &Zots| {
+        let pending = |store: &Zappers| {
             store
                 .events("release")
                 .unwrap()
@@ -2052,7 +2140,7 @@ mod tests {
             .command(command(
                 "release",
                 "user-stop-2",
-                ZotAction::StopWorker {
+                ZapperAction::StopWorker {
                     chat_id: "worker".into(),
                 },
             ))
@@ -2067,16 +2155,16 @@ mod tests {
         );
         auto("after-quick-turn").unwrap();
     }
-    pub(super) fn config() -> ZotConfig {
-        ZotConfig {
+    pub(super) fn config() -> ZapperConfig {
+        ZapperConfig {
             name: "Release".into(),
             purpose: "Coordinate the release".into(),
             home_device_id: "local".into(),
-            repositories: vec![ZotRepository {
+            repositories: vec![ZapperRepository {
                 device_id: "local".into(),
                 space_id: "repo".into(),
             }],
-            coordinator_model: ZotModel {
+            coordinator_model: ZapperModel {
                 harness: "mock".into(),
                 model: None,
             },
@@ -2087,25 +2175,25 @@ mod tests {
             avatar_image: None,
         }
     }
-    pub(super) fn command(zot: &str, id: &str, action: ZotAction) -> ZotCommand {
-        ZotCommand {
+    pub(super) fn command(zapper: &str, id: &str, action: ZapperAction) -> ZapperCommand {
+        ZapperCommand {
             command_id: id.into(),
-            zot_id: zot.into(),
+            zapper_id: zapper.into(),
             expected_revision: None,
             action,
         }
     }
-    pub(super) fn create(store: &Zots, id: &str) {
+    pub(super) fn create(store: &Zappers, id: &str) {
         store
             .command(command(
                 id,
                 &format!("create-{id}"),
-                ZotAction::Create { config: config() },
+                ZapperAction::Create { config: config() },
             ))
             .unwrap();
     }
-    pub(super) fn worker() -> ZotWorker {
-        ZotWorker {
+    pub(super) fn worker() -> ZapperWorker {
+        ZapperWorker {
             chat_id: "worker".into(),
             device_id: "local".into(),
             space_id: "repo".into(),
@@ -2118,39 +2206,43 @@ mod tests {
     #[test]
     fn command_receipts_survive_restart_and_reject_changed_input() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
-        let input = command("release", "create", ZotAction::Create { config: config() });
+        let store = Zappers::open(dir.path(), "local").unwrap();
+        let input = command(
+            "release",
+            "create",
+            ZapperAction::Create { config: config() },
+        );
         let original = store.command(input.clone()).unwrap();
         store
             .command(command(
                 "release",
                 "pause",
-                ZotAction::SetStatus {
-                    status: ZotStatus::Paused,
+                ZapperAction::SetStatus {
+                    status: ZapperStatus::Paused,
                 },
             ))
             .unwrap();
         drop(store);
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         assert_eq!(store.command(input).unwrap(), original);
-        assert_eq!(store.get("release").unwrap().status, ZotStatus::Paused);
+        assert_eq!(store.get("release").unwrap().status, ZapperStatus::Paused);
         assert!(
             store
-                .command(command("release", "create", ZotAction::Delete))
+                .command(command("release", "create", ZapperAction::Delete))
                 .is_err()
         );
     }
     #[test]
     fn versions_restore_without_erasing_human_decisions() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         store
             .command(command(
                 "release",
                 "decision",
-                ZotAction::Decide {
-                    decision: ZotDecision {
+                ZapperAction::Decide {
+                    decision: ZapperDecision {
                         id: "approval".into(),
                         worker_chat_id: None,
                         question: "Release now?".into(),
@@ -2163,7 +2255,7 @@ mod tests {
             .command(command(
                 "release",
                 "digest",
-                ZotAction::WriteFile {
+                ZapperAction::WriteFile {
                     path: "DIGEST.md".into(),
                     content: "Everything is ready".into(),
                     expected_version: 1,
@@ -2175,7 +2267,7 @@ mod tests {
                 .command(command(
                     "release",
                     "stale",
-                    ZotAction::WriteFile {
+                    ZapperAction::WriteFile {
                         path: "DIGEST.md".into(),
                         content: "stale".into(),
                         expected_version: 1
@@ -2187,7 +2279,7 @@ mod tests {
             .command(command(
                 "release",
                 "restore",
-                ZotAction::RestoreFile {
+                ZapperAction::RestoreFile {
                     path: "DIGEST.md".into(),
                     version: 1,
                     expected_version: 2,
@@ -2209,14 +2301,14 @@ mod tests {
     #[test]
     fn membership_is_exclusive_and_release_preserves_other_state() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "one");
         create(&store, "two");
         store
             .command(command(
                 "one",
                 "adopt-one",
-                ZotAction::AdoptWorker { worker: worker() },
+                ZapperAction::AdoptWorker { worker: worker() },
             ))
             .unwrap();
         assert!(
@@ -2224,7 +2316,7 @@ mod tests {
                 .command(command(
                     "two",
                     "adopt-two",
-                    ZotAction::AdoptWorker { worker: worker() }
+                    ZapperAction::AdoptWorker { worker: worker() }
                 ))
                 .is_err()
         );
@@ -2233,7 +2325,7 @@ mod tests {
             .command(command(
                 "one",
                 "release",
-                ZotAction::ReleaseWorker {
+                ZapperAction::ReleaseWorker {
                     chat_id: "worker".into(),
                 },
             ))
@@ -2242,7 +2334,7 @@ mod tests {
             .command(command(
                 "two",
                 "adopt-two",
-                ZotAction::AdoptWorker { worker: worker() },
+                ZapperAction::AdoptWorker { worker: worker() },
             ))
             .unwrap();
         assert_eq!(store.get("two").unwrap().workers.len(), 1);
@@ -2250,13 +2342,13 @@ mod tests {
     #[test]
     fn stop_cancels_pending_delivery_and_followups_are_bounded() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         store
             .command(command(
                 "release",
                 "delegate",
-                ZotAction::Delegate {
+                ZapperAction::Delegate {
                     issue_id: None,
                     worker: worker(),
                     model: config().coordinator_model,
@@ -2269,7 +2361,7 @@ mod tests {
                 .command(command(
                     "release",
                     &format!("follow-{index}"),
-                    ZotAction::MessageWorker {
+                    ZapperAction::MessageWorker {
                         chat_id: "worker".into(),
                         text: "Continue".into(),
                         automatic: true,
@@ -2282,7 +2374,7 @@ mod tests {
                 .command(command(
                     "release",
                     "excess",
-                    ZotAction::MessageWorker {
+                    ZapperAction::MessageWorker {
                         chat_id: "worker".into(),
                         text: "Continue".into(),
                         automatic: true
@@ -2294,24 +2386,24 @@ mod tests {
             .command(command(
                 "release",
                 "stop",
-                ZotAction::SetStatus {
-                    status: ZotStatus::Stopped,
+                ZapperAction::SetStatus {
+                    status: ZapperStatus::Stopped,
                 },
             ))
             .unwrap();
         let outbox = store.outbox().unwrap();
         assert_eq!(outbox.len(), 1);
-        assert!(matches!(outbox[0].3, ZotAction::StopWorker { .. }));
+        assert!(matches!(outbox[0].3, ZapperAction::StopWorker { .. }));
     }
     #[test]
     fn events_are_durable_deduplicated_and_acknowledgements_are_scoped() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "one");
         create(&store, "two");
-        let event = ZotEvent {
+        let event = ZapperEvent {
             id: "event".into(),
-            zot_id: "one".into(),
+            zapper_id: "one".into(),
             worker_chat_id: "worker".into(),
             kind: "settled".into(),
             summary: "report".into(),
@@ -2322,7 +2414,7 @@ mod tests {
         store.acknowledge("two", &["event".into()]).unwrap();
         assert!(!store.events("one").unwrap()[0].acknowledged);
         drop(store);
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         assert_eq!(store.events("one").unwrap().len(), 1);
         store.acknowledge("one", &["event".into()]).unwrap();
         assert!(store.events("one").unwrap()[0].acknowledged);
@@ -2330,16 +2422,16 @@ mod tests {
     #[test]
     fn renewal_preserves_workers_and_revisions_are_checked() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         store
             .command(command(
                 "release",
                 "adopt",
-                ZotAction::AdoptWorker { worker: worker() },
+                ZapperAction::AdoptWorker { worker: worker() },
             ))
             .unwrap();
-        let mut input = command("release", "fresh", ZotAction::FreshConversation);
+        let mut input = command("release", "fresh", ZapperAction::FreshConversation);
         input.expected_revision = Some(1);
         assert!(store.command(input.clone()).is_err());
         input.expected_revision = Some(2);
@@ -2350,15 +2442,15 @@ mod tests {
     #[test]
     fn avatar_pictures_are_validated_stored_and_kept_out_of_envelopes() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         create(&store, "release");
         let configure = |id: &str, image: &str| {
             store.command(command(
                 "release",
                 id,
-                ZotAction::Configure {
-                    config: ZotConfig {
-                        avatar: Some(ZotAvatar {
+                ZapperAction::Configure {
+                    config: ZapperConfig {
+                        avatar: Some(ZapperAvatar {
                             mascot: "hex".into(),
                             color: "teal".into(),
                         }),
@@ -2373,7 +2465,7 @@ mod tests {
             "data:image/svg+xml;base64,PHN2Zz4=",
             &format!(
                 "data:image/png;base64,{}",
-                "A".repeat(zuse_protocol::zots::AVATAR_IMAGE_MAX_LEN)
+                "A".repeat(zuse_protocol::zappers::AVATAR_IMAGE_MAX_LEN)
             ),
         ] {
             assert!(configure(&format!("bad-{}", bad.len()), bad).is_err());
@@ -2381,22 +2473,22 @@ mod tests {
         let image = "data:image/png;base64,iVBORw0KGgo=";
         configure("good", image).unwrap();
         // Survives a restart, as every client reads it from here.
-        let zot = Zots::open(dir.path(), "local")
+        let zapper = Zappers::open(dir.path(), "local")
             .unwrap()
             .get("release")
             .unwrap();
-        assert_eq!(zot.config.avatar_image.as_deref(), Some(image));
+        assert_eq!(zapper.config.avatar_image.as_deref(), Some(image));
         // Prompt envelopes carry the mascot only, never image bytes.
-        let envelope = zuse_protocol::presentation::zot_message::envelope(&zot, "hi");
+        let envelope = zuse_protocol::presentation::zapper_message::envelope(&zapper, "hi");
         assert!(envelope.contains(r#""avatar":{"mascot":"hex","color":"teal"}"#));
         assert!(!envelope.contains("base64"));
     }
     #[test]
     fn storage_is_profile_scoped_and_paths_cannot_escape() {
         let dir = tempfile::tempdir().unwrap();
-        let first = Zots::open(&dir.path().join("first"), "local").unwrap();
+        let first = Zappers::open(&dir.path().join("first"), "local").unwrap();
         create(&first, "release");
-        let second = Zots::open(&dir.path().join("second"), "local").unwrap();
+        let second = Zappers::open(&dir.path().join("second"), "local").unwrap();
         assert!(second.list().unwrap().is_empty());
         assert!(first.workspace("../escape").is_err());
         assert!(
@@ -2404,7 +2496,7 @@ mod tests {
                 .command(command(
                     "release",
                     "escape",
-                    ZotAction::WriteFile {
+                    ZapperAction::WriteFile {
                         path: "../escape".into(),
                         content: "bad".into(),
                         expected_version: 0
@@ -2435,27 +2527,31 @@ mod purpose_tests {
     use super::tests::{command, config};
     use super::*;
 
-    fn store() -> (tempfile::TempDir, Zots) {
+    fn store() -> (tempfile::TempDir, Zappers) {
         let dir = tempfile::tempdir().unwrap();
-        let store = Zots::open(dir.path(), "local").unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
         (dir, store)
     }
-    fn create_with(store: &Zots, purpose: &str) {
+    fn create_with(store: &Zappers, purpose: &str) {
         let mut config = config();
         config.purpose = purpose.into();
         store
-            .command(command("release", "create", ZotAction::Create { config }))
+            .command(command(
+                "release",
+                "create",
+                ZapperAction::Create { config },
+            ))
             .unwrap();
     }
-    fn coordinator_prompt(store: &Zots, message: &str) -> String {
-        let zot = store.get("release").unwrap();
+    fn coordinator_prompt(store: &Zappers, message: &str) -> String {
+        let zapper = store.get("release").unwrap();
         let mut request: zuse_protocol::RunRequest = serde_json::from_value(
             serde_json::json!({"prompt": message, "cwd": "/tmp", "sandbox": "workspace-write"}),
         )
         .unwrap();
         store
             .prepare_request(
-                &zot.coordinator_chat_id,
+                &zapper.coordinator_chat_id,
                 zuse_protocol::HarnessId::ClaudeCode,
                 &mut request,
             )
@@ -2466,7 +2562,7 @@ mod purpose_tests {
             .unwrap();
         format!("{brief}\n\n{}", request.prompt)
     }
-    fn doc(store: &Zots) -> ZotFile {
+    fn doc(store: &Zappers) -> ZapperFile {
         store
             .files("release", false)
             .unwrap()
@@ -2474,12 +2570,12 @@ mod purpose_tests {
             .find(|f| f.path == PURPOSE_FILE)
             .unwrap()
     }
-    fn write(store: &Zots, id: &str, content: &str, expected_version: u32) -> Zot {
+    fn write(store: &Zappers, id: &str, content: &str, expected_version: u32) -> Zapper {
         store
             .command(command(
                 "release",
                 id,
-                ZotAction::WriteFile {
+                ZapperAction::WriteFile {
                     path: PURPOSE_FILE.into(),
                     content: content.into(),
                     expected_version,
@@ -2505,9 +2601,9 @@ mod purpose_tests {
         // A mid-interview turn still carries the interview.
         assert!(coordinator_prompt(&store, "mostly the engine").contains("not set yet"));
 
-        let zot = write(&store, "soul", SOUL, 1);
+        let zapper = write(&store, "soul", SOUL, 1);
         assert_eq!(
-            zot.config.purpose,
+            zapper.config.purpose,
             "I keep the zuse release moving: triage CI, fix flaky tests and cut releases."
         );
         let next = coordinator_prompt(&store, "what's next?");
@@ -2527,7 +2623,7 @@ mod purpose_tests {
             .command(command(
                 "release",
                 "restore",
-                ZotAction::RestoreFile {
+                ZapperAction::RestoreFile {
                     path: PURPOSE_FILE.into(),
                     version: 1,
                     expected_version: 2,
@@ -2567,19 +2663,19 @@ mod purpose_tests {
             .command(command(
                 "release",
                 "model",
-                ZotAction::Configure { config: same },
+                ZapperAction::Configure { config: same },
             ))
             .unwrap();
         assert_eq!(doc(&store).version, 1);
         // A purpose stored only in config, with an empty doc, still reaches the prompt.
-        let zot = store.get("release").unwrap();
-        let empty = ZotFile {
+        let zapper = store.get("release").unwrap();
+        let empty = ZapperFile {
             path: PURPOSE_FILE.into(),
             version: 1,
             content: String::new(),
         };
         assert_eq!(
-            purpose_section(&zot, Some(&empty)),
+            purpose_section(&zapper, Some(&empty)),
             "## Purpose\nCoordinate the release"
         );
     }
@@ -2591,7 +2687,11 @@ mod purpose_tests {
         let mut config = store.get("release").unwrap().config;
         config.purpose = "Coordinate the 0.28 release".into();
         store
-            .command(command("release", "edit", ZotAction::Configure { config }))
+            .command(command(
+                "release",
+                "edit",
+                ZapperAction::Configure { config },
+            ))
             .unwrap();
         assert_eq!(doc(&store).content, "Coordinate the 0.28 release");
         write(&store, "soul", SOUL, 2);
@@ -2601,7 +2701,7 @@ mod purpose_tests {
             .command(command(
                 "release",
                 "edit-2",
-                ZotAction::Configure { config },
+                ZapperAction::Configure { config },
             ))
             .unwrap();
         let current = doc(&store);
