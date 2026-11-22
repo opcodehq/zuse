@@ -219,49 +219,6 @@ pub fn workspace_option(
         .child(selection(selected))
 }
 
-/// The workspace menu's Cloud row, in the same style as Worktree and Local.
-pub fn cloud_workspace_option(
-    id: impl Into<ElementId>,
-    description: &'static str,
-    selected: bool,
-    active: bool,
-) -> Stateful<Div> {
-    div()
-        .id(id)
-        .role(Role::RadioButton)
-        .aria_label("Cloud")
-        .aria_selected(selected)
-        .tab_index(0)
-        .min_h(px(28.))
-        .px(px(8.))
-        .py(px(4.))
-        .rounded(px(7.))
-        .flex()
-        .items_center()
-        .gap(px(8.))
-        .text_color(palette::rgb(TEXT))
-        .when(active, |v| v.bg(s::frame_bg()))
-        .hover(|v| v.bg(s::frame_bg()))
-        .focus_visible(|v| v.bg(s::frame_bg()))
-        .child(icon("cloud").size(px(14.)).flex_none())
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .line_height(px(16.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .child("Cloud"),
-                )
-                .child(meta(description).line_height(px(100. / 7.)).truncate()),
-        )
-        .child(selection(selected))
-}
-
 pub fn workspace_popup() -> Div {
     menu(224.).p(px(8.)).border_0().rounded(px(10.))
 }

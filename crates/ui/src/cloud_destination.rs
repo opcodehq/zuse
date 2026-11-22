@@ -54,6 +54,9 @@ pub(crate) enum CloudOffer {
     Hidden,
     /// Cloud on this connected repository.
     Repository(Value),
+    /// The chat's project lives on GitHub (`owner/repo`) but Cloud doesn't
+    /// have it yet: picking Cloud connects it first.
+    Connect(String),
     /// The chat has no repository Cloud knows: picking Cloud asks which
     /// connected repository to use.
     ChooseRepository,
@@ -80,16 +83,26 @@ pub(crate) fn offer(facts: &Facts) -> CloudOffer {
         return CloudOffer::Hidden;
     }
     let destination = destination(facts.selected, facts.local_repository, facts.rows);
-    if destination.is_none() && !facts.rows.iter().any(launchable) {
+    let connect = facts.local_repository.and_then(github_repository);
+    if destination.is_none() && connect.is_none() && !facts.rows.iter().any(launchable) {
         return CloudOffer::Hidden;
     }
     if let Err(reason) = facts.ready {
         return CloudOffer::Unavailable(reason.to_owned());
     }
-    match destination {
-        Some(row) => CloudOffer::Repository(row),
-        None => CloudOffer::ChooseRepository,
+    match (destination, connect) {
+        (Some(row), _) => CloudOffer::Repository(row),
+        (None, Some(repository)) => CloudOffer::Connect(repository),
+        (None, None) => CloudOffer::ChooseRepository,
     }
+}
+
+/// A remote as `owner/repo`, when it lives on GitHub.
+pub(crate) fn github_repository(remote: &str) -> Option<String> {
+    normalize(remote)
+        .strip_prefix("github.com/")
+        .filter(|rest| rest.contains('/'))
+        .map(str::to_owned)
 }
 
 /// The chat's Cloud repository: the one already chosen, else the connected
@@ -179,12 +192,23 @@ mod tests {
     #[test]
     fn a_chat_without_a_cloud_repository_asks_which_one() {
         let rows = rows();
-        // No project at all, or a project Cloud doesn't know.
+        // No project at all, or a project off GitHub Cloud can't connect.
         assert_eq!(offer(&facts(&rows, None)), CloudOffer::ChooseRepository);
         assert_eq!(
-            offer(&facts(&rows, Some("github.com/someone/else"))),
+            offer(&facts(&rows, Some("gitlab.com/someone/else"))),
             CloudOffer::ChooseRepository
         );
+    }
+
+    #[test]
+    fn a_github_project_cloud_lacks_is_connected_on_pick() {
+        // Even before any repository is connected.
+        for rows in [rows(), Vec::new()] {
+            assert_eq!(
+                offer(&facts(&rows, Some("git@github.com:someone/else.git"))),
+                CloudOffer::Connect("someone/else".into())
+            );
+        }
     }
 
     #[test]

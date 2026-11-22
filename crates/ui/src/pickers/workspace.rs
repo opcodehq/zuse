@@ -2,46 +2,35 @@
 use super::*;
 use zuse_protocol::presentation::WorkspaceMode;
 
-/// One row of the workspace menu.
+/// One row of the workspace menu. Cloud isn't one: where a chat runs is the
+/// computer picker's choice, and a cloud chat always gets a fresh branch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WorkspaceChoice {
     Worktree,
     Local,
-    /// Runs on the account's cloud computer.
-    Cloud,
 }
 
 impl Pickers {
+    /// The Worktree / Local chip, shown only for a chat on this computer.
     pub(super) fn render_creation_workspace(
         &mut self,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if self.cloud.task_binding.is_some() || self.workspace_choices(cx).len() < 2 {
+        if !self.shows_workspace_chip(cx) {
             return None;
         }
-        // Cloud's repositories load with the menu, so picking Cloud is instant.
-        self.ensure_cloud(cx);
-        let on_cloud = self.state.read(cx).cloud_project.is_some();
-        if !on_cloud {
-            self.ensure_refs(false, cx);
-        }
+        self.ensure_refs(false, cx);
         let theme = Theme::of(cx).clone();
         let mut trigger = self
             .tray_chip(
                 PickerKind::Checkout,
                 "picker-checkout",
-                if on_cloud {
-                    crate::icons::DITHER_CLOUD
-                } else if self.config.checkout == CheckoutKind::NewWorktree {
+                if self.config.checkout == CheckoutKind::NewWorktree {
                     crate::icons::DITHER_BRANCH
                 } else {
                     crate::icons::DITHER_FOLDER
                 },
-                if on_cloud {
-                    "Cloud".into()
-                } else {
-                    self.checkout_label().into()
-                },
+                self.checkout_label().into(),
                 &theme,
                 cx,
             )
@@ -56,6 +45,14 @@ impl Pickers {
             ));
         }
         Some(trigger.into_any_element())
+    }
+
+    /// Worktree or Local only means something for a checkout on this side;
+    /// a chat bound for Cloud has no workspace chip.
+    pub(super) fn shows_workspace_chip(&self, cx: &App) -> bool {
+        self.cloud.task_binding.is_none()
+            && self.state.read(cx).cloud_project.is_none()
+            && self.workspace_choices(cx).len() >= 2
     }
 
     pub(super) fn remembered_checkout(
@@ -81,29 +78,23 @@ impl Pickers {
         }
     }
 
-    /// The workspace menu's rows: Worktree and Local for a git checkout
-    /// here, and Cloud for a subscriber (or a chat already on Cloud).
+    /// The workspace menu's rows: Worktree and Local for a git checkout.
     pub(super) fn workspace_choices(&self, cx: &App) -> Vec<WorkspaceChoice> {
-        let state = self.state.read(cx);
-        let mut choices = Vec::new();
-        if state.selected_space_row().is_some_and(|s| s.git_detected) {
-            choices.extend([WorkspaceChoice::Worktree, WorkspaceChoice::Local]);
-        }
-        if state.cloud_project.is_some()
-            || (crate::cloud_beta()
-                && zuse_viewport::cloud_gate::enabled()
-                && state.cloud_access().subscribed())
+        if self
+            .state
+            .read(cx)
+            .selected_space_row()
+            .is_some_and(|s| s.git_detected)
         {
-            choices.push(WorkspaceChoice::Cloud);
+            vec![WorkspaceChoice::Worktree, WorkspaceChoice::Local]
+        } else {
+            Vec::new()
         }
-        choices
     }
 
     /// The selected row of the workspace menu.
-    pub(super) fn workspace_choice(&self, cx: &App) -> WorkspaceChoice {
-        if self.state.read(cx).cloud_project.is_some() {
-            WorkspaceChoice::Cloud
-        } else if self.config.checkout == CheckoutKind::NewWorktree {
+    pub(super) fn workspace_choice(&self) -> WorkspaceChoice {
+        if self.config.checkout == CheckoutKind::NewWorktree {
             WorkspaceChoice::Worktree
         } else {
             WorkspaceChoice::Local
@@ -111,27 +102,18 @@ impl Pickers {
     }
 
     pub(super) fn pick_workspace(&mut self, choice: WorkspaceChoice, cx: &mut Context<Self>) {
-        match choice {
-            WorkspaceChoice::Cloud => self.pick_cloud_workspace(cx),
-            WorkspaceChoice::Worktree | WorkspaceChoice::Local => {
-                if self.state.read(cx).cloud_project.is_some() {
-                    self.leave_cloud(cx);
-                }
-                self.pick_checkout(
-                    if choice == WorkspaceChoice::Worktree {
-                        CheckoutKind::NewWorktree
-                    } else {
-                        CheckoutKind::Local
-                    },
-                    cx,
-                );
-            }
-        }
+        self.pick_checkout(
+            if choice == WorkspaceChoice::Worktree {
+                CheckoutKind::NewWorktree
+            } else {
+                CheckoutKind::Local
+            },
+            cx,
+        );
     }
 
     pub(super) fn render_checkout_popover(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let current = self.workspace_choice(cx);
-        let cloud_detail = self.cloud_workspace_detail(cx);
+        let current = self.workspace_choice();
         div()
             .flex()
             .flex_col()
@@ -142,22 +124,12 @@ impl Pickers {
                     .enumerate()
                     .map(|(i, choice)| {
                         let active = self.workspace_keyboard && self.active == i;
-                        match choice {
-                            WorkspaceChoice::Cloud => {
-                                zuse_viewport::creation_style::cloud_workspace_option(
-                                    ("checkout-row", i),
-                                    cloud_detail,
-                                    current == choice,
-                                    active,
-                                )
-                            }
-                            _ => zuse_viewport::creation_style::workspace_option(
-                                ("checkout-row", i),
-                                choice == WorkspaceChoice::Worktree,
-                                current == choice,
-                                active,
-                            ),
-                        }
+                        zuse_viewport::creation_style::workspace_option(
+                            ("checkout-row", i),
+                            choice == WorkspaceChoice::Worktree,
+                            current == choice,
+                            active,
+                        )
                         .on_click(
                             cx.listener(move |this, _, _, cx| this.pick_workspace(choice, cx)),
                         )
