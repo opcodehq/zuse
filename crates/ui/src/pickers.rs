@@ -3972,9 +3972,8 @@ impl Pickers {
                 cx,
             )
             .when(offline, |el| el.text_color(theme.warning.opacity(0.8)));
-        let show_device_chip = zuse_viewport::cloud_gate::remote_enabled()
-            || self.state.read(cx).cloud_project.is_some()
-            || self.cloud_offer_selectable(cx);
+        let show_device_chip =
+            self.shows_device_chip(zuse_viewport::cloud_gate::remote_enabled(), cx);
         let project_chip = self.tray_chip(
             PickerKind::Space,
             "picker-project",
@@ -4012,6 +4011,30 @@ impl Pickers {
             .child(div().flex_1())
             .children(self.render_new_thread_git_selectors(cx))
             .into_any_element()
+    }
+
+    /// The computer chip: always with remote access; otherwise only when
+    /// Cloud can be picked. Cloud's destinations load here, so the chip
+    /// doesn't wait for a picker to open, and until they arrive a
+    /// subscriber's GitHub project already counts as able to use Cloud.
+    fn shows_device_chip(&mut self, remote: bool, cx: &mut Context<Self>) -> bool {
+        if remote || self.state.read(cx).cloud_project.is_some() {
+            return true;
+        }
+        self.ensure_cloud(cx);
+        if self.cloud_offer_selectable(cx) {
+            return true;
+        }
+        let state = self.state.read(cx);
+        crate::cloud_beta()
+            && zuse_viewport::cloud_gate::enabled()
+            && state.cloud_access().offers_cloud()
+            && !self.cloud_context_known()
+            && state
+                .selected_space_row()
+                .and_then(|space| space.remote_repository.as_deref())
+                .and_then(crate::cloud_destination::github_repository)
+                .is_some()
     }
 
     /// Prepare a source checkout or issue context before the first send.

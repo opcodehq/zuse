@@ -823,6 +823,9 @@ impl Pickers {
                 .unwrap_or_else(|| owner.clone());
             (engine, owner, organization, scope)
         };
+        // The chat the connection is for; picking another project meanwhile
+        // must not be pulled onto Cloud when it finishes.
+        let origin = self.state.read(cx).selected_space.clone();
         self.cloud.connecting = true;
         self.cloud.error = None;
         cx.notify();
@@ -866,31 +869,52 @@ impl Pickers {
         cx.spawn(async move |this, cx| {
             let result = job.await.unwrap_or_else(|e| Err(e.to_string()));
             let _ = this.update(cx, |this, cx| {
-                this.cloud.connecting = false;
-                match result {
-                    Ok(Some(project)) if project["projectId"].is_string() => {
-                        let row = json!({
-                            "projectId": project["projectId"],
-                            "repositoryIdentity": project["repositoryIdentity"],
-                            "repositoryUrl": project["repositoryUrl"],
-                            "displayName": project["displayName"],
-                            "defaultBranch": project["defaultBranch"],
-                            "accountId": scope,
-                            "providerId": "boxd",
-                        });
-                        this.cloud.rows.push(row.clone());
-                        this.select_cloud(row, cx);
-                        // Reload destinations so the new repository is listed.
-                        this.cloud.refresh();
-                    }
-                    // GitHub doesn't grant this repository yet: set it up.
-                    Ok(_) => this.open_cloud_setup(cx),
-                    Err(error) => this.cloud.error = Some(error),
-                }
-                cx.notify();
+                this.finish_cloud_connect(origin, scope, result, cx)
             });
         })
         .detach();
+    }
+    /// A repository connection came back. The connected repository joins
+    /// the catalog either way; Cloud is picked (or setup opened) only while
+    /// the chat is still on the project the connection started from.
+    fn finish_cloud_connect(
+        &mut self,
+        origin: Option<String>,
+        scope: String,
+        result: Result<Option<Value>, String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.cloud.connecting = false;
+        let current = self.state.read(cx).selected_space == origin
+            && self.state.read(cx).cloud_project.is_none();
+        match result {
+            Ok(Some(project)) if project["projectId"].is_string() => {
+                let row = json!({
+                    "projectId": project["projectId"],
+                    "repositoryIdentity": project["repositoryIdentity"],
+                    "repositoryUrl": project["repositoryUrl"],
+                    "displayName": project["displayName"],
+                    "defaultBranch": project["defaultBranch"],
+                    "accountId": scope,
+                    "providerId": "boxd",
+                });
+                self.cloud.rows.push(row.clone());
+                if current {
+                    self.select_cloud(row, cx);
+                }
+                // Reload destinations so the new repository is listed.
+                self.cloud.refresh();
+            }
+            // GitHub doesn't grant this repository yet: set it up.
+            Ok(_) if current => self.open_cloud_setup(cx),
+            Ok(_) => {}
+            Err(error) => self.cloud.error = Some(error),
+        }
+        cx.notify();
+    }
+    /// Cloud's account context has been read (or painted from cache).
+    pub(super) fn cloud_context_known(&self) -> bool {
+        !self.cloud.context.is_null()
     }
     /// Cloud is a row the keyboard can land on.
     pub(super) fn cloud_offer_selectable(&self, cx: &App) -> bool {
@@ -1520,6 +1544,88 @@ mod project_selection_tests {
             .unwrap();
         window.update(cx, |_, w, _| w.remove_window()).unwrap();
         cx.run_until_parked();
+    }
+    /// A connection that finishes after the chat moved to another project
+    /// lists the repository but leaves the chat where it is.
+    #[gpui::test]
+    fn a_late_connection_does_not_pull_another_project_onto_cloud(cx: &mut gpui::TestAppContext) {
+        let state = cx.new(|_| {
+            let mut s = AppState::new();
+            s.apply_cloud_account(json!({"user":{"id":"fixture-user"},"orgId":null}));
+            s.selected_space = Some("other".into());
+            s
+        });
+        let p = cx.new(|cx| {
+            let mut p = Pickers::new(state.clone(), cx);
+            p.cloud.owner = Some("fixture-user".into());
+            p.cloud.loaded = true;
+            p.cloud.context = provider_context();
+            p.cloud.connecting = true;
+            p
+        });
+        let project = || {
+            Ok(Some(
+                json!({"projectId":"zuse","repositoryIdentity":"github.com/o/zuse",
+                "displayName":"zuse","defaultBranch":"main"}),
+            ))
+        };
+        p.update(cx, |p, cx| {
+            p.finish_cloud_connect(Some("zuse".into()), "fixture-user".into(), project(), cx);
+            assert!(!p.cloud.connecting);
+            assert!(p.state.read(cx).cloud_project.is_none());
+            assert!(p.cloud.rows.iter().any(|r| r["projectId"] == "zuse"));
+            // Still on the project it started from: Cloud is picked.
+            p.cloud.connecting = true;
+            p.finish_cloud_connect(Some("other".into()), "fixture-user".into(), project(), cx);
+            assert!(!p.cloud.connecting);
+            assert_eq!(
+                p.state.read(cx).cloud_project.as_ref().unwrap()["projectId"],
+                "zuse"
+            );
+        });
+    }
+    /// Without remote access the computer chip still offers Cloud to a
+    /// subscriber's GitHub project before Cloud's destinations have loaded.
+    #[gpui::test]
+    fn computer_chip_offers_cloud_before_destinations_load(cx: &mut gpui::TestAppContext) {
+        let space = |remote: Option<&str>| Space {
+            id: "zuse".into(),
+            device_id: "mac".into(),
+            remote_repository: remote.map(str::to_owned),
+            path: "/mac/zuse".into(),
+            name: Some("zuse".into()),
+            git_detected: true,
+            git_checked_at: None,
+            checkout_id: None,
+            repository_id: None,
+            created_at: chrono::DateTime::<chrono::Utc>::UNIX_EPOCH,
+        };
+        for (remote, subscribed, shown) in [
+            (Some("github.com/o/zuse"), true, true),
+            (None, true, false),
+            (Some("github.com/o/zuse"), false, false),
+        ] {
+            let state = cx.new(|_| {
+                let mut s = AppState::new();
+                if subscribed {
+                    s.apply_cloud_account(json!({"user":{"id":"fixture-user"},"orgId":null}));
+                }
+                s.local_device_id = Some("mac".into());
+                s.apply_spaces(vec![space(remote)]);
+                s.selected_space = Some("zuse".into());
+                s
+            });
+            let p = cx.new(|cx| Pickers::new(state, cx));
+            p.update(cx, |p, cx| {
+                assert!(p.cloud.context.is_null());
+                assert_eq!(
+                    p.shows_device_chip(false, cx),
+                    shown,
+                    "{remote:?} {subscribed}"
+                );
+                assert!(p.shows_device_chip(true, cx));
+            });
+        }
     }
     #[gpui::test]
     fn bound_task_locks_provider_and_preserves_sleeping_model_choice(
