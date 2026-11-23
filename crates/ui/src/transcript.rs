@@ -4132,7 +4132,7 @@ impl Transcript {
         let state = self.state.read(cx);
         if state.hosted_on_cloud_computer && state.engine().is_none() {
             let path = match &file {
-                LinkedFile::Image(path) | LinkedFile::Other(path) => path,
+                LinkedFile::Image { path, .. } | LinkedFile::Other(path) => path,
             };
             crate::toast::show(
                 cx,
@@ -4145,8 +4145,49 @@ impl Transcript {
             return true;
         }
         match file {
-            LinkedFile::Image(path) => self.open_linked_image(path, window, cx),
+            LinkedFile::Image { path, chat } => {
+                self.open_linked_image(path, chat.as_deref(), window, cx)
+            }
             LinkedFile::Other(_) => false,
+        }
+    }
+
+    /// The one machine a linked file is read from: the device of `chat`
+    /// (the chat owning the file's checkout), else the linking chat's. No
+    /// fallback to this desktop — a same-named local file must never stand
+    /// in for the chat's. A chat row not synced yet falls back to the
+    /// engine's own device, which is the chat's for a cloud computer.
+    fn linked_file_device(&self, chat: Option<&str>, cx: &gpui::App) -> Option<String> {
+        let state = self.state.read(cx);
+        let row = match chat {
+            Some(id) => state.chats.iter().find(|row| row.id == id),
+            // An override (subagent) transcript has no chat row of its own.
+            None if self.doc_override.is_some() => return None,
+            None => state.selected_chat_row(),
+        };
+        row.map(|row| row.device_id.clone())
+            .or_else(|| state.local_device_id.clone())
+    }
+
+    /// An inline Markdown image's file: resolved through the chat's roots
+    /// like a link, so a relative source joins the checkout that owns it.
+    /// A source no root resolves is read as written from the chat's machine.
+    fn inline_image_file(&mut self, source: &str, cx: &mut Context<Self>) -> LinkedFile {
+        let activation = render::LinkActivation {
+            target: render::LinkTarget::new("", source),
+            action: render::LinkAction::Primary,
+            source_session: None,
+        };
+        match self
+            .link_ui(cx)
+            .and_then(|link| linked_file(&link, &activation))
+        {
+            Some(LinkedFile::Image { path, chat }) => LinkedFile::Image { path, chat },
+            Some(LinkedFile::Other(path)) => LinkedFile::Image { path, chat: None },
+            None => LinkedFile::Image {
+                path: source.to_owned(),
+                chat: None,
+            },
         }
     }
 
@@ -4156,13 +4197,14 @@ impl Transcript {
     fn open_linked_image(
         &mut self,
         path: String,
+        chat: Option<&str>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let devices = self.attachment_device_ids(cx);
-        if devices.is_empty() {
+        let Some(device) = self.linked_file_device(chat, cx) else {
             return false;
-        }
+        };
+        let devices = vec![device];
         let notice = format!(
             "Couldn't open {}. It may have moved, or its computer is offline.",
             file_badge_name(&path)
@@ -8204,7 +8246,8 @@ impl Transcript {
                                 cx.open_url(&url);
                                 return;
                             }
-                            this.open_linked_file(LinkedFile::Image(source.clone()), window, cx);
+                            let file = this.inline_image_file(&source, cx);
+                            this.open_linked_file(file, window, cx);
                         });
                     })
                     .into_any_element()
@@ -11351,8 +11394,10 @@ struct SentPdfPreview {
 /// A transcript link that names a file on the chat's machine.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum LinkedFile {
-    /// An image, opened in the viewer from its absolute path on that machine.
-    Image(String),
+    /// An image, opened in the viewer from its absolute path on the machine
+    /// of `chat` — the chat whose checkout owns it (`None`: the linking
+    /// chat's own machine).
+    Image { path: String, chat: Option<String> },
     /// Any other file; the shell's file preview opens it.
     Other(String),
 }
@@ -11382,7 +11427,10 @@ fn linked_file(link: &render::LinkUi, activation: &render::LinkActivation) -> Op
             let absolute = root.absolute(&link).to_string_lossy().into_owned();
             Some(
                 if root.chat.is_some() && crate::attachments::is_image_path(&absolute) {
-                    LinkedFile::Image(absolute)
+                    LinkedFile::Image {
+                        path: absolute,
+                        chat: root.chat.clone(),
+                    }
                 } else {
                     LinkedFile::Other(absolute)
                 },
@@ -15070,7 +15118,12 @@ mod tests {
                 local: false,
             },
         ]);
-        let image = |path: &str| Some(LinkedFile::Image(path.into()));
+        let image = |path: &str| {
+            Some(LinkedFile::Image {
+                path: path.into(),
+                chat: Some("cloud-chat".into()),
+            })
+        };
         let other = |path: &str| Some(LinkedFile::Other(path.into()));
         for (target, action, expected) in [
             // The reported links: an image and pages the agent wrote.
@@ -15319,6 +15372,62 @@ mod tests {
                     .iter()
                     .any(|message| message.contains("Couldn't open missing.png")),
                 "{messages:?}"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn linked_images_read_only_from_the_owning_chats_machine(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+            crate::settings::init(crate::settings::UiSettings::default(), dir.path(), cx);
+        });
+        // A chat hosted on another machine, viewed from this desktop.
+        let state = cloud_chat_state(cx, "linked-far-host");
+        state.update(cx, |state, _| {
+            state.hosted_on_cloud_computer = false;
+            state.local_device_id = Some("linked-desk".into());
+        });
+        let image = "/home/zuse/workspace/same-name.png";
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(8, 8)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        // This desktop happens to hold a different file at the same path.
+        crate::attachments::store_loaded_for(
+            &crate::attachments::AttachmentKey::new("linked-desk", image, None),
+            "same-name.png".into(),
+            Arc::new(gpui::Image::from_bytes(
+                gpui::ImageFormat::Png,
+                png.into_inner(),
+            )),
+        );
+        let (transcript, cx) = cx.add_window_view(|_, cx| Transcript::new(state.clone(), cx));
+        let forwarded = recording_link_handler(&transcript, cx);
+        click_transcript_link(&transcript, image, cx);
+        cx.run_until_parked();
+        transcript.read_with(cx, |this, _| {
+            assert!(
+                this.attachment_preview.is_none(),
+                "the desktop's same-named file never stands in for the chat's"
+            );
+        });
+        assert!(forwarded.borrow().is_empty());
+
+        // A relative inline image joins the chat's checkout like a link.
+        transcript.update(cx, |this, cx| {
+            assert_eq!(
+                this.inline_image_file("artifacts/shot.png", cx),
+                LinkedFile::Image {
+                    path: "/home/zuse/workspace/artifacts/shot.png".into(),
+                    chat: Some("cloud-chat".into()),
+                }
+            );
+            assert_eq!(
+                this.linked_file_device(Some("cloud-chat"), cx).as_deref(),
+                Some("linked-far-host")
             );
         });
     }

@@ -1926,13 +1926,12 @@ impl AppState {
         // An unprobed device id means the chats on screen are the local
         // engine's — everything shown counts as local until sync says else.
         // A cloud computer's engine owns its own device id, never this disk.
-        let on_this_device = |device: &str| {
-            !self.hosted_on_cloud_computer
-                && self
-                    .local_device_id
-                    .as_deref()
-                    .is_none_or(|local| device == local)
+        let same_device = |device: &str| {
+            self.local_device_id
+                .as_deref()
+                .is_none_or(|local| device == local)
         };
+        let on_this_device = |device: &str| !self.hosted_on_cloud_computer && same_device(device);
         let mut roots: Vec<FileLinkRoot> = Vec::new();
         let mut push = |chat: Option<&Chat>, device: &str, root: Option<&str>| {
             let Some(root) = root.filter(|root| !root.is_empty()) else {
@@ -1950,10 +1949,10 @@ impl AppState {
         let chat_row = |id: &str| self.chats.iter().find(|chat| chat.id == id);
         let linking = chat_row(chat_id);
         // Roots on the linking chat's device; an unknown chat row falls back
-        // to this device's.
+        // to the engine's own device (a cloud computer's, for its chats).
         let on_link_device = |device: &str| match linking {
             Some(chat) => chat.device_id == device,
-            None => on_this_device(device),
+            None => same_device(device),
         };
         if let Some(chat) = linking {
             push(Some(chat), &chat.device_id, chat.cwd.as_deref());
@@ -6546,6 +6545,16 @@ mod tests {
         state.apply_spaces(vec![space("repo", "dev", "/home/zuse/workspace/repo", 0)]);
         assert!(!state.chat_is_local("cloud"));
         assert!(!state.chat_is_local("unknown"));
+        // A chat row not synced yet still resolves against the computer's
+        // own projects, flagged remote.
+        assert_eq!(
+            state.file_link_roots("unknown"),
+            vec![FileLinkRoot {
+                chat: None,
+                root: "/home/zuse/workspace/repo".into(),
+                local: false,
+            }]
+        );
         assert_eq!(
             state.file_link_roots("cloud"),
             vec![
