@@ -236,7 +236,9 @@ mod hosted_controller_tests {
             .handle(methods::CLOUD_ACCOUNT_SIGN_IN, json!({}))
             .await
             .expect("hosted sign-in must return a PKCE redirect");
-        let RpcReply::Value(progress) = reply else { panic!("expected login progress"); };
+        let RpcReply::Value(progress) = reply else {
+            panic!("expected login progress");
+        };
         let url = reqwest::Url::parse(progress["url"].as_str().unwrap()).unwrap();
         let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
         assert_eq!(query["redirect_uri"], format!("{origin}/app/"));

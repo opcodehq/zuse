@@ -474,7 +474,8 @@ impl Account {
             url: url.into(),
             expires_at: now() + BROWSER_SIGN_IN_SECS,
         };
-        *lock(&self.0.hosted_login) = Some((expected_state, verifier, generation, progress.expires_at));
+        *lock(&self.0.hosted_login) =
+            Some((expected_state, verifier, generation, progress.expires_at));
         self.show_login(generation, &progress)?;
         Ok(progress)
     }
@@ -1028,7 +1029,10 @@ mod tests {
         assert_eq!(query["code_challenge_method"], "S256");
         let (state, verifier, _, _) = lock(&first.0.hosted_login).clone().unwrap();
         use sha2::Digest;
-        assert_eq!(query["code_challenge"], URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(verifier.as_bytes())));
+        assert_eq!(
+            query["code_challenge"],
+            URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(verifier.as_bytes()))
+        );
         assert_eq!(query["state"], state);
         assert!(!progress.url.contains(&verifier));
         assert!(second.hosted_callback("code", &state).await.is_err());

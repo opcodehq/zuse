@@ -333,7 +333,10 @@ impl HostedBrowser {
         );
         Ok(self
             .router()
-            .route("/", get(|| async { axum::response::Redirect::temporary("/app/") }))
+            .route(
+                "/",
+                get(|| async { axum::response::Redirect::temporary("/app/") }),
+            )
             .route(
                 "/app",
                 get(|| async { axum::response::Redirect::temporary("/app/") }),
