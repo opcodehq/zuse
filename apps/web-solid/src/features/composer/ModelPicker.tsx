@@ -1,7 +1,7 @@
 // Agent, model and effort picker: the toolbar's model pill and its popover.
 // The popover mirrors crates/ui/src/pickers/model_menu.rs with crates/viewport/src/model_picker_style.rs (provider rail,
-// search, grouped rows) and the Advanced footer of crates/ui/src/pickers/compact.rs (fast mode, effort slider).
-import { navigate } from "@/core/view";
+// search, grouped rows), plus the separate 240px card from crates/ui/src/pickers/model_detail.rs.
+import { navigate, setView, view } from "@/core/view";
 import { Icon } from "@/ui/Icon";
 import { Spinner, toast } from "@/ui/primitives";
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
@@ -10,7 +10,7 @@ import { Tooltip as KTooltip } from "@kobalte/core/tooltip";
 import { type JSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, For, onSettled, Show, untrack } from "solid-js";
 import { brandIcon, BrandMark } from "./assets";
-import { catalog, changeConfig, defaults, effortOption, fastModeValues, harnessList, modelList, offeredHarnesses, reasoningLabel, resolve, revalidateCatalog, selectedChat, setCatalog, targetDeviceId, updateDefaults, type HarnessInfo, type Model, type ModelOption, type Resolved, } from "./catalog";
+import { catalog, changeConfig, clampReasoning, defaults, effortOption, fastModeValues, harnessList, modelList, offeredHarnesses, reasoningLabel, resolve, revalidateCatalog, selectedChat, setCatalog, targetDeviceId, updateDefaults, type HarnessInfo, type Model, type ModelOption, type Resolved, } from "./catalog";
 import { focusComposer } from "./drafts";
 
 const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
@@ -18,7 +18,7 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
 const harnessName = (h: HarnessInfo) => h.name || h.id;
 
 /** One model row; `selectedOnly` is the chat's model when the fresh catalog no longer lists it. */
-interface Row { harness: HarnessInfo; model: Model; selectedOnly?: boolean }
+interface Row { harness: HarnessInfo; model: Model; selectedOnly?: boolean; favoriteSection?: boolean }
 
 const [open, setOpen] = createSignal(false);
 let focusModelSearch = () => {};
@@ -33,13 +33,13 @@ function apply(change: Parameters<typeof changeConfig>[0]) {
 
 /** The effort slider's stops: the reasoning ladder, else an option shaped like one, so every model with an effort gets the same slider. */
 interface Effort { labels: string[]; selected: number; pick: (index: number) => void }
-function effortOf(r: Resolved): Effort | null {
+function effortOf(r: Resolved, change: typeof apply = apply): Effort | null {
   if (r.ladder.length) {
     const ladder = r.ladder;
     return {
       labels: ladder.map(reasoningLabel),
       selected: Math.max(0, r.reasoning ? ladder.indexOf(r.reasoning) : 0),
-      pick: (index) => ladder[index] && ladder[index] !== r.reasoning && apply({ reasoning: ladder[index] }),
+      pick: (index) => ladder[index] && ladder[index] !== r.reasoning && change({ reasoning: ladder[index] }),
     };
   }
   const option = r.model && effortOption(r.model);
@@ -58,12 +58,12 @@ function effortOf(r: Resolved): Effort | null {
 }
 
 /** The model's fast-mode option, its on/off values and whether it is on. */
-function fastOf(r: Resolved) {
+function fastOf(r: Resolved, change: typeof apply = apply) {
   const option = r.model?.options?.find((o) => fastModeValues(o));
   const values = option && fastModeValues(option);
   if (!option || !values) return null;
   const on = (r.options[option.id] ?? option.defaultChoice) === values.on;
-  return { option, on, flip: () => apply({ option: { id: option.id, value: on ? values.off : values.on, isDefault: (on ? values.off : values.on) === option.defaultChoice } }) };
+  return { option, on, flip: () => change({ option: { id: option.id, value: on ? values.off : values.on, isDefault: (on ? values.off : values.on) === option.defaultChoice } }) };
 }
 
 /** Alt+T: step through the selected model's effort, wrapping back to the lowest. */
@@ -126,9 +126,10 @@ export function ModelPill() {
   );
 }
 
-/** The default model for new chats: the composer's remembered agent and its model. */
-const isDefaultModel = (harness: string, model: string) => defaults().harness === harness && defaults().models[harness]?.id === model;
+/** Explicit new-chat default, independent of the active chat and recent picks. */
+const isDefaultModel = (harness: string, model: string) => view.preferences.defaultModel?.provider === harness && view.preferences.defaultModel?.model === model;
 function makeDefault(row: Row) {
+  setView(draft => { draft.preferences.defaultModel = {provider:row.harness.id,model:row.model.id,label:row.model.label}; });
   const r = resolve();
   // On the new-chat canvas the current pick stays put while the default moves.
   if (!selectedChat() && r.harness) setCatalog(draft => { Object.assign(draft["draft"]!, { harness: r.harness, model: r.modelId }); });
@@ -162,7 +163,6 @@ function PickerBody(props: { close: () => void }) {
   let listEl: HTMLDivElement | undefined;
   const needle = () => query().trim().toLowerCase();
   const grouped = () => scope() === null && !needle();
-  const showProvider = () => scope() === null && !!needle();
   // All, unsearched, leads with the current agent; a tab shows one agent; a search spans the tab it runs on.
   const inScope = createMemo(() => {
     const list = providers().filter((h) => scope() === null || h.id === scope());
@@ -184,6 +184,7 @@ function PickerBody(props: { close: () => void }) {
         if (match(id, label)) out.push({ harness, model: { id, label }, selectedOnly: true });
       }
     }
+    if (grouped()) return [...out.filter(row => defaults().favorites.includes(`${row.harness.id}|${row.model.id}`)).map(row=>({...row,favoriteSection:true})),...out];
     return out;
   });
   const loading = () => list().status === "loading" || catalogs().some((c) => c.models.status === "loading");
@@ -194,7 +195,6 @@ function PickerBody(props: { close: () => void }) {
     return entry && { harness: entry.harness, message: (entry.models as { message: string }).message };
   };
   const isSelected = (row: Row) => row.harness.id === r().harness && row.model.id === r().modelId;
-  const count = (harness: string) => rows().filter((row) => row.harness.id === harness).length;
   const isLive = (harness: string) => modelList(device(), harness).status === "ready";
   const label = () => {
     const n = rows().length;
@@ -255,7 +255,7 @@ function PickerBody(props: { close: () => void }) {
   });
   return (
     <div class="cmp-models-frame" onKeyDown={onKeyDown}>
-      <Show
+      <div class="cmp-model-list-card"><Show
         when={list().status !== "error"}
         fallback={
           <div class="cmp-models-body">
@@ -313,21 +313,20 @@ function PickerBody(props: { close: () => void }) {
                 when={rows().length}
                 fallback={<div class="cmp-models-note">{loading() ? "Checking available agents…" : "No models match your search."}</div>}
               >
-                <div class="cmp-models-label" aria-hidden="true">{label()}</div>
+                <Show when={!grouped()}><div class="cmp-models-label" aria-hidden="true">{label()}</div></Show>
                 <For each={rows()}>
                   {(row, index) => {
-                    const first = () => grouped() && (index() === 0 || rows()[index() - 1]!.harness.id !== row.harness.id);
-                    const last = () => index() === rows().length - 1 || (grouped() && rows()[index() + 1]!.harness.id !== row.harness.id);
+                    const first = () => grouped() && (index() === 0 || (rows()[index() - 1]!.favoriteSection !== row.favoriteSection || (!row.favoriteSection && rows()[index() - 1]!.harness.id !== row.harness.id)));
+                    const last = () => index() === rows().length - 1 || (grouped() && (rows()[index() + 1]!.favoriteSection !== row.favoriteSection || (!row.favoriteSection && rows()[index() + 1]!.harness.id !== row.harness.id)));
                     const isDefault = () => isDefaultModel(row.harness.id, row.model.id);
                     return (
                       <>
                         <Show when={first()}>
                           <div class="cmp-models-group" role="presentation">
                             <div class="cmp-models-group-head">
-                              <Icon name={brandIcon(row.harness.id)} size={14} />
-                              <span class="cmp-models-group-name">{harnessName(row.harness)}</span>
-                              <Show when={row.harness.id === r().harness}><span class="cmp-models-current">CURRENT</span></Show>
-                              <span class="cmp-models-count">{count(row.harness.id)}</span>
+                              <Icon name={row.favoriteSection ? "dither-bookmark" : brandIcon(row.harness.id)} size={14} />
+                              <span class="cmp-models-group-name">{row.favoriteSection ? "Favorites" : harnessName(row.harness)}</span>
+
                             </div>
                           </div>
                         </Show>
@@ -350,26 +349,9 @@ function PickerBody(props: { close: () => void }) {
                           <span class="cmp-model-glyph"><Icon name={brandIcon(row.harness.id)} size={16} /></span>
                           <div class="cmp-model-text">
                             <span class="cmp-model-name">{row.model.label}</span>
-                            <Show when={showProvider()}>
-                              <span class="cmp-model-sub">{harnessName(row.harness)}</span>
-                            </Show>
+
                           </div>
-                          <Show when={!row.selectedOnly}>
-                            <button
-                              type="button"
-                              class="cmp-star"
-                              aria-label={isDefault() ? "Default model" : "Make default model"}
-                              aria-pressed={(isDefault()) ? "true" : "false"}
-                              title={isDefault() ? "Default model" : "Make default model"}
-                              tabindex={-1}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                makeDefault(row);
-                              }}
-                            >
-                              <Icon name="star" size={14} />
-                            </button>
-                          </Show>
+                          <Show when={isDefault()}><span class="cmp-model-default">Default</span></Show>
                           <Show when={isSelected(row)}>
                             <Icon name="check" size={14} class="cmp-model-check" />
                           </Show>
@@ -383,11 +365,11 @@ function PickerBody(props: { close: () => void }) {
                 </For>
               </Show>
             </div>
-            <Settings />
-            <Advanced />
+
           </div>
         </Show>
       </Show>
+      </div><Show when={rows()[active()]}>{row => <ModelDetail row={row()} />}</Show>
     </div>
   );
 }
@@ -449,15 +431,15 @@ interface Group {
 }
 
 /** The selected model's other settings; effort and fast mode have their own controls in the footer. */
-function Settings() {
-  const r = createMemo(resolve);
+function Settings(props: { resolved: Resolved; change: typeof apply }) {
+  const r = () => props.resolved;
   const groups = createMemo<Group[]>(() => {
     const model = r().model;
     if (!model) return [];
     const effort = !r().ladder.length ? effortOption(model)?.id : undefined;
     const fast = model.options?.find((o) => fastModeValues(o))?.id;
     return (model.options ?? [])
-      .filter((option) => option.choices.length && option.id !== effort && option.id !== fast)
+      .filter((option) => option.choices.length && option.id !== effort && option.id !== fast && option.id !== contextOf(model, r().options)?.option.id)
       .map((option) => ({
         option,
         selected: r().options[option.id] ?? option.defaultChoice,
@@ -466,7 +448,7 @@ function Settings() {
       }));
   });
   const saving = () => !!selectedChat() && !!catalog.saving[selectedChat()!.id];
-  const choose = (group: Group, value: string) => apply({ option: { id: group.option.id, value, isDefault: value === group.option.defaultChoice } });
+  const choose = (group: Group, value: string) => props.change({ option: { id: group.option.id, value, isDefault: value === group.option.defaultChoice } });
   const valueLabel = (group: Group) => group.choices.find((c) => c.id === group.selected)?.label ?? "Agent default";
   return (
     <Show when={groups().length}>
@@ -537,37 +519,54 @@ function Tip(props: { content: string; children: JSX.Element }) {
   );
 }
 
-/** The Advanced footer: the fast-mode button beside its label, the effort slider beneath. */
-function Advanced() {
-  const r = createMemo(resolve);
-  const effort = createMemo(() => effortOf(r()));
-  const fast = createMemo(() => fastOf(r()));
-  return (
-    <Show when={effort() || fast()}>
-      <div class="cmp-advanced" data-slider={(!!effort()) ? "true" : "false"}>
-        <div class="cmp-advanced-head">
-          <span>Advanced</span>
-          <Show when={fast()}>
-            {(f) => (
-              <Tip content={"1.5× speed\nMore usage"}>
-                <button
-                  type="button"
-                  class="cmp-fast"
-                  aria-label={f().on ? "Turn off fast mode" : "Turn on fast mode"}
-                  aria-pressed={(f().on) ? "true" : "false"}
-                  aria-keyshortcuts="Alt+O"
-                  onClick={() => f().flip()}
-                >
-                  <Icon name="fast-tier-bold" size={14} />
-                </button>
-              </Tip>
-            )}
-          </Show>
-        </div>
-        <Show when={effort()}>{(e) => <EffortSlider effort={e()} />}</Show>
+/** Desktop model_detail.rs: one compact card follows the hovered or keyboard row. */
+function contextOf(model: Model, options: Record<string,string>) {
+  for (const option of model.options ?? []) {
+    if (!option.id.toLowerCase().includes("context")) continue;
+    const values = switchValues(option);
+    if (!values) continue;
+    const count = (value: string) => { const match = /^([\d.]+)([km])$/i.exec(value); return match ? Number(match[1]) * (match[2]!.toLowerCase() === "m" ? 1e6 : 1e3) : 0; };
+    if (count(values.on) < 1e6 || count(values.off) >= 1e6) continue;
+    return {option, ...values, selected: options[option.id] ?? option.defaultChoice};
+  }
+  return null;
+}
+function ModelDetail(props: { row: Row }) {
+  const resolved = createMemo<Resolved>(() => {
+    const current = resolve();
+    if (current.harness === props.row.harness.id && current.modelId === props.row.model.id) return current;
+    const memory = defaults();
+    const key = `${props.row.harness.id}|${props.row.model.id}`;
+    const ladder = props.row.model.reasoningLevels?.length ? props.row.model.reasoningLevels : props.row.harness.reasoningLevels ?? [];
+    return {...current,harness:props.row.harness.id,harnessInfo:props.row.harness,model:props.row.model,modelId:props.row.model.id,modelLabel:props.row.model.label,ladder,reasoning:clampReasoning(memory.reasoning[key] ?? memory.reasoning[props.row.harness.id],ladder),options:memory.options[key] ?? {}};
+  });
+  const change: typeof apply = value => { const current=resolve(); apply({...value,...(current.harness !== props.row.harness.id ? {harness:props.row.harness.id} : {}),...(current.harness !== props.row.harness.id || current.modelId !== props.row.model.id ? {model:props.row.model.id} : {})}); };
+  const effort = createMemo(() => effortOf(resolved(), change));
+  const fast = createMemo(() => fastOf(resolved(), change));
+  const context = createMemo(() => contextOf(props.row.model,resolved().options));
+  const favorite = () => defaults().favorites.includes(`${props.row.harness.id}|${props.row.model.id}`);
+  const toggleFavorite = () => { const key=`${props.row.harness.id}|${props.row.model.id}`; updateDefaults(draft => { draft.favorites = draft.favorites.includes(key) ? draft.favorites.filter(item=>item!==key) : [...draft.favorites,key]; }); };
+  const toggleDefault = () => {
+    if (!isDefaultModel(props.row.harness.id,props.row.model.id)) return makeDefault(props.row);
+    const current = resolve();
+    if (!selectedChat()) setCatalog(draft => { Object.assign(draft.draft,{harness:current.harness,model:current.modelId}); });
+    setView(draft => { draft.preferences.defaultModel=null; });
+    const harness = props.row.harness.id;
+    updateDefaults(draft => { delete draft.harness; delete draft.models[harness]; });
+  };
+  return <aside class="cmp-model-detail" aria-label="Model details">
+    <header class="cmp-detail-header"><Icon name={brandIcon(props.row.harness.id)} size={16} /><strong>{props.row.model.label}</strong><span>{harnessName(props.row.harness)}</span></header>
+    <div class="cmp-detail-body">
+      <Show when={effort()}>{e => <><div class="cmp-detail-reasoning"><span>Reasoning</span><span>{e().labels[e().selected]}</span></div><EffortSlider effort={e()} /></>}</Show>
+      <div class="cmp-detail-controls">
+        <Show when={fast()}>{f => <Tip content={f().on ? "Fast mode · On" : "Fast mode · Off"}><button type="button" class="cmp-detail-toggle" aria-label="Fast mode" aria-pressed={f().on ? "true":"false"} onClick={()=>f().flip()}><Icon name="dither-bolt" size={16} /></button></Tip>}</Show>
+        <Tip content={favorite() ? "Remove from favorites" : "Add to favorites"}><button type="button" class="cmp-detail-toggle" aria-label="Favorite" aria-pressed={favorite()?"true":"false"} onClick={toggleFavorite}><Icon name="dither-bookmark" size={16} /></button></Tip>
+        <Tip content={isDefaultModel(props.row.harness.id,props.row.model.id) ? "Default model · New chats start here" : "Set as default"}><button type="button" class="cmp-detail-toggle" aria-label="Default model" aria-pressed={isDefaultModel(props.row.harness.id,props.row.model.id)?"true":"false"} onClick={toggleDefault}><Icon name="dither-flag" size={16} /></button></Tip>
+        <Show when={context()}>{c => <div class="cmp-detail-context" role="radiogroup" aria-label="Context window" onKeyDown={event => { const value = ({ArrowLeft:c().off,ArrowRight:c().on,Home:c().off,End:c().on} as Record<string,string>)[event.key]; if (value) { event.preventDefault(); event.stopPropagation(); change({option:{id:c().option.id,value,isDefault:value===c().option.defaultChoice}}); } }}><For each={[c().off,c().on]}>{value=><button type="button" role="radio" aria-checked={c().selected===value?"true":"false"} onClick={()=>change({option:{id:c().option.id,value,isDefault:value===c().option.defaultChoice}})}>{c().option.choices.find(choice=>choice.id===value)?.label ?? value.toUpperCase()}</button>}</For></div>}</Show>
       </div>
-    </Show>
-  );
+      <Settings resolved={resolved()} change={change} />
+    </div>
+  </aside>;
 }
 
 const THUMB_INSET = 12;

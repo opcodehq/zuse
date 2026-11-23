@@ -135,7 +135,10 @@ column, 56px top inset, 24/30 headings, accent progress rail and footer actions)
 Cloud creation and Settings share `ui/ModelSelect`, a searchable provider-rail
 menu using desktop icons, 28px model rows and keyboard navigation. Permission
 and repository controls use the shared non-modal menus. The conversation
-composer retains its existing desktop picker with reasoning/fast controls.
+composer follows the current desktop model_menu/model_detail implementation:
+a 344px list with a full-height provider rail and a separate 240px hover/keyboard
+detail card. The card has a dither header, pill reasoning slider, pixel-icon
+fast/favorite/default toggles, and a catalog-gated 200K/1M context switch.
 
 `node e2e/capture-preview.mjs` captures onboarding, sign-in, the complete
 workspace/Agents pane and the composer picker using fixture data in the actual
@@ -149,3 +152,8 @@ and close controls, search/reset, switching back from workspace panels, nested
 model-picker focus, and narrow-screen inspector navigation. All use fixture data
 without cloud allocation. Preview captures include issue lists/details and the
 narrow inspector.
+
+`bun run e2e:model-picker` verifies detail-card width, hover-targeted settings,
+absence of unsupported context controls, offered 1M context, reasoning keyboard
+controls, favorites and explicit default selection/clearing. Default model
+selection is shared with Settings and independent of the current chat's model.

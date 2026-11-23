@@ -223,12 +223,12 @@ export function resolve(): Resolved {
   if (chat) harness = config?.harness;
   else {
     const draftPick = catalog.draft.harness;
-    harness = [draftPick, memory.harness].find((h) => h && (!ready || offered.some((o) => o.id === h))) ?? offered[0]?.id;
+    harness = [draftPick, view.preferences.defaultModel?.provider, memory.harness].find((h) => h && (!ready || offered.some((o) => o.id === h))) ?? offered[0]?.id;
   }
   const harnessInfo = ready?.find((h) => h.id === harness);
   const models = harness ? modelList(device, harness) : undefined;
   const catalogModels = models?.status === "ready" ? models.value : undefined;
-  const explicit = chat ? config?.model ?? undefined : catalog.draft.model ?? (harness ? memory.models[harness]?.id : undefined);
+  const explicit = chat ? config?.model ?? undefined : catalog.draft.model ?? (view.preferences.defaultModel?.provider === harness ? view.preferences.defaultModel?.model : undefined) ?? (harness ? memory.models[harness]?.id : undefined);
   const model = catalogModels ? (explicit ? catalogModels.find((m) => m.id === explicit) : catalogModels[0]) : undefined;
   const modelId = model?.id ?? explicit;
   const modelLabel = model?.label ?? (harness && explicit ? memory.models[harness]?.label ?? explicit : undefined);
@@ -281,14 +281,14 @@ export async function changeConfig(change: { harness?: string; model?: string; r
     if (change.reasoning !== undefined && harness) {
       setCatalog(draft => { draft["draft"]!["reasoning"] = change.reasoning; });
       updateDefaults((d) => {
-        d.reasoning[modelKey(harness, r.modelId)] = change.reasoning!;
+        d.reasoning[modelKey(harness, change.model ?? r.modelId)] = change.reasoning!;
         d.reasoning[harness] = change.reasoning!;
       });
     }
-    if (change.option && harness && r.modelId) {
+    if (change.option && harness && (change.model ?? r.modelId)) {
       const { id, value, isDefault } = change.option;
       updateDefaults((d) => {
-        const picks = (d.options[modelKey(harness, r.modelId)] ??= {});
+        const picks = (d.options[modelKey(harness, change.model ?? r.modelId)] ??= {});
         if (isDefault) delete picks[id];
         else picks[id] = value;
       });

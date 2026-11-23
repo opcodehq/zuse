@@ -470,3 +470,40 @@ button.cmp-pill-body { cursor: pointer; }
 .cmp-emoji-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 400 14px / 20px var(--font-mono); color: var(--text); }
 
 @media (max-width: 800px) { .cmp-landing { padding-left: 16px; padding-right: 16px; } }
+
+/* Desktop model_menu.rs / model_detail.rs: separate 344px list and 240px card. */
+.cmp-models.cmp-popover { width: min(592px, calc(100vw - 24px)); max-height: none; padding: 0; border: 0; background: transparent; box-shadow: none; overflow: visible; }
+.cmp-models-frame { gap: 8px; align-items: flex-start; }
+.cmp-model-list-card { width: 344px; min-width: 0; flex: 1; display: flex; align-items: stretch; overflow: hidden; border-radius: 14px; border: 1px solid var(--hairline); background: var(--float-chrome); box-shadow: var(--shadow); }
+.cmp-models-body { max-height: min(420px, calc(100vh - 96px)); }
+.cmp-models-list { min-height: 260px; }
+.cmp-models-rail { width: 44px; padding: 6px; }
+.cmp-model-row { min-height: 28px; padding: 4px 7px; border-color: transparent; }
+.cmp-model-row[aria-selected="true"] { border-color: transparent; }
+.cmp-model-row[aria-selected="true"]::before { display: none; }
+.cmp-model-name { font-weight: 400; }
+.cmp-model-default { font-size: 11px; color: var(--text-muted); }
+.cmp-model-detail { width: 240px; flex: none; min-width: 0; border: 1px solid var(--hairline); border-radius: 14px; overflow: hidden; background: var(--float-chrome); box-shadow: var(--shadow); }
+.cmp-detail-header { height: 40px; padding: 0 12px; position: relative; display: flex; align-items: center; gap: 8px; overflow: hidden; }
+.cmp-detail-header::after { content: ""; position: absolute; top: 0; right: 0; width: 130px; height: 40px; pointer-events: none; opacity: .3; background: radial-gradient(var(--accent) .7px, transparent .8px) 0 0 / 3px 3px; mask-image: linear-gradient(35deg, transparent 30%, black); }
+.cmp-detail-header strong { font-weight: 500; font-size: 12px; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmp-detail-header > span:last-child { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmp-detail-body { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+.cmp-detail-reasoning { display: flex; justify-content: space-between; font-size: 11px; }
+.cmp-detail-reasoning > span:first-child { color: var(--text-muted); }
+.cmp-detail-controls { display: flex; align-items: center; gap: 2px; }
+.cmp-detail-toggle { width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; }
+.cmp-detail-toggle:hover { background: var(--wash); }
+.cmp-detail-toggle[aria-pressed="true"] { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.cmp-detail-context { margin-left: auto; display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--wash); }
+.cmp-detail-context button { background: transparent; color: var(--text-muted); font-size: 11px; border: 0; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+.cmp-detail-context button[aria-checked="true"] { color: var(--text); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.cmp-model-detail .cmp-models-tray { margin: 0; padding: 0; border: 0; background: transparent; }
+.cmp-effort-fill { background: radial-gradient(color-mix(in srgb, var(--accent) 65%, transparent) .7px, transparent .8px) 0 0 / 3px 3px, color-mix(in srgb, var(--accent) 17%, transparent); }
+.cmp-effort-thumb { top: 5px; width: 22px; height: 14px; margin-left: -11px; border: 0; border-radius: 8px; background: var(--text-strong); box-shadow: 0 1px 5px var(--scrim); }
+.cmp-effort-stops > span { width: 3px; height: 3px; }
+@media (max-width: 620px) { .cmp-models-frame { flex-direction: column; } .cmp-model-list-card { width: 100%; flex: auto; } .cmp-model-detail { width: 100%; } .cmp-models-body { max-height: 40vh; } .cmp-models-list { min-height: 100px; } }
+
+.cmp-model-list-card .cmp-kbd, .cmp-model-list-card .cmp-rail-live { display: none; }
+.cmp-model-list-card .cmp-models-group-name { font-size: 11px; color: var(--text-muted); font-weight: 400; }
+.cmp-model-list-card .cmp-models-group-head { padding-top: 6px; }

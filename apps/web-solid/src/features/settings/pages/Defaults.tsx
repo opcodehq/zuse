@@ -1,3 +1,4 @@
+import { setView, view } from "@/core/view";
 // Default models: how new chats start (crates/ui/src/settings/defaults.rs). The composer reads the same
 // remembered defaults, so a choice here is what the next new chat offers.
 import { Show } from "solid-js";
@@ -10,8 +11,8 @@ import { PERMISSION_MODES } from "../prefs";
 import { Card, Group, Row, SectionTitle, Select, WarningStrip } from "../widgets";
 
 export function Defaults() {
-  const harness = () => defaults().harness ?? null;
-  const model = () => (harness() ? (defaults().models[harness()!]?.id ?? null) : null);
+  const harness = () => view.preferences.defaultModel?.provider ?? null;
+  const model = () => view.preferences.defaultModel?.model ?? null;
   const sandbox = (): Sandbox => defaults().sandbox ?? "workspace-write";
   const harnessName = () => (harness() ? (offeredAgents().find((h) => h.id === harness())?.name ?? providerName(harness()!)) : null);
 
@@ -43,6 +44,8 @@ export function Defaults() {
                 placeholder={offeredAgents().length ? "Choose a model" : "No agents enabled"}
                 disabled={!offeredAgents().length}
                 onChange={(nextHarness, nextModel) =>
+                  { const label = nextHarness && nextModel ? data.models[nextHarness]?.find(model => model.id === nextModel)?.label ?? nextModel : null;
+                  setView(draft => { draft.preferences.defaultModel = nextHarness && nextModel ? {provider:nextHarness,model:nextModel,label:label!} : null; });
                   updateDefaults((draft) => {
                     if (!nextHarness) return;
                     draft.harness = nextHarness;
@@ -50,7 +53,7 @@ export function Defaults() {
                       const label = data.models[nextHarness]?.find((m) => m.id === nextModel)?.label ?? nextModel;
                       draft.models[nextHarness] = { id: nextModel, label };
                     } else delete draft.models[nextHarness];
-                  })
+                  }); }
                 }
               />
             </Row>

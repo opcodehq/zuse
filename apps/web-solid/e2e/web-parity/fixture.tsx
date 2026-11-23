@@ -1,8 +1,8 @@
 import type { Zapper } from "@/core/zapper-types";
 import { setTab, setInspectorOpen } from "@/features/zappers/state";
 import { App } from "@/shell/App";
-import { setView } from "@/core/view";
-import { setCatalog } from "@/features/composer/catalog";
+import { view, setView } from "@/core/view";
+import { catalog, defaults, setCatalog } from "@/features/composer/catalog";
 import { ModelSelect } from "@/ui/ModelSelect";
 import "@/shell/shell.css";
 import "@/shell/theme";
@@ -35,7 +35,7 @@ const sampleZapper: Zapper = {
  ]
 };
 const codexModels = [{id:"gpt-5.3-codex",label:"GPT-5.3 Codex",reasoningLevels:["low","medium","high","xhigh"]},{id:"gpt-5.2",label:"GPT-5.2"}];
-const claudeModels = [{id:"claude-opus-4-6",label:"Opus 4.6"},{id:"claude-sonnet-4-6",label:"Sonnet 4.6"}];
+const claudeModels = [{id:"claude-opus-4-6",label:"Opus 4.6",reasoningLevels:["low","medium","high"],options:[{id:"contextWindow",label:"Context window",defaultChoice:"200k",choices:[{id:"200k",label:"200K"},{id:"1m",label:"1M"}]},{id:"speed",label:"Fast mode",defaultChoice:"normal",choices:[{id:"normal",label:"Normal"},{id:"fast",label:"Fast"}]}]},{id:"claude-sonnet-4-6",label:"Sonnet 4.6"}];
 const requests: { method: string; params: unknown }[] = [];
 const message = { id: "reply", role: "assistant", deviceId: "remote", createdAt: 0, status: "complete", parts: [{ kind: "text", id: "text", text: "Subagent streamed reply" }] };
 Object.assign(rpc, {
@@ -95,7 +95,7 @@ function Fixture() {
         draft.chats.parent = {...draft.chats.parent!,title:"Bring web in sync with desktop",cwd:"/workspace/zuse",spaceId:"project",branch:"web-parity",config:{harness:"codex",model:"gpt-5.3-codex",sandbox:"auto"}};
       });
       setMode("app"); flush();
-      setCatalog(draft => { draft.models["local|codex"] = {status:"ready",value:[{id:"gpt-5.3-codex",label:"GPT-5.3 Codex",reasoningLevels:["low","medium","high","xhigh"]},{id:"gpt-5.2",label:"GPT-5.2"}]}; draft.models["local|claude-code"] = {status:"ready",value:[{id:"claude-opus-4-6",label:"Opus 4.6"},{id:"claude-sonnet-4-6",label:"Sonnet 4.6"}]}; });
+      setCatalog(draft => { draft.models["local|codex"] = {status:"ready",value:[{id:"gpt-5.3-codex",label:"GPT-5.3 Codex",reasoningLevels:["low","medium","high","xhigh"]},{id:"gpt-5.2",label:"GPT-5.2"}]}; draft.models["local|claude-code"] = {status:"ready",value:[{id:"claude-opus-4-6",label:"Opus 4.6",reasoningLevels:["low","medium","high"],options:[{id:"contextWindow",label:"Context window",defaultChoice:"200k",choices:[{id:"200k",label:"200K"},{id:"1m",label:"1M"}]},{id:"speed",label:"Fast mode",defaultChoice:"normal",choices:[{id:"normal",label:"Normal"},{id:"fast",label:"Fast"}]}]},{id:"claude-sonnet-4-6",label:"Sonnet 4.6"}]}; });
       openSubagent("parent", "parent--sub--worker"); flush();
     },
     zapper: () => {
@@ -106,6 +106,8 @@ function Fixture() {
       setInspectorOpen(true); setTab("issues"); flush();
     },
     panels: () => { setView(draft => { draft.rightPanel="files"; }); flush(); },
+    newChatPicker: () => { setView(draft => { draft.selectedChatId=null; draft.route={kind:"chat"}; draft.draftProjectPath="/workspace/zuse"; draft.rightPanel=null; }); flush(); },
+    pickerState: () => ({ draft: catalog.draft, defaults: defaults(), explicit: view.preferences.defaultModel }),
     hide: () => { setActive(false); flush(); },
     reconnect: () => { setState(draft => { draft.epoch++; }); flush(); },
     snapshot: () => { snapshot = true; setActive(true); flush(); },

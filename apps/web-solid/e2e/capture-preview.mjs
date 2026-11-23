@@ -26,6 +26,10 @@ try {
  await page.waitFor("!!document.querySelector('.cmp-models')");
  await page.waitFor("document.querySelectorAll('.cmp-model-row').length > 0");
  await page.screenshot(`${out}/model-picker.png`);
+ const opus = await page.eval("(() => { const row=[...document.querySelectorAll('.cmp-model-row')].find(row=>row.textContent.includes('Opus 4.6')); const box=row.getBoundingClientRect(); return {x:box.x+box.width/2,y:box.y+box.height/2}; })()");
+ await page.call('Input.dispatchMouseEvent',{type:'mouseMoved',...opus});
+ await page.waitFor("document.querySelector('.cmp-detail-header')?.textContent.includes('Opus 4.6') && !!document.querySelector('.cmp-detail-context')");
+ await page.screenshot(`${out}/model-picker-context.png`);
  await page.click('.cmp-model');
  await page.waitFor("!document.querySelector('.cmp-models')");
  await page.eval('parity.zapper()');
