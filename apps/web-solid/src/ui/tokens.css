@@ -28,6 +28,8 @@
   --solid: #e8e8e8;
   --on-solid: #151515;
   --accent: #89ca21;
+  --dither-ink: #97b74c;
+  --slider-knob: #fff;
   --on-accent: #0c170f;
   /* Activity glyph rows (desktop GlyphPalette::for_accent): lighter, accent, deep. */
   --glyph-light: hsl(from var(--accent) h calc(s * 0.72) min(calc(l + 14), 90));

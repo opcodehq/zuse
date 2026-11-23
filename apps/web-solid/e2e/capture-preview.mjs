@@ -1,6 +1,6 @@
 import { createServer } from 'vite';
 import { openBrowser } from './harness.mjs';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 const root = new URL('..', import.meta.url).pathname;
 const out = process.env.ZUSE_PREVIEW_OUT ?? new URL('../../../artifacts/web-preview', import.meta.url).pathname;
 mkdirSync(out, { recursive: true });
@@ -30,6 +30,9 @@ try {
  await page.call('Input.dispatchMouseEvent',{type:'mouseMoved',...opus});
  await page.waitFor("document.querySelector('.cmp-detail-header')?.textContent.includes('Opus 4.6') && !!document.querySelector('.cmp-detail-context')");
  await page.screenshot(`${out}/model-picker-context.png`);
+ const cardClip = await page.eval("(() => { const box=document.querySelector('.cmp-model-detail').getBoundingClientRect(); return {x:box.x-8,y:box.y-8,width:box.width+16,height:box.height+16,scale:1}; })()");
+ const cardImage = await page.call('Page.captureScreenshot',{format:'png',clip:cardClip});
+ writeFileSync(`${out}/reasoning-card.png`,Buffer.from(cardImage.result.data,'base64'));
  await page.click('.cmp-model');
  await page.waitFor("!document.querySelector('.cmp-models')");
  await page.eval('parity.zapper()');

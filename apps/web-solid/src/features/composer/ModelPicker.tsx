@@ -1,3 +1,4 @@
+import { reasoningDither } from "./reasoningDither";
 // Agent, model and effort picker: the toolbar's model pill and its popover.
 // The popover mirrors crates/ui/src/pickers/model_menu.rs with crates/viewport/src/model_picker_style.rs (provider rail,
 // search, grouped rows), plus the separate 240px card from crates/ui/src/pickers/model_detail.rs.
@@ -574,10 +575,21 @@ const THUMB_INSET = 12;
 function EffortSlider(props: { effort: Effort }) {
   let el: HTMLDivElement | undefined;
   const [drag, setDrag] = createSignal<number | null>(null);
+  const [width, setWidth] = createSignal(216);
+  onSettled(() => {
+    if (!el) return;
+    const measure = () => setWidth(el!.getBoundingClientRect().width);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  });
   const count = () => props.effort.labels.length;
   const last = () => Math.max(1, count() - 1);
-  const fraction = () => drag() ?? props.effort.selected / last();
+  const fraction = () => props.effort.selected / last();
   const current = () => props.effort.labels[props.effort.selected] ?? "Default";
+  const fillWidth = () => Math.min(width(), THUMB_INSET + fraction() * (width() - THUMB_INSET * 2) + 11);
+  const cells = createMemo(() => reasoningDither(fillWidth()));
   const fractionAt = (x: number) => {
     const box = el!.getBoundingClientRect();
     return Math.min(1, Math.max(0, (x - box.left - THUMB_INSET) / Math.max(1, box.width - THUMB_INSET * 2)));
@@ -624,9 +636,9 @@ function EffortSlider(props: { effort: Effort }) {
         onPointerCancel={() => setDrag(null)}
       >
         <span class="cmp-effort-track" />
-        <span class="cmp-effort-fill" />
+        <span class="cmp-effort-fill" style={{width:`${fillWidth()}px`}}><svg class="cmp-effort-texture" aria-hidden="true" viewBox={`0 0 ${fillWidth()} 20`} width="100%" height="20"><For each={cells()}>{cell => <rect x={cell.x} y={cell.y} width={cell.width} height="2" fill="currentColor" opacity={cell.opacity} />}</For></svg></span>
         <span class="cmp-effort-stops">
-          <For keyed={false} each={props.effort.labels}>{() => <span />}</For>
+          <For keyed={false} each={props.effort.labels}>{(_, index) => <span style={{visibility:index > props.effort.selected ? "visible":"hidden"}} />}</For>
         </span>
         <span class="cmp-effort-rail">
           <span class="cmp-effort-thumb" />

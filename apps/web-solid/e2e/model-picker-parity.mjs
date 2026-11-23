@@ -34,6 +34,13 @@ try {
  await page.eval("document.querySelector('.cmp-model-detail [role=slider]').focus()");
  await page.key('Home','Home',36);
  await page.waitFor("parity.pickerState().draft.reasoning === 'low'");
+ const geometry = await page.eval("(() => { const slider=document.querySelector('.cmp-effort');const size=selector=>{const rect=slider.querySelector(selector).getBoundingClientRect();return [rect.width,rect.height]};return {height:slider.getBoundingClientRect().height,track:size('.cmp-effort-track'),knob:size('.cmp-effort-thumb'),fill:size('.cmp-effort-fill'),dots:[...slider.querySelectorAll('.cmp-effort-stops > span')].filter(dot=>getComputedStyle(dot).visibility==='visible').length,texture:!!slider.querySelector('.cmp-effort-texture rect')};})()");
+ assert.equal(geometry.height,24);
+ assert.equal(geometry.track[1],20);
+ assert.deepEqual(geometry.knob,[22,14]);
+ assert.equal(geometry.fill[0],23);
+ assert.equal(geometry.dots,2);
+ assert.equal(geometry.texture,true);
  await page.key('End','End',35);
  await page.waitFor("parity.pickerState().draft.reasoning === 'high'");
  console.log('PASS desktop model detail width, hovered model settings, catalog-only context, fast/favorite/default toggles, default clearing and reasoning keyboard control');

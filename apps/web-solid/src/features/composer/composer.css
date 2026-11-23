@@ -387,21 +387,17 @@ button.cmp-pill-body { cursor: pointer; }
 .cmp-fast:hover { background: color-mix(in srgb, var(--cmp-muted) 60%, transparent); }
 .cmp-fast[aria-pressed="true"] { background: color-mix(in srgb, var(--warning) 20%, transparent); color: var(--warning); }
 .cmp-fast[aria-pressed="true"]:hover { background: color-mix(in srgb, var(--warning) 30%, transparent); }
-.cmp-effort { position: relative; flex: 1; height: 30px; cursor: pointer; touch-action: none; border-radius: 999px; }
+/* Desktop model_detail.rs: 24px hit area, 20px track, 22×14px knob. */
+.cmp-effort { position: relative; flex: none; width: 100%; height: 24px; cursor: pointer; touch-action: none; border-radius: 999px; }
 .cmp-effort:focus-visible { outline-offset: 2px; }
 .cmp-effort > span { position: absolute; pointer-events: none; }
-.cmp-effort-track { left: 0; right: 0; top: 5px; height: 20px; border-radius: 999px; background: var(--raised); }
-[data-theme="light"] .cmp-effort-track { background: var(--active); }
-.cmp-effort-fill { left: 0; top: 5px; height: 20px; width: calc(var(--f) * 100%); border-radius: 999px; background: var(--accent); }
-.cmp-effort-stops { left: 12px; right: 12px; top: 5px; height: 20px; display: flex; align-items: center; justify-content: space-between; }
-.cmp-effort-stops > span { width: 4px; height: 4px; border-radius: 50%; background: color-mix(in srgb, var(--text-muted) 50%, transparent); }
-.cmp-effort-rail { left: 12px; right: 12px; top: 3px; height: 24px; }
-.cmp-effort-thumb {
-  position: absolute; left: calc(var(--f) * 100%); margin-left: -12px; width: 24px; height: 24px; border-radius: 50%;
-  background: #fff; border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
-}
-.cmp-effort:not([data-dragging="true"]) .cmp-effort-fill { transition: width 180ms cubic-bezier(0.33, 1, 0.68, 1); }
-.cmp-effort:not([data-dragging="true"]) .cmp-effort-thumb { transition: left 180ms cubic-bezier(0.33, 1, 0.68, 1); }
+.cmp-effort-track { left: 0; right: 0; top: 2px; height: 20px; border-radius: 999px; background: color-mix(in srgb, var(--hover) 55%, transparent); }
+.cmp-effort-fill { left: 0; top: 2px; height: 20px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 12%, transparent); overflow: hidden; }
+.cmp-effort-texture { display: block; color: var(--dither-ink); opacity: .32; }
+.cmp-effort-stops { left: 12px; right: 12px; top: 2px; height: 20px; display: flex; align-items: center; justify-content: space-between; }
+.cmp-effort-stops > span { width: 3px; height: 3px; border-radius: 50%; background: color-mix(in srgb, var(--text-muted) 50%, transparent); }
+.cmp-effort-rail { left: 12px; right: 12px; top: 0; height: 24px; }
+.cmp-effort-thumb { position: absolute; left: calc(var(--f) * 100%); top: 5px; margin-left: -11px; width: 22px; height: 14px; border-radius: 999px; background: var(--slider-knob); box-shadow: 0 1px 3px var(--scrim); }
 .cmp-models-empty { flex: 1; padding: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; color: var(--text-muted); font-size: var(--text-xs); }
 .cmp-models-empty strong { font-size: var(--text-sm); font-weight: 400; color: var(--text); }
 .cmp-skeleton { display: flex; flex-direction: column; gap: 6px; padding: 8px; }
@@ -499,9 +495,6 @@ button.cmp-pill-body { cursor: pointer; }
 .cmp-detail-context button { background: transparent; color: var(--text-muted); font-size: 11px; border: 0; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
 .cmp-detail-context button[aria-checked="true"] { color: var(--text); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .cmp-model-detail .cmp-models-tray { margin: 0; padding: 0; border: 0; background: transparent; }
-.cmp-effort-fill { background: radial-gradient(color-mix(in srgb, var(--accent) 65%, transparent) .7px, transparent .8px) 0 0 / 3px 3px, color-mix(in srgb, var(--accent) 17%, transparent); }
-.cmp-effort-thumb { top: 5px; width: 22px; height: 14px; margin-left: -11px; border: 0; border-radius: 8px; background: var(--text-strong); box-shadow: 0 1px 5px var(--scrim); }
-.cmp-effort-stops > span { width: 3px; height: 3px; }
 @media (max-width: 620px) { .cmp-models-frame { flex-direction: column; } .cmp-model-list-card { width: 100%; flex: auto; } .cmp-model-detail { width: 100%; } .cmp-models-body { max-height: 40vh; } .cmp-models-list { min-height: 100px; } }
 
 .cmp-model-list-card .cmp-kbd, .cmp-model-list-card .cmp-rail-live { display: none; }
