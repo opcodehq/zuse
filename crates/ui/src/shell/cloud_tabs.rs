@@ -337,8 +337,13 @@ impl Shell {
         let index = match self.cloud_tabs.retained_index(&target, cx) {
             Some(index) => index,
             None => {
-                let view =
-                    self.new_cloud_conversation_view(target, row, serde_json::Value::Null, cx);
+                // One still working in the background comes back as is.
+                let view = match self.background_cloud_conversation(&target, cx) {
+                    Some(view) => view,
+                    None => {
+                        self.new_cloud_conversation_view(target, row, serde_json::Value::Null, cx)
+                    }
+                };
                 self.cloud_tabs.views.push(Some(view));
                 self.cloud_tabs.drafts.push(CloudDraft::default());
                 self.cloud_tabs.views.len() - 1
