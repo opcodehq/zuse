@@ -3946,7 +3946,9 @@ pub struct Transcript {
     gallery_opening: bool,
     /// Opened in a tab if the opening gallery's first image cannot be read
     /// (a linked file that moved, or a machine that went offline).
-    gallery_failure_fallback: Option<String>,
+    /// The path and the chat session that linked it, so the tab opens
+    /// through that chat even if the transcript moved on meanwhile.
+    gallery_failure_fallback: Option<(String, Option<String>)>,
     /// Mermaid fences drawn as diagrams in settled Markdown blocks. Each
     /// row's media handler requests its fences while laying out, so only
     /// painted diagrams are rendered (see [`MermaidCache`]).
@@ -4109,7 +4111,14 @@ impl Transcript {
             link.handler = Rc::new(move |activation, window, cx| {
                 if let Some(file) = linked_file(&probe, activation)
                     && owner
-                        .update(cx, |this, cx| this.open_linked_file(file, window, cx))
+                        .update(cx, |this, cx| {
+                            this.open_linked_file(
+                                file,
+                                activation.source_session.clone(),
+                                window,
+                                cx,
+                            )
+                        })
                         .unwrap_or(false)
                 {
                     return render::LinkOutcome::Internal;
@@ -4127,6 +4136,7 @@ impl Transcript {
     fn open_linked_file(
         &mut self,
         file: LinkedFile,
+        source_session: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -4135,7 +4145,7 @@ impl Transcript {
         }
         match file {
             LinkedFile::Image { path, chat } => {
-                self.open_linked_image(path, chat.as_deref(), window, cx)
+                self.open_linked_image(path, chat.as_deref(), source_session, window, cx)
             }
             LinkedFile::Other(_) => false,
         }
@@ -4188,6 +4198,7 @@ impl Transcript {
         &mut self,
         path: String,
         chat: Option<&str>,
+        source_session: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -4201,25 +4212,36 @@ impl Transcript {
                 preview: None,
             }],
             0,
-            Some(path),
+            Some((path, source_session)),
             window,
             cx,
         );
         true
     }
 
+    /// The chat session this transcript's links come from.
+    fn link_source_session(&self) -> Option<String> {
+        self.workspace_link
+            .as_ref()
+            .and_then(|link| link.source_session.clone())
+            .or_else(|| self.chat_id.as_ref().map(|chat| chat.to_string()))
+    }
+
     /// Hand a file on to the shell's tab, as an unhandled link would be:
     /// the tab reads it from the chat's machine (waking a sleeping cloud
     /// computer first) and shows any failure inline with a retry. Deferred,
     /// because the shell's handler may reach back into this transcript.
-    fn open_in_file_tab(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_in_file_tab(
+        &mut self,
+        path: String,
+        source_session: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(link) = self.workspace_link.clone() else {
             return;
         };
-        let source_session = link
-            .source_session
-            .clone()
-            .or_else(|| self.chat_id.as_ref().map(|chat| chat.to_string()));
+        let source_session = source_session.or_else(|| self.link_source_session());
         let activation = render::LinkActivation {
             target: render::LinkTarget::new(file_badge_name(&path), path.as_str()),
             action: render::LinkAction::Primary,
@@ -7053,7 +7075,7 @@ impl Transcript {
         &mut self,
         entries: Vec<GalleryEntry>,
         index: usize,
-        failure_fallback: Option<String>,
+        failure_fallback: Option<(String, Option<String>)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -7113,8 +7135,8 @@ impl Transcript {
                         if self.gallery_opening {
                             self.gallery_opening = false;
                             self.attachment_gallery.clear();
-                            if let Some(path) = self.gallery_failure_fallback.take() {
-                                self.open_in_file_tab(path, window, cx);
+                            if let Some((path, session)) = self.gallery_failure_fallback.take() {
+                                self.open_in_file_tab(path, session, window, cx);
                             }
                         }
                         return;
@@ -8244,8 +8266,9 @@ impl Transcript {
                             }
                             let file = this.inline_image_file(&source, cx);
                             let path = file.path().to_owned();
-                            if !this.open_linked_file(file, window, cx) {
-                                this.open_in_file_tab(path, window, cx);
+                            let session = this.link_source_session();
+                            if !this.open_linked_file(file, session.clone(), window, cx) {
+                                this.open_in_file_tab(path, session, window, cx);
                             }
                         });
                     })
@@ -15523,8 +15546,8 @@ mod tests {
         transcript.update_in(cx, |this, window, cx| {
             let file = this.inline_image_file("artifacts/shot.png", cx);
             let path = file.path().to_owned();
-            assert!(!this.open_linked_file(file, window, cx));
-            this.open_in_file_tab(path, window, cx);
+            assert!(!this.open_linked_file(file, None, window, cx));
+            this.open_in_file_tab(path, None, window, cx);
         });
         cx.run_until_parked();
         assert_eq!(

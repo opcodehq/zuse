@@ -1284,7 +1284,9 @@ impl CloudConversation {
                     }
                     Err(error) => {
                         this.error = Some(error.to_string());
-                        this.watch_environment(false, cx);
+                        // A wake asked for during the pause still happens.
+                        let wake = std::mem::take(&mut this.wake_after_sleep);
+                        this.watch_environment(wake, cx);
                     }
                 }
                 this.refresh_history(cx);

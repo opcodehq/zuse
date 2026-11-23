@@ -1189,13 +1189,14 @@ impl FilesSurface {
 
     /// Read a file that failed to load again, from scratch.
     pub(super) fn retry_document(&mut self, path: String, cx: &mut Context<Self>) {
-        if self.awaiting_computer(cx) {
-            self.retry_computer_wake(cx);
-            return;
-        }
+        // Drop the failed copy first, so a wake reopens the file.
         self.preview.documents.remove(&path);
         if self.preview.active.as_deref() == Some(path.as_str()) {
             self.preview.active = None;
+        }
+        if self.awaiting_computer(cx) {
+            self.retry_computer_wake(cx);
+            return;
         }
         self.open_file(path, cx);
     }

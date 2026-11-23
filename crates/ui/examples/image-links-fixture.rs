@@ -104,6 +104,9 @@ fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(&output)?;
     let temp = tempfile::tempdir()?;
     let data = temp.path().to_path_buf();
+    // The scenario's outcome, read once the application loop returns.
+    let passed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let scenario_passed = passed.clone();
     gpui_platform::application()
         .with_assets(icons::Assets)
         .run(move |cx| {
@@ -206,6 +209,7 @@ fn main() -> anyhow::Result<()> {
                 if let Err(error) = &result {
                     eprintln!("image links fixture failed: {error:?}");
                 }
+                scenario_passed.store(result.is_ok(), std::sync::atomic::Ordering::SeqCst);
                 std::fs::write(
                     output.join("result.txt"),
                     if result.is_ok() { "PASS\n" } else { "FAIL\n" },
@@ -220,5 +224,9 @@ fn main() -> anyhow::Result<()> {
             })
             .detach();
         });
+    anyhow::ensure!(
+        passed.load(std::sync::atomic::Ordering::SeqCst),
+        "image links fixture failed"
+    );
     Ok(())
 }

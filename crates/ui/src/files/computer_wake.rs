@@ -36,14 +36,19 @@ pub(crate) enum WakeView {
 }
 
 impl FilesSurface {
-    /// An editor tab whose cloud computer must be woken before it can read.
+    /// An editor tab whose cloud computer must be woken before it can read
+    /// its file. A tab already holding its document (perhaps with unsaved
+    /// edits) keeps showing it while the computer sleeps.
     pub(super) fn awaiting_computer(&self, cx: &App) -> bool {
-        self.presentation.is_editor() && self.state.read(cx).cloud_computer_asleep()
+        self.presentation.is_editor()
+            && !self.preview.has_active()
+            && self.state.read(cx).cloud_computer_asleep()
     }
 
     /// Ask for the computer once per wait, and bound the wait.
     pub(super) fn request_computer_wake(&mut self, cx: &mut Context<Self>) {
-        if self.computer_wake.requested {
+        // A wait that already ended (the computer woke) starts afresh.
+        if self.computer_wake.requested && !self.computer_wake.woke {
             return;
         }
         self.computer_wake = ComputerWake {
