@@ -503,6 +503,13 @@ impl RetainedProvider for RuntimeProvider {
             return Ok(false);
         }
         if result.exit_code != 0 || result.stdout.len() > 65536 {
+            tracing::warn!(
+                provider = self.provider.id().as_str(),
+                machine = %request.source_machine_id,
+                exit_code = result.exit_code,
+                code = %helper_rejection_code(&result.stdout),
+                "Fresh boot helper rejected the retained resume"
+            );
             return Err(ProviderError::Rejected);
         }
         Ok(request

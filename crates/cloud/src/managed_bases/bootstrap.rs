@@ -165,6 +165,12 @@ fn identifier(v: &str, max: usize) -> bool {
 }
 /// The verified fixed-path loader every fresh boot helper call runs through.
 pub const LOADER: &str = include_str!("../../../../infra/cloud/managed-base-fresh-boot-loader.py");
+/// Runs before the loader on Boat: waits for the lazy restore's disk swap and
+/// restarts a supervisor whose lock was taken before it.
+pub const BOAT_SETTLE: &str = include_str!("../../../../infra/cloud/boat-machine-settle.py");
+/// How long one provider command waits inside the computer for the swap
+/// before answering `machine_disk_settling`.
+pub const BOAT_SETTLE_WAIT_SECONDS: u32 = 15;
 impl Request {
     pub fn valid(&self) -> bool {
         self.version == 1
@@ -208,11 +214,23 @@ impl Request {
     pub fn command(&self) -> Result<String, ProviderError> {
         let body = self.encoded()?;
         let quote = |v: &str| format!("'{}'", v.replace('\'', "'\\''"));
-        Ok(format!(
+        let loader = format!(
             "sudo -n /usr/bin/python3 -I -B -c {} {} {}",
             quote(LOADER),
             quote(&self.image_pins.helper_sha256),
             quote(&body)
+        );
+        if self.provider != ProviderId::Boat {
+            return Ok(loader);
+        }
+        // Boat swaps its lazily restored task directories for the local disk
+        // shortly after create or a cold resume. The settle step waits that
+        // out and replaces a supervisor whose lock was taken before the swap;
+        // it prints nothing when settled, so the helper's receipt stays the
+        // only output.
+        Ok(format!(
+            "sudo -n /usr/bin/python3 -I -B -c {} {BOAT_SETTLE_WAIT_SECONDS} && {loader}",
+            quote(BOAT_SETTLE)
         ))
     }
     /// The helper's request argument, exactly as [`Self::command`] passes it.
@@ -226,11 +244,18 @@ impl Request {
     /// root-owned. A fresh Boat restore shows the provider's ownership on
     /// /usr/local for a few seconds; the helper never ran, so this is "not
     /// ready yet", bounded by the caller's own deadline, not a rejection.
+    ///
+    /// Boat's settle step answers `machine_disk_settling` the same way while
+    /// its task directories are still served by the temporary restore mount.
     pub fn loader_not_ready(exit_code: i32, stdout: &[u8]) -> bool {
         exit_code == 1
             && stdout.len() <= 256
             && serde_json::from_slice::<Value>(stdout).is_ok_and(|v| {
-                v["status"] == "rejected" && v["code"] == "fresh_boot_loader_path_unsafe"
+                v["status"] == "rejected"
+                    && matches!(
+                        v["code"].as_str(),
+                        Some("fresh_boot_loader_path_unsafe" | "machine_disk_settling")
+                    )
             })
     }
     /// None is a bounded pending observation, never authorization to upload a grant.
@@ -670,5 +695,56 @@ mod tests {
         assert!(command.contains("managed-base-fresh-boot.py"));
         assert!(!command.contains("systemctl restart"));
         assert!(!command.contains("BOOT_TOKEN"));
+    }
+    #[test]
+    fn boat_settles_its_restored_disk_before_the_loader_and_others_run_it_directly() {
+        let boxd = request();
+        let loader = boxd.command().unwrap();
+        assert!(!loader.contains(BOAT_SETTLE));
+        for purpose in [Purpose::InitialAllocation, Purpose::RetainedResume] {
+            let mut boat = request();
+            boat.provider = ProviderId::Boat;
+            boat.purpose = purpose;
+            let command = boat.command().unwrap();
+            let (settle, rest) = command
+                .split_once(&format!("' {BOAT_SETTLE_WAIT_SECONDS} && "))
+                .unwrap();
+            // The settle step runs first, as root, and gates the loader.
+            assert!(settle.starts_with("sudo -n /usr/bin/python3 -I -B -c '"));
+            assert!(settle.contains("supervisor_lock_stale_with_child"));
+            assert!(rest.starts_with("sudo -n /usr/bin/python3 -I -B -c "));
+            assert!(rest.contains(&boat.image_pins.helper_sha256));
+            assert!(rest.ends_with(&format!("'{}'", boat.encoded().unwrap())));
+        }
+        // Not yet settled is "not ready", exactly like the loader's path rule.
+        let settling = br#"{"version": 1, "status": "rejected", "code": "machine_disk_settling"}"#;
+        assert!(Request::loader_not_ready(1, settling));
+        assert!(!Request::loader_not_ready(0, settling));
+        let permanent =
+            br#"{"version": 1, "status": "rejected", "code": "supervisor_lock_stale_with_child"}"#;
+        assert!(!Request::loader_not_ready(1, permanent));
+    }
+    #[test]
+    fn boat_settle_waits_for_the_swap_and_restarts_only_a_stale_idle_supervisor() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("boat-machine-settle.py");
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(BOAT_SETTLE.as_bytes())
+            .unwrap();
+        let output = std::process::Command::new("/usr/bin/python3")
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .args(["-I", "-B", "-c", include_str!("settle_tests.py")])
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success() && output.stdout.ends_with(b"ok\n"),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }

@@ -11,7 +11,8 @@ asking again and again from the server:
    neither read nor replace it while we wait.
 2. Hand the wait to a transient systemd unit and answer immediately. The unit
    needs no network or server from here on.
-3. Wait for the loader's own path rule to hold (inotify on the path and
+3. Wait for the loader's own path rule to hold and for Boat's lazy restore to
+   hand the task directories over to the local disk (inotify on the path and
    mount-table changes, a 250 ms fallback check, a hard deadline).
 4. Run the unchanged loader and fresh boot helper, accept only a ready receipt
    that passes the same checks the server applies, then run the server's
@@ -34,9 +35,20 @@ FALLBACK_SECONDS = 0.25
 REJECTED_RETRY_SECONDS = 0.5
 HELPER_SECONDS = 40
 UNIT_SUBMIT_SECONDS = 15
-# Helper refusals that clear on their own right after the helper's own start.
+# Helper refusals that clear on their own right after the helper's own start:
+# between systemd's fork and its exec of the supervisor, the new process has
+# the task user's ids but still the service manager's command line.
 # Every other refusal (a hash mismatch, for one) ends the attempt at once.
-TRANSIENT_REFUSALS = frozenset({'fresh_boot_resident_not_owned_idle'})
+TRANSIENT_REFUSALS = frozenset({'fresh_boot_resident_not_owned_idle',
+                                'fresh_boot_resident_program_changed'})
+# Directories the supervisor and the runtime keep open files, locks and
+# sockets in. Right after create, Boat serves each of them from a temporary
+# lazily restored mount, then swaps it for the local disk a few seconds later
+# (about 5-10 s after the restore). A lock, socket or working directory taken
+# before the swap stays on the retired mount: the visible path is a different
+# file. Nothing may start until every one of them is on the root filesystem.
+SETTLED_PATHS = ('/home/zuse', '/home/zuse/.zuse-data', '/home/zuse/workspace', '/opt/zuse',
+                 '/var/lib/zuse', '/usr/local/lib/zuse', '/usr/local/bin')
 SAFE_ID = re.compile(r'[A-Za-z0-9_.:-]{1,160}\Z')
 HEX64 = re.compile(r'[a-f0-9]{64}\Z')
 BINDING = ('version', 'provider', 'purpose', 'operationId', 'workspaceId', 'generation',
@@ -65,6 +77,24 @@ def path_safe(path, owner=0):
                 return False
     except OSError:
         return False
+    return True
+
+
+def disk_settled(paths=SETTLED_PATHS, root='/'):
+    """True once every existing task directory is on the root filesystem
+    (the same device as `/`), i.e. no longer served by a temporary mount."""
+    try:
+        device = os.stat(root).st_dev
+    except OSError:
+        return False
+    for path in paths:
+        try:
+            if os.stat(path).st_dev != device:
+                return False
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return False
     return True
 
 
@@ -347,8 +377,10 @@ def run_start(directory, watch=None, clock=time.monotonic, run=subprocess.run, s
     watch = watch or Watch([HELPER.parent, *HELPER.parents])
     try:
         while True:
-            if not wait_until(lambda: path_safe(HELPER), deadline, watch, clock):
-                return status(directory, operation, 'timeout', 'fresh_start_path_unsafe_until_deadline')
+            if not wait_until(lambda: path_safe(HELPER) and disk_settled(), deadline, watch, clock):
+                code = ('fresh_start_path_unsafe_until_deadline' if not path_safe(HELPER)
+                        else 'fresh_start_disk_unsettled_until_deadline')
+                return status(directory, operation, 'timeout', code)
             # The helper never outlives the deadline, so neither can a launch.
             left = deadline - clock()
             if left <= 0:
@@ -362,7 +394,8 @@ def run_start(directory, watch=None, clock=time.monotonic, run=subprocess.run, s
             if state == 'rejected':
                 # Right after its own `systemctl start` the helper can see the
                 # resident before it has switched to the task user
-                # (`fresh_boot_resident_not_owned_idle`). Retry only such
+                # (`fresh_boot_resident_not_owned_idle`) or before it has run
+                # the supervisor (`fresh_boot_resident_program_changed`). Retry only such
                 # refusals, bounded by the deadline. The helper's journal makes
                 # a retry observe the original start, never issue another.
                 rejected = helper_code(result)

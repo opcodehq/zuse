@@ -9,9 +9,14 @@ fn apply(
     update: &RuntimePreparationUpdate,
     now: i64,
 ) -> Result<Option<&'static str>, ApiError> {
+    // Setup output, and git's scrubbed stderr when the repository step failed.
+    let log_allowed = match update.stage {
+        PreparationStage::Environment => update.state != PreparationStepState::Running,
+        PreparationStage::Repository => update.state == PreparationStepState::Failed,
+        _ => false,
+    };
     if update.log.as_ref().is_some_and(|log| {
-        update.stage != PreparationStage::Environment
-            || update.state == PreparationStepState::Running
+        !log_allowed
             || log.stdout.len() > zuse_protocol::cloud_computers::MAX_PREPARATION_LOG_BYTES
             || log.stderr.len() > zuse_protocol::cloud_computers::MAX_PREPARATION_LOG_BYTES
     }) {
@@ -394,6 +399,58 @@ mod tests {
             "credential_preparation_failed"
         );
         assert_eq!(config["preparation"]["repository"]["state"], "completed");
+    }
+
+    #[test]
+    fn a_failed_repository_step_may_carry_git_output_and_nothing_else_may() {
+        let config = json!({"rustAllocationOperationId":"operation","rustPreparationVersion":1});
+        let log = zuse_protocol::cloud_computers::PreparationLog {
+            stdout: String::new(),
+            stderr: "fatal: unable to access https://[redacted]@github.com/o/r.git/".into(),
+            success: false,
+            truncated: false,
+        };
+        let update = |stage, state, error_code: Option<&str>| RuntimePreparationUpdate {
+            operation_id: "operation".into(),
+            stage,
+            state,
+            source_commit: None,
+            error_code: error_code.map(str::to_owned),
+            log: Some(log.clone()),
+        };
+        let failed = update(
+            PreparationStage::Repository,
+            PreparationStepState::Failed,
+            Some("repository_preparation_failed"),
+        );
+        assert_eq!(
+            apply(&mut config.clone(), &failed, 10).unwrap(),
+            Some("repository_preparation_failed")
+        );
+        for refused in [
+            update(
+                PreparationStage::Repository,
+                PreparationStepState::Running,
+                None,
+            ),
+            update(
+                PreparationStage::Credentials,
+                PreparationStepState::Failed,
+                Some("credential_preparation_failed"),
+            ),
+        ] {
+            assert_eq!(
+                apply(&mut config.clone(), &refused, 10).unwrap_err().code,
+                "invalid_preparation_log"
+            );
+        }
+        let mut oversized = failed.clone();
+        oversized.log.as_mut().unwrap().stderr =
+            "x".repeat(zuse_protocol::cloud_computers::MAX_PREPARATION_LOG_BYTES + 1);
+        assert_eq!(
+            apply(&mut config.clone(), &oversized, 10).unwrap_err().code,
+            "invalid_preparation_log"
+        );
     }
 
     #[test]

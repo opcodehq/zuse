@@ -822,16 +822,8 @@ async fn run() -> Result<()> {
                 .await?;
             }
             Err(error) => {
-                report_preparation(
-                    &authority,
-                    &updates,
-                    &cancel,
-                    &directory,
-                    PreparationStage::Repository,
-                    PreparationStepState::Failed,
-                    None,
-                )
-                .await?;
+                report_repository_failure(&authority, &updates, &cancel, &directory, &error)
+                    .await?;
                 return Err(error);
             }
         }
@@ -1445,6 +1437,77 @@ async fn report_preparation(
     state: PreparationStepState,
     source_commit: Option<String>,
 ) -> Result<()> {
+    report_preparation_detail(
+        authority,
+        updates,
+        cancel,
+        data,
+        stage,
+        state,
+        source_commit,
+        None,
+    )
+    .await
+}
+/// A failed repository step also reports what git printed (already bounded
+/// and scrubbed by `repository::git_output`), privately to the owner. A server
+/// that predates repository logs refuses the field; the stage outcome is then
+/// reported without it.
+async fn report_repository_failure(
+    authority: &Authority,
+    updates: &tokio::sync::watch::Receiver<CloudRuntimeBootstrap>,
+    cancel: &CancellationToken,
+    data: &std::path::Path,
+    error: &anyhow::Error,
+) -> Result<()> {
+    let detail = zuse_cloud_runtime::repository::git_output::failure_stderr(error).map(|stderr| {
+        let boot = updates.borrow();
+        let mut stderr = stderr.to_owned();
+        for secret in [&boot.runtime_credential, &boot.sealed_transcript_key] {
+            if secret.len() >= 4 {
+                stderr = stderr.replace(secret.as_str(), "[redacted]");
+            }
+        }
+        tracing::warn!(error = %error, stderr = %stderr, "Cloud repository preparation failed");
+        stderr
+    });
+    let failed = PreparationStepState::Failed;
+    let stage = PreparationStage::Repository;
+    match report_preparation_detail(
+        authority,
+        updates,
+        cancel,
+        data,
+        stage,
+        failed,
+        None,
+        detail.clone(),
+    )
+    .await
+    {
+        Err(refused)
+            if detail.is_some()
+                && refused
+                    .downcast_ref::<zuse_cloud_runtime::authority::Failure>()
+                    .is_some_and(|f| !f.retryable && f.code == "runtime_authority_unavailable") =>
+        {
+            report_preparation_detail(authority, updates, cancel, data, stage, failed, None, None)
+                .await
+        }
+        result => result,
+    }
+}
+#[allow(clippy::too_many_arguments)]
+async fn report_preparation_detail(
+    authority: &Authority,
+    updates: &tokio::sync::watch::Receiver<CloudRuntimeBootstrap>,
+    cancel: &CancellationToken,
+    data: &std::path::Path,
+    stage: PreparationStage,
+    state: PreparationStepState,
+    source_commit: Option<String>,
+    failure_detail: Option<String>,
+) -> Result<()> {
     let boot = updates.borrow().clone();
     if boot.launch_intent.is_none()
         || boot.extra.get("rustPreparationVersion") != Some(&serde_json::json!(1))
@@ -1476,7 +1539,16 @@ async fn report_preparation(
         state,
         source_commit,
         error_code,
-        log: if stage == PreparationStage::Environment && state != PreparationStepState::Running {
+        log: if let (PreparationStage::Repository, PreparationStepState::Failed, Some(stderr)) =
+            (stage, state, failure_detail)
+        {
+            Some(zuse_protocol::cloud_computers::PreparationLog {
+                stdout: String::new(),
+                stderr,
+                success: false,
+                truncated: false,
+            })
+        } else if stage == PreparationStage::Environment && state != PreparationStepState::Running {
             // Optional diagnostic publication must not change a stage outcome.
             zuse_cloud_runtime::environment::preparation_log(
                 data,

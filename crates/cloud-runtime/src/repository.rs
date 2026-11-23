@@ -6,6 +6,8 @@ use std::{
     path::Path,
     process::{Command, Stdio},
 };
+pub mod git_output;
+use git_output::GitFailure;
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CheckoutPlan {
@@ -57,7 +59,11 @@ fn git(root: &Path, args: &[&str]) -> Result<String> {
         .args(args)
         .stdin(Stdio::null())
         .output()?;
-    ensure!(output.status.success(), "runtime_repository_command_failed");
+    if !output.status.success() {
+        return Err(
+            GitFailure::new("runtime_repository_command_failed", &output.stderr, &[]).into(),
+        );
+    }
     ensure!(
         output.stdout.len() <= 1024 * 1024,
         "runtime_repository_output_too_large"
@@ -256,6 +262,31 @@ mod tests {
             -1,
             "fetch must be reaped before returning"
         );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_fetch_keeps_a_scrubbed_tail_of_what_git_printed() {
+        let child = Command::new("sh")
+            .args([
+                "-c",
+                "echo 'fatal: unable to access https://x-access-token:secret@github.com/o/r.git/: Could not resolve host: github.com' >&2; exit 128",
+            ])
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let error = wait_for_fetch(child, None, std::time::Duration::from_secs(5)).unwrap_err();
+        assert_eq!(error.to_string(), "runtime_repository_fetch_failed");
+        assert_eq!(
+            git_output::failure_stderr(&error),
+            Some(
+                "fatal: unable to access https://[redacted]@github.com/o/r.git/: Could not resolve host: github.com"
+            )
+        );
+        // Plain git commands keep their stderr the same way.
+        let dir = tempfile::tempdir().unwrap();
+        let error = git(dir.path(), &["rev-parse", "--verify", "HEAD"]).unwrap_err();
+        assert_eq!(error.to_string(), "runtime_repository_command_failed");
+        assert!(git_output::failure_stderr(&error).is_some_and(|s| s.contains("fatal:")));
     }
     fn repository() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
         let root = tempfile::tempdir().unwrap();
@@ -1019,7 +1050,8 @@ fn fetch_remote_with_helper_cancellable(
         .env("GIT_CONFIG_COUNT", "0")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        // Kept (bounded, scrubbed) so a failed fetch says why.
+        .stderr(Stdio::piped());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -1039,16 +1071,50 @@ fn fetch_remote_with_helper_cancellable(
     git(checkout, &["rev-parse", "--verify", "FETCH_HEAD^{commit}"])
 }
 
+/// Drains a child's stderr on its own thread (so git never blocks on a full
+/// pipe), keeping at most `MAX_CAPTURE_BYTES`: the newest bytes win.
+fn capture_stderr(
+    stderr: Option<std::process::ChildStderr>,
+) -> Option<std::thread::JoinHandle<Vec<u8>>> {
+    let mut stderr = stderr?;
+    Some(std::thread::spawn(move || {
+        use std::io::Read;
+        let mut kept = Vec::new();
+        let mut block = [0u8; 8192];
+        while let Ok(read) = stderr.read(&mut block) {
+            if read == 0 {
+                break;
+            }
+            kept.extend_from_slice(&block[..read]);
+            if kept.len() > git_output::MAX_CAPTURE_BYTES {
+                kept.drain(..kept.len() - git_output::MAX_CAPTURE_BYTES);
+            }
+        }
+        kept
+    }))
+}
+
 fn wait_for_fetch(
     mut child: std::process::Child,
     cancel: Option<&tokio_util::sync::CancellationToken>,
     timeout: std::time::Duration,
 ) -> Result<()> {
     let pid = child.id();
+    let stderr = capture_stderr(child.stderr.take());
+    let failure = |code: &'static str, stderr: Option<std::thread::JoinHandle<Vec<u8>>>| {
+        let output = stderr
+            .and_then(|reader| reader.join().ok())
+            .unwrap_or_default();
+        let failure = GitFailure::new(code, &output, &[]);
+        tracing::warn!(code, stderr = %failure.stderr, "Cloud Git fetch failed");
+        anyhow::Error::new(failure)
+    };
     let deadline = std::time::Instant::now() + timeout;
     loop {
         if let Some(status) = child.try_wait()? {
-            ensure!(status.success(), "runtime_repository_fetch_failed");
+            if !status.success() {
+                return Err(failure("runtime_repository_fetch_failed", stderr));
+            }
             break;
         }
         let cancelled = cancel.is_some_and(|cancel| cancel.is_cancelled());
@@ -1059,11 +1125,14 @@ fn wait_for_fetch(
             }
             let _ = child.kill();
             let _ = child.wait();
-            anyhow::bail!(if cancelled {
-                "runtime_repository_fetch_cancelled"
-            } else {
-                "runtime_repository_fetch_timeout"
-            });
+            return Err(failure(
+                if cancelled {
+                    "runtime_repository_fetch_cancelled"
+                } else {
+                    "runtime_repository_fetch_timeout"
+                },
+                stderr,
+            ));
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }

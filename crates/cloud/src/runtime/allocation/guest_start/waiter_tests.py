@@ -26,6 +26,14 @@ link.symlink_to(safe)
 check(not ns['path_safe'](link, owner=uid), 'symlink must be unsafe')
 check(not ns['path_safe'](tmp / 'missing', owner=uid), 'missing path is not yet safe')
 
+# Boat's temporary restore mounts: a task directory on another device than the
+# root is not settled yet; missing directories do not hold the start back.
+same = tmp / 'same'
+same.mkdir()
+check(ns['disk_settled']((str(same), str(tmp / 'missing')), root=str(tmp)), 'same device is settled')
+check(not ns['disk_settled']((str(same), '/proc/self'), root=str(tmp)), 'another device is not settled')
+check(ns['SETTLED_PATHS'][:2] == ('/home/zuse', '/home/zuse/.zuse-data'), 'the supervisor directories are checked')
+
 # A real attribute event wakes the wait long before the 5 s fallback interval.
 watched = tmp / 'watched'
 watched.mkdir()
@@ -168,7 +176,7 @@ check(reply == 'fresh_start_unit_failed' and not kept and state == 'failed', f's
 
 
 # The waiting unit: retry while the loader refuses, accept, launch once.
-def start(helper_results, launch_code, safe_after=0.0, deadline=60, helper_seconds=0.0):
+def start(helper_results, launch_code, safe_after=0.0, deadline=60, helper_seconds=0.0, settled_after=0.0):
     (directory / 'arguments.json').write_bytes(ns['canonical']({**args, 'deadlineSeconds': deadline}))
     (directory / 'boot').write_bytes(b'private-boot-credential')
     calls, timeouts = [], []
@@ -186,6 +194,7 @@ def start(helper_results, launch_code, safe_after=0.0, deadline=60, helper_secon
         clock.now += helper_seconds
         return helper_results.pop(0) if len(helper_results) > 1 else helper_results[0]
     ns['path_safe'] = lambda path, owner=0: clock.now >= safe_after
+    ns['disk_settled'] = lambda: clock.now >= settled_after
     ns['run_start'](directory, watch=clock, clock=clock, run=run, sleep=clock.wait)
     start.timeouts = timeouts
     record = json.loads((directory / 'status.json').read_bytes())
@@ -226,4 +235,16 @@ check(record['status'] == 'launched' and calls == ['helper', 'helper', '-c'], f'
 record, calls = start([racing], 0, deadline=5)
 check(record['status'] == 'rejected' and record['helperCode'] == 'fresh_boot_resident_not_owned_idle'
       and '-c' not in calls and len(calls) >= 5, f'lasting refusal: {record} {len(calls)}')
+# Nothing starts while Boat still serves the task directories from its temporary
+# restore mount: the supervisor's lock would stay behind on the retired mount.
+record, calls = start([Result(0, json.dumps(ready))], 0, settled_after=0.6)
+check(record['status'] == 'launched' and calls == ['helper', '-c'], f'started after the swap: {record} {calls}')
+record, calls = start([Result(0, json.dumps(ready))], 0, settled_after=999, deadline=5)
+check(record['status'] == 'timeout' and record['code'] == 'fresh_start_disk_unsettled_until_deadline'
+      and calls == [], f'swap never came: {record} {calls}')
+# Between systemd's fork and exec the resident still has the service manager's
+# command line: retried like the uid refusal, within the deadline.
+forked = Result(1, json.dumps({'version': 1, 'status': 'rejected', 'code': 'fresh_boot_resident_program_changed'}))
+record, calls = start([forked, forked, Result(0, json.dumps(ready))], 0)
+check(record['status'] == 'launched' and calls == ['helper', 'helper', 'helper', '-c'], f'retried exec race: {record} {calls}')
 print('ok')
