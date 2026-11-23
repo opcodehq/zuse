@@ -98,6 +98,11 @@ impl ImagePreview {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn is_loaded(&self) -> bool {
+        self.source.is_some()
+    }
+
     pub fn deleted(&mut self, cx: &mut Context<Self>) {
         self.suspend(cx);
         self.suspended = false;
@@ -188,7 +193,8 @@ impl ImagePreview {
 
 impl Render for ImagePreview {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::of(cx);
+        let theme = Theme::of(cx).clone();
+        let theme = &theme;
         let mut root = div()
             .id("file-image-preview")
             .track_focus(&self.focus)
@@ -226,18 +232,22 @@ impl Render for ImagePreview {
                 window,
                 cx,
             ));
+        } else if let Some(error) = self.error.clone() {
+            // A missing image (or one whose computer went away) offers a
+            // retry instead of a dead end.
+            root = root.child(super::computer_wake::retry_state(
+                "files-image-retry",
+                error,
+                crate::localization::message(cx, zuse_i18n::messages::chat::attempts_retry),
+                theme,
+                cx.listener(|this, _, _, cx| this.reload(cx)),
+            ));
         } else {
-            root = root.child(
-                div()
-                    .px(px(16.0))
-                    .text_size(px(12.0))
-                    .text_color(theme.text_muted)
-                    .child(
-                        self.error
-                            .clone()
-                            .unwrap_or_else(|| "Loading image…".into()),
-                    ),
-            );
+            root = root.child(super::computer_wake::loading_state(
+                "files-image-loading",
+                "Loading image…",
+                theme,
+            ));
         }
         let entity = cx.weak_entity();
         root.child(

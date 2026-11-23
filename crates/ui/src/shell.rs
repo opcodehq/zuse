@@ -125,6 +125,8 @@ mod cloud_info;
 mod cloud_sidebar;
 mod cloud_start;
 mod cloud_tabs;
+#[cfg(feature = "image-links-fixture")]
+mod image_links_fixture;
 mod tabs;
 mod top_bar;
 mod voice_stage;

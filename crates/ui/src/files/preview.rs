@@ -1187,6 +1187,19 @@ impl FilesSurface {
         cx.notify();
     }
 
+    /// Read a file that failed to load again, from scratch.
+    pub(super) fn retry_document(&mut self, path: String, cx: &mut Context<Self>) {
+        if self.awaiting_computer(cx) {
+            self.retry_computer_wake(cx);
+            return;
+        }
+        self.preview.documents.remove(&path);
+        if self.preview.active.as_deref() == Some(path.as_str()) {
+            self.preview.active = None;
+        }
+        self.open_file(path, cx);
+    }
+
     fn read_file(&mut self, path: String, cx: &mut Context<Self>) {
         if super::image_preview::is_image(&path) {
             self.read_image_file(path, cx);
@@ -2886,7 +2899,16 @@ impl FilesSurface {
             return centered_state("Loading file…", theme.text_faint);
         }
         if let DocumentPhase::Error(error) = &document.phase {
-            return centered_state(error.clone(), theme.danger_muted);
+            // A file that could not be read (moved, or its computer went
+            // away) is never a dead end: retry reads it again.
+            let retry_path = path.to_owned();
+            return super::computer_wake::retry_state(
+                "files-document-retry",
+                error.clone(),
+                tr(cx, msg::chat::attempts_retry),
+                theme,
+                cx.listener(move |this, _, _, cx| this.retry_document(retry_path.clone(), cx)),
+            );
         }
         if let Some(editor) = editor {
             editor.update(cx, |state, _| {

@@ -105,6 +105,11 @@ pub(super) struct CloudConversation {
     sleep_command: Option<String>,
     /// A message's files asked for a wake while a sleep was still running.
     wake_after_sleep: bool,
+    /// The state's wake requests (see `AppState::request_cloud_wake`) this
+    /// view has answered.
+    answered_wake_requests: u64,
+    /// A file tab asked for a wake before the account was confirmed.
+    wake_after_authorize: bool,
     computer: computer::State,
     /// The computer's conversations the server has registered, including
     /// ones its computer has not installed yet.
@@ -240,6 +245,12 @@ impl CloudConversation {
             }),
             cx.observe(&composer, |_: &mut Self, _, cx| cx.notify()),
             cx.observe(&state, |this: &mut Self, state, cx| {
+                // A file tab opened while the computer sleeps asks for it.
+                let requests = state.read(cx).cloud_wake_requests;
+                if requests != this.answered_wake_requests {
+                    this.answered_wake_requests = requests;
+                    this.wake_for_file(cx);
+                }
                 this.history.observe_live(state.read(cx));
                 // New transcript or admissions reconcile the first message's
                 // stand-in and the working lines right away.
@@ -298,6 +309,8 @@ impl CloudConversation {
             operation: None,
             sleep_command: None,
             wake_after_sleep: false,
+            answered_wake_requests: 0,
+            wake_after_authorize: false,
             computer: computer::State::default(),
             registered: Vec::new(),
             registering: false,
@@ -329,7 +342,7 @@ impl CloudConversation {
     pub(super) fn set_admissions_for_test(&mut self, rows: Value) {
         self.admissions = rows;
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "image-links-fixture"))]
     pub(super) fn transcript_for_test(&self) -> &Entity<Transcript> {
         &self.transcript
     }
@@ -822,6 +835,9 @@ impl CloudConversation {
                                     this.refresh_history(cx);
                                     this.watch_environment(false, cx);
                                     this.watch_events(cx);
+                                    if std::mem::take(&mut this.wake_after_authorize) {
+                                        this.wake_for_file(cx);
+                                    }
                                     cx.notify();
                                 }
                             } else if this.authorized || !(loading || this.access_revoked) {
@@ -1108,6 +1124,40 @@ impl CloudConversation {
         self.environment = None;
         self.watch_environment(true, cx);
     }
+    /// Wake the computer for a file tab opened while it sleeps, the same
+    /// way a message's files wake it. A wake that cannot start, or fails on
+    /// the way, says so on the shared state so the tab offers a retry
+    /// instead of waiting on a computer that is not coming.
+    fn wake_for_file(&mut self, cx: &mut Context<Self>) {
+        if self.state.read(cx).engine().is_some() {
+            return;
+        }
+        if self.access_revoked {
+            self.report_wake_failure("This computer belongs to another account.", cx);
+            return;
+        }
+        if !self.authorized {
+            self.wake_after_authorize = true;
+            return;
+        }
+        if self.operation.is_some() {
+            self.wake_after_sleep = true;
+            return;
+        }
+        if !self.computer.execution_controls_enabled() {
+            self.report_wake_failure("The computer can't be woken right now.", cx);
+            return;
+        }
+        self.environment = None;
+        self.watch_environment(true, cx);
+    }
+    fn report_wake_failure(&mut self, message: &str, cx: &mut Context<Self>) {
+        let message = gpui::SharedString::from(message.to_owned());
+        self.state.update(cx, |state, cx| {
+            state.cloud_wake_failure = Some(message);
+            cx.notify();
+        });
+    }
     fn watch_environment(&mut self, interactive: bool, cx: &mut Context<Self>) {
         if !self.authorized
             || interactive
@@ -1130,6 +1180,7 @@ impl CloudConversation {
                         "Computer connection interrupted. Reconnect to check its current state."
                             .into(),
                     );
+                    this.report_wake_failure("Couldn't reach the computer.", cx);
                     cx.notify();
                 });
                 return;
@@ -1144,11 +1195,23 @@ impl CloudConversation {
                         this.composer
                             .update(cx, |composer, _| composer.set_cloud_task_sleeping(sleeping));
                     }
+                    if interactive && matches!(status["state"].as_str(), Some("failed" | "error")) {
+                        this.report_wake_failure("The computer couldn't start.", cx);
+                    }
                     this.status = status;
                     if ready && !this.domain_sleeping() {
                         this.connect_execution(cx);
                     }
                     cx.notify();
+                });
+            }
+            // A wake whose status stream ends before the computer's tools
+            // connect (or start connecting) did not bring it up.
+            if interactive {
+                let _ = this.update(cx, |this, cx| {
+                    if this.state.read(cx).engine().is_none() && this.execution.is_none() {
+                        this.report_wake_failure("Couldn't reach the computer.", cx);
+                    }
                 });
             }
         }));
@@ -1177,7 +1240,10 @@ impl CloudConversation {
                         this.history.start_live(this.state.read(cx).transcript_revision);
                         this.state.update(cx,|state,cx|state.attach_cloud_conversation(handle,session,cx));
                     },
-                    _=>this.error=Some("The conversation is saved, but the computer tools could not connect. Reconnect to try again.".into()),
+                    _=>{
+                        this.error=Some("The conversation is saved, but the computer tools could not connect. Reconnect to try again.".into());
+                        this.report_wake_failure("Couldn't connect to the computer.", cx);
+                    }
                 }
                 cx.notify();
             });
@@ -3031,6 +3097,352 @@ mod tests {
                 LinkOutcome::External("https://example.com/docs".into())
             );
         });
+    }
+    /// The cloud computer's files, once it is awake: every image reads as
+    /// one small PNG.
+    struct ComputerFiles {
+        png: Vec<u8>,
+        image_reads: std::sync::Mutex<Vec<Value>>,
+    }
+    #[async_trait::async_trait]
+    impl zuse_rpc::RpcService for ComputerFiles {
+        async fn handle(
+            &self,
+            method: &str,
+            params: Value,
+        ) -> Result<zuse_rpc::RpcReply, zuse_rpc::RpcError> {
+            use base64::Engine as _;
+            if method == methods::READ_WORKSPACE_IMAGE {
+                self.image_reads.lock().unwrap().push(params);
+                return zuse_rpc::RpcReply::value(&zuse_protocol::WorkspaceImageChunk {
+                    checkout_id: "checkout".into(),
+                    content_hash: "hash".into(),
+                    mime_type: "image/png".into(),
+                    data: base64::engine::general_purpose::STANDARD.encode(&self.png),
+                    next_offset: self.png.len(),
+                    size: self.png.len(),
+                    done: true,
+                });
+            }
+            Ok(zuse_rpc::RpcReply::Stream(Box::pin(
+                futures::stream::pending(),
+            )))
+        }
+    }
+    /// Clicking an image link in a cloud chat whose computer is asleep opens
+    /// a tab at once in a waking state and asks the conversation to wake the
+    /// computer. A failed wake shows an inline retry; a tab closed while
+    /// waiting is gone for good; once the computer's tools connect, the
+    /// remaining tab shows the image.
+    #[gpui::test]
+    fn a_sleeping_cloud_chats_image_link_opens_a_waking_tab(cx: &mut TestAppContext) {
+        use crate::files::computer_wake::WakeView;
+        use crate::markdown::render::{LinkAction, LinkActivation, LinkOutcome, LinkTarget};
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        cx.executor().allow_parking();
+        let directory = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            initialize(cx);
+            settings::init(UiSettings::default(), directory.path(), cx);
+            crate::history::init(
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                cx,
+            );
+        });
+        let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
+            std::sync::Arc::new(PendingController),
+        ));
+        let (host, cx) = cx.add_window_view(|_, cx| {
+            let shell = cx.new(|cx| {
+                let state = cx.new(|_| {
+                    let mut state = AppState::new();
+                    account(&mut state);
+                    state
+                });
+                let mut shell = Shell::new(state, boot(directory.path()), cx);
+                shell.reduced_motion = true;
+                shell.open_cloud_conversation(
+                    CloudTarget {
+                        controller,
+                        subject: "owner".into(),
+                        organization: None,
+                        workspace: "task".into(),
+                        initial_session: "session".into(),
+                    },
+                    json!({"workspaceId":"task","initialSessionId":"session"}),
+                    Value::Null,
+                    cx,
+                );
+                shell
+            });
+            CloudChromeHost {
+                shell,
+                _directory: directory,
+            }
+        });
+        let shell = host.read_with(cx, |host, _| host.shell.clone());
+        let (view, state, transcript) = shell.update(cx, |shell, cx| {
+            let view = shell.cloud_conversation.clone().unwrap();
+            let state = view.read(cx).state.clone();
+            let transcript = view.read(cx).transcript_for_test().clone();
+            (view, state, transcript)
+        });
+        // The saved history names the chat; its computer is asleep, so no
+        // engine is attached.
+        let chat: zuse_protocol::Chat = serde_json::from_value(json!({
+            "id": "session", "deviceId": "cloud-computer", "archived": false,
+            "cwd": "/home/zuse/workspace", "spaceId": "space", "checkoutId": "checkout",
+            "createdAt": "2026-11-23T11:00:00Z",
+        }))
+        .unwrap();
+        state.update(cx, |state, cx| {
+            state.local_device_id = Some("cloud-computer".into());
+            state.apply_chats(vec![chat]);
+            cx.notify();
+        });
+        assert!(state.read_with(cx, |state, _| state.cloud_computer_asleep()));
+        let click = |target: &str, cx: &mut gpui::VisualTestContext| {
+            let link = transcript
+                .update(cx, |transcript, cx| transcript.link_ui(cx))
+                .expect("a cloud chat's links are routed");
+            let activation = LinkActivation {
+                target: LinkTarget::new("Updated reasoning slider", target),
+                action: LinkAction::Primary,
+                source_session: Some("session".into()),
+            };
+            let outcome = cx.update(|window, cx| (link.handler)(&activation, window, cx));
+            assert_eq!(outcome, LinkOutcome::Internal);
+            cx.run_until_parked();
+            shell.read_with(cx, |shell, cx| match shell.active_main_tab(cx) {
+                Some(main_tabs::MainTab::File(id)) => (id, shell.file_surfaces[&id].clone()),
+                other => panic!("expected a file tab, got {other:?}"),
+            })
+        };
+
+        // The click opens the tab at once, waking, and asks for the computer.
+        let (_, file) = click("/home/zuse/workspace/artifacts/reasoning-slider.png", cx);
+        file.read_with(cx, |file, cx| {
+            assert_eq!(file.wake_view(cx), Some(WakeView::Waking))
+        });
+        assert_eq!(state.read_with(cx, |state, _| state.cloud_wake_requests), 1);
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.answered_wake_requests, 1, "the conversation took it");
+            // The account is still being confirmed here; the wake starts
+            // the moment it is.
+            assert!(view.wake_after_authorize);
+        });
+        cx.update(|_, cx| assert!(crate::toast::messages(cx).is_empty(), "no notice"));
+
+        // A wake that fails is a quiet inline error with a retry, which
+        // asks again.
+        state.update(cx, |state, cx| {
+            state.cloud_wake_failure = Some("Couldn't reach the computer.".into());
+            cx.notify();
+        });
+        file.read_with(cx, |file, cx| {
+            assert_eq!(
+                file.wake_view(cx),
+                Some(WakeView::Failed("Couldn't reach the computer.".into()))
+            )
+        });
+        file.update(cx, |file, cx| file.retry_computer_wake(cx));
+        cx.run_until_parked();
+        file.read_with(cx, |file, cx| {
+            assert_eq!(file.wake_view(cx), Some(WakeView::Waking))
+        });
+        state.read_with(cx, |state, _| {
+            assert_eq!(state.cloud_wake_requests, 2);
+            assert!(state.cloud_wake_failure.is_none());
+        });
+        view.read_with(cx, |view, _| assert_eq!(view.answered_wake_requests, 2));
+
+        // A second link's tab, closed while it waits, stays closed.
+        let (other_id, other) = click("/home/zuse/workspace/artifacts/other.png", cx);
+        let weak_other = other.downgrade();
+        drop(other);
+        shell.update(cx, |shell, cx| {
+            shell.close_main_tab(main_tabs::MainTab::File(other_id), cx);
+            assert!(!shell.file_surfaces.contains_key(&other_id));
+            assert_eq!(shell.main_tab_rows(cx).len(), 1);
+        });
+        cx.run_until_parked();
+        assert!(
+            weak_other.upgrade().is_none(),
+            "the closed tab's wait is dropped"
+        );
+
+        // The computer comes up: the remaining tab reads the image from it.
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(32, 24)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let files = std::sync::Arc::new(ComputerFiles {
+            png: png.into_inner(),
+            image_reads: Default::default(),
+        });
+        state.update(cx, |state, cx| {
+            state.set_test_engine(crate::state::EngineHandle::from_test_client(
+                zuse_rpc::memory_client(files.clone()),
+            ));
+            cx.notify();
+        });
+        cx.run_until_parked();
+        file.read_with(cx, |file, cx| assert_eq!(file.wake_view(cx), None));
+        file.update(cx, |file, cx| file.show_active_image(cx));
+        for _ in 0..400 {
+            cx.run_until_parked();
+            if file.read_with(cx, |file, cx| file.active_image_loaded(cx)) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        file.read_with(cx, |file, cx| {
+            assert!(file.active_image_loaded(cx), "the image is on screen");
+        });
+        {
+            let reads = files.image_reads.lock().unwrap();
+            assert!(!reads.is_empty());
+            assert!(
+                reads.iter().all(|read| read["path"]
+                    .as_str()
+                    .is_some_and(|path| path.ends_with("artifacts/reasoning-slider.png"))),
+                "only the open tab's image is read: {reads:?}"
+            );
+        }
+        shell.read_with(cx, |shell, cx| {
+            assert_eq!(
+                shell.main_tab_rows(cx).len(),
+                1,
+                "the closed tab stays closed"
+            )
+        });
+    }
+    /// A sleeping computer that a file tab asks to wake. `fail` refuses the
+    /// interactive wake the way an unreachable computer does.
+    struct FileWakeController {
+        fail: bool,
+        environment_calls: std::sync::Mutex<Vec<Value>>,
+    }
+    #[async_trait::async_trait]
+    impl zuse_rpc::RpcService for FileWakeController {
+        async fn handle(
+            &self,
+            method: &str,
+            params: Value,
+        ) -> Result<zuse_rpc::RpcReply, zuse_rpc::RpcError> {
+            use futures::StreamExt as _;
+            let pending = |initial: Value| {
+                zuse_rpc::RpcReply::Stream(Box::pin(
+                    futures::stream::once(async move { initial }).chain(futures::stream::pending()),
+                ))
+            };
+            match method {
+                methods::CLOUD_ACCOUNT_STATUS => {
+                    Ok(pending(json!({"user":{"id":"owner"},"orgId":null})))
+                }
+                methods::CLOUD_HISTORY => Ok(zuse_rpc::RpcReply::Value(retained_history(false))),
+                methods::CLOUD_ENVIRONMENT => {
+                    let interactive = params["interactiveResume"] == true;
+                    self.environment_calls.lock().unwrap().push(params);
+                    if interactive && self.fail {
+                        return Err(zuse_rpc::RpcError::Failed("unreachable".into()));
+                    }
+                    Ok(pending(json!({"state":"paused","epoch":1})))
+                }
+                _ => Ok(zuse_rpc::RpcReply::Stream(Box::pin(
+                    futures::stream::pending(),
+                ))),
+            }
+        }
+    }
+    /// A file tab's wake request takes the same interactive wake a message's
+    /// files take; a wake that cannot reach the computer is reported back
+    /// on the shared state so the tab can offer a retry.
+    #[gpui::test]
+    fn a_file_tabs_wake_request_wakes_the_computer_and_reports_failure(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        cx.update(|cx| {
+            initialize(cx);
+            gpui_tokio::init_from_handle(cx, runtime.handle().clone());
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let pump = |cx: &mut TestAppContext| {
+            for _ in 0..12 {
+                cx.run_until_parked();
+                runtime.block_on(async { tokio::task::yield_now().await });
+            }
+        };
+        for fail in [false, true] {
+            let service = std::sync::Arc::new(FileWakeController {
+                fail,
+                environment_calls: Default::default(),
+            });
+            let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
+                service.clone(),
+            ));
+            let view = cx.new(|cx| {
+                CloudConversation::new(
+                    CloudTarget {
+                        controller,
+                        subject: "owner".into(),
+                        organization: None,
+                        workspace: "task".into(),
+                        initial_session: "session".into(),
+                    },
+                    json!({"workspaceId":"task","state":"paused","desiredState":"paused"}),
+                    Value::Null,
+                    boot(directory.path()),
+                    cx,
+                )
+            });
+            pump(cx);
+            let state = view.read_with(cx, |view, _| {
+                assert!(view.authorized);
+                view.state.clone()
+            });
+            assert!(
+                service
+                    .environment_calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|call| call["interactiveResume"] == false),
+                "opening the chat never wakes the computer"
+            );
+            state.update(cx, |state, cx| state.request_cloud_wake(cx));
+            pump(cx);
+            let woke = service
+                .environment_calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|call| call["interactiveResume"] == true);
+            assert!(woke, "the request wakes the computer");
+            state.read_with(cx, |state, _| {
+                if fail {
+                    assert_eq!(
+                        state.cloud_wake_failure.as_deref(),
+                        Some("Couldn't reach the computer.")
+                    );
+                } else {
+                    assert!(state.cloud_wake_failure.is_none());
+                }
+            });
+            view.update(cx, |view, cx| view.revoke(cx));
+            pump(cx);
+        }
     }
     #[gpui::test]
     fn cloud_only_chat_paints_header_logo_and_opens_right_sidebar(cx: &mut TestAppContext) {

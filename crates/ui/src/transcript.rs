@@ -3944,9 +3944,9 @@ pub struct Transcript {
     gallery_swipe: Rc<std::cell::Cell<crate::image_viewer::Swipe>>,
     /// A gallery was opened and waits for its first image to load.
     gallery_opening: bool,
-    /// Shown if the opening gallery's first image cannot be read (a linked
-    /// file that moved, or a machine that went offline).
-    gallery_failure_notice: Option<SharedString>,
+    /// Opened in a tab if the opening gallery's first image cannot be read
+    /// (a linked file that moved, or a machine that went offline).
+    gallery_failure_fallback: Option<String>,
     /// Mermaid fences drawn as diagrams in settled Markdown blocks. Each
     /// row's media handler requests its fences while laying out, so only
     /// painted diagrams are rendered (see [`MermaidCache`]).
@@ -4121,28 +4121,17 @@ impl Transcript {
     }
 
     /// Open a file link the transcript can serve itself. `false` hands the
-    /// link on to the shell. A cloud chat whose computer is not connected
-    /// answers every file link with a quiet notice instead of an empty tab.
+    /// link on to the shell, which opens it in a tab. A cloud chat whose
+    /// computer is asleep always takes the tab: it opens at once with a
+    /// waking state, wakes the computer, and shows the file once it is up.
     fn open_linked_file(
         &mut self,
         file: LinkedFile,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let state = self.state.read(cx);
-        if state.hosted_on_cloud_computer && state.engine().is_none() {
-            let path = match &file {
-                LinkedFile::Image { path, .. } | LinkedFile::Other(path) => path,
-            };
-            crate::toast::show(
-                cx,
-                crate::toast::ToastKind::Info,
-                format!(
-                    "Couldn't open {}. Its computer is offline.",
-                    file_badge_name(path)
-                ),
-            );
-            return true;
+        if self.state.read(cx).cloud_computer_asleep() {
+            return false;
         }
         match file {
             LinkedFile::Image { path, chat } => {
@@ -4192,8 +4181,9 @@ impl Transcript {
     }
 
     /// Show an image the chat linked to, read from the chat's own machine —
-    /// never from this desktop's disk unless the chat runs here. A missing
-    /// file or unreachable machine ends in a quiet notice, not a dead click.
+    /// never from this desktop's disk unless the chat runs here. An image
+    /// that cannot be read opens in a tab instead, which explains why and
+    /// offers a retry, so the click never ends in a dead end.
     fn open_linked_image(
         &mut self,
         path: String,
@@ -4205,21 +4195,39 @@ impl Transcript {
             return false;
         };
         let devices = vec![device];
-        let notice = format!(
-            "Couldn't open {}. It may have moved, or its computer is offline.",
-            file_badge_name(&path)
-        );
-        self.open_gallery_with_notice(
+        self.open_gallery_with_fallback(
             vec![GalleryEntry {
-                source: Some((devices, path)),
+                source: Some((devices, path.clone())),
                 preview: None,
             }],
             0,
-            Some(notice.into()),
+            Some(path),
             window,
             cx,
         );
         true
+    }
+
+    /// Hand a file on to the shell's tab, as an unhandled link would be:
+    /// the tab reads it from the chat's machine (waking a sleeping cloud
+    /// computer first) and shows any failure inline with a retry. Deferred,
+    /// because the shell's handler may reach back into this transcript.
+    fn open_in_file_tab(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(link) = self.workspace_link.clone() else {
+            return;
+        };
+        let source_session = link
+            .source_session
+            .clone()
+            .or_else(|| self.chat_id.as_ref().map(|chat| chat.to_string()));
+        let activation = render::LinkActivation {
+            target: render::LinkTarget::new(file_badge_name(&path), path.as_str()),
+            action: render::LinkAction::Primary,
+            source_session,
+        };
+        window.defer(cx, move |window, cx| {
+            let _ = (link.handler)(&activation, window, cx);
+        });
     }
 
     /// The ordered checkouts a file link from `chat_id` may open against:
@@ -4453,7 +4461,7 @@ impl Transcript {
             attachment_gallery_index: 0,
             gallery_swipe: Rc::default(),
             gallery_opening: false,
-            gallery_failure_notice: None,
+            gallery_failure_fallback: None,
             diagrams: Rc::default(),
             diagram_media: None,
             diagram_worker: None,
@@ -7035,23 +7043,24 @@ impl Transcript {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.open_gallery_with_notice(entries, index, None, window, cx);
+        self.open_gallery_with_fallback(entries, index, None, window, cx);
     }
 
-    /// Open the lightbox on `entries`. `failure_notice`, when given, is shown
-    /// if the first image cannot be read, so the click is never silent.
-    fn open_gallery_with_notice(
+    /// Open the lightbox on `entries`. `failure_fallback`, when given, is the
+    /// file to open in a tab if the first image cannot be read: the tab shows
+    /// why with a retry, so the click is never silent.
+    fn open_gallery_with_fallback(
         &mut self,
         entries: Vec<GalleryEntry>,
         index: usize,
-        failure_notice: Option<SharedString>,
+        failure_fallback: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if index >= entries.len() {
             return;
         }
-        self.gallery_failure_notice = failure_notice;
+        self.gallery_failure_fallback = failure_fallback;
         self.close_diagram_zoom(cx);
         self.dismiss_sent_pdf();
         self.attachment_preview = None;
@@ -7080,7 +7089,7 @@ impl Transcript {
         if foreign {
             self.attachment_gallery.clear();
             self.gallery_opening = false;
-            self.gallery_failure_notice = None;
+            self.gallery_failure_fallback = None;
             return;
         }
         let index = self.attachment_gallery_index;
@@ -7104,8 +7113,8 @@ impl Transcript {
                         if self.gallery_opening {
                             self.gallery_opening = false;
                             self.attachment_gallery.clear();
-                            if let Some(notice) = self.gallery_failure_notice.take() {
-                                crate::toast::show(cx, crate::toast::ToastKind::Info, notice);
+                            if let Some(path) = self.gallery_failure_fallback.take() {
+                                self.open_in_file_tab(path, window, cx);
                             }
                         }
                         return;
@@ -7121,7 +7130,7 @@ impl Transcript {
         if !current {
             preview.viewer.reset();
             self.attachment_preview = Some(preview);
-            self.gallery_failure_notice = None;
+            self.gallery_failure_fallback = None;
             if std::mem::take(&mut self.gallery_opening) {
                 window.focus(&self.attachment_preview_focus, cx);
             }
@@ -8223,20 +8232,7 @@ impl Transcript {
             image: Some(Rc::new(move |image, id, theme| {
                 let source = image.source.clone();
                 let owner = image_owner.clone();
-                let label = if image.alt.is_empty() {
-                    "Preview image".to_owned()
-                } else {
-                    image.alt.clone()
-                };
-                div()
-                    .id(id)
-                    .role(gpui::Role::Button)
-                    .aria_label(SharedString::from(format!("Preview {label}")))
-                    .tab_index(0)
-                    .cursor_pointer()
-                    .text_color(theme.accent)
-                    .hover(|style| style.underline())
-                    .child(label)
+                inline_image_link(image, id, theme)
                     .on_click(move |_, window, cx| {
                         let _ = owner.update(cx, |this, cx| {
                             // Web images retain normal validated web navigation.
@@ -8247,7 +8243,10 @@ impl Transcript {
                                 return;
                             }
                             let file = this.inline_image_file(&source, cx);
-                            this.open_linked_file(file, window, cx);
+                            let path = file.path().to_owned();
+                            if !this.open_linked_file(file, window, cx) {
+                                this.open_in_file_tab(path, window, cx);
+                            }
                         });
                     })
                     .into_any_element()
@@ -11400,6 +11399,68 @@ enum LinkedFile {
     Image { path: String, chat: Option<String> },
     /// Any other file; the shell's file preview opens it.
     Other(String),
+}
+
+impl LinkedFile {
+    fn path(&self) -> &str {
+        match self {
+            Self::Image { path, .. } | Self::Other(path) => path,
+        }
+    }
+}
+
+/// An inline Markdown image as the transcript shows it: the photo lead and
+/// the label styled like any other file link (foreground text, muted
+/// underline). The caller attaches the click.
+fn inline_image_link(
+    image: &crate::markdown::parser::InlineImage,
+    id: SharedString,
+    theme: &Theme,
+) -> gpui::Stateful<gpui::Div> {
+    let label = if image.alt.is_empty() {
+        "Preview image".to_owned()
+    } else {
+        image.alt.clone()
+    };
+    div()
+        .id(id.clone())
+        .debug_selector(move || format!("inline-image-link-{id}"))
+        .role(gpui::Role::Button)
+        .aria_label(SharedString::from(format!("Preview {label}")))
+        .tab_index(0)
+        .cursor_pointer()
+        .self_start()
+        .min_w_0()
+        .flex()
+        .items_center()
+        .gap(px(4.0))
+        .child(render::file_icon_well(
+            inline_image_icon_path(&image.source),
+            theme,
+        ))
+        .child(inline_image_label(theme).child(label))
+}
+
+/// The file whose type picks an inline image's icon: the image itself, or a
+/// stand-in photo for a source without an image extension (a data or
+/// extensionless URL), so every inline image leads with a photo.
+fn inline_image_icon_path(source: &str) -> &str {
+    let source = source.split(['#', '?']).next().unwrap_or_default();
+    if crate::attachments::is_image_path(source) {
+        source
+    } else {
+        "image.png"
+    }
+}
+
+/// An inline image's label reads like any other file link: foreground text
+/// with a muted underline, never the accent colour.
+fn inline_image_label(theme: &Theme) -> gpui::Div {
+    div()
+        .min_w_0()
+        .text_color(theme.text)
+        .underline()
+        .text_decoration_color(theme.text_muted)
 }
 
 /// Classify a link click: web links and copy/external actions are `None`,
@@ -15350,7 +15411,8 @@ mod tests {
         click_transcript_link(&transcript, "https://example.com/docs", cx);
         assert_eq!(*forwarded.borrow(), [page, "https://example.com/docs"]);
 
-        // A file that is gone ends in a quiet notice, not a dead click.
+        // A file that is gone opens in a tab, which says so with a retry,
+        // instead of a notice or a dead click.
         transcript.update(cx, |this, _| this.attachment_preview = None);
         let missing = "/home/zuse/workspace/artifacts/missing.png";
         click_transcript_link(&transcript, missing, cx);
@@ -15361,19 +15423,17 @@ mod tests {
             )
         });
         transcript.update_in(cx, |this, window, cx| this.resolve_gallery(window, cx));
+        cx.run_until_parked();
         transcript.read_with(cx, |this, _| {
             assert!(!this.gallery_opening, "no endless wait");
             assert!(this.attachment_gallery.is_empty());
         });
-        cx.update(|_, cx| {
-            let messages = crate::toast::messages(cx);
-            assert!(
-                messages
-                    .iter()
-                    .any(|message| message.contains("Couldn't open missing.png")),
-                "{messages:?}"
-            );
-        });
+        assert_eq!(
+            *forwarded.borrow(),
+            [page, "https://example.com/docs", missing],
+            "the unreadable image goes on to its tab"
+        );
+        cx.update(|_, cx| assert!(crate::toast::messages(cx).is_empty()));
     }
 
     #[gpui::test]
@@ -15414,7 +15474,9 @@ mod tests {
                 "the desktop's same-named file never stands in for the chat's"
             );
         });
-        assert!(forwarded.borrow().is_empty());
+        // Unreadable here, the image goes on to a tab that reads it through
+        // the chat (and says so if it cannot).
+        assert_eq!(*forwarded.borrow(), [image]);
 
         // A relative inline image joins the chat's checkout like a link.
         transcript.update(cx, |this, cx| {
@@ -15433,7 +15495,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn an_offline_cloud_chats_file_links_answer_quietly(cx: &mut gpui::TestAppContext) {
+    fn an_asleep_cloud_chats_file_links_open_in_a_tab(cx: &mut gpui::TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         cx.update(|cx| {
             gpui_base::init(cx);
@@ -15444,21 +15506,60 @@ mod tests {
         let state = cloud_chat_state(cx, "cloud-computer-offline");
         let (transcript, cx) = cx.add_window_view(|_, cx| Transcript::new(state.clone(), cx));
         let forwarded = recording_link_handler(&transcript, cx);
-        click_transcript_link(&transcript, "/home/zuse/workspace/sign-in.png", cx);
-        click_transcript_link(&transcript, "/home/zuse/workspace/onboarding.html", cx);
+        // Images and other files alike go straight to a tab, which wakes the
+        // computer; nothing waits in the viewer and no notice appears.
+        let image = "/home/zuse/workspace/sign-in.png";
+        let page = "/home/zuse/workspace/onboarding.html";
+        click_transcript_link(&transcript, image, cx);
+        click_transcript_link(&transcript, page, cx);
         click_transcript_link(&transcript, "https://example.com/", cx);
-        assert_eq!(*forwarded.borrow(), ["https://example.com/"]);
+        assert_eq!(*forwarded.borrow(), [image, page, "https://example.com/"]);
         transcript.read_with(cx, |this, _| {
             assert!(this.attachment_gallery.is_empty());
             assert!(!this.gallery_opening);
         });
-        cx.update(|_, cx| {
-            let messages = crate::toast::messages(cx);
-            for name in ["sign-in.png", "onboarding.html"] {
-                let expected = format!("Couldn't open {name}. Its computer is offline.");
-                assert!(messages.iter().any(|m| *m == expected), "{messages:?}");
-            }
+
+        // An inline image takes the same tab.
+        transcript.update_in(cx, |this, window, cx| {
+            let file = this.inline_image_file("artifacts/shot.png", cx);
+            let path = file.path().to_owned();
+            assert!(!this.open_linked_file(file, window, cx));
+            this.open_in_file_tab(path, window, cx);
         });
+        cx.run_until_parked();
+        assert_eq!(
+            forwarded.borrow().last().map(String::as_str),
+            Some("/home/zuse/workspace/artifacts/shot.png")
+        );
+        cx.update(|_, cx| assert!(crate::toast::messages(cx).is_empty()));
+    }
+
+    #[test]
+    fn inline_images_lead_with_a_photo_and_read_like_file_links() {
+        let theme = Theme::dark();
+        // The label is foreground text with a muted underline, as every other
+        // file link: never the accent colour.
+        let mut label = inline_image_label(&theme);
+        let style = gpui::Styled::text_style(&mut label);
+        assert_eq!(style.color, Some(theme.text));
+        assert_ne!(style.color, Some(theme.accent));
+        let underline = style.underline.expect("the label is underlined");
+        assert_eq!(underline.color, Some(theme.text_muted));
+        // The icon is the photo a link to the same file shows; a source
+        // without an image extension still leads with a photo.
+        let photo = zuse_icons::file_icon_path("shot.png");
+        for source in [
+            "/home/zuse/workspace/artifacts/reasoning-slider.png",
+            "artifacts/shot.png?raw=1",
+            "https://example.com/render",
+            "data:image/png;base64,AAAA",
+        ] {
+            assert_eq!(
+                zuse_icons::file_icon_path(inline_image_icon_path(source)),
+                photo,
+                "{source}"
+            );
+        }
     }
 
     #[gpui::test]

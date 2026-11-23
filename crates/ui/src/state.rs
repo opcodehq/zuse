@@ -1034,6 +1034,13 @@ pub struct AppState {
     /// computer, so the paths it names are never on this desktop's disk even
     /// though they match the engine's own device id.
     pub(crate) hosted_on_cloud_computer: bool,
+    /// Wake requests for this cloud computer from views that need it awake
+    /// (a file tab opened while it sleeps). The conversation that owns the
+    /// computer answers each new request once.
+    pub(crate) cloud_wake_requests: u64,
+    /// Why the last wake did not bring the computer up; the next request
+    /// clears it.
+    pub(crate) cloud_wake_failure: Option<gpui::SharedString>,
     initial_cloud_chat: Option<String>,
     pub(crate) pending_cloud_resume: Option<(String, String, bool)>,
     pub selected_chat: Option<String>,
@@ -1247,6 +1254,8 @@ impl AppState {
             canvas_target: None,
             cloud_project: None,
             hosted_on_cloud_computer: false,
+            cloud_wake_requests: 0,
+            cloud_wake_failure: None,
             initial_cloud_chat: None,
             selected_chat: None,
             pending_cloud_resume: None,
@@ -1990,6 +1999,19 @@ impl AppState {
     /// resolves to this disk, so its menu may offer local file actions. An
     /// unprobed device id (or an unknown chat row) counts as local, matching
     /// `file_link_roots`.
+    /// A cloud chat's computer is asleep (or still connecting): its files
+    /// can only be read once it is woken.
+    pub(crate) fn cloud_computer_asleep(&self) -> bool {
+        self.hosted_on_cloud_computer && self.engine().is_none()
+    }
+
+    /// Ask the conversation that owns this cloud computer to wake it.
+    pub(crate) fn request_cloud_wake(&mut self, cx: &mut Context<Self>) {
+        self.cloud_wake_requests = self.cloud_wake_requests.wrapping_add(1);
+        self.cloud_wake_failure = None;
+        cx.notify();
+    }
+
     pub(crate) fn chat_is_local(&self, chat_id: &str) -> bool {
         if self.hosted_on_cloud_computer {
             return false;
@@ -3585,7 +3607,7 @@ impl AppState {
         self.engine.as_ref()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "image-links-fixture"))]
     pub(crate) fn set_test_engine(&mut self, handle: EngineHandle) {
         self.engine = Some(handle);
     }
