@@ -208,12 +208,8 @@ impl Composer {
     /// Hold sends while the server records this new conversation.
     pub(crate) fn set_cloud_registering(&mut self, registering: bool, cx: &mut Context<Self>) {
         self.cloud.registering = registering;
-        if !registering
-            && self
-                .failure
-                .as_ref()
-                .is_some_and(|failure| failure.as_ref() == STILL_OPENING)
-        {
+        if !registering {
+            // Its notices (held send, retried attempt) are resolved now.
             self.failure = None;
         }
         cx.notify();
@@ -251,7 +247,10 @@ impl Composer {
             return true;
         }
         if self.cloud.registering {
-            self.failure = Some(STILL_OPENING.into());
+            // A shown reason (a failed attempt being retried) stays visible.
+            if self.failure.is_none() {
+                self.failure = Some(STILL_OPENING.into());
+            }
             cx.notify();
             return true;
         }

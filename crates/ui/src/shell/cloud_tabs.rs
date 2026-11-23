@@ -304,10 +304,11 @@ impl Shell {
         else {
             return;
         };
-        view.update(cx, |view, cx| view.start_registering(chat, cx));
         tracing::info!(workspace = %target.workspace, ms = opened_at.elapsed().as_millis() as u64,
             "Cloud conversation tab ready");
-        let params = serde_json::json!({
+        // One logical command for every attempt: a retry after a lost reply
+        // replays the same conversation and never records a second one.
+        let request = serde_json::json!({
             "workspaceId": target.workspace,
             "expectedAccountId": target.subject,
             "expectedOrganizationId": target.organization,
@@ -316,33 +317,7 @@ impl Shell {
             "method": methods::CREATE_THREAD_SESSION,
             "params": {"chatId": session, "threadId": thread, "templateChat": template},
         });
-        cx.spawn(async move |_, cx| {
-            let result = async {
-                let mut reply = target
-                    .controller
-                    .client()
-                    .subscribe_scoped(methods::CLOUD_RPC, params)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                let frame = reply
-                    .recv()
-                    .await
-                    .ok_or_else(|| "The new conversation was not confirmed. Try again.".to_owned())?;
-                if let Some(error) = frame["err"].as_str() {
-                    return Err(error.to_owned());
-                }
-                serde_json::from_value::<zuse_protocol::Chat>(frame["ok"].clone())
-                    .ok()
-                    .filter(|chat| chat.id == session)
-                    .map(|_| ())
-                    .ok_or_else(|| "The new conversation was not confirmed. Try again.".to_owned())
-            }
-            .await;
-            tracing::info!(workspace = %target.workspace, ms = opened_at.elapsed().as_millis() as u64,
-                ok = result.is_ok(), "Cloud conversation recorded");
-            view.update(cx, |view, cx| view.registered(result, cx));
-        })
-        .detach();
+        view.update(cx, |view, cx| view.start_registering(chat, request, cx));
     }
     /// Open `session`, a conversation on `origin`'s computer, in a tab of its
     /// own (or its existing tab), in front when `focus`.
@@ -1451,6 +1426,8 @@ mod tests {
     #[derive(Default)]
     struct Computer {
         seen: std::sync::Mutex<Vec<(String, Value)>>,
+        /// Refuse this many conversation registrations first.
+        refuse: std::sync::atomic::AtomicUsize,
     }
     #[async_trait::async_trait]
     impl zuse_rpc::RpcService for Computer {
@@ -1464,6 +1441,16 @@ mod tests {
                 .unwrap()
                 .push((method.to_owned(), params.clone()));
             if method == methods::CLOUD_RPC && params["method"] == methods::CREATE_THREAD_SESSION {
+                use std::sync::atomic::Ordering;
+                if self
+                    .refuse
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                    .is_ok()
+                {
+                    return Ok(zuse_rpc::RpcReply::Stream(Box::pin(futures::stream::once(
+                        async { json!({"id":0,"err":"The cloud action was not confirmed."}) },
+                    ))));
+                }
                 let inner = &params["params"];
                 let chat = json!({"id":inner["chatId"],"threadId":inner["threadId"],
                     "deviceId":format!("cloud:{}",params["workspaceId"].as_str().unwrap()),
@@ -1626,6 +1613,101 @@ mod tests {
             })
             .unwrap();
         assert_eq!(creates().len(), 1);
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+    }
+    /// A refused registration shows its reason, keeps sends held, and is
+    /// retried with the same request, so the same conversation, until the
+    /// server confirms it.
+    #[gpui::test]
+    fn a_refused_new_cloud_chat_is_retried_as_the_same_conversation(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        let window = draft_shell(cx, dir.path());
+        cx.update(|cx| gpui_tokio::init_from_handle(cx, runtime.handle().clone()));
+        let computer = std::sync::Arc::new(Computer {
+            refuse: 1.into(),
+            ..Default::default()
+        });
+        let controller =
+            crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(computer.clone()));
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_cloud_conversation(
+                    crate::state::CloudTarget {
+                        controller,
+                        subject: "owner".into(),
+                        organization: None,
+                        workspace: "task1".into(),
+                        initial_session: "session1".into(),
+                    },
+                    json!({"workspaceId":"task1","chatId":"thread1","initialSessionId":"session1"}),
+                    Value::Null,
+                    cx,
+                );
+                shell.open_new_conversation_tab(cx);
+            })
+            .unwrap();
+        let attempts = || {
+            computer
+                .seen
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(method, params)| {
+                    method == methods::CLOUD_RPC
+                        && params["method"] == methods::CREATE_THREAD_SESSION
+                })
+                .map(|(_, params)| params.clone())
+                .collect::<Vec<_>>()
+        };
+        let settle = |cx: &mut TestAppContext| {
+            for _ in 0..20 {
+                cx.run_until_parked();
+                runtime.block_on(tokio::task::yield_now());
+            }
+        };
+        settle(cx);
+        assert_eq!(attempts().len(), 1);
+        window
+            .update(cx, |shell, _, cx| {
+                let front = shell.cloud_conversation.clone().unwrap();
+                assert!(front.read(cx).registering, "sends stay held");
+                let composer = front.read(cx).composer.clone();
+                composer.update(cx, |composer, cx| {
+                    composer.send_for_test("Held".into(), false, cx);
+                    assert!(
+                        composer
+                            .failure
+                            .as_ref()
+                            .is_some_and(|failure| failure.contains("not confirmed")),
+                        "the refusal stays visible"
+                    );
+                });
+            })
+            .unwrap();
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(3));
+        settle(cx);
+        let attempts = attempts();
+        assert_eq!(attempts.len(), 2);
+        assert_eq!(
+            attempts[0], attempts[1],
+            "the same request, so the same conversation"
+        );
+        window
+            .update(cx, |shell, _, cx| {
+                let front = shell.cloud_conversation.clone().unwrap();
+                assert!(!front.read(cx).registering);
+                assert!(front.read(cx).composer.read(cx).failure.is_none());
+                assert_eq!(shell.cloud_tabs.views.len(), 2);
+            })
+            .unwrap();
         window
             .update(cx, |_, window, _| window.remove_window())
             .unwrap();

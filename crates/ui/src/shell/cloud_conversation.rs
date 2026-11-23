@@ -111,6 +111,8 @@ pub(super) struct CloudConversation {
     registered: Vec<zuse_protocol::Chat>,
     /// This conversation was opened before the server finished recording it.
     pub(super) registering: bool,
+    /// The request that records it, retried until the server confirms.
+    registration: Option<(Value, Task<()>)>,
     _subscriptions: Vec<Subscription>,
 }
 impl gpui::EventEmitter<CloudConversationEvent> for CloudConversation {}
@@ -299,6 +301,7 @@ impl CloudConversation {
             computer: computer::State::default(),
             registered: Vec::new(),
             registering: false,
+            registration: None,
             _subscriptions: subscriptions,
         };
         this.computer.metadata = initial_metadata;
@@ -660,8 +663,14 @@ impl CloudConversation {
         row
     }
     /// Opened at once, before the server has recorded this conversation:
-    /// sends and history reads wait for [`Self::registered`].
-    pub(super) fn start_registering(&mut self, chat: zuse_protocol::Chat, cx: &mut Context<Self>) {
+    /// sends and history reads wait until `request` (the `CloudRpc` that
+    /// records it) is confirmed.
+    pub(super) fn start_registering(
+        &mut self,
+        chat: zuse_protocol::Chat,
+        request: Value,
+        cx: &mut Context<Self>,
+    ) {
         self.registering = true;
         self.remember_conversation(chat.clone());
         self.state.update(cx, |state, cx| {
@@ -673,15 +682,64 @@ impl CloudConversation {
         });
         self.composer
             .update(cx, |composer, cx| composer.set_cloud_registering(true, cx));
+        self.register(request, std::time::Duration::ZERO, cx);
     }
-    /// The server recorded this conversation (or refused it).
-    pub(super) fn registered(&mut self, result: Result<(), String>, cx: &mut Context<Self>) {
+    /// Send the request that records this conversation, after `delay`. A
+    /// failure shows and is retried with the same request (so the same
+    /// conversation), backing off to half a minute, while the tab is open.
+    fn register(&mut self, request: Value, delay: std::time::Duration, cx: &mut Context<Self>) {
+        let controller = self.target.controller.clone();
+        let session = self.target.initial_session.clone();
+        let started = std::time::Instant::now();
+        let params = request.clone();
+        let task = cx.spawn(async move |this, cx| {
+            if !delay.is_zero() {
+                cx.background_executor().timer(delay).await;
+            }
+            let result = async {
+                let mut reply = controller
+                    .client()
+                    .subscribe_scoped(methods::CLOUD_RPC, params)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let frame = reply
+                    .recv()
+                    .await
+                    .ok_or_else(|| "The new chat was not confirmed.".to_owned())?;
+                if let Some(error) = frame["err"].as_str() {
+                    return Err(error.to_owned());
+                }
+                serde_json::from_value::<zuse_protocol::Chat>(frame["ok"].clone())
+                    .ok()
+                    .filter(|chat| chat.id == session)
+                    .map(|_| ())
+                    .ok_or_else(|| "The new chat was not confirmed.".to_owned())
+            }
+            .await;
+            let _ = this.update(cx, |this, cx| {
+                tracing::info!(workspace = %this.target.workspace,
+                    ms = started.elapsed().as_millis() as u64, ok = result.is_ok(),
+                    "Cloud conversation recorded");
+                this.registered(result, delay, cx)
+            });
+        });
+        self.registration = Some((request, task));
+    }
+    /// The server recorded this conversation, or the attempt failed.
+    fn registered(
+        &mut self,
+        result: Result<(), String>,
+        delay: std::time::Duration,
+        cx: &mut Context<Self>,
+    ) {
         if !self.registering {
             return;
         }
         match result {
             Ok(()) => {
                 self.registering = false;
+                self.registration = None;
+                self.error = None;
                 self.composer
                     .update(cx, |composer, cx| composer.set_cloud_registering(false, cx));
                 if std::mem::take(&mut self.read_again) {
@@ -689,11 +747,18 @@ impl CloudConversation {
                 }
             }
             Err(error) => {
-                self.error = Some(format!(
-                    "This chat could not be opened on its computer. {error}"
-                ));
+                let message =
+                    format!("This chat isn't open on its computer yet: {error} Retrying…");
+                self.error = Some(message.clone());
                 self.composer
-                    .update(cx, |composer, cx| composer.show_error(error, cx));
+                    .update(cx, |composer, cx| composer.show_error(message, cx));
+                if let Some((request, _)) = self.registration.take() {
+                    let next = (delay * 2).clamp(
+                        std::time::Duration::from_secs(2),
+                        std::time::Duration::from_secs(30),
+                    );
+                    self.register(request, next, cx);
+                }
             }
         }
         cx.notify();
@@ -952,12 +1017,16 @@ impl CloudConversation {
         }
         // Registered here but not yet on the computer: keep its row while
         // the computer's chat list catches up, or attaching drops it.
+        // The row lives until the computer lists the conversation (then
+        // `apply_chats` drops it) or this tab closes with its state.
         let registered_only = value["source"] == "admission"
             && value["session"].is_object()
             && value["admission"].is_null();
-        self.state.update(cx, |state, _| {
-            state.pending_cloud_conversation = registered_only.then(|| head.chat.clone());
-        });
+        if registered_only {
+            self.state.update(cx, |state, _| {
+                state.pending_cloud_conversation = Some(head.chat.clone());
+            });
+        }
         // Never inject saved pages into the live watch's delta baseline.
         self.project_saved_history(&head, cx);
         self.composer.update(cx, |composer, cx| {
