@@ -3944,6 +3944,9 @@ pub struct Transcript {
     gallery_swipe: Rc<std::cell::Cell<crate::image_viewer::Swipe>>,
     /// A gallery was opened and waits for its first image to load.
     gallery_opening: bool,
+    /// Shown if the opening gallery's first image cannot be read (a linked
+    /// file that moved, or a machine that went offline).
+    gallery_failure_notice: Option<SharedString>,
     /// Mermaid fences drawn as diagrams in settled Markdown blocks. Each
     /// row's media handler requests its fences while laying out, so only
     /// painted diagrams are rendered (see [`MermaidCache`]).
@@ -4093,12 +4096,88 @@ impl Transcript {
     ) -> Option<render::LinkUi> {
         let roots = self.file_link_roots(source_chat_id, cx);
         let source_local = self.state.read(cx).chat_is_local(source_chat_id);
+        let owner = cx.weak_entity();
         self.workspace_link.clone().map(|mut link| {
             link.source_session = Some(source_chat_id.to_string());
             link.source_local = source_local;
             link.file_roots = Some(roots);
+            // Links to files on the chat's machine are read from that machine:
+            // images open in the viewer here, everything else falls through to
+            // the shell's file preview. Web links pass straight through.
+            let probe = link.clone();
+            let inner = link.handler.clone();
+            link.handler = Rc::new(move |activation, window, cx| {
+                if let Some(file) = linked_file(&probe, activation)
+                    && owner
+                        .update(cx, |this, cx| this.open_linked_file(file, window, cx))
+                        .unwrap_or(false)
+                {
+                    return render::LinkOutcome::Internal;
+                }
+                inner(activation, window, cx)
+            });
             link
         })
+    }
+
+    /// Open a file link the transcript can serve itself. `false` hands the
+    /// link on to the shell. A cloud chat whose computer is not connected
+    /// answers every file link with a quiet notice instead of an empty tab.
+    fn open_linked_file(
+        &mut self,
+        file: LinkedFile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let state = self.state.read(cx);
+        if state.hosted_on_cloud_computer && state.engine().is_none() {
+            let path = match &file {
+                LinkedFile::Image(path) | LinkedFile::Other(path) => path,
+            };
+            crate::toast::show(
+                cx,
+                crate::toast::ToastKind::Info,
+                format!(
+                    "Couldn't open {}. Its computer is offline.",
+                    file_badge_name(path)
+                ),
+            );
+            return true;
+        }
+        match file {
+            LinkedFile::Image(path) => self.open_linked_image(path, window, cx),
+            LinkedFile::Other(_) => false,
+        }
+    }
+
+    /// Show an image the chat linked to, read from the chat's own machine —
+    /// never from this desktop's disk unless the chat runs here. A missing
+    /// file or unreachable machine ends in a quiet notice, not a dead click.
+    fn open_linked_image(
+        &mut self,
+        path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let devices = self.attachment_device_ids(cx);
+        if devices.is_empty() {
+            return false;
+        }
+        let notice = format!(
+            "Couldn't open {}. It may have moved, or its computer is offline.",
+            file_badge_name(&path)
+        );
+        self.open_gallery_with_notice(
+            vec![GalleryEntry {
+                source: Some((devices, path)),
+                preview: None,
+            }],
+            0,
+            Some(notice.into()),
+            window,
+            cx,
+        );
+        true
     }
 
     /// The ordered checkouts a file link from `chat_id` may open against:
@@ -4332,6 +4411,7 @@ impl Transcript {
             attachment_gallery_index: 0,
             gallery_swipe: Rc::default(),
             gallery_opening: false,
+            gallery_failure_notice: None,
             diagrams: Rc::default(),
             diagram_media: None,
             diagram_worker: None,
@@ -6913,9 +6993,23 @@ impl Transcript {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.open_gallery_with_notice(entries, index, None, window, cx);
+    }
+
+    /// Open the lightbox on `entries`. `failure_notice`, when given, is shown
+    /// if the first image cannot be read, so the click is never silent.
+    fn open_gallery_with_notice(
+        &mut self,
+        entries: Vec<GalleryEntry>,
+        index: usize,
+        failure_notice: Option<SharedString>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if index >= entries.len() {
             return;
         }
+        self.gallery_failure_notice = failure_notice;
         self.close_diagram_zoom(cx);
         self.dismiss_sent_pdf();
         self.attachment_preview = None;
@@ -6944,6 +7038,7 @@ impl Transcript {
         if foreign {
             self.attachment_gallery.clear();
             self.gallery_opening = false;
+            self.gallery_failure_notice = None;
             return;
         }
         let index = self.attachment_gallery_index;
@@ -6967,6 +7062,9 @@ impl Transcript {
                         if self.gallery_opening {
                             self.gallery_opening = false;
                             self.attachment_gallery.clear();
+                            if let Some(notice) = self.gallery_failure_notice.take() {
+                                crate::toast::show(cx, crate::toast::ToastKind::Info, notice);
+                            }
                         }
                         return;
                     }
@@ -6981,6 +7079,7 @@ impl Transcript {
         if !current {
             preview.viewer.reset();
             self.attachment_preview = Some(preview);
+            self.gallery_failure_notice = None;
             if std::mem::take(&mut self.gallery_opening) {
                 window.focus(&self.attachment_preview_focus, cx);
             }
@@ -8105,16 +8204,7 @@ impl Transcript {
                                 cx.open_url(&url);
                                 return;
                             }
-                            let devices = this.attachment_device_ids(cx);
-                            this.open_gallery_entries(
-                                vec![GalleryEntry {
-                                    source: Some((devices, source.clone())),
-                                    preview: None,
-                                }],
-                                0,
-                                window,
-                                cx,
-                            );
+                            this.open_linked_file(LinkedFile::Image(source.clone()), window, cx);
                         });
                     })
                     .into_any_element()
@@ -11256,6 +11346,50 @@ struct SentPdfPreview {
     bytes: Arc<Vec<u8>>,
     index: usize,
     pages: usize,
+}
+
+/// A transcript link that names a file on the chat's machine.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum LinkedFile {
+    /// An image, opened in the viewer from its absolute path on that machine.
+    Image(String),
+    /// Any other file; the shell's file preview opens it.
+    Other(String),
+}
+
+/// Classify a link click: web links and copy/external actions are `None`,
+/// as is any target the surface's roots cannot resolve to a file. An image
+/// inside a chat's checkout opens in the viewer by its absolute path on the
+/// chat's machine — a relative link joins the root that owns it — so it is
+/// read from there, never from this disk. Images elsewhere (a bare project
+/// root, an outside path) keep the file preview, which reads them read-only.
+fn linked_file(link: &render::LinkUi, activation: &render::LinkActivation) -> Option<LinkedFile> {
+    use crate::workspace_links::FileLinkResolution;
+    if !matches!(
+        activation.action,
+        render::LinkAction::Primary | render::LinkAction::Internal
+    ) || activation.target.navigation.is_ok()
+    {
+        return None;
+    }
+    let roots = link.file_roots.as_deref()?;
+    match crate::workspace_links::first_root_owning(
+        &activation.target.original,
+        roots.iter().map(|root| root.root.as_str()),
+    )? {
+        FileLinkResolution::Owned { root, link } => {
+            let root = &roots[root];
+            let absolute = root.absolute(&link).to_string_lossy().into_owned();
+            Some(
+                if root.chat.is_some() && crate::attachments::is_image_path(&absolute) {
+                    LinkedFile::Image(absolute)
+                } else {
+                    LinkedFile::Other(absolute)
+                },
+            )
+        }
+        FileLinkResolution::Outside(link) => Some(LinkedFile::Other(link.path)),
+    }
 }
 
 /// One image the lightbox can step to: shown from `preview` once known,
@@ -14900,6 +15034,321 @@ mod tests {
             assert!(this.attachment_preview.is_some());
             assert_eq!(this.attachment_gallery.len(), 1);
             assert!(!this.gallery_opening);
+        });
+    }
+
+    fn linked_file_ui(roots: Vec<crate::workspace_links::FileLinkRoot>) -> render::LinkUi {
+        render::LinkUi {
+            source_session: Some("cloud-chat".into()),
+            source_local: false,
+            file_roots: Some(Rc::new(roots)),
+            handler: Rc::new(|_, _, _| render::LinkOutcome::Rejected),
+        }
+    }
+
+    fn link_click(target: &str, action: render::LinkAction) -> render::LinkActivation {
+        render::LinkActivation {
+            target: render::LinkTarget::new("label", target),
+            action,
+            source_session: Some("cloud-chat".into()),
+        }
+    }
+
+    #[test]
+    fn links_to_files_on_the_chats_machine_are_classified_before_web_routing() {
+        use crate::workspace_links::FileLinkRoot;
+        use render::LinkAction::{Copy, External, Internal, Primary};
+        let ui = linked_file_ui(vec![
+            FileLinkRoot {
+                chat: Some("cloud-chat".into()),
+                root: "/home/zuse/workspace".into(),
+                local: false,
+            },
+            FileLinkRoot {
+                chat: None,
+                root: "/projects/app".into(),
+                local: false,
+            },
+        ]);
+        let image = |path: &str| Some(LinkedFile::Image(path.into()));
+        let other = |path: &str| Some(LinkedFile::Other(path.into()));
+        for (target, action, expected) in [
+            // The reported links: an image and pages the agent wrote.
+            (
+                "/home/zuse/workspace/artifacts/web-preview/sign-in.png",
+                Primary,
+                image("/home/zuse/workspace/artifacts/web-preview/sign-in.png"),
+            ),
+            (
+                "/home/zuse/workspace/artifacts/web-preview/onboarding.html",
+                Primary,
+                other("/home/zuse/workspace/artifacts/web-preview/onboarding.html"),
+            ),
+            // A relative link joins the chat's checkout on its machine.
+            (
+                "artifacts/shot.JPG",
+                Internal,
+                image("/home/zuse/workspace/artifacts/shot.JPG"),
+            ),
+            // Images outside a chat checkout keep the read-only file preview.
+            (
+                "/projects/app/logo.png",
+                Primary,
+                other("/projects/app/logo.png"),
+            ),
+            ("/tmp/report.png", Primary, other("/tmp/report.png")),
+            // Web links, copies and unresolvable paths are not files here.
+            ("https://example.com/shot.png", Primary, None),
+            ("/home/zuse/workspace/shot.png", Copy, None),
+            ("/home/zuse/workspace/shot.png", External, None),
+            ("../secret.png", Primary, None),
+        ] {
+            assert_eq!(
+                linked_file(&ui, &link_click(target, action)),
+                expected,
+                "{target} {action:?}"
+            );
+        }
+        // A surface without file roots offers no file links at all.
+        let mut bare = ui.clone();
+        bare.file_roots = None;
+        assert_eq!(
+            linked_file(&bare, &link_click("/home/zuse/workspace/a.png", Primary)),
+            None
+        );
+    }
+
+    struct LinkedImageRpc {
+        calls: Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+        bytes: Vec<u8>,
+    }
+
+    #[async_trait::async_trait]
+    impl zuse_rpc::RpcService for LinkedImageRpc {
+        async fn handle(
+            &self,
+            method: &str,
+            params: serde_json::Value,
+        ) -> Result<zuse_rpc::RpcReply, zuse_rpc::RpcError> {
+            use base64::Engine as _;
+            if method != zuse_protocol::methods::READ_ATTACHMENT_CHUNK {
+                return Err(zuse_rpc::RpcError::Failed("unsupported".into()));
+            }
+            self.calls.lock().unwrap().push(params.clone());
+            if params["path"]
+                .as_str()
+                .is_some_and(|path| path.contains("missing"))
+            {
+                return Err(zuse_rpc::RpcError::Failed("No such file".into()));
+            }
+            zuse_rpc::RpcReply::value(&serde_json::json!({
+                "name": "sign-in.png",
+                "mimeType": "image/png",
+                "data": base64::engine::general_purpose::STANDARD.encode(&self.bytes),
+                "nextOffset": self.bytes.len(),
+                "done": true,
+            }))
+        }
+    }
+
+    /// A cloud chat's state as its conversation view builds it: the engine
+    /// runs on the computer and reports the computer's device id.
+    fn cloud_chat_state(cx: &mut gpui::TestAppContext, device: &str) -> Entity<AppState> {
+        let chat: zuse_protocol::Chat = serde_json::from_value(serde_json::json!({
+            "id": "cloud-chat",
+            "deviceId": device,
+            "title": null,
+            "archived": false,
+            "cwd": "/home/zuse/workspace",
+            "branch": null,
+            "checkoutId": null,
+            "config": null,
+            "lastMessagePreview": null,
+            "lastMessageAt": null,
+            "createdAt": "2026-11-23T11:00:00Z",
+        }))
+        .unwrap();
+        let device = device.to_owned();
+        cx.new(|_| {
+            let mut state = AppState::new();
+            state.hosted_on_cloud_computer = true;
+            state.local_device_id = Some(device);
+            state.selected_chat = Some("cloud-chat".into());
+            state.apply_chats(vec![chat]);
+            state
+        })
+    }
+
+    fn recording_link_handler(
+        transcript: &Entity<Transcript>,
+        cx: &mut gpui::VisualTestContext,
+    ) -> Rc<RefCell<Vec<String>>> {
+        let forwarded: Rc<RefCell<Vec<String>>> = Rc::default();
+        let recorded = forwarded.clone();
+        transcript.update(cx, |transcript, _| {
+            transcript.set_workspace_link_handler(render::LinkUi {
+                source_session: Some("cloud-chat".into()),
+                source_local: false,
+                file_roots: None,
+                handler: Rc::new(move |activation, _, _| {
+                    recorded
+                        .borrow_mut()
+                        .push(activation.target.original.clone());
+                    render::LinkOutcome::Internal
+                }),
+            })
+        });
+        forwarded
+    }
+
+    fn click_transcript_link(
+        transcript: &Entity<Transcript>,
+        target: &str,
+        cx: &mut gpui::VisualTestContext,
+    ) {
+        // A rendered link's click runs outside the transcript's own update.
+        let ui = transcript
+            .update(cx, |transcript, cx| transcript.link_ui(cx))
+            .expect("the chat has a link handler");
+        cx.update(|window, cx| {
+            render::activate_link(
+                render::LinkTarget::new("label", target),
+                render::LinkAction::Primary,
+                Some(&ui),
+                window,
+                cx,
+            );
+        });
+    }
+
+    fn wait_for(cx: &mut gpui::VisualTestContext, mut done: impl FnMut() -> bool) {
+        for _ in 0..400 {
+            cx.run_until_parked();
+            if done() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!("timed out");
+    }
+
+    #[gpui::test]
+    fn a_cloud_chats_image_link_opens_the_viewer_from_the_computer(cx: &mut gpui::TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        cx.executor().allow_parking();
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+            crate::settings::init(crate::settings::UiSettings::default(), dir.path(), cx);
+        });
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(32, 24)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let state = cloud_chat_state(cx, "cloud-computer-viewer");
+        state.update(cx, |state, _| {
+            state.set_test_engine(crate::state::EngineHandle::from_test_client(
+                zuse_rpc::memory_client(Arc::new(LinkedImageRpc {
+                    calls: calls.clone(),
+                    bytes: png.into_inner(),
+                })),
+            ))
+        });
+        let (transcript, cx) = cx.add_window_view(|_, cx| Transcript::new(state.clone(), cx));
+        let forwarded = recording_link_handler(&transcript, cx);
+
+        let image = "/home/zuse/workspace/artifacts/web-preview/sign-in.png";
+        click_transcript_link(&transcript, image, cx);
+        wait_for(cx, || {
+            matches!(
+                crate::attachments::attachment_snapshot("cloud-computer-viewer", image),
+                crate::attachments::AttachmentSnapshot::Loaded(_)
+            )
+        });
+        transcript.update_in(cx, |this, window, cx| this.resolve_gallery(window, cx));
+        {
+            let calls = calls.lock().unwrap();
+            assert_eq!(calls.len(), 1, "the image is read once");
+            assert_eq!(calls[0]["path"], image);
+            // The computer's engine serves its own file: no relay target, and
+            // never a read of this desktop's disk.
+            assert!(calls[0].get("targetDeviceId").is_none());
+        }
+        transcript.read_with(cx, |this, _| {
+            assert!(this.attachment_preview.is_some(), "the viewer shows it");
+            assert!(!this.gallery_opening);
+        });
+        assert!(
+            forwarded.borrow().is_empty(),
+            "an image never falls through to the desktop's file routing"
+        );
+
+        // Another file goes on to the file preview, which reads through the
+        // same chat; web links keep their normal handling.
+        let page = "/home/zuse/workspace/artifacts/web-preview/onboarding.html";
+        click_transcript_link(&transcript, page, cx);
+        click_transcript_link(&transcript, "https://example.com/docs", cx);
+        assert_eq!(*forwarded.borrow(), [page, "https://example.com/docs"]);
+
+        // A file that is gone ends in a quiet notice, not a dead click.
+        transcript.update(cx, |this, _| this.attachment_preview = None);
+        let missing = "/home/zuse/workspace/artifacts/missing.png";
+        click_transcript_link(&transcript, missing, cx);
+        wait_for(cx, || {
+            matches!(
+                crate::attachments::attachment_snapshot("cloud-computer-viewer", missing),
+                crate::attachments::AttachmentSnapshot::Error { .. }
+            )
+        });
+        transcript.update_in(cx, |this, window, cx| this.resolve_gallery(window, cx));
+        transcript.read_with(cx, |this, _| {
+            assert!(!this.gallery_opening, "no endless wait");
+            assert!(this.attachment_gallery.is_empty());
+        });
+        cx.update(|_, cx| {
+            let messages = crate::toast::messages(cx);
+            assert!(
+                messages
+                    .iter()
+                    .any(|message| message.contains("Couldn't open missing.png")),
+                "{messages:?}"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn an_offline_cloud_chats_file_links_answer_quietly(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+            crate::settings::init(crate::settings::UiSettings::default(), dir.path(), cx);
+        });
+        // History is on screen, but the computer's engine is not connected.
+        let state = cloud_chat_state(cx, "cloud-computer-offline");
+        let (transcript, cx) = cx.add_window_view(|_, cx| Transcript::new(state.clone(), cx));
+        let forwarded = recording_link_handler(&transcript, cx);
+        click_transcript_link(&transcript, "/home/zuse/workspace/sign-in.png", cx);
+        click_transcript_link(&transcript, "/home/zuse/workspace/onboarding.html", cx);
+        click_transcript_link(&transcript, "https://example.com/", cx);
+        assert_eq!(*forwarded.borrow(), ["https://example.com/"]);
+        transcript.read_with(cx, |this, _| {
+            assert!(this.attachment_gallery.is_empty());
+            assert!(!this.gallery_opening);
+        });
+        cx.update(|_, cx| {
+            let messages = crate::toast::messages(cx);
+            for name in ["sign-in.png", "onboarding.html"] {
+                let expected = format!("Couldn't open {name}. Its computer is offline.");
+                assert!(messages.iter().any(|m| *m == expected), "{messages:?}");
+            }
         });
     }
 

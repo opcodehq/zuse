@@ -163,6 +163,7 @@ impl CloudConversation {
             let mut state = AppState::new();
             // Account-owned rendering is available before a guest connects.
             state.connection = ConnectionStatus::Ready;
+            state.hosted_on_cloud_computer = true;
             state.selected_chat = Some(session);
             state.auto_selected = true;
             // The last transcript this app showed for the chat paints at
@@ -293,6 +294,17 @@ impl CloudConversation {
         // Paint the saved copy now; the fresh read follows the account check.
         this.read_provisional_history(cx);
         this
+    }
+    /// Route the transcript's links through the shell: file links open on
+    /// this computer's own files, web links keep their normal handling.
+    pub(super) fn set_link_handler(
+        &mut self,
+        links: crate::markdown::render::LinkUi,
+        cx: &mut Context<Self>,
+    ) {
+        self.transcript.update(cx, |transcript, _| {
+            transcript.set_workspace_link_handler(links)
+        });
     }
     #[cfg(test)]
     pub(super) fn set_computer_metadata_for_test(&mut self, metadata: Value) {
@@ -1272,7 +1284,10 @@ impl Shell {
                 }
             }
         }
-        cx.new(|cx| CloudConversation::new(target, row, launch, self.boot.clone(), cx))
+        let links = Self::session_links(Some(target.initial_session.clone()), cx);
+        let view = cx.new(|cx| CloudConversation::new(target, row, launch, self.boot.clone(), cx));
+        view.update(cx, |view, cx| view.set_link_handler(links, cx));
+        view
     }
 }
 
@@ -2708,6 +2723,105 @@ mod tests {
                     .child(shell.workspace_sidebar_header(cx))
             })
         }
+    }
+    #[gpui::test]
+    fn a_cloud_chats_file_links_open_on_its_own_computer(cx: &mut TestAppContext) {
+        use crate::markdown::render::{LinkAction, LinkActivation, LinkOutcome, LinkTarget};
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let directory = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            initialize(cx);
+            settings::init(UiSettings::default(), directory.path(), cx);
+            crate::history::init(
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                cx,
+            );
+        });
+        let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
+            std::sync::Arc::new(PendingController),
+        ));
+        let (host, cx) = cx.add_window_view(|_, cx| {
+            let shell = cx.new(|cx| {
+                let state = cx.new(|_| {
+                    let mut state = AppState::new();
+                    account(&mut state);
+                    state
+                });
+                let mut shell = Shell::new(state, boot(directory.path()), cx);
+                shell.reduced_motion = true;
+                shell.open_cloud_conversation(
+                    CloudTarget {
+                        controller,
+                        subject: "owner".into(),
+                        organization: None,
+                        workspace: "task".into(),
+                        initial_session: "session".into(),
+                    },
+                    json!({"workspaceId":"task","initialSessionId":"session"}),
+                    Value::Null,
+                    cx,
+                );
+                shell
+            });
+            CloudChromeHost {
+                shell,
+                _directory: directory,
+            }
+        });
+        let shell = host.read_with(cx, |host, _| host.shell.clone());
+        shell.update_in(cx, |shell, window, cx| {
+            let view = shell.cloud_conversation.clone().unwrap();
+            let state = view.read(cx).state.clone();
+            // The computer's engine reports its own device id; its paths are
+            // still never this desktop's.
+            state.update(cx, |state, _| {
+                state.local_device_id = Some("cloud-computer".into())
+            });
+            assert!(state.read(cx).hosted_on_cloud_computer);
+            assert!(!state.read(cx).chat_is_local("session"));
+            // Before the fix the cloud transcript had no link handler, so
+            // every file link fell back to web validation and was dropped.
+            let transcript = view.read(cx).transcript_for_test().clone();
+            let link = transcript
+                .update(cx, |transcript, cx| transcript.link_ui(cx))
+                .expect("a cloud chat's links are routed");
+            assert_eq!(link.source_session.as_deref(), Some("session"));
+            assert!(!link.source_local, "no desktop file actions");
+
+            // The shell's own state has no selection while a cloud chat is
+            // open; the link still counts as the open chat's.
+            assert!(shell.state.read(cx).selected_chat.is_none());
+            let page = "/home/zuse/workspace/artifacts/web-preview/onboarding.html";
+            let activation = LinkActivation {
+                target: LinkTarget::new("Web onboarding", page),
+                action: LinkAction::Primary,
+                source_session: Some("session".into()),
+            };
+            assert_eq!(
+                shell.activate_session_link(&activation, window, cx),
+                LinkOutcome::Internal
+            );
+            let id = shell.file_surface_seq;
+            assert_eq!(shell.file_surfaces[&id].read(cx).chat_id(), "session");
+            assert_eq!(shell.file_surface_paths[&id], page);
+            // Web links keep their normal handling.
+            let web = LinkActivation {
+                target: LinkTarget::new("Docs", "https://example.com/docs"),
+                action: LinkAction::External,
+                source_session: Some("session".into()),
+            };
+            assert_eq!(
+                shell.activate_session_link(&web, window, cx),
+                LinkOutcome::External("https://example.com/docs".into())
+            );
+        });
     }
     #[gpui::test]
     fn cloud_only_chat_paints_header_logo_and_opens_right_sidebar(cx: &mut TestAppContext) {

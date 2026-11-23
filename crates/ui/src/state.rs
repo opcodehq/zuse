@@ -1026,6 +1026,10 @@ pub struct AppState {
     /// canvas always reopens where the user left it.
     pub(crate) canvas_target: Option<CanvasTarget>,
     pub(crate) cloud_project: Option<serde_json::Value>,
+    /// This state renders a cloud computer's chat: its engine runs on that
+    /// computer, so the paths it names are never on this desktop's disk even
+    /// though they match the engine's own device id.
+    pub(crate) hosted_on_cloud_computer: bool,
     initial_cloud_chat: Option<String>,
     pub(crate) pending_cloud_resume: Option<(String, String, bool)>,
     pub selected_chat: Option<String>,
@@ -1237,6 +1241,7 @@ impl AppState {
             selected_device: None,
             canvas_target: None,
             cloud_project: None,
+            hosted_on_cloud_computer: false,
             initial_cloud_chat: None,
             selected_chat: None,
             pending_cloud_resume: None,
@@ -1920,10 +1925,13 @@ impl AppState {
         use crate::workspace_links::FileLinkRoot;
         // An unprobed device id means the chats on screen are the local
         // engine's — everything shown counts as local until sync says else.
+        // A cloud computer's engine owns its own device id, never this disk.
         let on_this_device = |device: &str| {
-            self.local_device_id
-                .as_deref()
-                .is_none_or(|local| device == local)
+            !self.hosted_on_cloud_computer
+                && self
+                    .local_device_id
+                    .as_deref()
+                    .is_none_or(|local| device == local)
         };
         let mut roots: Vec<FileLinkRoot> = Vec::new();
         let mut push = |chat: Option<&Chat>, device: &str, root: Option<&str>| {
@@ -1972,6 +1980,9 @@ impl AppState {
     /// unprobed device id (or an unknown chat row) counts as local, matching
     /// `file_link_roots`.
     pub(crate) fn chat_is_local(&self, chat_id: &str) -> bool {
+        if self.hosted_on_cloud_computer {
+            return false;
+        }
         self.chats
             .iter()
             .find(|chat| chat.id == chat_id)
@@ -6518,6 +6529,37 @@ mod tests {
                 _ => None,
             },
             Some((Some("parent".into()), "src/lib.rs".into()))
+        );
+    }
+
+    #[test]
+    fn a_cloud_computers_chat_never_names_files_on_this_disk() {
+        use crate::workspace_links::FileLinkRoot;
+        let mut state = AppState::new();
+        // The cloud computer's engine reports its own device id, which the
+        // chat row shares — yet nothing it names is on this desktop.
+        state.local_device_id = Some("dev".into());
+        state.hosted_on_cloud_computer = true;
+        let mut cloud = chat("cloud", 0, None);
+        cloud.cwd = Some("/home/zuse/workspace".into());
+        state.apply_chats(vec![cloud]);
+        state.apply_spaces(vec![space("repo", "dev", "/home/zuse/workspace/repo", 0)]);
+        assert!(!state.chat_is_local("cloud"));
+        assert!(!state.chat_is_local("unknown"));
+        assert_eq!(
+            state.file_link_roots("cloud"),
+            vec![
+                FileLinkRoot {
+                    chat: Some("cloud".into()),
+                    root: "/home/zuse/workspace".into(),
+                    local: false,
+                },
+                FileLinkRoot {
+                    chat: None,
+                    root: "/home/zuse/workspace/repo".into(),
+                    local: false,
+                },
+            ]
         );
     }
 

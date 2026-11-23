@@ -4577,9 +4577,16 @@ impl Shell {
         let Some(source) = activation.source_session.clone() else {
             return LinkOutcome::Rejected;
         };
+        // A cloud chat's selection lives in its own conversation state; the
+        // shell's state has no chat selected while one is open.
         let from_main = !self.active_chat.is_empty()
             && source == self.active_chat
-            && self.state.read(cx).selected_chat.as_deref() == Some(self.active_chat.as_str());
+            && self
+                .conversation_state(cx)
+                .read(cx)
+                .selected_chat
+                .as_deref()
+                == Some(self.active_chat.as_str());
         if !from_main && !self.side_chat_open_here(&source, cx) {
             return LinkOutcome::Rejected;
         }
