@@ -2729,9 +2729,25 @@ fn opencode_release_package(installed: &str) -> &'static str {
 /// Whether `installed` is `target` or newer. False unless both are version
 /// numbers, so a format this can't compare never skips an install.
 fn version_at_least(installed: &str, target: &str) -> bool {
-    version_numbers(installed).is_some()
-        && version_numbers(target).is_some()
-        && !version_is_newer(target, installed)
+    if version_numbers(installed).is_none()
+        || version_numbers(target).is_none()
+        || version_is_newer(target, installed)
+    {
+        return false;
+    }
+    // On the same core a prerelease comes before its release: `2.0.0-beta.1`
+    // is short of `2.0.0`. Two prereleases of one core count as equal, as
+    // they do for update checks.
+    version_is_newer(installed, target) || !is_prerelease(installed) || is_prerelease(target)
+}
+
+/// Whether a version carries a prerelease tag (`-beta.1`). Build metadata
+/// after `+` doesn't count.
+fn is_prerelease(version: &str) -> bool {
+    version
+        .split('+')
+        .next()
+        .is_some_and(|version| version.contains('-'))
 }
 
 fn version_is_newer(latest: &str, installed: &str) -> bool {
@@ -3370,6 +3386,12 @@ esac
         assert!(version_at_least("2.1.0", "2.0.0"));
         assert!(version_at_least("v2.0", "2.0.0"));
         assert!(!version_at_least("1.9.9", "2.0.0"));
+        // A prerelease is short of its own release, not of older ones.
+        assert!(!version_at_least("2.0.0-alpha.1", "2.0.0"));
+        assert!(version_at_least("2.0.0-alpha.1", "1.9.0"));
+        assert!(version_at_least("2.1.0-alpha.1", "2.0.0"));
+        assert!(version_at_least("2.0.0", "2.0.0-rc.1"));
+        assert!(version_at_least("2.0.0+build.5", "2.0.0"));
         // Formats it can't compare never skip an install.
         assert!(!version_at_least("0.20.0", "3 commits behind"));
         assert!(!version_at_least("nightly", "2.0.0"));
