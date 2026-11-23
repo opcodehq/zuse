@@ -9,6 +9,34 @@ pub(super) fn active_tab_text_color(theme: &Theme) -> gpui::Hsla {
     crate::theme::mix(theme.text, theme.text_muted, 0.3)
 }
 
+/// The chip every conversation, file and diff tab in the titlebar strip
+/// shares.
+pub(super) fn conversation_tab_chip(
+    id: SharedString,
+    title: SharedString,
+    active: bool,
+    theme: &Theme,
+) -> gpui::Stateful<gpui::Div> {
+    crate::surface_chrome::workspace_tab(id, active, theme)
+        .role(gpui::Role::Tab)
+        .aria_label(title)
+        .aria_selected(active)
+        .cursor_pointer()
+        .flex_none()
+        .w(px(160.))
+        .h(px(28.))
+        .px(px(9.))
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .text_size(crate::typography::text_md())
+        .when(active, |d| {
+            d.text_color(active_tab_text_color(theme))
+                .font_weight(gpui::FontWeight::MEDIUM)
+        })
+        .when(!active, |d| d.text_color(theme.text_muted))
+}
+
 /// The × every closable tab shares: shown on the active tab, revealed on
 /// hover (of `group`) for the rest.
 pub(super) fn tab_close_button(
@@ -703,83 +731,20 @@ impl Shell {
         }
     }
 
-    pub(super) fn render_thread_conversations(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// The open chat's file and commit-diff tabs as titlebar chips. Local and
+    /// cloud conversation strips both end with them, so a file opened from
+    /// the Files panel always gets a tab beside the chat it belongs to.
+    pub(super) fn render_main_tab_chips(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let theme = Theme::of(cx).clone();
-        let Some((_, rows, closed_rows)) = self.thread_conversation_tabs(cx) else {
-            return Empty.into_any_element();
-        };
-        let state = self.state.read(cx);
-        let Some(selected) = state.selected_chat_row() else {
-            return Empty.into_any_element();
-        };
-        // Side chats of the open conversation list after its siblings; they
-        // open in the right pane, beside the conversation they branch from.
-        let mut side_chats: Vec<_> = state
-            .chats
-            .iter()
-            .filter(|chat| {
-                chat.parent_chat_id.as_deref() == Some(selected.id.as_str()) && !chat.archived
-            })
-            .cloned()
-            .collect();
-        side_chats.sort_by_key(|chat| chat.created_at);
-        // Tabs whose agent is mid-turn trade their harness icon for the
-        // activity glyph, so work in a background tab stays visible.
-        let now = Utc::now();
-        let working: std::collections::HashSet<String> = rows
-            .iter()
-            .chain(&side_chats)
-            .filter(|chat| {
-                state.display_status_for(chat, now) == zuse_protocol::ChatIndicator::Working
-            })
-            .map(|chat| chat.id.clone())
-            .collect();
-        let selected_id = selected.id.clone();
-        let archived = selected.archived;
         let main_tab = self.active_main_tab(cx);
-        let main_tabs = self.main_tab_rows(cx);
-        let closable = rows.len() > 1;
-        let tab_spinner = |id: &str, cx: &mut Context<Self>| {
-            div()
-                .size(px(14.))
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(crate::loaders::mini_glyph_spinner(
-                    format!("thread-conversation-working-{id}"),
-                    2.0,
-                    theme.loader_glyph(),
-                    cx.entity_id(),
-                    cx,
-                ))
-                .into_any_element()
-        };
         let tab_chip = |id: SharedString, title: SharedString, active: bool| {
-            crate::surface_chrome::workspace_tab(id, active, &theme)
-                .role(gpui::Role::Tab)
-                .aria_label(title)
-                .aria_selected(active)
-                .cursor_pointer()
-                .flex_none()
-                .w(px(160.))
-                .h(px(28.))
-                .px(px(9.))
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .text_size(crate::typography::text_md())
-                .when(active, |d| {
-                    d.text_color(active_tab_text_color(&theme))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                })
-                .when(!active, |d| d.text_color(theme.text_muted))
+            conversation_tab_chip(id, title, active, &theme)
         };
         let close_button =
             |id: SharedString, label: &'static str, active: bool, group: SharedString| {
                 tab_close_button(id, label, active, group, &theme)
             };
-        let main_chips = main_tabs
+        self.main_tab_rows(cx)
             .into_iter()
             .map(|row| {
                 let main_tabs::MainTabRow {
@@ -879,7 +844,68 @@ impl Shell {
                     }))
                     .into_any_element()
             })
-            .collect::<Vec<_>>();
+            .collect::<Vec<_>>()
+    }
+
+    pub(super) fn render_thread_conversations(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::of(cx).clone();
+        let Some((_, rows, closed_rows)) = self.thread_conversation_tabs(cx) else {
+            return Empty.into_any_element();
+        };
+        let state = self.state.read(cx);
+        let Some(selected) = state.selected_chat_row() else {
+            return Empty.into_any_element();
+        };
+        // Side chats of the open conversation list after its siblings; they
+        // open in the right pane, beside the conversation they branch from.
+        let mut side_chats: Vec<_> = state
+            .chats
+            .iter()
+            .filter(|chat| {
+                chat.parent_chat_id.as_deref() == Some(selected.id.as_str()) && !chat.archived
+            })
+            .cloned()
+            .collect();
+        side_chats.sort_by_key(|chat| chat.created_at);
+        // Tabs whose agent is mid-turn trade their harness icon for the
+        // activity glyph, so work in a background tab stays visible.
+        let now = Utc::now();
+        let working: std::collections::HashSet<String> = rows
+            .iter()
+            .chain(&side_chats)
+            .filter(|chat| {
+                state.display_status_for(chat, now) == zuse_protocol::ChatIndicator::Working
+            })
+            .map(|chat| chat.id.clone())
+            .collect();
+        let selected_id = selected.id.clone();
+        let archived = selected.archived;
+        let main_tab = self.active_main_tab(cx);
+        let closable = rows.len() > 1;
+        let tab_spinner = |id: &str, cx: &mut Context<Self>| {
+            div()
+                .size(px(14.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(crate::loaders::mini_glyph_spinner(
+                    format!("thread-conversation-working-{id}"),
+                    2.0,
+                    theme.loader_glyph(),
+                    cx.entity_id(),
+                    cx,
+                ))
+                .into_any_element()
+        };
+        let tab_chip = |id: SharedString, title: SharedString, active: bool| {
+            conversation_tab_chip(id, title, active, &theme)
+        };
+        let close_button =
+            |id: SharedString, label: &'static str, active: bool, group: SharedString| {
+                tab_close_button(id, label, active, group, &theme)
+            };
+        let main_chips = self.render_main_tab_chips(cx);
         let conversation_chips = rows
             .into_iter()
             .map(|chat| {

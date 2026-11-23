@@ -424,6 +424,10 @@ impl Shell {
             return None;
         }
         let theme = Theme::of(cx).clone();
+        // A file or diff tab in front stands in for the conversation, as in
+        // a local chat: the chat tab stays listed but not selected.
+        let main_tab_active = self.active_main_tab(cx).is_some();
+        let main_chips = self.render_main_tab_chips(cx);
         let tabs = self
             .cloud_tabs
             .views
@@ -447,7 +451,8 @@ impl Shell {
                         )
                     })
                     .or_else(|| draft.and_then(|(_, harness)| harness));
-                let active = index == self.cloud_tabs.active;
+                let current = index == self.cloud_tabs.active;
+                let active = current && !main_tab_active;
                 // Mid-turn, the tab trades its agent icon for the activity
                 // glyph, like a local chat's tab.
                 let working = view
@@ -470,6 +475,7 @@ impl Shell {
                     tab.text_color(super::tabs::active_tab_text_color(&theme))
                 })
                 .when(!active, |tab| tab.text_color(theme.text_muted))
+                .debug_selector(move || format!("cloud-conversation-tab-{index}"))
                 .cursor_pointer()
                 .text_size(crate::typography::text_md())
                 .child(if working {
@@ -503,7 +509,13 @@ impl Shell {
                             this.close_cloud_tab(index, cx);
                         })),
                 )
-                .on_click(cx.listener(move |this, _, _, cx| this.select_cloud_tab(index, cx)))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if current && main_tab_active {
+                        this.activate_main_tab(None, cx);
+                    } else {
+                        this.select_cloud_tab(index, cx);
+                    }
+                }))
             })
             .collect::<Vec<_>>();
         Some(
@@ -526,6 +538,7 @@ impl Shell {
                         .child(icon(icons::PLUS).size(px(14.)))
                         .on_click(cx.listener(|this, _, _, cx| this.open_new_conversation_tab(cx))),
                 )
+                .children(main_chips)
                 .into_any_element(),
         )
     }
@@ -1562,6 +1575,110 @@ mod tests {
         {
             let mut visual = gpui::VisualTestContext::from_window(tabs.into(), cx);
             assert!(visual.debug_bounds("cloud-tab-working-0").is_none());
+        }
+        tabs.update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+    }
+
+    /// A file opened from a cloud chat's Files panel gets its own tab beside
+    /// the chat tab, as in a local chat: the chat tab switches back to the
+    /// conversation, and closing the file tab returns to it too.
+    #[gpui::test]
+    fn a_cloud_chats_file_opens_in_a_tab_beside_the_chat(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| gpui_tokio::init_from_handle(cx, runtime.handle().clone()));
+        let window = draft_shell(cx, dir.path());
+        let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
+            std::sync::Arc::new(Pending),
+        ));
+        let row = json!({"workspaceId":"w","initialSessionId":"s","projectId":"p","title":"Cloud",
+            "state":"ready","createdAt":1,"updatedAt":1});
+        let file = window
+            .update(cx, |shell, window, cx| {
+                shell.reduced_motion = true;
+                shell.state.update(cx, |state, _| {
+                    state.set_test_engine(controller.clone());
+                    catalog(state, json!([row.clone()]));
+                });
+                shell.open_cloud_conversation(
+                    crate::state::CloudTarget {
+                        controller: controller.clone(),
+                        subject: "owner".into(),
+                        organization: None,
+                        workspace: "w".into(),
+                        initial_session: "s".into(),
+                    },
+                    row.clone(),
+                    Value::Null,
+                    cx,
+                );
+                assert!(shell.cloud_conversation.is_some());
+                shell.add_files_surface(window, cx);
+                shell.add_file_surface("README.md".into(), window, cx);
+                let file = shell.active_main_tab(cx).expect("the file is in front");
+                assert_eq!(shell.main_tab_rows(cx).len(), 1);
+                file
+            })
+            .unwrap();
+        let main_tabs::MainTab::File(id) = file else {
+            panic!("expected a file tab, got {file:?}");
+        };
+        let shell = window.entity(cx).unwrap();
+        let tabs = cx.add_window(|_, _| TabsOnly {
+            shell: shell.clone(),
+            _dir: tempfile::tempdir().unwrap(),
+        });
+        // `debug_bounds` takes a static selector.
+        let file_tab: &'static str = format!("main-tab-file-{id}").leak();
+        let draw = |cx: &mut TestAppContext| {
+            cx.update_window(tabs.into(), |_, window, cx| window.draw(cx).clear())
+                .unwrap();
+        };
+        draw(cx);
+        {
+            let mut visual = gpui::VisualTestContext::from_window(tabs.into(), cx);
+            assert!(
+                visual.debug_bounds(file_tab).is_some(),
+                "the file has a tab in the cloud strip"
+            );
+            let chat = visual
+                .debug_bounds("cloud-conversation-tab-0")
+                .expect("the chat tab stays listed");
+            visual.simulate_click(chat.center(), gpui::Modifiers::default());
+        }
+        shell.read_with(cx, |shell, cx| {
+            assert_eq!(
+                shell.active_main_tab(cx),
+                None,
+                "the chat tab shows the chat"
+            );
+            assert_eq!(shell.main_tab_rows(cx).len(), 1, "the file tab stays");
+        });
+        draw(cx);
+        {
+            let mut visual = gpui::VisualTestContext::from_window(tabs.into(), cx);
+            let file = visual
+                .debug_bounds(file_tab)
+                .expect("the file tab is still listed");
+            visual.simulate_click(file.center(), gpui::Modifiers::default());
+        }
+        shell.update(cx, |shell, cx| {
+            assert_eq!(shell.active_main_tab(cx), Some(file), "back on the file");
+            shell.close_main_tab(file, cx);
+            assert_eq!(shell.active_main_tab(cx), None, "closing returns to chat");
+            assert!(shell.main_tab_rows(cx).is_empty());
+            assert!(shell.cloud_conversation.is_some());
+        });
+        draw(cx);
+        {
+            let mut visual = gpui::VisualTestContext::from_window(tabs.into(), cx);
+            assert!(visual.debug_bounds(file_tab).is_none());
+            assert!(visual.debug_bounds("cloud-conversation-tab-0").is_some());
         }
         tabs.update(cx, |_, window, _| window.remove_window())
             .unwrap();
