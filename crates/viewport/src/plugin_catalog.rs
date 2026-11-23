@@ -104,7 +104,9 @@ pub fn logo(domain: &str, name: &str, extent: f32, background: Hsla, muted: Hsla
             .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
     {
         // GPUI fetches and caches remote images when their elements are rendered.
-        Some(format!("https://www.google.com/s2/favicons?domain={domain}&sz=128"))
+        Some(format!(
+            "https://www.google.com/s2/favicons?domain={domain}&sz=128"
+        ))
     } else {
         None
     };
