@@ -1591,6 +1591,10 @@ mod tests {
                 assert_eq!(view.target.workspace, "task1");
                 assert_eq!(view.target.initial_session, session);
                 assert_eq!(view.title, "New chat");
+                assert!(
+                    view.composer.read(cx).failure.is_none(),
+                    "the held send's notice clears once the chat is recorded"
+                );
                 assert_eq!(view.thread_id().as_deref(), Some("thread1"));
                 assert_eq!(shell.cloud_tabs.active, 1);
                 assert!(shell.closed_cloud_conversations(cx).is_empty());

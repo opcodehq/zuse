@@ -8,6 +8,10 @@ mod runtime_update;
 mod unknown;
 mod waiting;
 mod wake;
+/// Shown when a message is sent before the server has recorded its new
+/// conversation; cleared once it has.
+const STILL_OPENING: &str =
+    "This chat is still opening on its computer. Your draft is preserved; send again in a moment.";
 #[derive(Default)]
 pub(super) struct Launch {
     pub task: Option<Task<()>>,
@@ -204,7 +208,12 @@ impl Composer {
     /// Hold sends while the server records this new conversation.
     pub(crate) fn set_cloud_registering(&mut self, registering: bool, cx: &mut Context<Self>) {
         self.cloud.registering = registering;
-        if !registering {
+        if !registering
+            && self
+                .failure
+                .as_ref()
+                .is_some_and(|failure| failure.as_ref() == STILL_OPENING)
+        {
             self.failure = None;
         }
         cx.notify();
@@ -242,10 +251,7 @@ impl Composer {
             return true;
         }
         if self.cloud.registering {
-            self.failure = Some(
-                "This chat is still opening on its computer. Your draft is preserved; send again in a moment."
-                    .into(),
-            );
+            self.failure = Some(STILL_OPENING.into());
             cx.notify();
             return true;
         }
