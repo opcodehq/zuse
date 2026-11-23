@@ -711,6 +711,14 @@ impl Shell {
 
     /// Reopen a closed conversation from the history menu as the active tab.
     fn restore_thread_conversation(&mut self, chat_id: String, cx: &mut Context<Self>) {
+        if self.cloud_conversation.is_some() {
+            // A cloud chat's conversations live on its computer, not in this
+            // device's thread list: reopen it in a tab of its own.
+            self.close_conversation_history(cx);
+            self.restore_cloud_conversation(chat_id, cx);
+            self.activate_main_tab(None, cx);
+            return;
+        }
         if let Some((root, ..)) = self.thread_conversation_tabs(cx)
             && let Some(closed) = self.settings.closed_thread_conversations.get_mut(&root)
         {
@@ -1035,63 +1043,10 @@ impl Shell {
                 .into_any_element()
             })
             .collect::<Vec<_>>();
-        // Quiet 24px strip buttons: the `+` after the last tab and the
-        // history clock at the strip's right end.
         let strip_button = |id: &'static str, glyph: &'static str, label: &'static str| {
-            div()
-                .id(id)
-                .role(gpui::Role::Button)
-                .aria_label(label)
-                .size(px(24.))
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(7.))
-                .cursor_pointer()
-                .hover(|d| d.bg(theme.muted_fill().opacity(0.6)))
-                .tip(label)
-                .child(icon(glyph).size(px(14.)).text_color(theme.text_muted))
+            strip_button(&theme, id, glyph, label)
         };
-        let history_open = self.conversation_history.get().is_some();
-        let history = strip_button(
-            "thread-conversation-history",
-            icons::HISTORY,
-            "Earlier chats",
-        )
-        .aria_expanded(history_open)
-        .when(history_open, |d| d.bg(theme.muted_fill().opacity(0.6)))
-        .block_mouse_except_scroll()
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|this, _, window, _| {
-                window.prevent_default();
-                this.conversation_history.note_trigger_press();
-            }),
-        )
-        .on_click(cx.listener(|this, _, _, cx| {
-            cx.stop_propagation();
-            if this.conversation_history.take_press_was_open() {
-                this.close_conversation_history(cx);
-            } else {
-                this.conversation_history.open(());
-                cx.notify();
-            }
-        }));
-        let history = if history_open {
-            let closing = self.conversation_history.closing_since();
-            let menu = self.render_conversation_history(&closed_rows, &theme, cx);
-            history
-                .relative()
-                .child(popover::anchored_menu_below_end(
-                    "thread-conversation-history-menu",
-                    menu,
-                    closing,
-                ))
-                .into_any_element()
-        } else {
-            history.into_any_element()
-        };
+        let history = self.render_conversation_history_button(&closed_rows, &theme, cx);
         div()
             .w_full()
             .flex()
@@ -1126,6 +1081,55 @@ impl Shell {
             .child(div().flex_1())
             .child(history)
             .into_any_element()
+    }
+
+    /// The strip's history clock and its menu of `closed` conversations.
+    pub(super) fn render_conversation_history_button(
+        &self,
+        closed: &[zuse_protocol::Chat],
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let history_open = self.conversation_history.get().is_some();
+        let history = strip_button(
+            theme,
+            "thread-conversation-history",
+            icons::HISTORY,
+            "Earlier chats",
+        )
+        .aria_expanded(history_open)
+        .when(history_open, |d| d.bg(theme.muted_fill().opacity(0.6)))
+        .block_mouse_except_scroll()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, window, _| {
+                window.prevent_default();
+                this.conversation_history.note_trigger_press();
+            }),
+        )
+        .on_click(cx.listener(|this, _, _, cx| {
+            cx.stop_propagation();
+            if this.conversation_history.take_press_was_open() {
+                this.close_conversation_history(cx);
+            } else {
+                this.conversation_history.open(());
+                cx.notify();
+            }
+        }));
+        if history_open {
+            let closing = self.conversation_history.closing_since();
+            let menu = self.render_conversation_history(closed, theme, cx);
+            history
+                .relative()
+                .child(popover::anchored_menu_below_end(
+                    "thread-conversation-history-menu",
+                    menu,
+                    closing,
+                ))
+                .into_any_element()
+        } else {
+            history.into_any_element()
+        }
     }
 
     /// The history menu: this thread's closed conversations, most recent
@@ -1468,6 +1472,30 @@ impl Shell {
         self.titlebar_drag_region("chat-titlebar", bar, cx)
             .into_any_element()
     }
+}
+
+/// A quiet 24px strip button: the `+` after the last tab and the history
+/// clock at the strip's right end.
+pub(super) fn strip_button(
+    theme: &Theme,
+    id: &'static str,
+    glyph: &'static str,
+    label: &'static str,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .size(px(24.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(7.))
+        .cursor_pointer()
+        .hover(|d| d.bg(theme.muted_fill().opacity(0.6)))
+        .tip(label)
+        .child(icon(glyph).size(px(14.)).text_color(theme.text_muted))
 }
 
 #[cfg(test)]

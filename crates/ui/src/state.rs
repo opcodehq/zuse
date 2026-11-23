@@ -1003,6 +1003,10 @@ pub struct AppState {
     /// `pending_side_chat` was started by hand and nothing has minted it:
     /// no registry row, no doc, until its first send.
     unsaved_side_chat: bool,
+    /// A cloud conversation the server registered that the computer has not
+    /// installed yet (it does on its first run): kept in the list until the
+    /// computer's own list has it, so its selection survives attaching.
+    pub(crate) pending_cloud_conversation: Option<Chat>,
     pub sessions: Vec<Session>,
     /// Synced user/org sidebar pin state. Local workspaces deliberately ignore
     /// this and continue reading their device-local settings entry.
@@ -1233,6 +1237,7 @@ impl AppState {
             chat_configuration: Default::default(),
             pending_side_chat: None,
             unsaved_side_chat: false,
+            pending_cloud_conversation: None,
             sessions: Vec::new(),
             sidebar_preferences: SidebarPreferencesState::default(),
             session_presentation: None,
@@ -1652,6 +1657,13 @@ impl AppState {
             if chats.iter().any(|chat| chat.id == pending.id) {
                 self.pending_side_chat = None;
                 changed = true;
+            } else {
+                chats.push(pending.clone());
+            }
+        }
+        if let Some(pending) = &self.pending_cloud_conversation {
+            if chats.iter().any(|chat| chat.id == pending.id) {
+                self.pending_cloud_conversation = None;
             } else {
                 chats.push(pending.clone());
             }
@@ -6894,6 +6906,24 @@ mod tests {
         state.selected_chat = Some("b".into());
         state.apply_chats(vec![chat("b", 1, None), chat("c", 2, None)]);
         assert_eq!(state.selected_chat.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn a_registered_cloud_conversation_stays_selected_until_its_computer_lists_it() {
+        let mut state = AppState::new();
+        state.pending_cloud_conversation = Some(chat("added", 2, None));
+        state.selected_chat = Some("added".into());
+        state.apply_chats(vec![chat("first", 0, None)]);
+        assert_eq!(state.selected_chat.as_deref(), Some("added"));
+        assert!(state.chats.iter().any(|chat| chat.id == "added"));
+        // The computer installs it on its first message and lists it.
+        state.apply_chats(vec![chat("first", 0, None), chat("added", 3, None)]);
+        assert!(state.pending_cloud_conversation.is_none());
+        assert_eq!(
+            state.chats.iter().filter(|chat| chat.id == "added").count(),
+            1
+        );
+        assert_eq!(state.selected_chat.as_deref(), Some("added"));
     }
 
     fn clock_epoch() -> DateTime<Utc> {

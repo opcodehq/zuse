@@ -48,6 +48,10 @@ pub(super) struct Launch {
     pub(super) failure: Option<SharedString>,
     /// When the new chat's first message was sent.
     started_at: Option<std::time::Instant>,
+    /// A conversation just added beside the computer's others is still being
+    /// recorded by the server (a few tens of milliseconds, no computer work):
+    /// a send waits for it, so it never reaches the server unregistered.
+    registering: bool,
 }
 impl Launch {
     pub(super) fn admitted(&self) -> bool {
@@ -197,6 +201,14 @@ impl Composer {
     pub(crate) fn is_native_cloud(&self) -> bool {
         self.cloud.native.is_some()
     }
+    /// Hold sends while the server records this new conversation.
+    pub(crate) fn set_cloud_registering(&mut self, registering: bool, cx: &mut Context<Self>) {
+        self.cloud.registering = registering;
+        if !registering {
+            self.failure = None;
+        }
+        cx.notify();
+    }
     pub(crate) fn set_cloud_task_sleeping(&mut self, sleeping: bool) {
         if let Some(task) = &mut self.cloud.native {
             task.wake = sleeping;
@@ -227,6 +239,14 @@ impl Composer {
             return false;
         }
         if self.cloud.task.is_some() {
+            return true;
+        }
+        if self.cloud.registering {
+            self.failure = Some(
+                "This chat is still opening on its computer. Your draft is preserved; send again in a moment."
+                    .into(),
+            );
+            cx.notify();
             return true;
         }
         if self.cloud_unknown_blocks_send(cx) {
