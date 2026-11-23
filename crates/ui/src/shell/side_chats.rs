@@ -671,7 +671,11 @@ mod tests {
                 assert!(shell.right_pane_shown(cx));
                 assert_eq!(shell.resolved_right_active(cx), RightSurface::SideChat(id));
                 assert_eq!(
-                    shell.side_chats[&id].state.read(cx).selected_chat.as_deref(),
+                    shell.side_chats[&id]
+                        .state
+                        .read(cx)
+                        .selected_chat
+                        .as_deref(),
                     Some("side")
                 );
 
@@ -688,11 +692,7 @@ mod tests {
                 shell.open_child_chat_tab("side", cx);
                 assert!(shell.right_pane_shown(cx));
 
-                shell.close_right_surface(
-                    RightSurface::SideChat(shell.side_chat_seq),
-                    window,
-                    cx,
-                );
+                shell.close_right_surface(RightSurface::SideChat(shell.side_chat_seq), window, cx);
                 shell.viewport_width = 1280.0;
                 shell.open_child_chat_tab("side", cx);
                 assert!(shell.right_pane_shown(cx));
