@@ -12,7 +12,7 @@ export type Route =
   | { kind: "usage" }
   | { kind: "archive"; projectKey?: string };
 
-export type RightPanel = "files" | "changes" | "terminal" | "browser" | "git" | "history" | "pullRequest" | null;
+export type RightPanel = "files" | "changes" | "terminal" | "browser" | "git" | "history" | "pullRequest" | "agents" | null;
 
 export interface Preferences {
   theme: "system" | "dark" | "light";

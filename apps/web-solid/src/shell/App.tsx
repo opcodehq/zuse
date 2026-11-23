@@ -1,5 +1,7 @@
+import { hostedBrowser } from "@/core/auth";
 // The window frame: sidebar, main pane and optional right panel, matching desktop's layout.
 import { narrowLayout, setSidebarVisible, setView, sidebarVisible, view } from "@/core/view";
+import { WebOnboarding } from "@/features/connection/WebOnboarding";
 import { Composer } from "@/features/composer";
 import { ConnectionGate } from "@/features/connection";
 import { ErrorScreen, Extras } from "@/features/extras";
@@ -24,6 +26,7 @@ const Zappers = lazy(() => import("@/features/zappers/Page").then(m => ({ defaul
 const ZapperConfig = lazy(() => import("@/features/zappers/Config").then(m => ({ default: m.ConfigPage })));
 const Settings = lazy(() => loadSettings().then((m) => ({ default: m.Settings })));
 const Usage = lazy(() => loadSettings().then((m) => ({ default: m.Usage })));
+const CloudHome = lazy(() => loadPlugins().then(m => ({ default: m.CloudHome })));
 const Plugins = lazy(() => loadPlugins().then((m) => ({ default: m.Plugins })));
 const NewProject = lazy(() => loadProjects().then((m) => ({ default: m.NewProject })));
 const ProjectArchive = lazy(() => loadProjects().then((m) => ({ default: m.ProjectArchive })));
@@ -37,7 +40,7 @@ export function App() {
   return (
     <Errored fallback={(error, reset) => <Fatal error={error()} reset={reset} />}>
       <ConnectionGate>
-        <Frame />
+        <WebOnboarding><Frame /></WebOnboarding>
       </ConnectionGate>
       <Extras />
       <ToastRegion />
@@ -280,6 +283,7 @@ function Frame() {
         <main class="app-pane">
           <Errored fallback={(error, reset) => <Fatal error={error()} reset={reset} />}>
             <Switch>
+              <Match when={hostedBrowser() && !location.hash.startsWith("#cloud=") && ["chat", "newProject", "newZapper"].includes(view.route.kind)}><CloudHome /></Match>
               <Match when={view.route.kind === "zappers"}><Zappers /></Match>
               <Match when={view.route.kind === "newZapper"}><ZapperConfig /></Match>
               <Match when={view.route.kind === "settings"}><Settings /></Match>

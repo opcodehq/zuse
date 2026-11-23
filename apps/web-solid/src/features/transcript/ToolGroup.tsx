@@ -1,4 +1,6 @@
 // Tool groups: summary header, activity rail, chips with folding detail (desktop `render_tool_group`).
+import { openSubagent } from "@/features/workspace/agents";
+import { view } from "@/core/view";
 import { Icon } from "@/ui/Icon";
 import { type JSX } from "@solidjs/web";
 import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
@@ -304,7 +306,7 @@ function SubagentHeader(props: { part: ToolPart; harness: string | undefined }) 
     return null;
   };
   return (
-    <div class="chip-head subagent">
+    <button type="button" class="chip-head subagent" disabled={!props.part.subagentRef} onClick={() => { if (props.part.subagentRef && view.selectedChatId) openSubagent(view.selectedChatId, props.part.subagentRef); }}>
       <span class="subagent-status" data-status={status()}>
         <Switch>
           <Match when={status() === "running"}><span class="subagent-live" role="img" aria-label="Subagent running" /></Match>
@@ -316,7 +318,8 @@ function SubagentHeader(props: { part: ToolPart; harness: string | undefined }) 
       <span class="chip-label strong truncate">{title()}</span>
       <Show when={status() === "running"}><span class="chip-detail">Agent running</span></Show>
       <Show when={model()}><span class="chip-detail">{model()}</span></Show>
-    </div>
+      <Show when={props.part.subagentRef}><Icon name="alt-arrow-right" size={12} /></Show>
+    </button>
   );
 }
 

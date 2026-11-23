@@ -1,3 +1,4 @@
+import { openCloudWorkspace } from "@/features/connection/cloud";
 // Starting cloud chats, their first-message queue, and the account's live workspaces (crates/viewport/src/cloud.rs, cloud_queue.rs).
 import { view } from "@/core/view";
 import { Icon } from "@/ui/Icon";
@@ -261,6 +262,9 @@ function Workspaces() {
                 action={
                   <>
                     <Badge tone={badge().tone}>{badge().label}</Badge>
+                    <Show when={!archiveVisible(row) && !["failed", "blocked", "deleting"].includes(row.state)}>
+                      <Action onClick={() => { const account = owner(); if (account) openCloudWorkspace({ workspaceId: row.workspaceId, accountId: account.accountId, organizationId: account.organizationId }); }}>Open workspace</Action>
+                    </Show>
                     <Action disabled={cloud.history.loading} onClick={() => void openHistory(row.workspaceId, row.initialSessionId || null)}>
                       View history
                     </Action>

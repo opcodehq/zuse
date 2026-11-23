@@ -1,0 +1,10 @@
+.web-onboarding { height: 100%; overflow: auto; background: var(--frame); color: var(--text); }
+.web-onboarding-header { display: flex; align-items: center; gap: 12px; padding: 24px; }
+.web-onboarding-caption { margin-left: auto; color: var(--text-muted); }
+.web-onboarding-steps { display: flex; flex-wrap: wrap; gap: 20px; list-style: none; padding: 16px 24px; margin: 0 auto; max-width: 900px; color: var(--text-muted); }
+.web-onboarding-steps [aria-current="step"] { color: var(--text-strong); font-weight: 600; }
+.web-onboarding-steps [data-complete] { color: var(--success); }
+.web-onboarding-body { max-width: 900px; margin: 32px auto; padding: 0 24px 40px; }
+.web-onboarding-body > p { max-width: 650px; line-height: 1.7; color: var(--text-muted); }
+.web-onboarding-body > .btn { margin: 16px 12px 0 0; }
+@media (max-width: 600px) { .web-onboarding-caption { display: none; } .web-onboarding-body { margin-top: 16px; } }

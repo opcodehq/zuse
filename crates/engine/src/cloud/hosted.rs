@@ -269,15 +269,17 @@ impl RpcService for Controller {
             methods::CLOUD_ACCOUNT_STATUS => RpcReply::Stream(self.auth.status_stream()),
             methods::CLOUD_ACCOUNT_SIGN_IN => {
                 if before.0.is_some() { return Err(RpcError::BadParams("Sign out before signing in with another account.".into())); }
+                if let (Some(code), Some(state)) = (params["code"].as_str(), params["state"].as_str()) {
+                    self.account.hosted_callback(code, state).await.map_err(|e| RpcError::Failed(e.to_string()))?;
+                    return RpcReply::value(&json!({"ok":true}));
+                }
                 let _slot = self.login_slots.clone().try_acquire_owned().map_err(|_| RpcError::Failed("Sign-in is busy. Retry shortly.".into()))?;
                 {
                     let mut last = self.last_login.lock().map_err(|_| RpcError::Failed("Sign-in is unavailable.".into()))?;
                     if last.is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(15)) { return Err(RpcError::Failed("A sign-in was just started. Use its verification link before starting another.".into())); }
                     *last = Some(std::time::Instant::now());
                 }
-                // Device-code sign-in is gone; hosted browsers need their own
-                // redirect flow before they can sign in here.
-                return Err(RpcError::Failed(crate::account::AccountError::BrowserRequired.to_string()));
+                RpcReply::value(&self.account.hosted_sign_in().map_err(|e| RpcError::Failed(e.to_string()))?)?
             }
             methods::CLOUD_ACCOUNT_SIGN_OUT => { self.account.sign_out().map_err(|e| RpcError::Failed(e.to_string()))?; self.closed.cancel(); RpcReply::value(&json!({"ok":true}))? }
             methods::SELECT_ORG => return self.select_organization(&params).await,

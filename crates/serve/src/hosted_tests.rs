@@ -225,6 +225,9 @@ mod hosted_session_tests {
                 .clone()
                 .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
         };
+        let root = call("/").await.unwrap();
+        assert_eq!(root.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(root.headers()[header::LOCATION], "/app/");
         let redirect = call("/app").await.unwrap();
         assert_eq!(redirect.status(), StatusCode::TEMPORARY_REDIRECT);
         assert_eq!(redirect.headers()[header::LOCATION], "/app/");

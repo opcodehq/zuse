@@ -232,12 +232,16 @@ mod hosted_controller_tests {
         });
         let controller = controller(&origin, "actor-a");
         controller.account.sign_out().unwrap();
-        let error = controller
+        let reply = controller
             .handle(methods::CLOUD_ACCOUNT_SIGN_IN, json!({}))
             .await
-            .err()
-            .expect("hosted sign-in has no device fallback");
-        assert!(error.to_string().contains("Sign in from Zuse"));
+            .expect("hosted sign-in must return a PKCE redirect");
+        let RpcReply::Value(progress) = reply else { panic!("expected login progress"); };
+        let url = reqwest::Url::parse(progress["url"].as_str().unwrap()).unwrap();
+        let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+        assert_eq!(query["redirect_uri"], format!("{origin}/app/"));
+        assert_eq!(query["code_challenge_method"], "S256");
+        assert!(!query.contains_key("code_verifier"));
         assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 0);
         controller.account.retire();
         controller.closed.cancel();

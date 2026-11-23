@@ -131,6 +131,7 @@ struct Inner {
     store: Option<PathBuf>,
     state: Mutex<State>,
     refresh: AsyncMutex<()>,
+    hosted_login: Mutex<Option<(String, String, u64, i64)>>,
     status: watch::Sender<AccountStatus>,
 }
 #[derive(Clone)]
@@ -330,6 +331,7 @@ impl Account {
                 retry_after: 0,
             }),
             refresh: AsyncMutex::new(()),
+            hosted_login: Mutex::new(None),
             status,
         })))
     }
@@ -434,6 +436,79 @@ impl Account {
                 }
             }
         });
+    }
+
+    /// Start an isolated hosted login. The redirect is fixed to the configured
+    /// API origin; the PKCE verifier never leaves this account's server memory.
+    pub fn hosted_sign_in(&self) -> Result<LoginProgress, AccountError> {
+        if self.0.store.is_some() {
+            return Err(AccountError::InvalidEndpoint);
+        }
+        let (generation, _) = self.begin_login()?;
+        let expected_state = uuid::Uuid::new_v4().simple().to_string();
+        let verifier = {
+            use rand_core::RngCore;
+            let mut bytes = [0u8; 32];
+            rand_core::OsRng.fill_bytes(&mut bytes);
+            URL_SAFE_NO_PAD.encode(bytes)
+        };
+        let challenge = {
+            use sha2::Digest;
+            URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(verifier.as_bytes()))
+        };
+        let redirect_uri = format!("{}/app/", self.0.api_url);
+        let url = reqwest::Url::parse_with_params(
+            &format!("{}/user_management/authorize", self.0.identity_url),
+            [
+                ("response_type", "code"),
+                ("client_id", self.0.client_id.as_str()),
+                ("redirect_uri", redirect_uri.as_str()),
+                ("provider", "authkit"),
+                ("state", expected_state.as_str()),
+                ("code_challenge", challenge.as_str()),
+                ("code_challenge_method", "S256"),
+            ],
+        )
+        .map_err(|_| AccountError::InvalidEndpoint)?;
+        let progress = LoginProgress {
+            url: url.into(),
+            expires_at: now() + BROWSER_SIGN_IN_SECS,
+        };
+        *lock(&self.0.hosted_login) = Some((expected_state, verifier, generation, progress.expires_at));
+        self.show_login(generation, &progress)?;
+        Ok(progress)
+    }
+
+    /// Complete only this browser session's pending login, once. A mismatched
+    /// state cannot consume another browser's attempt or redeem its code.
+    pub async fn hosted_callback(
+        &self,
+        code: &str,
+        received_state: &str,
+    ) -> Result<(), AccountError> {
+        if code.is_empty() || code.len() > 8192 || received_state.len() > 128 {
+            return Err(AccountError::InvalidResponse);
+        }
+        let (_, verifier, generation, _) = {
+            let mut pending = lock(&self.0.hosted_login);
+            let Some((expected, _, _, expires)) = pending.as_ref() else {
+                return Err(AccountError::Cancelled);
+            };
+            if expected != received_state || *expires <= now() {
+                return Err(AccountError::Cancelled);
+            }
+            pending.take().ok_or(AccountError::Cancelled)?
+        };
+        let result = self.redeem(code, &verifier, generation).await;
+        if let Err(error) = &result {
+            let mut state = lock(&self.0.state);
+            if state.generation == generation {
+                state.login = None;
+                state.error = Some(error.to_string());
+                self.publish(&state);
+            }
+        }
+        result
     }
 
     /// Sign in through this machine's browser: AuthKit redirects to a loopback
@@ -750,6 +825,7 @@ impl Account {
 
     /// Revoke a retired runtime without deleting the account saved for next boot.
     pub fn retire(&self) {
+        *lock(&self.0.hosted_login) = None;
         let mut state = lock(&self.0.state);
         state.retired = true;
         state.generation = state.generation.wrapping_add(1);
@@ -768,6 +844,7 @@ impl Account {
         }
     }
     pub fn sign_out(&self) -> Result<(), AccountError> {
+        *lock(&self.0.hosted_login) = None;
         let mut state = lock(&self.0.state);
         state.generation = state.generation.wrapping_add(1);
         state.login_cancel.cancel();
@@ -939,6 +1016,28 @@ fn persist(path: &Path, session: &impl Serialize) -> Result<(), AccountError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn hosted_login_is_bound_to_session_state_pkce_and_expiry() {
+        let first = Account::ephemeral("https://code.zuse.sh", "public-client").unwrap();
+        let second = Account::ephemeral("https://code.zuse.sh", "public-client").unwrap();
+        let progress = first.hosted_sign_in().unwrap();
+        let url = reqwest::Url::parse(&progress.url).unwrap();
+        let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+        assert_eq!(query["redirect_uri"], "https://code.zuse.sh/app/");
+        assert_eq!(query["code_challenge_method"], "S256");
+        let (state, verifier, _, _) = lock(&first.0.hosted_login).clone().unwrap();
+        use sha2::Digest;
+        assert_eq!(query["code_challenge"], URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(verifier.as_bytes())));
+        assert_eq!(query["state"], state);
+        assert!(!progress.url.contains(&verifier));
+        assert!(second.hosted_callback("code", &state).await.is_err());
+        assert!(first.hosted_callback("code", "wrong-state").await.is_err());
+        assert!(lock(&first.0.hosted_login).is_some());
+        lock(&first.0.hosted_login).as_mut().unwrap().3 = now() - 1;
+        assert!(first.hosted_callback("code", &state).await.is_err());
+        first.retire();
+    }
 
     #[test]
     fn staging_origins_sign_in_with_staging_client() {

@@ -92,3 +92,40 @@ The inspector mirrors desktop Overview, Issues, Threads, Drive and History. Comm
 Run `node e2e/zappers.mjs` for browser checks against a disposable engine and a scripted agent (creation, ownership, adoption, delegation, decisions, issues/comments, document versions/restores, reload and release).
 
 Zapper inspector tabs follow the desktop icon/label strip. Resource reads coalesce bursts of watch updates into one active request and a trailing refresh; late responses from another Zapper are ignored. Reconnect epochs refresh the inspector even when revisions do not change. Server snapshots reconcile into existing rows, and document drafts retain their DOM identity through updates. Composer and Zapper surfaces use spacing and background tones instead of decorative borders; the composer editor overrides the global focus ring while controls retain keyboard focus indicators.
+
+## Hosted browser
+
+`bash scripts/build-web.sh --solid` builds this client with `/app/` asset URLs.
+The existing WASM build remains available without that flag. Deploy the Solid
+output as `ZUSE_CLOUD_BROWSER_ASSETS` on the cloud server built with its
+`hosted-browser` feature. The server's root redirects to `/app/`. Both
+`ZUSE_CLOUD_BROWSER_ORIGIN` and `CLOUD_PUBLIC_API_URL` must name the same exact
+HTTPS origin; a second public hostname must redirect to that canonical origin.
+
+Register `<canonical origin>/app/` as a redirect URI on the configured WorkOS
+client before enabling browser sign-in. Hosted sign-in uses a same-tab AuthKit
+redirect and server-held PKCE verifier, bound to the opaque browser session.
+The authorization code and state are removed from the address before analytics
+starts, then redeemed once over the authenticated controller RPC. The controller
+stores refresh credentials only in memory. Controller restarts/expiry require
+sign-in again.
+
+`controllerReady` from `/api/session/check` enables separate web onboarding:
+welcome, account, plan, GitHub/repository image setup, first cloud chat. Completion
+is keyed by account and organization in browser storage. Local and paired clients
+keep their normal startup. Choosing a workspace opens `#cloud=` public metadata
+in an isolated tab. `CloudTransport` holds a `CloudEnvironment` subscription and
+forwards engine requests through `CloudRpc`; account/cloud settings remain on the
+controller. The normal chat, Zapper, thread, workspace and transcript surfaces
+therefore run against the selected cloud engine. Account changes close access.
+
+Subagent chips open the Agents surface. It tries the frozen transcript blob first,
+then watches the original subagent doc, preserving the source chat's device route
+for copied spawn chips. Closing/hiding the panel cancels its watch; reconnects
+refresh it. Only spawn calls can link to subagent docs.
+
+`bun run e2e:web-parity` runs browser regressions for onboarding isolation, icon
+aliases, live/frozen agent transcripts, reconnect cleanup, cloud RPC forwarding,
+cancellation and account revocation without provisioning paid cloud resources.
+Production OAuth, provider allocation and live domain routing require deployment
+verification separately.

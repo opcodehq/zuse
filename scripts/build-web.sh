@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# The DOM client shares desktop assets and the current engine protocol.
+if [[ "${1:-}" == "--solid" ]]; then
+    shift
+    cd apps/web-solid
+    export ZUSE_WEB_BASE="${ZUSE_WEB_BASE:-/app/}"
+    exec bun run build "$@"
+fi
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$(python3 scripts/cargo_dev.py --print-target-dir)/browser}"
 export HUGEICONS_BUILD_KEY="$(python3 scripts/cargo_dev.py --print-icon-fingerprint)"
 export RUSTUP_TOOLCHAIN="${ZUSE_WEB_TOOLCHAIN:-nightly}"

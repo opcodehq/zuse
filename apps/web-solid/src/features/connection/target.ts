@@ -1,3 +1,4 @@
+import { CloudTransport, readCloudTarget } from "./cloud";
 // Chooses what this tab connects to before the connection loop starts. A `#pair=` capability is
 // removed from the address bar immediately, before anything else can read or record it.
 import { checkSession } from "@/core/auth";
@@ -72,6 +73,15 @@ function useAccount(target: AccountTarget, controller: () => Transport | Promise
 }
 
 function install() {
+  if (location.hash.startsWith("#cloud=")) {
+    try {
+      const target = readCloudTarget()!;
+      setTransportFactory(() => new CloudTransport(target));
+    } catch {
+      setTransportFactory(() => Promise.reject(new ConnectionBlocked({ kind: "accountRequired", message: "Invalid cloud workspace link. Open it again from Cloud settings." })));
+    }
+    return;
+  }
   const choice = choose();
   let account: AccountTarget | null = null;
   try {

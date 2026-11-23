@@ -12,6 +12,7 @@
     "gen:methods": "python3 scripts/gen-methods.py",
     "e2e": "node e2e/smoke.mjs",
     "e2e:analytics": "bun e2e/analytics.mjs",
+    "e2e:web-parity": "node e2e/web-parity.mjs",
     "e2e:zappers": "node e2e/zappers.mjs",
     "e2e:solid2": "node e2e/solid2.mjs"
   },

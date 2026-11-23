@@ -1,3 +1,4 @@
+import { hostedBrowser } from "@/core/auth";
 // The Zuse account behind plugins and Cloud. The engine streams its status into state.account.
 import { rpc } from "@/core/connection";
 import { M } from "@/core/methods";
@@ -69,14 +70,20 @@ export async function signIn() {
   if (session.busy || signedIn()) return;
   const pending = login();
   if (pending) {
-    window.open(pending.url, "_blank", "noopener");
+    if (hostedBrowser()) location.assign(pending.url);
+    else window.open(pending.url, "_blank", "noopener");
     return;
   }
   setSession(draft => { Object.assign(draft, { busy: true, error: null }); });
+  const popup = hostedBrowser() ? null : window.open("about:blank", "_blank");
+  if (popup) popup.opener = null;
   try {
     const progress = await rpc.call<LoginProgress>(M.CLOUD_ACCOUNT_SIGN_IN, {});
-    if (progress?.url?.startsWith("https://")) window.open(progress.url, "_blank", "noopener");
+    if (progress?.url?.startsWith("https://") && hostedBrowser()) location.assign(progress.url);
+    else if (progress?.url?.startsWith("https://") && popup) popup.location.href = progress.url;
+    else popup?.close();
   } catch (error) {
+    popup?.close();
     setSession(draft => { draft["error"] = errorText(error, "Could not start sign-in. Try again."); });
   } finally {
     setSession(draft => { draft["busy"] = false; });

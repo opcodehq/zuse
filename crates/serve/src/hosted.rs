@@ -329,10 +329,11 @@ impl HostedBrowser {
             .read_to_string(&mut html)?;
         anyhow::ensure!(
             html.len() <= 1024 * 1024 && (html.contains("'/app/") || html.contains("\"/app/")),
-            "Compile the hosted browser with Trunk --public-url /app/"
+            "Compile the hosted browser with ZUSE_WEB_BASE=/app/ (Solid) or Trunk --public-url /app/ (WASM)"
         );
         Ok(self
             .router()
+            .route("/", get(|| async { axum::response::Redirect::temporary("/app/") }))
             .route(
                 "/app",
                 get(|| async { axum::response::Redirect::temporary("/app/") }),

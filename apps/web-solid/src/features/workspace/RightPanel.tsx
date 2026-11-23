@@ -15,9 +15,12 @@ const Browser = lazy(() => import("./Browser").then((m) => ({ default: m.Browser
 const Files = lazy(() => import("./files/Files").then((m) => ({ default: m.Files })));
 const Terminal = lazy(() => import("./Terminal").then((m) => ({ default: m.Terminal })));
 
+const Agents = lazy(() => import("./Agents").then(m => ({ default: m.Agents })));
+
 type Surface = Exclude<Panel, null>;
 
 const SURFACES: Record<Surface, { label: string; icon: string; git?: boolean }> = {
+  agents: { label: "Agents", icon: "tool-agent" },
   files: { label: "Files", icon: "folder" },
   pullRequest: { label: "PR", icon: "pull-request", git: true },
   changes: { label: "Changes", icon: "git-compare", git: true },
@@ -27,7 +30,7 @@ const SURFACES: Record<Surface, { label: string; icon: string; git?: boolean }> 
   browser: { label: "Browser", icon: "globe" },
 };
 // Desktop order (crates/ui/src/shell/panel_menu.rs), with Git beside Changes and History last.
-const ORDER: Surface[] = ["files", "pullRequest", "changes", "git", "terminal", "browser", "history"];
+const ORDER: Surface[] = ["agents", "files", "pullRequest", "changes", "git", "terminal", "browser", "history"];
 
 export function RightPanel() {
   const target = createMemo(selectedTarget, targetMemoOptions);
@@ -155,6 +158,7 @@ export function RightPanel() {
                 >
                   <Loading fallback={<div class="ws-empty"><Spinner label="Loading" /></div>}>
                     <Switch>
+                      <Match when={surface === "agents"}><Agents chatId={chatId} active={view.rightPanel === "agents"} /></Match>
                       <Match when={surface === "files"}><Files target={target()!} /></Match>
                       <Match when={surface === "changes"}><Changes target={target()!} /></Match>
                       <Match when={surface === "git"}><GitPanel target={target()!} /></Match>

@@ -1,10 +1,5 @@
 import { omit } from "solid-js";
-// Desktop icons, inlined so they inherit currentColor. Desktop's asset source (crates/ui/src/icons.rs
-// `Assets::load`) serves the shared Hugeicons selection in crates/icons first and crates/ui/assets/icons
-// only for names that set lacks, so the same precedence applies here.
-// Desktop icons, inlined so they inherit currentColor. Desktop's asset source (crates/ui/src/icons.rs
-// `Assets::load`) serves the shared Hugeicons selection in crates/icons first and crates/ui/assets/icons
-// only for names that set lacks, so the same precedence applies here.
+// Desktop assets are shared with the DOM client; the shared set takes precedence.
 import { type JSX } from "@solidjs/web";
 
 // Vite reads glob options statically, so each call spells them out.
@@ -21,10 +16,19 @@ const icons = new Map(
   [...Object.entries(local), ...Object.entries(shared)].map(([path, svg]) => [path.slice(path.lastIndexOf("/") + 1, -4), prepare(svg)]),
 );
 
+// Desktop renamed these controls while older web surfaces still use the semantic names.
+const aliases: Record<string, string> = {
+  "git-merge": "git-lane-merge",
+  "git-branch": "git-lane-branch",
+  "pull-request": "git-lane-pr",
+  "menu-dots": "more-horizontal",
+  "fork": "fork-split",
+};
+const iconName = (name: string) => aliases[name] ?? name;
 export type IconName = string;
 
 export function hasIcon(name: string) {
-  return icons.has(name);
+  return icons.has(iconName(name));
 }
 
 export function Icon(props: { name: IconName; size?: number; label?: string } & JSX.HTMLAttributes<HTMLSpanElement>) {
@@ -38,7 +42,7 @@ export function Icon(props: { name: IconName; size?: number; label?: string } & 
       aria-hidden={(props.label ? undefined : true) == null ? undefined : (props.label ? undefined : true) ? "true" : "false"}
       style={{ display: "inline-flex", width: size(), height: size(), "flex-shrink": 0, ...(props.style as JSX.CSSProperties) }}
       // eslint-disable-next-line solid/no-innerhtml -- trusted SVGs bundled from the repository
-      innerHTML={icons.get(props.name) ?? icons.get("info-circle") ?? ""}
+      innerHTML={icons.get(iconName(props.name)) ?? icons.get("info-circle") ?? ""}
     />
   );
 }

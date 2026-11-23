@@ -1,6 +1,6 @@
 // Plugins and Cloud. The plugins route is the catalog alone, as on desktop. Settings mounts the same export for its
 // plugins and cloud sections, so it follows the route to the installed list or the Cloud workspaces page.
-import { Match, Switch } from "solid-js";
+import { Match, Switch, onSettled } from "solid-js";
 import { navigate, view } from "@/core/view";
 import { PageTitle } from "./ui";
 import { Browse } from "./plugins/Browse";
@@ -55,3 +55,9 @@ export function PluginSettings() {
 export { CloudSettings };
 /** Settings → Archived chats: saved cloud archives. */
 export { Archives as CloudArchives };
+
+/** Hosted controllers start conversations in cloud repositories rather than local folders. */
+export function CloudHome() {
+  onSettled(() => { selectCloudTab("chats"); });
+  return <div class="pc-root"><div class="pc-scroll"><CloudSettings /></div></div>;
+}

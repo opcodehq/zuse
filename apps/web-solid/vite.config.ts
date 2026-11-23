@@ -7,6 +7,7 @@ const repo = fileURLToPath(new URL("../..", import.meta.url));
 
 export default defineConfig({
   define: { __APP_VERSION__: JSON.stringify(readFileSync(new URL("../../Cargo.toml", import.meta.url), "utf8").match(/^version = "([^"]+)"/m)?.[1] ?? "unknown") },
+  base: process.env.ZUSE_WEB_BASE ?? "/",
   plugins: [solid({ dev: process.env.ZUSE_SOLID_DEV === "1" ? true : undefined })],
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)), "@repo": repo } },
   // Desktop fonts and icons are read straight from crates/ui/assets.
