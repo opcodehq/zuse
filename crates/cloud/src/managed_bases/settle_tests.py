@@ -72,6 +72,25 @@ try:
 except ns['Refused'] as error:
     check(str(error) == 'supervisor_lock_stale_with_child' and units.restarts == 0, str(error))
 
+# Transient host conditions are "not ready", never a permanent refusal: the
+# resident exits between reads, or systemd is slow or fails to answer.
+def vanished(pid):
+    raise FileNotFoundError('/proc/41/fd')
+class SlowUnits(Units):
+    def state(self):
+        raise subprocess.TimeoutExpired(['systemctl'], 5)
+class FailingRestart(Units):
+    def restart(self):
+        raise subprocess.CalledProcessError(1, ['systemctl'])
+for units, stale in ((Units(), vanished), (SlowUnits(), lambda pid: True), (FailingRestart(), lambda pid: True)):
+    clock = Clock()
+    try:
+        ns['settle'](15, units=units, settled=lambda: True, stale=stale, child_pids=lambda pid: [],
+                     ready=lambda pid: True, clock=clock, sleep=clock.sleep)
+        check(False, f'{type(units).__name__} must not be settled')
+    except ns['NotReady'] as error:
+        check(str(error) == 'machine_settle_pending', str(error))
+
 # Stale-lock detection against this very process's descriptors.
 ipc = tmp / 'ipc'
 ipc.mkdir()

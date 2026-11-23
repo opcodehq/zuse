@@ -254,7 +254,11 @@ impl Request {
                 v["status"] == "rejected"
                     && matches!(
                         v["code"].as_str(),
-                        Some("fresh_boot_loader_path_unsafe" | "machine_disk_settling")
+                        Some(
+                            "fresh_boot_loader_path_unsafe"
+                                | "machine_disk_settling"
+                                | "machine_settle_pending"
+                        )
                     )
             })
     }
@@ -700,7 +704,10 @@ mod tests {
     fn boat_settles_its_restored_disk_before_the_loader_and_others_run_it_directly() {
         let boxd = request();
         let loader = boxd.command().unwrap();
-        assert!(!loader.contains(BOAT_SETTLE));
+        // The script is embedded quoted, so assert on text that survives quoting.
+        assert!(!loader.contains("supervisor_lock_stale_with_child"));
+        assert!(!loader.contains(&format!("' {BOAT_SETTLE_WAIT_SECONDS} && ")));
+        assert!(loader.starts_with("sudo -n /usr/bin/python3 -I -B -c "));
         for purpose in [Purpose::InitialAllocation, Purpose::RetainedResume] {
             let mut boat = request();
             boat.provider = ProviderId::Boat;
@@ -720,6 +727,8 @@ mod tests {
         let settling = br#"{"version": 1, "status": "rejected", "code": "machine_disk_settling"}"#;
         assert!(Request::loader_not_ready(1, settling));
         assert!(!Request::loader_not_ready(0, settling));
+        let pending = br#"{"version": 1, "status": "rejected", "code": "machine_settle_pending"}"#;
+        assert!(Request::loader_not_ready(1, pending));
         let permanent =
             br#"{"version": 1, "status": "rejected", "code": "supervisor_lock_stale_with_child"}"#;
         assert!(!Request::loader_not_ready(1, permanent));

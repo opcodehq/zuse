@@ -73,21 +73,29 @@ pub fn scrub(raw: &[u8], secrets: &[&str]) -> String {
 
 fn redact_line(line: &str) -> String {
     let lower = line.to_ascii_lowercase();
-    for marker in [
+    // Everything after the earliest header- or assignment-style marker goes;
+    // the kept prefix is scrubbed word by word like any other line.
+    let earliest = [
         "authorization:",
         "proxy-authorization:",
         "bearer ",
         "token=",
-    ] {
-        if let Some(at) = lower.find(marker) {
-            return format!(
-                "{}{} [redacted]",
-                &line[..at],
-                line[at..at + marker.len()].trim_end()
-            );
-        }
+    ]
+    .iter()
+    .filter_map(|marker| lower.find(marker).map(|at| (at, marker.len())))
+    .min();
+    match earliest {
+        Some((at, len)) => format!(
+            "{}{} [redacted]",
+            redact_words(&line[..at]),
+            line[at..at + len].trim_end()
+        ),
+        None => redact_words(line),
     }
-    line.split(' ')
+}
+
+fn redact_words(text: &str) -> String {
+    text.split(' ')
         .map(redact_word)
         .collect::<Vec<_>>()
         .join(" ")
@@ -165,6 +173,18 @@ using github_pat_11ABCDEFG0123456789_abcdefghijklmnop and runtime-credential-val
         ] {
             assert!(!text.contains(secret), "{secret} in {text}");
         }
+    }
+
+    #[test]
+    fn a_credential_before_a_header_marker_is_still_redacted() {
+        let text = scrub(
+            b"fatal: https://x-access-token:ghs_abcdefghijklmnopqrstuvwxyz0123@github.com/o/r.git Bearer abc Authorization: Basic xyz\n",
+            &[],
+        );
+        assert_eq!(
+            text,
+            "fatal: https://[redacted]@github.com/o/r.git Bearer [redacted]"
+        );
     }
 
     #[test]

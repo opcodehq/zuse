@@ -19,6 +19,8 @@ visible paths are different ones, the helper refuses with
    it runs no child (no runtime, no recovery). The helper then verifies the
    new resident exactly as before. With a child still running, refuse with
    `supervisor_lock_stale_with_child` (permanent; nothing is interrupted).
+   A process that exits mid-check or a slow systemd answers
+   `machine_settle_pending`, also retried.
 
 Arguments: the number of seconds to wait for the swap (0-30).
 """
@@ -33,6 +35,8 @@ IPC = '/home/zuse/.zuse-data/.runtime-supervision'
 POLL_SECONDS = 0.25
 RESTART_SECONDS = 20
 PUBLISH_SECONDS = 10
+# Transient host conditions: not ready yet, never a permanent refusal.
+PENDING = 'machine_settle_pending'
 
 
 class Refused(Exception):
@@ -65,7 +69,7 @@ class Units:
         result = subprocess.run(['systemctl', 'show', UNIT, '--property=MainPID,ActiveState,SubState,Job'],
                                 capture_output=True, text=True, timeout=5, env={'PATH': '/usr/bin:/bin'})
         if result.returncode != 0 or len(result.stdout) > 4096:
-            raise Refused('settle_unit_state_unavailable')
+            raise NotReady(PENDING)
         return dict(line.split('=', 1) for line in result.stdout.splitlines() if '=' in line)
 
     def restart(self):
@@ -127,13 +131,22 @@ def settle(wait_seconds, units=None, settled=disk_settled, stale=stale_lock, chi
         if clock() >= deadline:
             raise NotReady('machine_disk_settling')
         sleep(POLL_SECONDS)
+    try:
+        return supervise(units, stale, child_pids, ready, clock, sleep)
+    except (OSError, subprocess.SubprocessError):
+        # The resident exited between reads, or systemd was slow to answer:
+        # every step re-reads the unit and the lock, so ask again later.
+        raise NotReady(PENDING) from None
+
+
+def supervise(units, stale, child_pids, ready, clock, sleep):
     state = units.state()
     if state.get('ActiveState') != 'active' or state.get('SubState') != 'running' or state.get('Job'):
         return 'unchanged'
     try:
         pid = int(state.get('MainPID', '0'))
     except ValueError:
-        raise Refused('settle_unit_state_unavailable') from None
+        raise NotReady(PENDING) from None
     if pid <= 1 or not stale(pid):
         return 'unchanged'
     if child_pids(pid):
