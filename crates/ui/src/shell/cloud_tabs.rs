@@ -199,6 +199,7 @@ impl Shell {
             self.cloud_conversation_events = None;
             self.cloud_conversation = None;
             self.cloud_tabs = CloudTabs::default();
+            self.cloud_activity.clear();
             self.composer
                 .update(cx, |composer, cx| composer.revoke_cloud_canvases(&keys, cx));
             self.state.update(cx, |state, cx| {
@@ -697,20 +698,17 @@ impl Shell {
                 .is_some_and(super::chat_peek::cloud_row_online),
         }
     }
-    /// `(agent working, computer online)` for an open conversation (in
-    /// front or in a tab) of `workspace`; `None` when none is open.
+    /// `(agent working, computer online)` as the open conversations of
+    /// `workspace` (in front, in a tab, or running in the background) report
+    /// it; `None` when none is open.
     pub(super) fn cloud_open_activity(&self, workspace: &str, cx: &App) -> Option<(bool, bool)> {
-        // A computer can show several conversations in tabs: it is working
-        // when any of them is, and online when any of them sees it up.
-        self.cloud_conversation
-            .iter()
-            .chain(self.cloud_tabs.views.iter().flatten())
-            .map(|view| view.read(cx))
-            .filter(|view| view.target.workspace == workspace)
-            .map(|view| (view.agent_working(cx), view.computer_online()))
-            .reduce(|(working, online), (more_working, more_online)| {
-                (working || more_working, online || more_online)
-            })
+        // A computer can show several conversations: the app state combines
+        // their reports, working when any is and online when any sees it up.
+        self.state
+            .read(cx)
+            .cloud_chat_activity(workspace)
+            .live
+            .map(|live| (live.working, live.online))
     }
     /// A draft tab's provisional title (its first message, once sent) and
     /// agent (the one its launch uses, else the one chosen in front), so a
@@ -825,9 +823,18 @@ mod tests {
     impl zuse_rpc::RpcService for Pending {
         async fn handle(
             &self,
-            _: &str,
+            method: &str,
             _: Value,
         ) -> Result<zuse_rpc::RpcReply, zuse_rpc::RpcError> {
+            // The sidebar's plan and usage reads never answer either: an
+            // answer would land from a runtime thread the test can't order.
+            if matches!(
+                method,
+                zuse_rpc::methods::CLOUD_BILLING_ENTITLEMENTS
+                    | zuse_rpc::methods::LIST_AGENT_ACCOUNTS
+            ) {
+                futures::future::pending::<()>().await;
+            }
             Ok(zuse_rpc::RpcReply::Stream(Box::pin(
                 futures::stream::pending(),
             )))
@@ -1956,7 +1963,7 @@ mod tests {
                 view.update(cx, |view, cx| {
                     view.set_admissions_for_test(json!([{"commandId":"c","messageId":"ask",
                         "text":"go","executionState":"running","createdAt":1}]));
-                    view.state.update(cx, |state, _| {
+                    view.state.update(cx, |state, cx| {
                         state.apply_transcript(vec![
                             entry("ask", zuse_model::MessageRole::User, None),
                             entry(
@@ -1964,17 +1971,20 @@ mod tests {
                                 zuse_model::MessageRole::Assistant,
                                 Some(zuse_model::MessageStatus::Streaming),
                             ),
-                        ])
+                        ]);
+                        cx.notify();
                     });
                 });
-                assert!(
-                    shell.cloud_workspace_working("w", cx),
-                    "the sidebar row spins while the agent works"
-                );
                 view
             })
             .unwrap();
         let shell = window.entity(cx).unwrap();
+        shell.read_with(cx, |shell, cx| {
+            assert!(
+                shell.cloud_workspace_working("w", cx),
+                "the sidebar row spins while the agent works"
+            );
+        });
         let tabs = cx.add_window(|_, _| TabsOnly {
             shell: shell.clone(),
             _dir: tempfile::tempdir().unwrap(),
@@ -1990,7 +2000,7 @@ mod tests {
         }
         // The turn completes (its command row may still read running).
         view.update(cx, |view, cx| {
-            view.state.update(cx, |state, _| {
+            view.state.update(cx, |state, cx| {
                 state.apply_transcript(vec![
                     entry("ask", zuse_model::MessageRole::User, None),
                     entry(
@@ -1998,7 +2008,8 @@ mod tests {
                         zuse_model::MessageRole::Assistant,
                         Some(zuse_model::MessageStatus::Complete),
                     ),
-                ])
+                ]);
+                cx.notify();
             });
         });
         shell.read_with(cx, |shell, cx| {
@@ -2116,9 +2127,13 @@ mod tests {
         }
         tabs.update(cx, |_, window, _| window.remove_window())
             .unwrap();
+        // Close the shell before the runtime stops, so no runtime thread
+        // wakes a task of it during the shutdown.
+        drop(shell);
         window
             .update(cx, |_, window, _| window.remove_window())
             .unwrap();
+        cx.run_until_parked();
     }
 
     /// A sidebar row's cloud is green only while its computer is up: a
@@ -2138,7 +2153,7 @@ mod tests {
             json!({"workspaceId":id,"initialSessionId":format!("{id}-s"),"projectId":"p",
                 "title":id,"state":state,"runtimeState":runtime,"createdAt":1,"updatedAt":1})
         };
-        window
+        let view = window
             .update(cx, |shell, _, cx| {
                 shell.state.update(cx, |state, _| {
                     state.set_test_engine(controller.clone());
@@ -2167,23 +2182,29 @@ mod tests {
                     cx,
                 );
                 let view = shell.cloud_conversation.clone().unwrap();
-                view.update(cx, |view, _| {
+                view.update(cx, |view, cx| {
                     view.set_computer_metadata_for_test(
                         json!({"workspaceId":"stale","state":"paused","runtimeState":"offline"}),
-                    )
+                    );
+                    cx.notify();
                 });
-                assert!(
-                    !shell.cloud_row_online("stale", cx),
-                    "the live state wins over a stale list"
-                );
-                view.update(cx, |view, _| {
-                    view.set_computer_metadata_for_test(
-                        json!({"workspaceId":"stale","state":"ready","runtimeState":"online"}),
-                    )
-                });
-                assert!(shell.cloud_row_online("stale", cx));
+                view
             })
             .unwrap();
+        let shell = window.entity(cx).unwrap();
+        shell.read_with(cx, |shell, cx| {
+            assert!(
+                !shell.cloud_row_online("stale", cx),
+                "the live state wins over a stale list"
+            );
+        });
+        view.update(cx, |view, cx| {
+            view.set_computer_metadata_for_test(
+                json!({"workspaceId":"stale","state":"ready","runtimeState":"online"}),
+            );
+            cx.notify();
+        });
+        shell.read_with(cx, |shell, cx| assert!(shell.cloud_row_online("stale", cx)));
         window
             .update(cx, |_, window, _| window.remove_window())
             .unwrap();

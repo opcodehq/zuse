@@ -6,6 +6,8 @@ pub(super) struct Activity {
     pub next: Option<&'static str>,
     pub busy: bool,
 }
+/// The label of a turn waiting on the user.
+pub(super) const NEEDS_INPUT: &str = "Agent needs your input";
 pub(super) fn preparation(row: &Value, initial: bool) -> Option<Activity> {
     let progress = zuse_viewport::cloud_preparation_progress(row, initial);
     progress.visible.then(|| Activity {
@@ -77,7 +79,7 @@ pub(super) fn command(
     let (label, busy) = match row["executionState"].as_str()? {
         "starting" => ("Starting agent turn…", true),
         "running" => ("Agent working…", true),
-        "waiting-input" => ("Agent needs your input", false),
+        "waiting-input" => (NEEDS_INPUT, false),
         _ => ("Waiting for agent…", true),
     };
     Some(Activity {

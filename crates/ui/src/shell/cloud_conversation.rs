@@ -387,6 +387,17 @@ impl CloudConversation {
         self.agent_activity(cx)
             .is_some_and(|activity| activity.busy)
     }
+    /// What this conversation reports for its chat's sidebar row and tab.
+    pub(super) fn live_activity(&self, cx: &App) -> crate::state::CloudLiveActivity {
+        let activity = self.agent_activity(cx);
+        crate::state::CloudLiveActivity {
+            working: activity.as_ref().is_some_and(|activity| activity.busy),
+            awaiting_input: activity
+                .as_ref()
+                .is_some_and(|activity| activity.label == activity::NEEDS_INPUT),
+            online: self.computer_online(),
+        }
+    }
     /// The message's progress once it is with the agent.
     fn agent_activity(&self, cx: &App) -> Option<activity::Activity> {
         if self.access_revoked {
@@ -1375,6 +1386,7 @@ impl Shell {
         view: &Entity<CloudConversation>,
         cx: &mut Context<Self>,
     ) {
+        self.mark_cloud_conversation_seen(view, cx);
         self.cloud_conversation_events =
             Some(cx.subscribe(view, |this, _, event, cx| match event {
                 CloudConversationEvent::Terminal => this.add_terminal_surface(cx),
@@ -1429,7 +1441,11 @@ impl Shell {
             self.track_current_cloud_canvas(cx);
         }
         let session = target.initial_session.clone();
-        let view = self.new_cloud_conversation_view(target, row, launch, cx);
+        // A conversation still working in the background comes back as is.
+        let view = match self.background_cloud_conversation(&target, cx) {
+            Some(view) => view,
+            None => self.new_cloud_conversation_view(target, row, launch, cx),
+        };
         // A tab still creating a chat keeps it; this one opens beside it.
         self.ensure_free_cloud_tab(cx);
         self.subscribe_cloud_conversation(&view, cx);
@@ -1479,6 +1495,7 @@ impl Shell {
         let links = Self::session_links(Some(target.initial_session.clone()), cx);
         let view = cx.new(|cx| CloudConversation::new(target, row, launch, self.boot.clone(), cx));
         view.update(cx, |view, cx| view.set_link_handler(links, cx));
+        self.track_cloud_conversation(&view, cx);
         view
     }
 }

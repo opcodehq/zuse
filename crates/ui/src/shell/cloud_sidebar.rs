@@ -322,22 +322,7 @@ impl Shell {
             .and_then(chrono::DateTime::from_timestamp_millis)
             .unwrap_or(now);
         let time_ago = zuse_protocol::view::format_time_ago(updated, now);
-        // Starting and resuming read as activity, like a local run; an idle
-        // or sleeping computer shows its age, like any idle chat.
-        // An open conversation knows more than the last list read: its agent
-        // mid-turn spins, like a local chat's row, and a computer it sees
-        // online is idle even while the listed row still reads starting.
-        let open = pending
-            .is_none()
-            .then(|| self.cloud_open_activity(&workspace, cx))
-            .flatten();
-        let status = match row["state"].as_str() {
-            _ if open.is_some_and(|(working, _)| working) => zuse_protocol::ChatIndicator::Working,
-            _ if open.is_some_and(|(_, online)| online) => zuse_protocol::ChatIndicator::Idle,
-            Some("ready" | "paused" | "pausing" | "archived") => zuse_protocol::ChatIndicator::Idle,
-            Some("failed" | "error" | "blocked") => zuse_protocol::ChatIndicator::Errored,
-            _ => zuse_protocol::ChatIndicator::Working,
-        };
+        let status = self.cloud_row_status(&row, cx);
         let project_group = self.settings.sidebar_organization == SidebarOrganization::ByProject;
         let height = sidebar_row_height(
             self.sidebar_compact_rows(),
@@ -367,6 +352,36 @@ impl Shell {
             cx,
         );
         Some((id, height, element))
+    }
+    /// A cloud chat row's status. Starting and resuming read as activity,
+    /// like a local run; an idle or sleeping computer shows its age, like
+    /// any idle chat. The chat's live status knows more than the last list
+    /// read, whichever chat is open: its agent mid-turn spins, like a local
+    /// chat's row, a turn waiting on the user asks for input, a turn that
+    /// finished out of sight reads done until the chat is opened, and a
+    /// computer seen online is idle even while the listed row still reads
+    /// starting.
+    pub(super) fn cloud_row_status(&self, row: &Value, cx: &App) -> zuse_protocol::ChatIndicator {
+        use zuse_protocol::ChatIndicator;
+        let activity = row["workspaceId"]
+            .as_str()
+            .filter(|_| row["pendingLaunch"].is_null())
+            .map(|workspace| self.state.read(cx).cloud_chat_activity(workspace))
+            .unwrap_or_default();
+        let live = activity.live.unwrap_or_default();
+        let settled = if activity.unseen {
+            ChatIndicator::Completed
+        } else {
+            ChatIndicator::Idle
+        };
+        match row["state"].as_str() {
+            _ if live.working => ChatIndicator::Working,
+            _ if live.awaiting_input => ChatIndicator::AwaitingInput,
+            _ if live.online => settled,
+            Some("ready" | "paused" | "pausing" | "archived") => settled,
+            Some("failed" | "error" | "blocked") => ChatIndicator::Errored,
+            _ => ChatIndicator::Working,
+        }
     }
     #[cfg(test)]
     pub(super) fn pending_launch_rows(&self, cx: &App) -> Vec<Value> {

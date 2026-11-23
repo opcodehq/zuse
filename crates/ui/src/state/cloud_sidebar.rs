@@ -71,6 +71,38 @@ pub(super) struct Catalog {
     /// landed (or no event at all) must not leave a new chat out of the
     /// sidebar after its pending row is gone.
     created: Vec<CreatedWorkspace>,
+    /// Each cloud chat's live activity, by workspace id: what its open
+    /// conversations (in front, in a tab, or still running in the
+    /// background) report, and whether a turn finished out of sight. The
+    /// sidebar and tabs read it for every chat, whichever one is open.
+    activity: HashMap<String, ChatActivity>,
+}
+/// What the sidebar knows live about one cloud chat.
+#[derive(Default)]
+struct ChatActivity {
+    /// Each open conversation's report, by its view.
+    live: HashMap<u64, CloudLiveActivity>,
+    /// A turn ended while none of its conversations was in front.
+    unseen: bool,
+}
+/// One open cloud conversation's live report.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CloudLiveActivity {
+    /// Its agent is mid-turn.
+    pub working: bool,
+    /// Its agent is waiting on the user.
+    pub awaiting_input: bool,
+    /// It sees its computer up.
+    pub online: bool,
+}
+/// A cloud chat's status for its sidebar row and tab, across every open
+/// conversation of its computer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CloudChatActivity {
+    /// Live reports, combined; `None` when no conversation of it is open.
+    pub live: Option<CloudLiveActivity>,
+    /// A turn finished while it was not in front.
+    pub unseen: bool,
 }
 /// A chat the server confirmed creating, shown until a fresh list has it.
 struct CreatedWorkspace {
@@ -371,6 +403,66 @@ impl AppState {
     #[cfg(test)]
     pub(crate) fn cloud_sidebar_archive_pending(&self, workspace: &str) -> bool {
         self.cloud_sidebar.pending_archive.contains_key(workspace)
+    }
+    /// One open conversation (`view`) of `workspace` reports its activity,
+    /// or `None` once it closes. A turn that ends while that conversation is
+    /// not in front leaves the chat unseen. Returns whether the chat's
+    /// status changed.
+    pub(crate) fn report_cloud_chat_activity(
+        &mut self,
+        workspace: &str,
+        view: u64,
+        report: Option<CloudLiveActivity>,
+        in_front: bool,
+    ) -> bool {
+        let before = self.cloud_chat_activity(workspace);
+        let entry = self
+            .cloud_sidebar
+            .activity
+            .entry(workspace.to_owned())
+            .or_default();
+        let previous = match report {
+            Some(report) => entry.live.insert(view, report),
+            None => entry.live.remove(&view),
+        };
+        let was_busy = previous.is_some_and(|live| live.working || live.awaiting_input);
+        let busy = report.is_some_and(|live| live.working || live.awaiting_input);
+        if was_busy && !busy && !in_front {
+            entry.unseen = true;
+        }
+        if entry.live.is_empty() && !entry.unseen {
+            self.cloud_sidebar.activity.remove(workspace);
+        }
+        self.cloud_chat_activity(workspace) != before
+    }
+    /// The chat was opened in front: a finished turn is seen.
+    pub(crate) fn mark_cloud_chat_seen(&mut self, workspace: &str) -> bool {
+        let Some(entry) = self.cloud_sidebar.activity.get_mut(workspace) else {
+            return false;
+        };
+        let changed = std::mem::take(&mut entry.unseen);
+        if entry.live.is_empty() {
+            self.cloud_sidebar.activity.remove(workspace);
+        }
+        changed
+    }
+    /// The live status of `workspace`'s chat, for its sidebar row and tab.
+    pub(crate) fn cloud_chat_activity(&self, workspace: &str) -> CloudChatActivity {
+        let Some(entry) = self.cloud_sidebar.activity.get(workspace) else {
+            return CloudChatActivity::default();
+        };
+        CloudChatActivity {
+            live: entry
+                .live
+                .values()
+                .copied()
+                .reduce(|all, one| CloudLiveActivity {
+                    working: all.working || one.working,
+                    awaiting_input: all.awaiting_input || one.awaiting_input,
+                    online: all.online || one.online,
+                }),
+            unseen: entry.unseen,
+        }
     }
     pub(super) fn clear_cloud_sidebar(&mut self) {
         self.cloud_sidebar = Catalog::default();

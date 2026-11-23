@@ -119,6 +119,7 @@ mod zapper_avatar;
 mod zapper_forms;
 mod zappers;
 use side_chats::SideChatTab;
+mod cloud_activity;
 mod cloud_conversation;
 mod cloud_info;
 mod cloud_sidebar;
@@ -2193,6 +2194,8 @@ pub struct Shell {
     cloud_conversation: Option<Entity<cloud_conversation::CloudConversation>>,
     cloud_conversation_events: Option<Subscription>,
     cloud_tabs: cloud_tabs::CloudTabs,
+    /// Live status reports from every open cloud conversation.
+    cloud_activity: cloud_activity::CloudActivity,
     desktop_import: Entity<crate::desktop_import::Onboarding>,
     onboarding: Entity<crate::onboarding::Wizard>,
     /// A chat onboarding asked to open before its row synced in.
@@ -2948,6 +2951,7 @@ impl Shell {
             cloud_conversation: None,
             cloud_conversation_events: None,
             cloud_tabs: Default::default(),
+            cloud_activity: Default::default(),
             desktop_import,
             onboarding,
             pending_open_chat: None,

@@ -92,7 +92,7 @@ mod cloud_plan;
 mod cloud_sidebar;
 pub use cloud_connection::CloudTarget;
 pub use cloud_plan::CloudAccess;
-pub(crate) use cloud_sidebar::ProjectLabels;
+pub(crate) use cloud_sidebar::{CloudLiveActivity, ProjectLabels};
 mod remote_connection;
 pub use account_connection::{AccountTarget, RemoteTarget};
 
@@ -6924,6 +6924,53 @@ mod tests {
             1
         );
         assert_eq!(state.selected_chat.as_deref(), Some("added"));
+    }
+
+    /// A local chat's row reads its own session, not the open chat: it
+    /// keeps spinning while another chat is selected and reads done when
+    /// its turn ends out of sight.
+    #[gpui::test]
+    fn a_background_chat_keeps_its_live_status_while_another_is_selected(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::AppContext as _;
+        let status = |state: &AppState, id: &str| {
+            state
+                .sidebar_chats(Utc::now(), None)
+                .into_iter()
+                .find(|(_, chat)| chat.id == id)
+                .map(|(status, _)| status)
+        };
+        let seen = |id: &str| {
+            let mut chat = chat(id, 0, Some(1));
+            chat.last_seen_at = chat.last_message_at;
+            chat
+        };
+        let state = cx.new(|_| {
+            let mut state = AppState::new();
+            state.apply_chats(vec![seen("a"), seen("b")]);
+            state.apply_sessions(vec![session("a", SessionStatus::Working, 0, Utc::now())]);
+            state
+        });
+        state.update(cx, |state, cx| {
+            state.select_chat(Some("a".into()), cx);
+            state.select_chat(Some("b".into()), cx);
+        });
+        state.read_with(cx, |state, _| {
+            assert_eq!(status(state, "a"), Some(ChatIndicator::Working));
+            assert_eq!(status(state, "b"), Some(ChatIndicator::Idle));
+        });
+        // A's turn ends while B is open: its reply is unseen.
+        state.update(cx, |state, _| {
+            let mut a = seen("a");
+            a.last_message_at = Some(Utc::now());
+            state.apply_chats(vec![a, seen("b")]);
+            state.apply_sessions(vec![session("a", SessionStatus::Idle, 0, Utc::now())]);
+        });
+        state.read_with(cx, |state, _| {
+            assert_eq!(status(state, "a"), Some(ChatIndicator::Completed));
+            assert_eq!(status(state, "b"), Some(ChatIndicator::Idle));
+        });
     }
 
     fn clock_epoch() -> DateTime<Utc> {
