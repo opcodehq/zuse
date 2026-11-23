@@ -11,9 +11,9 @@ try {
   await page.waitFor("!!window.parity && !!document.querySelector('#workspace')");
   assert.equal(await page.eval("parity.icons()"), true);
   await page.eval("parity.hosted()");
-  await page.waitFor("document.body.textContent.includes('Start building from your browser')");
-  await page.eval("[...document.querySelectorAll('button')].find(b => b.textContent === 'Get started').click()");
-  await page.waitFor("document.querySelector('h1')?.textContent === 'Sign in to Zuse'");
+  await page.waitFor("document.body.textContent.includes('Your workspace, wherever you are.')");
+  await page.eval("document.querySelector('.web-onboarding-primary').click()");
+  await page.waitFor("document.querySelector('h1')?.textContent === 'Make yourself at home.'");
   await page.eval("parity.local()");
   await page.waitFor("!!document.querySelector('#workspace')");
   await page.eval("parity.agents()");
@@ -28,6 +28,13 @@ try {
   await page.eval("parity.snapshot()");
   await page.waitFor("document.body.textContent.includes('Subagent streamed reply')");
   assert.equal(await page.eval("parity.counters().requests.filter(r => r.method === 'WatchDocMessages').length"), before);
+  await page.eval("parity.models()");
+  await page.click('.model-select-trigger');
+  await page.waitFor("!!document.querySelector('.model-select-popover')");
+  await page.eval("(() => { const input = document.querySelector('.model-select-search input'); input.value = 'Opus'; input.dispatchEvent(new Event('input', {bubbles:true})); })()");
+  await page.waitFor("document.querySelectorAll('.model-select-row').length === 1");
+  await page.click('.model-select-row');
+  await page.waitFor("parity.model() === 'opus' && !document.querySelector('.model-select-popover')");
   const transport = await page.eval("checkCloudTransport()");
   const forwarded = transport.frames.find(frame => frame.method === "CloudRpc");
   assert.equal(forwarded.params.workspaceId, "workspace");

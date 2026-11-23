@@ -1,3 +1,9 @@
+import { App } from "@/shell/App";
+import { setView } from "@/core/view";
+import { setCatalog } from "@/features/composer/catalog";
+import { ModelSelect } from "@/ui/ModelSelect";
+import "@/shell/shell.css";
+import "@/shell/theme";
 import { render } from "@solidjs/web";
 import { createSignal, flush, Show } from "solid-js";
 import { setHostedBrowser } from "@/core/auth";
@@ -15,17 +21,29 @@ import "@/features/workspace/workspace.css";
 let sink: ((value: unknown) => void) | undefined;
 let cancellations = 0;
 let snapshot = false;
+let preview = false;
+const codexModels = [{id:"gpt-5.3-codex",label:"GPT-5.3 Codex",reasoningLevels:["low","medium","high","xhigh"]},{id:"gpt-5.2",label:"GPT-5.2"}];
+const claudeModels = [{id:"claude-opus-4-6",label:"Opus 4.6"},{id:"claude-sonnet-4-6",label:"Sonnet 4.6"}];
 const requests: { method: string; params: unknown }[] = [];
 const message = { id: "reply", role: "assistant", deviceId: "remote", createdAt: 0, status: "complete", parts: [{ kind: "text", id: "text", text: "Subagent streamed reply" }] };
 Object.assign(rpc, {
   call: async (method: string, params: unknown) => {
     requests.push({ method, params });
+    if (method === M.LIST_MODELS) return (params as {harness:string}).harness === "claude-code" ? claudeModels : codexModels;
     if (method === M.FETCH_TOOL_BLOB) { if (snapshot) return { text: JSON.stringify([message]) }; throw new Error("live doc"); }
     throw new Error("Fixture has no paid services");
   },
   subscribe: (method: string, params: unknown, onItem: (value: unknown) => void) => {
     requests.push({ method, params });
-    if (method === M.WATCH_DOC_MESSAGES) { sink = onItem; queueMicrotask(() => onItem({ reset: [message] })); }
+    if (method === M.WATCH_DOC_MESSAGES) {
+      sink = onItem;
+      const parentMessages = [
+        {id:"request",role:"user",createdAt:Date.now(),deviceId:"remote",parts:[{kind:"text",id:"request-text",text:"Bring the cloud UI in sync with desktop. Start with the model picker and agent panels."}]},
+        {...message,parts:[{kind:"text",id:"text",text:"I’m comparing the desktop controls and bringing the same layout, spacing, and interactions to web."},{kind:"tool",id:"spawn",call:{kind:"unknown",name:"Agent: Review model picker",input:{model:"gpt-5.3-codex"}},subagentRef:"parent--sub--worker",subagentStatus:"running"}]},
+      ];
+      const workerMessages = [{...message,parts:[{kind:"text",id:"text",text:"The desktop picker uses a compact provider rail, grouped models, and a search field. I’m checking the web menu against those dimensions.\n\n- Provider icons and selection states\n- Model row spacing and keyboard navigation\n- Reasoning and fast-mode controls"}]}];
+      queueMicrotask(() => onItem({ reset: preview ? (params as {chatId:string}).chatId === "parent" ? parentMessages : workerMessages : [message] }));
+    }
     return { cancel: () => { cancellations++; } };
   },
 });
@@ -37,11 +55,28 @@ setState(draft => {
 });
 function Fixture() {
   const [mode, setMode] = createSignal("onboarding");
+  const [model, setModel] = createSignal("gpt");
   const [active, setActive] = createSignal(true);
   Object.assign(window, { parity: {
     hosted: () => { setHostedBrowser(true); flush(); },
     local: () => { setHostedBrowser(false); flush(); },
     agents: () => { setMode("agents"); openSubagent("parent", "parent--sub--worker"); flush(); },
+    models: () => { setMode("models"); flush(); },
+    model: () => model(),
+    workspace: () => {
+      preview = true; snapshot = false;
+      setHostedBrowser(false);
+      setView(draft => { draft.route = {kind:"chat"}; draft.selectedChatId = "parent"; draft.rightPanel = "agents"; });
+      setState(draft => {
+        draft.workspaceSynced = true; draft.localDeviceId = "remote"; draft.zappersReady = true;
+        draft.harnesses = [{id:"codex",name:"Codex",installed:true,enabled:true},{id:"claude-code",name:"Claude Code",installed:true,enabled:true}];
+        draft.spaces.project = {id:"project",name:"zuse",path:"/workspace/zuse",deviceId:"remote",gitDetected:true};
+        draft.chats.parent = {...draft.chats.parent!,title:"Bring web in sync with desktop",cwd:"/workspace/zuse",spaceId:"project",branch:"web-parity",config:{harness:"codex",model:"gpt-5.3-codex",sandbox:"auto"}};
+      });
+      setMode("app"); flush();
+      setCatalog(draft => { draft.models["local|codex"] = {status:"ready",value:[{id:"gpt-5.3-codex",label:"GPT-5.3 Codex",reasoningLevels:["low","medium","high","xhigh"]},{id:"gpt-5.2",label:"GPT-5.2"}]}; draft.models["local|claude-code"] = {status:"ready",value:[{id:"claude-opus-4-6",label:"Opus 4.6"},{id:"claude-sonnet-4-6",label:"Sonnet 4.6"}]}; });
+      openSubagent("parent", "parent--sub--worker"); flush();
+    },
     hide: () => { setActive(false); flush(); },
     reconnect: () => { setState(draft => { draft.epoch++; }); flush(); },
     snapshot: () => { snapshot = true; setActive(true); flush(); },
@@ -49,7 +84,12 @@ function Fixture() {
     counters: () => ({ cancellations, requests }),
     icons: () => ["git-merge", "menu-dots", "tool-agent", "git-branch", "pull-request"].every(hasIcon),
   } });
-  return <><Icon name="git-merge" /><Show when={mode() === "onboarding"} fallback={<Agents chatId="parent" active={active()} />}><WebOnboarding><div id="workspace">Workspace</div></WebOnboarding></Show></>;
+  return <Show when={mode() !== "app"} fallback={<App />}><Show when={mode() !== "models"} fallback={<div style={{padding:"100px",height:"100vh",background:"var(--bg)"}}><ModelSelect label="Model" value={model()} onChange={setModel} options={[
+    {key:"gpt",label:"GPT-5.3 Codex",provider:"codex",providerLabel:"Codex"},
+    {key:"gpt52",label:"GPT-5.2",provider:"codex",providerLabel:"Codex"},
+    {key:"opus",label:"Opus 4.6",provider:"claude-code",providerLabel:"Claude Code"},
+    {key:"sonnet",label:"Sonnet 4.6",provider:"claude-code",providerLabel:"Claude Code"},
+  ]} /></div>}><Show when={mode() === "onboarding"} fallback={<Agents chatId="parent" active={active()} />}><WebOnboarding><div id="workspace">Workspace</div></WebOnboarding></Show></Show></Show>;
 }
 render(() => <Fixture />, document.getElementById("root")!);
 

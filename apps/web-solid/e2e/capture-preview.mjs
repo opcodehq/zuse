@@ -1,0 +1,30 @@
+import { createServer } from 'vite';
+import { openBrowser } from './harness.mjs';
+import { mkdirSync } from 'node:fs';
+const root = new URL('..', import.meta.url).pathname;
+const out = process.env.ZUSE_PREVIEW_OUT ?? new URL('../../../artifacts/web-preview', import.meta.url).pathname;
+mkdirSync(out, { recursive: true });
+const server = await createServer({ root, configFile: `${root}/vite.config.ts`, server: { host:'127.0.0.1', port:0 } });
+await server.listen();
+let page;
+try {
+ page = await openBrowser(`http://127.0.0.1:${server.httpServer.address().port}/e2e/web-parity/fixture.html`, { width:1280, height:820 });
+ await page.waitFor('!!window.parity');
+ await page.eval(`(async () => { await import('/src/shell/shell.css'); await import('/src/shell/theme.ts'); document.documentElement.dataset.theme = 'dark'; document.querySelector('#root > span')?.remove(); })()`);
+ await page.eval('parity.hosted()');
+ await page.waitFor("document.querySelector('h1')?.textContent.includes('Your workspace')");
+ await page.screenshot(`${out}/onboarding.png`);
+ await page.eval("document.querySelector('.web-onboarding-primary').click()");
+ await page.waitFor("document.querySelector('h1')?.textContent === 'Make yourself at home.'");
+ await page.screenshot(`${out}/sign-in.png`);
+ await page.eval('parity.workspace()');
+ await page.waitFor("!!document.querySelector('.app') && !!document.querySelector('.cmp-model')");
+ await page.waitFor("!!document.querySelector('.ws-agent-row')");
+ await page.screenshot(`${out}/workspace.png`);
+ await page.screenshot(`${out}/agents.png`);
+ await page.click('.cmp-model');
+ await page.waitFor("!!document.querySelector('.cmp-models')");
+ await page.waitFor("document.querySelectorAll('.cmp-model-row').length > 0");
+ await page.screenshot(`${out}/model-picker.png`);
+ console.log(out);
+} finally { await page?.close(); await server.close(); }

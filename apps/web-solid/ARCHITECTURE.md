@@ -129,3 +129,14 @@ aliases, live/frozen agent transcripts, reconnect cleanup, cloud RPC forwarding,
 cancellation and account revocation without provisioning paid cloud resources.
 Production OAuth, provider allocation and live domain routing require deployment
 verification separately.
+
+Hosted onboarding follows desktop `Wizard` geometry (520px welcome/account
+column, 56px top inset, 24/30 headings, accent progress rail and footer actions).
+Cloud creation and Settings share `ui/ModelSelect`, a searchable provider-rail
+menu using desktop icons, 28px model rows and keyboard navigation. Permission
+and repository controls use the shared non-modal menus. The conversation
+composer retains its existing desktop picker with reasoning/fast controls.
+
+`node e2e/capture-preview.mjs` captures onboarding, sign-in, the complete
+workspace/Agents pane and the composer picker using fixture data in the actual
+app shell. Set `ZUSE_PREVIEW_OUT` to choose the output directory.

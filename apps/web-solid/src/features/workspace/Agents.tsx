@@ -61,8 +61,8 @@ export function Agents(props: { chatId: string; active: boolean }) {
         <Show when={agents().length} fallback={<p class="ws-muted">Delegated agents appear here when your agent starts them.</p>}>
           <For each={agents()}>{part => <button type="button" class="ws-agent-row" aria-pressed={selected() === part.subagentRef ? "true" : "false"} onClick={() => setSelectedSubagent({ chatId: props.chatId, docId: part.subagentRef! })}>
             <Icon name="tool-agent" size={14} />
-            <span>{(() => { const call = callOf(part); return call.kind === "unknown" ? call.name : "Agent"; })()}</span>
-            <small>{agentStatus(part)}</small>
+            <span class="ws-agent-name">{(() => { const call = callOf(part); return call.kind === "unknown" ? call.name.replace(/^Agent: ?/, "") : "Agent"; })()}</span>
+            <span class="ws-agent-state" data-status={agentStatus(part)}><span />{agentStatus(part) === "running" ? "Working" : agentStatus(part) === "done" ? "Complete" : "Failed"}</span>
           </button>}</For>
         </Show>
       </nav>

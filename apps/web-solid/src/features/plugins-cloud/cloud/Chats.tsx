@@ -1,3 +1,5 @@
+import { ModelSelect } from "@/ui/ModelSelect";
+import { Menu } from "@/ui/primitives";
 import { openCloudWorkspace } from "@/features/connection/cloud";
 // Starting cloud chats, their first-message queue, and the account's live workspaces (crates/viewport/src/cloud.rs, cloud_queue.rs).
 import { view } from "@/core/view";
@@ -94,33 +96,15 @@ function NewChat() {
             <div class="pc-launch-pickers">
               <label class="pc-field">
                 <span>Repository</span>
-                <select class="field pc-select" value={projectId()} onChange={(e) => setProjectId(e.currentTarget.value)}>
-                  <For each={projects()}>
-                    {(p) => (
-                      <option value={p.projectId} disabled={!prepared(p)}>
-                        {(p.displayName ?? p.name ?? p.projectId) + (prepared(p) ? "" : " · image not built")}
-                      </option>
-                    )}
-                  </For>
-                </select>
+                <Menu placement="bottom-start" trigger={attrs => <button {...attrs} type="button" class="model-select-trigger"><Icon name="folder" size={14} /><span>{project()?.displayName ?? project()?.name ?? "Choose a repository"}</span><Icon name="alt-arrow-down" size={12} /></button>} items={projects().map(row => ({ label: (row.displayName ?? row.name ?? row.projectId) + (prepared(row) ? "" : " · image not built"), icon: "folder", disabled: !prepared(row), onSelect: () => setProjectId(row.projectId) }))} />
               </label>
               <label class="pc-field">
                 <span>Model</span>
-                <select class="field pc-select" value={modelKey()} onChange={(e) => setModelKey(e.currentTarget.value)}>
-                  <For each={cloud.context.agents}>
-                    {(agent) => (
-                      <optgroup label={agent.name}>
-                        <For each={agent.models}>{(model) => <option value={`${agent.id}\u0000${model.id}`}>{model.label ?? model.name ?? model.id}</option>}</For>
-                      </optgroup>
-                    )}
-                  </For>
-                </select>
+                <ModelSelect label="Model" value={modelKey()} onChange={setModelKey} options={cloud.context.agents.flatMap(agent => agent.models.map(model => ({ key: `${agent.id}\u0000${model.id}`, label: model.label ?? model.name ?? model.id, provider: agent.id, providerLabel: agent.name })))} />
               </label>
               <label class="pc-field">
                 <span>Permissions</span>
-                <select class="field pc-select" value={mode()} onChange={(e) => setMode(e.currentTarget.value as LaunchDraft["runtimeMode"])}>
-                  <For each={MODES}>{(item) => <option value={item.value}>{item.label}</option>}</For>
-                </select>
+                <Menu placement="bottom-start" trigger={attrs => <button {...attrs} type="button" class="model-select-trigger"><Icon name={mode() === "full-access" ? "access-full" : mode() === "auto" ? "access-auto" : "access-ask"} size={14} /><span>{MODES.find(item => item.value === mode())?.label}</span><Icon name="alt-arrow-down" size={12} /></button>} items={MODES.map(item => ({ label: item.label, icon: item.value === "full-access" ? "access-full" : item.value === "auto" ? "access-auto" : "access-ask", onSelect: () => setMode(item.value) }))} />
               </label>
               <label class="pc-field">
                 <span>Branch</span>

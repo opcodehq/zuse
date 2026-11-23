@@ -463,9 +463,9 @@
 .pc-launch-pickers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
 @media (max-width: 640px) { .pc-launch-pickers { grid-template-columns: minmax(0, 1fr); } }
 .pc-launch-compose {
-  display: flex; align-items: flex-end; gap: 8px; padding: 8px 8px 8px 12px; border-radius: 12px; background: var(--composer); border: 1px solid var(--border-strong);
+  display: flex; align-items: flex-end; gap: 8px; padding: 14px 12px 12px 16px; border-radius: 19.2px; background: var(--composer); border: 0;
 }
-.pc-launch-compose:focus-within { border-color: color-mix(in srgb, var(--accent) 50%, var(--border-strong)); }
+.pc-launch-compose:focus-within { outline: none; }
 .pc-launch-input {
   flex: 1; min-width: 0; min-height: 48px; max-height: 200px; resize: vertical; border: 0; outline: none; background: transparent; color: var(--text);
   font-size: var(--text-base); line-height: 20px; padding: 2px 0;
