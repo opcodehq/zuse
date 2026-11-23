@@ -510,3 +510,145 @@ async fn native_start_error_before_stream_is_unknown_and_never_replayed() {
     assert_eq!(harness.requests.lock().unwrap().len(), 1);
     core.shutdown().await;
 }
+
+/// "+" in a cloud chat: a conversation the server registered installs in the
+/// workspace's thread on its first Run, runs beside the first conversation in
+/// the same checkout, is stopped on its own, and is reopened on resume.
+#[tokio::test]
+async fn a_second_conversation_installs_on_first_run_and_runs_beside_the_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let checkout = dir.path().join("repo");
+    std::fs::create_dir(&checkout).unwrap();
+    let profile = EngineProfile::synced(dir.path(), "task", "owner")
+        .with_durable_command_commits()
+        .with_managed_recovery()
+        .with_preparation_pending();
+    let database = profile.store_root().join("docs.sqlite3");
+    let harness = Arc::new(ControlledCodex {
+        requests: Mutex::new(Vec::new()),
+    });
+    let registry = Arc::new(HarnessRegistry::new());
+    registry.register(harness.clone());
+    let core = Arc::new(
+        EngineCore::assemble_with_profile(profile, registry, HarnessId::Codex, None).unwrap(),
+    );
+    core.rpc_service().handle(methods::MUTATE,json!({"op":"createChat","chatId":"thread","deviceId":core.device_id,"cwd":checkout,"config":{"harness":"codex","model":"fixture","sandbox":"workspace-write"}})).await.unwrap();
+    core.rpc_service()
+        .handle(
+            methods::CREATE_THREAD_SESSION,
+            json!({"threadId":"thread","chatId":"session"}),
+        )
+        .await
+        .unwrap();
+    let boot:CloudRuntimeBootstrap=serde_json::from_value(json!({"workspaceId":"task","zuseAccountId":"owner","chatId":"thread","initialSessionId":"session","runtimeCredential":"synthetic","runtimeGeneration":1,"gatewayEpoch":1,"runtimeCredentialExpiresAt":9007199254740000i64,"gatewayUrl":"wss://fixture.invalid","gatewayProtocol":"fixture","sealedTranscriptKey":"synthetic","runtimeStorage":{"format":"zuse-rust-engine-v1","storageIncarnationId":"disk"},"providerSandboxId":"machine","agent":"codex","commandAdmissionVersion":2,"commandPolicyRevision":1,"commandDeliveryMode":"server-admitted-v2"})).unwrap();
+    let progress = Publisher::open(&database, &boot, &core).unwrap();
+    core.doc_host.require_canonical_cloud_commands();
+    core.sessions
+        .complete_preparation(core.sessions.preparation_epoch())
+        .unwrap();
+    // Nothing here needs the server: no attachments are bound.
+    let authority = Authority::new("http://127.0.0.1:9/").unwrap();
+    let (_credentials, updates) = watch::channel(boot.clone());
+    let executor = Arc::new(EngineExecutor {
+        core: core.clone(),
+        thread: "thread".into(),
+        checkout: checkout.clone(),
+        allow_test: false,
+        task_context: Some(TaskContext::new(authority, updates, &checkout).unwrap()),
+        progress: Some(progress),
+    });
+    let key = CommandKey::parse(&B64.encode([49; 32])).unwrap();
+    let mailbox = Mailbox::new(&database, &boot, key, executor).unwrap();
+    let key = CommandKey::parse(&B64.encode([49; 32])).unwrap();
+    let run = |session: &str, cid: &str, registration: Option<Value>| -> CloudSessionCommand {
+        let mut binding = json!({"version":2,"policyRevision":1,"cwdRelative":"."});
+        if let Some(registration) = registration {
+            binding["session"] = registration;
+        }
+        serde_json::from_value(json!({"commandId":cid,"sessionId":session,"runtimeBinding":binding,"payload":{"kind":"run","messageId":format!("message:{cid}"),"request":{"prompt":"wait for exact stop","harness":"codex","model":"fixture","cwd":".","sandbox":"workspace-write"}}})).unwrap()
+    };
+    let stop = |session: &str, cid: &str, target: &str| -> CloudSessionCommand {
+        serde_json::from_value(json!({"commandId":cid,"sessionId":session,"runtimeBinding":{"version":2,"policyRevision":1,"cwdRelative":".","interruptCommandId":target,"interruptMessageId":format!("message:{target}")},"payload":{"kind":"interrupt"}})).unwrap()
+    };
+    // Before its first Run the registered conversation is unknown here, and
+    // a control cannot conjure it.
+    assert!(core.workspace.chat("second").unwrap().is_none());
+    mailbox
+        .apply(&sealed(&key, &run("session", "run-first", None), 1))
+        .await
+        .unwrap();
+    let registration =
+        json!({"sessionId":"second","threadId":"thread","title":null,"createdAt":crate::now_ms()});
+    mailbox
+        .apply(&sealed(
+            &key,
+            &run("second", "run-second", Some(registration)),
+            2,
+        ))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while harness.requests.lock().unwrap().len() < 2 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let root = core.workspace.chat("thread").unwrap().unwrap();
+    let second = core.workspace.chat("second").unwrap().unwrap();
+    assert_eq!(second.thread_id.as_deref(), Some("thread"));
+    assert_eq!(
+        second.cwd, root.cwd,
+        "same checkout as the first conversation"
+    );
+    assert!(core.sessions.turn_in_flight("session"));
+    assert!(core.sessions.turn_in_flight("second"));
+    for request in harness.requests.lock().unwrap().iter() {
+        assert_eq!(
+            std::fs::canonicalize(&request.cwd).unwrap(),
+            std::fs::canonicalize(&checkout).unwrap()
+        );
+    }
+
+    // Stop in the second conversation ends only its own turn.
+    mailbox
+        .apply(&sealed(
+            &key,
+            &stop("second", "stop-second", "run-second"),
+            3,
+        ))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while core.sessions.turn_in_flight("second") {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(core.sessions.turn_in_flight("session"));
+
+    // Pause flushes, and resume reopens, every conversation of the thread.
+    let mut family = crate::lifecycle::family(&core, &boot).unwrap();
+    family.sort();
+    assert_eq!(family, vec!["second", "session", "thread"]);
+    let mut reopened = crate::lifecycle::reopen_conversations(&core, &boot).unwrap();
+    reopened.sort();
+    assert_eq!(reopened, vec!["second", "session", "thread"]);
+    mailbox
+        .apply(&sealed(
+            &key,
+            &stop("session", "stop-first", "run-first"),
+            4,
+        ))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while core.sessions.turn_in_flight("session") {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    core.shutdown().await;
+}

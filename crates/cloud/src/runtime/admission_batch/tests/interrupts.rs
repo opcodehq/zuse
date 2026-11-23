@@ -2,7 +2,7 @@
 use super::*;
 use std::sync::Arc;
 use zuse_protocol::cloud_task_commands as w;
-fn access() -> crate::access::Access {
+pub(super) fn access() -> crate::access::Access {
     crate::access::Access {
         actor: crate::auth::Principal {
             account_id: "user-test".into(),
@@ -18,11 +18,11 @@ fn stop(id: &str, cid: &str, turn: Option<&str>) -> w::Request {
 fn run(id: &str, cid: &str) -> w::Request {
     serde_json::from_value(json!({"commandId":cid,"sessionId":format!("session-{id}"),"action":{"type":"submit","messageId":format!("mid:{cid}"),"payload":{"kind":"run","messageId":format!("mid:{cid}"),"request":{"prompt":"An explicit later user message","harness":"codex","model":"fixture","cwd":".","sandbox":"workspace-write"}}}})).unwrap()
 }
-async fn online(pool: &PgPool, id: &str, now: i64) {
+pub(super) async fn online(pool: &PgPool, id: &str, now: i64) {
     let config = json!({"runtimeBootstrapReceipt":{"workspaceId":id,"generation":1,"gatewayEpoch":1},"runtimeCredentialExpiresAtMs":now+3600000,"runtimeCredentialKeyThumbprint":"key","runtimeSigningKeyThumbprint":"sign","rustStorageEnrollment":{"phase":"committed","generation":1,"sourceSandboxId":format!("machine-{id}"),"storageIncarnationId":format!("disk:{id}"),"credentialKeyThumbprint":"key","signingKeyThumbprint":"sign","capabilities":["rust-session-commands-v1",zuse_protocol::cloud_task_commands::CAPABILITY]}});
     sqlx::query("UPDATE api_cloud_workspaces SET state='ready',desired_state='ready',runtime_state='online',provider_sandbox_id=$2,runtime_credential_hash=$3,request_config=request_config||$4 WHERE workspace_id=$1").bind(id).bind(format!("machine-{id}")).bind(hash("stop-runtime-fixture")).bind(config).execute(pool).await.unwrap();
 }
-fn lease(id: &str, controls: bool) -> zuse_protocol::cloud_commands::LeaseRequest {
+pub(super) fn lease(id: &str, controls: bool) -> zuse_protocol::cloud_commands::LeaseRequest {
     zuse_protocol::cloud_commands::LeaseRequest {
         control_only: controls,
         max_items: Some(4),

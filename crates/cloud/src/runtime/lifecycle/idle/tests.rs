@@ -66,7 +66,7 @@ async fn idle_deadline_respects_recent_work_busy_states_scope_and_durable_pause(
     ] {
         sqlx::raw_sql(ddl).execute(&pool).await.unwrap();
     }
-    sqlx::raw_sql("CREATE TABLE zuse_rust_task_command_execution(workspace_id text NOT NULL,command_id text NOT NULL,state text NOT NULL,updated_at bigint NOT NULL,runtime_generation bigint NOT NULL DEFAULT 2,PRIMARY KEY(workspace_id,command_id)); INSERT INTO zuse_rust_control_owners VALUES('workspace','ws-bob','rust',2,0)").execute(&pool).await.unwrap();
+    sqlx::raw_sql("CREATE TABLE zuse_rust_task_command_execution(workspace_id text NOT NULL,command_id text NOT NULL,state text NOT NULL,updated_at bigint NOT NULL,runtime_generation bigint NOT NULL DEFAULT 2,session_id text NOT NULL DEFAULT 'session-bob',PRIMARY KEY(workspace_id,command_id)); INSERT INTO zuse_rust_control_owners VALUES('workspace','ws-bob','rust',2,0)").execute(&pool).await.unwrap();
     let control = std::sync::Arc::new(control(pool.clone()));
     let now = 2_000_000;
     let grace = crate::runtime::activity::COALESCE_MS;
@@ -151,6 +151,24 @@ async fn idle_deadline_respects_recent_work_busy_states_scope_and_durable_pause(
         .execute(&pool)
         .await
         .unwrap();
+    // Every conversation on the computer counts: a turn in a second
+    // conversation holds it although the first one finished long ago.
+    sqlx::query("INSERT INTO zuse_rust_task_command_execution(workspace_id,command_id,state,updated_at,session_id) VALUES('ws-bob','second-conversation-turn','running',1,'second-conversation')").execute(&pool).await.unwrap();
+    assert!(
+        !control.idle_sleep_once(now).await.unwrap(),
+        "a turn in another conversation holds the computer"
+    );
+    assert_eq!(
+        control.idle_sleep_due(now).await.unwrap(),
+        None,
+        "a live turn in any conversation has no idle deadline"
+    );
+    sqlx::query(
+        "DELETE FROM zuse_rust_task_command_execution WHERE command_id='second-conversation-turn'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     for patch in [
         json!({"runtimeReleaseChangeRequested":true}),
         json!({"runtimeActivation":{"phase":"preparing"}}),

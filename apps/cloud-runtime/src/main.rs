@@ -1586,23 +1586,7 @@ async fn adopt(
     identity_only: bool,
 ) -> Result<()> {
     let Some(intent) = &bootstrap.launch_intent else {
-        ensure!(
-            core.workspace.chat(&bootstrap.chat_id)?.is_some()
-                && core
-                    .workspace
-                    .chat(&bootstrap.initial_session_id)?
-                    .is_some(),
-            "runtime_retained_history_missing"
-        );
-        for chat in core.workspace.read_chats()? {
-            if !chat.archived
-                && chat.device_id == core.device_id
-                && (chat.id == bootstrap.chat_id
-                    || chat.thread_id.as_deref() == Some(&bootstrap.chat_id))
-            {
-                core.doc_host.open_local(&chat.id)?;
-            }
-        }
+        zuse_cloud_runtime::lifecycle::reopen_conversations(core, bootstrap)?;
         return Ok(());
     };
     ensure!(intent.fork_source.is_none(), "runtime_fork_import_required");

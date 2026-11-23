@@ -33,6 +33,30 @@ pub(crate) fn family(core: &EngineCore, boot: &CloudRuntimeBootstrap) -> Result<
     }
     Ok(ids.into_iter().collect())
 }
+/// A retained boot reopens every active conversation of the workspace's
+/// thread (the first one and each one added beside it), so work admitted to
+/// any of them resumes without a viewer.
+pub fn reopen_conversations(
+    core: &EngineCore,
+    boot: &CloudRuntimeBootstrap,
+) -> Result<Vec<String>> {
+    ensure!(
+        core.workspace.chat(&boot.chat_id)?.is_some()
+            && core.workspace.chat(&boot.initial_session_id)?.is_some(),
+        "runtime_retained_history_missing"
+    );
+    let mut opened = Vec::new();
+    for chat in core.workspace.read_chats()? {
+        if !chat.archived
+            && chat.device_id == core.device_id
+            && (chat.id == boot.chat_id || chat.thread_id.as_deref() == Some(&boot.chat_id))
+        {
+            core.doc_host.open_local(&chat.id)?;
+            opened.push(chat.id);
+        }
+    }
+    Ok(opened)
+}
 pub struct Shutdown {
     directive: Directive,
     handles: Vec<Arc<ChatDocHandle>>,

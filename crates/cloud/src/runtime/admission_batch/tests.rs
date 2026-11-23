@@ -473,6 +473,8 @@ mod queue_drain;
 
 mod interrupts;
 
+mod conversations;
+
 mod agent_switch;
 
 mod runtime_outdated;
