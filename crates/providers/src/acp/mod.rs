@@ -41,9 +41,9 @@ use std::time::Duration;
 
 use crate::process::{ChildStdin, ChildStdout};
 use async_trait::async_trait;
-use futures::StreamExt;
 use futures::future::BoxFuture;
 use futures::stream::{BoxStream, FuturesUnordered};
+use futures::{FutureExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::io::AsyncBufReadExt;
 use tokio::sync::mpsc;
@@ -4086,11 +4086,11 @@ fn track_open_tools(ev: &AgentEvent, open_tools: &mut std::collections::HashSet<
     }
 }
 
-/// Emit one `Steered` per deferred mid-turn boundary (see
+/// Emit one `SteerBoundary` per deferred mid-turn boundary (see
 /// `pending_steer_boundaries` in `run_session`), rotating the
 /// assistant-message ledger exactly like the queued-steer boundary path
-/// does. Each boundary names the steer it delivers so the engine confirms
-/// that ledger entry, not simply the oldest. Returns false when the
+/// does. Each provisional boundary names its assignment without confirming
+/// delivery; only a successful RPC acknowledges it. Returns false when the
 /// consumer hung up.
 async fn flush_steer_boundaries(
     event_tx: &mpsc::Sender<Result<AgentEvent, HarnessError>>,
@@ -4101,7 +4101,7 @@ async fn flush_steer_boundaries(
         let (prev, next) = rotate(assistant_message_id);
         if !send(
             event_tx,
-            AgentEvent::Steered {
+            AgentEvent::SteerBoundary {
                 assistant_message_id: Some(prev),
                 next_assistant_message_id: Some(next),
                 message_id,
@@ -4701,6 +4701,7 @@ async fn run_session(session: Session) {
     let mut injected: FuturesUnordered<
         BoxFuture<'static, (u64, String, Option<String>, Result<Value, HarnessError>)>,
     > = FuturesUnordered::new();
+    let mut promoted_complete: Option<tokio::sync::oneshot::Sender<()>> = None;
     let mut steer_seq: u64 = 0;
     // Devin applies an injected prompt at the lead's next model call —
     // after its in-flight tools return — so a mid-turn steer's `Steered`
@@ -4935,7 +4936,7 @@ async fn run_session(session: Session) {
                     refused_steers.clear();
                 } else {
                     // The steer merged into this turn: its deferred
-                    // boundary is confirmed now — ahead of the turn's close,
+                    // boundary splits output now — ahead of the turn's close,
                     // and ahead of the late-promotion `continue` below.
                     if !flush_steer_boundaries(
                         &event_tx,
@@ -4954,26 +4955,32 @@ async fn run_session(session: Session) {
                                     target: "zuse_providers::acp",
                                     "mid-turn prompt refused at turn end (redelivering): {error}"
                                 );
-                                // Its boundary never confirmed this steer:
-                                // drop any still-pending one and hold the
+                                // Drop any still-pending boundary and hold the
                                 // text for ordered redelivery after Done.
                                 pending_steer_boundaries.retain(|(s, _)| *s != seq);
                                 refused_steers.insert(seq, (text, message_id));
                             }
-                            Ok(Some((_, _, _, Ok(_)))) | Ok(None) => {}
+                            Ok(Some((_, _, Some(message_id), Ok(_)))) => {
+                                if !send(&event_tx, AgentEvent::DeliveryAcknowledged { message_id }).await {
+                                    break 'main;
+                                }
+                            }
+                            Ok(Some((_, _, None, Ok(_)))) | Ok(None) => {}
                             Err(_) => break,
                         }
                     }
                     if !injected.is_empty() {
                         if status == DoneStatus::Completed {
-                            let pending = std::mem::take(&mut injected);
+                            // Keep each promoted RPC in `injected`: its own
+                            // select arm records refusals and acknowledgements.
+                            // Wait for all of them before the single Done. A
+                            // refused injection is retried after that Done and
+                            // does not change the successful primary outcome.
+                            let (complete_tx, complete_rx) = tokio::sync::oneshot::channel();
+                            promoted_complete = Some(complete_tx);
                             turn = Some(Box::pin(async move {
-                                let mut pending = pending;
-                                let mut last = Ok(json!({ "stopReason": "end_turn" }));
-                                while let Some((_seq, _text, _id, res)) = pending.next().await {
-                                    last = res;
-                                }
-                                last
+                                let _ = complete_rx.await;
+                                Ok(json!({ "stopReason": "end_turn" }))
                             }));
                             done_current = false;
                             prompt_seq += 1;
@@ -5245,6 +5252,19 @@ async fn run_session(session: Session) {
                     }
                 }
                 Some(Incoming::Eof) | None => {
+                    // The reader resolves outstanding RPCs before EOF. Preserve
+                    // every receipt even when EOF wins the select race; refused
+                    // injections stay in the engine ledger for runtime recovery.
+                    while let Some(Some((seq, _text, message_id, result))) = injected.next().now_or_never() {
+                        if result.is_err() {
+                            pending_steer_boundaries.retain(|(s, _)| *s != seq);
+                        } else if !(interrupted || stopping) && let Some(message_id) = message_id {
+                            let _ = send(&event_tx, AgentEvent::DeliveryAcknowledged { message_id }).await;
+                        }
+                    }
+                    if injected.is_empty() && let Some(complete) = promoted_complete.take() {
+                        let _ = complete.send(());
+                    }
                     // The turn ends via a request RESPONSE, which races EOF
                     // through a different channel than notifications: an agent
                     // exiting right after its final response must read as a
@@ -5449,9 +5469,9 @@ async fn run_session(session: Session) {
             // into the running turn (nothing to do); `Err` means the agent
             // refused it — hold it for ordered redelivery at the turn
             // boundary unless the run is winding down. A refusal whose
-            // boundary already went out confirms as a no-op there; one
-            // still pending loses its boundary so its ledger entry stays
-            // unconfirmed until the redelivery `Steered` names it.
+            // boundary already went out remains recoverable; one still
+            // pending loses its boundary. Only RPC success or redelivery
+            // confirms its ledger entry.
             res = async { injected.next().await }, if !injected.is_empty() => {
                 match res {
                     Some((seq, text, message_id, Err(error))) => {
@@ -5464,7 +5484,15 @@ async fn run_session(session: Session) {
                             refused_steers.insert(seq, (text, message_id));
                         }
                     }
-                    Some((_, _, _, Ok(_))) | None => {}
+                    Some((_, _, Some(message_id), Ok(_))) => {
+                        if !send(&event_tx, AgentEvent::DeliveryAcknowledged { message_id }).await {
+                            break 'main;
+                        }
+                    }
+                    Some((_, _, None, Ok(_))) | None => {}
+                }
+                if injected.is_empty() && let Some(complete) = promoted_complete.take() {
+                    let _ = complete.send(());
                 }
             },
 

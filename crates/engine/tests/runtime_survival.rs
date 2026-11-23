@@ -174,24 +174,48 @@ impl Harness for ProcessHarness {
                     steer = controls.steering.recv() => {
                         let Some(steer) = steer else { return };
                         if steer.prompt.contains("vanish") {
+                            if steer.prompt.contains("boundary") {
+                                let _ = send(AgentEvent::SteerBoundary {
+                                    assistant_message_id: None,
+                                    next_assistant_message_id: None,
+                                    message_id: (!steer.prompt.contains("background")).then_some(steer.message_id).flatten(),
+                                }).await;
+                            }
                             return;
                         }
                         if let Some(config) = &steer.config {
                             ledger.reconfigured.lock().unwrap().push(config.model.clone());
                         }
                         let holding = prompt(&steer.prompt, steer.attachments.len());
-                        let boundary = AgentEvent::Steered {
-                            assistant_message_id: None,
-                            next_assistant_message_id: None,
-                            message_id: None,
+                        let boundary = if steer.prompt.contains("provisional") {
+                            AgentEvent::SteerBoundary {
+                                assistant_message_id: None,
+                                next_assistant_message_id: None,
+                                message_id: steer.message_id.clone(),
+                            }
+                        } else {
+                            AgentEvent::Steered {
+                                assistant_message_id: None,
+                                next_assistant_message_id: None,
+                                message_id: None,
+                            }
                         };
+                        if steer.prompt.contains("receipt-first") {
+                            let _ = send(AgentEvent::DeliveryAcknowledged { message_id: steer.message_id.clone().unwrap() }).await;
+                        }
                         if !send(boundary).await
                             || !send(AgentEvent::TextDelta { text: format!("on it: {}", steer.prompt) }).await
                         {
                             return;
                         }
+                        if steer.prompt.contains("receipt-last") {
+                            let _ = send(AgentEvent::DeliveryAcknowledged { message_id: steer.message_id.clone().unwrap() }).await;
+                        }
                         waiting = steer.prompt.contains("wait");
                         if !holding && !waiting && !send(done(DoneStatus::Completed)).await {
+                            return;
+                        }
+                        if steer.prompt.contains("receipt-") {
                             return;
                         }
                     }
@@ -401,6 +425,16 @@ async fn a_model_switch_is_adopted_by_the_live_runtime() {
 /// not as the chat's latest request with the images stripped.
 #[tokio::test]
 async fn a_message_orphaned_by_a_dying_runtime_replays_as_sent() {
+    orphaned_steer_case("vanish").await;
+}
+
+#[tokio::test]
+async fn provisional_and_background_boundaries_preserve_runtime_failure_recovery() {
+    orphaned_steer_case("boundary-vanish").await;
+    orphaned_steer_case("background-boundary-vanish").await;
+}
+
+async fn orphaned_steer_case(prefix: &str) {
     let rig = rig_with(true);
     rig.core
         .sessions
@@ -413,7 +447,8 @@ async fn a_message_orphaned_by_a_dying_runtime_replays_as_sent() {
     )
     .await;
 
-    let mut sent = request("vanish: what is in this screenshot?");
+    let prompt = format!("{prefix}: what is in this screenshot?");
+    let mut sent = request(&prompt);
     sent.model = Some("process-2".into());
     sent.attachments = vec!["/tmp/shot.png".into()];
     rig.core
@@ -430,7 +465,7 @@ async fn a_message_orphaned_by_a_dying_runtime_replays_as_sent() {
     );
     assert_eq!(
         rig.ledger.prompts.lock().unwrap()[1],
-        ("vanish: what is in this screenshot?".to_string(), 1),
+        (prompt, 1),
         "the image survived the replay"
     );
     assert_eq!(
@@ -453,6 +488,109 @@ async fn a_message_orphaned_by_a_dying_runtime_replays_as_sent() {
         .collect();
     assert_eq!(orphan, ["m-orphan"], "one entry, under its own id");
     rig.core.sessions.shutdown().await;
+}
+
+#[tokio::test]
+async fn explicit_stop_cancels_a_provisional_steer_without_replaying_it() {
+    let rig = rig();
+    rig.core
+        .sessions
+        .dispatch(CHAT, HarnessId::Mock, request("hold: initial"), None)
+        .await
+        .unwrap();
+    wait_for(
+        || rig.ledger.prompts.lock().unwrap().len() == 1,
+        "initial turn",
+    )
+    .await;
+    rig.core
+        .sessions
+        .dispatch(
+            CHAT,
+            HarnessId::Mock,
+            request("provisional hold"),
+            Some("pending".into()),
+        )
+        .await
+        .unwrap();
+    wait_for(
+        || rig.ledger.prompts.lock().unwrap().len() == 2,
+        "provisional steer",
+    )
+    .await;
+    rig.core
+        .doc_host
+        .queue_command(CHAT, SessionCommandPayload::Interrupt {})
+        .unwrap();
+    wait_for(
+        || {
+            rig.ledger.kills.load(Ordering::SeqCst) == 1
+                && !rig.core.sessions.live_run_steerable(CHAT)
+        },
+        "runtime stop",
+    )
+    .await;
+    rig.core
+        .sessions
+        .dispatch(CHAT, HarnessId::Mock, request("fresh turn"), None)
+        .await
+        .unwrap();
+    settle(&rig, 3).await;
+    assert_eq!(rig.ledger.spawns.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        rig.ledger
+            .prompts
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(p, _)| p == "provisional hold")
+            .count(),
+        1
+    );
+    rig.core.sessions.shutdown().await;
+}
+
+#[tokio::test]
+async fn delivery_receipts_work_before_and_after_a_provisional_boundary() {
+    for order in ["first", "last"] {
+        let rig = rig();
+        rig.core
+            .sessions
+            .dispatch(CHAT, HarnessId::Mock, request("hold: initial"), None)
+            .await
+            .unwrap();
+        wait_for(
+            || rig.ledger.prompts.lock().unwrap().len() == 1,
+            "initial turn",
+        )
+        .await;
+        rig.core
+            .sessions
+            .dispatch(
+                CHAT,
+                HarnessId::Mock,
+                request(&format!("provisional receipt-{order}")),
+                Some("delivered".into()),
+            )
+            .await
+            .unwrap();
+        wait_for(
+            || {
+                rig.ledger.prompts.lock().unwrap().len() >= 2
+                    && !rig.core.sessions.live_run_steerable(CHAT)
+            },
+            "receipt and runtime exit",
+        )
+        .await;
+        assert_eq!(
+            rig.ledger.spawns.load(Ordering::SeqCst),
+            1,
+            "a confirmed steer must not replay"
+        );
+        assert_eq!(rig.ledger.prompts.lock().unwrap().len(), 2);
+        assert_eq!(status(&rig.core), Some(SessionStatus::Idle));
+        rig.core.sessions.shutdown().await;
+    }
 }
 
 /// Every distinct completion ping the chat publishes, recorded until the

@@ -1146,6 +1146,15 @@ pub enum AgentEvent {
     DeliveryAcknowledged {
         message_id: String,
     },
+    /// Split streamed output without confirming delivery. A named provisional
+    /// assignment remains recoverable until `DeliveryAcknowledged` arrives.
+    /// An unnamed boundary is autonomous activity and confirms no assignment.
+    #[serde(rename_all = "camelCase")]
+    SteerBoundary {
+        assistant_message_id: Option<String>,
+        next_assistant_message_id: Option<String>,
+        message_id: Option<String>,
+    },
     /// A confirmed new assignment. When tagged as Subagent, this reopens the
     /// same child transcript even if the provider does not echo the user text.
     #[serde(rename_all = "camelCase")]

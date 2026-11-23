@@ -173,7 +173,7 @@ fn summarize(label: &str, events: &[AgentEvent], check_banana: bool) {
         let mut banana_at = None;
         for (i, e) in events.iter().enumerate() {
             match e {
-                AgentEvent::Steered { .. } if steered_at.is_none() => steered_at = Some(i),
+                AgentEvent::SteerBoundary { .. } if steered_at.is_none() => steered_at = Some(i),
                 AgentEvent::TextDelta { text: delta } => {
                     text.push_str(delta);
                     if banana_at.is_none() && text.contains("BANANA") {

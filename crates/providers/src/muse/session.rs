@@ -778,8 +778,14 @@ impl Runner {
                 if !self.running && !id.is_empty() && !self.completed.iter().any(|c| c == id) {
                     self.active = Some(id.to_owned());
                     self.running = true;
-                    let steered = self.rotate();
-                    self.emit(steered).await?;
+                    let previous =
+                        std::mem::replace(&mut self.assistant, uuid::Uuid::new_v4().to_string());
+                    self.emit(AgentEvent::SteerBoundary {
+                        assistant_message_id: Some(previous),
+                        next_assistant_message_id: Some(self.assistant.clone()),
+                        message_id: None,
+                    })
+                    .await?;
                 }
             }
             "turn/completed" | "turn/unqueued" => {

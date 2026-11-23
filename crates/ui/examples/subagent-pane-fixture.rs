@@ -326,8 +326,14 @@ fn main() -> anyhow::Result<()> {
                         // `capture PATH` renders the window to a PNG — a real
                         // capture of the compiled fixture, no screen-recording
                         // permission needed.
-                        if words.first() == Some(&"capture") && words.len() == 2 {
-                            let path = words[1].to_string();
+                        if let Some(path) = line
+                            .trim_start()
+                            .strip_prefix("capture")
+                            .filter(|rest| rest.starts_with(char::is_whitespace))
+                            .map(str::trim)
+                            .filter(|path| !path.is_empty())
+                        {
+                            let path = path.to_string();
                             let saved = gpui::AnyWindowHandle::from(window).update(
                                 cx,
                                 |_, w, _| -> anyhow::Result<()> {

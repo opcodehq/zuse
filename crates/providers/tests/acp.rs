@@ -1763,7 +1763,7 @@ for line in sys.stdin:
     );
     let steered = events
         .iter()
-        .position(|e| matches!(e, AgentEvent::Steered { .. }))
+        .position(|e| matches!(e, AgentEvent::SteerBoundary { .. }))
         .expect("Steered boundary");
     let second = events
         .iter()
@@ -1850,7 +1850,7 @@ for line in sys.stdin:
 
     let steered = events
         .iter()
-        .position(|e| matches!(e, AgentEvent::Steered { .. }))
+        .position(|e| matches!(e, AgentEvent::SteerBoundary { .. }))
         .expect("Steered boundary");
     let second = events
         .iter()
@@ -1965,7 +1965,7 @@ for line in sys.stdin:
         .expect("lead tool ToolResult");
     let steered = events
         .iter()
-        .position(|e| matches!(e, AgentEvent::Steered { .. }))
+        .position(|e| matches!(e, AgentEvent::SteerBoundary { .. }))
         .expect("Steered boundary");
     let second = events
         .iter()
@@ -1985,22 +1985,23 @@ for line in sys.stdin:
 /// Devin refuses injected mid-turn prompts: two steers ("s1", "s2") ride
 /// `session/prompt` while the turn lives, the fake rejects the SECOND
 /// injection first, then the FIRST, then settles the primary. Each refusal
-/// keeps its steer unconfirmed — its boundary already went out, so the
-/// redelivery `Steered` naming its message id is a no-op confirmation that
-/// still re-arms the segment — and the refused texts redeliver joined in
+/// keeps its steer unconfirmed after a provisional boundary. The redelivery
+/// `Steered` confirms exactly its own message, and refused texts join in
 /// admission order as the next prompt. One Done per prompt cycle, no
 /// session/cancel.
 #[cfg(unix)]
-#[tokio::test]
-async fn devin_mid_turn_refused_steers_redeliver_in_order_and_confirm_once() {
+async fn refused_steers_case(late: bool, refused: &[usize], reverse: bool) {
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("cancelled");
     let redelivered = dir.path().join("redelivered.txt");
     let harness = devin_script(
         &dir,
         "devin.py",
-        r#"#!/usr/bin/env python3
-import json, sys, pathlib
+        &r#"#!/usr/bin/env python3
+import json, sys, pathlib, time
+late = LATE
+refused = REFUSED
+reverse = REVERSE
 root = pathlib.Path(__file__).parent
 
 def emit(frame):
@@ -2034,14 +2035,21 @@ for line in sys.stdin:
             # both are refused together below.
             pass
         elif len(prompts) == 3:
-            # Both injected prompts arrived while the turn lived: refuse
-            # the second injection first, then the first, then settle the
-            # primary turn.
-            s2_id, _ = prompts[2]
-            s1_id, _ = prompts[1]
-            emit({'id':s2_id,'error':{'code':-32000,'message':'injection refused'}})
-            emit({'id':s1_id,'error':{'code':-32000,'message':'injection refused'}})
-            emit({'id':primary_id,'result':{'stopReason':'end_turn'}})
+            if late:
+                emit({'id':primary_id,'result':{'stopReason':'end_turn'}})
+                time.sleep(0.8)  # Both RPCs must outlive the promotion grace.
+            for index in ([2, 1] if reverse else [1, 2]):
+                response = {'id':prompts[index][0]}
+                if index in refused:
+                    response['error'] = {'code':-32000,'message':'injection refused'}
+                else:
+                    response['result'] = {'stopReason':'end_turn'}
+                emit(response)
+            if not late:
+                emit({'id':primary_id,'result':{'stopReason':'end_turn'}})
+            if not refused:
+                time.sleep(0.2)
+                break
         else:
             # The redelivery prompt joins the refused steers in admission
             # order.
@@ -2049,7 +2057,9 @@ for line in sys.stdin:
             update({'sessionUpdate':'agent_message_chunk','content':{'type':'text','text':'again'}})
             emit({'id':req['id'],'result':{'stopReason':'end_turn'}})
             break
-"#,
+"#.replace("LATE", if late { "True" } else { "False" })
+    .replace("REFUSED", &format!("{refused:?}"))
+    .replace("REVERSE", if reverse { "True" } else { "False" }),
     );
     let (controls, steer_tx, _token) = controls();
     let mut req = devin_request("first task");
@@ -2084,36 +2094,79 @@ for line in sys.stdin:
         !marker.exists(),
         "session/cancel must not be sent: {events:?}"
     );
-    assert_eq!(
-        std::fs::read_to_string(&redelivered).unwrap(),
-        "s1-text\n\ns2-text",
-        "refused steers redeliver joined in admission order"
-    );
-    // Every Steered boundary names the steer it delivers; the two
-    // redelivery boundaries after the first Done confirm "s1" then "s2".
-    let steered_ids: Vec<Option<String>> = events
+    if refused.is_empty() {
+        assert!(!redelivered.exists());
+    } else {
+        assert_eq!(
+            std::fs::read_to_string(&redelivered).unwrap(),
+            refused
+                .iter()
+                .map(|i| format!("s{i}-text"))
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+            "refused steers redeliver in admission order"
+        );
+    }
+    let boundaries: Vec<_> = events
         .iter()
         .filter_map(|e| match e {
-            AgentEvent::Steered { message_id, .. } => Some(message_id.clone()),
+            AgentEvent::SteerBoundary { message_id, .. } => {
+                Some(format!("pending:{}", message_id.as_deref().unwrap()))
+            }
+            AgentEvent::Steered { message_id, .. } => {
+                Some(format!("delivered:{}", message_id.as_deref().unwrap()))
+            }
+            AgentEvent::Done { .. } => Some("done".into()),
             _ => None,
         })
         .collect();
+    let mut expected = vec![
+        "pending:s1".to_string(),
+        "pending:s2".to_string(),
+        "done".to_string(),
+    ];
+    if !refused.is_empty() {
+        expected.extend(refused.iter().map(|i| format!("delivered:s{i}")));
+        expected.push("done".into());
+    }
+    assert_eq!(boundaries, expected, "{events:?}");
+    let mut acknowledged: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::DeliveryAcknowledged { message_id } => Some(message_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    acknowledged.sort();
+    let expected: Vec<_> = (1..=2)
+        .filter(|i| !refused.contains(i))
+        .map(|i| format!("s{i}"))
+        .collect();
     assert_eq!(
-        steered_ids,
-        vec![
-            Some("s1".into()),
-            Some("s2".into()),
-            Some("s1".into()),
-            Some("s2".into())
-        ],
-        "{events:?}"
+        acknowledged, expected,
+        "only successful injections confirm delivery: {events:?}"
     );
-    // One Done per prompt cycle: the merged turn, then the redelivery.
     assert_eq!(
         dones(&events),
-        vec![(DoneStatus::Completed, None), (DoneStatus::Completed, None)],
+        vec![(DoneStatus::Completed, None); if refused.is_empty() { 1 } else { 2 }],
         "{events:?}"
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn devin_mid_turn_refused_steers_redeliver_in_order_and_confirm_once() {
+    refused_steers_case(false, &[1, 2], true).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn devin_promoted_steers_preserve_each_outcome_in_either_completion_order() {
+    for reverse in [false, true] {
+        refused_steers_case(true, &[1], reverse).await;
+        refused_steers_case(true, &[1, 2], reverse).await;
+        refused_steers_case(true, &[], reverse).await;
+    }
 }
 
 /// Devin `session/load` can fail transiently with -32015 session_locked

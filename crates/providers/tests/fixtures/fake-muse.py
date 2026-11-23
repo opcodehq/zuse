@@ -93,6 +93,16 @@ def turn_start(request, params):
         state['running'] = False
         output({'method': 'view/gap', 'params': {'sessionId': state['session'], 'after': after, 'next': str(state['cursor'])}})
         return
+    if text == 'background':
+        message()
+        def wake():
+            time.sleep(0.15)
+            state['turn'] = 'background-turn'
+            state['running'] = True
+            event('turn/started', {'turnId': state['turn']})
+            message('Background reply', 'background-message')
+        threading.Thread(target=wake, daemon=True).start()
+        return
     if text == 'crash':
         sys.stdout.flush()
         os._exit(7)

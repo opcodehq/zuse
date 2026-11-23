@@ -401,7 +401,9 @@ impl MessagePart {
 /// - `Error` and `Done{error}` become visible error parts.
 pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
     match event {
-        AgentEvent::SessionStarted { .. } | AgentEvent::Steered { .. } => {
+        AgentEvent::SessionStarted { .. }
+        | AgentEvent::Steered { .. }
+        | AgentEvent::SteerBoundary { .. } => {
             out.clear();
         }
         AgentEvent::TextDelta { text } => {
@@ -591,9 +593,9 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                 }),
                 // A new assignment reopens a settled chip. Providers may
                 // announce it with user text or a confirmed turn boundary.
-                AgentEvent::UserMessage { .. } | AgentEvent::Steered { .. } => {
-                    Some(SubagentStatus::Running)
-                }
+                AgentEvent::UserMessage { .. }
+                | AgentEvent::Steered { .. }
+                | AgentEvent::SteerBoundary { .. } => Some(SubagentStatus::Running),
                 _ => None,
             };
             for p in out.iter_mut() {

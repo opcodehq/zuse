@@ -3927,6 +3927,10 @@ async fn drive_run(
     // Workflow chips this run saw progress for and that have not settled.
     let mut live_workflows: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+    // A receipt can beat its tool-delayed transcript boundary. Keep its
+    // assignment until that boundary can associate execution with the segment.
+    let mut acknowledged_steers: HashMap<String, RoutedSteer> = HashMap::new();
+    let mut provisional_steers: std::collections::HashSet<String> = Default::default();
     let mut execution_message = (!resume_state.idle).then(|| resume_state.user_message_id.clone());
     let mut final_completed_turn = None;
     let final_status = loop {
@@ -4179,6 +4183,24 @@ async fn drive_run(
             event
         };
 
+        // Transcript segmentation and delivery confirmation are independent:
+        // a provisional boundary may arrive before an injected RPC resolves.
+        let (event, provisional) = match event {
+            AgentEvent::SteerBoundary {
+                assistant_message_id,
+                next_assistant_message_id,
+                message_id,
+            } => (
+                AgentEvent::Steered {
+                    assistant_message_id,
+                    next_assistant_message_id,
+                    message_id,
+                },
+                true,
+            ),
+            event => (event, false),
+        };
+
         // Replayed consumption is a receipt, never an assistant boundary.
         if let AgentEvent::DeliveryAcknowledged { message_id } = &event {
             let (confirmed, pending) = lock(&inner.runs)
@@ -4194,6 +4216,9 @@ async fn drive_run(
                 })
                 .unwrap_or((None, false));
             if let Some(confirmed) = confirmed {
+                if !provisional_steers.remove(message_id) {
+                    acknowledged_steers.insert(message_id.clone(), confirmed.clone());
+                }
                 turn.forget_steer(message_id);
                 if confirmed.fork_history
                     && let Some(session) = lock(&inner.harness_sessions)
@@ -4260,25 +4285,6 @@ async fn drive_run(
             // on click).
             let done_only = !sink_known && matches!(sub_event.as_ref(), AgentEvent::Done { .. });
             if chip_streaming {
-                if !sink_known && !done_only {
-                    for p in folded.iter_mut() {
-                        if let MessagePart::Tool {
-                            id,
-                            call,
-                            subagent_ref,
-                            ..
-                        } = p
-                            && id == parent_tool_use_id
-                            // Genus gate: a subagent ref may only ever bind
-                            // to a SPAWN call — mis-keyed tagged traffic
-                            // must not turn an ordinary chip into a spawn
-                            // link (empty tab on click).
-                            && call.is_subagent_spawn()
-                        {
-                            *subagent_ref = Some(sub_id.clone());
-                        }
-                    }
-                }
                 zuse_doc::fold_event_into_parts(&mut folded, &event);
                 if !dirty {
                     dirty = true;
@@ -4296,6 +4302,23 @@ async fn drive_run(
                     }
                 });
                 if let Some(sub_doc) = opened {
+                    // Publish a link only once its document exists.
+                    if chip_streaming {
+                        for part in folded.iter_mut() {
+                            if let MessagePart::Tool {
+                                id,
+                                call,
+                                subagent_ref,
+                                ..
+                            } = part
+                                && id == parent_tool_use_id
+                                && call.is_subagent_spawn()
+                            {
+                                // Only spawn chips may link to a child transcript.
+                                *subagent_ref = Some(sub_id.clone());
+                            }
+                        }
+                    }
                     subagents.insert(
                         parent_tool_use_id.clone(),
                         SubagentSink {
@@ -4705,8 +4728,24 @@ async fn drive_run(
                 .get_mut(&chat_id)
                 .filter(|h| h.run_id == run_id)
                 .and_then(|h| {
-                    let confirmed =
-                        take_confirmed_steer(&mut lock(&h.routed_steers), message_id.as_deref());
+                    let confirmed = if provisional {
+                        // Associate execution with the new segment, but retain
+                        // the receipt for recovery if delivery later fails.
+                        lock(&h.routed_steers)
+                            .iter()
+                            .find(|s| Some(s.message_id.as_str()) == message_id.as_deref())
+                            .cloned()
+                            .inspect(|s| {
+                                provisional_steers.insert(s.message_id.clone());
+                            })
+                            .or_else(|| {
+                                message_id
+                                    .as_ref()
+                                    .and_then(|id| acknowledged_steers.remove(id))
+                            })
+                    } else {
+                        take_confirmed_steer(&mut lock(&h.routed_steers), message_id.as_deref())
+                    };
                     if let Some(confirmed) = &confirmed {
                         h.active_message = Some(confirmed.message_id.clone());
                     }
@@ -4750,9 +4789,12 @@ async fn drive_run(
             // this runtime's provider session.
             if let Some(steer) = &confirmed {
                 source_message_id = steer.message_id.clone();
-                turn.forget_steer(&steer.message_id);
+                if !provisional {
+                    turn.forget_steer(&steer.message_id);
+                }
             }
-            if confirmed.is_some_and(|steer| steer.fork_history)
+            if !provisional
+                && confirmed.is_some_and(|steer| steer.fork_history)
                 && let Some(session) = lock(&inner.harness_sessions)
                     .get(&chat_id)
                     .map(|known| known.session_id.clone())
