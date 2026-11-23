@@ -5804,10 +5804,8 @@ impl Pickers {
                         "description":"Best for complex coding and reasoning",
                         "reasoningLevels":["low","medium","high","xhigh"],
                         "options":[
-                            {"id":"serviceTier","label":"Service tier","defaultChoice":"standard",
-                             "choices":[{"id":"standard","label":"Standard"},{"id":"fast","label":"Fast"}]},
-                            {"id":"contextWindow","label":"Context window","defaultChoice":"standard",
-                             "choices":[{"id":"standard","label":"Standard"},{"id":"1m","label":"1M tokens"}]}
+                            {"id":"serviceTier","label":"Service tier","defaultChoice":"default",
+                             "choices":[{"id":"default","label":"Standard"},{"id":"fast","label":"Fast"}]}
                         ]
                     },
                     {"id":"gpt-5.3-codex","label":"GPT-5.3 Codex",

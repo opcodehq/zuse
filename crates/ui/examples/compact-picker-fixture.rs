@@ -104,8 +104,26 @@ async fn scene(
     )
     .await?;
 
+    // A model without a 1M window: the card lists fast mode, favorite and
+    // default only.
+    window.update(cx, |view, _, cx| {
+        view.composer.update(cx, |composer, cx| {
+            composer.pickers().update(cx, |pickers, cx| {
+                pickers.fixture_highlight_model("gpt-5.4", cx)
+            });
+        });
+    })?;
+    pause(cx).await;
+    capture(
+        window.into(),
+        cx,
+        output,
+        &format!("model-picker-detail-gpt-{label}.png"),
+    )
+    .await?;
+
     // The card follows the highlighted row: a model with fast mode and a
-    // context window choice.
+    // 1M context window.
     window.update(cx, |view, _, cx| {
         view.composer.update(cx, |composer, cx| {
             composer.pickers().update(cx, |pickers, cx| {

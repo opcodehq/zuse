@@ -7,12 +7,17 @@
 use super::*;
 use crate::tooltip::TooltipExt as _;
 
-pub(super) const CARD_WIDTH: f32 = 272.;
-const PAD: f32 = 14.;
-const SLIDER_HEIGHT: f32 = 28.;
-const SLIDER_RADIUS: f32 = 8.;
-const KNOB_WIDTH: f32 = 12.;
-const KNOB_HEIGHT: f32 = 20.;
+pub(super) const CARD_WIDTH: f32 = 240.;
+const PAD: f32 = 12.;
+const HEADER: f32 = 40.;
+/// Option rows and toggle chips share one height.
+const ROW: f32 = 30.;
+const TOGGLE: f32 = 28.;
+/// The reasoning slider: a pill track, a soft pill knob and dot stops.
+const TRACK: f32 = 20.;
+const KNOB_W: f32 = 22.;
+const KNOB_H: f32 = 14.;
+const DOT: f32 = 3.;
 
 /// Everything the card shows for one row.
 pub(super) struct Detail {
@@ -20,11 +25,133 @@ pub(super) struct Detail {
     pub effort: Option<compact::CompactEffort>,
     /// Fast mode offered by the model, and whether it is on.
     pub fast: Option<bool>,
+    /// The long-context switch, for models whose catalog offers one.
+    pub long_context: Option<LongContext>,
     /// The remaining options (context window, ...), excluding the ones the
     /// slider and the fast-mode switch own.
     pub options: Vec<SettingGroup>,
     pub favorite: bool,
     pub is_default: bool,
+}
+
+/// A model's long-context option as one switch ("1M context").
+#[derive(Clone, Debug)]
+pub(super) struct LongContext {
+    pub option: String,
+    pub on_value: String,
+    pub off_value: String,
+    pub on_label: String,
+    pub off_label: String,
+    pub on: bool,
+    pub off_default: bool,
+}
+
+/// "200k" / "1m" as a token count.
+fn token_count(value: &str) -> Option<f64> {
+    let value = value.trim().to_ascii_lowercase();
+    let (number, scale) = if let Some(n) = value.strip_suffix('m') {
+        (n, 1_000_000.)
+    } else {
+        (value.strip_suffix('k')?, 1_000.)
+    };
+    number.parse::<f64>().ok().map(|n| n * scale)
+}
+
+/// The model's long-context switch, read from its catalog options: a
+/// two-choice context option whose larger window is at least a million
+/// tokens. Models whose catalog has no such option get no switch.
+fn long_context(
+    model: &Model,
+    options: &serde_json::Map<String, serde_json::Value>,
+) -> Option<LongContext> {
+    model.options.iter().find_map(|option| {
+        if !option.id.to_ascii_lowercase().contains("context") {
+            return None;
+        }
+        let (on, off) = zuse_protocol::presentation::binary_switch_values(
+            option.choices.iter().map(|c| c.id.as_str()),
+        )?;
+        if token_count(on)? < 1_000_000. || token_count(off)? >= 1_000_000. {
+            return None;
+        }
+        let current = options
+            .get(&option.id)
+            .and_then(|v| v.as_str())
+            .unwrap_or(&option.default_choice);
+        Some(LongContext {
+            option: option.id.clone(),
+            on_value: on.to_owned(),
+            off_value: off.to_owned(),
+            on_label: option
+                .choices
+                .iter()
+                .find(|c| c.id == on)
+                .map(|c| c.label.clone())
+                .unwrap_or_else(|| on.to_uppercase()),
+            off_label: option
+                .choices
+                .iter()
+                .find(|c| c.id == off)
+                .map(|c| c.label.clone())
+                .unwrap_or_else(|| off.to_uppercase()),
+            on: current == on,
+            off_default: option.default_choice == off,
+        })
+    })
+}
+
+/// An icon-only toggle in the card: the pixel icon, muted when off and in
+/// the accent on a faint wash when on. The tooltip names it and its state.
+fn icon_toggle(
+    id: &'static str,
+    icon: &'static str,
+    label: &'static str,
+    on: bool,
+    tip: &'static str,
+    theme: &Theme,
+    on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    let hover = theme.muted_fill().opacity(0.8);
+    div()
+        .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .aria_toggled(if on {
+            gpui::Toggled::True
+        } else {
+            gpui::Toggled::False
+        })
+        .tab_index(0)
+        .size(px(TOGGLE))
+        .flex_none()
+        .rounded(px(7.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .when(on, |el| el.bg(theme.accent.opacity(0.12)))
+        .when(!on, |el| el.hover(move |s| s.bg(hover)))
+        .tip(tip)
+        .on_click(on_click)
+        .child(
+            crate::icons::icon(icon)
+                .size(px(16.))
+                .flex_none()
+                .text_color(if on { theme.accent } else { theme.text_muted }),
+        )
+        .into_any_element()
+}
+
+/// The card's tooltip on the name: the description, or for a model that
+/// shares its name with another, its id. The list shows names only.
+fn card_note(row: &ModelRowData) -> Option<SharedString> {
+    row.model
+        .description
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .map(|d| SharedString::from(d.to_owned()))
+        .or_else(|| row.ambiguous.then(|| row.model.id.clone().into()))
 }
 
 impl Pickers {
@@ -139,11 +266,15 @@ impl Pickers {
                 .unwrap_or(&option.default_choice)
                 == on
         });
+        let long = configurable
+            .then(|| long_context(&row.model, &options))
+            .flatten();
         let hidden: Vec<&str> = effort
             .as_ref()
             .and_then(|e| e.option_id())
             .into_iter()
             .chain(fast_option.map(|(o, _)| o.id.as_str()))
+            .chain(long.as_ref().map(|l| l.option.as_str()))
             .collect();
         let groups = if configurable {
             build_setting_groups(Vec::new(), None, Some(&row.model), &options)
@@ -161,6 +292,7 @@ impl Pickers {
                 .is_some_and(|m| m.provider == row.harness && m.model == row.model.id),
             effort,
             fast,
+            long_context: long,
             options: groups,
             row,
         })
@@ -300,6 +432,16 @@ impl Pickers {
         cx.notify();
     }
 
+    /// Stop starting new chats with a particular model.
+    pub(super) fn clear_detail_default(&mut self, cx: &mut Context<Self>) {
+        crate::settings::update(crate::settings::SavePolicy::Immediate, cx, |settings| {
+            settings.default_model = None;
+        });
+        self.catalog_rev += 1;
+        cx.refresh_windows();
+        cx.notify();
+    }
+
     pub(super) fn render_model_detail(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let detail = self.model_detail(cx)?;
         let theme = Theme::of(cx).for_popup();
@@ -309,38 +451,19 @@ impl Pickers {
         let label: SharedString = detail.row.model.label.clone().into();
         let (path, tint) = harness_brand_icon(harness);
         let divider = || div().h(px(1.)).flex_none().bg(theme.border.opacity(0.5));
-        let info = |name: &'static str, value: SharedString| {
-            div()
-                .h(px(20.))
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap(px(12.))
-                .text_size(crate::typography::text_xs())
-                .child(div().text_color(theme.text_muted).child(name))
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(theme.text)
-                        .child(value),
-                )
-        };
         let header = div()
             .relative()
+            .h(px(HEADER))
             .px(px(PAD))
-            .pt(px(12.))
-            .pb(px(10.))
             .flex()
-            .flex_col()
-            .gap(px(6.))
+            .items_center()
             .child(
                 div()
                     .absolute()
                     .top_0()
                     .right_0()
-                    .w(px(150.))
-                    .h(px(44.))
+                    .w(px(130.))
+                    .h(px(HEADER))
                     .child(zuse_viewport::dither::corner(
                         ink.opacity(0.55),
                         popover::CARD_RADIUS,
@@ -350,6 +473,7 @@ impl Pickers {
                 div()
                     .id("model-detail-name")
                     .relative()
+                    .min_w_0()
                     .flex()
                     .items_center()
                     .gap(px(8.))
@@ -360,35 +484,39 @@ impl Pickers {
                     ))
                     .child(
                         div()
-                            .min_w_0()
+                            .flex_none()
+                            .max_w(px(CARD_WIDTH - 2. * PAD - 96.))
                             .truncate()
                             .text_size(crate::typography::text_sm())
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(theme.text_strong)
                             .child(label.clone()),
                     )
-                    .when_some(detail.row.model.description.clone(), |el, description| {
-                        el.tip(description)
-                    }),
-            )
-            .child(info("Provider", detail.row.harness_name.clone()));
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(crate::typography::text_xs())
+                            .text_color(theme.text_muted)
+                            .child(detail.row.harness_name.clone()),
+                    )
+                    .when_some(card_note(&detail.row), |el, note| el.tip(note)),
+            );
 
-        let mut settings = div()
+        let mut body = div()
             .px(px(PAD))
             .pt(px(10.))
-            .pb(px(10.))
+            .pb(px(PAD))
             .flex()
             .flex_col()
             .gap(px(8.));
-        let mut has_settings = false;
         if let Some(effort) = detail.effort.as_ref() {
-            has_settings = true;
             let current = effort
                 .labels
                 .get(effort.selected)
                 .cloned()
                 .unwrap_or_default();
-            settings = settings.child(
+            body = body.child(
                 div()
                     .flex()
                     .items_center()
@@ -398,174 +526,154 @@ impl Pickers {
                     .child(div().text_color(theme.text).child(current)),
             );
             if effort.labels.len() > 1 {
-                settings = settings.child(self.detail_slider(
-                    effort,
-                    harness,
-                    model_id.clone(),
-                    &theme,
-                    cx,
-                ));
+                body =
+                    body.child(self.detail_slider(effort, harness, model_id.clone(), &theme, cx));
             }
-        }
-        if let Some(on) = detail.fast {
-            has_settings = true;
-            let toggle_model = model_id.clone();
-            settings = settings.child(
-                div()
-                    .id("model-detail-fast")
-                    .role(gpui::Role::Switch)
-                    .aria_label("Fast mode")
-                    .aria_toggled(if on {
-                        gpui::Toggled::True
-                    } else {
-                        gpui::Toggled::False
-                    })
-                    .tab_index(0)
-                    .h(px(26.))
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .cursor_pointer()
-                    .text_size(crate::typography::text_xs())
-                    .tip("Faster responses, more usage")
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.set_detail_fast(harness, &toggle_model, !on, cx);
-                    }))
-                    .child(
-                        crate::icons::icon(if on {
-                            crate::icons::FAST_TIER_BOLD
-                        } else {
-                            crate::icons::FAST_TIER
-                        })
-                        .size(px(14.))
-                        .text_color(if on {
-                            theme.accent
-                        } else {
-                            theme.text_muted
-                        }),
-                    )
-                    .child(div().flex_1().text_color(theme.text).child("Fast mode"))
-                    .child(crate::settings::widgets::toggle_switch(
-                        &theme,
-                        on,
-                        "model-detail-fast-switch",
-                    )),
-            );
-        }
-        for (gx, group) in detail.options.iter().enumerate() {
-            has_settings = true;
-            settings =
-                settings.child(self.detail_option(gx, group, harness, &model_id, &theme, cx));
+            body = body.child(div().h(px(1.)));
         }
 
+        // One row under the slider: icon toggles on the left, the context
+        // window switch on the right. Hover names each toggle.
+        let mut toggles = div().flex().items_center().gap(px(2.));
+        if let Some(on) = detail.fast {
+            let model = model_id.clone();
+            toggles = toggles.child(icon_toggle(
+                "model-detail-fast",
+                crate::icons::DITHER_BOLT,
+                "Fast mode",
+                on,
+                if on {
+                    "Fast mode · On"
+                } else {
+                    "Fast mode · Off"
+                },
+                &theme,
+                cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.set_detail_fast(harness, &model, !on, cx);
+                }),
+            ));
+        }
         let favorite = detail.favorite;
         let favorite_model = model_id.clone();
+        toggles = toggles.child(icon_toggle(
+            "model-detail-favorite",
+            crate::icons::DITHER_BOOKMARK,
+            "Favorite",
+            favorite,
+            if favorite {
+                "Remove from favorites"
+            } else {
+                "Add to favorites"
+            },
+            &theme,
+            cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                cx.stop_propagation();
+                this.toggle_detail_favorite(harness, &favorite_model, cx);
+            }),
+        ));
+        let is_default = detail.is_default;
         let default_model = model_id.clone();
         let default_label = label.clone();
-        let is_default = detail.is_default;
-        let button = |id: &'static str| {
-            div()
-                .id(id)
-                .role(gpui::Role::Button)
-                .tab_index(0)
-                .flex_1()
-                .h(px(30.))
-                .rounded(px(8.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .gap(px(6.))
-                .text_size(crate::typography::text_xs())
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(theme.text)
-                .bg(theme.muted_fill().opacity(0.5))
-        };
-        let actions = div()
-            .p(px(8.))
-            .flex()
-            .gap(px(6.))
-            .child(
-                button("model-detail-favorite")
-                    .aria_label(if favorite {
-                        "Remove from favorites"
-                    } else {
-                        "Add to favorites"
-                    })
-                    .aria_toggled(if favorite {
-                        gpui::Toggled::True
-                    } else {
-                        gpui::Toggled::False
-                    })
-                    .tip(if favorite {
-                        "Remove from favorites"
-                    } else {
-                        "Add to favorites"
-                    })
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme.muted_fill()))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.toggle_detail_favorite(harness, &favorite_model, cx);
-                    }))
-                    .child(
-                        crate::icons::icon(if favorite {
-                            crate::icons::STAR_BOLD
-                        } else {
-                            crate::icons::STAR
-                        })
-                        .size(px(13.))
-                        .text_color(if favorite {
-                            theme.accent
+        toggles = toggles.child(icon_toggle(
+            "model-detail-default",
+            crate::icons::DITHER_FLAG,
+            "Default model",
+            is_default,
+            if is_default {
+                "Default model · New chats start here"
+            } else {
+                "Set as default"
+            },
+            &theme,
+            cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                cx.stop_propagation();
+                if is_default {
+                    this.clear_detail_default(cx);
+                } else {
+                    this.set_detail_default(harness, &default_model, &default_label, cx);
+                }
+            }),
+        ));
+        let context = detail.long_context.clone().map(|long| {
+            let segment =
+                |id: &'static str, text: String, value: String, default: bool, on: bool| {
+                    let model = model_id.clone();
+                    let option = long.option.clone();
+                    div()
+                        .id(id)
+                        .role(gpui::Role::RadioButton)
+                        .aria_label(SharedString::from(text.clone()))
+                        .aria_selected(on)
+                        .tab_index(0)
+                        .h(px(22.))
+                        .min_w(px(40.))
+                        .px(px(8.))
+                        .rounded(px(6.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .text_color(if on {
+                            theme.text_strong
                         } else {
                             theme.text_muted
-                        }),
-                    )
-                    .child(if favorite {
-                        "Favorite"
-                    } else {
-                        "Add to favorites"
-                    }),
-            )
-            .child(
-                button("model-detail-default")
-                    .aria_label(if is_default {
-                        "Default model"
-                    } else {
-                        "Set as default model"
-                    })
-                    .tip(if is_default {
-                        "New chats start with this model"
-                    } else {
-                        "Start new chats with this model"
-                    })
-                    .when(is_default, |el| el.text_color(theme.text_muted))
-                    .when(!is_default, |el| {
-                        el.cursor_pointer()
-                            .hover(|s| s.bg(theme.muted_fill()))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                cx.stop_propagation();
-                                this.set_detail_default(
+                        })
+                        .when(on, |el| model_selected(el, &theme))
+                        .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                            cx.stop_propagation();
+                            if !on {
+                                this.set_detail_option(
                                     harness,
-                                    &default_model,
-                                    &default_label,
+                                    &model,
+                                    option.clone(),
+                                    value.clone(),
+                                    default,
                                     cx,
                                 );
-                            }))
-                    })
-                    .when(is_default, |el| {
-                        el.child(
-                            crate::icons::icon(crate::icons::CHECK)
-                                .size(px(13.))
-                                .text_color(theme.accent),
-                        )
-                    })
-                    .child(if is_default {
-                        "Default"
-                    } else {
-                        "Set as default"
-                    }),
-            );
+                            }
+                        }))
+                        .child(text)
+                };
+            div()
+                .id("model-detail-context")
+                .role(gpui::Role::RadioGroup)
+                .aria_label("Context window")
+                .tip("Context window")
+                .flex_none()
+                .p(px(2.))
+                .rounded(px(8.))
+                .bg(theme.muted_fill().opacity(0.45))
+                .flex()
+                .gap(px(2.))
+                .text_size(crate::typography::text_xs())
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .child(segment(
+                    "model-detail-context-off",
+                    long.off_label.clone(),
+                    long.off_value.clone(),
+                    long.off_default,
+                    !long.on,
+                ))
+                .child(segment(
+                    "model-detail-context-on",
+                    long.on_label.clone(),
+                    long.on_value.clone(),
+                    !long.off_default,
+                    long.on,
+                ))
+        });
+        body = body.child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(toggles)
+                .children(context),
+        );
+        for (gx, group) in detail.options.iter().enumerate() {
+            body = body.child(self.detail_option(gx, group, harness, &model_id, &theme, cx));
+        }
 
         let entity = cx.entity().downgrade();
         Some(
@@ -576,9 +684,8 @@ impl Pickers {
                 .flex_col()
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(header)
-                .when(has_settings, |card| card.child(divider()).child(settings))
                 .child(divider())
-                .child(actions)
+                .child(body)
                 .child(
                     gpui::canvas(
                         move |bounds, _, cx| {
@@ -613,6 +720,11 @@ impl Pickers {
             inset + index as f32 / count.saturating_sub(1).max(1) as f32 * (width - 2. * inset)
         };
         let knob_x = stop_x(selected);
+        let (track, knob_w, knob_h) = (TRACK, KNOB_W, KNOB_H);
+        let radius = track / 2.;
+        // The hit area stays comfortable when the track is slim.
+        let height = track.max(knob_h) + 4.;
+        let top = (height - track) / 2.;
         let ink = popover::dither_ink(theme);
         let label = effort.labels.get(selected).cloned().unwrap_or_default();
         let entity = cx.entity().downgrade();
@@ -628,9 +740,7 @@ impl Pickers {
             .aria_max_numeric_value(count.saturating_sub(1) as f64)
             .relative()
             .w(px(width))
-            .h(px(SLIDER_HEIGHT))
-            .rounded(px(SLIDER_RADIUS))
-            .bg(theme.muted_fill().opacity(0.55))
+            .h(px(height))
             .cursor_pointer()
             .on_mouse_down(
                 gpui::MouseButton::Left,
@@ -695,32 +805,43 @@ impl Pickers {
                 div()
                     .absolute()
                     .left_0()
-                    .top_0()
-                    .bottom_0()
-                    .w(px(knob_x + KNOB_WIDTH / 2. + 3.))
-                    .child(zuse_viewport::dither::ramp(ink, SLIDER_RADIUS)),
+                    .top(px(top))
+                    .w(px(width))
+                    .h(px(track))
+                    .rounded_full()
+                    .bg(theme.muted_fill().opacity(0.55)),
+            )
+            // The filled span: a faint accent wash with a light dither
+            // texture, rounded at both ends like the track.
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top(px(top))
+                    .h(px(track))
+                    .w(px((knob_x + radius.max(knob_w / 2.)).min(width)))
+                    .rounded_full()
+                    .bg(theme.accent.opacity(0.12))
+                    .child(zuse_viewport::dither::ramp(ink.opacity(0.32), radius)),
             )
             .children(((selected + 1)..count).map(|index| {
                 div()
                     .absolute()
-                    .left(px(stop_x(index) - 0.5))
-                    .top(px((SLIDER_HEIGHT - 8.) / 2.))
-                    .w(px(1.))
-                    .h(px(8.))
+                    .left(px(stop_x(index) - DOT / 2.))
+                    .top(px((height - DOT) / 2.))
+                    .size(px(DOT))
                     .rounded_full()
-                    .bg(theme.text_muted.opacity(0.45))
+                    .bg(theme.text_muted.opacity(0.5))
             }))
             .child(
                 div()
                     .absolute()
-                    .left(px(knob_x - KNOB_WIDTH / 2.))
-                    .top(px((SLIDER_HEIGHT - KNOB_HEIGHT) / 2.))
-                    .w(px(KNOB_WIDTH))
-                    .h(px(KNOB_HEIGHT))
-                    .rounded(px(5.))
+                    .left(px(knob_x - knob_w / 2.))
+                    .top(px((height - knob_h) / 2.))
+                    .w(px(knob_w))
+                    .h(px(knob_h))
+                    .rounded_full()
                     .bg(gpui::white())
-                    .border_1()
-                    .border_color(ink)
                     .shadow_sm(),
             )
             .into_any_element()
@@ -768,7 +889,7 @@ impl Pickers {
                     gpui::Toggled::False
                 })
                 .tab_index(0)
-                .h(px(26.))
+                .h(px(ROW))
                 .flex()
                 .items_center()
                 .gap(px(8.))
@@ -848,8 +969,8 @@ impl Pickers {
         });
         div()
             .flex()
-            .when(inline, |el| el.items_center().gap(px(12.)))
-            .when(!inline, |el| el.flex_col().gap(px(6.)))
+            .when(inline, |el| el.h(px(ROW)).items_center().gap(px(12.)))
+            .when(!inline, |el| el.py(px(8.)).flex_col().gap(px(6.)))
             .text_size(crate::typography::text_xs())
             .child(label)
             .child(
@@ -976,18 +1097,19 @@ mod tests {
                 let detail = picker.model_detail(cx).unwrap();
                 assert_eq!(detail.row.model.id, "gpt-a", "starts on the selection");
                 assert_eq!(detail.fast, None);
+                assert!(detail.long_context.is_none());
                 assert!(detail.options.is_empty());
                 assert_eq!(detail.effort.as_ref().unwrap().labels.len(), 3);
 
                 picker.active = row_index(picker, "opus", cx);
                 let detail = picker.model_detail(cx).unwrap();
                 assert_eq!(detail.fast, Some(false));
-                // Fast mode has its own switch; the context window remains.
-                assert_eq!(detail.options.len(), 1);
-                assert_eq!(
-                    detail.options[0].id,
-                    ModelSetting::Option("contextWindow".into())
-                );
+                // Fast mode and the 1M window are switches of their own.
+                let long = detail.long_context.unwrap();
+                assert_eq!(long.option, "contextWindow");
+                assert_eq!(long.on_label, "1M");
+                assert!(!long.on);
+                assert!(detail.options.is_empty());
 
                 picker.active = row_index(picker, "gpt-plain", cx);
                 let detail = picker.model_detail(cx).unwrap();
@@ -1064,6 +1186,8 @@ mod tests {
                 assert_eq!(picker.active, 0);
                 assert!(picker.model_detail(cx).unwrap().favorite);
 
+                picker.clear_detail_default(cx);
+                assert!(!picker.model_detail(cx).unwrap().is_default);
                 picker.set_detail_default(HarnessId::ClaudeCode, "opus", "Opus", cx);
                 assert!(picker.model_detail(cx).unwrap().is_default);
                 assert!(picker.is_open());
@@ -1309,6 +1433,99 @@ mod tests {
                 assert_eq!(picker.model_rows(cx)[0].model.id, "gpt-plain");
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn only_models_whose_catalog_offers_1m_get_the_context_switch(cx: &mut gpui::TestAppContext) {
+        let (_dir, handle) = picker_window(cx);
+        handle
+            .update(cx, |picker, window, cx| {
+                // A service-tier model (no context option) beside the
+                // long-context one.
+                let mut tiered = laddered("gpt-tier", "GPT Tier", false);
+                tiered.options = serde_json::from_value(serde_json::json!([
+                    {"id":"serviceTier","label":"Service Tier","defaultChoice":"default",
+                     "choices":[{"id":"default","label":"Standard"},{"id":"fast","label":"Fast"}]}
+                ]))
+                .unwrap();
+                picker
+                    .models
+                    .insert(HarnessId::Codex, Loadable::Ready(vec![tiered]));
+                picker.config.model = Some("gpt-tier".into());
+                picker.catalog_rev += 1;
+                picker.open_model_menu(window, cx);
+                let detail = picker.model_detail(cx).unwrap();
+                assert_eq!(detail.row.model.id, "gpt-tier");
+                assert!(detail.long_context.is_none());
+                assert_eq!(detail.fast, Some(false));
+
+                // The Claude model's switch turns 1M on, and off again.
+                picker.active = row_index(picker, "opus", cx);
+                picker.set_detail_option(
+                    HarnessId::ClaudeCode,
+                    "opus",
+                    "contextWindow".into(),
+                    "1m".into(),
+                    false,
+                    cx,
+                );
+                assert_eq!(picker.resolved(cx).model_options["contextWindow"], "1m");
+                assert!(picker.model_detail(cx).unwrap().long_context.unwrap().on);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn same_named_models_are_told_apart_in_the_card_not_the_list(cx: &mut gpui::TestAppContext) {
+        let (_dir, handle) = picker_window(cx);
+        handle
+            .update(cx, |picker, _, cx| {
+                // An alias without a description beside the full entry.
+                let mut full = laddered("claude-opus", "Opus", false);
+                full.description = Some("Best for complex work".into());
+                picker.models.insert(
+                    HarnessId::ClaudeCode,
+                    Loadable::Ready(vec![bare_model("opus", "Opus"), full]),
+                );
+                picker.catalog_rev += 1;
+                let rows = picker.model_rows(cx);
+                let alias = rows.iter().find(|r| r.model.id == "opus").unwrap();
+                let full = rows.iter().find(|r| r.model.id == "claude-opus").unwrap();
+                assert!(alias.ambiguous && full.ambiguous);
+                assert_eq!(card_note(alias).as_deref(), Some("opus"));
+                assert_eq!(card_note(full).as_deref(), Some("Best for complex work"));
+                let plain = rows.iter().find(|r| r.model.id == "gpt-plain").unwrap();
+                assert_eq!(card_note(plain), None);
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn long_context_needs_a_window_of_a_million_tokens() {
+        let model = |choices: serde_json::Value| -> Model {
+            let mut model = bare_model("m", "M");
+            model.options = serde_json::from_value(serde_json::json!([
+                {"id":"contextWindow","label":"Context Window","defaultChoice":"200k",
+                 "choices": choices}
+            ]))
+            .unwrap();
+            model
+        };
+        let empty = serde_json::Map::new();
+        let one_m = model(serde_json::json!([
+            {"id":"200k","label":"200K"},{"id":"1m","label":"1M"}
+        ]));
+        let long = long_context(&one_m, &empty).unwrap();
+        assert_eq!(
+            (long.on_value.as_str(), long.off_value.as_str()),
+            ("1m", "200k")
+        );
+        assert!(!long.on && long.off_default);
+        let small = model(serde_json::json!([
+            {"id":"128k","label":"128K"},{"id":"200k","label":"200K"}
+        ]));
+        assert!(long_context(&small, &empty).is_none());
+        assert!(long_context(&bare_model("plain", "Plain"), &empty).is_none());
     }
 
     #[test]

@@ -5,8 +5,12 @@ use crate::tooltip::TooltipExt as _;
 use std::{cell::RefCell, sync::Arc};
 use zuse_viewport::model_picker_style as ui;
 
+/// The rule between provider groups.
+const HAIRLINE: f32 = 0.45;
+
 /// The list card's width (rail included) and tallest height.
-pub(super) const MENU_WIDTH: f32 = 328.;
+pub(super) const MENU_WIDTH: f32 = 344.;
+const SEARCH_INSET: f32 = 10.;
 pub(super) const MENU_HEIGHT: f32 = 380.;
 const RAIL_WIDTH: f32 = 44.;
 const ROW_HEIGHT: f32 = compact::COMPACT_ROW_HEIGHT;
@@ -318,8 +322,8 @@ impl Pickers {
                 .text_size(crate::typography::text_xs())
                 .text_color(theme.text_muted)
                 .child(
-                    crate::icons::icon(crate::icons::STAR)
-                        .size(px(13.))
+                    crate::icons::icon(crate::icons::DITHER_BOOKMARK)
+                        .size(px(14.))
                         .flex_none()
                         .text_color(theme.text_muted),
                 )
@@ -336,7 +340,7 @@ impl Pickers {
                     .when(!first, |el| {
                         el.mt(px(4.))
                             .border_t_1()
-                            .border_color(theme.border.opacity(0.5))
+                            .border_color(theme.border.opacity(HAIRLINE))
                     })
                     .h(px(HEADER_HEIGHT))
                     .px(px(8.))
@@ -369,7 +373,8 @@ impl Pickers {
         let highlighted = self.active == index;
         let is_default = crate::settings::default_model(cx)
             .is_some_and(|model| model.provider == row.harness && model.model == row.model.id);
-        // A second muted line only tells same-named rows apart.
+        // Same-named rows read alike in the list; the accessible name and
+        // the card's tooltip tell them apart.
         let attribution: Option<SharedString> = row.ambiguous.then(|| {
             row.model
                 .description
@@ -402,7 +407,9 @@ impl Pickers {
             .cursor_pointer()
             .text_size(crate::typography::text_xs())
             .text_color(theme.text)
-            .when(selected, |el| model_selected(el, &theme))
+            .when(selected, |el| {
+                el.bg(theme.accent.opacity(if highlighted { 0.14 } else { 0.10 }))
+            })
             .when(!selected && highlighted, |el| {
                 el.bg(theme.muted_fill().opacity(0.6))
             })
@@ -443,16 +450,7 @@ impl Pickers {
                             .truncate()
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .child(label),
-                    )
-                    .when_some(attribution, |el, attribution| {
-                        el.child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_color(theme.text_muted)
-                                .child(attribution),
-                        )
-                    }),
+                    ),
             )
             .when(is_default, |el| {
                 el.child(
@@ -462,10 +460,7 @@ impl Pickers {
                         .child("Default"),
                 )
             })
-            .when(selected, |el| {
-                el.child(model_check(&theme))
-                    .child(compact::selected_bar(&theme))
-            });
+            .when(selected, |el| el.child(model_check(&theme)));
         div()
             .pb(px(popover::MENU_GAP))
             .child(item)
@@ -523,11 +518,13 @@ impl Pickers {
         id: impl Into<gpui::ElementId>,
         label: SharedString,
         active: bool,
-        glyph: AnyElement,
+        glyph: Option<AnyElement>,
         scope: Option<HarnessId>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        ui::provider_tab(id, label.clone(), active, false, Some(glyph))
+        // The shared provider tab: "All" as text, providers as their marks.
+        ui::provider_tab(id, label.clone(), active, false, glyph)
+            .cursor_pointer()
             .tip(label)
             .on_key_down(cx.listener(move |this, e: &KeyDownEvent, _, cx| {
                 if matches!(e.keystroke.key.as_str(), "enter" | "space") {
@@ -577,33 +574,31 @@ impl Pickers {
                 .overflow_y_scroll()
                 .w(px(RAIL_WIDTH))
                 .flex_none()
+                // Full height beside the search and the list, on a faint
+                // wash of its own.
                 .p(px(6.))
                 .border_r_1()
                 .border_color(theme.border.opacity(0.5))
+                .bg(theme.muted_fill().opacity(0.2))
                 .flex()
                 .flex_col()
                 .items_center()
                 .gap(px(4.))
-                .child(
-                    self.rail_tab(
-                        "model-tab-all",
-                        "All models".into(),
-                        self.model_scope.is_none(),
-                        crate::icons::icon(crate::icons::LIST)
-                            .size(px(15.))
-                            .text_color(theme.text_muted)
-                            .into_any_element(),
-                        None,
-                        cx,
-                    ),
-                );
+                .child(self.rail_tab(
+                    "model-tab-all",
+                    "All models".into(),
+                    self.model_scope.is_none(),
+                    None,
+                    None,
+                    cx,
+                ));
             for (index, p) in providers.iter().enumerate() {
                 let (path, tint) = picker_brand(p.id, theme.text_muted);
                 rail = rail.child(self.rail_tab(
                     ("harness-tab", index),
                     p.name.clone().into(),
                     self.model_scope == Some(p.id),
-                    crate::icons::brand_icon(path, 16., tint),
+                    Some(crate::icons::brand_icon(path, 16., tint)),
                     Some(p.id),
                     cx,
                 ));
@@ -615,28 +610,38 @@ impl Pickers {
             cx.processor(move |this, index, _, cx| this.reference_item(&items[index], cx)),
         )
         .size_full();
+        // A bordered field at the top of the list column, over a hairline.
         let search = div()
             .flex_none()
-            .h(px(ui::SEARCH_HEIGHT))
-            .px(px(14.))
+            .p(px(SEARCH_INSET))
             .border_b_1()
             .border_color(theme.border.opacity(0.5))
-            .flex()
-            .items_center()
-            .gap(px(8.))
             .child(
-                crate::icons::icon(crate::icons::MAGNIFER)
-                    .size(px(14.))
-                    .flex_none()
-                    .text_color(theme.text_muted),
-            )
-            .child(div().flex_1().min_w_0().child(self.search.clone()));
+                div()
+                    .h(px(32.))
+                    .px(px(10.))
+                    .rounded(px(MODEL_ROW_RADIUS))
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.bg)
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        crate::icons::icon(crate::icons::MAGNIFER)
+                            .size(px(14.))
+                            .flex_none()
+                            .text_color(theme.text_muted),
+                    )
+                    .child(div().flex_1().min_w_0().child(self.search.clone())),
+            );
         let body = div()
             .flex()
             .flex_col()
             .flex_1()
             .min_w_0()
             .min_h_0()
+            .child(search)
             .when_some(error, |body, message| {
                 body.child(self.retry_row(
                     "model-menu-retry",
@@ -650,7 +655,7 @@ impl Pickers {
                 div()
                     .flex_1()
                     .min_h_0()
-                    .px(px(ui::LIST_INSET))
+                    .px(px(SEARCH_INSET - 4.))
                     .pt(px(4.))
                     .pb(px(6.))
                     .when(!empty, |v| v.child(list))
@@ -689,17 +694,9 @@ impl Pickers {
             .relative()
             .size_full()
             .flex()
-            .flex_col()
-            .child(search)
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .items_stretch()
-                    .children(rail)
-                    .child(body),
-            )
+            .items_stretch()
+            .children(rail)
+            .child(body)
             .child(
                 gpui::canvas(
                     move |bounds, _, cx| {
