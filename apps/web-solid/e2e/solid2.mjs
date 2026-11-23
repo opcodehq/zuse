@@ -22,8 +22,8 @@ try {
   await new Promise(resolve => setTimeout(resolve, 150));
   assert.equal(await page.eval("window.solid2.counters().rowMounts"), mounts, "measurement must preserve row identity");
   await page.press("#dialog-trigger");
-  await page.waitFor("!!document.querySelector('[role=dialog]') && document.activeElement?.id === 'dialog-close'");
-  await page.press("#dialog-close");
+  await page.waitFor("!!document.querySelector('[role=dialog]') && document.activeElement?.matches('.dialog-close')");
+  await page.press(".dialog-close");
   await page.waitFor("!document.querySelector('[role=dialog]')");
   await page.press("#menu-trigger");
   await page.waitFor("!!document.querySelector('[role=menuitem]')");

@@ -1,3 +1,4 @@
+import { ZapperModelPicker } from "./Controls";
 import {
   createMemo,
   createSignal,
@@ -243,46 +244,7 @@ function ConfigForm(props: { existing?: Zapper }) {
           </Show>
         </fieldset>
         <div class="zp-form-grid">
-          <label>
-            Coordinator agent
-            <select
-              value={draft().coordinatorModel.harness}
-              onChange={(e) =>
-                change("coordinatorModel", {
-                  harness: e.currentTarget.value,
-                  model: null,
-                })
-              }
-            >
-              <For each={state.harnesses}>
-                {(h) => <option value={h.id}>{h.name || h.id}</option>}
-              </For>
-              <Show
-                when={
-                  !state.harnesses.some(
-                    (h) => h.id === draft().coordinatorModel.harness,
-                  )
-                }
-              >
-                <option value={draft().coordinatorModel.harness}>
-                  {draft().coordinatorModel.harness}
-                </option>
-              </Show>
-            </select>
-          </label>
-          <label>
-            Model
-            <input
-              value={draft().coordinatorModel.model ?? ""}
-              placeholder="Agent default"
-              onInput={(e) =>
-                change("coordinatorModel", {
-                  ...draft().coordinatorModel,
-                  model: e.currentTarget.value || null,
-                })
-              }
-            />
-          </label>
+          <label>Coordinator model<ZapperModelPicker label="Coordinator model" deviceId={draft().homeDeviceId} value={draft().coordinatorModel} onChange={value => change("coordinatorModel",value)} /></label>
           <label>
             Concurrent threads
             <input

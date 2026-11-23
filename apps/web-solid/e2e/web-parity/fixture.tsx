@@ -1,3 +1,5 @@
+import type { Zapper } from "@/core/zapper-types";
+import { setTab, setInspectorOpen } from "@/features/zappers/state";
 import { App } from "@/shell/App";
 import { setView } from "@/core/view";
 import { setCatalog } from "@/features/composer/catalog";
@@ -22,6 +24,16 @@ let sink: ((value: unknown) => void) | undefined;
 let cancellations = 0;
 let snapshot = false;
 let preview = false;
+const sampleZapper: Zapper = {
+ id:"captain",revision:1,activityRevision:1,status:"active",coordinatorChatId:"parent",previousCoordinatorChats:[],
+ config:{name:"Web captain",purpose:"Keep the browser workspace consistent with desktop. Coordinate design, implementation, and review.",homeDeviceId:"remote",workerDeviceId:"remote",repositories:[{deviceId:"remote",spaceId:"project"}],coordinatorModel:{harness:"codex",model:"gpt-5.3-codex"},maxConcurrentWorkers:3,maxFollowups:2},
+ workers:[{chatId:"worker",deviceId:"remote",spaceId:"project",objective:"Align the cloud model picker with desktop",followups:0}],decisions:[],
+ issues:[
+  {id:"picker",number:12,createdAt:0,updatedAt:0,details:{title:"Match the desktop model picker",description:"Use the provider rail, search, and keyboard navigation from desktop.",status:"inProgress",priority:"high",assigned:true,owner:{type:"zapper"},dueDate:null,labels:["design","web"],relations:[],doneCriteria:"Models can be searched and selected with the keyboard.",outOfScope:"Provider authentication"},threads:["worker"],pullRequests:[],activity:[]},
+  {id:"review",number:13,createdAt:0,updatedAt:0,details:{title:"Review the new workspace layout",description:"Check the inspector at narrow widths.",status:"needsYou",priority:"normal",assigned:false,dueDate:null,labels:["review"],relations:[]},threads:[],pullRequests:[],activity:[]},
+  {id:"done",number:11,createdAt:0,updatedAt:0,details:{title:"Use shared desktop icons",description:"",status:"done",priority:"low",assigned:false,dueDate:null,labels:[],relations:[]},threads:[],pullRequests:[],activity:[]},
+ ]
+};
 const codexModels = [{id:"gpt-5.3-codex",label:"GPT-5.3 Codex",reasoningLevels:["low","medium","high","xhigh"]},{id:"gpt-5.2",label:"GPT-5.2"}];
 const claudeModels = [{id:"claude-opus-4-6",label:"Opus 4.6"},{id:"claude-sonnet-4-6",label:"Sonnet 4.6"}];
 const requests: { method: string; params: unknown }[] = [];
@@ -29,6 +41,15 @@ const message = { id: "reply", role: "assistant", deviceId: "remote", createdAt:
 Object.assign(rpc, {
   call: async (method: string, params: unknown) => {
     requests.push({ method, params });
+    if (method === "ZotFiles" || method === "ZotEvents") return [];
+    if (method === "ZotCommand") {
+      const request = params as {action:{type:string;issueId:string;details:Zapper["issues"][number]["details"]}};
+      const next = structuredClone(sampleZapper);
+      if (request.action.type === "editIssue") next.issues = next.issues.map(issue => issue.id === request.action.issueId ? {...issue,details:request.action.details} : issue);
+      next.revision++;
+      Object.assign(sampleZapper,next);
+      return next;
+    }
     if (method === M.LIST_MODELS) return (params as {harness:string}).harness === "claude-code" ? claudeModels : codexModels;
     if (method === M.FETCH_TOOL_BLOB) { if (snapshot) return { text: JSON.stringify([message]) }; throw new Error("live doc"); }
     throw new Error("Fixture has no paid services");
@@ -77,6 +98,14 @@ function Fixture() {
       setCatalog(draft => { draft.models["local|codex"] = {status:"ready",value:[{id:"gpt-5.3-codex",label:"GPT-5.3 Codex",reasoningLevels:["low","medium","high","xhigh"]},{id:"gpt-5.2",label:"GPT-5.2"}]}; draft.models["local|claude-code"] = {status:"ready",value:[{id:"claude-opus-4-6",label:"Opus 4.6"},{id:"claude-sonnet-4-6",label:"Sonnet 4.6"}]}; });
       openSubagent("parent", "parent--sub--worker"); flush();
     },
+    zapper: () => {
+      preview = true;
+      setHostedBrowser(false); setMode("app");
+      setState(draft => { draft.zappers = [structuredClone(sampleZapper)]; draft.zappersReady = true; draft.zappersSupported = true; draft.chats.worker = {...draft.chats.parent!,id:"worker",title:"Align cloud model picker"}; });
+      setView(draft => { draft.route = {kind:"zappers",zapperId:"captain"}; draft.selectedChatId="parent"; draft.rightPanel=null; });
+      setInspectorOpen(true); setTab("issues"); flush();
+    },
+    panels: () => { setView(draft => { draft.rightPanel="files"; }); flush(); },
     hide: () => { setActive(false); flush(); },
     reconnect: () => { setState(draft => { draft.epoch++; }); flush(); },
     snapshot: () => { snapshot = true; setActive(true); flush(); },

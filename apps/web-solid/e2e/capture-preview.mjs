@@ -26,5 +26,17 @@ try {
  await page.waitFor("!!document.querySelector('.cmp-models')");
  await page.waitFor("document.querySelectorAll('.cmp-model-row').length > 0");
  await page.screenshot(`${out}/model-picker.png`);
+ await page.click('.cmp-model');
+ await page.waitFor("!document.querySelector('.cmp-models')");
+ await page.eval('parity.zapper()');
+ await page.waitFor("document.querySelectorAll('.zp-issue-row').length === 2 && !document.querySelector('.app-right')");
+ await page.screenshot(`${out}/zapper-issues.png`);
+ await page.click('.zp-issue-row');
+ await page.waitFor("document.querySelector('[role=dialog]')?.textContent.includes('Done when')");
+ await page.screenshot(`${out}/zapper-issue-detail.png`);
+ await page.click('[aria-label="Close dialog"]');
+ await page.call('Emulation.setDeviceMetricsOverride',{width:720,height:900,deviceScaleFactor:1,mobile:false});
+ await page.waitFor("getComputedStyle(document.querySelector('.zp-conversation')).display === 'none'");
+ await page.screenshot(`${out}/zapper-narrow.png`);
  console.log(out);
 } finally { await page?.close(); await server.close(); }

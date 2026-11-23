@@ -1,3 +1,5 @@
+import { ZapperModelPicker } from "./Controls";
+import { Icon } from "@/ui/Icon";
 import { createMemo, createSignal, For, Show, untrack } from "solid-js";
 import { state } from "@/core/store";
 import { openChat } from "@/core/view";
@@ -68,7 +70,7 @@ export function Threads(props: { zapper: Zapper }) {
                     size="sm"
                     aria-label={`Thread actions for ${threadTitle(worker.chatId, worker.objective)}`}
                   >
-                    •••
+                    <Icon name="more-horizontal" size={14} />
                   </Button>
                 )}
                 items={[
@@ -215,7 +217,7 @@ export function WorkerDialog(props: {
   const save = async (event: SubmitEvent) => {
     event.preventDefault();
     const r = repository();
-    if (!r || !objective().trim()) return;
+    if (!r || !objective().trim() || (props.mode === "adopt" && !chat())) return;
     const worker = {
       chatId: props.mode === "adopt" ? chat() : "",
       deviceId: r.deviceId,
@@ -310,25 +312,7 @@ export function WorkerDialog(props: {
           />
         </label>
         <Show when={props.mode === "delegate"}>
-          <label>
-            Agent
-            <select
-              value={harness()}
-              onChange={(e) => setHarness(e.currentTarget.value)}
-            >
-              <For each={state.harnesses}>
-                {(h) => <option value={h.id}>{h.name || h.id}</option>}
-              </For>
-            </select>
-          </label>
-          <label>
-            Model
-            <input
-              placeholder="Agent default"
-              value={model()}
-              onInput={(e) => setModel(e.currentTarget.value)}
-            />
-          </label>
+          <label>Agent and model<ZapperModelPicker label="Worker model" deviceId={repository()?.deviceId ?? props.zapper.config.workerDeviceId} value={{harness:harness(),model:model() || null}} onChange={value => { setHarness(value.harness); setModel(value.model ?? ""); }} /></label>
           <label>
             Base branch or commit
             <input

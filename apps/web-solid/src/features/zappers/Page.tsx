@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import { state } from "@/core/store";
-import { navigate, openChat, view } from "@/core/view";
+import { navigate, openChat, setView, view } from "@/core/view";
 import type { Zapper, ZapperDecision, ZapperAction } from "@/core/zapper-types";
 import { Composer } from "@/features/composer";
 import { Transcript } from "@/features/transcript";
@@ -47,7 +47,7 @@ export function ZapperPage() {
       <CommandAlert />
       <Show when={selectedZapper()} fallback={<Directory />}>
         {(z) => (
-          <div class="zp-page">
+          <div class="zp-page" data-inspector={inspectorOpen() && !view.rightPanel ? "true" : undefined}>
             <div class="zp-conversation">
               <div class="zp-context">
                 <button class="zp-context-name" onClick={() => openZapper(z())}>
@@ -61,9 +61,9 @@ export function ZapperPage() {
                 </button>
                 <Button
                   size="sm"
-                  onClick={() => setInspectorOpen(!inspectorOpen())}
+                  onClick={() => { if (view.rightPanel) { setView(draft => { draft.rightPanel = null; }); setInspectorOpen(true); } else setInspectorOpen(!inspectorOpen()); }}
                 >
-                  {inspectorOpen() ? "Hide Zapper" : "Show Zapper"}
+                  {inspectorOpen() && !view.rightPanel ? "Hide Zapper" : "Show Zapper"}
                 </Button>
               </div>
               <TopBar />
@@ -83,6 +83,8 @@ export function ZapperPage() {
 }
 function Directory() {
   const [archived, setArchived] = createSignal(false);
+  const [query, setQuery] = createSignal("");
+  const visible = createMemo(() => state.zappers.filter(z => (archived() || z.status !== "archived") && `${z.config.name} ${z.config.purpose}`.toLowerCase().includes(query().toLowerCase())));
   return (
     <div class="zp-directory">
       <div class="zp-section-heading">
@@ -98,14 +100,15 @@ function Directory() {
         Captains for your projects, with their own conversations, threads,
         issues and shared notes.
       </p>
+      <div class="zp-directory-tools"><label class="zp-search"><Icon name="palette-search" size={14} /><input aria-label="Search Zappers" placeholder="Find a Zapper…" value={query()} onInput={e => setQuery(e.currentTarget.value)} /></label>
       <label class="zp-check">
         <input
           type="checkbox"
           checked={archived()}
           onChange={(e) => setArchived(e.currentTarget.checked)}
         />
-        Show archived Zappers
-      </label>
+        Show archived
+      </label></div>
       <Show when={!state.zappersReady}>
         <p>Loading Zappers…</p>
       </Show>
@@ -114,9 +117,7 @@ function Directory() {
       </Show>
       <div class="zp-directory-grid">
         <For
-          each={state.zappers.filter(
-            (z) => archived() || z.status !== "archived",
-          )}
+          each={visible()}
         >
           {(z) => (
             <button
@@ -128,15 +129,15 @@ function Directory() {
               <p>{z.config.purpose || "Your project captain"}</p>
               <span class="zp-muted">
                 {statusLabel(z.status)} · {z.workers.length} threads ·{" "}
-                {z.issues.length} issues
+                {z.issues.filter(issue => !["done","canceled"].includes(issue.details.status)).length} open issues
               </span>
             </button>
           )}
         </For>
       </div>
-      <Show when={state.zappersReady && !state.zappers.length}>
+      <Show when={state.zappersReady && !state.zappersError && !visible().length}>
         <div class="zp-empty">
-          Create a Zapper to start coordinating work across your projects.
+          <Icon name="tool-agent" size={28} /><strong>{state.zappers.length ? "No matching Zappers" : "A captain for your next project"}</strong><p>{state.zappers.length ? "Try another search or include archived Zappers." : "Create a Zapper to coordinate tasks, threads, and shared notes."}</p>
         </div>
       </Show>
     </div>
@@ -196,7 +197,7 @@ function Inspector(props: { zapper: Zapper }) {
         <Menu
           trigger={(attrs) => (
             <Button {...attrs} aria-label="Zapper actions">
-              •••
+              <Icon name="more-horizontal" size={14} />
             </Button>
           )}
           items={[
@@ -227,6 +228,7 @@ function Inspector(props: { zapper: Zapper }) {
             },
           ]}
         />
+        <Button size="sm" icon="close" aria-label="Close Zapper inspector" onClick={() => setInspectorOpen(false)} />
       </header>
       <nav class="zp-tabs" aria-label="Zapper sections">
         <For each={tabs()}>

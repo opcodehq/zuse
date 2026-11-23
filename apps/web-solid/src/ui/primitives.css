@@ -105,3 +105,8 @@
 @keyframes toast-in { from { opacity: 0; transform: translateY(12px); } }
 .empty { display: grid; place-items: center; gap: 6px; padding: 32px; color: var(--text-muted); text-align: center; }
 .unfinished { padding: 24px; color: var(--text-faint); font-size: var(--text-sm); border: 1px dashed var(--border-strong); border-radius: var(--radius); margin: 16px; }
+
+.dialog-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.dialog-header .dialog-title { font-weight: 500; line-height: 22px; flex: 1; }
+.dialog-close { display: grid; place-items: center; flex: none; width: 26px; height: 26px; padding: 0; margin: -3px -5px 0 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; }
+.dialog-close:hover { background: var(--hover); color: var(--text); }

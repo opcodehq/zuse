@@ -140,3 +140,12 @@ composer retains its existing desktop picker with reasoning/fast controls.
 `node e2e/capture-preview.mjs` captures onboarding, sign-in, the complete
 workspace/Agents pane and the composer picker using fixture data in the actual
 app shell. Set `ZUSE_PREVIEW_OUT` to choose the output directory.
+
+Zapper forms use execution-device model catalogs through `zappers/Controls.tsx`;
+worker/coordinator models are selected from the same provider menu as Cloud.
+Issue editing swaps the contents of one dialog rather than nesting dialogs.
+`bun run e2e:zapper-polish` checks issue edit/save, completion criteria, Escape
+and close controls, search/reset, switching back from workspace panels, nested
+model-picker focus, and narrow-screen inspector navigation. All use fixture data
+without cloud allocation. Preview captures include issue lists/details and the
+narrow inspector.

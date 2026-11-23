@@ -118,8 +118,8 @@ export function Dialog(props: { open: boolean; onOpenChange: (open: boolean) => 
     <KDialog open={props.open} onOpenChange={props.onOpenChange}>
       <KDialog.Portal>
         <KDialog.Overlay class="dialog-overlay" />
-        <KDialog.Content class="dialog">
-          <KDialog.Title class="dialog-title">{props.title}</KDialog.Title>
+        <KDialog.Content class="dialog" onKeyDown={event => { if (event.key === "Escape" && !event.defaultPrevented && (event.target as Element).closest('[role="dialog"]') === event.currentTarget) { event.preventDefault(); event.stopPropagation(); props.onOpenChange(false); } }}>
+          <div class="dialog-header"><KDialog.Title class="dialog-title">{props.title}</KDialog.Title><KDialog.CloseButton class="dialog-close" aria-label="Close dialog"><Icon name="close" size={14} /></KDialog.CloseButton></div>
           <Show when={props.description}>
             <KDialog.Description class="dialog-description">{props.description}</KDialog.Description>
           </Show>

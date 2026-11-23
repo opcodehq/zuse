@@ -5,7 +5,8 @@ import { Icon } from "./Icon";
 import { harnessIcon, harnessTint } from "./harness";
 import "./model-select.css";
 export interface ModelChoice { key: string; label: string; provider: string; providerLabel: string; description?: string; disabled?: boolean }
-export function ModelSelect(props: { options: ModelChoice[]; value: string; onChange: (key: string) => void; label: string; disabled?: boolean; placeholder?: string; width?: number }) {
+export function ModelSelect(props: { options: ModelChoice[]; value: string; onChange: (key: string) => void; label: string; disabled?: boolean; placeholder?: string; width?: number; modal?: boolean }) {
+  let search: HTMLInputElement | undefined;
   const [open, setOpen] = createSignal(false);
   const [query, setQuery] = createSignal("");
   const [provider, setProvider] = createSignal("");
@@ -13,17 +14,17 @@ export function ModelSelect(props: { options: ModelChoice[]; value: string; onCh
   const providers = createMemo(() => [...new Map(props.options.map(row => [row.provider, row.providerLabel])).entries()].filter(row => row[0]));
   const rows = createMemo(() => props.options.filter(row => (!provider() || row.provider === provider()) && `${row.label} ${row.providerLabel} ${row.description ?? ""}`.toLowerCase().includes(query().toLowerCase())));
   const pick = (row: ModelChoice) => { if (row.disabled) return; props.onChange(row.key); setOpen(false); };
-  return <Popover open={open()} onOpenChange={value => { setOpen(value); if (value) { setQuery(""); setProvider(""); } }} placement="bottom-start" gutter={6}>
+  return <Popover modal={props.modal ?? false} open={open()} onOpenChange={value => { setOpen(value); if (value) { setQuery(""); setProvider(""); } }} placement="bottom-start" gutter={6}>
     <Popover.Trigger class="model-select-trigger" aria-label={props.label} disabled={props.disabled} style={{ width: props.width ? `${props.width}px` : undefined }}>
       <Icon name={harnessIcon(selected()?.provider, "tool-agent")} size={14} /><span>{selected()?.label ?? props.placeholder ?? "Choose a model"}</span><Icon name="alt-arrow-down" size={12} />
     </Popover.Trigger>
-    <Popover.Portal><Popover.Content class="model-select-popover" aria-label={props.label}>
+    <Popover.Portal><Popover.Content class="model-select-popover" aria-label={props.label} onOpenAutoFocus={event => { event.preventDefault(); requestAnimationFrame(() => search?.focus()); }}>
       <div class="model-select-rail" aria-label="Filter by provider">
         <button type="button" class="model-select-provider" aria-pressed={!provider() ? "true" : "false"} onClick={() => setProvider("")}>All</button>
         <For each={providers()}>{row => <button type="button" class="model-select-provider" aria-label={row[1] || "Defaults"} title={row[1] || "Defaults"} aria-pressed={provider() === row[0] ? "true" : "false"} onClick={() => setProvider(row[0])}><Icon name={harnessIcon(row[0], "tool-agent")} size={16} style={{ color: harnessTint(row[0]) }} /></button>}</For>
       </div>
       <div class="model-select-body">
-        <label class="model-select-search"><Icon name="palette-search" size={14} /><input autofocus aria-label="Search models" placeholder="Search models…" value={query()} onInput={e => setQuery(e.currentTarget.value)} onKeyDown={e => { if (e.key === "ArrowDown") { e.preventDefault(); e.currentTarget.closest('.model-select-body')?.querySelector<HTMLButtonElement>('.model-select-row:not(:disabled)')?.focus(); } if (e.key === "Enter" && rows().length === 1) { e.preventDefault(); pick(rows()[0]!); } }} /><kbd>esc</kbd></label>
+        <label class="model-select-search"><Icon name="palette-search" size={14} /><input ref={node => { search = node; }} aria-label="Search models" placeholder="Search models…" value={query()} onInput={e => setQuery(e.currentTarget.value)} onKeyDown={e => { if (e.key === "ArrowDown") { e.preventDefault(); e.currentTarget.closest('.model-select-body')?.querySelector<HTMLButtonElement>('.model-select-row:not(:disabled)')?.focus(); } if (e.key === "Enter" && rows().length === 1) { e.preventDefault(); pick(rows()[0]!); } }} /><kbd>esc</kbd></label>
         <div class="model-select-list" onKeyDown={e => {
           if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
           e.preventDefault();
