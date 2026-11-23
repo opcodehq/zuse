@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 mod activity;
 mod computer;
 mod environment_card;
+mod monitor;
 
 pub(super) use computer::Tone;
 mod history;
@@ -1228,7 +1229,8 @@ impl CloudConversation {
     }
 }
 impl Render for CloudConversation {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let monitor = self.computer.monitor_view(window, cx);
         let theme = Theme::of(cx).clone();
         self.sync_progress(cx);
         let composer_visible = self.authorized && self.computer.composer_enabled();
@@ -1242,6 +1244,9 @@ impl Render for CloudConversation {
             .flex()
             .flex_col()
             .pt(px(Theme::TITLEBAR_HEIGHT))
+            .when_some(monitor, |view, monitor| {
+                view.child(div().h(px(360.)).w_full().child(monitor))
+            })
             .children(self.render_older_history(cx))
             .child(div().flex_1().min_h_0().child(self.transcript.clone()))
             .when(show_tray || composer_visible, |view| {

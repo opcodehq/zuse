@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><meta
+    name="viewport"
+    content="width=device-width,initial-scale=1"
+  /><title>Zuse Monitor</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      color: #e9eee9;
+      background: #101412;
+      font: 15px system-ui;
+    }
+    header {
+      height: 48px;
+      display: flex;
+      gap: 18px;
+      align-items: center;
+      padding: 0 20px;
+    }
+    #status {
+      color: #b9c4ba;
+    }
+    canvas {
+      width: 100%;
+      height: calc(100dvh - 48px);
+      object-fit: contain;
+      display: block;
+    }
+    form {
+      padding: 20px;
+    }
+    button,
+    input {
+      font: inherit;
+    }
+  </style>
+  <header>
+    <strong>Zuse Monitor</strong
+    ><span id="status" role="status">Connecting…</span>
+  </header>
+  <form hidden>
+    <label
+      >Viewer password <input type="password" autocomplete="off" required
+    /></label>
+    <button>Connect</button>
+  </form>
+  <canvas width="1920" height="1080" aria-label="Live cloud desktop"></canvas>
+  <script>
+    const statusText = document.querySelector("#status"),
+      form = document.querySelector("form"),
+      ctx = document.querySelector("canvas").getContext("2d", { alpha: false });
+    let token =
+      location.hash.slice(1) ||
+      new URLSearchParams(location.search).get("token") ||
+      sessionStorage.viewer ||
+      "";
+    history.replaceState(null, "", "/");
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      token = form.querySelector("input").value;
+      form.hidden = true;
+      connect();
+    };
+    // Proxies may buffer an HTTP response across multiple frames. Preserve
+    // message boundaries across the public TLS hop. Local SSH uses loopback.
+    async function remoteReader(signal) {
+      const ws = new WebSocket("wss://" + location.host + "/live", ["zuse.monitor.v1", "bearer." + token]);
+      ws.binaryType = "arraybuffer";
+      signal.addEventListener("abort", () => ws.close(), { once: true });
+      const stream = new ReadableStream({
+        start(controller) {
+          ws.onmessage = event => {
+            if (controller.desiredSize <= 0) { ws.close(); return; }
+            controller.enqueue(new Uint8Array(event.data));
+          };
+          ws.onclose = () => controller.close();
+        }
+      }, {highWaterMark: 16});
+      await new Promise((resolve, reject) => {
+        ws.onopen = resolve;
+        ws.onerror = () => reject(Error("Monitor connection failed"));
+      });
+      return stream.getReader();
+    }
+
+    async function connect() {
+      if (!token) {
+        statusText.textContent = "Sign in to view";
+        form.hidden = false;
+        return;
+      }
+      const controller = new AbortController();
+      let decoder, watchdog = setTimeout(() => controller.abort(), 12000);
+      try {
+        if (!window.VideoDecoder)
+          throw Error("This browser needs WebCodecs. Open in Chrome or Edge.");
+        const remote = location.protocol === "https:";
+        const response = await fetch(remote ? "/ready" : "/stream", {
+          headers: { Authorization: "Bearer " + token },
+          signal: controller.signal,
+        });
+        if (response.status === 401) {
+          token = "";
+          sessionStorage.removeItem("viewer");
+          form.hidden = false;
+          statusText.textContent = "Viewer password required";
+          return;
+        }
+        if (!response.ok) throw Error("Stream unavailable");
+        sessionStorage.viewer = token;
+        let last = performance.now(),
+          count = 0,
+          bytes = 0,
+          needKey = true;
+        window.zuseMonitorStats = { codec: null, kbps: 0, fps: 0 };
+        let pendingVideo = false;
+        function presented() {
+          count++;
+          const now = performance.now();
+          if (!window.zuseMonitorStats.codec) {
+            window.zuseMonitorStats.codec = "avc1.42c02a";
+            statusText.textContent = "Live · View only";
+          }
+          window.dispatchEvent(new Event("monitor-frame"));
+          if (now - last >= 1000) {
+            window.zuseMonitorStats.kbps = (bytes * 8) / (now - last);
+            window.zuseMonitorStats.fps = (count * 1000) / (now - last);
+            bytes = 0;
+            const fps = Math.round(window.zuseMonitorStats.fps);
+            statusText.textContent = fps < 2 ? "Live · View only" : `Live · ${fps} FPS · View only`;
+            count = 0;
+            last = now;
+          }
+        }
+        // A patch is an LZ4 block prefixed with its little-endian decoded size.
+        const scratch = new Uint8ClampedArray(1024 * 1024);
+        function unpackPatch(src) {
+          const size = new DataView(src.buffer, src.byteOffset, src.byteLength).getUint32(0, true);
+          if (size < 2 || size > scratch.length) throw Error("Invalid patch size");
+          let read = 4, written = 0;
+          function length(n) {
+            if (n === 15) {
+              let extra;
+              do {
+                if (read >= src.length) throw Error("Truncated patch");
+                extra = src[read++];
+                n += extra;
+              } while (extra === 255);
+            }
+            return n;
+          }
+          while (read < src.length) {
+            const token = src[read++];
+            const literals = length(token >> 4);
+            if (read + literals > src.length || written + literals > size)
+              throw Error("Invalid literal length");
+            scratch.set(src.subarray(read, read + literals), written);
+            read += literals;
+            written += literals;
+            if (read === src.length) break;
+            if (read + 2 > src.length) throw Error("Missing match");
+            const distance = src[read++] | (src[read++] << 8);
+            let count = 4 + length(token & 15);
+            if (!distance || distance > written || written + count > size)
+              throw Error("Invalid match");
+            let available = distance;
+            while (count > 0) {
+              const n = Math.min(count, available);
+              scratch.copyWithin(written, written - available, written - available + n);
+              written += n;
+              count -= n;
+              available += n;
+            }
+          }
+          if (written !== size) throw Error("Incomplete patch");
+          return scratch.subarray(0, size);
+        }
+        async function paintPatch(encoded) {
+          if (pendingVideo) {
+            await decoder.flush();
+            pendingVideo = false;
+          }
+          const raw = unpackPatch(encoded);
+          const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
+          const shift = view.getInt16(0, true);
+          if (Math.abs(shift) > 32) throw Error("Invalid scroll offset");
+          if (shift) ctx.drawImage(ctx.canvas, 0, -shift);
+          for (let offset = 2; offset < raw.length; ) {
+            const left = view.getUint16(offset, true),
+              top = view.getUint16(offset + 2, true);
+            const width = view.getUint16(offset + 4, true);
+            if (!width || left + width > 1920 || top >= 1080)
+              throw Error("Invalid patch extent");
+            const start = offset;
+            let height = 0;
+            do {
+              offset += 6 + width * 4;
+              height++;
+            } while (
+              offset + 6 <= raw.length &&
+              view.getUint16(offset, true) === left &&
+              view.getUint16(offset + 2, true) === top + height &&
+              view.getUint16(offset + 4, true) === width
+            );
+            if (offset > raw.length || top + height > 1080)
+              throw Error("Incomplete patch");
+            const pixels = new ImageData(width, height);
+            for (let row = 0; row < height; row++) {
+              const pos = start + row * (6 + 4 * width) + 6;
+              pixels.data.set(
+                raw.subarray(pos, pos + 4 * width),
+                row * 4 * width,
+              );
+            }
+            ctx.putImageData(pixels, left, top);
+          }
+          presented();
+        }
+        decoder = new VideoDecoder({
+          output(frame) {
+            try {
+              ctx.drawImage(frame, 0, 0);
+              presented();
+            } finally {
+              frame.close();
+            }
+          },
+          error: () => controller.abort(),
+        });
+        decoder.configure({ codec: "avc1.42c02a", optimizeForLatency: true });
+        // Anchor a burst to its first arriving frames. A small playout window
+        // absorbs arrival jitter without delaying the first input after idle.
+        let earliest = Infinity, previousStamp = -Infinity, streak = 0;
+        async function pace(stamp) {
+          let now = performance.now();
+          if (stamp - previousStamp > 40 || stamp <= previousStamp) {
+            earliest = Infinity;
+            streak = 0;
+          }
+          previousStamp = stamp;
+          earliest = Math.min(earliest, now - stamp);
+          const delay = stamp + earliest + 7 - now;
+          if (++streak > 2 && delay > 1)
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
+        const reader = remote ? await remoteReader(controller.signal) : response.body.getReader();
+        let buffer = new Uint8Array(0);
+        while (true) {
+          clearTimeout(watchdog);
+          watchdog = setTimeout(() => controller.abort(), 12000);
+          const { done, value } = await reader.read();
+          if (done) throw Error("Stream ended");
+          bytes += value.length;
+          const data = new Uint8Array(buffer.length + value.length);
+          data.set(buffer);
+          data.set(value, buffer.length);
+          let i = 0;
+          while (data.length - i >= 12) {
+            const h = new DataView(data.buffer, i);
+            const flags = h.getUint32(0, true);
+            const n = flags & 0x3fffffff;
+            if (n < 1 || n > 8388608) throw Error("Invalid frame");
+            if (data.length - i < 12 + n) break;
+            const frame = data.subarray(i + 12, i + 12 + n);
+            const key = (flags & 0x80000000) !== 0;
+            await pace(Number(h.getBigUint64(4, true)) / 1000);
+            if (decoder.decodeQueueSize > 3) needKey = true;
+            if (flags & 0x40000000) {
+              if (!needKey) await paintPatch(frame);
+            } else if (key || !needKey) {
+              pendingVideo = true;
+              decoder.decode(
+                new EncodedVideoChunk({
+                  type: key ? "key" : "delta",
+                  timestamp: Number(h.getBigUint64(4, true)),
+                  data: frame,
+                }),
+              );
+              needKey = false;
+            }
+            i += 12 + n;
+          }
+          buffer = data.slice(i);
+        }
+      } catch (e) {
+        statusText.textContent = window.VideoDecoder
+          ? "Reconnecting…"
+          : e.message;
+        if (window.VideoDecoder) setTimeout(connect, 1500);
+      } finally {
+        clearTimeout(watchdog);
+        controller.abort();
+        if (decoder?.state === "configured") decoder.close();
+      }
+    }
+    connect();
+  </script>
+</html>
