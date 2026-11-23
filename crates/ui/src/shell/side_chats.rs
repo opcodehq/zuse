@@ -311,6 +311,13 @@ impl Shell {
     /// whichever is on screen.
     fn open_surfaces_for(&mut self, key: &str, cx: &mut Context<Self>) {
         if key == self.panel_key(cx) {
+            // At narrow logical widths (including scaled Windows displays),
+            // the fit hides the surface host even when it was just opened.
+            // Give the requested conversation the main column's space so
+            // clicking its tab always reveals it.
+            if self.viewport_width < CHAT_PANEL_MIN + RIGHT_PANE_MIN {
+                self.right_pane_expanded = true;
+            }
             // Programmatic, so an already-open pane is left alone.
             self.set_surfaces_open(true, cx);
         } else {
@@ -641,6 +648,57 @@ mod tests {
                 cx,
             )
         })
+    }
+
+    #[gpui::test]
+    fn child_chat_tab_is_visible_in_a_narrow_window(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let window = shell_window(dir.path(), cx);
+        window
+            .update(cx, |shell, window, cx| {
+                shell.active_chat = "main".into();
+                shell.viewport_width = CHAT_PANEL_MIN + RIGHT_PANE_MIN - 1.0;
+                let chat = serde_json::from_value(serde_json::json!({
+                    "id": "side", "parentChatId": "main", "deviceId": "local",
+                    "archived": false, "createdAt": Utc::now(),
+                }))
+                .unwrap();
+                shell.state.update(cx, |state, _| state.chats.push(chat));
+
+                // Exercise the same entry point as the conversation tab.
+                shell.open_child_chat_tab("side", cx);
+                let id = shell.side_chat_seq;
+                assert!(shell.right_pane_shown(cx));
+                assert_eq!(shell.resolved_right_active(cx), RightSurface::SideChat(id));
+                assert_eq!(
+                    shell.side_chats[&id].state.read(cx).selected_chat.as_deref(),
+                    Some("side")
+                );
+
+                // Reopening an existing tab must reveal it too, even when
+                // its pane is already flagged open but the fit hides it.
+                shell.right_pane_expanded = false;
+                assert!(!shell.right_pane_shown(cx));
+                shell.open_child_chat_tab("side", cx);
+                assert!(shell.right_pane_shown(cx));
+                assert_eq!(shell.side_chat_seq, id);
+
+                shell.close_right_surface(RightSurface::SideChat(id), window, cx);
+                assert!(!shell.right_pane_expanded);
+                shell.open_child_chat_tab("side", cx);
+                assert!(shell.right_pane_shown(cx));
+
+                shell.close_right_surface(
+                    RightSurface::SideChat(shell.side_chat_seq),
+                    window,
+                    cx,
+                );
+                shell.viewport_width = 1280.0;
+                shell.open_child_chat_tab("side", cx);
+                assert!(shell.right_pane_shown(cx));
+                assert!(!shell.right_pane_expanded);
+            })
+            .unwrap();
     }
 
     #[gpui::test]
