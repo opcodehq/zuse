@@ -37,13 +37,13 @@ pub(crate) fn computer_sizes(
     let limit = plan.unwrap_or(PlanId::Cloud).plan();
     [plans::DEFAULT_SIZE, plans::LARGE_SIZE]
         .into_iter()
-        .filter(|id| provider.sizes.iter().any(|s| s.id == *id))
-        .filter_map(|id| {
-            let (vcpus, memory) = plans::size_resources(id)?;
+        .filter_map(|id| provider.sizes.iter().find(|s| s.id == id))
+        .filter_map(|size| {
+            let (vcpus, memory) = size_resources(size)?;
             let available = limit.allows(vcpus, memory);
             Some(plans::SizeOption {
-                id: id.into(),
-                label: plans::size_label(id)?.into(),
+                id: size.id.clone(),
+                label: size_label(&size.id, vcpus, memory)?,
                 vcpus,
                 memory_mib: memory,
                 machine_rate: plans::machine_rate(memory),
@@ -52,6 +52,28 @@ pub(crate) fn computer_sizes(
             })
         })
         .collect()
+}
+/// What this provider's machine of that size really has. Providers differ for
+/// the same plan size (a Boat `default` is 4 vCPU / 8 GB, a Boxd one 4 / 16),
+/// so the managed base's declared size wins; the plan table is the fallback.
+fn size_resources(size: &ComputerSize) -> Option<(u32, u32)> {
+    if size.vcpus > 0 && size.memory_mib > 0 {
+        return Some((size.vcpus, size.memory_mib));
+    }
+    zuse_protocol::cloud_billing::plans::size_resources(&size.id)
+}
+/// "Standard · 4 vCPU · 8 GB", from the real resources.
+fn size_label(id: &str, vcpus: u32, memory_mib: u32) -> Option<String> {
+    use zuse_protocol::cloud_billing::plans;
+    let name = match id {
+        plans::DEFAULT_SIZE => "Standard",
+        plans::LARGE_SIZE => "Large",
+        _ => return None,
+    };
+    Some(format!(
+        "{name} · {vcpus} vCPU · {} GB",
+        memory_mib.div_ceil(1024)
+    ))
 }
 /// Capability text shown to people never names the provider.
 fn neutral(mut provider: ProviderCapabilities) -> ProviderCapabilities {
@@ -65,8 +87,10 @@ fn neutral(mut provider: ProviderCapabilities) -> ProviderCapabilities {
             Some("Cloud computers are not available for this account yet.".into());
     }
     for size in &mut provider.sizes {
-        if let Some(label) = plans::size_label(&size.id) {
-            size.label = label.into();
+        if let Some(label) =
+            size_resources(size).and_then(|(vcpus, memory)| size_label(&size.id, vcpus, memory))
+        {
+            size.label = label;
         } else if plans::names_infrastructure(&size.label) {
             size.label = "Cloud computer".into();
         }
@@ -89,12 +113,22 @@ mod plan_size_tests {
             supports_docker: false,
             sizes: sizes
                 .iter()
-                .map(|id| ComputerSize {
-                    id: (*id).into(),
-                    label: "Boxd standard".into(),
-                    vcpus: 1,
-                    memory_mib: 4096,
-                    disk_gib: 20,
+                .map(|size| {
+                    // What each managed base declares (Boat's are smaller).
+                    let (vcpus, memory_mib) = match (id, *size) {
+                        (ProviderId::Boat, "small") => (2, 4096),
+                        (ProviderId::Boat, "default") => (4, 8192),
+                        (ProviderId::Boat, _) => (8, 16384),
+                        (_, "default") => (4, 16384),
+                        _ => (8, 32768),
+                    };
+                    ComputerSize {
+                        id: (*size).into(),
+                        label: "Boxd standard".into(),
+                        vcpus,
+                        memory_mib,
+                        disk_gib: 20,
+                    }
                 })
                 .collect(),
             unavailable_reason: reason.map(str::to_owned),
@@ -119,6 +153,16 @@ mod plan_size_tests {
         assert_eq!((sizes[1].machine_rate, sizes[1].available), (8, false));
         assert_eq!(sizes[1].requires_plan, Some(PlanId::CloudMax));
         assert!(computer_sizes(&providers, Some(PlanId::CloudMax))[1].available);
+        // A Boat computer shows what a Boat machine has, not the Boxd size.
+        let boat = computer_sizes(&providers[..1], Some(PlanId::Cloud));
+        assert_eq!(boat[0].label, "Standard · 4 vCPU · 8 GB");
+        assert_eq!((boat[0].vcpus, boat[0].memory_mib), (4, 8192));
+        assert_eq!((boat[0].machine_rate, boat[0].available), (2, true));
+        assert_eq!(boat[1].label, "Large · 8 vCPU · 16 GB");
+        assert!(!boat[1].available);
+        let shown = neutral(providers[0].clone());
+        assert_eq!(shown.sizes[1].label, "Standard · 4 vCPU · 8 GB");
+        assert_eq!(shown.sizes[0].label, "Cloud computer");
         // Without the default provider, the server picks another that can create.
         assert_eq!(default_provider(&providers[..1]), Some(ProviderId::Boat));
         for p in providers.into_iter().map(neutral) {

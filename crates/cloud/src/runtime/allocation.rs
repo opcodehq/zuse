@@ -378,6 +378,11 @@ impl RuntimeControl {
     ) -> Result<(), ApiError> {
         tracing::info!(workspace=%job.resource_id, operation=job.payload["operationId"].as_str().unwrap_or(""),
             attempt=job.attempts, claimed_at=now, "Cloud allocation attempt started");
+        // A start whose machine never enrolled a runtime stops visibly at its
+        // deadline, whether its attempts fail or keep observing "not yet".
+        if self.stop_overdue_started_allocation(job, now).await? {
+            return Ok(());
+        }
         let mut diagnostic_context = None;
         let allocation = async {
             if let Some(next) = self

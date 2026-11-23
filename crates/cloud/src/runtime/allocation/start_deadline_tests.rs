@@ -642,3 +642,51 @@ async fn archive_or_delete_cancels_a_stuck_first_start() {
         }
     }
 }
+
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn a_started_machine_that_never_enrolls_stops_visibly_and_retry_restarts_it() {
+    let f = Fixture::new(false).await;
+    let fake = Fake::new(Create::Ok, Find::Works);
+    let machine = Machine {
+        id: "machine-1".into(),
+        name: sqlx::query_scalar(
+            "SELECT machine_name FROM zuse_rust_allocations WHERE operation_id=$1",
+        )
+        .bind(&f.op)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap(),
+        state: MachineState::Starting,
+        vcpu: None,
+        memory_bytes: None,
+    };
+    *fake.machine.lock().unwrap() = Some(machine);
+    // The machine exists and the launch went out, but no runtime ever enrolled
+    // (a helper that kept refusing, say) for longer than the start deadline.
+    f.exec("UPDATE zuse_rust_allocations SET phase='launching',machine_id='machine-1' WHERE workspace_id=$1 AND operation_id=$2").await;
+    f.exec("UPDATE api_cloud_workspaces SET state='provisioning',provider_sandbox_id='machine-1' WHERE workspace_id=$1").await;
+    f.age_start(11 * MIN).await;
+    f.attempt(&fake).await.unwrap();
+    assert_eq!(f.job_state().await, "failed");
+    let row = f.row().await;
+    assert_eq!(row["status_code"], "cloud_provider_rejected");
+    let shown = crate::runtime::allocation::rejection::metadata(&row);
+    assert_eq!(shown["retryAvailable"], true);
+    assert_eq!(shown["reason"], "deadline");
+    assert_eq!(
+        row["request_config"]["rustAllocationRejection"]["machineId"],
+        "machine-1"
+    );
+    // Retry runs the start again on the same machine: no create, and the
+    // deadline restarts from the Retry instead of stopping it at once.
+    f.retry().await.unwrap();
+    assert_eq!(f.job_state().await, "pending");
+    let _ = f.attempt(&fake).await;
+    let row = f.row().await;
+    assert!(row["request_config"]["rustAllocationRejection"].is_null());
+    assert_ne!(f.job_state().await, "failed");
+    assert_eq!(fake.creates(), 0);
+    assert_eq!(f.machine().await.as_deref(), Some("machine-1"));
+    f.close().await;
+}

@@ -112,6 +112,16 @@ pub(super) fn capture_intent(row: &Value) -> bool {
         && intent["storageIncarnationId"]
             == row["request_config"]["rustRuntimeStorage"]["storageIncarnationId"]
 }
+/// The last resume ended with a failure that left the provider's machine in
+/// place (it would not start), so recreation can still capture it.
+pub(super) fn resume_failed(code: &str) -> bool {
+    lifecycle::resume_failure_terminal(code)
+}
+/// Recreation captures the computer it replaces; one its provider no longer
+/// has cannot be captured, so Recreate is not offered for it.
+fn source_missing(row: &Value) -> bool {
+    row["state"] == "paused" && row["status_code"] == lifecycle::MACHINE_MISSING
+}
 /// Any active or attention-required recreation keeps execution closed.
 pub(super) fn leases_blocked(row: &Value) -> bool {
     row["request_config"]["rustRecreation"]["operationId"].is_string()
@@ -155,6 +165,7 @@ impl RuntimeControl {
             && !super::repair::leases_blocked(row)
             && !leases_blocked(row)
             && matches!(row["state"].as_str(), Some("ready" | "paused"))
+            && !source_missing(row)
             && row["request_config"]["rustRecreationVersion"] == 1
             && storage_enrolled(row)
             && row["managed_release_id"].is_string()
@@ -371,7 +382,18 @@ impl RuntimeControl {
         if row["state"] == "paused" {
             let paused:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM zuse_rust_lifecycle_operations WHERE operation_id=$1 AND workspace_id=$2 AND generation=$3 AND source_machine_id=$4 AND storage_incarnation_id=$5 AND phase='paused')").bind(row["request_config"]["rustLifecycleOperation"]["id"].as_str()).bind(id).bind(generation).bind(source).bind(incarnation).fetch_one(&mut *tx).await?;
             if !paused {
-                return Err(ApiError::conflict("cloud_lifecycle_quiescence_required"));
+                // A resume that could not start the computer settles it as
+                // paused without a completed pause. The provider still has
+                // the machine, so recreation may wake, capture and replace it.
+                let failed_resume:Option<String>=sqlx::query_scalar("SELECT j.last_error_code FROM zuse_rust_jobs j JOIN zuse_rust_lifecycle_operations o ON o.operation_id=j.payload->>'operationId' WHERE j.kind=$1 AND j.resource_id=$2 AND j.resource_generation=$3 AND j.state='failed' AND o.operation_id=$4 AND o.workspace_id=$2 AND o.generation=$3 AND o.source_machine_id=$5 AND o.storage_incarnation_id=$6 AND o.action='resume' ORDER BY j.updated_at DESC LIMIT 1")
+                    .bind(lifecycle::JOB_KIND).bind(id).bind(generation).bind(row["request_config"]["rustLifecycleOperation"]["id"].as_str()).bind(source).bind(incarnation).fetch_optional(&mut *tx).await?.flatten();
+                match failed_resume.as_deref() {
+                    Some(code) if resume_failed(code) => {}
+                    Some(lifecycle::MACHINE_MISSING) => {
+                        return Err(ApiError::conflict("computer_recreation_source_missing"));
+                    }
+                    _ => return Err(ApiError::conflict("cloud_lifecycle_quiescence_required")),
+                }
             }
         }
         let operation = uuid::Uuid::new_v4().to_string();
@@ -545,3 +567,22 @@ impl RuntimeControl {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod failed_resume_tests {
+    use super::*;
+    #[test]
+    fn recreate_follows_a_resume_that_could_not_start_but_not_a_missing_machine() {
+        assert!(resume_failed("cloud_retained_provider_failed"));
+        assert!(resume_failed("cloud_lifecycle_timed_out"));
+        assert!(!resume_failed(lifecycle::MACHINE_MISSING));
+        assert!(!resume_failed("cloud_lifecycle_fenced"));
+        let mut row = json!({"state":"paused","status_code":lifecycle::MACHINE_MISSING});
+        assert!(source_missing(&row));
+        row["status_code"] = json!("cloud_retained_provider_failed");
+        assert!(!source_missing(&row));
+        row["status_code"] = json!(lifecycle::MACHINE_MISSING);
+        row["state"] = json!("ready");
+        assert!(!source_missing(&row));
+    }
+}

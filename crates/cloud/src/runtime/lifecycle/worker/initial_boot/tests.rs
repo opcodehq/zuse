@@ -89,6 +89,9 @@ impl RetainedProvider for Probe {
         if self.mode == "reply-lost" && n == 0 {
             return Err(ProviderError::OutcomeUnknown);
         }
+        if self.mode == "refused-overdue" {
+            return Err(ProviderError::Rejected);
+        }
         Ok(!(self.mode == "pending" && n == 0))
     }
     async fn launch_retained(&self, d: &Directive, w: &str, _: &str) -> Result<(), ProviderError> {
@@ -113,6 +116,7 @@ async fn boat_disabled_unit_retained_start_is_hydration_and_current_owner_fenced
         "not-hydrated",
         "pending",
         "reply-lost",
+        "refused-overdue",
         "delete",
         "lease-expired",
         "lease-replaced",
@@ -169,7 +173,16 @@ async fn boat_disabled_unit_retained_start_is_hydration_and_current_owner_fenced
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO zuse_rust_lifecycle_operations(operation_id,workspace_id,command_id,generation,source_machine_id,storage_incarnation_id,action,phase,created_at,updated_at) VALUES('retained-operation','ws-bob','resume-command',3,'retained-source','retained-disk','resume','waking',1,1)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO zuse_rust_lifecycle_operations(operation_id,workspace_id,command_id,generation,source_machine_id,storage_incarnation_id,action,phase,created_at,updated_at) VALUES('retained-operation','ws-bob','resume-command',3,'retained-source','retained-disk','resume','waking',(extract(epoch from clock_timestamp())*1000)::bigint,1)").execute(&pool).await.unwrap();
+        if mode == "refused-overdue" {
+            // The provider has refused to start this computer since before
+            // the resume deadline.
+            sqlx::query("UPDATE zuse_rust_lifecycle_operations SET created_at=created_at-$1 WHERE operation_id='retained-operation'")
+                .bind(crate::runtime::lifecycle::RESUME_FAILURE_DEADLINE_MS + 1)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
         let mut tx = pool.begin().await.unwrap();
         jobs::enqueue(
             &mut tx,
@@ -238,6 +251,18 @@ async fn boat_disabled_unit_retained_start_is_hydration_and_current_owner_fenced
                 1
             }
         );
+        if mode == "refused-overdue" {
+            // Stops visibly instead of retrying: paused with the failure, and
+            // the job is done, so no further helper call is made.
+            let (state, code, job): (String, String, String) = sqlx::query_as("SELECT w.state,w.status_code,j.state FROM api_cloud_workspaces w, zuse_rust_jobs j WHERE w.workspace_id='ws-bob' AND j.resource_id='ws-bob'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(
+                (state.as_str(), code.as_str(), job.as_str()),
+                ("paused", "cloud_retained_provider_failed", "failed")
+            );
+        }
         if matches!(mode, "pending" | "reply-lost") {
             sqlx::query("UPDATE zuse_rust_jobs SET due_at=0")
                 .execute(&pool)

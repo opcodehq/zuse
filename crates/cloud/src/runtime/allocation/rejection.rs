@@ -21,6 +21,15 @@ fn source_matches(row: &Value, op: &Value, marker: &Value) -> bool {
         && row["request_config"]["rustRuntimeStorage"]["storageIncarnationId"]
             == op["storage_incarnation_id"]
 }
+/// Marker state for a start whose provider machine exists but never enrolled
+/// a runtime before the deadline. Its Retry runs the start again on that same
+/// machine; no create is involved.
+const MACHINE_PRESENT: &str = "machine-present";
+fn machine_present(marker: &Value, row: &Value) -> bool {
+    marker["createReceiptState"] == MACHINE_PRESENT
+        && marker["machineId"].is_string()
+        && marker["machineId"] == row["provider_sandbox_id"]
+}
 pub(crate) fn metadata(row: &Value) -> Value {
     let marker = &row["request_config"]["rustAllocationRejection"];
     let available = marker["version"] == 1
@@ -30,7 +39,7 @@ pub(crate) fn metadata(row: &Value) -> Value {
             == row["request_config"]["rustRuntimeStorage"]["storageIncarnationId"]
         && row["state"] == "provisioning"
         && row["desired_state"] == "ready"
-        && row["provider_sandbox_id"].is_null()
+        && (row["provider_sandbox_id"].is_null() || machine_present(marker, row))
         && !blocked(row);
     if available {
         json!({"operationId":marker["operationId"],"state":"rejected","errorCode":"cloud_provider_rejected","reason":marker["reason"].as_str().unwrap_or("rejected"),"retryAvailable":true,"rejectedAt":marker["rejectedAt"]})
@@ -65,6 +74,21 @@ fn start_began(row: &Value, op: &Value) -> i64 {
         .unwrap_or(0);
     op["created_at"].as_i64().unwrap_or(0).max(retried)
 }
+/// The start's machine exists, belongs to this exact operation, and the start
+/// has run past its deadline without an enrolled runtime.
+fn started_overdue(row: &Value, op: &Value, now: i64) -> bool {
+    let retry = &row["request_config"]["rustAllocationStartRetry"];
+    let retried = (retry["operationId"] == op["operation_id"])
+        .then(|| retry["approvedAt"].as_i64())
+        .flatten()
+        .unwrap_or(0);
+    matches!(op["phase"].as_str(), Some("allocated" | "launching"))
+        && op["machine_id"].is_string()
+        && op["machine_id"] == row["provider_sandbox_id"]
+        && row["request_config"]["rustAllocationOperationId"] == op["operation_id"]
+        && now.saturating_sub(start_began(row, op).max(retried))
+            >= super::effects::ALLOCATION_START_DEADLINE_MS
+}
 impl RuntimeControl {
     pub(super) async fn stop_rejected_allocation(
         &self,
@@ -81,6 +105,55 @@ impl RuntimeControl {
         now: i64,
     ) -> Result<bool, ApiError> {
         self.stop_allocation(job, now, true).await
+    }
+    /// Stops a first start whose provider machine exists but has not enrolled
+    /// a runtime within `ALLOCATION_START_DEADLINE_MS`, whatever kept it (a
+    /// helper that keeps refusing, a runtime that never came up). Like the
+    /// machine-less case it stops visibly with Retry and Delete; Retry runs the
+    /// start again on the same machine. The machine itself stays under the
+    /// awake backstop until Retry or Delete.
+    pub(super) async fn stop_overdue_started_allocation(
+        &self,
+        job: &jobs::Job,
+        now: i64,
+    ) -> Result<bool, ApiError> {
+        let mut tx = self.pool.begin().await?;
+        let (row, generation, _) = locked_workspace(&mut tx, &job.resource_id).await?;
+        let config = &row["request_config"];
+        if generation != job.generation
+            || blocked(&row)
+            || row["desired_state"] != "ready"
+            || row["state"] != "provisioning"
+            || !row["provider_sandbox_id"].is_string()
+            || !row["runtime_credential_hash"].is_null()
+            || !config["rustStorageEnrollment"].is_null()
+            || !config["runtimeBootstrapReceipt"].is_null()
+            || row["runtime_state"] == "online"
+            || super::super::repair::leases_blocked(&row)
+            || super::super::recreation::leases_blocked(&row)
+        {
+            return Ok(false);
+        }
+        let op:Option<Value>=sqlx::query_scalar("SELECT to_jsonb(a) FROM zuse_rust_allocations a WHERE operation_id=$1 AND workspace_id=$2 AND generation=$3 FOR UPDATE")
+            .bind(job.payload["operationId"].as_str()).bind(&job.resource_id).bind(generation).fetch_optional(&mut *tx).await?;
+        let Some(op) = op else { return Ok(false) };
+        if !started_overdue(&row, &op, now) {
+            return Ok(false);
+        }
+        let changed=sqlx::query("UPDATE zuse_rust_jobs SET state='failed',last_error_code='cloud_provider_rejected',lease_token=NULL,lease_expires_at=NULL,updated_at=$3 WHERE job_id=$1 AND lease_token=$2 AND state='running' AND lease_expires_at>$3 AND resource_generation=$4")
+            .bind(&job.id).bind(&job.lease_token).bind(now).bind(generation).execute(&mut *tx).await?;
+        if changed.rows_affected() != 1 {
+            return Ok(false);
+        }
+        let mut config = config.clone();
+        config["rustAllocationRejection"] = json!({"version":1,"operationId":op["operation_id"],"generation":generation,"artifactId":op["snapshot_id"],"machineName":op["machine_name"],"machineId":op["machine_id"],"storageIncarnationId":op["storage_incarnation_id"],"rejectedAt":now,"createReceiptState":MACHINE_PRESENT,"reason":"deadline"});
+        sqlx::query("UPDATE api_cloud_workspaces SET status_code='cloud_provider_rejected',request_config=$2,revision=revision+1,updated_at=GREATEST(updated_at+1,$3) WHERE workspace_id=$1")
+            .bind(&job.resource_id).bind(config).bind(now).execute(&mut *tx).await?;
+        tx.commit().await?;
+        tracing::warn!(workspace=%job.resource_id, operation=op["operation_id"].as_str().unwrap_or(""),
+            machine=op["machine_id"].as_str().unwrap_or(""),
+            "Cloud start did not enroll a runtime before its deadline; Retry or Delete required");
+        Ok(true)
     }
     async fn stop_allocation(
         &self,
@@ -359,10 +432,17 @@ impl RuntimeControl {
             }
             return Ok(prior.clone());
         }
+        let present = machine_present(&config["rustAllocationRejection"], &row);
+        let phase_ok = if present {
+            matches!(op["phase"].as_str(), Some("allocated" | "launching"))
+                && op["machine_id"] == config["rustAllocationRejection"]["machineId"]
+        } else {
+            matches!(op["phase"].as_str(), Some("creating" | "planned"))
+                && op["machine_id"].is_null()
+        };
         if metadata(&row).is_null()
             || !source_matches(&row, &op, &config["rustAllocationRejection"])
-            || !matches!(op["phase"].as_str(), Some("creating" | "planned"))
-            || !op["machine_id"].is_null()
+            || !phase_ok
             || !row["runtime_credential_hash"].is_null()
             || !config["rustStorageEnrollment"].is_null()
             || !config["runtimeBootstrapReceipt"].is_null()
@@ -376,7 +456,11 @@ impl RuntimeControl {
         let expected = config["rustAllocationRejection"]["createReceiptState"]
             .as_str()
             .unwrap_or("rejected");
-        if receipt_state(receipt.as_ref(), required(&op, "machine_name")?) != Some(expected) {
+        // A machine-present start already has its machine: nothing is created
+        // again, so there is no create receipt to reconcile.
+        if !present
+            && receipt_state(receipt.as_ref(), required(&op, "machine_name")?) != Some(expected)
+        {
             return Err(ApiError::conflict("cloud_allocation_retry_outcome_unknown"));
         }
         self.allocation_capacity(&mut tx, &row, now).await?;
@@ -390,7 +474,12 @@ impl RuntimeControl {
         config["rustAllocationRetries"] = ledger;
         let receipt = json!({"version":1,"priorProviderReceipt":receipt,"commandId":input.command_id,"workspaceId":id,"operationId":operation,"actorId":access.actor.account_id,"generation":generation,"artifactId":op["snapshot_id"],"machineName":op["machine_name"],"storageIncarnationId":op["storage_incarnation_id"],"state":"accepted","requestedAt":now});
         config["rustAllocationRetries"][&input.command_id] = receipt.clone();
-        config["rustAllocationDispatchAuthorization"] = json!({"version":1,"state":"approved","commandId":input.command_id,"operationId":operation,"generation":generation,"artifactId":op["snapshot_id"],"machineName":op["machine_name"],"storageIncarnationId":op["storage_incarnation_id"],"expectedReceipt":receipt["priorProviderReceipt"],"approvedAt":now});
+        if present {
+            // The deadline restarts from this Retry.
+            config["rustAllocationStartRetry"] = json!({"version":1,"operationId":operation,"commandId":input.command_id,"approvedAt":now});
+        } else {
+            config["rustAllocationDispatchAuthorization"] = json!({"version":1,"state":"approved","commandId":input.command_id,"operationId":operation,"generation":generation,"artifactId":op["snapshot_id"],"machineName":op["machine_name"],"storageIncarnationId":op["storage_incarnation_id"],"expectedReceipt":receipt["priorProviderReceipt"],"approvedAt":now});
+        }
         config
             .as_object_mut()
             .ok_or_else(|| ApiError::conflict("cloud_allocation_retry_fenced"))?
@@ -423,3 +512,52 @@ impl RuntimeControl {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod machine_present_tests {
+    use super::*;
+    const DEADLINE: i64 = super::super::effects::ALLOCATION_START_DEADLINE_MS;
+    fn started() -> (Value, Value) {
+        let op = json!({"operation_id":"op","phase":"launching","machine_id":"bx_one","created_at":1_000,
+            "snapshot_id":"art","machine_name":"name","storage_incarnation_id":"disk","generation":1});
+        let row = json!({"state":"provisioning","desired_state":"ready","provider_sandbox_id":"bx_one",
+            "request_config":{"rustAllocationOperationId":"op","runtimeGeneration":1,
+                "rustRuntimeStorage":{"storageIncarnationId":"disk"}}});
+        (row, op)
+    }
+    #[test]
+    fn a_started_machine_that_never_enrolls_is_overdue_only_after_the_deadline() {
+        let (mut row, mut op) = started();
+        assert!(!started_overdue(&row, &op, 1_000 + DEADLINE - 1));
+        assert!(started_overdue(&row, &op, 1_000 + DEADLINE));
+        // A Retry restarts the deadline.
+        row["request_config"]["rustAllocationStartRetry"] =
+            json!({"version":1,"operationId":"op","approvedAt":50_000});
+        assert!(!started_overdue(&row, &op, 1_000 + DEADLINE));
+        assert!(started_overdue(&row, &op, 50_000 + DEADLINE));
+        // Another operation's machine, or a start before its machine, is not this one.
+        row["provider_sandbox_id"] = json!("bx_other");
+        assert!(!started_overdue(&row, &op, i64::MAX / 2));
+        row["provider_sandbox_id"] = json!("bx_one");
+        op["phase"] = json!("creating");
+        assert!(!started_overdue(&row, &op, i64::MAX / 2));
+    }
+    #[test]
+    fn a_machine_present_stop_offers_retry_for_that_machine_only() {
+        let (mut row, op) = started();
+        row["request_config"]["rustAllocationRejection"] = json!({"version":1,"operationId":"op",
+            "generation":1,"artifactId":op["snapshot_id"],"machineName":op["machine_name"],
+            "machineId":"bx_one","storageIncarnationId":"disk","rejectedAt":9,
+            "createReceiptState":MACHINE_PRESENT,"reason":"deadline"});
+        let shown = metadata(&row);
+        assert_eq!(shown["state"], "rejected");
+        assert_eq!(shown["retryAvailable"], true);
+        assert_eq!(shown["errorCode"], "cloud_provider_rejected");
+        row["provider_sandbox_id"] = json!("bx_replaced");
+        assert!(metadata(&row).is_null());
+        // A machine-less rejection never applies once a machine exists.
+        row["provider_sandbox_id"] = json!("bx_one");
+        row["request_config"]["rustAllocationRejection"]["createReceiptState"] = json!("rejected");
+        assert!(metadata(&row).is_null());
+    }
+}

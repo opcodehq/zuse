@@ -1186,3 +1186,100 @@ impl crate::auth::Identity for DepartedRecreator {
         Err(ApiError::forbidden("organization_access_denied"))
     }
 }
+#[tokio::test]
+#[ignore = "requires isolated localhost PostgreSQL"]
+async fn recreate_follows_a_resume_that_could_not_start_the_computer() {
+    let (admin, pool, schema, c, now, config) = fixture().await;
+    let bob = Access {
+        actor: Principal {
+            account_id: "user-bob".into(),
+        },
+        scope: Scope::Personal,
+        owner_id: "user-bob".into(),
+        membership: None,
+    };
+    sqlx::query("INSERT INTO api_cloud_billing_periods VALUES('recreate-period','user-bob','polar',NULL,'manual','USD',$1,$2,1000,1000,500,500,$1)").bind(now-1000).bind(now+86400000).execute(&pool).await.unwrap();
+    // A resume the provider kept refusing settled the computer as paused
+    // (lifecycle::settle_failed_resume): its operation never completed a pause.
+    let resume = uuid::Uuid::new_v4().to_string();
+    let mut settled = config.clone();
+    settled["rustLifecycleOperation"] = json!({"id":resume,"action":"resume","phase":"paused"});
+    sqlx::query("UPDATE api_cloud_workspaces SET state='paused',desired_state='paused',runtime_state='offline',provider_sandbox_id='machine-bob',status_code='cloud_retained_provider_failed',request_config=$1 WHERE workspace_id='ws-bob'").bind(&settled).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO zuse_rust_lifecycle_operations(operation_id,workspace_id,command_id,generation,source_machine_id,storage_incarnation_id,action,phase,created_at,updated_at) VALUES($1,'ws-bob','failed-resume',1,'machine-bob','disk','resume','launching',$2,$2)").bind(&resume).bind(now).execute(&pool).await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    let job = jobs::enqueue(
+        &mut tx,
+        &format!("lifecycle:{resume}"),
+        lifecycle::JOB_KIND,
+        "ws-bob",
+        1,
+        &json!({"operationId":resume}),
+        now,
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let fail = |code: &'static str| {
+        sqlx::query("UPDATE zuse_rust_jobs SET state='failed',last_error_code=$2 WHERE job_id=$1")
+            .bind(job.clone())
+            .bind(code)
+    };
+    // While the resume job is still retrying, recreation waits for quiescence.
+    assert_eq!(
+        c.recreate_computer("ws-bob", &bob, &uuid::Uuid::new_v4().to_string(), None, now)
+            .await
+            .unwrap_err()
+            .code,
+        "cloud_lifecycle_quiescence_required"
+    );
+    // A machine the provider no longer has cannot be captured: not offered.
+    fail(lifecycle::MACHINE_MISSING)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        c.recreate_computer("ws-bob", &bob, &uuid::Uuid::new_v4().to_string(), None, now)
+            .await
+            .unwrap_err()
+            .code,
+        "computer_recreation_source_missing"
+    );
+    let mut missing: Value = sqlx::query_scalar(
+        "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-bob'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    missing["status_code"] = json!(lifecycle::MACHINE_MISSING);
+    assert!(!c.recreation_eligible(&missing));
+    // A machine that would not start is woken, captured and replaced.
+    fail("cloud_retained_provider_failed")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let op = c
+        .recreate_computer("ws-bob", &bob, &uuid::Uuid::new_v4().to_string(), None, now)
+        .await
+        .unwrap();
+    assert_eq!(op["state"], "waking");
+    let row: Value = sqlx::query_scalar(
+        "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-bob'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(row["state"], "resuming");
+    assert_eq!(
+        row["request_config"]["rustLifecycleOperation"]["action"],
+        "resume"
+    );
+    assert_ne!(
+        row["request_config"]["rustLifecycleOperation"]["id"],
+        json!(resume)
+    );
+    pool.close().await;
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
+}

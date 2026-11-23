@@ -700,12 +700,51 @@ impl RuntimeControl {
                     "Retained computer missing at its provider; lifecycle stopped");
                 return result;
             }
+            if self.settle_failed_resume(job, error.code).await? {
+                return result;
+            }
             jobs::retry(&self.pool, &job, clock_ms(), error.code).await?;
             sqlx::query("UPDATE api_cloud_workspaces w SET status_code=$3,revision=revision+1,updated_at=GREATEST(updated_at+1,(extract(epoch from clock_timestamp())*1000)::bigint) WHERE workspace_id=$1 AND request_config->'rustLifecycleOperation'->>'id'=$2 AND desired_state<>'deleted' AND state NOT IN ('deleting','deleted') AND request_config->'rustLifecycleOperation'->>'phase' NOT IN ('paused','ready') AND request_config->'rustMemoryTransportRecovery'->>'operationId' IS DISTINCT FROM $2 AND EXISTS(SELECT 1 FROM zuse_rust_control_owners o WHERE o.resource_kind='workspace' AND o.resource_id=w.workspace_id AND o.backend='rust' AND o.generation=$4)").bind(&job.resource_id).bind(job.payload["operationId"].as_str()).bind(error.code).bind(job.generation).execute(&self.pool).await?;
         } else if job.payload.get("missingObservations").is_some() {
             self.clear_missing_observations(job).await?;
         }
         result
+    }
+    /// A resume whose provider keeps refusing to start the computer (or that
+    /// ran out of attempts) stops visibly instead of retrying for hours: the
+    /// workspace settles to paused with the failure code, its saved messages
+    /// stay queued, and Recreate becomes available (see
+    /// `recreation::resume_failed`). Recreations own their wake failures.
+    async fn settle_failed_resume(&self, job: &jobs::Job, code: &str) -> Result<bool, ApiError> {
+        if !resume_failure_terminal(code) {
+            return Ok(false);
+        }
+        let operation = job.payload["operationId"].as_str().unwrap_or("");
+        let op: Option<(String, i64)> = sqlx::query_as("SELECT action,created_at FROM zuse_rust_lifecycle_operations WHERE operation_id=$1 AND workspace_id=$2 AND generation=$3")
+            .bind(operation).bind(&job.resource_id).bind(job.generation).fetch_optional(&self.pool).await?;
+        let Some((action, created_at)) = op else {
+            return Ok(false);
+        };
+        if !resume_overdue(&action, code, created_at, clock_ms()) {
+            return Ok(false);
+        }
+        let mut tx = self.pool.begin().await?;
+        let failed = sqlx::query("UPDATE zuse_rust_jobs SET state='failed',last_error_code=$3,lease_token=NULL,lease_expires_at=NULL,updated_at=$4 WHERE job_id=$1 AND lease_token=$2 AND state='running'")
+            .bind(&job.id).bind(&job.lease_token).bind(code).bind(clock_ms()).execute(&mut *tx).await?;
+        if failed.rows_affected() != 1 {
+            return Ok(false);
+        }
+        let settled = sqlx::query("UPDATE api_cloud_workspaces SET state='paused',desired_state='paused',runtime_state='offline',status_code=$3,request_config=jsonb_set(request_config,'{rustLifecycleOperation,phase}','\"paused\"'),revision=revision+1,updated_at=GREATEST(updated_at+1,$4) WHERE workspace_id=$1 AND request_config->'rustLifecycleOperation'->>'id'=$2 AND request_config->'rustLifecycleOperation'->>'action'='resume' AND desired_state<>'deleted' AND state NOT IN ('deleting','deleted') AND (request_config->'rustRecreation'->>'operationId' IS NULL OR request_config->'rustRecreation'->>'phase' IN ('ready','cancelled'))")
+            .bind(&job.resource_id).bind(operation).bind(code).bind(clock_ms()).execute(&mut *tx).await?;
+        if settled.rows_affected() != 1 {
+            // Not this workspace's plain resume (a recreation wake, say):
+            // leave the ordinary retry and attention handling in charge.
+            return Ok(false);
+        }
+        tx.commit().await?;
+        tracing::warn!(workspace = %job.resource_id, operation, code,
+            "Cloud resume could not start the computer; settled as paused");
+        Ok(true)
     }
     /// Only consecutive "missing" answers count toward giving up.
     async fn clear_missing_observations(&self, job: &jobs::Job) -> Result<(), ApiError> {
@@ -720,6 +759,50 @@ impl RuntimeControl {
 pub(crate) const MACHINE_MISSING: &str = "cloud_retained_machine_missing";
 /// Consecutive "missing" observations before giving up.
 const MISSING_CONFIRMATIONS: i32 = 3;
+/// How long a resume may keep failing to start its computer before it stops
+/// visibly; the same bound a first start has.
+pub(crate) const RESUME_FAILURE_DEADLINE_MS: i64 = super::effects::ALLOCATION_START_DEADLINE_MS;
+/// Resume failures that settle the computer once overdue.
+pub(crate) fn resume_failure_terminal(code: &str) -> bool {
+    matches!(
+        code,
+        "cloud_retained_provider_failed" | "cloud_lifecycle_timed_out"
+    )
+}
+/// A resume that ran out of attempts stops at once; one whose provider keeps
+/// failing stops after [`RESUME_FAILURE_DEADLINE_MS`].
+fn resume_overdue(action: &str, code: &str, created_at: i64, now: i64) -> bool {
+    action == "resume"
+        && resume_failure_terminal(code)
+        && (code == "cloud_lifecycle_timed_out"
+            || now.saturating_sub(created_at) >= RESUME_FAILURE_DEADLINE_MS)
+}
+#[cfg(test)]
+mod resume_failure_tests {
+    use super::*;
+    #[test]
+    fn a_failing_resume_stops_at_its_deadline_and_a_timed_out_one_at_once() {
+        let deadline = RESUME_FAILURE_DEADLINE_MS;
+        let code = "cloud_retained_provider_failed";
+        assert!(!resume_overdue("resume", code, 1_000, 1_000 + deadline - 1));
+        assert!(resume_overdue("resume", code, 1_000, 1_000 + deadline));
+        assert!(resume_overdue(
+            "resume",
+            "cloud_lifecycle_timed_out",
+            1_000,
+            1_001
+        ));
+        // Pauses, archives and unrelated errors keep their own handling.
+        assert!(!resume_overdue("pause", code, 0, i64::MAX));
+        assert!(!resume_overdue(
+            "resume",
+            "cloud_lifecycle_fenced",
+            0,
+            i64::MAX
+        ));
+        assert!(!resume_overdue("resume", MACHINE_MISSING, 0, i64::MAX));
+    }
+}
 
 pub(super) async fn require_resume_capacity(
     pin: Option<&crate::managed_bases::candidate::StagingBasePin>,
