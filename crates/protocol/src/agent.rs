@@ -287,10 +287,20 @@ fn is_plain_sentence(text: &str) -> bool {
         && text.chars().count() <= 160
         && !text.contains('\n')
         && !text.contains(" exited with ")
-        && !text.split_whitespace().any(|word| {
-            let word = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '/' && c != '~');
-            word.starts_with('/') || word.starts_with("~/")
-        })
+        && !text.split_whitespace().any(looks_like_path)
+}
+
+/// A Unix (`/…`, `~/…`), Windows drive (`C:\…`, `C:/…`) or UNC (`\\host\…`)
+/// path, ignoring quotes and punctuation around it. Any backslash counts:
+/// plain sentences don't use them.
+fn looks_like_path(word: &str) -> bool {
+    let word = word.trim_matches(|c: char| !c.is_alphanumeric() && !matches!(c, '/' | '~' | '\\'));
+    let mut chars = word.chars();
+    let drive = matches!(
+        (chars.next(), chars.next(), chars.next()),
+        (Some(letter), Some(':'), Some('/' | '\\')) if letter.is_ascii_alphabetic()
+    );
+    drive || word.contains('\\') || word.starts_with('/') || word.starts_with("~/")
 }
 
 fn sentence(text: &str) -> String {
@@ -1409,6 +1419,27 @@ mod tests {
         ] {
             assert_eq!(HarnessUpdateFailureCode::classify(raw), code, "{raw}");
         }
+    }
+
+    #[test]
+    fn windows_paths_stay_out_of_the_message() {
+        for raw in [
+            r"could not run C:\Users\me\bin\grok.exe: file not found",
+            "could not run C:/Users/me/bin/grok.exe: file not found",
+            r"could not run \\build\tools\grok.exe: file not found",
+            r"could not run 'D:\agents\grok.exe'",
+        ] {
+            let failure = HarnessUpdateFailure::from_raw(HarnessUpdateStep::Install, raw, true);
+            assert_eq!(failure.message, "The update didn’t finish.", "{raw}");
+            assert_eq!(failure.details.as_deref(), Some(raw));
+        }
+        // Other colons don't make a path.
+        let kept = HarnessUpdateFailure::from_raw(
+            HarnessUpdateStep::Install,
+            "try again after 12:30",
+            true,
+        );
+        assert_eq!(kept.message, "Try again after 12:30.");
     }
 
     #[test]

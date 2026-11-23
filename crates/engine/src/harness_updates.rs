@@ -1313,6 +1313,20 @@ impl HarnessUpdateCoordinator {
             }
         };
         self.mutate(harness, |status| status.progress = None);
+        // Another Zuse process, or the agent's own updater, may have installed
+        // this release or a newer one since `current` was read, most often
+        // while this update waited for the lock above. Installing the target
+        // captured back then would downgrade the agent.
+        if let Some(installed) = self
+            .installed_at_or_past_target(harness, &current, &cancel)
+            .await
+        {
+            drop(shared_lock);
+            drop(lease);
+            self.finish_already_current(harness, installed.clone());
+            intent.finish();
+            return Ok(installed);
+        }
         // Busy files and dropped connections usually clear within seconds:
         // retry quietly and only surface a failure that outlasts the retries.
         let mut retries = TRANSIENT_RETRY_DELAYS.iter();
@@ -1434,6 +1448,26 @@ impl HarnessUpdateCoordinator {
         }
         intent.finish();
         result
+    }
+
+    /// The installed version, when it is already `current`'s target or newer.
+    /// `None` when there's no target version (Hermes tracks commits) or the
+    /// version can't be read, so the install goes ahead as before.
+    async fn installed_at_or_past_target(
+        &self,
+        harness: HarnessId,
+        current: &HarnessUpdateStatus,
+        cancel: &CancellationToken,
+    ) -> Option<String> {
+        let target = current.latest_version.as_deref()?;
+        let executable = self.executable(harness).ok()?;
+        let installed = cancellable(
+            cancel,
+            run_version_command(harness, &executable, provider(harness).version_args),
+        )
+        .await
+        .ok()?;
+        version_at_least(&installed, target).then_some(installed)
     }
 
     /// One installation attempt. Callers hold the update lease and the
@@ -2091,6 +2125,30 @@ impl HarnessUpdateCoordinator {
         });
     }
 
+    /// Ends an update that found the agent already at or past its target.
+    /// Nothing was installed, so it reads as current, not updated.
+    fn finish_already_current(&self, harness: HarnessId, installed: String) {
+        lock(&self.inner.prefs).dismissed_versions.remove(&harness);
+        self.persist_preferences();
+        let enabled = self.inner.registry.enabled_set().contains(&harness);
+        self.mutate(harness, |status| {
+            status.installed_version = Some(installed);
+            status.progress = None;
+            status.error = None;
+            status.checked_at = Some(now_ms());
+            status.phase = if !enabled || status.policy == HarnessUpdatePolicy::Off {
+                HarnessUpdatePhase::Dormant
+            } else {
+                HarnessUpdatePhase::Current
+            };
+        });
+        lock(&self.inner.cancellations).remove(&harness);
+        self.inner.registry.end_update(harness);
+        // The final status was published before the operation left the active
+        // set. Wake shutdown even if it already consumed that frame.
+        self.inner.status_tx.send_modify(|_| {});
+    }
+
     fn finish_failed_update(&self, harness: HarnessId, error: String) {
         lock(&self.inner.cancellations).remove(&harness);
         self.inner.registry.end_update(harness);
@@ -2668,6 +2726,14 @@ fn opencode_release_package(installed: &str) -> &'static str {
     }
 }
 
+/// Whether `installed` is `target` or newer. False unless both are version
+/// numbers, so a format this can't compare never skips an install.
+fn version_at_least(installed: &str, target: &str) -> bool {
+    version_numbers(installed).is_some()
+        && version_numbers(target).is_some()
+        && !version_is_newer(target, installed)
+}
+
 fn version_is_newer(latest: &str, installed: &str) -> bool {
     match (version_numbers(latest), version_numbers(installed)) {
         (Some(mut latest), Some(mut installed)) => {
@@ -2682,11 +2748,13 @@ fn version_is_newer(latest: &str, installed: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::{AgentUpdateLock, TRANSIENT_RETRY_DELAYS};
     use super::{
-        AgentUpdateLock, LatestSource, TRANSIENT_RETRY_DELAYS, UpdatePlan, activate_codex_release,
-        can_apply_update, codex_standalone_install, extract_latest_version, extract_version,
-        installed_version, muse_installer, opencode_release_package, provider, update_plan,
-        validate_codex_package, version_is_newer,
+        LatestSource, UpdatePlan, activate_codex_release, can_apply_update,
+        codex_standalone_install, extract_latest_version, extract_version, installed_version,
+        muse_installer, opencode_release_package, provider, update_plan, validate_codex_package,
+        version_at_least, version_is_newer,
     };
     use std::path::Path;
     use std::path::PathBuf;
@@ -2696,9 +2764,10 @@ mod tests {
     use async_trait::async_trait;
     use futures::StreamExt as _;
     use zuse_protocol::{
-        AgentEvent, HarnessId, HarnessUpdateFailureCode, HarnessUpdatePhase, HarnessUpdateStep,
-        Model, ReasoningLevel, RunRequest, SteeringMode,
+        AgentEvent, HarnessId, HarnessUpdatePhase, Model, ReasoningLevel, RunRequest, SteeringMode,
     };
+    #[cfg(unix)]
+    use zuse_protocol::{HarnessUpdateFailureCode, HarnessUpdateStep};
     use zuse_providers::{Harness, HarnessError, RunControls};
 
     use crate::registry::HarnessRegistry;
@@ -3089,6 +3158,7 @@ esac
 
     /// A fake Hermes whose `update --yes` fails like a held git lock until
     /// it has been called `fail_times` times.
+    #[cfg(unix)]
     fn busy_hermes(dir: &Path, fail_times: u32) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
         let executable = dir.join("hermes");
@@ -3122,12 +3192,34 @@ esac
         executable
     }
 
+    #[cfg(unix)]
     fn attempts(dir: &Path) -> usize {
         std::fs::read_to_string(dir.join("attempts"))
             .map(|text| text.lines().count())
             .unwrap_or(0)
     }
 
+    /// Waits until an install is queued behind another process's agent lock.
+    #[cfg(unix)]
+    async fn wait_for_the_other_process(
+        coordinator: &super::HarnessUpdateCoordinator,
+        harness: HarnessId,
+    ) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !coordinator
+                .status(harness)
+                .progress
+                .and_then(|progress| progress.message)
+                .is_some_and(|message| message.contains("another Zuse process"))
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("install waits for the other process");
+    }
+
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_busy_install_is_retried_quietly_before_anyone_sees_a_failure() {
         let temp = tempfile::tempdir().unwrap();
@@ -3146,6 +3238,7 @@ esac
         coordinator.shutdown().await;
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_lasting_failure_shows_a_plain_summary_and_keeps_the_raw_output() {
         let temp = tempfile::tempdir().unwrap();
@@ -3172,6 +3265,7 @@ esac
         coordinator.shutdown().await;
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn another_zuse_process_holding_the_agent_pauses_checks_and_installs() {
         let temp = tempfile::tempdir().unwrap();
@@ -3209,21 +3303,7 @@ esac
             let coordinator = coordinator.clone();
             async move { coordinator.apply(HarnessId::Hermes).await }
         });
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let status = coordinator.status(HarnessId::Hermes);
-                if status
-                    .progress
-                    .and_then(|progress| progress.message)
-                    .is_some_and(|message| message.contains("another Zuse process"))
-                {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("install waits for the other process");
+        wait_for_the_other_process(&coordinator, HarnessId::Hermes).await;
         assert_eq!(attempts(temp.path()), 0);
 
         drop(held);
@@ -3234,6 +3314,65 @@ esac
             HarnessUpdatePhase::Updated
         );
         coordinator.shutdown().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_install_that_waited_keeps_what_the_other_process_installed() {
+        // The fixture's updater installs 2.0.0, the target its check found.
+        for installed_meanwhile in ["2.0.0", "2.1.0"] {
+            let (temp, coordinator) = automatic_fixture();
+            coordinator.check_one(HarnessId::Grok).await.unwrap();
+            assert_eq!(
+                coordinator.status(HarnessId::Grok).phase,
+                HarnessUpdatePhase::Available
+            );
+            let path = AgentUpdateLock::path(&coordinator.inner.update_lock_dir, HarnessId::Grok);
+            let held = AgentUpdateLock::try_acquire(&path).unwrap().unwrap();
+            let installing = tokio::spawn({
+                let coordinator = coordinator.clone();
+                async move { coordinator.apply(HarnessId::Grok).await }
+            });
+            wait_for_the_other_process(&coordinator, HarnessId::Grok).await;
+            // The other process installs this release, or a newer one.
+            std::fs::write(
+                temp.path().join("version"),
+                format!("{installed_meanwhile}\n"),
+            )
+            .unwrap();
+            drop(held);
+
+            assert_eq!(installing.await.unwrap().unwrap(), installed_meanwhile);
+            let status = coordinator.status(HarnessId::Grok);
+            assert_eq!(
+                status.phase,
+                HarnessUpdatePhase::Current,
+                "{installed_meanwhile}"
+            );
+            assert_eq!(
+                status.installed_version.as_deref(),
+                Some(installed_meanwhile)
+            );
+            assert!(status.error.is_none() && status.progress.is_none());
+            assert_eq!(
+                std::fs::read_to_string(temp.path().join("version")).unwrap(),
+                format!("{installed_meanwhile}\n"),
+                "never downgraded"
+            );
+            assert!(!coordinator.inner.registry.update_pending(HarnessId::Grok));
+            coordinator.shutdown().await;
+        }
+    }
+
+    #[test]
+    fn only_comparable_versions_count_as_already_installed() {
+        assert!(version_at_least("2.0.0", "2.0.0"));
+        assert!(version_at_least("2.1.0", "2.0.0"));
+        assert!(version_at_least("v2.0", "2.0.0"));
+        assert!(!version_at_least("1.9.9", "2.0.0"));
+        // Formats it can't compare never skip an install.
+        assert!(!version_at_least("0.20.0", "3 commits behind"));
+        assert!(!version_at_least("nightly", "2.0.0"));
     }
 
     #[test]
@@ -3952,7 +4091,11 @@ esac
             let coordinator = coordinator.clone();
             async move { coordinator.apply(HarnessId::ClaudeCode).await }
         });
-        tokio::time::timeout(Duration::from_secs(1), async {
+        // Both bounds are normally well under a second and only prove progress:
+        // process launches (reading the installed version, then the update)
+        // can stall for seconds right after a build while the OS scans the
+        // new binaries.
+        tokio::time::timeout(Duration::from_secs(10), async {
             while coordinator.status(HarnessId::ClaudeCode).phase != HarnessUpdatePhase::Installing
             {
                 tokio::task::yield_now().await;
@@ -3962,9 +4105,6 @@ esac
         .unwrap();
         apply.abort();
 
-        // Normally well under a second. The bound only proves the install
-        // finishes; process launches can stall for seconds right after a
-        // build while the OS scans the new binaries.
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 let status = coordinator.status(HarnessId::ClaudeCode);
