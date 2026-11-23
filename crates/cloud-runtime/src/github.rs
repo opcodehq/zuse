@@ -1,6 +1,7 @@
 //! Task-local GitHub credential broker. Only short-lived repository-scoped tokens
 //! leave the authority. Tokens live in memory, never Git URLs/config/argv or disks.
 mod cli;
+mod fork;
 pub use cli::{managed_cli_receipt, managed_cli_version, run_cli, run_profile};
 
 use crate::{Authority, now_ms};
@@ -180,6 +181,7 @@ struct Broker {
     bootstrap: watch::Receiver<CloudRuntimeBootstrap>,
     repository: String,
     cached: Mutex<Option<Arc<Credential>>>,
+    forks: fork::ForkPolicy,
     #[cfg(feature = "engine")]
     secret_filter: std::sync::OnceLock<Arc<zuse_providers::credentials::redaction::Secrets>>,
 }
@@ -217,18 +219,35 @@ impl Broker {
     }
     async fn respond(&self, input: &[u8], operation: &str) -> Result<Zeroizing<Vec<u8>>> {
         let fields = parse_input(input)?;
+        let path = fields
+            .get("path")
+            .map(|path| path.strip_suffix(".git").unwrap_or(path));
         ensure!(
             fields.get("protocol").map(String::as_str) == Some("https")
                 && fields.get("host").map(String::as_str) == Some("github.com")
-                && fields.get("path").is_some_and(|path| path
-                    .strip_suffix(".git")
-                    .unwrap_or(path)
-                    .eq_ignore_ascii_case(&self.repository)),
+                && path.is_some_and(valid_repository),
             "github_credential_scope_mismatch"
         );
+        // Anything but the pinned repository can only be the fork behind one of
+        // its pull requests; see `fork`.
+        let fork = path.filter(|path| !path.eq_ignore_ascii_case(&self.repository));
         match operation {
             "get" => {
                 let credential = self.credential().await?;
+                if let Some(fork) = fork {
+                    let reason = match self
+                        .forks
+                        .allows(&self.repository, fork, &credential.token)
+                        .await
+                    {
+                        Ok(true) => None,
+                        Ok(false) => Some(fork::Refusal::NotEditable),
+                        Err(_) => Some(fork::Refusal::Unavailable),
+                    };
+                    if let Some(reason) = reason {
+                        return Ok(fork::refusal(&self.repository, fork, reason));
+                    }
+                }
                 ensure!(
                     fields
                         .get("username")
@@ -307,6 +326,7 @@ impl GithubAuth {
             bootstrap,
             repository: repository.into(),
             cached: Mutex::new(None),
+            forks: fork::ForkPolicy::new()?,
             #[cfg(feature = "engine")]
             secret_filter: std::sync::OnceLock::new(),
         });
@@ -463,6 +483,10 @@ pub fn run_helper_cli(socket: &Path, operation: &str) -> Result<()> {
         .build()?
         .block_on(helper(socket, operation, &input))
         .map_err(|_| anyhow::anyhow!("github_credential_unavailable"))?;
+    let (result, message) = fork::split_message(&result);
+    if let Some(message) = message {
+        eprintln!("{message}");
+    }
     std::io::stdout().lock().write_all(&result)?;
     Ok(())
 }
@@ -637,6 +661,8 @@ mod tests {
             bootstrap: updates,
             repository: "team/project".into(),
             cached: Mutex::new(Some(credential)),
+            // Nothing listens here: a fork lookup fails closed.
+            forks: fork::ForkPolicy::with_api("http://127.0.0.1:9/".parse().unwrap()).unwrap(),
             #[cfg(feature = "engine")]
             secret_filter: std::sync::OnceLock::new(),
         };
@@ -654,11 +680,52 @@ mod tests {
         for input in [
             b"protocol=https\nhost=evil.example\npath=team/project.git\n\n".as_slice(),
             b"protocol=http\nhost=github.com\npath=team/project.git\n\n",
-            b"protocol=https\nhost=github.com\npath=team/other.git\n\n",
+            b"protocol=https\nhost=github.com\npath=team/../project.git\n\n",
             b"protocol=https\nhost=github.com\n\n",
         ] {
             assert!(broker.respond(input, "get").await.is_err());
         }
+        // Another repository is treated as a possible fork; an unconfirmed one
+        // gets a refusal that stops git, never the token.
+        let refused = broker
+            .respond(
+                b"protocol=https\nhost=github.com\npath=team/other.git\n\n",
+                "get",
+            )
+            .await
+            .unwrap();
+        let text = std::str::from_utf8(&refused).unwrap();
+        assert!(text.starts_with("quit=1\n"));
+        assert!(!text.contains("scoped-token"));
+        // The fork behind an editable pull request gets the same scoped token;
+        // GitHub only accepts the push on that pull request's head branch.
+        let (forks, _) = fork::tests::serve(vec![vec![
+            fork::tests::pull("contributor/project", true, true),
+            fork::tests::pull("locked/project", true, false),
+        ]])
+        .await;
+        let broker = Broker { forks, ..broker };
+        let granted = broker
+            .respond(
+                b"protocol=https\nhost=github.com\npath=contributor/project.git\n\n",
+                "get",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            granted.as_slice(),
+            b"username=actor\npassword=scoped-token\n\n"
+        );
+        let locked = broker
+            .respond(
+                b"protocol=https\nhost=github.com\npath=locked/project.git\n\n",
+                "get",
+            )
+            .await
+            .unwrap();
+        let text = std::str::from_utf8(&locked).unwrap();
+        assert!(text.starts_with("quit=1\n") && text.contains("allows edits by maintainers"));
+        assert!(!text.contains("scoped-token"));
         broker.respond(b"protocol=https\nhost=github.com\npath=team/project.git\npassword=DO-NOT-STORE\n\n","store").await.unwrap();
         broker
             .respond(
