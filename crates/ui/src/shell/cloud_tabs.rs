@@ -672,11 +672,7 @@ impl Shell {
                     .p(px(5.))
                     .rounded(px(7.))
                     .hover(|d| d.bg(theme.muted_fill().opacity(0.6)))
-                    .child(
-                        icon(icons::PLUS)
-                            .size(px(14.))
-                            .text_color(theme.text_muted),
-                    )
+                    .child(icon(icons::PLUS).size(px(14.)).text_color(theme.text_muted))
                     .on_click(cx.listener(|this, _, _, cx| this.open_new_conversation_tab(cx))),
             )
             .children(main_chips);
