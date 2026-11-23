@@ -9,8 +9,8 @@ import { createSignal, For, Show } from "solid-js";
 import { logoUrl } from "./plugins/catalog";
 
 export function Logo(props: { domain: string; name: string; size: number; radius?: number }) {
-  const [failed, setFailed] = createSignal(false);
-  const url = () => (failed() ? null : logoUrl(props.domain));
+  const [failed, setFailed] = createSignal<string | null>(null);
+  const url = () => (failed() === props.domain ? null : logoUrl(props.domain));
   return (
     <span
       class="pc-logo"
@@ -18,7 +18,7 @@ export function Logo(props: { domain: string; name: string; size: number; radius
       style={{ width: `${props.size}px`, height: `${props.size}px`, "border-radius": `${props.radius ?? 10}px` }}
     >
       <Show when={url()} fallback={<span>{(props.name.trim()[0] ?? "?").toUpperCase()}</span>}>
-        {(src) => <img src={src()} alt="" loading="lazy" decoding="async" onError={() => setFailed(true)} />}
+        {(src) => <img src={src()} alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onError={() => setFailed(props.domain)} />}
       </Show>
     </span>
   );

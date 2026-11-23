@@ -87,7 +87,35 @@ pub fn tile(
 }
 
 pub fn logo(domain: &str, name: &str, extent: f32, background: Hsla, muted: Hsla) -> Div {
+    let domain = domain.trim().to_ascii_lowercase();
     let path = format!("plugin-icons/{domain}");
+    let initial = name
+        .chars()
+        .next()
+        .unwrap_or('?')
+        .to_uppercase()
+        .to_string();
+    let fallback = move || div().child(initial.clone()).into_any_element();
+    let source = if zuse_icons::load_plugin_icon(&path).is_some() {
+        Some(path)
+    } else if domain.contains('.')
+        && domain
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+    {
+        // GPUI fetches and caches remote images when their elements are rendered.
+        Some(format!("https://www.google.com/s2/favicons?domain={domain}&sz=128"))
+    } else {
+        None
+    };
+    let image = source.map(|source| {
+        img(source)
+            .size_full()
+            .rounded(px(10.))
+            .with_loading(fallback.clone())
+            .with_fallback(fallback.clone())
+            .into_any_element()
+    });
     div()
         .size(px(extent))
         .flex_none()
@@ -99,22 +127,7 @@ pub fn logo(domain: &str, name: &str, extent: f32, background: Hsla, muted: Hsla
         .justify_center()
         .text_size(px(14.))
         .text_color(muted)
-        .child(if zuse_icons::load_plugin_icon(&path).is_some() {
-            img(SharedString::from(path))
-                .size_full()
-                .rounded(px(10.))
-                .into_any_element()
-        } else {
-            div()
-                .child(
-                    name.chars()
-                        .next()
-                        .unwrap_or('?')
-                        .to_uppercase()
-                        .to_string(),
-                )
-                .into_any_element()
-        })
+        .child(image.unwrap_or_else(fallback))
 }
 
 /// Choose an unused connection label, retaining disabled accounts in the check.

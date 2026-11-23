@@ -1,5 +1,6 @@
 // Plugin discovery rules shared with desktop (crates/viewport/src/plugin_catalog.rs).
 import bundled from "@repo/crates/protocol/src/plugin-catalog.json?raw";
+import { createLogoResolver } from "./logos";
 import iconTable from "@repo/crates/icons/src/plugins.rs?raw";
 
 export interface PluginDefinition {
@@ -123,10 +124,4 @@ export function subtitle(item: PluginDefinition) {
 
 // Brand tiles are the desktop's bundled images, keyed by domain in crates/icons/src/plugins.rs.
 const images = import.meta.glob("../../../../../../crates/icons/assets/plugins/*", { query: "?url", import: "default", eager: true }) as Record<string, string>;
-const byFile = new Map(Object.entries(images).map(([path, url]) => [path.slice(path.lastIndexOf("/") + 1), url]));
-const logos = new Map<string, string>();
-for (const match of iconTable.matchAll(/"plugin-icons\/([^"]+)"\s*=>\s*Some\(include_bytes!\("\.\.\/assets\/plugins\/([^"]+)"\)\)/g)) {
-  const url = byFile.get(match[2]!);
-  if (url) logos.set(match[1]!, url);
-}
-export const logoUrl = (domain: string) => logos.get(domain) ?? null;
+export const logoUrl = createLogoResolver(iconTable, images);
