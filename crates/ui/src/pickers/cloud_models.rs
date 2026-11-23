@@ -13,6 +13,32 @@ pub(super) fn preparation_catalog_error(error: &zuse_rpc::RpcError) -> bool {
                 || message.starts_with("Cloud couldn't do this right now ("))
 }
 
+/// A managed-base Codex catalogue for tests: a six-level ladder and a
+/// two-tier service option that reads as fast mode.
+#[cfg(test)]
+pub(crate) fn configurable_cloud_context_for_test() -> Value {
+    use serde_json::json;
+    let model = json!({"id":"gpt-sol","label":"GPT Sol","reasoningLevels":["low","medium","high","xhigh","max","ultra"],"options":[{"id":"serviceTier","label":"Service Tier","choices":[{"id":"default","label":"Standard"},{"id":"fast","label":"Fast"}],"defaultChoice":"default"}]});
+    let catalog = json!({"providers":[{"id":"codex","name":"Codex","defaultModel":"gpt-sol","models":[model]}]});
+    json!({"accountId":"fixture-user","ownerId":"fixture-user","organizationId":null,"commandAdmissionVersion":2,"computerCapabilities":{"providers":[{"id":"boxd","configured":true,"managedBaseReady":true,"commandAdmissionVersion":2,"preservesDisk":true,"preservesMemory":true,"supportsSnapshots":true,"supportsDocker":false,"sizes":[{"id":"default","label":"Standard","vcpus":4,"memoryMib":16384,"diskGib":32}],"unavailableReason":null}]},"providerAgentCatalogs":{"boxd":catalog},"agentConnections":[{"agent":"codex","state":"connected","connectionId":"codex-selected"}]})
+}
+
+#[cfg(test)]
+impl Pickers {
+    /// Set a model's reasoning stop and fast mode through its detail card.
+    pub(crate) fn set_card_settings_for_test(
+        &mut self,
+        harness: HarnessId,
+        model: &str,
+        effort: usize,
+        fast: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_detail_effort(harness, model, effort, cx);
+        self.set_detail_fast(harness, model, fast, cx);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -52,6 +78,48 @@ mod tests {
             assert!(notice.contains("cloud_access_denied"));assert!(retry);assert!(!pickers.cloud.model_waiting);
             assert_eq!(pickers.resolved(cx).model,choice.model);
         });
+    }
+
+    #[gpui::test]
+    fn cloud_catalog_card_offers_the_models_reasoning_and_fast_mode(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            cx.set_global(Theme::dark());
+            crate::settings::init(crate::settings::UiSettings::default(), dir.path(), cx);
+        });
+        let handle = cx.add_window(|_, cx| {
+            let state = cx.new(|_| {
+                let mut state = AppState::new();
+                state.apply_cloud_account(json!({"user":{"id":"fixture-user"},"orgId":null}));
+                state
+            });
+            Pickers::new(state, cx)
+        });
+        handle
+            .update(cx, |picker, window, cx| {
+                let project = json!({"projectId":"repository","accountId":"fixture-user","providerId":"boxd","defaultBranch":"main","supportsModelConfiguration":true});
+                picker.seed_cloud_creation_for_test(
+                    configurable_cloud_context_for_test(),
+                    project,
+                    cx,
+                );
+                assert!(picker.cloud_models_active(cx));
+                picker.open_model_menu(window, cx);
+                let detail = picker.model_detail(cx).expect("card for the cloud model");
+                assert_eq!(detail.row.model.id, "gpt-sol");
+                let effort = detail.effort.expect("reasoning slider");
+                assert_eq!(effort.labels.len(), 6, "{:?}", effort.labels);
+                assert_eq!(detail.fast, Some(false), "fast mode toggle");
+
+                picker.set_card_settings_for_test(HarnessId::Codex, "gpt-sol", 3, true, cx);
+                let resolved = picker.resolved(cx);
+                assert_eq!(resolved.reasoning, Some(ReasoningLevel::XHigh));
+                assert_eq!(resolved.model_options["serviceTier"], "fast");
+                let detail = picker.model_detail(cx).unwrap();
+                assert_eq!(detail.fast, Some(true));
+                assert_eq!(detail.effort.unwrap().selected, 3);
+            })
+            .unwrap();
     }
 
     #[test]
