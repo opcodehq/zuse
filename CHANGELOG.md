@@ -7,6 +7,25 @@
 - Add opt-in Slack cloud tasks with threaded status/results, sender/channel attribution, and a workspace/repository connection flow in Cloud settings. Server credentials stay encrypted; enablement requires the Slack migration and a rebuilt compatible runtime image.
 - Link a chat or a Zapper to a Slack channel from its right-click menu. Finished replies post into a Slack thread, your replies in that thread come back to the chat, and Zappers post under their own name and avatar. Their worker threads get their own threads in the same channel. Requires the new Slack migration and re-authorizing the Slack app for its added scopes.
 
+## 0.27.7 - 2026-11-23
+
+### Added
+
+- The plus button in a cloud chat opens a new conversation on the same cloud computer, sharing its folder, branch and files. The tab opens instantly; a sleeping computer wakes on the first message. The history button reopens the computer's other conversations.
+- Sign up and start cloud chats entirely in the browser, with the web workspace closer to the desktop app.
+
+### Changed
+
+- Cleaner model picker: a provider rail with search, one-line rows, and a compact card with a rounded reasoning slider, icon toggles for fast mode, favorite and default, and a 200K | 1M switch shown only for models that support it.
+
+### Fixed
+
+- File and image links in cloud chats open from the cloud computer: images in the image viewer, other files in the file preview, with a short notice when the file is missing or the computer is offline.
+- Files opened from a cloud chat appear as a tab beside the chat instead of replacing it.
+- The sidebar keeps showing working and finished status for chats in the background, not just the open one.
+- Missing plugin logos load on demand.
+- Agent update failures explain what happened in one sentence; busy and offline installs retry quietly first.
+
 ## 0.27.6 - 2026-11-22
 
 ### Added

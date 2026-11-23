@@ -62,8 +62,8 @@ launcher, it keeps that command's old interface.
   set -e
   installer=$(mktemp)
   trap 'rm -f "$installer"' EXIT
-  curl -fsSL https://github.com/opcodehq/zuse/releases/download/v0.27.6/install.sh -o "$installer"
-  sh "$installer" --version 0.27.6
+  curl -fsSL https://github.com/opcodehq/zuse/releases/download/v0.27.7/install.sh -o "$installer"
+  sh "$installer" --version 0.27.7
 )
 ```
 
