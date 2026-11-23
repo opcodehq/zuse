@@ -8,13 +8,13 @@ import { Entry } from "@/features/transcript/Entry";
 import { agentStatus, callOf, isSubagentSpawn, type ToolPart } from "@/features/transcript/model";
 import { Icon } from "@/ui/Icon";
 import { createEffect, createSignal, createStore, For, Show, untrack } from "solid-js";
-import { selectedSubagent, setSelectedSubagent } from "./agents";
+import { openSubagent, selectedSubagent, setSelectedSubagent } from "./agents";
 import "@/features/transcript/transcript.css";
 
-export function Agents(props: { chatId: string; active: boolean }) {
+export function Agents(props: { chatId: string; active: boolean; docId?: string }) {
   const agents = () => (state.transcript?.chatId === props.chatId ? state.transcript.messages : []).flatMap(entry =>
     entry.parts.filter((part): part is ToolPart => part.kind === "tool" && isSubagentSpawn(callOf(part)) && !!part.subagentRef));
-  const selected = () => selectedSubagent()?.chatId === props.chatId ? selectedSubagent()!.docId : null;
+  const selected = () => props.docId ?? (selectedSubagent()?.chatId === props.chatId ? selectedSubagent()!.docId : null);
   const [history, setHistory] = createStore<{ messages: SessionMessageEntry[] }>({ messages: [] });
   const [error, setError] = createSignal<string | null>(null);
   const [ready, setReady] = createSignal(false);
@@ -59,7 +59,7 @@ export function Agents(props: { chatId: string; active: boolean }) {
     <div class="ws-agents">
       <nav class="ws-agent-list" aria-label="Subagents">
         <Show when={agents().length} fallback={<p class="ws-muted">Delegated agents appear here when your agent starts them.</p>}>
-          <For each={agents()}>{part => <button type="button" class="ws-agent-row" aria-pressed={selected() === part.subagentRef ? "true" : "false"} onClick={() => setSelectedSubagent({ chatId: props.chatId, docId: part.subagentRef! })}>
+          <For each={agents()}>{part => <button type="button" class="ws-agent-row" aria-pressed={selected() === part.subagentRef ? "true" : "false"} onClick={() => props.docId ? openSubagent(props.chatId,part.subagentRef!) : setSelectedSubagent({ chatId: props.chatId, docId: part.subagentRef! })}>
             <Icon name="tool-agent" size={14} />
             <span class="ws-agent-name">{(() => { const call = callOf(part); return call.kind === "unknown" ? call.name.replace(/^Agent: ?/, "") : "Agent"; })()}</span>
             <span class="ws-agent-state" data-status={agentStatus(part)}><span />{agentStatus(part) === "running" ? "Working" : agentStatus(part) === "done" ? "Complete" : "Failed"}</span>

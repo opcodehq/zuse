@@ -718,3 +718,47 @@
   .zp-page[data-inspector="true"] .zp-inspector-body { overflow: auto; }
   .zp-page:not([data-inspector]) > .zp-conversation { flex: 1; min-height: 0; }
 }
+
+/* Current desktop ZapperPanelTabs: fixed sections, then editor-like pages. */
+.zp-inspector { position: relative; }
+.zp-inspector-header { position: absolute; right: 10px; top: 5px; padding: 0; gap: 2px; height: 28px; z-index: 2; }
+.zp-tabs { min-height: 38px; align-items: center; padding: 4px 70px 4px 10px; overflow-x: auto; }
+.zp-page-tab { display: flex; align-items: center; flex: none; height: 28px; border-radius: 6px; color: var(--text-muted); }
+.zp-page-tab[data-active] { background: var(--wash); color: var(--text); }
+.zp-tabs .zp-page-tab-title { max-width: 150px; overflow: hidden; text-overflow: ellipsis; padding: 0 6px; color: inherit; }
+.zp-tabs .zp-page-tab-close { width: 22px; padding: 0; justify-content: center; color: var(--text-faint); }
+.zp-page-surface[hidden] { display: none; }
+.zp-issue-page-title { margin: 12px 0 20px; }
+.zp-issue-page-title > span { font-size: 11px; color: var(--text-muted); }
+.zp-issue-page-title h2 { margin: 8px 0 0; font-size: 18px; line-height: 25px; font-weight: 500; overflow-wrap: anywhere; }
+.zp-document-link { display: flex; gap: 8px; align-items: center; background: transparent; border: 0; color: var(--text); padding: 0; text-align: left; font-size: 12px; cursor: pointer; }
+.zp-thread-placeholder { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center; color: var(--text-muted); gap: 12px; }
+.zp-thread-placeholder h2 { font-size: 18px; color: var(--text); font-weight: 500; margin: 0; }
+.zp-thread-placeholder p { max-width: 420px; font-size: 13px; margin: 0; line-height: 20px; }
+.zp-thread-placeholder > span { font-size: 12px; color: var(--text-faint); }
+.zp-queued-badge { font-size: 9px; color: var(--text-faint); }
+.zp-finished-toggle { display: flex; gap: 8px; align-items: center; padding: 14px 0 8px; border: 0; background: transparent; color: var(--text-muted); font-size: 12px; cursor: pointer; }
+.zp-avatar-image { object-fit: cover; border-radius: 25%; }
+.zp-avatar-upload { display: flex; gap: 12px; align-items: center; }
+.zp-upload-button { position: relative; cursor: pointer; padding: 8px 10px; border-radius: 7px; background: var(--card); color: var(--text); }
+.zp-upload-button > input { position: absolute; inset: 0; opacity: 0; width: 100%; cursor: pointer; }
+.zp-overview-hero { display: flex; align-items: center; gap: 12px; margin: 16px 0; }
+.zp-overview-hero > div { flex: 1; min-width: 0; }
+.zp-overview-hero h2 { font-size: 15px; font-weight: 500; margin: 0 0 5px; }
+.zp-overview-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); }
+.zp-overview-status i { width: 6px; height: 6px; border-radius: 50%; background: var(--text-faint); }
+.zp-overview-status[data-status="active"] i { background: var(--success); }
+.zp-overview-status[data-status="paused"] i { background: var(--warning); }
+.zp-needs-you { padding: 6px; border-radius: 10px; border: 1px solid color-mix(in srgb,var(--warning) 25%,transparent); background: color-mix(in srgb,var(--warning) 5%,transparent); }
+.zp-needs-you h3 { color: var(--warning); margin: 4px; font-size: 11px; }
+.zp-needs-you > button { display: flex; width: 100%; gap: 8px; align-items: center; border: 0; background: transparent; color: var(--text); padding: 9px 4px; text-align: left; cursor: pointer; border-radius: 6px; }
+.zp-needs-you > button:hover { background: var(--wash); }
+.zp-needs-you > button > div { flex: 1; min-width: 0; }
+.zp-needs-you strong { font-size: 12px; font-weight: 500; }
+.zp-needs-you div > span { display: block; font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+.zp-needs-you > button > span:last-child { font-size: 11px; color: var(--warning); }
+.zp-repository-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.zp-repository-chips > span { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 6px; font-size: 11px; color: var(--text-muted); background: var(--wash); }
+.zp-inspector-body[data-workspace] { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
+.zp-inspector-body[data-workspace] > .zp-page-surface:not([hidden]) { flex: 1; min-height: 0; height: 100%; }
+.zp-issue-actions { display: flex; align-items: center; gap: 8px; margin: 16px 0; }

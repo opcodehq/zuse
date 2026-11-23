@@ -21,6 +21,7 @@ export interface ZapperConfig {
   maxConcurrentWorkers: number;
   maxFollowups: number;
   avatar?: ZapperAvatar;
+  avatarImage?: string;
 }
 export type ZapperStatus = "active" | "paused" | "stopped" | "archived";
 export interface ZapperWorker {
@@ -29,6 +30,7 @@ export interface ZapperWorker {
   spaceId: string;
   objective: string;
   followups: number;
+  queuePosition?: number;
 }
 export interface ZapperDecision {
   id: string;

@@ -306,7 +306,7 @@ function SubagentHeader(props: { part: ToolPart; harness: string | undefined }) 
     return null;
   };
   return (
-    <button type="button" class="chip-head subagent" disabled={!props.part.subagentRef} onClick={() => { if (props.part.subagentRef && view.selectedChatId) openSubagent(view.selectedChatId, props.part.subagentRef); }}>
+    <button type="button" class="chip-head subagent" disabled={!props.part.subagentRef} onClick={() => { if (props.part.subagentRef && view.selectedChatId) openSubagent(view.selectedChatId, props.part.subagentRef, title()); }}>
       <span class="subagent-status" data-status={status()}>
         <Switch>
           <Match when={status() === "running"}><span class="subagent-live" role="img" aria-label="Subagent running" /></Match>

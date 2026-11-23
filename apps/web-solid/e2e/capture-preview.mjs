@@ -37,13 +37,22 @@ try {
  await page.waitFor("!document.querySelector('.cmp-models')");
  await page.eval('parity.zapper()');
  await page.waitFor("document.querySelectorAll('.zp-issue-row').length === 2 && !document.querySelector('.app-right')");
+ await page.click('.zp-tabs [aria-label="Overview"]');
+ await page.waitFor("!!document.querySelector('.zp-needs-you')");
+ await page.screenshot(`${out}/zapper-overview.png`);
+ await page.click('.zp-tabs [aria-label="Issues"]');
+ await page.waitFor("!!document.querySelector('[aria-label=\"Search Zapper issues\"]')");
  await page.screenshot(`${out}/zapper-issues.png`);
  await page.click('.zp-issue-row');
- await page.waitFor("document.querySelector('[role=dialog]')?.textContent.includes('Done when')");
+ await page.waitFor("document.querySelector('.zp-issue-page')?.textContent.includes('Done when')");
  await page.screenshot(`${out}/zapper-issue-detail.png`);
- await page.click('[aria-label="Close dialog"]');
+ await page.click('[aria-label="Close ZAP-12"]');
  await page.call('Emulation.setDeviceMetricsOverride',{width:720,height:900,deviceScaleFactor:1,mobile:false});
  await page.waitFor("getComputedStyle(document.querySelector('.zp-conversation')).display === 'none'");
  await page.screenshot(`${out}/zapper-narrow.png`);
+ await page.eval('parity.queued(); parity.openQueued()');
+ await page.click('[aria-label="Close Zapper inspector"]');
+ await page.waitFor("document.querySelector('.zp-thread-placeholder')?.textContent.includes('Queued · 2')");
+ await page.screenshot(`${out}/zapper-queued.png`);
  console.log(out);
 } finally { await page?.close(); await server.close(); }

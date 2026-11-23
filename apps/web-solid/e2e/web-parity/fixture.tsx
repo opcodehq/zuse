@@ -29,7 +29,7 @@ const sampleZapper: Zapper = {
  config:{name:"Web captain",purpose:"Keep the browser workspace consistent with desktop. Coordinate design, implementation, and review.",homeDeviceId:"remote",workerDeviceId:"remote",repositories:[{deviceId:"remote",spaceId:"project"}],coordinatorModel:{harness:"codex",model:"gpt-5.3-codex"},maxConcurrentWorkers:3,maxFollowups:2},
  workers:[{chatId:"worker",deviceId:"remote",spaceId:"project",objective:"Align the cloud model picker with desktop",followups:0}],decisions:[],
  issues:[
-  {id:"picker",number:12,createdAt:0,updatedAt:0,details:{title:"Match the desktop model picker",description:"Use the provider rail, search, and keyboard navigation from desktop.",status:"inProgress",priority:"high",assigned:true,owner:{type:"zapper"},dueDate:null,labels:["design","web"],relations:[],doneCriteria:"Models can be searched and selected with the keyboard.",outOfScope:"Provider authentication"},threads:["worker"],pullRequests:[],activity:[]},
+  {id:"picker",number:12,createdAt:0,updatedAt:0,details:{title:"Match the desktop model picker",description:"Use the provider rail, search, and keyboard navigation from desktop.",status:"inProgress",priority:"high",assigned:true,owner:{type:"zapper"},dueDate:null,labels:["design","web"],relations:[],doneCriteria:"Models can be searched and selected with the keyboard.",outOfScope:"Provider authentication"},threads:["worker"],pullRequests:[{url:"https://github.com/opcodehq/zuse/pull/325",title:"Web parity"}],activity:[]},
   {id:"review",number:13,createdAt:0,updatedAt:0,details:{title:"Review the new workspace layout",description:"Check the inspector at narrow widths.",status:"needsYou",priority:"normal",assigned:false,dueDate:null,labels:["review"],relations:[]},threads:[],pullRequests:[],activity:[]},
   {id:"done",number:11,createdAt:0,updatedAt:0,details:{title:"Use shared desktop icons",description:"",status:"done",priority:"low",assigned:false,dueDate:null,labels:[],relations:[]},threads:[],pullRequests:[],activity:[]},
  ]
@@ -41,10 +41,12 @@ const message = { id: "reply", role: "assistant", deviceId: "remote", createdAt:
 Object.assign(rpc, {
   call: async (method: string, params: unknown) => {
     requests.push({ method, params });
-    if (method === "ZotFiles" || method === "ZotEvents") return [];
+    if (method === "ZotEvents") return [];
+    if (method === "ZotFiles") return [{path:"INSTRUCTIONS.md",version:1,content:"Generated instructions"},{path:"notes/plan.md",version:1,content:"# First version"},{path:"notes/plan.md",version:2,content:"# Current plan\n\nShip the desktop-aligned Zapper panel."}];
     if (method === "ZotCommand") {
       const request = params as {action:{type:string;issueId:string;details:Zapper["issues"][number]["details"]}};
       const next = structuredClone(sampleZapper);
+      if (request.action.type === "configure") next.config = (request.action as unknown as {config:Zapper["config"]}).config;
       if (request.action.type === "editIssue") next.issues = next.issues.map(issue => issue.id === request.action.issueId ? {...issue,details:request.action.details} : issue);
       next.revision++;
       Object.assign(sampleZapper,next);
@@ -103,8 +105,14 @@ function Fixture() {
       setHostedBrowser(false); setMode("app");
       setState(draft => { draft.zappers = [structuredClone(sampleZapper)]; draft.zappersReady = true; draft.zappersSupported = true; draft.chats.worker = {...draft.chats.parent!,id:"worker",title:"Align cloud model picker"}; });
       setView(draft => { draft.route = {kind:"zappers",zapperId:"captain"}; draft.selectedChatId="parent"; draft.rightPanel=null; });
-      setInspectorOpen(true); setTab("issues"); flush();
+      setInspectorOpen(true); flush(); setTab("issues"); flush();
     },
+    queued: () => { setState(draft=>{draft.zappers[0]!.workers[0]!.queuePosition=2;draft.zappers[0]!.issues[0]!.details.owner={type:"thread",chatId:"worker"};delete draft.chats.worker;}); flush(); },
+    startQueued: () => {setState(draft=>{delete draft.zappers[0]!.workers[0]!.queuePosition;draft.chats.worker={...draft.chats.parent!,id:"worker",title:"Ready worker"};});flush();},
+    openQueued: () => {setView(draft=>{draft.selectedChatId="worker";draft.route={kind:"zappers",zapperId:"captain"};});flush();},
+    openAgentPage: () => {openSubagent("parent","parent--sub--worker");flush();},
+    reviewChanges: () => {setView(draft=>{draft.rightPanel="changes";});flush();},
+    configureZapper: () => {setView(draft=>{draft.route={kind:"newZapper",zapperId:"captain"};});flush();},
     panels: () => { setView(draft => { draft.rightPanel="files"; }); flush(); },
     newChatPicker: () => { setView(draft => { draft.selectedChatId=null; draft.route={kind:"chat"}; draft.draftProjectPath="/workspace/zuse"; draft.rightPanel=null; }); flush(); },
     pickerState: () => ({ draft: catalog.draft, defaults: defaults(), explicit: view.preferences.defaultModel }),

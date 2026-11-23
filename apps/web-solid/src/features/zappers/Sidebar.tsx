@@ -1,3 +1,4 @@
+import { workerRank, workerStatus } from "./threads-model";
 import { createMemo, For, Show } from "solid-js";
 import { state } from "@/core/store";
 import { navigate, openChat, setView, view } from "@/core/view";
@@ -54,8 +55,8 @@ export function ZapperSidebar() {
               zapper.decisions.filter((d) => d.answer === null).length;
             const workers = createMemo(() =>
               zapper.workers.filter(
-                (w) => workerVisible(w.chatId) && threadActive(w.chatId),
-              ),
+                (w) => workerVisible(w.chatId) && (w.queuePosition !== undefined || threadActive(w.chatId)),
+              ).sort((a,b)=>workerRank(a)-workerRank(b)||(a.queuePosition ?? 0)-(b.queuePosition ?? 0)||a.chatId.localeCompare(b.chatId)),
             );
             return (
               <div class="zp-sidebar-group" data-zapper-id={zapper.id}>
@@ -69,7 +70,7 @@ export function ZapperSidebar() {
                     aria-label={`Open Zapper ${zapper.config.name}`}
                     onClick={() => openZapper(zapper)}
                   >
-                    <Avatar avatar={avatarOf(zapper)} size={17} />
+                    <Avatar avatar={avatarOf(zapper)} image={zapper.config.avatarImage} size={17} />
                     <span>{zapper.config.name}</span>
                     <Show when={waiting()}>
                       <span class="zp-badge" title="Decisions waiting for you">
@@ -124,11 +125,12 @@ export function ZapperSidebar() {
                             ? "true"
                             : undefined
                         }
+                        title={workerStatus(worker)}
                         onClick={() => openChat(worker.chatId)}
                       >
                         <Icon
                           name={
-                            state.sessions[worker.chatId]?.status === "working"
+                            worker.queuePosition !== undefined || state.sessions[worker.chatId]?.status === "working"
                               ? "clock-circle"
                               : "git-branch"
                           }
@@ -136,7 +138,7 @@ export function ZapperSidebar() {
                         />
                         <span class="zp-sidebar-worker-label">
                           {threadTitle(worker.chatId, worker.objective)}
-                        </span>
+                        </span><Show when={worker.queuePosition !== undefined}><small class="zp-queued-badge">Queued</small></Show>
                       </button>
                       <button
                         type="button"

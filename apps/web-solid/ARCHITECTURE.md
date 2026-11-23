@@ -87,7 +87,7 @@ Kobalte is pinned to `2.0.0-alpha.4`, its published Solid 2 line. Its peer range
 
 `WatchZappers` is a standing connection watch. `core/zappers.ts` determines ownership, including previous coordinators and thread descendants. Owned threads are excluded from ordinary sidebar and search results; `openChat` routes them into the Zapper conversation and inspector. The regular list waits for the first ownership snapshot to avoid briefly leaking Zapper threads. Released workers return to their projects; archived workers remain accessible from the archive.
 
-The inspector mirrors desktop Overview, Issues, Threads, Drive and History. Commands carry an expected revision and stable command ID. A lost response preserves the exact command for an explicit idempotent retry. Delegated chat IDs derive from that command ID. Document edits/restores carry an expected file version. Display attribution parses the engine envelope without modifying the stored or submitted prompt. Pixel mascots are generated from the shared Rust presentation definitions using `scripts/gen-zapper-mascots.py`.
+The inspector mirrors desktop Overview, Issues, Threads and Drive, with History and detail surfaces in closable tabs. Commands carry an expected revision and stable command ID. A lost response preserves the exact command for an explicit idempotent retry. Delegated chat IDs derive from that command ID. Document edits/restores carry an expected file version. Display attribution parses the engine envelope without modifying the stored or submitted prompt. Pixel mascots are generated from the shared Rust presentation definitions using `scripts/gen-zapper-mascots.py`.
 
 Run `node e2e/zappers.mjs` for browser checks against a disposable engine and a scripted agent (creation, ownership, adoption, delegation, decisions, issues/comments, document versions/restores, reload and release).
 
@@ -146,7 +146,7 @@ app shell. Set `ZUSE_PREVIEW_OUT` to choose the output directory.
 
 Zapper forms use execution-device model catalogs through `zappers/Controls.tsx`;
 worker/coordinator models are selected from the same provider menu as Cloud.
-Issue editing swaps the contents of one dialog rather than nesting dialogs.
+Issues open in closable panel pages; editing stays in the page and retains drafts across tab switches.
 `bun run e2e:zapper-polish` checks issue edit/save, completion criteria, Escape
 and close controls, search/reset, switching back from workspace panels, nested
 model-picker focus, and narrow-screen inspector navigation. All use fixture data
@@ -157,3 +157,15 @@ narrow inspector.
 absence of unsupported context controls, offered 1M context, reasoning keyboard
 controls, favorites and explicit default selection/clearing. Default model
 selection is shared with Settings and independent of the current chat's model.
+
+The current Zapper inspector mirrors `presentation::ZapperPanelTabs`: Overview,
+Issues, Threads and a conditional Drive section, followed by closable issue,
+document, History, subagent, PR and diff pages. History opens from the overflow
+menu. Each Zapper keeps its own navigation trail; open issue/document pages stay
+mounted across tab switches to retain drafts. Linked PRs reuse the workspace
+review surface with an explicit URL. Queued workers read `queuePosition` before
+session status, and show a placeholder until their conversation exists.
+Issue ownership (you, Zapper or a thread), parent issue, completion criteria,
+scope notes, questions and closing outcomes use the current protocol fields.
+Custom pictures accept PNG/JPEG only, are center-cropped to 128px, and respect
+the protocol's 96KiB data-URL cap, falling back to the saved mascot.

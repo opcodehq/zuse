@@ -1,4 +1,4 @@
-import { createMemo, For } from "solid-js";
+import { createMemo, createEffect, createSignal, For, Show } from "solid-js";
 import type { Zapper, ZapperAvatar } from "@/core/zapper-types";
 import { mascots, colors } from "./mascots";
 
@@ -13,12 +13,17 @@ export function defaultAvatar(seed: string): ZapperAvatar {
 }
 export const avatarOf = (zapper: Zapper) =>
   zapper.config.avatar ?? defaultAvatar(zapper.id);
-export function Avatar(props: { avatar: ZapperAvatar; size?: number }) {
+export function Avatar(props: { avatar: ZapperAvatar; size?: number; image?: string }) {
+  const [failed,setFailed]=createSignal(false);
+  createEffect(()=>props.image,()=>{setFailed(false);});
+  const image=()=>props.image && props.image.length<=96*1024 && /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(props.image) && !failed() ? props.image : null;
+  const identity=createMemo(()=>`${props.avatar.mascot}:${props.avatar.color}`);
   const pixels = createMemo(() => {
+    const [mascot,colorId]=identity().split(":");
     const sprite = (
-      mascots.find((m) => m.id === props.avatar.mascot) ?? mascots[0]!
+      mascots.find((m) => m.id === mascot) ?? mascots[0]!
     ).sprite;
-    const color = colors.find((c) => c.id === props.avatar.color) ?? colors[0]!;
+    const color = colors.find((c) => c.id === colorId) ?? colors[0]!;
     const palette: Record<string, string> = {
       b: color.body,
       s: color.shade,
@@ -35,7 +40,7 @@ export function Avatar(props: { avatar: ZapperAvatar; size?: number }) {
       ),
     );
   });
-  return (
+  return <Show when={image()} fallback={
     <svg
       class="zp-avatar"
       viewBox="0 0 16 16"
@@ -56,5 +61,5 @@ export function Avatar(props: { avatar: ZapperAvatar; size?: number }) {
         )}
       </For>
     </svg>
-  );
+  }>{src=><img class="zp-avatar zp-avatar-image" src={src()} alt="" width={props.size ?? 20} height={props.size ?? 20} onError={()=>setFailed(true)} />}</Show>;
 }

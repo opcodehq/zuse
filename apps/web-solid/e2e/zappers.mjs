@@ -139,28 +139,26 @@ try {
     await fill("[role=dialog] textarea", "Check the changelog");
     await page.click("[role=dialog] button[type=submit]");
     await page.waitFor("window.__zuse.state.zappers[0].issues.length===1");
-    await page.click(".zp-issue-row");
     await page.waitFor('!!document.querySelector(".zp-issue-detail")');
     await fill(".zp-issue-detail textarea", "Looks ready");
-    await page.click(".zp-issue-detail .zp-form button[type=submit]");
+    await page.eval("document.querySelector('.zp-issue-detail textarea').form.requestSubmit()");
     await page.waitFor(
       'window.__zuse.state.zappers[0].issues[0].activity.some(a=>a.text==="Looks ready")',
     );
-    await page.key("Escape", "Escape", 27);
+    await page.click('[aria-label="Close ZAP-1"]');
   });
   await step("Drive creates and versions notes", async () => {
     await clickText(".zp-tabs button", "Overview");
-    await clickText(".zp-inspector button", "Open Drive");
+    await page.press('[aria-label="Zapper actions"]');
+    await clickText("[role=menuitem]", "Drive");
     await clickText(".zp-inspector button", "New document");
     await fill("[role=dialog] input[required]", "notes.md");
     await fill("[role=dialog] textarea", "Version one");
     await page.click("[role=dialog] button[type=submit]");
-    await page.waitFor(
-      'document.querySelector(".zp-inspector-body")?.textContent.includes("Version one") && !document.querySelector("[role=dialog]")',
-    );
-    await page.eval(
-      `[...document.querySelectorAll('.zp-card')].find(e=>e.querySelector('strong')?.textContent==='notes.md').querySelector('button').click()`,
-    );
+    await page.waitFor('!!document.querySelector(".zp-document-link") && !document.querySelector("[role=dialog]")');
+    await page.click(".zp-document-link");
+    await page.waitFor('document.querySelector(".zp-page-surface:not([hidden])")?.textContent.includes("Version one")');
+    await clickText(".zp-page-surface:not([hidden]) button", "Edit document");
     await fill("[role=dialog] textarea", "Version two");
     await page.eval(
       "window.zapperDraftEditor=document.querySelector('[role=dialog] textarea')",
@@ -185,9 +183,10 @@ try {
     await page.waitFor(
       'document.querySelector(".zp-inspector-body")?.textContent.includes("Version two") && !document.querySelector("[role=dialog]")',
     );
-    await clickText(".zp-tabs button", "History");
+    await page.press('[aria-label="Zapper actions"]');
+    await clickText("[role=menuitem]", "Version history");
     await page.eval(
-      `[...document.querySelectorAll('.zp-card')].find(e=>e.querySelector('strong')?.textContent==='notes.md').querySelector('button').click()`,
+      `[...document.querySelectorAll('.zp-page-surface:not([hidden]) .zp-card')].find(e=>e.querySelector('strong')?.textContent==='notes.md').querySelector('button').click()`,
     );
     await clickText("[role=dialog] button", "Restore version");
     await page.waitFor('!document.querySelector("[role=dialog]")');

@@ -1,4 +1,7 @@
-import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
+import { targetForChat, workspace, type Target } from "@/features/workspace/store";
+import { panelFor, pageKey, showPage, closePage } from "./panel";
+import { workerStatus } from "./threads-model";
+import { createEffect, createMemo, createSignal, For, Show, lazy } from "solid-js";
 import { state } from "@/core/store";
 import { navigate, openChat, setView, view } from "@/core/view";
 import type { Zapper, ZapperDecision, ZapperAction } from "@/core/zapper-types";
@@ -8,7 +11,7 @@ import { TopBar } from "@/features/workspace";
 import { Button, Dialog, Menu } from "@/ui/primitives";
 import { Icon } from "@/ui/Icon";
 import { Avatar, avatarOf } from "./Avatar";
-import { Issues } from "./Issues";
+import { Issues, IssuePage } from "./Issues";
 import { Threads } from "./Threads";
 import { Drive } from "./Drive";
 import {
@@ -28,8 +31,19 @@ import {
 } from "./state";
 import { CommandAlert } from "./Alert";
 import "./zappers.css";
+const Agents=lazy(()=>import("@/features/workspace/Agents").then(module=>({default:module.Agents})));
+const Changes=lazy(()=>import("@/features/workspace/Changes").then(module=>({default:module.Changes})));
+const PullRequest=lazy(()=>import("@/features/workspace/PullRequest").then(module=>({default:module.PullRequest})));
 
 export function ZapperPage() {
+  createEffect(()=>[selectedZapper()?.id,view.selectedChatId,view.rightPanel] as const,([id,chatId,panel])=>{
+    if(!id || !chatId) return;
+    const url=workspace.changeRequests[chatId]?.changeRequest?.url;
+    if(panel === "changes" || (panel === "pullRequest" && url)) {
+      showPage(id,panel === "changes" ? {kind:"diff",chatId} : {kind:"pr",chatId,url:url!});
+      setInspectorOpen(true);setView(draft=>{draft.rightPanel=null;});
+    }
+  });
   createEffect(
     () => {
       const z = selectedZapper();
@@ -51,7 +65,7 @@ export function ZapperPage() {
             <div class="zp-conversation">
               <div class="zp-context">
                 <button class="zp-context-name" onClick={() => openZapper(z())}>
-                  <Avatar avatar={avatarOf(z())} size={24} />
+                  <Avatar avatar={avatarOf(z())} image={z().config.avatarImage} size={24} />
                   <strong>{z().config.name}</strong>
                   <span class="zp-muted">
                     {view.selectedChatId === z().coordinatorChatId
@@ -67,10 +81,7 @@ export function ZapperPage() {
                 </Button>
               </div>
               <TopBar />
-              <div class="app-chat">
-                <Transcript />
-                <Composer />
-              </div>
+              <div class="app-chat"><Show when={z().workers.find(worker=>worker.chatId===view.selectedChatId && (worker.queuePosition !== undefined || !state.chats[worker.chatId]))} fallback={<><Transcript /><Composer /></>}>{worker => <div class="zp-thread-placeholder"><Icon name="clock-circle" size={28} /><h2>{workerStatus(worker())}</h2><p>{worker().objective}</p><span>{worker().queuePosition !== undefined ? "This thread will start automatically when a worker slot is available." : "Preparing this thread’s conversation…"}</span></div>}</Show></div>
             </div>
             <Show when={inspectorOpen() && !view.rightPanel}>
               <Inspector zapper={z()} />
@@ -124,7 +135,7 @@ function Directory() {
               class="zp-card zp-directory-card"
               onClick={() => openZapper(z)}
             >
-              <Avatar avatar={avatarOf(z)} size={42} />
+              <Avatar avatar={avatarOf(z)} image={z.config.avatarImage} size={42} />
               <h2>{z.config.name}</h2>
               <p>{z.config.purpose || "Your project captain"}</p>
               <span class="zp-muted">
@@ -145,11 +156,11 @@ function Directory() {
 }
 function Inspector(props: { zapper: Zapper }) {
   const [confirm, setConfirm] = createSignal<"delete" | "archive" | null>(null);
-  const files = createMemo(() =>
-    resources.files.filter(
-      (f) => f.path !== "INSTRUCTIONS.md" && f.content.trim(),
-    ),
-  );
+  const files = createMemo(() => {
+    const latest=new Map<string,(typeof resources.files)[number]>();
+    for(const file of resources.files) if((latest.get(file.path)?.version ?? 0)<file.version)latest.set(file.path,file);
+    return [...latest.values()].filter(file=>(file.path!=="INSTRUCTIONS.md" || file.version>1) && file.content.trim());
+  });
   const tabs = createMemo(
     () =>
       [
@@ -157,11 +168,12 @@ function Inspector(props: { zapper: Zapper }) {
         "issues",
         "threads",
         ...(files().length || tab() === "drive" ? ["drive"] : []),
-        ...(resources.files.some((f) => f.version > 1) || tab() === "history"
-          ? ["history"]
-          : []),
       ] as Tab[],
   );
+  const panel = () => panelFor(props.zapper.id);
+  const label = (page: import("./panel").PanelPage) => page.kind === "issue" ? `ZAP-${props.zapper.issues.find(issue=>issue.id===page.id)?.number ?? "?"}` : page.kind === "file" ? page.path.split("/").at(-1)! : page.kind === "pr" ? `#${page.url.split("/").at(-1)}` : page.kind === "agent" ? page.title ?? "Agent" : page.kind === "diff" ? "Changes" : "History";
+  const target = (chatId:string): Target => targetForChat(chatId) ?? {chatId,deviceId:props.zapper.config.homeDeviceId,targetDeviceId:props.zapper.config.homeDeviceId,cwd:null,archived:false,space:null,git:false,local:false,branch:null,repoPath:null};
+  const openIssue = (id:string) => showPage(props.zapper.id,{kind:"issue",id});
   const fresh = async () => {
     try {
       const z = await command(props.zapper.id, { type: "freshConversation" });
@@ -189,11 +201,6 @@ function Inspector(props: { zapper: Zapper }) {
   return (
     <aside class="zp-inspector" aria-label="Zapper inspector">
       <header class="zp-inspector-header">
-        <Avatar avatar={avatarOf(props.zapper)} size={38} />
-        <div>
-          <h2>{props.zapper.config.name}</h2>
-          <span class="zp-muted">{statusLabel(props.zapper.status)}</span>
-        </div>
         <Menu
           trigger={(attrs) => (
             <Button {...attrs} aria-label="Zapper actions">
@@ -207,6 +214,8 @@ function Inspector(props: { zapper: Zapper }) {
                 navigate({ kind: "newZapper", zapperId: props.zapper.id }),
             },
             { label: "Fresh conversation", onSelect: () => void fresh() },
+            { label: "Version history", icon:"history", onSelect:()=>showPage(props.zapper.id,{kind:"history"}) },
+            { label: "Drive", icon:"folder-open", onSelect:()=>setTab("drive") },
             {
               label: props.zapper.status === "active" ? "Pause" : "Resume",
               onSelect: () =>
@@ -242,8 +251,8 @@ function Inspector(props: { zapper: Zapper }) {
               <Icon
                 name={
                   {
-                    overview: "list",
-                    issues: "clock-circle",
+                    overview: "widget",
+                    issues: "checklist",
                     threads: "chat-round-line",
                     drive: "folder-open",
                     history: "history",
@@ -257,20 +266,27 @@ function Inspector(props: { zapper: Zapper }) {
             </button>
           )}
         </For>
+        <For each={panel().open}>{page => <div class="zp-page-tab" data-active={pageKey(panel().active)===pageKey(page)?"true":undefined}><button type="button" class="zp-page-tab-title" title={page.kind === "issue" ? props.zapper.issues.find(issue=>issue.id===page.id)?.details.title : page.kind === "file" ? page.path : label(page)} onClick={()=>showPage(props.zapper.id,page)}>{label(page)}</button><button type="button" class="zp-page-tab-close" aria-label={`Close ${label(page)}`} onClick={()=>closePage(props.zapper.id,page)}><Icon name="close" size={11} /></button></div>}</For>
       </nav>
-      <div class="zp-inspector-body">
+      <div class="zp-inspector-body" data-workspace={["agent","diff","pr"].includes(panel().active.kind)?"true":undefined}>
         <Show when={tab() === "overview"}>
-          <Overview zapper={props.zapper} />
+          <Overview zapper={props.zapper} onOpenIssue={openIssue} />
         </Show>
         <Show when={tab() === "issues"}>
-          <Issues zapper={props.zapper} />
+          <Issues zapper={props.zapper} onOpen={openIssue} />
         </Show>
         <Show when={tab() === "threads"}>
           <Threads zapper={props.zapper} />
         </Show>
-        <Show when={tab() === "drive" || tab() === "history"}>
-          <Drive zapper={props.zapper} history={tab() === "history"} />
-        </Show>
+        <Show when={tab() === "drive"}><Drive zapper={props.zapper} history={false} onOpen={path=>showPage(props.zapper.id,{kind:"file",path})} /></Show>
+        <For each={panel().open}>{page=><section class="zp-page-surface" hidden={pageKey(panel().active)!==pageKey(page)}>
+          <Show when={page.kind === "issue"}><IssuePage zapper={props.zapper} id={page.kind === "issue" ? page.id : ""} onOpen={openIssue} onOpenPr={(url,chatId)=>showPage(props.zapper.id,{kind:"pr",url,chatId})} /></Show>
+          <Show when={page.kind === "file"}><Drive zapper={props.zapper} history={false} path={page.kind === "file" ? page.path : ""} /></Show>
+          <Show when={page.kind === "history"}><Drive zapper={props.zapper} history /></Show>
+          <Show when={page.kind === "agent"}>{page.kind === "agent" && <Agents chatId={page.chatId} docId={page.docId} active={pageKey(panel().active)===pageKey(page)} />}</Show>
+          <Show when={page.kind === "diff" && pageKey(panel().active)===pageKey(page)}>{page.kind === "diff" && <Changes target={target(page.chatId)} />}</Show>
+          <Show when={page.kind === "pr" && pageKey(panel().active)===pageKey(page)}>{page.kind === "pr" && <PullRequest target={target(page.chatId)} url={page.url} active onBack={()=>closePage(props.zapper.id,page)} />}</Show>
+        </section>}</For>
       </div>
       <Dialog
         open={!!confirm()}
@@ -299,94 +315,29 @@ function Inspector(props: { zapper: Zapper }) {
     </aside>
   );
 }
-function Overview(props: { zapper: Zapper }) {
-  return (
-    <>
-      <p class="zp-purpose">
-        {props.zapper.config.purpose || "Add a purpose in Zapper settings."}
-      </p>
-      <div class="zp-stats">
-        <button onClick={() => setTab("threads")}>
-          <strong>{props.zapper.workers.length}</strong>Threads
-        </button>
-        <button onClick={() => setTab("issues")}>
-          <strong>
-            {
-              props.zapper.issues.filter(
-                (i) => !["done", "canceled"].includes(i.details.status),
-              ).length
-            }
-          </strong>
-          Open issues
-        </button>
-        <span>
-          <strong>
-            {props.zapper.decisions.filter((d) => d.answer === null).length}
-          </strong>
-          Decisions
-        </span>
-      </div>
-      <h3>Needs your decision</h3>
-      <For
-        each={props.zapper.decisions.filter((d) => d.answer === null)}
-        fallback={<p class="zp-muted">No decisions waiting for you.</p>}
-      >
-        {(decision) => <Decision zapper={props.zapper} decision={decision} />}
-      </For>
-      <div class="zp-section-heading">
-        <h3>Issues</h3>
-        <Button size="sm" onClick={() => setTab("issues")}>
-          View all
-        </Button>
-      </div>
-      <Issues zapper={props.zapper} compact />
-      <div class="zp-section-heading">
-        <h3>Drive</h3>
-        <Button size="sm" onClick={() => setTab("drive")}>
-          Open Drive
-        </Button>
-      </div>
-      <p class="zp-muted">
-        Shared notes and instructions persist across coordinator conversations.
-      </p>
-      <h3>Recent activity</h3>
-      <Show when={resources.error}>
-        <p class="zp-error">
-          {resources.error}
-          <Button onClick={() => void loadResources(props.zapper)}>Retry</Button>
-        </p>
-      </Show>
-      <For
-        each={resources.events.slice(-12).reverse()}
-        fallback={<p class="zp-muted">No activity yet.</p>}
-      >
-        {(event) => (
-          <div class="zp-activity">
-            <span>{event.kind}</span>
-            <p>{event.summary}</p>
-            <Show when={event.workerChatId}>
-              <button onClick={() => openChat(event.workerChatId)}>
-                Open thread
-              </button>
-            </Show>
-          </div>
-        )}
-      </For>
-    </>
-  );
+function Overview(props: { zapper: Zapper; onOpenIssue: (id:string)=>void }) {
+  const [decision,setDecision]=createSignal<string|null>(null);
+  const working=()=>props.zapper.workers.filter(worker=>worker.queuePosition === undefined && state.sessions[worker.chatId]?.status === "working").length;
+  const asks=()=>props.zapper.issues.filter(issue=>issue.details.status === "needsYou" && (!issue.details.owner || issue.details.owner.type === "user"));
+  const decisions=()=>props.zapper.decisions.filter(decision=>decision.answer===null);
+  return <>
+    <div class="zp-overview-hero"><Avatar avatar={avatarOf(props.zapper)} image={props.zapper.config.avatarImage} size={40} /><div><h2>{props.zapper.config.name}</h2><span class="zp-overview-status" data-status={props.zapper.status}><i />{props.zapper.status === "active" && working() ? `${working()} ${working()===1?"thread":"threads"} working` : statusLabel(props.zapper.status)}</span></div><Show when={["active","paused"].includes(props.zapper.status)}><Button size="sm" onClick={()=>act(props.zapper.id,{type:"setStatus",status:props.zapper.status === "active" ? "paused":"active"})}>{props.zapper.status === "active" ? "Pause":"Resume"}</Button></Show></div>
+    <Show when={props.zapper.config.purpose.trim()}><p class="zp-purpose">{props.zapper.config.purpose}</p></Show>
+    <Show when={asks().length || decisions().length}><div class="zp-needs-you"><h3>Needs you</h3><For each={asks()}>{issue=><button type="button" onClick={()=>props.onOpenIssue(issue.id)}><Icon name="status-question" size={14} /><div><strong>{issue.details.title}</strong><span>{[...issue.activity].reverse().find(event=>event.kind === "question")?.text ?? `ZAP-${issue.number}`}</span></div><span>Answer</span></button>}</For><For each={decisions()}>{item=><button type="button" onClick={()=>setDecision(item.id)}><Icon name="info-circle" size={14} /><div><strong>{item.question}</strong></div><span>Answer</span></button>}</For></div></Show>
+    <div class="zp-section-heading"><h3>Work</h3><Button size="sm" onClick={()=>setTab("issues")}>All issues</Button></div><Issues zapper={props.zapper} compact onOpen={props.onOpenIssue} />
+    <h3>Repositories</h3><div class="zp-repository-chips"><For each={props.zapper.config.repositories}>{repo=><span><Icon name="folder" size={13} />{state.spaces[repo.spaceId]?.name ?? state.spaces[repo.spaceId]?.path ?? repo.spaceId}</span>}</For></div>
+    <Show when={props.zapper.decisions.find(item=>item.id===decision() && item.answer===null)}>{item=><Dialog open onOpenChange={open=>{if(!open)setDecision(null);}} title="Your decision"><Decision zapper={props.zapper} decision={item()} onDone={()=>setDecision(null)} /></Dialog>}</Show>
+  </>;
 }
-function Decision(props: { zapper: Zapper; decision: ZapperDecision }) {
+function Decision(props: { zapper: Zapper; decision: ZapperDecision; onDone?:()=>void }) {
   const [answer, setAnswer] = createSignal("");
   return (
     <form
       class="zp-card zp-form"
-      onSubmit={(e) => {
+      onSubmit={async e => {
         e.preventDefault();
-        if (answer().trim())
-          act(props.zapper.id, {
-            type: "decide",
-            decision: { ...props.decision, answer: answer().trim() },
-          });
+        if(!answer().trim()) return;
+        try {await command(props.zapper.id,{type:"decide",decision:{...props.decision,answer:answer().trim()}});props.onDone?.();}catch{/* shared command alert */}
       }}
     >
       <p>{props.decision.question}</p>

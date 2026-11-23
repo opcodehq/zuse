@@ -1,3 +1,4 @@
+import { panelFor, showPage } from "./panel";
 import { createSignal, createStore, reconcile } from "solid-js";
 import { rpc } from "@/core/connection";
 import { M } from "@/core/methods";
@@ -121,7 +122,8 @@ export function openZapper(zapper: Zapper) {
 }
 
 export type Tab = "overview" | "issues" | "threads" | "drive" | "history";
-export const [tab, setTab] = createSignal<Tab>("overview");
+export const tab = (): Tab | undefined => { const z=selectedZapper();const page=panelFor(z?.id ?? "").active;return page.kind === "section" ? page.name : page.kind === "history" ? "history" : undefined; };
+export function setTab(next: Tab) { const z=selectedZapper(); if(z)showPage(z.id,next === "history" ? {kind:"history"} : {kind:"section",name:next}); }
 export const [inspectorOpen, setInspectorOpen] = createSignal(true);
 export const [resources, setResources] = createStore({
   id: "",

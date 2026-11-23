@@ -30,8 +30,8 @@ interface SourceContext {
 }
 
 /** Where the selected chat runs, for every workspace request. */
-export function selectedTarget(): Target | null {
-  const id = view.selectedChatId;
+export function selectedTarget(): Target | null { return targetForChat(view.selectedChatId); }
+export function targetForChat(id: string | null): Target | null {
   const chat: Chat | undefined = id ? state.chats[id] : undefined;
   if (!chat) return null;
   const space = chat.spaceId ? state.spaces[chat.spaceId] ?? null : null;

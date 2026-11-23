@@ -1,3 +1,4 @@
+import { finishedThreads, workerRank, workerStatus } from "./threads-model";
 import { ZapperModelPicker } from "./Controls";
 import { Icon } from "@/ui/Icon";
 import { createMemo, createSignal, For, Show, untrack } from "solid-js";
@@ -10,12 +11,12 @@ import {
   act,
   command,
   commandState,
-  statusLabel,
   threadTitle,
   workerVisible,
 } from "./state";
 
 export function Threads(props: { zapper: Zapper }) {
+  const [finishedOpen,setFinishedOpen]=createSignal(false);
   const [mode, setMode] = createSignal<"delegate" | "adopt" | null>(null);
   const [message, setMessage] = createSignal<string | null>(null);
   const [text, setText] = createSignal("");
@@ -50,7 +51,7 @@ export function Threads(props: { zapper: Zapper }) {
         </div>
       </div>
       <For
-        each={props.zapper.workers.filter((w) => workerVisible(w.chatId))}
+        each={props.zapper.workers.filter((w) => workerVisible(w.chatId)).sort((a,b)=>workerRank(a)-workerRank(b)||(a.queuePosition ?? 0)-(b.queuePosition ?? 0)||a.chatId.localeCompare(b.chatId))}
         fallback={
           <p class="zp-muted">
             Delegate a task or adopt an existing project conversation.
@@ -110,7 +111,7 @@ export function Threads(props: { zapper: Zapper }) {
             </div>
             <p>{worker.objective}</p>
             <small class="zp-muted">
-              {statusLabel(state.sessions[worker.chatId]?.status)} ·{" "}
+              {workerStatus(worker)} ·{" "}
               {state.spaces[worker.spaceId]?.name ||
                 state.spaces[worker.spaceId]?.path ||
                 "Repository"}{" "}
@@ -119,6 +120,7 @@ export function Threads(props: { zapper: Zapper }) {
           </div>
         )}
       </For>
+      <Show when={finishedThreads(props.zapper).length}><button type="button" class="zp-finished-toggle" aria-expanded={finishedOpen()?"true":"false"} onClick={()=>setFinishedOpen(value=>!value)}>Finished · {finishedThreads(props.zapper).length}<Icon name={finishedOpen()?"alt-arrow-down":"alt-arrow-right"} size={12} /></button><Show when={finishedOpen()}><For each={finishedThreads(props.zapper)}>{id=><button type="button" class="zp-history-row" onClick={()=>openChat(id)}>{threadTitle(id)}<span class="zp-muted">{props.zapper.issues.find(issue=>issue.threads.includes(id))?.number ? `ZAP-${props.zapper.issues.find(issue=>issue.threads.includes(id))!.number}` : "Finished"}</span></button>}</For></Show></Show>
       <h3>Coordinator conversations</h3>
       <For
         each={[

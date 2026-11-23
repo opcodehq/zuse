@@ -68,7 +68,12 @@ function watchTranscript(chatId: string): Subscription {
 }
 
 createRoot(() => {
-  createEffect(() => [view.selectedChatId, state.epoch, state.connection.kind === "connected"] as const, ([chatId, , connected]) => {
+  createEffect(() => {
+    const chatId=view.selectedChatId;
+    const worker=chatId ? state.zappers.flatMap(zapper=>zapper.workers).find(worker=>worker.chatId===chatId) : undefined;
+    const waiting=!!worker && (worker.queuePosition !== undefined || !state.chats[worker.chatId]);
+    return [chatId,state.epoch,state.connection.kind === "connected",waiting] as const;
+  }, ([chatId, , connected, waiting]) => {
     const cleanups: (() => void)[] = [];
     if (!chatId) {
       setState(draft => { draft["transcript"] = null; });
@@ -76,7 +81,9 @@ createRoot(() => {
     }
     if (state.transcript?.chatId !== chatId)
       setState(draft => { draft["transcript"] = { chatId, ready: false, messages: [], contextUsage: null, notice: null }; });
-    if (!connected) return;
+    // A queued/not-yet-created worker has no document to subscribe to. Its
+    // Zapper watch will start this effect once the conversation is ready.
+    if (!connected || waiting) return;
     const transcript = watchTranscript(chatId);
     const queue = rpc.subscribe<{ items?: unknown[] }>(M.WATCH_QUEUE, chatRequest(chatId), (value) =>
       setState(draft => { draft["queue"]![chatId] = value?.items ?? []; }),

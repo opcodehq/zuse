@@ -32,12 +32,12 @@ const METHODS: { value: Method; label: string }[] = [
 
 const openExternal = (url: string) => window.open(url, "_blank", "noopener,noreferrer");
 
-export function PullRequest(props: { target: Target; active: boolean }) {
+export function PullRequest(props: { target: Target; active: boolean; url?: string; onBack?: ()=>void }) {
   const own = () => workspace.changeRequests[props.target.chatId]?.changeRequest ?? null;
   const [picked, setPicked] = createSignal<string | null>(null);
   // The branch's pull request shows by default; the list is one step back.
   const [browsing, setBrowsing] = createSignal(false);
-  const url = () => picked() ?? (browsing() ? null : own()?.url ?? null);
+  const url = () => props.url ?? picked() ?? (browsing() ? null : own()?.url ?? null);
 
   return (
     <div class="ws-surface-col ws-pr">
@@ -62,6 +62,7 @@ export function PullRequest(props: { target: Target; active: boolean }) {
             url={current}
             own={current === own()?.url}
             onBack={() => {
+              if(props.url) {props.onBack?.();return;}
               setPicked(null);
               setBrowsing(true);
             }}
