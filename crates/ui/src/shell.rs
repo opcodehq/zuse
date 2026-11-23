@@ -6100,6 +6100,12 @@ impl Shell {
                 page.update(cx, |page, cx| page.on_visible(cx));
             }
         }
+        // Back on the chat: a cloud turn that finished meanwhile is seen.
+        if matches!(self.route, Route::Chat)
+            && let Some(view) = self.cloud_conversation.clone()
+        {
+            self.mark_cloud_conversation_seen(&view, cx);
+        }
     }
 
     /// Close the user menu through the exit animation (no-op when closed).

@@ -12,10 +12,14 @@ use std::collections::HashMap;
 
 #[derive(Default)]
 pub(super) struct CloudActivity {
-    /// Each tracked conversation's change and release watches.
-    watches: HashMap<EntityId, [Subscription; 2]>,
+    /// Each tracked conversation's workspace and its change and release
+    /// watches.
+    watches: HashMap<EntityId, (String, [Subscription; 2])>,
     /// Conversations whose agent is busy, kept alive until the turn ends.
     busy: HashMap<EntityId, Entity<CloudConversation>>,
+    /// Withdraws every report when the shell closes: its conversations'
+    /// release watches no longer run then.
+    teardown: Option<Subscription>,
 }
 impl CloudActivity {
     /// The account changed: another account's chats stop reporting.
@@ -47,7 +51,25 @@ impl Shell {
                 }
             });
         });
-        self.cloud_activity.watches.insert(id, [changes, release]);
+        let workspace = view.read(cx).target.workspace.clone();
+        self.cloud_activity
+            .watches
+            .insert(id, (workspace, [changes, release]));
+        if self.cloud_activity.teardown.is_none() {
+            self.cloud_activity.teardown = Some(cx.on_release(|this, cx| {
+                let watches = std::mem::take(&mut this.cloud_activity.watches);
+                this.state.update(cx, |state, cx| {
+                    let mut changed = false;
+                    for (id, (workspace, _)) in watches {
+                        changed |=
+                            state.report_cloud_chat_activity(&workspace, id.as_u64(), None, true);
+                    }
+                    if changed {
+                        cx.notify();
+                    }
+                });
+            }));
+        }
         self.report_cloud_activity(view, cx);
     }
     fn report_cloud_activity(&mut self, view: &Entity<CloudConversation>, cx: &mut Context<Self>) {
@@ -72,10 +94,12 @@ impl Shell {
         if !in_scope {
             return;
         }
-        let in_front = self
-            .cloud_conversation
-            .as_ref()
-            .is_some_and(|front| front.entity_id() == id);
+        // Only a conversation on screen sees its turn end.
+        let in_front = matches!(self.route, Route::Chat)
+            && self
+                .cloud_conversation
+                .as_ref()
+                .is_some_and(|front| front.entity_id() == id);
         self.state.update(cx, |state, cx| {
             if state.report_cloud_chat_activity(&workspace, id.as_u64(), Some(report), in_front) {
                 cx.notify();
@@ -387,6 +411,50 @@ mod tests {
         open(&shell, "a", cx);
         assert_eq!(status(&shell, "a", cx), ChatIndicator::Idle);
         close(window, shell, cx);
+    }
+
+    /// A chat left in front behind another page (the plugin catalog) is not
+    /// on screen: its turn ending reads done until the chat shows again.
+    #[gpui::test]
+    fn a_turn_ending_behind_another_page_reads_done_until_the_chat_shows(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| gpui_tokio::init_from_handle(cx, runtime.handle().clone()));
+        let window = shell(cx, dir.path());
+        let shell = window.entity(cx).unwrap();
+        open(&shell, "a", cx);
+        let a = shell.read_with(cx, |shell, _| shell.cloud_conversation.clone().unwrap());
+        working(&a, cx);
+        shell.update(cx, |shell, cx| shell.set_route(Route::Plugins, cx));
+        finished(&a, cx);
+        assert_eq!(status(&shell, "a", cx), ChatIndicator::Completed);
+        shell.update(cx, |shell, cx| shell.set_route(Route::Chat, cx));
+        assert_eq!(status(&shell, "a", cx), ChatIndicator::Idle);
+        close(window, shell, cx);
+    }
+
+    /// Closing the shell withdraws what its conversations reported, so a
+    /// chat that was working then does not spin forever.
+    #[gpui::test]
+    fn closing_the_shell_withdraws_its_reports(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| gpui_tokio::init_from_handle(cx, runtime.handle().clone()));
+        let window = shell(cx, dir.path());
+        let shell = window.entity(cx).unwrap();
+        let state = shell.read_with(cx, |shell, _| shell.state.clone());
+        open(&shell, "a", cx);
+        let a = shell.read_with(cx, |shell, _| shell.cloud_conversation.clone().unwrap());
+        working(&a, cx);
+        drop(a);
+        assert!(state.read_with(cx, |state, _| state.cloud_chat_activity("a").live.is_some()));
+        close(window, shell, cx);
+        assert_eq!(
+            state.read_with(cx, |state, _| state.cloud_chat_activity("a")),
+            Default::default()
+        );
     }
 
     /// A turn that finishes while its chat is in front is seen as it ends;
