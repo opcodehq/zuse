@@ -624,7 +624,11 @@ impl Shell {
                     div()
                         .id(("close-cloud-tab", index))
                         .cursor_pointer()
-                        .child(icon(icons::CLOSE).size(px(12.)))
+                        .child(
+                            icon(icons::CLOSE)
+                                .size(px(12.))
+                                .text_color(theme.text_muted),
+                        )
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
                             this.close_cloud_tab(index, cx);
@@ -666,7 +670,13 @@ impl Shell {
                     })
                     .cursor_pointer()
                     .p(px(5.))
-                    .child(icon(icons::PLUS).size(px(14.)))
+                    .rounded(px(7.))
+                    .hover(|d| d.bg(theme.muted_fill().opacity(0.6)))
+                    .child(
+                        icon(icons::PLUS)
+                            .size(px(14.))
+                            .text_color(theme.text_muted),
+                    )
                     .on_click(cx.listener(|this, _, _, cx| this.open_new_conversation_tab(cx))),
             )
             .children(main_chips);
