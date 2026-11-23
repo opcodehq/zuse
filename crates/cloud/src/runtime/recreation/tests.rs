@@ -1244,14 +1244,31 @@ async fn recreate_follows_a_resume_that_could_not_start_the_computer() {
             .code,
         "computer_recreation_source_missing"
     );
-    let mut missing: Value = sqlx::query_scalar(
+    // As the missing-machine handler leaves it: the status is persisted too.
+    // Recreate stays unavailable, and the request says why.
+    sqlx::query("UPDATE api_cloud_workspaces SET status_code=$1 WHERE workspace_id='ws-bob'")
+        .bind(lifecycle::MACHINE_MISSING)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let missing: Value = sqlx::query_scalar(
         "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-bob'",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
-    missing["status_code"] = json!(lifecycle::MACHINE_MISSING);
     assert!(!c.recreation_eligible(&missing));
+    assert_eq!(
+        c.recreate_computer("ws-bob", &bob, &uuid::Uuid::new_v4().to_string(), None, now)
+            .await
+            .unwrap_err()
+            .code,
+        "computer_recreation_source_missing"
+    );
+    sqlx::query("UPDATE api_cloud_workspaces SET status_code='cloud_retained_provider_failed' WHERE workspace_id='ws-bob'")
+        .execute(&pool)
+        .await
+        .unwrap();
     // A machine that would not start is woken, captured and replaced.
     fail("cloud_retained_provider_failed")
         .execute(&pool)
@@ -1269,6 +1286,88 @@ async fn recreate_follows_a_resume_that_could_not_start_the_computer() {
     .await
     .unwrap();
     assert_eq!(row["state"], "resuming");
+    assert_eq!(
+        row["request_config"]["rustLifecycleOperation"]["action"],
+        "resume"
+    );
+    assert_ne!(
+        row["request_config"]["rustLifecycleOperation"]["id"],
+        json!(resume)
+    );
+    pool.close().await;
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
+}
+#[tokio::test]
+#[ignore = "requires isolated localhost PostgreSQL"]
+async fn resume_may_try_again_after_a_resume_that_could_not_start_the_computer() {
+    let (admin, pool, schema, c, now, config) = fixture().await;
+    let bob = Access {
+        actor: Principal {
+            account_id: "user-bob".into(),
+        },
+        scope: Scope::Personal,
+        owner_id: "user-bob".into(),
+        membership: None,
+    };
+    sqlx::query("INSERT INTO api_cloud_billing_periods VALUES('resume-period','user-bob','polar',NULL,'manual','USD',$1,$2,1000,1000,500,500,$1)").bind(now-1000).bind(now+86400000).execute(&pool).await.unwrap();
+    // Settled by lifecycle::settle_failed_resume: paused, the operation itself
+    // still `launching` (no completed pause), its job failed.
+    let resume = uuid::Uuid::new_v4().to_string();
+    let mut settled = config.clone();
+    settled["rustLifecycleOperation"] = json!({"id":resume,"action":"resume","phase":"paused"});
+    sqlx::query("UPDATE api_cloud_workspaces SET state='paused',desired_state='paused',runtime_state='offline',provider_sandbox_id='machine-bob',status_code='cloud_retained_provider_failed',request_config=$1 WHERE workspace_id='ws-bob'").bind(&settled).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO zuse_rust_lifecycle_operations(operation_id,workspace_id,command_id,generation,source_machine_id,storage_incarnation_id,action,phase,created_at,updated_at) VALUES($1,'ws-bob','failed-resume',1,'machine-bob','disk','resume','launching',$2,$2)").bind(&resume).bind(now).execute(&pool).await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    let job = jobs::enqueue(
+        &mut tx,
+        &format!("lifecycle:{resume}"),
+        lifecycle::JOB_KIND,
+        "ws-bob",
+        1,
+        &json!({"operationId":resume}),
+        now,
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    // While that resume is still retrying, a new Resume waits for quiescence.
+    assert_eq!(
+        c.lifecycle_action(
+            "ws-bob",
+            &bob,
+            zuse_protocol::cloud_lifecycle::Action::Resume,
+            Some("resume-early"),
+            now
+        )
+        .await
+        .unwrap_err()
+        .code,
+        "cloud_lifecycle_quiescence_required"
+    );
+    sqlx::query("UPDATE zuse_rust_jobs SET state='failed',last_error_code='cloud_retained_provider_failed' WHERE job_id=$1")
+        .bind(&job)
+        .execute(&pool)
+        .await
+        .unwrap();
+    c.lifecycle_action(
+        "ws-bob",
+        &bob,
+        zuse_protocol::cloud_lifecycle::Action::Resume,
+        Some("resume-again"),
+        now,
+    )
+    .await
+    .unwrap();
+    let row: Value = sqlx::query_scalar(
+        "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-bob'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(row["state"], "provisioning");
     assert_eq!(
         row["request_config"]["rustLifecycleOperation"]["action"],
         "resume"

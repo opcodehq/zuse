@@ -74,6 +74,17 @@ fn start_began(row: &Value, op: &Value) -> i64 {
         .unwrap_or(0);
     op["created_at"].as_i64().unwrap_or(0).max(retried)
 }
+/// A Retry renews the boot grant unless it still covers what the Retry needs:
+/// the next attempt, or for a machine-present Retry the whole restarted start
+/// deadline (a fresh grant lasts `BOOT_TTL`, longer than that deadline).
+fn boot_refresh_needed(expires_at: i64, now: i64, machine_present: bool) -> bool {
+    let needed = if machine_present {
+        super::effects::ALLOCATION_START_DEADLINE_MS + 60_000
+    } else {
+        60_000
+    };
+    expires_at <= now.saturating_add(needed)
+}
 /// The start's machine exists, belongs to this exact operation, and the start
 /// has run past its deadline without an enrolled runtime.
 fn started_overdue(row: &Value, op: &Value, now: i64) -> bool {
@@ -491,7 +502,7 @@ impl RuntimeControl {
         }
         // No recipient or storage has enrolled. Only an explicit authorized retry
         // can refresh an expired boot grant, preserving operation/name/disk.
-        if op["boot_expires_at"].as_i64().unwrap_or(0) <= now.saturating_add(60_000) {
+        if boot_refresh_needed(op["boot_expires_at"].as_i64().unwrap_or(0), now, present) {
             let boot = Zeroizing::new(format!(
                 "rust_boot_{}{}",
                 uuid::Uuid::new_v4().simple(),
@@ -541,6 +552,21 @@ mod machine_present_tests {
         row["provider_sandbox_id"] = json!("bx_one");
         op["phase"] = json!("creating");
         assert!(!started_overdue(&row, &op, i64::MAX / 2));
+    }
+    #[test]
+    fn a_machine_present_retry_keeps_the_boot_grant_through_its_restarted_deadline() {
+        let now = 1_000_000;
+        // A grant with 15 minutes left serves a create retry, not a restarted
+        // 10-minute start that may finish near its end.
+        let fifteen = now + 15 * 60_000;
+        assert!(!boot_refresh_needed(fifteen, now, false));
+        assert!(!boot_refresh_needed(fifteen, now, true));
+        let eight = now + 8 * 60_000;
+        assert!(!boot_refresh_needed(eight, now, false));
+        assert!(boot_refresh_needed(eight, now, true));
+        // A fresh grant always covers the restarted deadline.
+        assert!(!boot_refresh_needed(now + BOOT_TTL, now, true));
+        assert!(boot_refresh_needed(now, now, false));
     }
     #[test]
     fn a_machine_present_stop_offers_retry_for_that_machine_only() {

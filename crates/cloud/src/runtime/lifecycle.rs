@@ -186,6 +186,20 @@ async fn current(tx: &mut Transaction<'_, Postgres>, row: &Value) -> Result<Valu
     validate_current(row, &op)?;
     Ok(op)
 }
+/// The failure code of the job that ended `op`, when `op` is a resume whose
+/// job failed (it settled the computer as paused without a completed pause).
+pub(super) async fn failed_resume_code(
+    tx: &mut Transaction<'_, Postgres>,
+    row: &Value,
+    op: &Value,
+) -> Result<Option<String>, ApiError> {
+    if op["action"] != "resume" {
+        return Ok(None);
+    }
+    Ok(sqlx::query_scalar("SELECT last_error_code FROM zuse_rust_jobs WHERE kind=$1 AND resource_id=$2 AND resource_generation=$3 AND state='failed' AND payload->>'operationId'=$4 ORDER BY updated_at DESC LIMIT 1")
+        .bind(JOB_KIND).bind(required(row,"workspace_id")?).bind(op["generation"].as_i64()).bind(op["operation_id"].as_str())
+        .fetch_optional(&mut **tx).await?.flatten())
+}
 fn validate_current(row: &Value, op: &Value) -> Result<(), ApiError> {
     if op["generation"] != row["request_config"]["runtimeGeneration"]
         || op["source_machine_id"] != row["provider_sandbox_id"]
@@ -354,7 +368,13 @@ impl RuntimeControl {
         };
         if asleep {
             let previous = current(&mut tx, &row).await?;
-            if previous["phase"] != "paused" {
+            // A resume that could not start the computer settled it as paused
+            // without a completed pause; Resume may simply try again.
+            let retry_failed_resume = action == Action::Resume
+                && failed_resume_code(&mut tx, &row, &previous)
+                    .await?
+                    .is_some_and(|code| resume_failure_terminal(&code));
+            if previous["phase"] != "paused" && !retry_failed_resume {
                 return Err(ApiError::conflict("cloud_lifecycle_quiescence_required"));
             }
         }
@@ -729,16 +749,17 @@ impl RuntimeControl {
             return Ok(false);
         }
         let mut tx = self.pool.begin().await?;
-        let failed = sqlx::query("UPDATE zuse_rust_jobs SET state='failed',last_error_code=$3,lease_token=NULL,lease_expires_at=NULL,updated_at=$4 WHERE job_id=$1 AND lease_token=$2 AND state='running'")
-            .bind(&job.id).bind(&job.lease_token).bind(code).bind(clock_ms()).execute(&mut *tx).await?;
-        if failed.rows_affected() != 1 {
-            return Ok(false);
-        }
         let settled = sqlx::query("UPDATE api_cloud_workspaces SET state='paused',desired_state='paused',runtime_state='offline',status_code=$3,request_config=jsonb_set(request_config,'{rustLifecycleOperation,phase}','\"paused\"'),revision=revision+1,updated_at=GREATEST(updated_at+1,$4) WHERE workspace_id=$1 AND request_config->'rustLifecycleOperation'->>'id'=$2 AND request_config->'rustLifecycleOperation'->>'action'='resume' AND desired_state<>'deleted' AND state NOT IN ('deleting','deleted') AND (request_config->'rustRecreation'->>'operationId' IS NULL OR request_config->'rustRecreation'->>'phase' IN ('ready','cancelled'))")
             .bind(&job.resource_id).bind(operation).bind(code).bind(clock_ms()).execute(&mut *tx).await?;
         if settled.rows_affected() != 1 {
             // Not this workspace's plain resume (a recreation wake, say):
             // leave the ordinary retry and attention handling in charge.
+            return Ok(false);
+        }
+        // Workspace before job, the order every other lifecycle write uses.
+        let failed = sqlx::query("UPDATE zuse_rust_jobs SET state='failed',last_error_code=$3,lease_token=NULL,lease_expires_at=NULL,updated_at=$4 WHERE job_id=$1 AND lease_token=$2 AND state='running'")
+            .bind(&job.id).bind(&job.lease_token).bind(code).bind(clock_ms()).execute(&mut *tx).await?;
+        if failed.rows_affected() != 1 {
             return Ok(false);
         }
         tx.commit().await?;

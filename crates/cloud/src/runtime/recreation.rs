@@ -315,6 +315,9 @@ impl RuntimeControl {
             tx.commit().await?;
             return Ok(public(&prior, &row["request_config"]["rustRecreation"]));
         }
+        if source_missing(&row) {
+            return Err(ApiError::conflict("computer_recreation_source_missing"));
+        }
         if !self.recreation_eligible(&row) {
             return Err(unavailable());
         }
