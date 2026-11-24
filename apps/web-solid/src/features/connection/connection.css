@@ -22,6 +22,8 @@
 .cx-screen-actions[data-row="true"] { flex-direction: row; align-items: center; gap: 8px; }
 .cx-screen-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .cx-screen-form { display: flex; gap: 8px; }
+.cx-screen-reason { color: var(--text-strong); font-weight: 500; }
+.cx-screen-elapsed, .cx-banner-elapsed { font-variant-numeric: tabular-nums; }
 .cx-screen-error { font-size: var(--text-xs); line-height: 17px; color: var(--danger); }
 .cx-screen-list { display: flex; flex-direction: column; border-radius: 8px; border: 1px solid var(--border); overflow: hidden; }
 .cx-screen-list .cx-row { min-height: 44px; padding: 6px 8px 6px 12px; }

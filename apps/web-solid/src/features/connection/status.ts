@@ -1,13 +1,27 @@
 // What this tab is connected through. Area-only state; workspace data stays in the core store.
 import { createStore } from "solid-js";
+import type { CloudIssue } from "@/features/plugins-cloud/cloud/errors";
 import type { LinkStatus } from "./link/wasm";
 
-export type Mode = "owner" | "paired" | "account";
+export type Mode = "owner" | "paired" | "account" | "cloud";
 
 export interface AccountTarget {
   environmentId: string;
   expectedSubject: string;
   label: string;
+}
+
+/** Why a cloud computer stopped: asleep, or a start or wake that failed. */
+export type CloudStop =
+  | { kind: "paused" }
+  | { kind: "failed"; issue: CloudIssue; operationId: string | null };
+
+export interface CloudStatus {
+  /** The latest startup step, in the words of desktop's progress steps. */
+  phase: string;
+  /** When the current start or reconnect began; null once ready. */
+  since: number | null;
+  stop: CloudStop | null;
 }
 
 export interface ConnectionArea {
@@ -16,6 +30,7 @@ export interface ConnectionArea {
   origin: string;
   link: LinkStatus | null;
   account: AccountTarget | null;
+  cloud: CloudStatus;
 }
 
 export const [area, setArea] = createStore<ConnectionArea>({
@@ -23,6 +38,7 @@ export const [area, setArea] = createStore<ConnectionArea>({
   origin: location.origin,
   link: null,
   account: null,
+  cloud: { phase: "Connecting to the cloud computer", since: null, stop: null },
 });
 
 /** "Connected through Local network · 4 ms", or null for an owner socket. */

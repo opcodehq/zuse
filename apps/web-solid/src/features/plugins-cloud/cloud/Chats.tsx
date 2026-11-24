@@ -5,12 +5,14 @@ import { openCloudWorkspace } from "@/features/connection/cloud";
 import { view } from "@/core/view";
 import { Icon } from "@/ui/Icon";
 import { GlyphSpinner } from "@/ui/loaders";
-import { createEffect, createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { navigate } from "@/core/view";
+import { createEffect, createMemo, createSignal, For, onCleanup, onSettled, Show } from "solid-js";
 import { owner } from "../account";
-import { Action, Badge, Group, Row, type BadgeTone } from "../ui";
+import { Action, Badge, Group, Row } from "../ui";
 import { archiveVisible } from "./Archives";
-import { cloud, dismissLaunch, launch, loadContext, loadWorkspaces, openHistory, pauseWorkspace, workspaceLabel, type Launch, type LaunchDraft } from "./state";
-import type { CloudContextProject, Workspace } from "./types";
+import { elapsed, rowIssue, startupLabel, stateBadge } from "./progress";
+import { cloud, dismissLaunch, launch, loadContext, loadWorkspaces, openHistory, pauseWorkspace, retryAllocation, workspaceLabel, type Launch, type LaunchDraft } from "./state";
+import type { CloudContextProject } from "./types";
 
 const MODES: { value: LaunchDraft["runtimeMode"]; label: string }[] = [
   { value: "approval-required", label: "Ask for approval" },
@@ -148,22 +150,47 @@ function NewChat() {
 }
 
 /** The queued first message stays visible, with its status, until the cloud accepts it. */
+function openChat(workspaceId: string) {
+  const account = owner();
+  if (account) openCloudWorkspace({ workspaceId, accountId: account.accountId, organizationId: account.organizationId });
+}
+
+/** Agent accounts live on the Connections page; until it exists the alias opens Cloud settings. */
+const reconnectAgent = () => navigate({ kind: "settings", section: "connections" });
+
+function useNow() {
+  const [now, setNow] = createSignal(Date.now());
+  const timer = setInterval(() => setNow(Date.now()), 1000);
+  onCleanup(() => clearInterval(timer));
+  return now;
+}
+
 function Queued(props: { launch: Launch }) {
+  const now = useNow();
   const busy = () => props.launch.state === "sending";
   const retry = () => props.launch.state === "failed" || props.launch.state === "uncertain";
+  const row = () => cloud.workspaces.rows.find((item) => item.workspaceId === props.launch.workspaceId);
+  const issue = () => { const found = row(); return found ? rowIssue(found) : null; };
+  const status = () => {
+    if (props.launch.state !== "accepted") return props.launch.message ?? "Accepting first message…";
+    const problem = issue();
+    if (problem) return `Couldn't start · ${problem.title}`;
+    const found = row();
+    return `${(found && startupLabel(found)) ?? "Starting computer"}… · ${elapsed(now() - props.launch.startedAt)}`;
+  };
   return (
-    <div class="pc-queue-item" data-state={props.launch.state}>
+    <div class="pc-queue-item" data-state={issue() ? "failed" : props.launch.state}>
       <div class="pc-queue-status" role="status">
-        <Show when={busy()} fallback={<Icon name={retry() ? "danger-triangle" : "cloud"} size={12} />}>
+        <Show when={busy() || (props.launch.state === "accepted" && !issue())} fallback={<Icon name={retry() || issue() ? "danger-triangle" : "cloud"} size={12} />}>
           <GlyphSpinner cell={1.5} box={12} decorative />
         </Show>
-        <span class="pc-truncate pc-grow">{props.launch.message ?? "Preparing cloud workspace…"}</span>
+        <span class="pc-truncate pc-grow pc-tabular">{status()}</span>
         <span class="pc-muted pc-truncate">{props.launch.repository}</span>
       </div>
       <div class="pc-queue-prompt">{props.launch.text}</div>
       <div class="pc-queue-actions">
         <Show when={props.launch.workspaceId}>
-          {(id) => <Action onClick={() => void openHistory(id())}>View history</Action>}
+          {(id) => <Action onClick={() => openChat(id())}>Open chat</Action>}
         </Show>
         <Show when={retry()}>
           <Action primary onClick={() => void launch(null, props.launch.key)}>
@@ -176,27 +203,6 @@ function Queued(props: { launch: Launch }) {
       </div>
     </div>
   );
-}
-
-function stateBadge(row: Workspace): { tone: BadgeTone; label: string } {
-  switch (row.state) {
-    case "ready":
-    case "running":
-      return { tone: "ok", label: "Running" };
-    case "paused":
-      return { tone: "outline", label: "Paused" };
-    case "failed":
-    case "blocked":
-      return { tone: "error", label: row.state === "failed" ? "Failed" : "Blocked" };
-    case "pausing":
-      return { tone: "warn", label: "Pausing" };
-    case "starting":
-    case "provisioning":
-    case "creating":
-      return { tone: "warn", label: "Starting" };
-    default:
-      return { tone: "outline", label: row.state || "Unknown" };
-  }
 }
 
 function Workspaces() {
@@ -226,7 +232,14 @@ function Workspaces() {
           {(row) => {
             const badge = () => stateBadge(row);
             const pending = () => cloud.workspaces.pending[row.workspaceId];
-            const canPause = () => ["ready", "running", "starting"].includes(row.state);
+            const canPause = () => ["ready", "running", "starting"].includes(row.state) && !row.allocationRecovery;
+            const issue = () => rowIssue(row);
+            const phase = () => startupLabel(row);
+            const retryStart = () => {
+              const recovery = row.allocationRecovery;
+              if (recovery && recovery.retryAvailable !== false) void retryAllocation(row.workspaceId, recovery.operationId);
+              else openChat(row.workspaceId);
+            };
             return (
               <Row
                 title={
@@ -237,7 +250,13 @@ function Workspaces() {
                 }
                 description={
                   <>
-                    {row.branch ? `Branch ${row.branch}` : "Cloud workspace"}
+                    <Show when={issue()} fallback={<>{phase() ? `${phase()}… · ` : ""}{row.branch ? `Branch ${row.branch}` : "Cloud workspace"}</>}>
+                      {(found) => (
+                        <span class="pc-ws-issue">
+                          <span class="pc-error-text">{found().title}.</span> {found().detail}
+                        </span>
+                      )}
+                    </Show>
                     <Show when={cloud.workspaces.rowError?.id === row.workspaceId}>
                       <span class="pc-error-text"> · {cloud.workspaces.rowError?.message}</span>
                     </Show>
@@ -246,8 +265,19 @@ function Workspaces() {
                 action={
                   <>
                     <Badge tone={badge().tone}>{badge().label}</Badge>
-                    <Show when={!archiveVisible(row) && !["failed", "blocked", "deleting"].includes(row.state)}>
-                      <Action onClick={() => { const account = owner(); if (account) openCloudWorkspace({ workspaceId: row.workspaceId, accountId: account.accountId, organizationId: account.organizationId }); }}>Open workspace</Action>
+                    <Show when={issue()}>
+                      {(found) => (
+                        <Show when={found().recovery === "agent"} fallback={
+                          <Show when={found().recovery !== "none"}>
+                            <Action primary busy={pending() === "retry"} disabled={!!pending()} onClick={retryStart}>Retry start</Action>
+                          </Show>
+                        }>
+                          <Action primary onClick={reconnectAgent}>Reconnect agent</Action>
+                        </Show>
+                      )}
+                    </Show>
+                    <Show when={!issue() && !archiveVisible(row) && !["failed", "blocked", "deleting"].includes(row.state)}>
+                      <Action onClick={() => openChat(row.workspaceId)}>Open workspace</Action>
                     </Show>
                     <Action disabled={cloud.history.loading} onClick={() => void openHistory(row.workspaceId, row.initialSessionId || null)}>
                       View history

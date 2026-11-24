@@ -95,6 +95,7 @@ function install() {
     installRecipe(saved); notePrimaryRecipe(saved); return;
   }
   if (location.hash.startsWith("#cloud=")) {
+    setArea(draft => { Object.assign(draft, { mode: "cloud", origin: "" }); });
     try {
       const target = readCloudTarget()!;
       setTransportFactory(() => new CloudTransport(target));

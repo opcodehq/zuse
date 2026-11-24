@@ -5,9 +5,11 @@ import { setState, state } from "@/core/store";
 import { Icon } from "@/ui/Icon";
 import { Spinner } from "@/ui/primitives";
 import { type JSX } from "@solidjs/web";
-import { For, lazy, Match, Show, Switch } from "solid-js";
+import { createSignal, For, lazy, Match, onCleanup, Show, Switch } from "solid-js";
+import { elapsed, SLOW_START_MS } from "@/features/plugins-cloud/cloud/progress";
 import { returnToController } from "./account";
 import { AddComputer } from "./add";
+import { backToCloud, resumeCloud } from "./cloud";
 import { forgetCurrent, linkFor, openInThisTab, savedComputers, selectedLink } from "./computers";
 import "./connection.css";
 import { retryPaired } from "./paired";
@@ -21,7 +23,15 @@ export { AddComputer,addComputer } from "./add";
 export { AccountSignIn,signInToAccount,signOutOfAccount } from "./signin";
 
 const reconnectingText = () =>
-  area.mode === "paired" ? "Reconnecting to paired computer…" : area.mode === "account" ? "Reconnecting to account computer…" : "Reconnecting to your engine…";
+  area.mode === "cloud" ? "Reconnecting to the cloud computer…" : area.mode === "paired" ? "Reconnecting to paired computer…" : area.mode === "account" ? "Reconnecting to account computer…" : "Reconnecting to your engine…";
+
+/** Milliseconds since `since`, ticking once a second while shown. */
+function useWaited(since: () => number | null) {
+  const [now, setNow] = createSignal(Date.now());
+  const timer = setInterval(() => setNow(Date.now()), 1000);
+  onCleanup(() => clearInterval(timer));
+  return () => { const start = since(); return start === null ? 0 : Math.max(0, now() - start); };
+}
 
 export function ConnectionGate(props: { children: JSX.Element }) {
   const ready = () => state.connection.kind === "connected" || state.workspaceSynced;
@@ -49,7 +59,9 @@ function Banners() {
             <div class="cx-banner" role="status">
               <Spinner label="Reconnecting" tone="muted" cell={1.5} />
               <span class="cx-banner-text" title={message()}>
-                {reconnectingText()} Local edits are preserved; actions are not resent.
+                <Show when={area.mode === "cloud"} fallback={<>{reconnectingText()} Local edits are preserved; actions are not resent.</>}>
+                  <CloudReconnecting />
+                </Show>
               </span>
               <Btn size="sm" tone="quiet" onClick={() => retryConnection()}>Try again</Btn>
             </div>
@@ -59,6 +71,13 @@ function Banners() {
               <Icon name="danger-triangle" size={14} />
               <span class="cx-banner-text" title={message()}>{blockedTitle()} · {message() ?? blockedText()}</span>
               <BlockedActions />
+            </div>
+          </Match>
+          <Match when={status().kind === "cloudStopped"}>
+            <div class="cx-banner" data-tone="warning" role="alert">
+              <Icon name="danger-triangle" size={14} />
+              <span class="cx-banner-text">{area.cloud.stop?.kind === "paused" ? "This cloud chat is paused" : `Couldn't start · ${stoppedIssue().title}`}</span>
+              <CloudActions size="sm" />
             </div>
           </Match>
           <Match when={area.link?.state === "reattaching"}>
@@ -125,6 +144,12 @@ function Screen() {
       <div class="cx-screen-body" role="group" aria-labelledby="cx-screen-title">
         <span class="cx-screen-mark"><Icon name="zuse-logo" size={36} /></span>
         <Switch>
+          <Match when={area.mode === "cloud" && ["connecting", "connected", "reconnecting"].includes(state.connection.kind)}>
+            <CloudStarting />
+          </Match>
+          <Match when={state.connection.kind === "cloudStopped"}>
+            <CloudStopped />
+          </Match>
           <Match when={state.connection.kind === "connecting" || state.connection.kind === "connected"}>
             <h1 class="cx-screen-title" id="cx-screen-title">Connecting to your environment…</h1>
             <p class="cx-screen-text">Authentication and connection recovery happen automatically.</p>
@@ -199,3 +224,84 @@ function openSaved(id: string) {
   const link = linkFor(id);
   if (link) openInThisTab(link);
 }
+
+function CloudReconnecting() {
+  const waited = useWaited(() => area.cloud.since);
+  return (
+    <>
+      Reconnecting to the cloud computer… Your message won't be sent twice.
+      <Show when={waited() >= 30_000}>
+        <span class="cx-banner-elapsed"> {elapsed(waited())}</span>
+      </Show>
+    </>
+  );
+}
+
+const GENERIC_STOP = { title: "The cloud computer stopped", detail: "Your chat is saved. Retry, or go back to Cloud.", recovery: "retry" as const };
+const stoppedIssue = () => {
+  const stop = area.cloud.stop;
+  return stop?.kind === "failed" ? stop.issue : GENERIC_STOP;
+};
+
+function CloudActions(props: { size: "sm" | "lg" }) {
+  const paused = () => area.cloud.stop?.kind === "paused";
+  const retry = () => {
+    const stop = area.cloud.stop;
+    resumeCloud(stop?.kind === "failed" ? stop.operationId : null);
+  };
+  return (
+    <>
+      <Show when={paused()} fallback={
+        <Show when={stoppedIssue().recovery !== "none"}>
+          <Btn size={props.size} tone="solid" onClick={retry}>Retry start</Btn>
+        </Show>
+      }>
+        <Btn size={props.size} tone="solid" onClick={() => resumeCloud()}>Resume</Btn>
+      </Show>
+      <Btn size={props.size} tone="quiet" onClick={() => backToCloud()}>Back to Cloud</Btn>
+    </>
+  );
+}
+
+/** Cold start or wake: the latest startup step and how long it has taken. */
+function CloudStarting() {
+  const waited = useWaited(() => area.cloud.since);
+  return (
+    <>
+      <h1 class="cx-screen-title" id="cx-screen-title">{area.cloud.phase}…</h1>
+      <p class="cx-screen-text">This chat opens when its cloud computer is ready. Your messages are saved and won't be sent twice.</p>
+      <Show when={area.cloud.since !== null}>
+        <p class="cx-screen-detail cx-screen-elapsed" aria-live="off">{elapsed(waited())} elapsed</p>
+      </Show>
+      <Show when={waited() >= SLOW_START_MS}>
+        <p class="cx-screen-text" role="status">This is taking longer than usual. Zuse keeps trying for up to 10 minutes, then shows what went wrong.</p>
+      </Show>
+      <div class="cx-screen-actions" data-row="true">
+        <Spinner label="Starting" />
+        <Btn size="lg" tone="quiet" onClick={() => backToCloud()}>Back to Cloud</Btn>
+      </div>
+    </>
+  );
+}
+
+/** A paused computer, or a start or wake that failed. Nothing retries until the user chooses. */
+function CloudStopped() {
+  return (
+    <Show
+      when={area.cloud.stop?.kind !== "paused"}
+      fallback={
+        <>
+          <h1 class="cx-screen-title" id="cx-screen-title">This cloud chat is paused</h1>
+          <p class="cx-screen-text">Its computer is asleep and not using machine minutes. Your files and history are saved; Resume starts it again.</p>
+          <div class="cx-screen-actions" data-row="true"><CloudActions size="lg" /></div>
+        </>
+      }
+    >
+      <h1 class="cx-screen-title" id="cx-screen-title">Couldn't start</h1>
+      <p class="cx-screen-text cx-screen-reason">{stoppedIssue().title}</p>
+      <p class="cx-screen-text">{stoppedIssue().detail}</p>
+      <div class="cx-screen-actions" data-row="true"><CloudActions size="lg" /></div>
+    </Show>
+  );
+}
+

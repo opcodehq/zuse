@@ -145,13 +145,7 @@ export function usageHint(machineMinutes: number, rate: number | null | undefine
   return r === DEFAULT_RATE ? text : `${text} · ${r} per minute`;
 }
 
-/** Readable text for cloud error codes the server returns as messages. */
-export function cloudErrorText(message: string) {
-  if (message.includes("cloud_size_requires_cloud_max")) return "Large computers (8 vCPU / 32 GB) need Cloud Max. Upgrade in Usage to use them.";
-  if (message.includes("cloud_usage_hold")) return "Cloud computers are paused because this month's machine minutes or pay-as-you-go cap are used up. Open Usage to continue.";
-  if (message.includes("cloud_trial_unavailable")) return "This card or account has already used a trial.";
-  return message;
-}
+export { cloudErrorText } from "./errors";
 
 /** The internal provider id new cloud computers run on: the server's default, else the first ready provider. Never shown. */
 export function defaultProvider(capabilities: CloudCapabilities | null | undefined): string | null {

@@ -9,7 +9,9 @@ export type ConnectionStatus =
   | { kind: "reconnecting"; attempt: number; message?: string }
   | { kind: "authRequired"; message?: string }
   | { kind: "pairingRequired"; message?: string }
-  | { kind: "accountRequired"; message?: string };
+  | { kind: "accountRequired"; message?: string }
+  /** A cloud computer that is paused or could not start; it waits for the user instead of retrying. */
+  | { kind: "cloudStopped"; message?: string };
 
 export interface Transcript {
   chatId: string;

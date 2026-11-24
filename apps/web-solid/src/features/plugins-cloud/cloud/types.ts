@@ -222,6 +222,16 @@ export interface Workspace {
   localMirrorCleanup?: { state: string; removed: number; preserved: number; error?: string | null } | null;
   archiveStatus?: ArchiveStatus | null;
   projectId?: string;
+  /** What a starting computer is doing now (crates/cloud store.rs `startup_phase`). */
+  startupPhase?: string | null;
+  preparation?: Partial<Record<"repository" | "environment" | "credentials" | "agent", PreparationStep | null>> | null;
+  /** Set when the server gave up on a start; Retry restarts it with this operation. */
+  allocationRecovery?: { operationId: string; errorCode?: string | null; retryAvailable?: boolean } | null;
+}
+
+export interface PreparationStep {
+  state: "running" | "completed" | "failed" | string;
+  errorCode?: string | null;
 }
 
 export interface HeadChat {

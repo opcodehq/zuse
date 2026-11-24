@@ -52,6 +52,7 @@ const ALIASES: Record<string, SectionId> = {
   devices: "devices",
   remote: "devices",
   cloud: "cloud",
+  connections: "cloud",
   appearance: "appearance",
   notifications: "notifications",
   shortcuts: "shortcuts",

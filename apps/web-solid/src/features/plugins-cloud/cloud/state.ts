@@ -77,6 +77,8 @@ export interface Launch {
   state: "sending" | "accepted" | "failed" | "uncertain";
   message: string | null;
   workspaceId: string | null;
+  /** When this attempt started, for the elapsed time. */
+  startedAt: number;
 }
 interface Context {
   loaded: boolean;
@@ -334,9 +336,9 @@ const recoveryPending = (row: Workspace) => {
   const status = archiveStatus(row);
   return !!status && !status.errorCode && ["uploading", "verifying", "retiring", "restoring"].includes(status.phase ?? "");
 };
-const STARTING = new Set(["starting", "provisioning", "creating"]);
+const STARTING = new Set(["queued", "starting", "provisioning", "setup", "creating"]);
 const needsPoll = (rows: Workspace[]) =>
-  rows.some((row) => row.state === "archiving" || isDeleting(row) || cleanupPending(row) || recoveryPending(row) || ["starting", "pausing", "provisioning", "creating"].includes(row.state));
+  rows.some((row) => row.state === "archiving" || isDeleting(row) || cleanupPending(row) || recoveryPending(row) || row.state === "pausing" || (STARTING.has(row.state) && !row.allocationRecovery));
 
 export async function loadWorkspaces() {
   const who = owner();
@@ -380,18 +382,18 @@ function updateRow(row: Workspace) {
 
 // One command id per workspace action, kept until it resolves, so a retry repeats the same request.
 const commands = new Map<string, string>();
-export type WorkspaceAction = "restore" | "delete" | "cleanup" | "pause";
+export type WorkspaceAction = "restore" | "delete" | "cleanup" | "pause" | "retry";
 export const workspaceBusy = () => Object.values(cloud.workspaces.pending).some(Boolean);
-async function workspaceAction(id: string, action: WorkspaceAction) {
+async function workspaceAction(id: string, action: WorkspaceAction, extra: Record<string, unknown> = {}) {
   const who = owner();
   if (!who || cloud.workspaces.pending[id]) return;
-  const method = { restore: M.CLOUD_UNARCHIVE, delete: M.CLOUD_DELETE, cleanup: M.CLOUD_CLEANUP_MIRROR, pause: M.CLOUD_PAUSE }[action];
-  const commandKey = `${action}:${id}`;
+  const method = { restore: M.CLOUD_UNARCHIVE, delete: M.CLOUD_DELETE, cleanup: M.CLOUD_CLEANUP_MIRROR, pause: M.CLOUD_PAUSE, retry: M.CLOUD_ALLOCATION_RETRY }[action];
+  const commandKey = `${action}:${id}:${String(extra.operationId ?? "")}`;
   let command = commands.get(commandKey);
   if (!command) commands.set(commandKey, (command = newId()));
   setCloud(draft => { Object.assign(draft["workspaces"], { rowError: null }); });
   setCloud(draft => { draft["workspaces"]["pending"][id] = action; });
-  const params = action === "cleanup" ? { workspaceId: id } : { workspaceId: id, commandId: command };
+  const params = action === "cleanup" ? { workspaceId: id } : { workspaceId: id, commandId: command, ...extra };
   const result = await call<{ workspace?: Workspace }>(method, params, who, false);
   if (!result) return;
   // Store setters merge objects, so a removed key must be cleared explicitly.
@@ -408,6 +410,8 @@ export const restoreWorkspace = (id: string) => workspaceAction(id, "restore");
 export const deleteWorkspace = (id: string) => workspaceAction(id, "delete");
 export const retryCleanup = (id: string) => workspaceAction(id, "cleanup");
 export const pauseWorkspace = (id: string) => workspaceAction(id, "pause");
+/** Restarts a start the server gave up on, with the recovery operation it offered (crates/engine allocation_retry.rs). */
+export const retryAllocation = (id: string, operationId: string) => workspaceAction(id, "retry", { operationId });
 
 // Saved history ----------------------------------------------------------------------------------
 
@@ -492,11 +496,11 @@ export async function launch(draft: LaunchDraft | null, retryKey?: string) {
       firstMessage: draft.text,
     });
     setCloud(storeDraft => { storeDraft["launches"] = ((list) => [
-      { key: key!, text: draft.text, repository: project.displayName ?? project.name ?? "Repository", state: "sending", message: "Accepting first message…", workspaceId: null },
+      { key: key!, text: draft.text, repository: project.displayName ?? project.name ?? "Repository", state: "sending", message: "Accepting first message…", workspaceId: null, startedAt: Date.now() },
       ...list,
     ])(storeDraft["launches"]); });
   } else {
-    setCloud(draft => { for (const row of draft["launches"]) if (((row) => row.key === key)(row)) Object.assign(row, { state: "sending", message: "Accepting first message…" }); });
+    setCloud(draft => { for (const row of draft["launches"]) if (((row) => row.key === key)(row)) Object.assign(row, { state: "sending", message: "Accepting first message…", startedAt: Date.now() }); });
   }
   const body = drafts.get(key);
   if (!body) return;
@@ -508,7 +512,7 @@ export async function launch(draft: LaunchDraft | null, retryKey?: string) {
     const raw = reply.workspace as (Workspace & { workspace?: Workspace }) | undefined;
     const workspace = raw?.workspace ?? raw;
     drafts.delete(key);
-    setCloud(draft => { for (const row of draft["launches"]) if (((row) => row.key === key)(row)) Object.assign(row, { state: "accepted", message: "Preparing cloud workspace…", workspaceId: workspace?.workspaceId ?? null }); });
+    setCloud(draft => { for (const row of draft["launches"]) if (((row) => row.key === key)(row)) Object.assign(row, { state: "accepted", message: null, workspaceId: workspace?.workspaceId ?? null }); });
     if (workspace?.workspaceId) updateRow(workspace as Workspace);
     void loadWorkspaces();
   } catch (error) {

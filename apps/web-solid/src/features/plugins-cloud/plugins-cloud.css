@@ -42,6 +42,7 @@
 .pc-toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .pc-grow { flex: 1; min-width: 0; }
 .pc-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pc-tabular { font-variant-numeric: tabular-nums; }
 .pc-muted { color: var(--text-muted); }
 .pc-pad { padding: 12px; margin: 0; }
 .pc-relaxed { line-height: 16px; }
