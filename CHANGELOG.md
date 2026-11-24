@@ -7,6 +7,15 @@
 - Add opt-in Slack cloud tasks with threaded status/results, sender/channel attribution, and a workspace/repository connection flow in Cloud settings. Server credentials stay encrypted; enablement requires the Slack migration and a rebuilt compatible runtime image.
 - Link a chat or a Zapper to a Slack channel from its right-click menu. Finished replies post into a Slack thread, your replies in that thread come back to the chat, and Zappers post under their own name and avatar. Their worker threads get their own threads in the same channel. Requires the new Slack migration and re-authorizing the Slack app for its added scopes.
 
+## 0.27.8 - 2026-11-24
+
+### Fixed
+
+- Each cloud chat keeps its own tab bar: switching chats shows only that chat's conversations, and no stray "New chat" tab follows you around. New thread opens a clean new chat (a new computer) instead of a tab; the tab bar's plus still opens a conversation on the same computer.
+- The cloud tab bar's plus and close icons are visible again.
+- Image links show their photo icon and normal link style again. In a cloud chat whose computer is asleep, clicking an image or file link opens a tab right away, wakes the computer and shows the file, with Retry if it fails.
+- The Diff/Edit switch only appears for changed files git can compare, not for images, untracked files or unchanged files.
+
 ## 0.27.7 - 2026-11-23
 
 ### Added
