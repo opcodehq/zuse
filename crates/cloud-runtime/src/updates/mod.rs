@@ -197,9 +197,24 @@ pub fn take_exec() -> Option<PathBuf> {
         .take()
 }
 
-/// The image's launcher (`infra/cloud/launch-runtime.sh`). It runs the
-/// harness gate (`harness-release.py exec`) before it execs the binary.
+/// The image's launcher (`infra/cloud/launch-runtime.sh`) on root bases. It
+/// runs the harness gate (`harness-release.py exec`) before it execs the binary.
 pub const LAUNCHER: &str = "/usr/local/lib/zuse/launch-rust-runtime-core";
+/// The same launcher on Home bases, relative to the install root `R`
+/// (`R/bin/zuse-cloud-runtime`, `R/lib/launch-rust-runtime`; see
+/// `infra/cloud/prized-base/install.sh`).
+const HOME_LAUNCHER: &str = "lib/launch-rust-runtime";
+
+/// The launcher installed next to `binary`, by the computer's layout.
+pub fn launcher_for(binary: &Path) -> PathBuf {
+    if binary.starts_with("/usr/local/bin") {
+        return PathBuf::from(LAUNCHER);
+    }
+    binary
+        .parent()
+        .and_then(Path::parent)
+        .map_or_else(|| PathBuf::from(LAUNCHER), |root| root.join(HOME_LAUNCHER))
+}
 /// What the launcher needs to start a runtime again without new arguments.
 const LAUNCH_ENV: [&str; 4] = [
     "ZUSE_CLOUD_WORKSPACE_ID",
@@ -213,7 +228,9 @@ const LAUNCH_ENV: [&str; 4] = [
 pub fn exec(binary: &Path) -> std::io::Error {
     use std::os::unix::process::CommandExt;
     stop_children();
-    let mut command = restart_command(binary, Path::new(LAUNCHER), &|name| std::env::var_os(name));
+    let mut command = restart_command(binary, &launcher_for(binary), &|name| {
+        std::env::var_os(name)
+    });
     tracing::info!(binary = %binary.display(), launcher = command.get_program() != binary.as_os_str(), "Restarting into the updated runtime");
     command.exec()
 }

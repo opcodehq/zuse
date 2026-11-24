@@ -754,3 +754,46 @@ fn a_launcher_started_runtime_restarts_through_the_launcher() {
     assert_eq!(c.get_program(), binary.as_os_str());
     assert_eq!(envs(&c)["ZUSE_RUNTIME_BOOT_TOKEN_FILE"], None);
 }
+
+#[test]
+fn the_restart_uses_the_launcher_of_the_computers_layout() {
+    use std::collections::HashMap;
+    use std::ffi::OsString;
+    assert_eq!(
+        launcher_for(Path::new("/usr/local/bin/zuse-cloud-runtime")),
+        Path::new(LAUNCHER)
+    );
+    assert_eq!(
+        launcher_for(Path::new("/home/prized/.zuse/bin/zuse-cloud-runtime")),
+        Path::new("/home/prized/.zuse/lib/launch-rust-runtime")
+    );
+    // A Home install restarts through its own launcher, gate included.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::create_dir_all(root.join("lib")).unwrap();
+    let binary = root.join("bin/zuse-cloud-runtime");
+    write_executable(&binary, b"#!/bin/sh\n");
+    write_executable(&root.join("lib/launch-rust-runtime"), b"#!/bin/sh\n");
+    let data = root.join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(data.join("cloud-runtime-identity.json"), "{}").unwrap();
+    let vars: HashMap<&str, OsString> = [
+        ("ZUSE_HARNESS_ROOT", root.join("harnesses").into_os_string()),
+        ("ZUSE_CLOUD_WORKSPACE_ID", "workspace".into()),
+        ("ZUSE_API_URL", "https://api.example.test".into()),
+        ("ZUSE_RUNTIME_GENERATION", "1".into()),
+        ("ZUSE_STORAGE_INCARNATION_ID", "disk".into()),
+        ("ZUSE_RUNTIME_RETAINED", "true".into()),
+        ("ZUSE_USER_DATA", data.into_os_string()),
+    ]
+    .into_iter()
+    .collect();
+    let command = restart_command(&binary, &launcher_for(&binary), &|name| {
+        vars.get(name).cloned()
+    });
+    assert_eq!(
+        command.get_program(),
+        root.join("lib/launch-rust-runtime").as_os_str()
+    );
+}

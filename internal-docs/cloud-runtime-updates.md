@@ -219,7 +219,8 @@ launch after its first sleep without memory.
   downgrade the server makes. A managed base whose runtime is not registered
   is offered nothing.
 - **In-place restart** (`updates::restart_command`): a runtime the launcher
-  started restarts through `launch-rust-runtime-core --foreground`. A binary
+  started restarts through its layout's launcher (`launch-rust-runtime-core`,
+  or `lib/launch-rust-runtime` on Home bases) with `--foreground`. A binary
   the gate refuses then fails during probation and is rolled back.
 - **Retained launch** (`launch_repair.rs`, `runtime-update-launch-repair.py`):
   if a launch fails while the root journal holds a committed update that the
