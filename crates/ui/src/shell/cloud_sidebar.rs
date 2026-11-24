@@ -78,7 +78,10 @@ impl Shell {
         } else {
             Vec::new()
         };
-        elements.extend(self.render_settled_section(settled_count, settled_rows, &theme, cx));
+        // Settled sits beside the project scroller, as in the main sidebar,
+        // so its rows scroll on their own and it can take spare space.
+        let settled_section = self.render_settled_section(settled_count, settled_rows, &theme, cx);
+        let settled_fills = self.settled_open && settled_section.is_some();
         div()
             .id("offline-cloud-sidebar")
             .w(px(self.settings.sidebar_width.max(SIDEBAR_MIN)))
@@ -100,12 +103,14 @@ impl Shell {
             .child(
                 div()
                     .id("offline-cloud-projects")
-                    .flex_1()
+                    .when(settled_fills, |el| el.flex_initial())
+                    .when(!settled_fills, |el| el.flex_1())
                     .min_h_0()
                     .overflow_y_scroll()
                     .px(px(6.))
                     .children(elements),
             )
+            .children(settled_section)
             .child(
                 div()
                     .px(px(16.))
@@ -359,7 +364,7 @@ impl Shell {
             super::SIDEBAR_SETTLED_ROW_HEIGHT
         } else {
             sidebar_row_height(
-                self.sidebar_compact_rows(),
+                self.sidebar_row_compact(project_group),
                 self.sidebar_project_labels(),
                 project_group,
             )
@@ -1662,6 +1667,50 @@ mod tests {
         cx.run_until_parked();
         cx.update(|window, cx| window.draw(cx).clear());
         assert!(cx.debug_bounds("chat-peek-card").is_none());
+    }
+
+    #[gpui::test]
+    fn project_density_shapes_rows_under_project_headings(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let directory = tempfile::tempdir().unwrap();
+        let (shell, cx) = mixed_sidebar(cx, &runtime, directory.path(), None);
+        let heights = |shell: &Entity<Shell>,
+                       cx: &mut gpui::VisualTestContext,
+                       density: settings::SidebarDensity| {
+            shell.update(cx, |shell, cx| {
+                shell.settings.sidebar_organization = SidebarOrganization::ByProject;
+                shell.settings.sidebar_project_density = density;
+                shell.sidebar_collapsed_groups.clear();
+                cx.notify();
+            });
+            cx.run_until_parked();
+            cx.update(|window, cx| window.draw(cx).clear());
+            ["chat-local-1", "chat-cloud:task-1"]
+                .map(|row| f32::from(cx.debug_bounds(row).expect(row).size.height))
+        };
+        // Detailed, the default, draws cards; Compact draws one-line rows.
+        assert_eq!(
+            heights(&shell, cx, settings::SidebarDensity::Detailed),
+            [super::super::SIDEBAR_ROW_DOUBLE_HEIGHT; 2]
+        );
+        assert_eq!(
+            heights(&shell, cx, settings::SidebarDensity::Compact),
+            [super::super::SIDEBAR_ROW_SINGLE_HEIGHT; 2]
+        );
+        // Density belongs to the Projects view: the Threads view keeps cards.
+        shell.update(cx, |shell, cx| {
+            shell.settings.sidebar_organization = SidebarOrganization::InOneList;
+            cx.notify();
+        });
+        cx.update(|window, cx| window.draw(cx).clear());
+        assert_eq!(
+            f32::from(cx.debug_bounds("chat-local-1").unwrap().size.height),
+            super::super::SIDEBAR_ROW_DOUBLE_HEIGHT
+        );
     }
 }
 

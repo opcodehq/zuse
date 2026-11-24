@@ -962,6 +962,17 @@ pub enum SidebarSort {
     Created,
 }
 
+/// How chats under a project heading draw in the Projects view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum SidebarDensity {
+    /// One-line rows.
+    Compact,
+    /// Two-line cards: title and age, then the branch.
+    #[default]
+    Detailed,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowGeometry {
@@ -1124,6 +1135,8 @@ pub struct UiSettings {
     /// session title.
     pub sidebar_show_project_label: bool,
     pub sidebar_compact: bool,
+    /// Row density under project headings in the Projects view.
+    pub sidebar_project_density: SidebarDensity,
     pub sidebar_show_project_icon: bool,
     pub sidebar_show_harness: bool,
     pub sidebar_show_branch: bool,
@@ -1352,6 +1365,7 @@ impl Default for UiSettings {
             sidebar_sort: SidebarSort::LastUpdated,
             sidebar_show_project_label: true,
             sidebar_compact: true,
+            sidebar_project_density: SidebarDensity::Detailed,
             sidebar_show_project_icon: true,
             sidebar_show_harness: true,
             sidebar_show_branch: true,
@@ -2268,6 +2282,7 @@ impl UiSettings {
             sidebar_sort,
             sidebar_show_project_label,
             sidebar_compact,
+            sidebar_project_density,
             sidebar_show_project_icon,
             sidebar_show_harness,
             sidebar_show_branch,
@@ -3266,6 +3281,7 @@ mod tests {
             sidebar_organization: SidebarOrganization::ByDevice,
             sidebar_sort: SidebarSort::Created,
             sidebar_compact: true,
+            sidebar_project_density: SidebarDensity::Compact,
             sidebar_show_project_icon: false,
             sidebar_show_project_label: false,
             sidebar_show_harness: false,

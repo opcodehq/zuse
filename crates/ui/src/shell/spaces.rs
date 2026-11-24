@@ -716,6 +716,37 @@ mod pinned_session_tests {
     }
 
     #[gpui::test]
+    fn settled_pins_leave_the_pin_drag_check(cx: &mut gpui::TestAppContext) {
+        use super::*;
+        let dir = tempfile::tempdir().unwrap();
+        let window = pin_test_shell(cx, dir.path());
+        window
+            .update(cx, |shell, _, cx| {
+                shell.state.update(cx, |state, _| {
+                    state.workspace_scope = Some(WorkspaceScope::Local);
+                    state.chats = vec![pin_test_chat("p"), pin_test_chat("q")];
+                });
+                shell.settings.space_filter = None;
+                let profile = shell.active_sidebar_pin_profile_key(cx).unwrap();
+                shell
+                    .settings
+                    .sidebar_pins_mut(profile.clone())
+                    .extend(["p".into(), "q".into()]);
+                shell.set_sidebar_thread_settled(profile.clone(), "p".into(), true, cx);
+                // The active rows show only Q among the pins, so a drag of Q
+                // carries just Q; settled P must not make it look stale.
+                let payload = SidebarSessionDrag {
+                    chat_id: "q".into(),
+                    visible_ids: std::sync::Arc::new(vec!["q".into()]),
+                    filter: None,
+                    profile_key: profile,
+                };
+                assert!(shell.sidebar_session_transfer_is_valid(&payload, cx));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
     fn sidebar_menu_and_drop_both_reject_unknown_remote_preferences(cx: &mut gpui::TestAppContext) {
         use super::*;
         let dir = tempfile::tempdir().unwrap();
@@ -920,6 +951,38 @@ mod pinned_session_tests {
             })
             .unwrap();
         cx.run_until_parked();
+    }
+
+    #[test]
+    fn density_takes_the_compact_toggles_place_only_in_projects() {
+        use super::*;
+        let compact = SIDEBAR_VIEW_ITEMS
+            .iter()
+            .position(|item| matches!(item, SidebarViewItem::Row(SidebarViewRow::Compact)))
+            .unwrap();
+        assert!(matches!(
+            sidebar_view_item(compact, SidebarOrganization::ByProject),
+            Some(SidebarViewItem::Group(SIDEBAR_VIEW_DENSITY_GROUP))
+        ));
+        let (label, range) = sidebar_view_group(compact, SidebarOrganization::ByProject).unwrap();
+        assert_eq!(*label, "Density");
+        assert!(matches!(
+            SIDEBAR_VIEW_ROWS[range.clone()],
+            [
+                SidebarViewRow::DensityCompact,
+                SidebarViewRow::DensityDetailed
+            ]
+        ));
+        for organization in [
+            SidebarOrganization::InOneList,
+            SidebarOrganization::ByDevice,
+        ] {
+            assert!(matches!(
+                sidebar_view_item(compact, organization),
+                Some(SidebarViewItem::Row(SidebarViewRow::Compact))
+            ));
+            assert!(sidebar_view_group(compact, organization).is_none());
+        }
     }
 
     #[test]
@@ -2124,13 +2187,18 @@ enum SidebarViewRow {
     ShowPullRequest,
     ShowHarness,
     ShowProjectFilter,
+    DensityCompact,
+    DensityDetailed,
 }
 
 impl SidebarViewRow {
     /// Radio choices dismiss their submenu after selection. Show toggles
     /// stay open for batch changes.
     fn closes_submenu(self) -> bool {
-        matches!(self, Self::LastUpdated | Self::Created)
+        matches!(
+            self,
+            Self::LastUpdated | Self::Created | Self::DensityCompact | Self::DensityDetailed
+        )
     }
 }
 
@@ -2154,9 +2222,14 @@ const SIDEBAR_VIEW_ITEMS: [SidebarViewItem; 7] = [
     SidebarViewItem::CreateSection,
 ];
 
-const SIDEBAR_VIEW_GROUPS: [(&str, std::ops::Range<usize>); 2] = [("Sort", 0..2), ("Show", 2..8)];
+const SIDEBAR_VIEW_GROUPS: [(&str, std::ops::Range<usize>); 3] =
+    [("Sort", 0..2), ("Show", 2..8), ("Density", 8..10)];
 
-const SIDEBAR_VIEW_ROWS: [SidebarViewRow; 8] = [
+/// The Density submenu, which takes the Compact toggle's place in the
+/// Projects view.
+const SIDEBAR_VIEW_DENSITY_GROUP: usize = 2;
+
+const SIDEBAR_VIEW_ROWS: [SidebarViewRow; 10] = [
     SidebarViewRow::LastUpdated,
     SidebarViewRow::Created,
     SidebarViewRow::ShowBranch,
@@ -2165,12 +2238,30 @@ const SIDEBAR_VIEW_ROWS: [SidebarViewRow; 8] = [
     SidebarViewRow::ShowProjectIcon,
     SidebarViewRow::ShowProjectLabel,
     SidebarViewRow::ShowProjectFilter,
+    SidebarViewRow::DensityCompact,
+    SidebarViewRow::DensityDetailed,
 ];
 
+/// The top-level row at `item` for this view. The Projects view shapes its
+/// rows with the Density submenu; other views keep the Compact toggle.
+fn sidebar_view_item(item: usize, organization: SidebarOrganization) -> Option<SidebarViewItem> {
+    match SIDEBAR_VIEW_ITEMS.get(item)? {
+        SidebarViewItem::Row(SidebarViewRow::Compact)
+            if organization == SidebarOrganization::ByProject =>
+        {
+            Some(SidebarViewItem::Group(SIDEBAR_VIEW_DENSITY_GROUP))
+        }
+        entry => Some(*entry),
+    }
+}
+
 /// The submenu a top-level view options row opens, if it is a trigger.
-fn sidebar_view_group(item: usize) -> Option<&'static (&'static str, std::ops::Range<usize>)> {
-    match SIDEBAR_VIEW_ITEMS.get(item) {
-        Some(SidebarViewItem::Group(group)) => SIDEBAR_VIEW_GROUPS.get(*group),
+fn sidebar_view_group(
+    item: usize,
+    organization: SidebarOrganization,
+) -> Option<&'static (&'static str, std::ops::Range<usize>)> {
+    match sidebar_view_item(item, organization) {
+        Some(SidebarViewItem::Group(group)) => SIDEBAR_VIEW_GROUPS.get(group),
         _ => None,
     }
 }
@@ -3281,9 +3372,12 @@ impl Shell {
             return false;
         }
         let state = self.state.read(cx);
+        // Settled threads leave the active rows, so they leave this check too.
+        let choices = self.sidebar_settlement_choices(Some(payload.profile_key.as_str()));
         let visible: HashSet<String> = self
             .computer_sidebar_chats(state, Utc::now(), payload.filter.as_deref())
             .into_iter()
+            .filter(|(_, chat)| !Self::local_thread_is_settled(state, chat, choices))
             .map(|(_, chat)| chat.id.clone())
             .collect();
         if !visible.contains(&payload.chat_id) {
@@ -4093,14 +4187,16 @@ impl Shell {
                 self.settings.sidebar_show_branch = !self.settings.sidebar_show_branch
             }
             SidebarViewRow::ShowPullRequest => {
-                self.settings.sidebar_show_pull_request = !self.settings.sidebar_show_pull_request;
-                let visible = self.settings.sidebar_show_pull_request;
-                self.state.update(cx, |state, cx| {
-                    state.set_change_requests_visible(visible, cx)
-                });
+                self.settings.sidebar_show_pull_request = !self.settings.sidebar_show_pull_request
             }
             SidebarViewRow::ShowHarness => {
                 self.settings.sidebar_show_harness = !self.settings.sidebar_show_harness
+            }
+            SidebarViewRow::DensityCompact => {
+                self.settings.sidebar_project_density = SidebarDensity::Compact
+            }
+            SidebarViewRow::DensityDetailed => {
+                self.settings.sidebar_project_density = SidebarDensity::Detailed
             }
             SidebarViewRow::ShowProjectFilter => {
                 self.settings.sidebar_show_project_filter =
@@ -4124,10 +4220,13 @@ impl Shell {
     }
 
     fn open_sidebar_view_submenu(&mut self, item: usize, keyboard: bool, cx: &mut Context<Self>) {
+        let organization = self.settings.sidebar_organization;
         if let Some(menu) = self.sidebar_view_menu.open_mut() {
             menu.hover_intent.reset();
             menu.active = Some(item);
-            menu.submenu = sidebar_view_group(item).is_some().then_some(item);
+            menu.submenu = sidebar_view_group(item, organization)
+                .is_some()
+                .then_some(item);
             menu.submenu_active = keyboard.then_some(0);
             menu.submenu_bounds = None;
             cx.notify();
@@ -4186,6 +4285,7 @@ impl Shell {
     }
 
     fn sidebar_view_menu_key(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
+        let organization = self.settings.sidebar_organization;
         let Some(menu) = self.sidebar_view_menu.open_mut() else {
             return;
         };
@@ -4211,7 +4311,10 @@ impl Shell {
             }
             "up" | "down" => {
                 let delta = if key == "up" { -1 } else { 1 };
-                if let Some((_, range)) = menu.submenu.and_then(sidebar_view_group) {
+                if let Some((_, range)) = menu
+                    .submenu
+                    .and_then(|item| sidebar_view_group(item, organization))
+                {
                     menu.submenu_active =
                         popover::menu_step(menu.submenu_active, range.len(), delta);
                 } else {
@@ -4220,7 +4323,10 @@ impl Shell {
                 cx.notify();
             }
             "right" | "enter" | "space" => {
-                if let Some((_, range)) = menu.submenu.and_then(sidebar_view_group) {
+                if let Some((_, range)) = menu
+                    .submenu
+                    .and_then(|item| sidebar_view_group(item, organization))
+                {
                     if key == "enter"
                         && let Some(choice) = menu.submenu_active
                     {
@@ -4230,7 +4336,9 @@ impl Shell {
                 } else {
                     let item = menu.active.unwrap_or(0);
                     let pressed = key != "right" && !event.is_held;
-                    match SIDEBAR_VIEW_ITEMS[item] {
+                    match sidebar_view_item(item, organization)
+                        .unwrap_or(SidebarViewItem::CreateSection)
+                    {
                         SidebarViewItem::Group(_) => {
                             if key != "space" {
                                 self.open_sidebar_view_submenu(item, true, cx);
@@ -4280,6 +4388,8 @@ impl Shell {
             "Project icon",
             "Location",
             "Project filter",
+            "Compact",
+            "Detailed",
         ];
         let icons = [
             icons::CLOCK_CIRCLE,
@@ -4291,6 +4401,8 @@ impl Shell {
             // Location names the host: the remote glyph sidebar rows wear.
             icons::REMOTE_SERVER,
             icons::FOLDER,
+            icons::LIST,
+            icons::CHECKLIST,
         ];
         let selected = [
             sort == SidebarSort::LastUpdated,
@@ -4301,12 +4413,18 @@ impl Shell {
             self.settings.sidebar_show_project_icon,
             self.settings.sidebar_show_project_label,
             self.settings.sidebar_show_project_filter,
+            self.settings.sidebar_project_density == SidebarDensity::Compact,
+            self.settings.sidebar_project_density == SidebarDensity::Detailed,
         ];
         let sort_value = labels[selected[..2].iter().position(|v| *v).unwrap_or(0)];
+        let density_value = labels[8 + selected[8..].iter().position(|v| *v).unwrap_or(1)];
 
         let mut items: Vec<AnyElement> = Vec::new();
         items.push(popover::menu_heading(theme, "View").into_any_element());
-        for (item, entry) in SIDEBAR_VIEW_ITEMS.iter().copied().enumerate() {
+        for item in 0..SIDEBAR_VIEW_ITEMS.len() {
+            let Some(entry) = sidebar_view_item(item, organization) else {
+                continue;
+            };
             if matches!(
                 entry,
                 SidebarViewItem::Group(0)
@@ -4439,6 +4557,9 @@ impl Shell {
                     .child(div().flex_1().child(*label))
                     .when(group == 0, |el| {
                         el.child(div().text_color(theme.text_muted).child(sort_value))
+                    })
+                    .when(group == SIDEBAR_VIEW_DENSITY_GROUP, |el| {
+                        el.child(div().text_color(theme.text_muted).child(density_value))
                     })
                     .child(
                         icon(icons::ALT_ARROW_RIGHT)
@@ -5607,7 +5728,10 @@ impl Shell {
         sections.extend(regular_groups);
 
         let returning = self.sidebar_session_transfer.is_none();
-        let compact_rows = self.sidebar_compact_rows();
+        let (flat_compact, nested_compact) = (
+            self.sidebar_row_compact(false),
+            self.sidebar_row_compact(true),
+        );
         let project_labels = self.sidebar_project_labels();
         let transfer = self.sidebar_session_transfer.as_mut().or_else(|| {
             self.sidebar_session_return
@@ -5635,7 +5759,8 @@ impl Shell {
                     && group
                         .as_ref()
                         .is_some_and(|(key, _)| !key.starts_with("section:"));
-                drag.row_height = sidebar_row_height(compact_rows, project_labels, nested);
+                let compact = if nested { nested_compact } else { flat_compact };
+                drag.row_height = sidebar_row_height(compact, project_labels, nested);
                 // Move the vacant slot to the destination instead of keeping two
                 // holes. Sample layout and paint with the same reversible easing.
                 let collapse = !returning
@@ -5776,7 +5901,7 @@ impl Shell {
                     .then(|| chat.config.as_ref().map(|c| c.harness))
                     .flatten();
                 let height = sidebar_row_height(
-                    self.sidebar_compact_rows(),
+                    self.sidebar_row_compact(project_group),
                     self.sidebar_project_labels(),
                     project_group,
                 );

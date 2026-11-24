@@ -57,7 +57,7 @@ use crate::settings::shortcuts::{ShortcutsEvent, ShortcutsPage};
 use crate::settings::{
     self, CHAT_PANEL_MIN, ComposerSendBehavior, FILES_PANEL_MIN, JUMP_SLOTS, KeymapConfig,
     RIGHT_PANE_MIN, SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN, SavePolicy, ShortcutId,
-    SidebarOrganization, SidebarSort, TERMINAL_DEFAULT_HEIGHT, TERMINAL_MAX_VH,
+    SidebarDensity, SidebarOrganization, SidebarSort, TERMINAL_DEFAULT_HEIGHT, TERMINAL_MAX_VH,
     TERMINAL_MIN_HEIGHT, UiSettings, badge_combo, jump_hints_visible, modifier_send_hint_visible,
     platform_combo, sidebar_pin_profile_key,
 };
@@ -1192,6 +1192,16 @@ impl Shell {
             && self.settings.sidebar_organization != SidebarOrganization::InOneList
     }
 
+    /// Whether a row takes one line. Rows under a Projects heading follow
+    /// Density; Compact shapes the rest.
+    pub(crate) fn sidebar_row_compact(&self, nested: bool) -> bool {
+        if nested {
+            self.settings.sidebar_project_density == SidebarDensity::Compact
+        } else {
+            self.sidebar_compact_rows()
+        }
+    }
+
     pub(crate) fn sidebar_project_labels(&self) -> bool {
         self.settings.sidebar_show_project_label
             || self.settings.sidebar_organization == SidebarOrganization::InOneList
@@ -1201,10 +1211,11 @@ impl Shell {
 /// Sidebar row ids for cloud tasks: `cloud:<workspace id>`.
 pub(crate) const CLOUD_ROW_PREFIX: &str = "cloud:";
 
-/// Cards (Threads, and rows under a Projects heading) take two lines. Other
-/// rows take one when Compact is on or they have no second line.
+/// Cards (Threads, and rows under a Projects heading) take two lines. Rows
+/// take one when Compact (or, under a heading, Density) says so, or when
+/// they have no second line.
 fn sidebar_row_height(compact: bool, show_label: bool, nested: bool) -> f32 {
-    if nested || (!compact && show_label) {
+    if !compact && (nested || show_label) {
         SIDEBAR_ROW_DOUBLE_HEIGHT
     } else {
         SIDEBAR_ROW_SINGLE_HEIGHT
@@ -2917,10 +2928,7 @@ impl Shell {
         let transcript_events = cx.subscribe(&transcript, Self::on_transcript_event);
         let data_dir = boot.data_dir.clone();
         let mut settings = settings::current(cx);
-        state.update(cx, |state, cx| {
-            state.watch_clock_transitions(cx);
-            state.set_change_requests_visible(settings.sidebar_show_pull_request, cx)
-        });
+        state.update(cx, |state, cx| state.watch_clock_transitions(cx));
         crate::appshots::set_enabled(settings.appshots_enabled);
         crate::appshots::set_capture_sound_enabled(settings.appshot_sound_enabled);
         // Bind the customizable shortcuts from the persisted keymap.
@@ -9582,8 +9590,8 @@ impl Shell {
         };
         // The sidebar's own row layout; the palette keeps its three-line card.
         let sidebar = search_query.is_none();
-        // Rows under a Projects heading are always cards; Compact shapes the rest.
-        let compact = sidebar && self.sidebar_compact_rows() && !nested;
+        // Rows under a Projects heading follow Density; Compact shapes the rest.
+        let compact = sidebar && self.sidebar_row_compact(nested);
         let show_label = !single_line && (search_query.is_some() || self.sidebar_project_labels());
         let two_line = sidebar && !compact && (nested || show_label);
         let avatar_size = if two_line {
