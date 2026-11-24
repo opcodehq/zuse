@@ -1500,6 +1500,9 @@ impl Shell {
             self.set_route(Route::Chat, cx);
             return;
         }
+        // Chats left with a single tab are forgotten as this one opens.
+        self.cloud_tabs
+            .forget_single_tab_chats(&target.workspace, cx);
         let retained = self.cloud_tabs.retained_index(&target, cx);
         if let Some(index) = retained {
             self.select_cloud_tab(index, cx);

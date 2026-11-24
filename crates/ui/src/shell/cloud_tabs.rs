@@ -76,7 +76,7 @@ impl CloudTabs {
             .collect()
     }
     /// Another chat is opening: forget the chats left with a single tab.
-    fn forget_single_tab_chats(&mut self, opening: &str, cx: &App) {
+    pub(super) fn forget_single_tab_chats(&mut self, opening: &str, cx: &App) {
         let mut counts = std::collections::HashMap::<String, usize>::new();
         for view in &self.views {
             *counts
@@ -531,9 +531,22 @@ impl Shell {
             // The chat replaces its canvas; its key stays for the composer.
             self.cloud_tabs.canvas = None;
         }
-        if in_front {
-            self.open_cloud_conversation(target, row, launch, cx);
+        if !in_front {
+            return;
         }
+        if matches!(self.route, Route::Chat) {
+            self.open_cloud_conversation(target, row, launch, cx);
+            return;
+        }
+        // The user is elsewhere (Settings, say): the chat takes its canvas's
+        // place behind, without bringing them back.
+        let session = target.initial_session.clone();
+        let view = self.new_cloud_conversation_view(target, row, launch, cx);
+        self.retain_cloud_tab(&view, cx);
+        self.subscribe_cloud_conversation(&view, cx);
+        self.cloud_conversation = Some(view);
+        self.active_chat = session;
+        cx.notify();
     }
     fn close_cloud_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         self.sync_cloud_tab_scope(cx);
@@ -1442,6 +1455,21 @@ mod tests {
                     cx,
                 );
                 assert_eq!(strip(shell, cx), vec!["session3".to_owned()]);
+                // Back to a chat it kept: the single-tab chat is forgotten.
+                shell.open_cloud_conversation(
+                    target.clone(),
+                    json!({"workspaceId":"task1","projectId":"p"}),
+                    json!({}),
+                    cx,
+                );
+                assert_eq!(shell.cloud_tabs.views.len(), 4);
+                assert!(
+                    shell
+                        .cloud_tabs
+                        .views
+                        .iter()
+                        .all(|view| view.read(cx).target.workspace != "task3")
+                );
                 shell.open_new_session(None, cx);
                 assert!(shell.render_cloud_tabs(cx).is_none());
                 shell.open_cloud_conversation(
@@ -1469,6 +1497,56 @@ mod tests {
             })
             .unwrap();
         assert_eq!(cx.update(|cx| cx.windows().len()), windows);
+    }
+    /// A new chat admitted while the user is in Settings takes its canvas's
+    /// place without taking them back to the chat.
+    #[gpui::test]
+    fn a_chat_admitted_while_elsewhere_does_not_take_the_user_back(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| gpui_tokio::init_from_handle(cx, runtime.handle().clone()));
+        let window = draft_shell(cx, dir.path());
+        let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
+            std::sync::Arc::new(Pending),
+        ));
+        window
+            .update(cx, |shell, _, cx| {
+                shell
+                    .state
+                    .update(cx, |state, _| state.set_test_engine(controller.clone()));
+                shell.open_new_session(None, cx);
+                shell.track_current_cloud_canvas(cx);
+                let request = json!({"idempotencyKey":"k","projectId":"p","providerId":"boxd",
+                    "firstMessage":"Build it","agent":"codex","model":"m"});
+                shell.composer.update(cx, |composer, _| {
+                    composer.seed_pending_cloud_creation_for_test(request)
+                });
+                shell.set_route(Route::Settings(SettingsSection::General), cx);
+                shell.composer.update(cx, |composer, cx| {
+                    composer.admit_pending_cloud_creation_for_test(
+                        json!({"workspaceId":"fresh","initialSessionId":"fresh-session",
+                            "state":"provisioning","commandDeliveryMode":"server-admitted-v2",
+                            "commandAdmissionVersion":2}),
+                        cx,
+                    )
+                });
+            })
+            .unwrap();
+        window
+            .update(cx, |shell, _, cx| {
+                assert_eq!(shell.route, Route::Settings(SettingsSection::General));
+                let view = shell.cloud_conversation.clone().unwrap();
+                assert_eq!(view.read(cx).target.workspace, "fresh");
+                assert!(shell.cloud_tabs.canvas.is_none());
+            })
+            .unwrap();
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
     }
     /// The sessions the strip in front lists, in tab order.
     fn strip(shell: &Shell, cx: &App) -> Vec<String> {
