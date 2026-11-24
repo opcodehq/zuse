@@ -1,5 +1,5 @@
 //! The details card a sidebar chat row opens when the pointer rests on it:
-//! the full title, where the chat runs and what it is working on. It reads
+//! the full title, where the chat runs and its activity. It reads
 //! only what the sidebar already holds (local chat rows, the cloud catalog),
 //! so opening it never polls or calls the network.
 use super::*;
@@ -31,7 +31,6 @@ pub(super) struct ChatPeek {
     pub model: Option<String>,
     pub pull_request: Option<zuse_protocol::ChangeRequestSummary>,
     pub diff: Option<(u32, u32)>,
-    pub last_message: Option<String>,
     /// Activity and age, e.g. "Working · 5m ago" or "Active 2h ago".
     pub status: Option<String>,
 }
@@ -45,7 +44,6 @@ pub(super) enum PeekLine {
     Agent,
     PullRequest,
     Diff,
-    LastMessage,
     Status,
 }
 
@@ -67,9 +65,6 @@ impl ChatPeek {
         }
         if self.diff.is_some() {
             lines.push(PeekLine::Diff);
-        }
-        if self.last_message.is_some() {
-            lines.push(PeekLine::LastMessage);
         }
         if self.status.is_some() {
             lines.push(PeekLine::Status);
@@ -159,11 +154,7 @@ pub(super) fn local_peek(
         agent: chat.config.as_ref().map(|config| config.harness),
         model: non_empty(chat.config.as_ref().and_then(|c| c.model.as_deref())),
         pull_request: state.change_request_for_chat(chat).cloned(),
-        diff: state
-            .diff_stat_for_chat(chat)
-            .filter(|(added, removed)| added + removed > 0),
-        last_message: non_empty(chat.last_message_preview.as_deref())
-            .map(|text| transcript::single_line(&text)),
+        diff: state.diff_stat_for_chat(chat),
         status: status_line(status, time_ago),
     })
 }
@@ -190,7 +181,6 @@ pub(super) fn cloud_peek(
         model: non_empty(row["model"].as_str()),
         pull_request: None,
         diff: None,
-        last_message: None,
         status: status_line(status, time_ago),
     }
 }
@@ -322,13 +312,6 @@ fn render_chat_peek(peek: &ChatPeek, theme: &Theme) -> AnyElement {
                     theme,
                 )
             }
-            PeekLine::LastMessage => div()
-                .pt(px(2.0))
-                .w_full()
-                .min_w_0()
-                .line_clamp(2)
-                .text_color(theme.text.opacity(0.8))
-                .child(peek.last_message.clone().unwrap_or_default()),
             PeekLine::Status => div()
                 .pt(px(2.0))
                 .text_size(px(11.0))
@@ -397,13 +380,11 @@ mod tests {
                 PeekLine::Place,
                 PeekLine::Branch,
                 PeekLine::Agent,
-                PeekLine::LastMessage,
                 PeekLine::Status,
             ]
         );
         assert_eq!(peek.status.as_deref(), Some("Working · just now"));
         assert_eq!(peek.model.as_deref(), Some("test-model"));
-        assert!(!peek.last_message.unwrap().contains('\n'));
     }
 
     #[test]

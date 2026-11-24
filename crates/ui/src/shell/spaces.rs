@@ -1340,15 +1340,18 @@ mod pinned_session_tests {
             let row = cx.debug_bounds("chat-older").unwrap();
             let title = cx.debug_bounds("chat-title-older").unwrap();
             cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::default());
-            // The globe/archive slot is always reserved, so hovering swaps its
-            // glyph in place: the title keeps its width and the status and time
-            // columns never move.
-            assert_eq!(
-                cx.debug_bounds("chat-title-older").unwrap().size.width,
-                title.size.width
-            );
+            // Hover puts Settle just left of Archive without overlapping it.
+            // The title gives up only that room, and the corner keeps its
+            // right edge and status column.
+            assert!(cx.debug_bounds("chat-title-older").unwrap().size.width <= title.size.width);
+            let settle = cx.debug_bounds("chat-settle-older").unwrap();
+            let archive = cx.debug_bounds("chat-archive-older").unwrap();
+            assert!(settle.right() + px(SIDEBAR_ROW_ACTION_GAP) <= archive.left());
             assert_eq!(cx.debug_bounds("chat-status-older"), status);
-            assert_eq!(cx.debug_bounds("chat-time-older").unwrap(), time);
+            assert_eq!(
+                cx.debug_bounds("chat-time-older").unwrap().right(),
+                time.right()
+            );
         }
 
         // Dragging a regular session over another regular session is a no-op.
@@ -1807,11 +1810,12 @@ mod pinned_session_tests {
 
         let row = cx.debug_bounds("chat-a").unwrap();
         cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::default());
-        let pointer = cx.debug_bounds("chat-time-a").unwrap().center();
+        // Cards offer Archive at the end of their metadata line on hover.
+        let pointer = cx.debug_bounds("chat-archive-a").unwrap().center();
         cx.simulate_mouse_move(pointer, None, gpui::Modifiers::default());
         for (archived, next) in [
-            ("a", Some(("b", "chat-time-b"))),
-            ("b", Some(("c", "chat-time-c"))),
+            ("a", Some(("b", "chat-archive-b"))),
+            ("b", Some(("c", "chat-archive-c"))),
         ] {
             cx.simulate_click(pointer, gpui::Modifiers::default());
             shell.read_with(cx, |shell, _| {
@@ -2304,34 +2308,35 @@ pub(super) fn sidebar_project_header(
     chevron: AnyElement,
     group: SharedString,
 ) -> gpui::Div {
-    // Without an avatar the chevron holds the slot outright.
-    let has_icon = icon.is_some();
-    let lead = div()
-        .relative()
-        .size(px(SIDEBAR_PROJECT_AVATAR_SIZE))
-        .flex_none()
-        .when_some(icon, |el, icon| {
-            el.child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .group_hover(group.clone(), |style| style.opacity(0.0))
-                    .child(icon),
-            )
-        })
-        .child(
+    // The avatar stays put; the chevron follows the name on hover. Without
+    // an avatar the chevron leads instead, always visible.
+    let (lead, trailing_chevron) = match icon {
+        Some(icon) => (
             div()
-                .absolute()
-                .inset_0()
+                .size(px(SIDEBAR_PROJECT_AVATAR_SIZE))
+                .flex_none()
+                .child(icon),
+            Some(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .opacity(0.0)
+                    .group_hover(group.clone(), |style| style.opacity(1.0))
+                    .child(chevron),
+            ),
+        ),
+        None => (
+            div()
+                .size(px(SIDEBAR_PROJECT_AVATAR_SIZE))
+                .flex_none()
                 .flex()
                 .items_center()
                 .justify_center()
-                .when(has_icon, |el| {
-                    el.opacity(0.0)
-                        .group_hover(group.clone(), |style| style.opacity(1.0))
-                })
                 .child(chevron),
-        );
+            None,
+        ),
+    };
     div()
         .flex()
         .flex_row()
@@ -2352,20 +2357,21 @@ pub(super) fn sidebar_project_header(
                 .child(label),
         ))
         .children(count.map(|count| sidebar_count_badge(theme, count)))
+        .children(trailing_chevron)
         .child(div().flex_1())
         .child(
             div()
                 .flex_none()
                 .flex()
                 .items_center()
-                .gap(px(2.0))
+                .gap(px(1.0))
                 .opacity(0.0)
                 .group_hover(group, |style| style.opacity(1.0))
                 .children(actions),
         )
 }
 
-/// A 20px hover action on a project heading (14px glyph).
+/// An 18px hover action on a project heading (12px glyph).
 fn sidebar_project_action(
     id: SharedString,
     glyph: &'static str,
@@ -2375,7 +2381,7 @@ fn sidebar_project_action(
     div()
         .id(id.clone())
         .debug_selector(move || id.to_string())
-        .size(px(20.0))
+        .size(px(18.0))
         .flex_none()
         .flex()
         .items_center()
@@ -2387,7 +2393,7 @@ fn sidebar_project_action(
         .hover(|el| el.bg(theme.glass_hover()))
         .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .tip_above(label)
-        .child(icon(glyph).size(px(14.0)).text_color(theme.text_muted))
+        .child(icon(glyph).size(px(12.0)).text_color(theme.text_muted))
 }
 
 /// Section header glyphs (chevron, `+`, `…`) share the label's muted tone.
@@ -2405,7 +2411,11 @@ pub(super) fn sidebar_section_heading(
         .flex()
         .items_center()
         .gap(px(2.))
-        .pl(px(Theme::SPACE_SM + 2.))
+        .pl(px(if label == "Threads" {
+            Theme::SPACE_SM + super::SIDEBAR_CARD_PAD_X
+        } else {
+            Theme::SPACE_SM + 2.0
+        }))
         .pr(px(Theme::SPACE_SM))
         .pt(px(10.))
         .pb(px(4.))
@@ -2415,7 +2425,13 @@ pub(super) fn sidebar_section_heading(
                 .debug_selector(move || id.into())
                 .flex_1()
                 .min_w_0()
-                .text_size(crate::typography::text_xs())
+                .text_size(if label == "Threads" {
+                    crate::typography::text_sm()
+                } else {
+                    crate::typography::text_xs()
+                })
+                .line_height(crate::typography::ui_rems(16.0))
+                .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(theme.text_muted)
                 .child(label),
         )
@@ -5154,9 +5170,11 @@ impl Shell {
             .as_ref()
             .map_or(saved_pins.as_slice(), |ids| ids.as_slice());
         let state = self.state.read(cx);
+        let choices = self.sidebar_settlement_choices(profile_key.as_deref());
         let mut chats: Vec<zuse_protocol::Chat> = state
             .sidebar_chats(Utc::now(), filter.as_deref())
             .into_iter()
+            .filter(|(_, chat)| !Self::local_thread_is_settled(state, chat, choices))
             .map(|(_, chat)| chat.clone())
             .collect();
         chats.sort_by(|left, right| compare_sidebar_chats(self.settings.sidebar_sort, left, right));
@@ -5280,7 +5298,14 @@ impl Shell {
             );
             return false;
         };
-        if self.active_sidebar_pins(cx).contains(&chat.id) {
+        let profile = self.sidebar_settlement_profile(false, cx);
+        if Self::local_thread_is_settled(
+            self.state.read(cx),
+            &chat,
+            self.sidebar_settlement_choices(profile.as_deref()),
+        ) {
+            self.settled_open = true;
+        } else if self.active_sidebar_pins(cx).contains(&chat.id) {
             if !self.pinned_open {
                 self.pinned_open = true;
                 self.queue_sidebar_reveal("pinned");
@@ -5393,7 +5418,8 @@ impl Shell {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> SidebarSessionRows {
-        let cloud_groups = self.cloud_sidebar_groups(cx);
+        let mut cloud_groups = self.cloud_sidebar_groups(cx);
+        let settled_cloud = self.take_settled_cloud_rows(&mut cloud_groups, cx);
         let group_labels = {
             let state = self.state.read(cx);
             state.project_labels(&state.cloud_sidebar_projects())
@@ -5409,20 +5435,25 @@ impl Shell {
                 drag.filter == filter && profile_key.as_deref() == Some(&drag.profile_key)
             })
             .map(|drag| drag.visible_ids.clone());
-        let mut rows: Vec<ActiveChatRow> = {
+        let (mut rows, settled_local) = {
             let state = self.state.read(cx);
-            let mut chats: Vec<_> = state
+            let choices = self.sidebar_settlement_choices(profile_key.as_deref());
+            let (settled, mut chats): (Vec<_>, Vec<_>) = state
                 .sidebar_chats(now, filter.as_deref())
                 .into_iter()
-                .map(|(status, chat)| (status, chat.clone()))
-                .collect();
+                .partition(|(_, chat)| Self::local_thread_is_settled(state, chat, choices));
             chats.sort_by(|left, right| {
                 compare_sidebar_chats(self.settings.sidebar_sort, &left.1, &right.1)
             });
-            chats
+            let active = chats
                 .into_iter()
-                .map(|(status, chat)| self.sidebar_chat_data(status, chat, state))
-                .collect()
+                .map(|(status, chat)| self.sidebar_chat_data(status, chat.clone(), state))
+                .collect::<Vec<_>>();
+            let settled = settled
+                .into_iter()
+                .map(|(status, chat)| (status, chat.clone()))
+                .collect::<Vec<_>>();
+            (active, settled)
         };
         let pinned_order = frozen_pinned
             .as_ref()
@@ -5685,6 +5716,17 @@ impl Shell {
                 let time_ago: SharedString =
                     format_time_ago(chat.last_message_at.unwrap_or(chat.created_at), now).into();
                 let is_selected = selected.as_deref() == Some(chat.id.as_str());
+                // Under a project heading, the card names its branch instead
+                // of repeating the project.
+                let folder = if project_group {
+                    let state = self.state.read(cx);
+                    crate::change_requests::conversation_branch(&chat, &state.spaces)
+                        .map(str::trim)
+                        .unwrap_or_default()
+                        .to_owned()
+                } else {
+                    folder
+                };
                 let harness = self
                     .settings
                     .sidebar_show_harness
@@ -5757,6 +5799,7 @@ impl Shell {
                     jump_label,
                     self.settings.sidebar_show_project_icon && !project_group,
                     project_group,
+                    false,
                     None,
                     theme,
                     cx,
@@ -5843,7 +5886,9 @@ impl Shell {
                         }
                         .or_else(|| row["createdAt"].as_i64())
                         .unwrap_or_default();
-                        if let Some(row) = self.render_cloud_sidebar_row(row.clone(), theme, cx) {
+                        if let Some(row) =
+                            self.render_cloud_sidebar_row(row.clone(), false, theme, cx)
+                        {
                             // Newest first, alongside local chats of the same
                             // group, rather than after all of them.
                             let at = row_times
@@ -5976,7 +6021,7 @@ impl Shell {
                 actions.push(
                     sidebar_project_action(
                         format!("sidebar-group-settings-{collapse_key}").into(),
-                        icons::SETTINGS,
+                        icons::MORE_HORIZONTAL,
                         "Project settings",
                         theme,
                     )
@@ -5992,7 +6037,7 @@ impl Shell {
                 actions.push(
                     sidebar_project_action(
                         format!("sidebar-group-settings-{collapse_key}").into(),
-                        icons::SETTINGS,
+                        icons::MORE_HORIZONTAL,
                         "Cloud settings",
                         theme,
                     )
@@ -6007,7 +6052,7 @@ impl Shell {
                 actions.push(
                     sidebar_project_action(
                         format!("sidebar-group-new-chat-{collapse_key}").into(),
-                        icons::PEN_NEW_SQUARE,
+                        icons::PLUS,
                         "New chat in project",
                         theme,
                     )
@@ -6095,10 +6140,73 @@ impl Shell {
                 .into_any_element();
             rendered.push((format!("g:{collapse_key}"), height, element));
         }
+        let settled_count = settled_local.len() + settled_cloud.len();
+        let mut settled_rows = Vec::new();
+        if self.settled_open {
+            for (status, chat) in settled_local {
+                let time = sidebar_sort_time(self.settings.sidebar_sort, &chat);
+                let is_selected = selected.as_deref() == Some(chat.id.as_str());
+                let time_ago =
+                    format_time_ago(chat.last_message_at.unwrap_or(chat.created_at), now);
+                let harness = if self.settings.sidebar_show_harness {
+                    chat.config.as_ref().map(|config| config.harness)
+                } else {
+                    None
+                };
+                let ActiveChatRow {
+                    chat,
+                    folder,
+                    branch,
+                    change_request,
+                    ..
+                } = self.sidebar_chat_data(status, chat, self.state.read(cx));
+                let row = self.render_chat_row(
+                    chat.id,
+                    transcript::single_line(chat.title.as_deref().unwrap_or("New session")).into(),
+                    time_ago.into(),
+                    folder.into(),
+                    branch.map(SharedString::from),
+                    change_request,
+                    harness,
+                    status,
+                    is_selected,
+                    false,
+                    false,
+                    None,
+                    None,
+                    self.settings.sidebar_show_project_icon,
+                    false,
+                    true,
+                    None,
+                    theme,
+                    cx,
+                );
+                settled_rows.push((time, row));
+            }
+            for row in settled_cloud {
+                let time = match self.settings.sidebar_sort {
+                    SidebarSort::Created => row["createdAt"].as_i64(),
+                    SidebarSort::LastUpdated => row["updatedAt"].as_i64(),
+                }
+                .or_else(|| row["createdAt"].as_i64())
+                .unwrap_or_default();
+                if let Some((_, _, row)) = self.render_cloud_sidebar_row(row, true, theme, cx) {
+                    settled_rows.push((time, row));
+                }
+            }
+            settled_rows.sort_by(|(a, _), (b, _)| b.cmp(a));
+        }
+        let settled_section = self.render_settled_section(
+            settled_count,
+            settled_rows.into_iter().map(|(_, row)| row).collect(),
+            theme,
+            cx,
+        );
         SidebarSessionRows {
             custom_count,
             rows: rendered,
             pinned_count,
+            settled_section,
             moving_row,
         }
     }
@@ -7725,32 +7833,39 @@ impl Shell {
             let delete_id = space_id.clone();
             let archive_id = space_id.clone();
             let usage_id = space_id.clone();
+            // Compact rows, as the Pull requests page's menu uses.
+            let compact = |row: gpui::Div| {
+                row.py(px(5.0))
+                    .gap(px(8.0))
+                    .text_size(crate::typography::text_xs())
+            };
             let menu = popover::popover_card(&theme)
-                .w(px(196.0))
+                .w(px(184.0))
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                     this.close_space_menu(cx);
                 }))
                 .flex()
                 .flex_col()
+                .gap(px(1.0))
                 .child(
-                    popover::menu_row(
+                    compact(popover::menu_row(
                         &theme,
                         self.space_menu_active == 0,
                         format!("space-menu-rename-{space_id}"),
-                    )
+                    ))
                     .id("space-menu-rename")
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.open_rename_space(rename_id.clone(), cx)
                     }))
-                    .child(icon(icons::PEN).size(px(16.0)).text_color(theme.text_muted))
+                    .child(icon(icons::PEN).size(px(14.0)).text_color(theme.text_muted))
                     .child(SharedString::from("Rename…")),
                 )
                 .child(
-                    popover::menu_row(
+                    compact(popover::menu_row(
                         &theme,
                         self.space_menu_active == 1,
                         format!("space-menu-archives-{space_id}"),
-                    )
+                    ))
                     .id("space-menu-archives")
                     .role(gpui::Role::MenuItem)
                     .aria_label(tr(cx, msg::chat::archived_chats_page_archived_chats))
@@ -7766,11 +7881,11 @@ impl Shell {
                     })),
                 )
                 .child(
-                    popover::menu_row(
+                    compact(popover::menu_row(
                         &theme,
                         self.space_menu_active == 2,
                         format!("space-menu-usage-{space_id}"),
-                    )
+                    ))
                     .id("space-menu-usage")
                     .role(gpui::Role::MenuItem)
                     .aria_label(tr(cx, msg::usage::usage_dashboard_usage))
@@ -7785,13 +7900,19 @@ impl Shell {
                         this.open_usage(Some(usage_id.clone()), true, cx)
                     })),
                 )
-                .child(popover::menu_separator())
                 .child(
-                    popover::menu_row(
+                    div()
+                        .mx(px(-4.0))
+                        .my(px(4.0))
+                        .h(px(1.0))
+                        .bg(theme.border.opacity(0.6)),
+                )
+                .child(
+                    compact(popover::menu_row(
                         &theme,
                         self.space_menu_active == 3,
                         format!("space-menu-delete-{space_id}"),
-                    )
+                    ))
                     .id("space-menu-delete")
                     .text_color(theme.danger)
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -7801,7 +7922,7 @@ impl Shell {
                     }))
                     .child(
                         icon(icons::TRASH_BIN_MINIMALISTIC)
-                            .size(px(16.0))
+                            .size(px(14.0))
                             .text_color(theme.danger),
                     )
                     .child(SharedString::from("Remove…")),
@@ -7820,7 +7941,21 @@ impl Shell {
                 window.focus(&dialog.input.focus_handle(cx), cx);
             }
             let input = dialog.input.clone();
+            // The Pull requests page's Merge button sets the action style.
+            let small_button = |id: &'static str, tone| {
+                crate::settings::widgets::action_button(&theme, tone)
+                    .id(id)
+                    .debug_selector(move || id.into())
+                    .role(gpui::Role::Button)
+                    .flex_none()
+                    .min_h(px(26.0))
+                    .px(px(10.0))
+                    .py_0()
+            };
             let card = popover::dialog_card(&theme)
+                .w(px(300.0))
+                .p(px(14.0))
+                .rounded(px(12.0))
                 .on_key_down(cx.listener(|this, ev: &gpui::KeyDownEvent, _, cx| {
                     if ev.keystroke.key == "escape" {
                         this.rename_space_dialog = None;
@@ -7828,32 +7963,50 @@ impl Shell {
                         cx.stop_propagation();
                     }
                 }))
-                .child(popover::dialog_title(&theme, "Rename project"))
                 .child(
                     div()
-                        .mt(px(12.0))
+                        .text_size(crate::typography::text_sm())
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(theme.text_strong)
+                        .child("Rename project"),
+                )
+                .child(
+                    div()
+                        .mt(px(10.0))
                         .child(popover::dialog_field(input.into_any_element())),
                 )
                 .child(
-                    popover::dialog_footer(&theme)
+                    div()
+                        .mt(px(12.0))
+                        .flex()
+                        .justify_end()
+                        .gap(px(6.0))
                         .child(
-                            popover::btn_ghost(
-                                &theme,
-                                &tr(cx, msg::common::cancel),
+                            small_button(
                                 "rename-space-cancel",
+                                crate::settings::widgets::ActionTone::Quiet,
                             )
-                            .id("rename-space-cancel")
+                            .aria_label(tr(cx, msg::common::cancel))
+                            .child(tr(cx, msg::common::cancel))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.rename_space_dialog = None;
                                 cx.notify();
                             })),
                         )
                         .child(
-                            popover::btn_primary(&theme, "Rename")
-                                .id("rename-space-save")
-                                .on_click(
-                                    cx.listener(|this, _, _, cx| this.submit_rename_space(cx)),
-                                ),
+                            small_button(
+                                "rename-space-save",
+                                crate::settings::widgets::ActionTone::Solid,
+                            )
+                            .aria_label("Rename")
+                            .text_color(gpui::white())
+                            .child(
+                                crate::icons::icon(icons::PEN)
+                                    .size(px(13.0))
+                                    .text_color(gpui::white()),
+                            )
+                            .child("Rename")
+                            .on_click(cx.listener(|this, _, _, cx| this.submit_rename_space(cx))),
                         ),
                 )
                 .into_any_element();

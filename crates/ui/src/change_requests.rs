@@ -77,6 +77,7 @@ impl ChangeRequestBadgeModel {
 
 pub(crate) struct ChangeRequestTooltip {
     model: ChangeRequestBadgeModel,
+    compact: bool,
 }
 
 impl Render for ChangeRequestTooltip {
@@ -84,10 +85,16 @@ impl Render for ChangeRequestTooltip {
         let theme = Theme::of(cx);
         let card = crate::tooltip::surface(theme)
             .max_w(px(crate::tooltip::MAX_WIDTH))
-            .py(px(4.5))
             .flex()
             .flex_col()
             .gap(px(3.0))
+            .py(px(4.5))
+            .when(self.compact, |card| {
+                card.max_w(px(224.0))
+                    .py(px(3.0))
+                    .gap(px(0.0))
+                    .line_height(px(15.0))
+            })
             .rounded(px(6.0))
             .border_1()
             .border_color(theme.border_strong)
@@ -263,6 +270,7 @@ pub(crate) fn pull_request_state_inline(
                 .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                     cx.new(|_| ChangeRequestTooltip {
                         model: tooltip_model.clone(),
+                        compact: true,
                     })
                     .into()
                 })
@@ -355,6 +363,7 @@ fn render_badge_model(
                 .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                     cx.new(|_| ChangeRequestTooltip {
                         model: tooltip_model.clone(),
+                        compact: false,
                     })
                     .into()
                 })

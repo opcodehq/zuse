@@ -1338,7 +1338,7 @@ impl Shell {
                                         self.reduced_motion,
                                     ),
                                     true,
-                                    14.0,
+                                    16.0,
                                     theme.text_muted,
                                 ),
                                 ShortcutId::ToggleChanges.label(),

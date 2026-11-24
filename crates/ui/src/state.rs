@@ -8347,9 +8347,9 @@ pub struct CheckoutDiffStat {
     pub files: u32,
 }
 
-#[cfg(feature = "project-palette-fixture")]
+#[cfg(any(test, feature = "project-palette-fixture"))]
 impl AppState {
-    /// Seed provider metadata for the isolated native sidebar review fixture.
+    /// Seed provider metadata for native sidebar fixtures.
     pub fn fixture_sidebar_change_request(
         &mut self,
         snapshot: zuse_protocol::CheckoutChangeRequestStatus,

@@ -1759,19 +1759,6 @@ where
     Ok(registry.descriptors())
 }
 
-fn strip_diff_patches(mut frame: serde_json::Value) -> serde_json::Value {
-    match &mut frame {
-        serde_json::Value::Array(diffs) => {
-            for diff in diffs {
-                diff["patch"] = "".into();
-            }
-        }
-        diff @ serde_json::Value::Object(_) => diff["patch"] = "".into(),
-        _ => {}
-    }
-    frame
-}
-
 fn forward_deadline(method: &str) -> std::time::Duration {
     // Hub cold boots and the first agent XCTest preparation need room for
     // discovery, native readiness checks and an already admitted operation.
@@ -4905,12 +4892,12 @@ impl EngineRpc {
                 if let Some(id) = params["chatId"].as_str() {
                     return Ok(self.watch_archive_review(id.to_owned()));
                 }
-                let stream = watch_stream(self.diff_sync.watch_diffs());
-                if params["summaryOnly"].as_bool().unwrap_or(false) {
-                    // Sidebars need sizes, never megabytes of patch per frame.
-                    return Ok(RpcReply::Stream(stream.map(strip_diff_patches).boxed()));
-                }
-                Ok(RpcReply::Stream(stream))
+                let diffs = if params["summaryOnly"].as_bool().unwrap_or(false) {
+                    self.diff_sync.watch_diff_summaries()
+                } else {
+                    self.diff_sync.watch_diffs()
+                };
+                Ok(RpcReply::Stream(watch_stream(diffs)))
             }
             methods::WATCH_WORKSPACE_GIT_STATUS => {
                 let request: zuse_protocol::WatchWorkspaceFilesRequest = parse_params(params)?;
