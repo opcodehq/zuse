@@ -1128,6 +1128,11 @@ pub enum AgentEvent {
     McpServers {
         servers: Vec<HarnessMcpServer>,
     },
+    /// A provider usage window that blocked the current turn. Epoch milliseconds.
+    #[serde(rename_all = "camelCase")]
+    UsageLimit {
+        resets_at: Option<i64>,
+    },
     Error {
         message: String,
     },

@@ -1617,6 +1617,7 @@ async fn run_session(session: Session) {
     let mut reasoning_streams: HashMap<String, ReasoningStream> = HashMap::new();
     // Token usage is held until the turn ends, emitted just before Done.
     let mut pending_usage: Option<AgentEvent> = None;
+    let mut usage_limit_reset = None;
     // Steers whose `turn/steer` lost the turn-completed race; delivered as the
     // next `turn/start` when the expected turn's end notification arrives.
     // Each carries the configuration it was sent with, adopted when its own
@@ -1704,6 +1705,10 @@ async fn run_session(session: Session) {
                     }
                 }
                 match method.as_str() {
+                    "account/rateLimits/updated" => {
+                        usage_limit_reset = normalize::exhausted_window_reset(&params);
+                    }
+
                     "rawResponseItem/completed"=>{
                         for event in raw_tools.map(&params,router.active.as_deref()) {
                             if !send(&event_tx,event).await {break 'main;}
@@ -1912,6 +1917,12 @@ async fn run_session(session: Session) {
                                 == Some("failed"))
                             .then(|| "Codex turn failed".to_owned())
                         });
+                        if error.as_deref().is_some_and(|message| {
+                            let text = message.to_lowercase();
+                            ["usage limit", "rate limit", "limit reached", "hit your limit", "quota"].iter().any(|s| text.contains(s))
+                        }) {
+                            if !send(&event_tx, AgentEvent::UsageLimit { resets_at: usage_limit_reset }).await { break 'main; }
+                        }
                         let status = if interrupted || stopping {
                             DoneStatus::Interrupted
                         } else if error.is_some() {

@@ -1323,3 +1323,178 @@ async fn steer_after_restart_dispatches_new_turn_with_resume() {
     }
     core.shutdown().await;
 }
+
+struct UsageLimitedHarness {
+    requests: RequestLog,
+    reset: Option<i64>,
+}
+#[async_trait]
+impl Harness for UsageLimitedHarness {
+    fn id(&self) -> HarnessId {
+        HarnessId::Mock
+    }
+    fn display_name(&self) -> &str {
+        "Usage limited"
+    }
+    fn supports_steering(&self) -> bool {
+        false
+    }
+    fn steering_mode(&self) -> SteeringMode {
+        SteeringMode::TurnBoundary
+    }
+    fn reasoning_levels(&self) -> &[ReasoningLevel] {
+        &[ReasoningLevel::Medium]
+    }
+    async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+        Ok(vec![])
+    }
+    async fn run(
+        &self,
+        request: RunRequest,
+        controls: RunControls,
+    ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+        let first = self.requests.lock().unwrap().is_empty();
+        if !first {
+            return RecordingHarness {
+                requests: self.requests.clone(),
+                session_id: "limited-session".into(),
+                fail_starts: Default::default(),
+            }
+            .run(request, controls)
+            .await;
+        }
+        self.requests.lock().unwrap().push(request.clone());
+        Ok(futures::stream::iter(vec![
+            Ok(AgentEvent::SessionStarted {
+                harness: HarnessId::Mock,
+                model: "mock-1".into(),
+                tools: vec![],
+                cwd: request.cwd,
+                session_id: "limited-session".into(),
+                assistant_message_id: "limited-assistant".into(),
+            }),
+            Ok(AgentEvent::UsageLimit {
+                resets_at: self.reset,
+            }),
+            Ok(AgentEvent::Done {
+                status: DoneStatus::Errored,
+                result: None,
+                error: Some("Usage limit reached".into()),
+                session_id: Some("limited-session".into()),
+            }),
+        ])
+        .boxed())
+    }
+}
+fn assemble_usage_limited(
+    dir: &std::path::Path,
+    requests: RequestLog,
+    reset: Option<i64>,
+) -> EngineCore {
+    let registry = HarnessRegistry::new();
+    registry.register(Arc::new(UsageLimitedHarness { requests, reset }));
+    EngineCore::assemble(dir, Arc::new(registry), HarnessId::Mock, None).unwrap()
+}
+async fn wait_usage_limit(core: &EngineCore) {
+    wait_for(
+        || {
+            core.sessions.usage_resume_status(Some(CHAT))["pending"].is_object()
+                && !core.sessions.has_run(CHAT)
+        },
+        "usage limit continuation",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn usage_limit_manual_resume_keeps_session_and_user_message() {
+    let tmp = tempfile::tempdir().unwrap();
+    let requests: RequestLog = Default::default();
+    let core = assemble_usage_limited(tmp.path(), requests.clone(), None);
+    pre_title(&core);
+    core.sessions.set_usage_resume(None, true).unwrap();
+    queue_run(&core, "finish the task", "/tmp", "limited-user");
+    wait_usage_limit(&core).await;
+    assert!(core.sessions.usage_resume_status(Some(CHAT))["pending"]["resetsAt"].is_null());
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert_eq!(
+        requests.lock().unwrap().len(),
+        1,
+        "unknown reset must not auto-resume"
+    );
+    core.sessions.resume_usage_limit(CHAT).await.unwrap();
+    wait_for(
+        || requests.lock().unwrap().len() == 2 && !core.sessions.has_run(CHAT),
+        "manual continuation",
+    )
+    .await;
+    let resumed = requests.lock().unwrap()[1].clone();
+    assert_eq!(resumed.resume.as_deref(), Some("limited-session"));
+    assert!(resumed.prompt.contains("finish only what is still undone"));
+    assert_eq!(
+        entries_now(&core)
+            .iter()
+            .filter(|e| e.role == MessageRole::User)
+            .count(),
+        1
+    );
+    assert!(core.sessions.resume_usage_limit(CHAT).await.is_err());
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn usage_limit_auto_resume_survives_engine_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+    let requests: RequestLog = Default::default();
+    let reset = chrono::Utc::now().timestamp_millis() + 3000;
+    let core = assemble_usage_limited(tmp.path(), requests.clone(), Some(reset));
+    pre_title(&core);
+    core.sessions.set_usage_resume(None, true).unwrap();
+    queue_run(&core, "finish after reset", "/tmp", "limited-user");
+    wait_usage_limit(&core).await;
+    assert_eq!(
+        core.sessions.usage_resume_status(Some(CHAT))["pending"]["enabled"],
+        true
+    );
+    core.shutdown().await;
+    drop(core);
+    let core = assemble_usage_limited(tmp.path(), requests.clone(), Some(reset));
+    wait_for(
+        || requests.lock().unwrap().len() == 2 && !core.sessions.has_run(CHAT),
+        "scheduled continuation after restart",
+    )
+    .await;
+    assert!(chrono::Utc::now().timestamp_millis() >= reset);
+    assert_eq!(
+        requests.lock().unwrap()[1].resume.as_deref(),
+        Some("limited-session")
+    );
+    assert_eq!(
+        entries_now(&core)
+            .iter()
+            .filter(|e| e.role == MessageRole::User)
+            .count(),
+        1
+    );
+    assert!(core.sessions.usage_resume_status(Some(CHAT))["pending"].is_null());
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn usage_limit_stop_cancels_its_schedule() {
+    let tmp = tempfile::tempdir().unwrap();
+    let requests: RequestLog = Default::default();
+    let core = assemble_usage_limited(
+        tmp.path(),
+        requests.clone(),
+        Some(chrono::Utc::now().timestamp_millis() + 60_000),
+    );
+    pre_title(&core);
+    core.sessions.set_usage_resume(None, true).unwrap();
+    queue_run(&core, "stop this", "/tmp", "limited-user");
+    wait_usage_limit(&core).await;
+    core.sessions.interrupt(CHAT).await.unwrap();
+    assert!(core.sessions.usage_resume_status(Some(CHAT))["pending"].is_null());
+    assert_eq!(requests.lock().unwrap().len(), 1);
+    core.shutdown().await;
+}

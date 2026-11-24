@@ -1240,3 +1240,72 @@ mod generated_image_tests {
         }
     }
 }
+
+/// Reset of the last exhausted account window. Wait for all exhausted windows;
+/// an exhausted window without a reset time cannot be safely scheduled.
+pub(crate) fn exhausted_window_reset(value: &Value) -> Option<i64> {
+    fn visit(value: &Value, reset: &mut Option<i64>, unknown: &mut bool) {
+        match value {
+            Value::Object(fields) => {
+                if fields
+                    .get("usedPercent")
+                    .and_then(Value::as_f64)
+                    .is_some_and(|used| used >= 100.0)
+                {
+                    if let Some(at) = fields
+                        .get("resetsAt")
+                        .and_then(Value::as_i64)
+                        .and_then(|s| s.checked_mul(1000))
+                    {
+                        *reset = Some(reset.map_or(at, |previous| previous.max(at)));
+                    } else {
+                        *unknown = true;
+                    }
+                }
+                for child in fields.values() {
+                    visit(child, reset, unknown);
+                }
+            }
+            Value::Array(values) => {
+                for child in values {
+                    visit(child, reset, unknown);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut reset = None;
+    let mut unknown = false;
+    visit(value, &mut reset, &mut unknown);
+    if unknown { None } else { reset }
+}
+
+#[cfg(test)]
+mod usage_reset_tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn waits_for_all_exhausted_windows() {
+        assert_eq!(
+            exhausted_window_reset(&json!({"rateLimits": {
+                "primary": {"usedPercent":100,"resetsAt":1800000000_i64},
+                "secondary": {"usedPercent":100,"resetsAt":1800000100_i64}
+            }})),
+            Some(1_800_000_100_000)
+        );
+        assert_eq!(
+            exhausted_window_reset(
+                &json!({"primary":{"usedPercent":99,"resetsAt":1800000000_i64}})
+            ),
+            None
+        );
+        assert_eq!(
+            exhausted_window_reset(&json!({"primary":{"usedPercent":100}})),
+            None
+        );
+        assert_eq!(
+            exhausted_window_reset(&json!({"primary":{"usedPercent":100,"resetsAt":i64::MAX}})),
+            None
+        );
+    }
+}

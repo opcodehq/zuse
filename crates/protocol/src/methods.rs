@@ -24,6 +24,9 @@ pub const GET_CHAT_ARCHIVE_STATUS: &str = "GetChatArchiveStatus";
 pub const GET_CUSTOM_ACP_AGENTS: &str = "GetCustomAcpAgents";
 pub const SET_CUSTOM_ACP_AGENT: &str = "SetCustomAcpAgent";
 pub const DELETE_CUSTOM_ACP_AGENT: &str = "DeleteCustomAcpAgent";
+pub const GET_USAGE_RESUME: &str = "GetUsageResume";
+pub const SET_USAGE_RESUME: &str = "SetUsageResume";
+pub const RESUME_USAGE_LIMIT: &str = "ResumeUsageLimit";
 pub const GET_TITLE_SETTINGS: &str = "GetTitleSettings";
 pub const RECORD_DESKTOP_EVENT: &str = "RecordDesktopEvent";
 pub const RECORD_CHAT_OPENED: &str = "RecordChatOpened";
@@ -347,6 +350,7 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
     match method {
         GET_ANALYTICS_SETTINGS
         | GET_GIT_WORKSPACE
+        | GET_USAGE_RESUME
         | WATCH_GIT_WORKSPACE
         | WATCH_CHANGE_REQUEST
         | GET_BRANCH_GRAPH
