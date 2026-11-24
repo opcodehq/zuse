@@ -827,15 +827,23 @@ impl RuntimeControl {
             || config["rustLifecycleOperation"]["id"] != operation
             || config["rustLifecycleOperation"]["action"] != "resume"
             || deleted(&row)
-            || (config["rustRecreation"]["operationId"].is_string()
-                && !matches!(
-                    config["rustRecreation"]["phase"].as_str(),
-                    Some("ready" | "cancelled")
-                ))
         {
-            // Not this workspace's plain resume (a recreation wake, say):
-            // leave the ordinary retry and attention handling in charge.
             return Ok(false);
+        }
+        if recreation_owns_wake(config) {
+            // A recreation's wake: the recreation owns the computer and its
+            // attention state. Stop the wake at the same deadline (instead of
+            // about 9.5 hours of retries); the recreation worker then turns
+            // the failed wake into `attention-required`.
+            let failed = sqlx::query("UPDATE zuse_rust_jobs SET state='failed',last_error_code=$3,lease_token=NULL,lease_expires_at=NULL,updated_at=$4 WHERE job_id=$1 AND lease_token=$2 AND state='running'")
+                .bind(&job.id).bind(&job.lease_token).bind(code).bind(now).execute(&mut *tx).await?;
+            if failed.rows_affected() != 1 {
+                return Ok(false);
+            }
+            tx.commit().await?;
+            tracing::warn!(workspace = %job.resource_id, operation, code,
+                "Cloud recreation wake could not start the computer; stopped for the recreation to report");
+            return Ok(true);
         }
         // Workspace before job, the order every other lifecycle write uses.
         let failed = sqlx::query("UPDATE zuse_rust_jobs SET state='failed',last_error_code=$3,lease_token=NULL,lease_expires_at=NULL,updated_at=$4 WHERE job_id=$1 AND lease_token=$2 AND state='running'")
@@ -897,6 +905,14 @@ impl RuntimeControl {
         Ok(())
     }
 }
+/// An unfinished recreation owns the current wake.
+fn recreation_owns_wake(config: &Value) -> bool {
+    config["rustRecreation"]["operationId"].is_string()
+        && !matches!(
+            config["rustRecreation"]["phase"].as_str(),
+            Some("ready" | "cancelled")
+        )
+}
 /// The machine and retained disk a settled resume must still put to sleep.
 fn settle_sleep(row: &Value) -> Option<(String, String)> {
     let machine = row["provider_sandbox_id"].as_str()?;
@@ -956,6 +972,14 @@ mod resume_failure_tests {
             i64::MAX
         ));
         assert!(!resume_overdue("resume", MACHINE_MISSING, 0, i64::MAX));
+        // Recreation wakes are stopped at the same deadline, not settled.
+        assert!(recreation_owns_wake(
+            &json!({"rustRecreation":{"operationId":"r","phase":"waking"}})
+        ));
+        assert!(!recreation_owns_wake(
+            &json!({"rustRecreation":{"operationId":"r","phase":"ready"}})
+        ));
+        assert!(!recreation_owns_wake(&json!({})));
         // A launch the image permanently refuses settles at once.
         assert!(resume_overdue("resume", LAUNCH_INCOMPATIBLE, 1_000, 1_001));
         assert!(!resume_overdue("pause", LAUNCH_INCOMPATIBLE, 1_000, 1_001));

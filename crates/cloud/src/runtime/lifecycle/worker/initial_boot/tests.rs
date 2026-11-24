@@ -98,7 +98,7 @@ impl RetainedProvider for Probe {
         if self.mode == "reply-lost" && n == 0 {
             return Err(ProviderError::OutcomeUnknown);
         }
-        if self.mode == "refused-overdue" {
+        if matches!(self.mode, "refused-overdue" | "recreation-overdue") {
             return Err(ProviderError::Rejected);
         }
         Ok(!(self.mode == "pending" && n == 0))
@@ -126,6 +126,7 @@ async fn boat_disabled_unit_retained_start_is_hydration_and_current_owner_fenced
         "pending",
         "reply-lost",
         "refused-overdue",
+        "recreation-overdue",
         "delete",
         "lease-expired",
         "lease-replaced",
@@ -168,6 +169,9 @@ async fn boat_disabled_unit_retained_start_is_hydration_and_current_owner_fenced
         }
         sqlx::query("INSERT INTO api_cloud_billing_periods(period_id,account_id,status,period_start,period_end,base_price_micros,included_provider_cost_micros,markup_basis_points,overage_cap_micros,updated_at) VALUES('period','user-bob','active',0,9999999999999,0,1000000000,0,0,0)").execute(&pool).await.unwrap();
         let mut config = json!({"runtimeGeneration":3,"gatewayEpoch":3,"rustProviderControllerVersion":1,"managedReleaseId":"boat-explicit","rustRuntimeStorage":{"storageIncarnationId":"retained-disk"},"rustLifecycleOperation":{"id":"retained-operation","action":"resume","phase":"waking"}});
+        if mode == "recreation-overdue" {
+            config["rustRecreation"] = json!({"operationId":"recreation-op","phase":"waking"});
+        }
         if mode != "legacy" {
             config["initialRuntimeBootstrap"] = json!({"version":1,"mode":"post-hydration-first-start-v1","runtimeSha256":"a".repeat(64),"supervisorSha256":"b".repeat(64),"serviceSha256":"c".repeat(64),"manifestSha256":"d".repeat(64),"helperSha256":"e".repeat(64)});
         }
@@ -183,7 +187,7 @@ async fn boat_disabled_unit_retained_start_is_hydration_and_current_owner_fenced
             .await
             .unwrap();
         sqlx::query("INSERT INTO zuse_rust_lifecycle_operations(operation_id,workspace_id,command_id,generation,source_machine_id,storage_incarnation_id,action,phase,created_at,updated_at) VALUES('retained-operation','ws-bob','resume-command',3,'retained-source','retained-disk','resume','waking',(extract(epoch from clock_timestamp())*1000)::bigint,1)").execute(&pool).await.unwrap();
-        if mode == "refused-overdue" {
+        if matches!(mode, "refused-overdue" | "recreation-overdue") {
             // The provider has refused to start this computer since before
             // the resume deadline.
             sqlx::query("UPDATE zuse_rust_lifecycle_operations SET created_at=created_at-$1 WHERE operation_id='retained-operation'")
@@ -237,6 +241,44 @@ async fn boat_disabled_unit_retained_start_is_hydration_and_current_owner_fenced
             original: Mutex::new(None),
             sleeps: AtomicUsize::new(0),
         };
+        if mode == "recreation-overdue" {
+            // A recreation's wake that keeps failing stops at the same
+            // deadline instead of retrying for hours. The recreation (not a
+            // settlement) owns the computer: the job fails so the recreation
+            // worker reports attention; nothing is paused or slept here.
+            let job = jobs::claim(&pool, JOB_KIND, "workspace", clock_ms(), 120_000)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                control
+                    .settle_failed_resume(&job, "cloud_retained_provider_failed")
+                    .await
+                    .unwrap()
+            );
+            let (job, code): (String, String) = sqlx::query_as("SELECT state,last_error_code FROM zuse_rust_jobs WHERE payload->>'operationId'='retained-operation'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(
+                (job.as_str(), code.as_str()),
+                ("failed", "cloud_retained_provider_failed")
+            );
+            let state: String = sqlx::query_scalar(
+                "SELECT state FROM api_cloud_workspaces WHERE workspace_id='ws-bob'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(state, "provisioning");
+            assert_eq!(probe.sleeps.load(Ordering::SeqCst), 0);
+            pool.close().await;
+            sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+                .execute(&admin)
+                .await
+                .unwrap();
+            continue;
+        }
         let result = tokio::time::timeout(
             Duration::from_secs(5),
             control.lifecycle_once(&probe, clock_ms()),
