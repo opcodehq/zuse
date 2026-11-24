@@ -2383,6 +2383,26 @@ pub(super) fn sidebar_disclosure_header(
 /// list row (12px, near-foreground). On hover the avatar gives way to the
 /// disclosure chevron and the row's actions (project settings, new chat)
 /// appear at the right.
+/// The glyph leading a Devices heading: the cloud, a remote Linux server
+/// (usually reached over SSH), or a computer.
+fn sidebar_device_glyph(key: &str, state: &AppState) -> &'static str {
+    if key == "cloud-computers" {
+        return icons::DITHER_CLOUD;
+    }
+    if state.local_device_id.as_deref() == Some(key) {
+        return icons::DITHER_MONITOR;
+    }
+    match state
+        .devices
+        .iter()
+        .find(|device| device.id == key)
+        .map(|device| device.platform.as_str())
+    {
+        Some("linux") => icons::REMOTE_SERVER,
+        _ => icons::DITHER_MONITOR,
+    }
+}
+
 pub(super) fn sidebar_project_header(
     theme: &Theme,
     icon: Option<AnyElement>,
@@ -6263,6 +6283,9 @@ impl Shell {
                     .into_any_element(),
                 );
             }
+            // Device groups take the project heading's shape, led by the
+            // kind of machine: the cloud, a remote server, or a computer.
+            let device_group = nested_rows && !project_group;
             let header = if project_group {
                 sidebar_project_header(
                     theme,
@@ -6270,6 +6293,32 @@ impl Shell {
                     visible_label,
                     collapsed.then_some(row_count),
                     actions,
+                    chevron,
+                    group_name.clone(),
+                )
+            } else if device_group {
+                let glyph = {
+                    let state = self.state.read(cx);
+                    sidebar_device_glyph(&key, state)
+                };
+                sidebar_project_header(
+                    theme,
+                    Some(
+                        div()
+                            .size_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .debug_selector({
+                                let key = key.clone();
+                                move || format!("sidebar-device-icon-{key}")
+                            })
+                            .child(icon(glyph).size(px(16.0)).text_color(theme.text_muted))
+                            .into_any_element(),
+                    ),
+                    visible_label,
+                    collapsed.then_some(row_count),
+                    Vec::new(),
                     chevron,
                     group_name.clone(),
                 )

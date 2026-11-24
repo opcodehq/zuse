@@ -1736,6 +1736,13 @@ mod tests {
             );
             assert!(cx.debug_bounds(mark).is_some(), "{mark}");
         }
+        // Each machine's heading leads with the kind of machine it is.
+        for heading in [
+            "sidebar-device-icon-local",
+            "sidebar-device-icon-cloud-computers",
+        ] {
+            assert!(cx.debug_bounds(heading).is_some(), "{heading}");
+        }
         // Density belongs to Projects and Devices: the Threads view keeps cards.
         shell.update(cx, |shell, cx| {
             shell.settings.sidebar_organization = SidebarOrganization::InOneList;
