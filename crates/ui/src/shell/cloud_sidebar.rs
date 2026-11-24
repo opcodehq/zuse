@@ -1480,6 +1480,43 @@ mod tests {
     }
 
     #[gpui::test]
+    fn project_filter_menu_opens_beside_its_icon(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let directory = tempfile::tempdir().unwrap();
+        let (shell, cx) = mixed_sidebar(cx, &runtime, directory.path(), None);
+        shell.update(cx, |shell, cx| {
+            shell.settings.sidebar_organization = SidebarOrganization::InOneList;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            shell.update(cx, |shell, cx| shell.open_spaces_menu(window, cx));
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear());
+        let button = cx
+            .debug_bounds("spaces-filter-button")
+            .expect("filter button");
+        let row = cx
+            .debug_bounds("spaces-menu-row-0")
+            .expect("project menu row");
+        let threads = cx.debug_bounds("chat-local-1").unwrap();
+        assert!(
+            row.left() > threads.center().x,
+            "the project menu opens to the right, not over the list: {row:?} vs {threads:?}"
+        );
+        assert!(
+            row.left() >= button.right() && row.left() - button.right() < px(16.0),
+            "it opens right beside its icon: {row:?} vs {button:?}"
+        );
+        assert_eq!(row.size.height, px(30.0));
+    }
+
+    #[gpui::test]
     fn open_settled_fills_spare_space_and_yields_to_long_lists(cx: &mut TestAppContext) {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

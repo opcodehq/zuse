@@ -2403,8 +2403,8 @@ pub(super) fn sidebar_section_heading(
         .flex_none()
         .flex()
         .items_center()
-        .gap(px(2.))
-        .pl(px(if label == "Threads" {
+        .gap(px(SIDEBAR_HEADING_GAP))
+        .pl(px(if matches!(label, "Threads" | "Zappers") {
             Theme::SPACE_SM + super::SIDEBAR_CARD_PAD_X
         } else {
             Theme::SPACE_SM + 2.0
@@ -2418,7 +2418,7 @@ pub(super) fn sidebar_section_heading(
                 .debug_selector(move || id.into())
                 .flex_1()
                 .min_w_0()
-                .text_size(if label == "Threads" {
+                .text_size(if matches!(label, "Threads" | "Zappers") {
                     crate::typography::text_sm()
                 } else {
                     crate::typography::text_xs()
@@ -2429,6 +2429,12 @@ pub(super) fn sidebar_section_heading(
                 .child(label),
         )
 }
+
+/// The sidebar heading's icon buttons and the space between them.
+const SIDEBAR_HEADER_BUTTON_SIZE: f32 = 22.0;
+const SIDEBAR_HEADING_GAP: f32 = 2.0;
+/// Rows in the project filter card, as tall as the view options card's.
+const SPACES_MENU_ROW_HEIGHT: f32 = 30.0;
 
 /// A 22px icon button in the sidebar's section heading (14px glyph).
 pub(super) fn sidebar_header_button(
@@ -2452,7 +2458,7 @@ pub(super) fn sidebar_header_button_tinted(
         .group("sidebar-header-button")
         .role(gpui::Role::Button)
         .tab_index(0)
-        .size(px(22.0))
+        .size(px(SIDEBAR_HEADER_BUTTON_SIZE))
         .flex_none()
         .flex()
         .items_center()
@@ -3920,7 +3926,7 @@ impl Shell {
             .map_or_else(|| id.to_owned(), zuse_protocol::view::project_key)
     }
 
-    fn open_spaces_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn open_spaces_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_sidebar_view_menu(cx);
         // "PaletteSearch" context: ↑↓/⏎ stay unbound in the input and bubble
         // to the card's key handler.
@@ -4818,6 +4824,7 @@ impl Shell {
             if active { theme.text } else { theme.text_muted },
             theme,
         )
+        .debug_selector(|| "spaces-filter-button".into())
         .aria_label(tr(cx, msg::native::filter_by_project))
         .aria_expanded(open)
         .when(active || open, |el| el.bg(theme.glass_hover()))
@@ -4836,9 +4843,11 @@ impl Shell {
         if self.spaces_menu.get().is_some() {
             let closing = self.spaces_menu.closing_since();
             let menu = self.render_spaces_menu(theme, cx);
+            // Opens beside its own icon, like the "…" view menu, instead of
+            // over the thread list.
             trigger
                 .relative()
-                .child(popover::anchored_menu_below_end(
+                .child(popover::anchored_menu_right(
                     "spaces-filter-menu",
                     menu,
                     closing,
@@ -5039,8 +5048,8 @@ impl Shell {
                     .flex()
                     .flex_col()
                     .gap(px(2.0))
-                    // Same scroll budget as the composer project menu.
-                    .max_h(px(224.0))
+                    // Five compact rows show before the list scrolls.
+                    .max_h(px(5.0 * SPACES_MENU_ROW_HEIGHT + 8.0))
                     .children(details.into_iter().zip(icons).enumerate().map(
                         |(ix, ((row, label, _, offline, selected), art))| {
                             let menu_space = match &row {
@@ -5055,6 +5064,9 @@ impl Shell {
                                 format!("spaces-menu-row-{ix}"),
                             )
                             .id(("spaces-menu-row", ix))
+                            .debug_selector(move || format!("spaces-menu-row-{ix}"))
+                            .min_h(px(SPACES_MENU_ROW_HEIGHT))
+                            .py(px(0.0))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.activate_spaces_menu_row(activate.clone(), cx);
                             }))
@@ -5087,9 +5099,8 @@ impl Shell {
             .children(scrollbar);
 
         popover::popover_card(theme)
-            // Match the trigger row as the sidebar is resized. Both live
-            // inside the same SPACE_SM horizontal gutters.
-            .w(px(self.sidebar_content_width() - 2.0 * Theme::SPACE_SM))
+            // As wide as the "…" view options card beside it.
+            .w(px(200.0))
             .track_focus(&focus)
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 this.spaces_menu_key(event, cx)
@@ -5123,6 +5134,8 @@ impl Shell {
                             "spaces-menu-add".to_string(),
                         )
                         .id("spaces-menu-add")
+                        .min_h(px(SPACES_MENU_ROW_HEIGHT))
+                        .py(px(0.0))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.activate_spaces_menu_row(SpacesMenuRow::AddSpace, cx);
                         }))
