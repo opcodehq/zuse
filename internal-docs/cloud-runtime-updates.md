@@ -201,6 +201,38 @@ Capability gating covers that session.
   Ignore unknown names, raise the 10-entry cap, and keep validating format and
   length.
 
+### Harness gate (base image)
+
+Every launch goes through the image's harness gate (`harness-release.py exec`
+from `launch-runtime.sh`). On current bases it refuses a runtime whose
+`--version` differs from the `runtimeVersion` of the harness release baked into
+the image. That harness release is built for the base's own runtime, so the
+base runtime's registered version is the only version such a base can
+cold-launch. On 2026-11-24 a computer updated in place from 0.26.0 to 0.26.1
+kept serving (the in-place restart skipped the gate), then failed every
+launch after its first sleep without memory.
+
+- **Offers** (`runtime_updates.rs`, `HarnessGate`): on a managed base without
+  `manifest.rustHarnessRuntimeCompatibilityVersion >= 1`, only releases with the
+  base runtime's version (other builds of it are fine) are offered. A computer
+  pinned to another version is offered the base runtime back, the one
+  downgrade the server makes. A managed base whose runtime is not registered
+  is offered nothing.
+- **In-place restart** (`updates::restart_command`): a runtime the launcher
+  started restarts through `launch-rust-runtime-core --foreground`. A binary
+  the gate refuses then fails during probation and is rolled back.
+- **Retained launch** (`launch_repair.rs`, `runtime-update-launch-repair.py`):
+  if a launch fails while the root journal holds a committed update that the
+  gate refuses and the previous binary passes, the server discards staged
+  releases, writes the standard `rollback.json`, and launches once more. If
+  that fails, the error code is `cloud_runtime_launch_incompatible`.
+- **Next base image:** the gate should accept a runtime the root helper
+  committed (journal `committed`, `sha256(binary) == journal.sha256`) when
+  the signed release declares compatibility with the harness release's
+  `adapterRevision`/`stateFormat`. The helper should refuse incompatible
+  releases. Such a base sets `rustHarnessRuntimeCompatibilityVersion: 1` in
+  its manifest so the server offers it newer versions again.
+
 ## Failure modes
 
 | Failure | Behavior |

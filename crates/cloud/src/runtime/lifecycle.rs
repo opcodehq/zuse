@@ -102,6 +102,59 @@ pub trait RetainedProvider: Send + Sync {
         workspace: &str,
         api: &str,
     ) -> Result<(), ProviderError>;
+    /// [`Self::launch_retained`] with its lifecycle error code. Providers that
+    /// can run commands on the computer override it to roll back an in-place
+    /// runtime update the image can no longer launch (`launch_repair`).
+    async fn launch_retained_checked(
+        &self,
+        directive: &Directive,
+        workspace: &str,
+        api: &str,
+    ) -> Result<(), ApiError> {
+        self.launch_retained(directive, workspace, api)
+            .await
+            .map_err(provider_error)
+    }
+}
+/// The lifecycle error for a [`super::launch_repair::launch`] failure.
+pub(super) fn launch_failure(failure: super::launch_repair::LaunchFailure) -> ApiError {
+    match failure {
+        super::launch_repair::LaunchFailure::Provider(error) => provider_error(error),
+        super::launch_repair::LaunchFailure::Incompatible => {
+            ApiError::unavailable(super::launch_repair::LAUNCH_INCOMPATIBLE)
+        }
+    }
+}
+/// The retained launch command; `run_as_task` and `launcher` come from the
+/// computer's [`super::machine_layout::Layout`].
+pub(super) fn retained_launch_command(
+    run_as_task: &str,
+    launcher: &str,
+    d: &Directive,
+    workspace: &str,
+    api: &str,
+) -> String {
+    fn q(v: &str) -> String {
+        format!("'{}'", v.replace('\'', "'\\''"))
+    }
+    format!(
+        "{run_as_task} ZUSE_RUNTIME_RETAINED=true ZUSE_CLOUD_WORKSPACE_ID={} ZUSE_API_URL={} ZUSE_RUNTIME_GENERATION={} ZUSE_STORAGE_INCARNATION_ID={} ZUSE_RUNTIME_RESUME_OPERATION_ID={} {launcher}",
+        q(workspace),
+        q(api),
+        d.generation,
+        q(&d.storage_incarnation_id),
+        q(&d.operation_id)
+    )
+}
+#[async_trait]
+impl super::launch_repair::Exec for Boxd {
+    async fn exec(
+        &self,
+        machine: &str,
+        command: &str,
+    ) -> Result<crate::providers::ExecResult, ProviderError> {
+        Boxd::exec(self, machine, command).await
+    }
 }
 #[async_trait]
 impl RetainedProvider for Boxd {
@@ -129,21 +182,26 @@ impl RetainedProvider for Boxd {
         workspace: &str,
         api: &str,
     ) -> Result<(), ProviderError> {
-        fn q(v: &str) -> String {
-            format!("'{}'", v.replace('\'', "'\\''"))
-        }
-        let command = format!(
-            "sudo -n -u zuse env ZUSE_RUNTIME_RETAINED=true ZUSE_CLOUD_WORKSPACE_ID={} ZUSE_API_URL={} ZUSE_RUNTIME_GENERATION={} ZUSE_STORAGE_INCARNATION_ID={} ZUSE_RUNTIME_RESUME_OPERATION_ID={} /usr/local/lib/zuse/launch-rust-runtime",
-            q(workspace),
-            q(api),
-            d.generation,
-            q(&d.storage_incarnation_id),
-            q(&d.operation_id)
-        );
+        let layout = super::machine_layout::Layout::Root;
+        let command =
+            retained_launch_command(layout.run_as_task(), layout.launcher(), d, workspace, api);
         if self.exec(&d.source_machine_id, &command).await?.exit_code != 0 {
             return Err(ProviderError::Unavailable);
         }
         Ok(())
+    }
+    async fn launch_retained_checked(
+        &self,
+        d: &Directive,
+        workspace: &str,
+        api: &str,
+    ) -> Result<(), ApiError> {
+        let layout = super::machine_layout::Layout::Root;
+        let command =
+            retained_launch_command(layout.run_as_task(), layout.launcher(), d, workspace, api);
+        super::launch_repair::launch(self, &d.source_machine_id, workspace, layout, &command)
+            .await
+            .map_err(launch_failure)
     }
 }
 fn provider_error(_: ProviderError) -> ApiError {

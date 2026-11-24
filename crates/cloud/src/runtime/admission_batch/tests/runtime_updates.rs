@@ -525,4 +525,114 @@ pub(super) async fn exercise(
         .await
         .unwrap_err();
     assert_eq!(refused.code, u::RUNTIME_UPDATE_UNAVAILABLE);
+
+    strict_base(
+        control, owner, pool, access, master, &plan, &old, &new, &old_caps, now,
+    )
+    .await;
+}
+
+/// REGRESSION GUARD (2026-11-24): the base image's harness gate refuses a
+/// runtime whose version differs from the one it was built for, so a computer
+/// updated in place to another version failed its next cold launch. On such a
+/// base nothing of another version is offered, and a computer already pinned
+/// to one is offered the base runtime back.
+#[allow(clippy::too_many_arguments)]
+async fn strict_base(
+    control: &std::sync::Arc<RuntimeControl>,
+    owner: &PgPool,
+    pool: &PgPool,
+    access: &crate::access::Access,
+    master: &crate::crypto::MasterKey,
+    plan: &impl Fn(&str) -> Value,
+    old: &str,
+    new: &str,
+    old_caps: &[Value],
+    now: i64,
+) {
+    let base = "zuse-base-strict-harness-fixture";
+    sqlx::query("INSERT INTO cloud_managed_bases(provider,release_id,artifact_id,architecture,capabilities,state,created_at,runtime_manifest) VALUES('boxd',$1,'strict-artifact','x86_64','[]','verified',$2,$3)")
+        .bind(base)
+        .bind(now)
+        .bind(json!({"manifest":{"commandAdmission":{"runtimeSha256":old}}}))
+        .execute(owner)
+        .await
+        .unwrap();
+    let on_base = |id: &'static str| async move {
+        sqlx::query("UPDATE api_cloud_workspaces SET provider='boxd',managed_release_id=$2 WHERE workspace_id=$1")
+            .bind(id)
+            .bind(base)
+            .execute(owner)
+            .await
+            .unwrap();
+    };
+
+    // On the base runtime: the newer version is not offered.
+    let id = "runtime-update-strict-base";
+    computer(
+        control,
+        pool,
+        access,
+        master,
+        plan(id),
+        Some(old_caps.to_vec()),
+        now,
+    )
+    .await;
+    attach_runtime(owner, id, old, now).await;
+    on_base(id).await;
+    assert!(
+        control
+            .runtime_update_offer(id, CREDENTIAL, now)
+            .await
+            .unwrap()
+            .directive
+            .is_none()
+    );
+    assert_eq!(
+        status(control, pool, id).await.state,
+        u::UpdateState::Current
+    );
+
+    // Pinned to the newer version in place: offered the base runtime back.
+    let id = "runtime-update-strict-base-heal";
+    computer(
+        control,
+        pool,
+        access,
+        master,
+        plan(id),
+        Some(old_caps.to_vec()),
+        now,
+    )
+    .await;
+    attach_runtime(owner, id, new, now).await;
+    on_base(id).await;
+    let heal = control
+        .runtime_update_offer(id, CREDENTIAL, now + 1)
+        .await
+        .unwrap()
+        .directive
+        .expect("the base runtime is offered back");
+    assert_eq!(heal.artifact.release.sha256, old);
+    assert_eq!(heal.artifact.release.version, "1.0.0");
+    assert_eq!(
+        status(control, pool, id).await.state,
+        u::UpdateState::Downloading
+    );
+    let mut report = attestation(u::Outcome::Committed, Some(heal.update_id), old, old_caps);
+    report.version = "1.0.0".into();
+    control
+        .runtime_update_attest(id, CREDENTIAL, report, now + 2)
+        .await
+        .unwrap();
+    assert_eq!(config(pool, id).await["runtimeRelease"]["sha256"], old);
+    assert!(
+        control
+            .runtime_update_offer(id, CREDENTIAL, now + 3)
+            .await
+            .unwrap()
+            .directive
+            .is_none()
+    );
 }

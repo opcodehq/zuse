@@ -33,6 +33,7 @@ pub mod grants;
 pub mod harness_updates;
 mod internal_observations;
 pub mod keep_running;
+mod launch_repair;
 pub mod lifecycle;
 pub(crate) mod machine_layout;
 pub mod mailbox;

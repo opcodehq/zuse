@@ -651,9 +651,8 @@ impl RuntimeControl {
                 .await;
         }
         provider
-            .launch_retained(&current, &job.resource_id, &self.signer.issuer())
-            .await
-            .map_err(provider_error)?;
+            .launch_retained_checked(&current, &job.resource_id, &self.signer.issuer())
+            .await?;
         self.lifecycle_save_with(
             connection.as_mut().map(|c| &mut **c),
             job,
