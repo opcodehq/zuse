@@ -690,3 +690,48 @@ async fn a_started_machine_that_never_enrolls_stops_visibly_and_retry_restarts_i
     assert_eq!(f.machine().await.as_deref(), Some("machine-1"));
     f.close().await;
 }
+
+/// A launch command that keeps "succeeding" without a runtime ever enrolling
+/// (the launcher exits 0, its runtime dies) is relaunched every two seconds.
+/// Those relaunches must not use up the job's attempts before the start
+/// deadline: an exhausted job is never claimed again, so the deadline would
+/// never fire and the computer would show "Starting" forever.
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn relaunches_that_never_enroll_still_reach_the_start_deadline() {
+    let f = Fixture::new(false).await;
+    let fake = Fake::new(Create::Ok, Find::Works);
+    let machine = Machine {
+        id: "machine-1".into(),
+        name: sqlx::query_scalar(
+            "SELECT machine_name FROM zuse_rust_allocations WHERE operation_id=$1",
+        )
+        .bind(&f.op)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap(),
+        state: MachineState::Running,
+        vcpu: None,
+        memory_bytes: None,
+    };
+    *fake.machine.lock().unwrap() = Some(machine);
+    f.exec("UPDATE zuse_rust_allocations SET phase='launching',machine_id='machine-1' WHERE workspace_id=$1 AND operation_id=$2").await;
+    f.exec("UPDATE api_cloud_workspaces SET state='provisioning',provider_sandbox_id='machine-1' WHERE workspace_id=$1").await;
+    for pass in 0..150 {
+        assert!(
+            f.attempt(&fake).await.unwrap(),
+            "pass {pass}: the start was abandoned before its deadline"
+        );
+        assert_eq!(f.job_state().await, "pending");
+    }
+    f.age_start(11 * MIN).await;
+    f.attempt(&fake).await.unwrap();
+    assert_eq!(f.job_state().await, "failed");
+    let row = f.row().await;
+    assert_eq!(row["status_code"], "cloud_provider_rejected");
+    assert_eq!(
+        crate::runtime::allocation::rejection::metadata(&row)["reason"],
+        "deadline"
+    );
+    f.close().await;
+}

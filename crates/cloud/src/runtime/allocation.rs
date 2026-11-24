@@ -1191,6 +1191,20 @@ impl RuntimeControl {
             .bind(&job.resource_id)
             .execute(&self.pool)
             .await?;
+        if delay_ms > 0 {
+            // A launch that succeeded is an observation, not a failed
+            // delivery. Without this, a runtime that never enrolls used up
+            // the 120 attempts in about four minutes of relaunches; an
+            // exhausted job is never claimed again, so the start deadline
+            // (checked at claim) never fired and the computer showed
+            // "Starting" forever. Bounded by the same ceiling as readiness.
+            let ceiling = 120 + BOOT_TTL / 2000 + 1;
+            sqlx::query("UPDATE zuse_rust_jobs SET max_attempts=LEAST($2,max_attempts+1) WHERE job_id=$1 AND state='pending' AND lease_token IS NULL")
+                .bind(&job.id)
+                .bind(ceiling as i32)
+                .execute(&self.pool)
+                .await?;
+        }
         Ok(())
     }
 }
