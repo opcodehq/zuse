@@ -222,6 +222,7 @@ async fn admission_case_with(
         include_str!("../../migrations/0023_managed_base_admission_lock.sql"),
         include_str!("../../migrations/0025_admission_read_batch.sql"),
         include_str!("../../migrations/0031_machine_images.sql"),
+        include_str!("../../migrations/0055_agent_connection_preferences.sql"),
         if user_image {
             crate::project_caches::user_images::MIGRATION
         } else {
@@ -1207,6 +1208,28 @@ async fn admission_case_with(
             .unwrap_err()
             .code,
         "github_runtime_credentials_required"
+    );
+    sqlx::query("UPDATE cloud_agent_connections SET enabled=false")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let connections = store.agent_connections("user-test").await.unwrap();
+    assert_eq!(connections.len(), 1);
+    assert!(
+        store
+            .managed_launch_catalog(&connections)
+            .await
+            .unwrap()
+            .providers
+            .is_empty()
+    );
+    assert_eq!(
+        control
+            .create_workspace(&access, copy(&next), now)
+            .await
+            .unwrap_err()
+            .code,
+        "agent_connection_required"
     );
     sqlx::query("UPDATE cloud_agent_connections SET state='revoked'")
         .execute(&pool)

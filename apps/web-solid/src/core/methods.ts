@@ -24,6 +24,7 @@ export const M = {
   CLOUD_ACCOUNT_STATUS: "CloudAccountStatus",
   CLOUD_AGENT_CONFIGURE: "CloudAgentConfigure",
   CLOUD_AGENT_CONNECTIONS: "CloudAgentConnections",
+  CLOUD_AGENT_CONNECTION_UPDATE: "CloudAgentConnectionUpdate",
   CLOUD_AGENT_DISCONNECT: "CloudAgentDisconnect",
   CLOUD_AGENT_LOGIN: "CloudAgentLogin",
   CLOUD_AGENT_LOGIN_CANCEL: "CloudAgentLoginCancel",

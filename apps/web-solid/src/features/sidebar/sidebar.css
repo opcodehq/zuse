@@ -196,14 +196,6 @@
 .sb-detail-head { display: flex; align-items: center; gap: 8px; padding-bottom: 8px; }
 .sb-detail-name { font-size: var(--text-md); line-height: 20px; font-weight: 500; color: var(--text); }
 .sb-detail-plan { font-size: var(--text-xs); color: var(--text-muted); }
-.sb-window { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; }
-.sb-window-top { display: flex; justify-content: space-between; font-size: var(--text-sm); color: var(--text); }
-.sb-window-top > span:first-child { font-weight: 500; }
-.sb-window-top > span:last-child, .sb-window-reset { color: var(--text-muted); }
-.sb-window-reset { font-size: var(--text-xs); }
-.sb-meter { height: 8px; border-radius: 2px; background: color-mix(in srgb, var(--text-muted) 30%, transparent); overflow: hidden; }
-.sb-meter > div { height: 100%; background: var(--accent); background-image: radial-gradient(rgb(0 0 0 / 0.25) 0.6px, transparent 0.7px); background-size: 2px 2px; }
-.sb-meter[data-warning="true"] > div { background-color: #fcd34d; }
 .sb-detail-empty { padding: 24px 0; text-align: center; font-size: var(--text-sm); color: var(--text-muted); }
 
 /* Menus opened from the sidebar share the primitives' .menu surface. */

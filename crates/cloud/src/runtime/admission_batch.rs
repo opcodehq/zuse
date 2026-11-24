@@ -241,7 +241,11 @@ impl RuntimeControl {
             "secretBindings":body.secret_bindings.as_deref().unwrap_or_default(),"assetIds":body.attachments.iter().map(|a|&a.asset_id).collect::<Vec<_>>(),"environmentRevision":body.environment_revision,"candidateRelease":pin.map(|p|&p.release_id),
             "stagingAllowance":pin.is_some_and(|p|p.allow_staging_compute),"branch":body.branch,
             "workspaceId":format!("workspace_{}",uuid::Uuid::new_v4().simple())});
-        let facts = sqlx::query_scalar("SELECT zuse_rust_admission_read_batch($1)")
+        let facts = sqlx::query_scalar(
+            "SELECT zuse_rust_admission_read_batch(CASE WHEN EXISTS(
+                SELECT 1 FROM cloud_agent_connections WHERE connection_id=$1::jsonb->>'connectionId' AND NOT enabled
+            ) THEN $1 - 'connectionId' ELSE $1 END)",
+        )
             .bind(input)
             .fetch_one(&mut **tx)
             .await?;

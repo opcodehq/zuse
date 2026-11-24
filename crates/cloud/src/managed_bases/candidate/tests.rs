@@ -144,9 +144,13 @@ async fn staging_candidate_is_owner_only_uncertified_and_fenced() {
         method: ConnectionMethod::DeviceCode,
         state: ConnectionState::Connected,
         account_label: None,
+        position: 0,
+        enabled: true,
+        alias: None,
         expires_at: None,
         version: 1,
         error_code: None,
+        pending_login_operation_id: None,
         credential_update: None,
         credential_update_key: None,
     };

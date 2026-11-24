@@ -3,6 +3,7 @@
 import { state } from "@/core/store";
 import { Icon } from "@/ui/Icon";
 import { Menu } from "@/ui/primitives";
+import { UsageMeter } from "@/ui/UsageMeter";
 import { createEffect, createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { type AgentAccount, data, loadAccounts, loadCustomAgents } from "../data";
 import { addOptionLabel, canStartUpdate, checkedLabel, cliName, type HarnessDescriptor, harnessMark, harnessTint, type HarnessUpdateStatus, installCommand, installHint, isCustomAcp, keepsOneLogin, loginCommand, loginOptions, maskedEmail, providerNote, reportsUsage, signsIn, switchesAccounts, UPDATE_POLICIES, updateDetail, updateInProgress, type UpdatePolicy, } from "../harness";
@@ -349,18 +350,6 @@ function AgentOptions(props: { harness: string }) {
   );
 }
 
-/** Compact absolute reset moment: a clock time within ~22h, a weekday within a week, else month and day. */
-function formatReset(resetsAt: string | null | undefined, now = Date.now()) {
-  if (!resetsAt) return null;
-  const at = new Date(resetsAt);
-  const hours = (at.getTime() - now) / 3_600_000;
-  if (hours < 22) return `resets ${at.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
-  if (hours < 24 * 7) return `resets ${at.toLocaleDateString(undefined, { weekday: "short" })}`;
-  return `resets ${at.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
-}
-
-const level = (fraction: number) => (fraction >= 0.95 ? "critical" : fraction >= 0.8 ? "warn" : undefined);
-
 function accountLabel(account: AgentAccount) {
   const name = account.displayName?.trim();
   if (name && name !== account.email) return name;
@@ -462,13 +451,6 @@ function AccountRow(props: { account: AgentAccount; blocked: boolean; onRemove: 
     if (a().usageError) return a().usageError!;
     return data.accountsLoading ? "Checking usage…" : "Usage unavailable";
   };
-  const resets = () =>
-    (a().usageWindows ?? [])
-      .map((w) => {
-        const reset = formatReset(w.resetsAt);
-        return reset ? `${w.label}: ${reset}` : w.label;
-      })
-      .join(" · ");
   const busy = () => login.busyAccount === a().id;
   const canSwitch = () => !a().active && !!a().switchable && !props.blocked;
   // Personal Claude orgs are named "<email>'s Organization": noise under the email itself.
@@ -502,25 +484,10 @@ function AccountRow(props: { account: AgentAccount; blocked: boolean; onRemove: 
         <Meta parts={[a().planLabel, organization(), a().authKind === "api-key" && "API key", missing()]} />
       </div>
       <Show when={reportsUsage(a().harness)}>
-        <div class="st-usage" title={resets() || undefined}>
+        <div class="st-usage">
           <Show when={!missing()}>
             <For each={a().usageWindows ?? []}>
-              {(w) => {
-                const fraction = () => Math.min(1, Math.max(0, w.usedFraction));
-                return (
-                  <div class="st-meter" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(fraction() * 100)} aria-label={`${w.label} usage`}>
-                    <span class="st-meter-label">{w.label}</span>
-                    <span class="st-meter-bar">
-                      <Show when={fraction() > 0}>
-                        <span class="st-meter-fill" data-level={level(fraction())} style={{ width: `${Math.max(fraction(), 0.015) * 100}%`, display: "block" }} />
-                      </Show>
-                    </span>
-                    <span class="st-meter-pct" data-level={level(fraction())}>
-                      {Math.round(fraction() * 100)}%
-                    </span>
-                  </div>
-                );
-              }}
+              {(window) => <UsageMeter window={window} variant="compact" />}
             </For>
           </Show>
         </div>

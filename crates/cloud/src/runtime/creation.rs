@@ -395,7 +395,7 @@ impl RuntimeControl {
             let selected = if let Some(facts) = &facts {
                 facts.get("connectionOwner").as_str().map(str::to_owned)
             } else {
-                sqlx::query_scalar("SELECT owner_id FROM cloud_agent_connections WHERE owner_id IN ($1,$2) AND connection_id=$3 AND agent=$4 AND state='connected'").bind(owner).bind(&access.actor.account_id).bind(connection).bind(agent).fetch_optional(&mut *tx).await?
+                sqlx::query_scalar("SELECT owner_id FROM cloud_agent_connections WHERE owner_id IN ($1,$2) AND connection_id=$3 AND agent=$4 AND state='connected' AND enabled").bind(owner).bind(&access.actor.account_id).bind(connection).bind(agent).fetch_optional(&mut *tx).await?
             };
             connection_owner =
                 Some(selected.ok_or_else(|| ApiError::conflict("agent_connection_required"))?);

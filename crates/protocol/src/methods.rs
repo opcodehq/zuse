@@ -563,6 +563,7 @@ pub const CLOUD_GITHUB: &str = "CloudGithubCatalog";
 pub const CLOUD_GITHUB_INSTALL: &str = "CloudGithubInstall";
 pub const CLOUD_CAPABILITIES: &str = "CloudCapabilities";
 pub const CLOUD_AGENT_CONNECTIONS: &str = "CloudAgentConnections";
+pub const CLOUD_AGENT_CONNECTION_UPDATE: &str = "CloudAgentConnectionUpdate";
 pub const CLOUD_AGENT_CONFIGURE: &str = "CloudAgentConfigure";
 pub const CLOUD_AGENT_LOGIN: &str = "CloudAgentLogin";
 pub const CLOUD_AGENT_LOGIN_STATUS: &str = "CloudAgentLoginStatus";

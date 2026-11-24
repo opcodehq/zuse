@@ -264,15 +264,6 @@ textarea.st-field { height: auto; min-height: 60px; padding: 6px 10px; resize: v
 .st-account-main { flex: 1; min-width: 0; }
 .st-account-email { font-size: var(--text-sm); font-weight: 500; color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .st-usage { width: 190px; flex: none; display: flex; flex-direction: column; gap: 2px; }
-.st-meter { height: 16px; display: flex; align-items: center; gap: 8px; font-size: var(--text-xs); }
-.st-meter-label { width: 52px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
-.st-meter-bar { width: 88px; height: 4px; flex: none; border-radius: 999px; overflow: hidden; background: var(--st-wash-2); }
-.st-meter-fill { height: 100%; border-radius: 999px; background: var(--accent); opacity: 0.8; }
-.st-meter-fill[data-level="warn"] { background: var(--warning); opacity: 0.9; }
-.st-meter-fill[data-level="critical"] { background: var(--danger); opacity: 0.9; }
-.st-meter-pct { width: 34px; flex: none; text-align: right; color: var(--text-muted); }
-.st-meter-pct[data-level="warn"] { color: var(--warning); }
-.st-meter-pct[data-level="critical"] { color: var(--danger); }
 .st-add-row {
   display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 6px 10px; border: 0; border-top: 1px solid var(--border);
   background: transparent; color: var(--text-muted); font-size: var(--text-xs); text-align: left; cursor: pointer; width: 100%;
@@ -394,14 +385,8 @@ textarea.st-field { height: auto; min-height: 60px; padding: 6px 10px; resize: v
 .us-limit { min-height: 80px; padding: 12px; display: flex; gap: 12px; }
 .us-limit-mark { width: 32px; height: 32px; flex: none; border-radius: 6px; display: grid; place-items: center; background: color-mix(in srgb, var(--st-frame) 45%, transparent); }
 .us-limit-info { flex: 1; min-width: 0; }
-.us-limit-head { display: flex; justify-content: space-between; gap: 12px; }
 .us-limit-name { font-size: var(--text-sm); font-weight: 500; }
 .us-limit-sub { font-size: 10px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.us-limit-left { text-align: right; font-size: var(--text-md); line-height: 20px; font-weight: 500; }
-.us-segments { display: flex; gap: 2px; height: 16px; margin-top: 8px; }
-.us-segments i { flex: 1; border-radius: 2px; background: color-mix(in srgb, var(--text-muted) 16%, transparent); }
-.us-segments i[data-on] { background: color-mix(in srgb, #89ca21 70%, transparent); }
-.us-segments[data-high] i[data-on] { background: color-mix(in srgb, #fcd34d 65%, transparent); }
 .us-table-wrap { overflow-x: auto; }
 .us-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
 .us-table th { height: 28px; padding: 0 8px; text-align: right; font-weight: 500; color: var(--text-muted); border-bottom: 1px solid var(--border); white-space: nowrap; }
@@ -475,7 +460,6 @@ textarea.st-field { height: auto; min-height: 60px; padding: 6px 10px; resize: v
   .st-account-row { flex-wrap: wrap; }
   .st-account-main { flex: 1 1 calc(100% - 80px); }
   .st-usage { order: 3; width: auto; flex: 1 1 100%; padding-left: 40px; }
-  .st-usage .st-meter-bar { flex: 1; width: auto; }
   .st-provider-name { flex-wrap: wrap; }
 }
 .us-root { min-width: 0; }

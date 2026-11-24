@@ -1,0 +1,62 @@
+.usage-meter {
+  --usage-meter-color: var(--accent);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  min-width: 0;
+  column-gap: 8px;
+}
+.usage-meter[data-tone="warn"] { --usage-meter-color: var(--warning); }
+.usage-meter[data-tone="critical"] { --usage-meter-color: var(--danger); }
+.usage-meter-label { grid-area: label; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-meter-value { grid-area: value; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.usage-meter-reset { grid-area: reset; color: var(--text-muted); white-space: nowrap; }
+.usage-meter-track {
+  grid-area: track;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--text-muted) 25%, transparent);
+}
+.usage-meter-fill { height: 100%; background: var(--usage-meter-color); }
+
+.usage-meter[data-variant="compact"] {
+  grid-template-areas: "label value" "track reset";
+  grid-template-columns: minmax(0, 1fr) 94px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.usage-meter[data-variant="compact"] .usage-meter-track { height: 4px; border-radius: 999px; }
+.usage-meter[data-variant="compact"] .usage-meter-reset { text-align: right; font-size: 10px; }
+.usage-meter[data-variant="compact"][data-tone] .usage-meter-value { color: var(--usage-meter-color); }
+
+.usage-meter[data-variant="detail"] {
+  grid-template-areas: "label value" "track track" "reset reset";
+  row-gap: 6px;
+  padding: 8px 0;
+  font-size: var(--text-sm);
+}
+.usage-meter[data-variant="detail"] .usage-meter-label { font-weight: 500; }
+.usage-meter[data-variant="detail"] .usage-meter-value { color: var(--text-muted); }
+.usage-meter[data-variant="detail"] .usage-meter-reset { font-size: var(--text-xs); }
+.usage-meter[data-variant="detail"] .usage-meter-track { height: 8px; border-radius: 2px; }
+.usage-meter[data-variant="detail"] .usage-meter-fill {
+  background-image: radial-gradient(rgb(0 0 0 / 0.25) 0.6px, transparent 0.7px);
+  background-size: 2px 2px;
+}
+
+.usage-meter[data-variant="card"] {
+  grid-template-areas: "label value" "label reset" "track track";
+  align-items: start;
+  column-gap: 12px;
+}
+.usage-meter[data-variant="card"]:not([data-tone]) { --usage-meter-color: #89ca21; }
+.usage-meter[data-variant="card"] .usage-meter-value { font-size: var(--text-md); line-height: 20px; font-weight: 500; }
+.usage-meter[data-variant="card"] .usage-meter-reset { font-size: 10px; text-align: right; }
+.usage-meter[data-variant="card"] .usage-meter-track {
+  --segment-width: calc(100% / 38);
+  height: 16px;
+  border-radius: 2px;
+  margin-top: 8px;
+  background: color-mix(in srgb, var(--text-muted) 16%, transparent);
+  mask-image: repeating-linear-gradient(to right, #000 0 calc(var(--segment-width) - 2px), transparent calc(var(--segment-width) - 2px) var(--segment-width));
+}
+.usage-meter[data-variant="card"] .usage-meter-fill { opacity: 0.7; }

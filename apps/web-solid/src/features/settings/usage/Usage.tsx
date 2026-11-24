@@ -4,6 +4,7 @@ import { state } from "@/core/store";
 import { navigate } from "@/core/view";
 import { Icon } from "@/ui/Icon";
 import { GlyphSpinner } from "@/ui/loaders";
+import { UsageMeter } from "@/ui/UsageMeter";
 import { Select as KSelect } from "@kobalte/core/select";
 import { type JSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, For, onSettled, Show } from "solid-js";
@@ -331,49 +332,25 @@ function Limits() {
           {(provider) => {
             const account = () => usage.limits?.accounts.find((a) => a.harness === provider.harness && a.active);
             const primary = () => account()?.usageWindows?.[0];
-            const fraction = () => Math.min(1, Math.max(0, primary()?.usedFraction ?? 0));
-            const filled = () => Math.ceil(fraction() * 38);
             return (
               <div class="us-card us-limit">
                 <span class="us-limit-mark" aria-hidden="true">
                   <Icon name={provider.mark} size={16} />
                 </span>
                 <div class="us-limit-info">
-                  <div class="us-limit-head">
-                    <div style={{ "min-width": 0 }}>
-                      <div class="us-limit-name">{provider.name}</div>
-                      <div class="us-limit-sub">{account()?.planLabel ?? primary()?.label ?? "Usage limits"}</div>
-                    </div>
-                    <div>
-                      <div class="us-limit-left">{primary() ? `${Math.round((1 - fraction()) * 100)}% left` : "—"}</div>
-                      <div class="us-limit-sub" style={{ "text-align": "right" }}>
-                        {primary()?.resetsAt
-                          ? new Date(primary()!.resetsAt!).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
-                          : primary()
-                            ? "No reset"
-                            : "Usage unavailable"}
-                      </div>
-                    </div>
-                  </div>
-                  <Show
-                    when={primary()}
-                    fallback={
-                      <Show when={account()?.usageError ?? usage.limitsError}>
-                        {(error) => <div class="us-limit-sub" style={{ "margin-top": "4px" }}>{error()}</div>}
-                      </Show>
+                  <UsageMeter
+                    window={primary()}
+                    variant="card"
+                    provider={provider.name}
+                    heading={
+                      <>
+                        <div class="us-limit-name">{provider.name}</div>
+                        <div class="us-limit-sub">{account()?.planLabel ?? primary()?.label ?? "Usage limits"}</div>
+                      </>
                     }
-                  >
-                    <div
-                      class="us-segments"
-                      data-high={fraction() >= 0.8 ? "true" : undefined}
-                      role="meter"
-                      aria-label={`${provider.name} ${primary()!.label} usage`}
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-valuenow={Math.round(fraction() * 100)}
-                    >
-                      <For each={Array.from({ length: 38 }, (_, i) => i)}>{(i) => <i data-on={i < filled() ? "true" : undefined} />}</For>
-                    </div>
+                  />
+                  <Show when={!primary() && (account()?.usageError ?? usage.limitsError)}>
+                    {(error) => <div class="us-limit-sub" style={{ "margin-top": "4px" }}>{error()}</div>}
                   </Show>
                 </div>
               </div>

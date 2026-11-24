@@ -27,13 +27,18 @@ mod tests {
             method: ConnectionMethod::ApiKey,
             state: ConnectionState::Connected,
             account_label: None,
+            position: 0,
+            enabled: true,
+            alias: None,
             expires_at: None,
             version: 1,
             error_code: None,
+            pending_login_operation_id: None,
             credential_update: None,
             credential_update_key: None,
         })
         .unwrap();
+        row.as_object_mut().unwrap().remove("position");
         row["connectionScope"] = json!(scope);
         row
     }
@@ -100,6 +105,30 @@ mod tests {
                 .as_deref(),
             Some("a-personal")
         );
+    }
+    #[test]
+    fn new_drafts_follow_scope_priority_and_skip_disabled_connections() {
+        let mut ctx = context(
+            vec![
+                row("a-team", AgentId::Codex, "organization"),
+                row("z-team", AgentId::Codex, "organization"),
+                row("personal", AgentId::Codex, "personal"),
+            ],
+            Some("team"),
+        );
+        ctx["agentConnections"][0]["position"] = json!(3);
+        ctx["agentConnections"][1]["position"] = json!(1);
+        ctx["agentConnections"][2]["position"] = json!(0);
+        let mut choices = ConnectionChoices::default();
+        let mut resolve =
+            |ctx: &Value| choices.resolve(ctx, "actor", Some("team"), HarnessId::Codex);
+        assert_eq!(resolve(&ctx).as_deref(), Some("z-team"));
+        ctx["agentConnections"][1]["enabled"] = json!(false);
+        assert_eq!(resolve(&ctx).as_deref(), Some("a-team"));
+        ctx["agentConnections"][0]["enabled"] = json!(false);
+        assert_eq!(resolve(&ctx).as_deref(), Some("personal"));
+        ctx["agentConnections"][2]["enabled"] = json!(false);
+        assert_eq!(resolve(&ctx), None);
     }
     #[test]
     fn revoked_or_missing_remembered_identity_never_switches_to_another_account() {
@@ -207,8 +236,9 @@ impl ConnectionChoices {
             harness.into()
         };
         let rows = context["agentConnections"].as_array()?;
+        let ordered = rows.iter().any(|row| row["position"].as_i64().is_some());
         let mut eligible = rows.iter().filter_map(|row| {
-            if row["agent"] != agent || row["state"] != "connected" {
+            if row["agent"] != agent || row["state"] != "connected" || row["enabled"] == false {
                 return None;
             }
             let (rank, connection_owner, connection_organization) = match row["connectionScope"]
@@ -232,17 +262,18 @@ impl ConnectionChoices {
             let id = row["connectionId"]
                 .as_str()
                 .filter(|id| !id.is_empty() && id.trim() == *id)?;
-            Some((rank, id))
+            Some((rank, row["position"].as_i64().unwrap_or(i64::MAX), id))
         });
+        if ordered {
+            return eligible.min().map(|(_, _, id)| id.to_owned());
+        }
         if let Some(remembered) = self.agents.get(&harness) {
             // Revocation/removal must not silently select another identity.
             return eligible
-                .find(|(_, id)| *id == remembered.as_str())
-                .map(|(_, id)| id.to_owned());
+                .find(|(_, _, id)| *id == remembered.as_str())
+                .map(|(_, _, id)| id.to_owned());
         }
-        // The wire format has no configured-default field. Use scoped, stable
-        // ordering rather than API response order, and retain it across refreshes.
-        let (_, selected) = eligible.min()?;
+        let (_, _, selected) = eligible.min()?;
         self.agents.insert(harness, selected.to_owned());
         Some(selected.to_owned())
     }

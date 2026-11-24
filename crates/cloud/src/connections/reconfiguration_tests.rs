@@ -113,6 +113,12 @@ async fn existing_non_device_credentials_verify_before_promotion_and_fence_refre
         .await
         .unwrap();
     sqlx::raw_sql(include_str!(
+        "../../migrations/0055_agent_connection_preferences.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
         "../../migrations/0024_credential_delivery_journal.sql"
     ))
     .execute(&pool)

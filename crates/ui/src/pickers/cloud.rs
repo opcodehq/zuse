@@ -121,6 +121,8 @@ impl Pickers {
         if let Some(project) = project {
             self.select_cloud(project, cx);
         }
+        self.cloud.loaded = false;
+        self.ensure_cloud(cx);
     }
     pub(crate) fn restore_cloud_canvas(
         &mut self,

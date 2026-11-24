@@ -4,8 +4,10 @@ import { formatKeys } from "@/core/keys";
 import { navigate, view } from "@/core/view";
 import { Icon } from "@/ui/Icon";
 import { Tooltip } from "@/ui/primitives";
+import { percentLeft } from "@/ui/usage-meter";
+import { UsageMeter } from "@/ui/UsageMeter";
 import { For, Match, Show, Switch } from "solid-js";
-import { account, accountAction, accountDisabled, type AgentAccount, available, loadUsage, percentLeft, planLabel, providerAccount, PROVIDERS, resetLabel, signedIn } from "./account";
+import { account, accountAction, accountDisabled, type AgentAccount, available, loadUsage, planLabel, providerAccount, PROVIDERS, signedIn } from "./account";
 import { toggleRightPanel, toggleSettings } from "./actions";
 import { EntriesMenu, type Entry } from "./menus";
 import { workingThreads } from "./model";
@@ -52,21 +54,7 @@ function ProviderDetail(props: { name: string; icon: string; account: AgentAccou
       <Switch>
         <Match when={props.account?.usageWindows.length}>
           <For each={props.account!.usageWindows}>
-            {(window) => {
-              const left = () => percentLeft(window);
-              return (
-                <div class="sb-window">
-                  <div class="sb-window-top">
-                    <span>{window.label}</span>
-                    <span>{left()}% left</span>
-                  </div>
-                  <div class="sb-meter" data-warning={window.usedFraction >= 0.8 ? "true" : undefined} role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={left()} aria-label={`${window.label}: ${left()}% left`}>
-                    <div style={{ width: `${left()}%` }} />
-                  </div>
-                  <span class="sb-window-reset">{resetLabel(window.resetsAt, now())}</span>
-                </div>
-              );
-            }}
+            {(window) => <UsageMeter window={window} variant="detail" />}
           </For>
         </Match>
         <Match when={true}>
@@ -91,8 +79,8 @@ function usageEntries(): Entry[] {
       label: provider.name,
       icon: provider.icon,
       get meta() {
-        const first = providerAccount(provider.harness)?.usageWindows[0];
-        return first ? `${percentLeft(first)}% left` : undefined;
+        const left = percentLeft(providerAccount(provider.harness)?.usageWindows[0]?.usedFraction);
+        return left === null ? undefined : `${left}% left`;
       },
       content: () => <ProviderDetail name={provider.name} icon={provider.icon} account={providerAccount(provider.harness)} />,
     });

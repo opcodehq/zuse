@@ -2,13 +2,14 @@ import { ModelSelect } from "@/ui/ModelSelect";
 import { Menu } from "@/ui/primitives";
 import { openCloudWorkspace } from "@/features/connection/cloud";
 // Starting cloud chats, their first-message queue, and the account's live workspaces (crates/viewport/src/cloud.rs, cloud_queue.rs).
-import { view } from "@/core/view";
+import { navigate, view } from "@/core/view";
 import { Icon } from "@/ui/Icon";
 import { GlyphSpinner } from "@/ui/loaders";
 import { createEffect, createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { owner } from "../account";
 import { Action, Badge, Group, Row, type BadgeTone } from "../ui";
 import { archiveVisible } from "./Archives";
+import { connectionMethods, connectionName, launchConnections } from "./connections";
 import { cloud, dismissLaunch, launch, loadContext, loadWorkspaces, openHistory, pauseWorkspace, workspaceLabel, type Launch, type LaunchDraft } from "./state";
 import type { CloudContextProject, Workspace } from "./types";
 
@@ -20,7 +21,7 @@ const MODES: { value: LaunchDraft["runtimeMode"]; label: string }[] = [
 
 export function Chats() {
   onSettled(() => {
-    if (!cloud.context.loaded) void loadContext();
+    void loadContext();
     if (!cloud.workspaces.loaded) void loadWorkspaces();
   });
   return (
@@ -41,6 +42,7 @@ export function Chats() {
 function NewChat() {
   const [projectId, setProjectId] = createSignal("");
   const [modelKey, setModelKey] = createSignal("");
+  const [connectionId, setConnectionId] = createSignal("");
   const [mode, setMode] = createSignal<LaunchDraft["runtimeMode"]>(view.preferences.defaultPermissionMode);
   const [branch, setBranch] = createSignal("");
   const [text, setText] = createSignal("");
@@ -64,15 +66,23 @@ function NewChat() {
     const provider = cloud.context.agents.find((a) => a.id === agent);
     return provider && model && provider.models.some((m) => m.id === model) ? { agent: provider.id, model } : null;
   };
+  const connections = createMemo(() => launchConnections(cloud.context.connections ?? [], selection()?.agent));
+  const connection = () => connectionId() ? connections().find((row) => row.connectionId === connectionId()) : connections()[0];
+  const connectionLabel = () => {
+    const current = connection();
+    return current ? connectionName(current) : "Choose an account";
+  };
   const submit = (event: Event) => {
     event.preventDefault();
     const chosen = project();
     if (!chosen || !prepared(chosen)) return setError("Select a prepared cloud repository before starting.");
     const picked = selection();
     if (!picked) return setError("Choose an available Cloud model before starting. Your draft is preserved.");
+    const auth = connection();
+    if (cloud.context.connections !== null && !auth) return setError("Choose a connected account for this model before starting.");
     if (!text().trim()) return setError("Write the first message for this cloud chat.");
     setError(null);
-    void launch({ project: chosen, agent: picked.agent, model: picked.model, branch: branch(), runtimeMode: mode(), text: text().trim() });
+    void launch({ project: chosen, agent: picked.agent, agentConnectionId: auth?.connectionId, model: picked.model, branch: branch(), runtimeMode: mode(), text: text().trim() });
     setText("");
     setBranch("");
   };
@@ -100,8 +110,19 @@ function NewChat() {
               </label>
               <label class="pc-field">
                 <span>Model</span>
-                <ModelSelect label="Model" value={modelKey()} onChange={setModelKey} options={cloud.context.agents.flatMap(agent => agent.models.map(model => ({ key: `${agent.id}\u0000${model.id}`, label: model.label ?? model.name ?? model.id, provider: agent.id, providerLabel: agent.name })))} />
+                <ModelSelect label="Model" value={modelKey()} onChange={(value) => {
+                  if (value.split("\u0000")[0] !== modelKey().split("\u0000")[0]) setConnectionId("");
+                  setModelKey(value);
+                }} options={cloud.context.agents.flatMap(agent => agent.models.map(model => ({ key: `${agent.id}\u0000${model.id}`, label: model.label ?? model.name ?? model.id, provider: agent.id, providerLabel: agent.name })))} />
               </label>
+              <Show when={cloud.context.connections !== null}>
+                <div class="pc-field">
+                  <span>Connection</span>
+                  <Show when={connections().length} fallback={<Action onClick={() => navigate({ kind: "settings", section: "connections" })}>Manage connections</Action>}>
+                    <Menu placement="bottom-start" trigger={attrs => <button {...attrs} type="button" class="model-select-trigger" aria-label={`Connection: ${connectionLabel()}`}><Icon name="link" size={14} /><span>{connectionLabel()}</span><Icon name="alt-arrow-down" size={12} /></button>} items={connections().map(row => ({ label: `${connectionName(row)} · ${connectionMethods[row.method]}`, icon: row.connectionId === connection()?.connectionId ? "check" : undefined, onSelect: () => { setConnectionId(row.connectionId); setError(null); } }))} />
+                  </Show>
+                </div>
+              </Show>
               <label class="pc-field">
                 <span>Permissions</span>
                 <Menu placement="bottom-start" trigger={attrs => <button {...attrs} type="button" class="model-select-trigger"><Icon name={mode() === "full-access" ? "access-full" : mode() === "auto" ? "access-auto" : "access-ask"} size={14} /><span>{MODES.find(item => item.value === mode())?.label}</span><Icon name="alt-arrow-down" size={12} /></button>} items={MODES.map(item => ({ label: item.label, icon: item.value === "full-access" ? "access-full" : item.value === "auto" ? "access-auto" : "access-ask", onSelect: () => setMode(item.value) }))} />

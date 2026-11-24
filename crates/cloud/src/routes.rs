@@ -201,7 +201,13 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
                 || state.store.computers.is_some()
                 || state.store.plugins.is_some()
             {
-                vec![Method::GET, Method::POST, Method::PUT, Method::DELETE]
+                vec![
+                    Method::GET,
+                    Method::POST,
+                    Method::PUT,
+                    Method::PATCH,
+                    Method::DELETE,
+                ]
             } else {
                 vec![Method::GET]
             },
@@ -281,7 +287,7 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         )
         .route(
             "/v1/cloud/agents/{id}",
-            axum::routing::delete(disconnect_agent),
+            axum::routing::patch(update_agent_connection).delete(disconnect_agent),
         )
         .route(
             "/v1/cloud/projects/{id}/environment/preparation",
@@ -1090,8 +1096,45 @@ async fn agent_connections(
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     let access = state.access(&headers, AccessKind::Content).await?;
+    let connections = state
+        .store
+        .agent_connections_for_actor(&access.owner_id, Some(&access.actor.account_id))
+        .await?;
+    let personal = if access.membership.is_some() && access.owner_id != access.actor.account_id {
+        state
+            .store
+            .agent_connections_for_actor(&access.actor.account_id, Some(&access.actor.account_id))
+            .await?
+    } else {
+        Vec::new()
+    };
     Ok(Json(
-        json!({"connections":state.store.agent_connections(&access.owner_id).await?,"supportsDeviceReconnect":true,"supportsCredentialReconfiguration":true}),
+        json!({"connections":connections,"personalConnections":personal,"supportsDeviceReconnect":true,"supportsCredentialReconfiguration":true}),
+    ))
+}
+async fn update_agent_connection(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Result<Json<zuse_protocol::cloud_connections::UpdateConnection>, JsonRejection>,
+) -> Result<Json<zuse_protocol::cloud_connections::AgentConnection>, ApiError> {
+    let access = state.access(&headers, AccessKind::Administration).await?;
+    let Json(request) =
+        body.map_err(|_| ApiError::bad_request("invalid_agent_connection_preferences"))?;
+    let control = state
+        .store
+        .connections
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_agent_connection_writes_disabled"))?;
+    Ok(Json(
+        control
+            .update(
+                &access.owner_id,
+                &id,
+                request,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await?,
     ))
 }
 async fn configure_agent_connection(

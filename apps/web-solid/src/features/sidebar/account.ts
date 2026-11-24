@@ -207,14 +207,3 @@ export function loadUsage(force = false) {
     )
     .finally(() => setAccount(draft => { draft["pending"]!["usage"] = false; }));
 }
-
-export function resetLabel(resetsAt: string | null | undefined, at: number) {
-  const when = resetsAt ? Date.parse(resetsAt) : NaN;
-  if (Number.isNaN(when) || when <= at) return "Reset unavailable";
-  const minutes = Math.max(0, Math.floor((when - at) / 60_000));
-  if (minutes >= 1440) return `Resets in ${Math.floor(minutes / 1440)}d ${Math.floor(minutes / 60) % 24}h`;
-  if (minutes >= 60) return `Resets in ${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
-  return `Resets in ${minutes}m`;
-}
-
-export const percentLeft = (w: UsageWindow) => Math.round((1 - Math.min(1, Math.max(0, w.usedFraction))) * 100);

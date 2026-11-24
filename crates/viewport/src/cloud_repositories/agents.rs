@@ -138,9 +138,13 @@ impl AgentView {
             method,
             state: ConnectionState::Connected,
             account_label: None,
+            position: self.connections.len().try_into().unwrap_or(i32::MAX),
+            enabled: true,
+            alias: None,
             expires_at: None,
             version: 0,
             error_code: None,
+            pending_login_operation_id: None,
             credential_update: None,
             credential_update_key: None,
         });
@@ -868,9 +872,16 @@ fn agent_tile(agent: AgentId) -> Div {
 /// What an account is called: its label, else how it signed in.
 fn account_name(connection: &AgentConnection) -> String {
     connection
-        .account_label
-        .clone()
+        .alias
+        .as_ref()
         .filter(|label| !label.trim().is_empty())
+        .or_else(|| {
+            connection
+                .account_label
+                .as_ref()
+                .filter(|label| !label.trim().is_empty())
+        })
+        .cloned()
         .unwrap_or_else(|| {
             match connection.method {
                 ConnectionMethod::ApiKey => "API key",
@@ -1272,9 +1283,16 @@ impl RepositoryPanel {
         ) && self.can_reconnect(account)
             && self.agents.edit.is_none();
         let menu = self.agent_menu(agent, Some((account, only)), busy, cx);
+        let status = if account.error_code.as_deref() == Some("agent_already_connected") {
+            Some(quiet_text("Already connected"))
+        } else if account.state == ConnectionState::Connected && !account.enabled {
+            Some(quiet_text("Disabled"))
+        } else {
+            connection_status(&id, account.state)
+        };
         row()
             .gap(px(10.))
-            .when_some(connection_status(&id, account.state), |v, s| v.child(s))
+            .when_some(status, |v, s| v.child(s))
             .when(needs_sign_in, |v| {
                 let id = id.clone();
                 v.child(
@@ -1606,6 +1624,7 @@ impl RepositoryPanel {
                     match o.error_code.as_deref() {
                         Some("auth_account_mismatch") => "That was a different account. Sign in with the original one, or add it as another account.",
                         Some("auth_identity_review_required") => "This connection needs a review before it can be reused. Add another account instead.",
+                        Some("agent_already_connected") => "Already connected",
                         _ => "Sign-in failed.",
                     }
                     .to_owned()
@@ -1636,9 +1655,13 @@ mod tests {
             method,
             state: ConnectionState::Connected,
             account_label: label.map(Into::into),
+            position: 0,
+            enabled: true,
+            alias: None,
             expires_at: None,
             version: 1,
             error_code: None,
+            pending_login_operation_id: None,
             credential_update: None,
             credential_update_key: None,
         }

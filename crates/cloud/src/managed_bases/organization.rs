@@ -208,6 +208,7 @@ async fn database() -> (PgPool, PgPool, String) {
         include_str!("../../migrations/0008_delete.sql"),
         include_str!("../../migrations/0008_launch_assets.sql"),
         include_str!("../../migrations/0009_computers.sql"),
+        include_str!("../../migrations/0055_agent_connection_preferences.sql"),
         include_str!("../../migrations/0010_managed_bases.sql"),
         include_str!("../../migrations/0011_transcript_heads.sql"),
         include_str!("../../migrations/0012_provider_receipts.sql"),

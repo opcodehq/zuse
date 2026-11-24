@@ -248,7 +248,8 @@ impl crate::store::Store {
             };
             for harness in release.harnesses {
                 if connections.iter().any(|c| {
-                    c.agent == harness.agent
+                    c.enabled
+                        && c.agent == harness.agent
                         && c.state == zuse_protocol::cloud_connections::ConnectionState::Connected
                 }) && seen.insert((provider.clone(), harness.agent.as_str()))
                 {
@@ -279,7 +280,8 @@ impl crate::store::Store {
                 .into_iter()
                 .filter(|h| {
                     connections.iter().any(|c| {
-                        c.agent == h.agent
+                        c.enabled
+                            && c.agent == h.agent
                             && c.state
                                 == zuse_protocol::cloud_connections::ConnectionState::Connected
                     })
@@ -934,9 +936,13 @@ mod tests {
             method: ConnectionMethod::DeviceCode,
             state: ConnectionState::Connected,
             account_label: None,
+            position: 0,
+            enabled: true,
+            alias: None,
             expires_at: None,
             version: 1,
             error_code: None,
+            pending_login_operation_id: None,
             credential_update: None,
             credential_update_key: None,
         };

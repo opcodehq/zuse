@@ -349,6 +349,7 @@ fn allowed(method: &str) -> bool {
             | methods::CLOUD_GITHUB_INSTALL
             | methods::CLOUD_CAPABILITIES
             | methods::CLOUD_AGENT_CONNECTIONS
+            | methods::CLOUD_AGENT_CONNECTION_UPDATE
             | methods::CLOUD_AGENT_CONFIGURE
             | methods::CLOUD_AGENT_LOGIN
             | methods::CLOUD_AGENT_LOGIN_STATUS

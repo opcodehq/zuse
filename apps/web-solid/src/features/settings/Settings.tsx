@@ -12,12 +12,13 @@ import { General } from "./pages/General";
 import { Segmented } from "./widgets";
 
 const Providers = lazy(() => import("./pages/Providers").then((m) => ({ default: m.Providers })));
+const Connections = lazy(() => import("./pages/Connections").then((m) => ({ default: m.Connections })));
 const Defaults = lazy(() => import("./pages/Defaults").then((m) => ({ default: m.Defaults })));
 const Appearance = lazy(() => import("./pages/Appearance").then((m) => ({ default: m.Appearance })));
 const Notifications = lazy(() => import("./pages/Notifications").then((m) => ({ default: m.Notifications })));
 const Shortcuts = lazy(() => import("./pages/Shortcuts").then((m) => ({ default: m.Shortcuts })));
 
-export type SectionId = "general" | "providers" | "defaults" | "plugins" | "devices" | "cloud" | "appearance" | "notifications" | "shortcuts" | "archived";
+export type SectionId = "general" | "providers" | "connections" | "defaults" | "plugins" | "devices" | "cloud" | "appearance" | "notifications" | "shortcuts" | "archived";
 
 interface Section {
   id: SectionId;
@@ -28,6 +29,7 @@ interface Section {
 const SECTIONS: Section[] = [
   { id: "general", icon: "dither-gear", label: () => t("settings-settings_page_general", "General") },
   { id: "providers", icon: "dither-term", label: () => t("settings-settings_page_providers", "Providers") },
+  { id: "connections", icon: "link", label: () => "Connections" },
   { id: "defaults", icon: "dither-sliders", label: () => t("settings-settings_page_default_models", "Default models") },
   { id: "plugins", icon: "dither-plug", label: () => t("plugins-plugins_title", "Plugins") },
   { id: "devices", icon: "dither-monitor", label: () => t("settings-settings_page_remote_access", "Remote access") },
@@ -52,6 +54,7 @@ const ALIASES: Record<string, SectionId> = {
   devices: "devices",
   remote: "devices",
   cloud: "cloud",
+  connections: "connections",
   appearance: "appearance",
   notifications: "notifications",
   shortcuts: "shortcuts",
@@ -102,6 +105,7 @@ export function Settings() {
           <Switch>
             <Match when={section() === "general"}><Scroll><General /></Scroll></Match>
             <Match when={section() === "providers"}><Scroll><Providers /></Scroll></Match>
+            <Match when={section() === "connections"}><Scroll><Connections /></Scroll></Match>
             <Match when={section() === "defaults"}><Scroll><Defaults /></Scroll></Match>
             <Match when={section() === "appearance"}><Scroll><Appearance /></Scroll></Match>
             <Match when={section() === "notifications"}><Scroll><Notifications /></Scroll></Match>

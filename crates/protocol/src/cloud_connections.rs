@@ -43,13 +43,35 @@ pub struct AgentConnection {
     pub method: ConnectionMethod,
     pub state: ConnectionState,
     pub account_label: Option<String>,
+    #[serde(default)]
+    pub position: i32,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    pub alias: Option<String>,
     pub expires_at: Option<i64>,
     pub version: i64,
     pub error_code: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_login_operation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_update: Option<LoginOperation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_update_key: Option<String>,
+}
+
+fn default_enabled() -> bool {
+    true
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdateConnection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -101,5 +123,22 @@ mod tests {
     #[test]
     fn secret_input_refuses_unexpected_unowned_fields() {
         assert!(serde_json::from_value::<ConfigureConnection>(serde_json::json!({"agent":"codex","method":"api-key","secret":"value","ownerId":"other-account"})).is_err());
+    }
+
+    #[test]
+    fn old_rows_default_to_enabled_and_update_input_cannot_override_scope() {
+        let old: AgentConnection = serde_json::from_value(serde_json::json!({
+            "connectionId":"c","agent":"codex","method":"api-key","state":"connected","version":1,
+        }))
+        .unwrap();
+        assert!(old.enabled);
+        assert_eq!(old.position, 0);
+        assert_eq!(old.alias, None);
+        assert!(
+            serde_json::from_value::<UpdateConnection>(serde_json::json!({
+                "alias":"example","ownerId":"not-authorized",
+            }))
+            .is_err()
+        );
     }
 }

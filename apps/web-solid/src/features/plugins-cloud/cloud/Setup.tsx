@@ -1,5 +1,6 @@
 // Cloud Setup: image, repositories and GitHub (crates/viewport/src/cloud_repositories), plus retained image storage for Usage.
 import { writeClipboard } from "@/ui/clipboard";
+import { navigate } from "@/core/view";
 import { Icon } from "@/ui/Icon";
 import { GlyphSpinner } from "@/ui/loaders";
 import { Dialog, IconButton, toast } from "@/ui/primitives";
@@ -368,7 +369,7 @@ function ImageGroup() {
         >
           <Row
             title="Cloud image ready"
-            description="Ready for new cloud chats. Agent authentication is delivered when a workspace starts."
+            description={<>Ready for new cloud chats. Manage agent authentication in <button type="button" class="pc-link-button" onClick={() => navigate({ kind: "settings", section: "connections" })}>Connections</button>.</>}
             action={
               <>
                 <Badge>Ready</Badge>

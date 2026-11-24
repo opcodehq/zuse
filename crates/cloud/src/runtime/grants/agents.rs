@@ -52,18 +52,23 @@ pub(super) fn selected(
 // Match the native new-draft resolver only when no identity has been bound yet.
 // Existing task bindings and the initial connection never pass through this chooser.
 fn unbound_connection(
-    candidates: Vec<(String, String)>,
+    candidates: Vec<(String, String, i32)>,
     account: &str,
     actor: &str,
 ) -> Option<(String, String)> {
     candidates
         .into_iter()
-        .filter(|(owner, id)| {
+        .filter(|(owner, id, _)| {
             (owner == account || owner == actor) && !id.is_empty() && id.trim() == id
         })
         .min_by(|left, right| {
-            (left.0.as_str() != account, &left.1).cmp(&(right.0.as_str() != account, &right.1))
+            (left.0.as_str() != account, left.2, &left.1).cmp(&(
+                right.0.as_str() != account,
+                right.2,
+                &right.1,
+            ))
         })
+        .map(|(owner, id, _)| (owner, id))
 }
 
 impl RuntimeControl {
@@ -117,7 +122,7 @@ impl RuntimeControl {
             }
             return Ok(Some((owner, id)));
         }
-        let candidates: Vec<(String,String)> = sqlx::query_as("SELECT owner_id,connection_id FROM cloud_agent_connections WHERE owner_id IN($1,$2) AND agent=$3 AND state='connected' AND credential_ciphertext IS NOT NULL ORDER BY CASE WHEN owner_id=$1 THEN 0 ELSE 1 END,connection_id LIMIT 2")
+        let candidates: Vec<(String,String,i32)> = sqlx::query_as("SELECT owner_id,connection_id,position FROM cloud_agent_connections WHERE owner_id IN($1,$2) AND agent=$3 AND state='connected' AND enabled AND credential_ciphertext IS NOT NULL")
             .bind(account).bind(actor).bind(agent).fetch_all(&mut **tx).await?;
         let (owner, id) = unbound_connection(candidates, account, actor)
             .ok_or_else(|| ApiError::conflict("agent_connection_required"))?;
@@ -170,7 +175,7 @@ mod tests {
             .connect(&url)
             .await
             .unwrap();
-        sqlx::raw_sql("CREATE TABLE api_cloud_workspaces(workspace_id text PRIMARY KEY,account_id text,request_config jsonb);CREATE TABLE cloud_agent_connections(connection_id text PRIMARY KEY,owner_id text,agent text,state text,credential_ciphertext text,created_at bigint);CREATE TABLE zuse_rust_task_command_policies(workspace_id text,owner_id text,policy_revision bigint,ciphertext text)").execute(&pool).await.unwrap();
+        sqlx::raw_sql("CREATE TABLE api_cloud_workspaces(workspace_id text PRIMARY KEY,account_id text,request_config jsonb);CREATE TABLE cloud_agent_connections(connection_id text PRIMARY KEY,owner_id text,agent text,state text,credential_ciphertext text,position integer,enabled boolean DEFAULT true);CREATE TABLE zuse_rust_task_command_policies(workspace_id text,owner_id text,policy_revision bigint,ciphertext text)").execute(&pool).await.unwrap();
         let encoded = B64.encode([63; 32]);
         let key = ed25519_dalek::SigningKey::from_bytes(&[64; 32]);
         let jwk = json!({"kty":"OKP","crv":"Ed25519","d":B64.encode([64;32]),"x":B64.encode(key.verifying_key().as_bytes())});
@@ -185,15 +190,16 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        for (id, owner, agent) in [
-            ("codex-a", "member", "codex"),
-            ("claude-z", "member", "claude"),
-            ("claude-a", "member", "claude"),
-            ("grok-a", "member", "grok"),
-            ("grok-org", "organization:team", "grok"),
-            ("foreign", "administrator", "claude"),
+        for (id, owner, agent, position, enabled) in [
+            ("codex-a", "member", "codex", 0, false),
+            ("claude-0", "member", "claude", 1, false),
+            ("claude-z", "member", "claude", 2, true),
+            ("claude-a", "member", "claude", 3, true),
+            ("grok-a", "member", "grok", 4, true),
+            ("grok-org", "organization:team", "grok", 0, true),
+            ("foreign", "administrator", "claude", 0, true),
         ] {
-            sqlx::query("INSERT INTO cloud_agent_connections VALUES($1,$2,$3,'connected','synthetic-never-opened',0)").bind(id).bind(owner).bind(agent).execute(&pool).await.unwrap();
+            sqlx::query("INSERT INTO cloud_agent_connections VALUES($1,$2,$3,'connected','synthetic-never-opened',$4,$5)").bind(id).bind(owner).bind(agent).bind(position).bind(enabled).execute(&pool).await.unwrap();
         }
         let catalog = |id: zuse_protocol::HarnessId| json!({"id":id,"name":"Fixture","defaultModel":"fixture","models":[{"id":"fixture","label":"Fixture"}]});
         let policy = json!({"agent":"codex","connectionId":"codex-a","connectionOwnerId":"member","runtimeMode":"auto","initialModel":"fixture","reasoning":null,"modelOptions":{},"catalog":catalog(zuse_protocol::HarnessId::Codex),"catalogs":{"codex":catalog(zuse_protocol::HarnessId::Codex),"claude":catalog(zuse_protocol::HarnessId::ClaudeCode),"grok":catalog(zuse_protocol::HarnessId::Grok)}});
@@ -225,7 +231,7 @@ mod tests {
                 .bind_task_agent_tx(&mut first, &row, "claude")
                 .await
                 .unwrap(),
-            Some(("member".into(), "claude-a".into()))
+            Some(("member".into(), "claude-z".into()))
         );
         let second_started = tokio::sync::Notify::new();
         let second = async {
@@ -242,15 +248,15 @@ mod tests {
         };
         let release = async {
             second_started.notified().await;
-            sqlx::query("INSERT INTO cloud_agent_connections VALUES('claude-0','member','claude','connected','synthetic-never-opened',1)")
+            sqlx::query("UPDATE cloud_agent_connections SET enabled = (connection_id = 'claude-0') WHERE connection_id IN ('claude-0','claude-z')")
                 .execute(&pool).await.unwrap();
             first.commit().await.unwrap();
         };
         let (second, ()) = tokio::join!(second, release);
-        assert_eq!(second, Some(("member".into(), "claude-a".into())));
+        assert_eq!(second, Some(("member".into(), "claude-z".into())));
         for (agent, expected_owner, expected) in [
             ("codex", "member", "codex-a"),
-            ("claude", "member", "claude-a"),
+            ("claude", "member", "claude-z"),
             ("grok", "organization:team", "grok-org"),
             ("codex", "member", "codex-a"),
         ] {
@@ -266,12 +272,11 @@ mod tests {
             tx.commit().await.unwrap();
         }
         sqlx::query(
-            "UPDATE cloud_agent_connections SET state='revoked' WHERE connection_id='claude-a'",
+            "UPDATE cloud_agent_connections SET state='revoked' WHERE connection_id='claude-z'",
         )
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query("INSERT INTO cloud_agent_connections VALUES('claude-b','member','claude','connected','another-synthetic',1)").execute(&pool).await.unwrap();
         let mut tx = pool.begin().await.unwrap();
         let row: Value = sqlx::query_scalar(
             "SELECT to_jsonb(w)FROM api_cloud_workspaces w WHERE workspace_id='task' FOR UPDATE",
@@ -294,7 +299,7 @@ mod tests {
         );
         assert_eq!(
             row["request_config"]["agentConnectionBindings"]["claude"]["connectionId"],
-            "claude-a"
+            "claude-z"
         );
         tx.rollback().await.unwrap();
         pool.close().await;
@@ -313,10 +318,10 @@ mod unbound_selection_tests {
     #[test]
     fn first_binding_is_stable_across_response_order_and_prefers_workspace_scope() {
         let personal = vec![
-            ("member".into(), "claude-z".into()),
-            ("member".into(), "claude-a".into()),
+            ("member".into(), "claude-z".into(), 1),
+            ("member".into(), "claude-a".into(), 2),
         ];
-        let expected = Some(("member".into(), "claude-a".into()));
+        let expected = Some(("member".into(), "claude-z".into()));
         assert_eq!(
             unbound_connection(personal.clone(), "organization:team", "member"),
             expected
@@ -330,8 +335,8 @@ mod unbound_selection_tests {
             expected
         );
         let both = vec![
-            ("member".into(), "a-personal".into()),
-            ("organization:team".into(), "z-organization".into()),
+            ("member".into(), "a-personal".into(), 0),
+            ("organization:team".into(), "z-organization".into(), 9),
         ];
         let expected = Some(("organization:team".into(), "z-organization".into()));
         assert_eq!(
@@ -353,8 +358,8 @@ mod unbound_selection_tests {
         assert_eq!(
             unbound_connection(
                 vec![
-                    ("administrator".into(), "a".into()),
-                    ("member".into(), " ".into())
+                    ("administrator".into(), "a".into(), 0),
+                    ("member".into(), " ".into(), 1)
                 ],
                 "organization:team",
                 "member"
@@ -363,7 +368,10 @@ mod unbound_selection_tests {
         );
         assert_eq!(
             unbound_connection(
-                vec![("member".into(), "z".into()), ("member".into(), "a".into())],
+                vec![
+                    ("member".into(), "z".into(), 0),
+                    ("member".into(), "a".into(), 0)
+                ],
                 "member",
                 "member"
             ),

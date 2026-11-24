@@ -63,6 +63,7 @@ async fn v2_initial_write_is_atomic_under_the_actual_restricted_role() {
         include_str!("../../../migrations/0026_task_command_admission.sql"),
         include_str!("../../../migrations/0034_runtime_releases.sql"),
         include_str!("../../../migrations/0036_harness_bundles.sql"),
+        include_str!("../../../migrations/0055_agent_connection_preferences.sql"),
     ] {
         sqlx::raw_sql(migration).execute(&pool).await.unwrap();
     }

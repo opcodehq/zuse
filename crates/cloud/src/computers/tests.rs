@@ -270,6 +270,7 @@ async fn environments_are_scoped_revisioned_and_available_without_compute_entitl
         include_str!("../../migrations/0009_computers.sql"),
         // Connection refresh journals its rotations.
         include_str!("../../migrations/0024_credential_delivery_journal.sql"),
+        include_str!("../../migrations/0055_agent_connection_preferences.sql"),
     ] {
         sqlx::raw_sql(sql).execute(&pool).await.unwrap();
     }
@@ -297,7 +298,9 @@ async fn environments_are_scoped_revisioned_and_available_without_compute_entitl
             runtime: None,
             gateway: Arc::new(Hub::default()),
         },
-        vec![],
+        vec![axum::http::HeaderValue::from_static(
+            "https://app.example.test",
+        )],
     );
     let path = "/v1/cloud/projects/project/environment";
     assert_eq!(
@@ -460,6 +463,62 @@ async fn environments_are_scoped_revisioned_and_available_without_compute_entitl
         "Verified test connection"
     );
     assert!(!verified.1.to_string().contains("test-private-key-value"));
+    let agent_path = format!("/v1/cloud/agents/{connection}");
+    let preflight = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri(&agent_path)
+                .header("origin", "https://app.example.test")
+                .header("access-control-request-method", "PATCH")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        preflight.headers()["access-control-allow-methods"]
+            .to_str()
+            .unwrap()
+            .split(',')
+            .any(|method| method.trim() == "PATCH")
+    );
+    let preferences = json!({"enabled":false,"alias":"Work"});
+    assert_eq!(
+        call(
+            &app,
+            "PATCH",
+            &agent_path,
+            "alice",
+            true,
+            preferences.clone()
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            &app,
+            "PATCH",
+            &agent_path,
+            "admin",
+            true,
+            preferences.clone()
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    let changed = call(&app, "PATCH", &agent_path, "alice", false, preferences).await;
+    assert_eq!(changed.0, StatusCode::OK, "{}", changed.1);
+    assert_eq!(changed.1["enabled"], false);
+    assert_eq!(changed.1["alias"], "Work");
+    let org = call(&app, "GET", "/v1/cloud/agents", "alice", true, Value::Null).await;
+    assert_eq!(org.0, StatusCode::OK);
+    assert_eq!(org.1["connections"], json!([]));
+    assert_eq!(org.1["personalConnections"][0]["connectionId"], connection);
     assert_eq!(
         authority
             .credential("user-alice", connection, "codex", false, &VerifiedDriver)

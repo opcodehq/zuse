@@ -147,12 +147,35 @@ fn verified(job: &AuthJob, credential: Value) -> Result<VerifiedConnection, &'st
     let account = credential["providerAccountId"]
         .as_str()
         .map(str::to_owned)
-        .filter(|s| s.len() <= 256);
+        .filter(|s| !s.trim().is_empty() && s.len() <= 256);
     Ok(VerifiedConnection {
         account_label: label,
         account_id: account,
         expires_at: credential["expiresAt"].as_i64(),
         credential: Zeroizing::new(credential.to_string()),
+    })
+}
+
+fn grok_user_id_matches(credential: &str, id: &str) -> bool {
+    serde_json::from_str::<Value>(credential).is_ok_and(|profile| {
+        profile["nativeAuth"].as_object().is_some_and(|entries| {
+            entries.iter().any(|(issuer, entry)| {
+                issuer.starts_with("https://auth.x.ai::") && entry["user_id"].as_str() == Some(id)
+            })
+        })
+    })
+}
+
+fn dedup_account<'a>(
+    agent: &str,
+    method: &str,
+    verified: &'a VerifiedConnection,
+) -> Option<&'a str> {
+    verified.account_id.as_deref().filter(|id| {
+        !id.trim().is_empty()
+            && (agent != "grok"
+                || method != "device-code"
+                || grok_user_id_matches(&verified.credential, id))
     })
 }
 #[async_trait::async_trait]
@@ -267,6 +290,38 @@ impl AuthDriver for CommandDriver {
     }
 }
 impl ConnectionControl {
+    async fn account_is_connected(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        owner: &str,
+        agent: &str,
+        connection: &str,
+        id: &str,
+    ) -> Result<bool, ApiError> {
+        if agent != "grok" {
+            return Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM cloud_agent_connections WHERE owner_id=$1 AND agent=$2 AND provider_account_id=$3 AND connection_id<>$4 AND state<>'revoked')")
+                .bind(owner).bind(agent).bind(id).bind(connection).fetch_one(&mut **tx).await?);
+        }
+        let candidates: Vec<(String, String, Option<String>)> = sqlx::query_as("SELECT connection_id,method,credential_ciphertext FROM cloud_agent_connections WHERE owner_id=$1 AND agent='grok' AND provider_account_id=$2 AND connection_id<>$3 AND state<>'revoked'")
+            .bind(owner).bind(id).bind(connection).fetch_all(&mut **tx).await?;
+        Ok(candidates
+            .into_iter()
+            .any(|(candidate, method, ciphertext)| {
+                method != "device-code"
+                    || ciphertext.is_some_and(|ciphertext| {
+                        self.master
+                            .open_api(
+                                &format!("agent-connection:{owner}:{candidate}"),
+                                &ciphertext,
+                            )
+                            .is_ok_and(|bytes| {
+                                std::str::from_utf8(&bytes)
+                                    .is_ok_and(|credential| grok_user_id_matches(credential, id))
+                            })
+                    })
+            }))
+    }
+
     pub async fn work_once(&self, driver: &dyn AuthDriver) -> Result<bool, ApiError> {
         let now = chrono::Utc::now().timestamp_millis();
         self.cleanup_rotations(now).await?;
@@ -379,7 +434,14 @@ impl ConnectionControl {
                 }
             }
         };
+        let dedup_id = result
+            .as_ref()
+            .ok()
+            .and_then(|verified| dedup_account(&expected_agent, &expected_method, verified));
         let mut tx = self.pool.begin().await?;
+        if dedup_id.is_some() {
+            lock_owner(&mut tx, &owner).await?;
+        }
         let current:Option<(i64,String,Option<String>,String,i64,String)>=sqlx::query_as("SELECT version,state,provider_account_id,method,authority_epoch,agent FROM cloud_agent_connections WHERE owner_id=$1 AND connection_id=$2 FOR UPDATE").bind(&owner).bind(&connection).fetch_optional(&mut *tx).await?;
         let claim:Option<(String,Option<String>,Option<i64>,i64)>=sqlx::query_as("SELECT state,lease_id,lease_expires_at,expires_at FROM cloud_auth_operations WHERE operation_id=$1 FOR UPDATE").bind(&operation).fetch_optional(&mut *tx).await?;
         let now: i64 =
@@ -412,7 +474,7 @@ impl ConnectionControl {
             return Ok(true);
         }
         match result {
-            Ok(verified) => {
+            Ok(ref verified) => {
                 let (prior_version, prior_state, prior_account, method, prior_epoch, _) =
                     current.as_ref().ok_or_else(unavailable)?;
                 let identity_error = if proposal.is_some()
@@ -445,13 +507,27 @@ impl ConnectionControl {
                 } else {
                     None
                 };
-                if let Some(code) = identity_error {
+                let duplicate = if let Some(id) = dedup_id
+                    .filter(|&id| identity_error.is_none() && prior_account.as_deref() != Some(id))
+                {
+                    self.account_is_connected(&mut tx, &owner, &expected_agent, &connection, id)
+                        .await?
+                } else {
+                    false
+                };
+                if let Some(code) =
+                    identity_error.or(duplicate.then_some("agent_already_connected"))
+                {
                     if *prior_version == 1
                         && *prior_epoch == 1
-                        && prior_state == "pending"
+                        && matches!(prior_state.as_str(), "pending" | "error")
                         && prior_account.is_none()
                     {
-                        sqlx::query("UPDATE cloud_agent_connections SET state='error',credential_ciphertext=NULL,last_error_code=$3,updated_at=$4 WHERE owner_id=$1 AND connection_id=$2 AND state='pending'").bind(&owner).bind(&connection).bind(code).bind(now).execute(&mut *tx).await?;
+                        if duplicate && method == "device-code" {
+                            revoke_connection_tx(&mut tx, &owner, &connection, now).await?;
+                        } else {
+                            sqlx::query("UPDATE cloud_agent_connections SET state='error',credential_ciphertext=NULL,last_error_code=$3,updated_at=$4 WHERE owner_id=$1 AND connection_id=$2").bind(&owner).bind(&connection).bind(code).bind(now).execute(&mut *tx).await?;
+                        }
                     }
                     // Existing tasks pin this connection. A wrong-account sign-in
                     // must not replace its identity, ciphertext, version or epoch.
@@ -466,7 +542,7 @@ impl ConnectionControl {
                         &verified.credential,
                     )
                     .map_err(|_| unavailable())?;
-                sqlx::query("UPDATE cloud_agent_connections SET state='connected',credential_ciphertext=$3,account_label=$4,provider_account_id=$5,expires_at=$6,version=version+1,authority_epoch=authority_epoch+1,refresh_lease_id=NULL,refresh_lease_expires_at=NULL,last_error_code=NULL,updated_at=$7 WHERE owner_id=$1 AND connection_id=$2").bind(&owner).bind(&connection).bind(encrypted).bind(verified.account_label).bind(verified.account_id).bind(verified.expires_at).bind(now).execute(&mut *tx).await?;
+                sqlx::query("UPDATE cloud_agent_connections SET state='connected',credential_ciphertext=$3,account_label=$4,provider_account_id=$5,expires_at=$6,version=version+1,authority_epoch=authority_epoch+1,refresh_lease_id=NULL,refresh_lease_expires_at=NULL,last_error_code=NULL,updated_at=$7 WHERE owner_id=$1 AND connection_id=$2").bind(&owner).bind(&connection).bind(encrypted).bind(&verified.account_label).bind(&verified.account_id).bind(verified.expires_at).bind(now).execute(&mut *tx).await?;
                 sqlx::query("UPDATE cloud_auth_operations SET state='connected',operation_ciphertext=NULL,lease_id=NULL,lease_expires_at=NULL,updated_at=$2 WHERE operation_id=$1").bind(&operation).bind(now).execute(&mut *tx).await?;
             }
             Err(code) => {
@@ -484,3 +560,18 @@ impl ConnectionControl {
 #[cfg(test)]
 #[path = "worker_reauth_tests.rs"]
 mod reauth_tests;
+
+#[cfg(test)]
+mod identity_tests {
+    use super::grok_user_id_matches;
+
+    #[test]
+    fn grok_deduplication_requires_the_provider_user_id_not_the_email() {
+        let email_only =
+            r#"{"nativeAuth":{"https://auth.x.ai::account":{"email":"member@example.com"}}}"#;
+        let user_id = r#"{"nativeAuth":{"https://auth.x.ai::account":{"email":"member@example.com","user_id":"user-123"}}}"#;
+        assert!(!grok_user_id_matches(email_only, "member@example.com"));
+        assert!(!grok_user_id_matches(user_id, "member@example.com"));
+        assert!(grok_user_id_matches(user_id, "user-123"));
+    }
+}

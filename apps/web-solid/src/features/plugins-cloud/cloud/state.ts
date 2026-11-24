@@ -3,6 +3,7 @@ import { createStore, reconcile } from "solid-js";
 import { onConnected, rpc } from "@/core/connection";
 import { M } from "@/core/methods";
 import { bound, boundReply, errorText, newId, openExternal, owner, ownerKey, type Owner } from "../account";
+import type { AgentConnection } from "./connections";
 import { capDollars, capMicros, cloudSubscribed } from "./money";
 import { cloudErrorText, defaultProvider, readCatalog } from "./plans";
 import type {
@@ -83,6 +84,7 @@ interface Context {
   loading: boolean;
   projects: CloudContextProject[];
   agents: CloudAgent[];
+  connections: AgentConnection[] | null;
   capabilities: CloudCapabilities | null;
   error: string | null;
 }
@@ -118,7 +120,7 @@ const initial = () => ({
   repos: { loaded: false, projects: [], github: null, listing: false, githubLoading: false, connecting: [], removing: null, error: null, notice: null } as Repositories,
   image: { value: null, loading: false, building: false, deleting: false, error: null } as Image,
   workspaces: { loaded: false, loading: false, rows: [], error: null, pending: {}, rowError: null } as Workspaces,
-  context: { loaded: false, loading: false, projects: [], agents: [], capabilities: null, error: null } as Context,
+  context: { loaded: false, loading: false, projects: [], agents: [], connections: null, capabilities: null, error: null } as Context,
   launches: [] as Launch[],
   history: { workspaceId: null, sessionId: null, head: null, loading: false, error: null } as History,
 });
@@ -447,11 +449,12 @@ export async function loadContext() {
   if (!result) return;
   setCloud(draft => { draft["context"]["loading"] = false; });
   if ("error" in result) return setCloud(draft => { draft["context"]["error"] = result.error; });
-  const value = result.value as { accountId?: string; projects?: CloudContextProject[]; agentCatalog?: { providers?: CloudAgent[] }; computerCapabilities?: CloudCapabilities | null };
+  const value = result.value as { accountId?: string; projects?: CloudContextProject[]; agentCatalog?: { providers?: CloudAgent[] }; agentConnections?: AgentConnection[] | null; computerCapabilities?: CloudCapabilities | null };
   if (value.accountId !== who.accountId) return setCloud(draft => { draft["context"]["error"] = "Your account changed. Reopen this view."; });
   setCloud(draft => { Object.assign(draft["context"], {
     projects: Array.isArray(value.projects) ? value.projects : [],
     agents: Array.isArray(value.agentCatalog?.providers) ? value.agentCatalog!.providers! : [],
+    connections: Array.isArray(value.agentConnections) ? value.agentConnections : null,
     capabilities: value.computerCapabilities && typeof value.computerCapabilities === "object" ? value.computerCapabilities : null,
   }); });
 }
@@ -459,6 +462,7 @@ export async function loadContext() {
 export interface LaunchDraft {
   project: CloudContextProject;
   agent: string;
+  agentConnectionId?: string;
   model: string;
   branch: string;
   runtimeMode: "approval-required" | "auto" | "full-access";
@@ -486,6 +490,7 @@ export async function launch(draft: LaunchDraft | null, retryKey?: string) {
       baseRef: project.defaultBranch ?? "main",
       ...(draft.branch.trim() ? { branch: draft.branch.trim() } : {}),
       agent: draft.agent,
+      ...(draft.agentConnectionId ? { agentConnectionId: draft.agentConnectionId } : {}),
       model: draft.model,
       runtimeMode: draft.runtimeMode,
       idempotencyKey: key,

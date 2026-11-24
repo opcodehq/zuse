@@ -335,6 +335,7 @@ pub fn handles(method: &str) -> bool {
             | zuse_protocol::methods::CLOUD_GITHUB_INSTALL
             | zuse_protocol::methods::CLOUD_CAPABILITIES
             | zuse_protocol::methods::CLOUD_AGENT_CONNECTIONS
+            | zuse_protocol::methods::CLOUD_AGENT_CONNECTION_UPDATE
             | zuse_protocol::methods::CLOUD_AGENT_CONFIGURE
             | zuse_protocol::methods::CLOUD_AGENT_LOGIN
             | zuse_protocol::methods::CLOUD_AGENT_LOGIN_STATUS
@@ -561,6 +562,8 @@ impl CloudApi {
                             "Agent connections are not enabled on this service yet.",
                         Some("invalid_agent_connection" | "invalid_device_login") =>
                             "Check the credential and sign-in method for this agent.",
+                        Some("invalid_agent_connection_preferences") =>
+                            "Check the connection’s position or name and try again.",
                         Some("agent_connection_idempotency_conflict") =>
                             "This connection request already has a different result. Refresh connections before retrying.",
                         Some("agent_login_not_found" | "agent_connection_not_found") =>
@@ -1184,6 +1187,7 @@ impl CloudApi {
             | zuse_protocol::methods::CLOUD_GITHUB_INSTALL
             | zuse_protocol::methods::CLOUD_CAPABILITIES
             | zuse_protocol::methods::CLOUD_AGENT_CONNECTIONS
+            | zuse_protocol::methods::CLOUD_AGENT_CONNECTION_UPDATE
             | zuse_protocol::methods::CLOUD_AGENT_CONFIGURE
             | zuse_protocol::methods::CLOUD_AGENT_LOGIN
             | zuse_protocol::methods::CLOUD_AGENT_LOGIN_STATUS
@@ -1227,6 +1231,25 @@ impl CloudApi {
                             None,
                             org.as_deref(),
                             &[],
+                        )
+                        .await?
+                    }
+                    zuse_protocol::methods::CLOUD_AGENT_CONNECTION_UPDATE => {
+                        let id = input
+                            .as_object_mut()
+                            .and_then(|object| object.remove("connectionId"))
+                            .and_then(|value| value.as_str().map(str::to_owned))
+                            .filter(|id| !id.is_empty() && id.len() <= 200)
+                            .ok_or_else(|| anyhow::anyhow!("Choose an agent connection."))?;
+                        let request: zuse_protocol::cloud_connections::UpdateConnection =
+                            serde_json::from_value(input)?;
+                        self.request_scoped_verb(
+                            &token,
+                            &["v1", "cloud", "agents", &id],
+                            Some(serde_json::to_value(request)?),
+                            org.as_deref(),
+                            &[],
+                            reqwest::Method::PATCH,
                         )
                         .await?
                     }
