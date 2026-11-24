@@ -29,6 +29,12 @@ pub(super) struct Decoration {
 }
 
 impl Decoration {
+    /// Whether git has a version of this file to compare against: anything
+    /// but a file git has never seen.
+    pub(super) fn has_history(self) -> bool {
+        self.kind != DecorationKind::Untracked
+    }
+
     pub(super) fn color(self, theme: &Theme) -> gpui::Hsla {
         match self.kind {
             DecorationKind::Untracked | DecorationKind::Added => theme.success,

@@ -2473,55 +2473,63 @@ impl FilesSurface {
                     )
                 },
             )
-            // Images are not text: they have nothing to edit, so the Diff/Edit
-            // switch is left out of their header.
-            .when(!super::image_preview::is_image(path), |el| {
-                el.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .border_1()
-                        .border_color(theme.border)
-                        .rounded(px(5.0))
-                        .children(
-                            [
-                                (true, "Diff", "files-show-diff"),
-                                (false, "Edit", "files-show-edit"),
-                            ]
-                            .into_iter()
-                            .map(|(diff, label, id)| {
-                                let selected = self
-                                    .preview
-                                    .documents
-                                    .get(path)
-                                    .is_some_and(|d| d.show_diff)
-                                    == diff;
-                                toolbar_button(id, label)
-                                    .w(px(36.0))
-                                    .h(px(22.0))
-                                    .text_size(px(11.0))
-                                    .when(selected, |el| el.bg(crate::theme::wash(0.12)))
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.suspend_images(cx);
-                                        if let Some(path) = this.preview.active.clone() {
-                                            if let Some(d) = this.preview.documents.get_mut(&path) {
-                                                d.show_diff = diff;
-                                                if !diff {
-                                                    d.show_web = false;
-                                                    d.show_markdown = false;
+            // Diff/Edit only means something for a text file git can compare:
+            // images, untracked files and files without changes leave it out.
+            .when(
+                !super::image_preview::is_image(path)
+                    && self
+                        .git_decoration(path, false, cx)
+                        .is_some_and(|decoration| decoration.has_history()),
+                |el| {
+                    el.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .border_1()
+                            .border_color(theme.border)
+                            .rounded(px(5.0))
+                            .children(
+                                [
+                                    (true, "Diff", "files-show-diff"),
+                                    (false, "Edit", "files-show-edit"),
+                                ]
+                                .into_iter()
+                                .map(|(diff, label, id)| {
+                                    let selected = self
+                                        .preview
+                                        .documents
+                                        .get(path)
+                                        .is_some_and(|d| d.show_diff)
+                                        == diff;
+                                    toolbar_button(id, label)
+                                        .w(px(36.0))
+                                        .h(px(22.0))
+                                        .text_size(px(11.0))
+                                        .when(selected, |el| el.bg(crate::theme::wash(0.12)))
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.suspend_images(cx);
+                                            if let Some(path) = this.preview.active.clone() {
+                                                if let Some(d) =
+                                                    this.preview.documents.get_mut(&path)
+                                                {
+                                                    d.show_diff = diff;
+                                                    if !diff {
+                                                        d.show_web = false;
+                                                        d.show_markdown = false;
+                                                    }
                                                 }
                                             }
-                                        }
-                                        if !diff {
-                                            this.focus_editor(window, cx);
-                                        }
-                                        cx.notify();
-                                    }))
-                                    .child(label)
-                            }),
-                        ),
-                )
-            })
+                                            if !diff {
+                                                this.focus_editor(window, cx);
+                                            }
+                                            cx.notify();
+                                        }))
+                                        .child(label)
+                                }),
+                            ),
+                    )
+                },
+            )
             .when(markdown, |element| {
                 element.child(
                     toolbar_button(
