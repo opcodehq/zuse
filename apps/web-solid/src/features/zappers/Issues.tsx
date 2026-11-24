@@ -1,4 +1,9 @@
 import { Icon } from "@/ui/Icon";
+import { state } from "@/core/store";
+import { IssuePriorityIcon, IssueStatusIcon, IssueWorking, issueStatuses } from "./IssueMetadata";
+import { issueAgentWorking } from "./issue-activity";
+import { deviceOnline } from "@/features/projects/hosts";
+import { effectiveIndicator } from "@/features/extras/util";
 import { ZapperSelect } from "./Controls";
 import {
   createMemo,
@@ -8,6 +13,7 @@ import {
   Show,
   snapshot,
   untrack,
+  onCleanup,
 } from "solid-js";
 import { openChat } from "@/core/view";
 import { uuid } from "@/core/util";
@@ -22,18 +28,12 @@ import { Button, Dialog } from "@/ui/primitives";
 import { Markdown } from "@/features/transcript/Markdown";
 import { WorkerDialog } from "./Threads";
 import { act, command, commandState, threadTitle } from "./state";
-const statuses: Record<IssueStatus, string> = {
-  backlog: "Backlog",
-  todo: "Todo",
-  inProgress: "In progress",
-  needsYou: "Needs you",
-  blocked: "Blocked",
-  inReview: "In review",
-  done: "Done",
-  canceled: "Canceled",
-};
+const statuses = Object.fromEntries(Object.entries(issueStatuses).map(([key, value]) => [key, value.label])) as Record<IssueStatus, string>;
 const priorities: IssuePriority[] = ["urgent", "high", "normal", "low"];
 export function Issues(props: { zapper: Zapper; compact?: boolean; onOpen?: (id:string)=>void }) {
+  const [activityAt, setActivityAt] = createSignal(Date.now());
+  const activityTimer = setInterval(() => setActivityAt(Date.now()), 15_000);
+  onCleanup(() => clearInterval(activityTimer));
   const [filter, setFilter] = createSignal("open");
   const [query, setQuery] = createSignal("");
   const [selected, setSelected] = createSignal<string | null>(null);
@@ -75,14 +75,14 @@ export function Issues(props: { zapper: Zapper; compact?: boolean; onOpen?: (id:
             value={query()}
             onInput={(e) => setQuery(e.currentTarget.value)}
           /></label>
-          <ZapperSelect label="Issue status filter" value={filter()} onChange={setFilter} options={[{value:"open",label:"Open issues"},{value:"all",label:"All issues"},...Object.entries(statuses).map(([value,label]) => ({value,label}))]} />
+          <ZapperSelect label="Issue status filter" value={filter()} onChange={setFilter} options={[{value:"open",label:"Open issues"},{value:"all",label:"All issues"},...Object.entries(statuses).map(([value,label]) => ({value,label,leading:<IssueStatusIcon status={value as IssueStatus} />}))]} />
         </div>
       </Show>
       <Show when={!props.compact}><div class="zp-list-summary">{filtered().length} {filtered().length === 1 ? "issue" : "issues"}<Show when={query() || filter() !== "open"}><button type="button" class="zp-link" onClick={() => { setQuery(""); setFilter("open"); }}>Clear filters</button></Show></div></Show>
       <div class="zp-issue-list"><For each={props.compact ? filtered().slice(0, 5) : filtered()} fallback={<div class="zp-list-empty"><Icon name="list" size={24} /><strong>{props.zapper.issues.length ? "No matching issues" : "A clear place for the next task"}</strong><p>{props.zapper.issues.length ? "Try another search or status." : "Track tasks, decisions, and progress with your Zapper."}</p><Show when={!props.compact && !props.zapper.issues.length}><Button size="sm" onClick={() => setCreating(true)}>Create an issue</Button></Show></div>}>
         {issue => <button type="button" class="zp-issue-row" onClick={() => { if(props.onOpen) props.onOpen(issue.id); else {setEditing(false);setSelected(issue.id);} }}>
-          <span class="zp-issue-status" data-status={issue.details.status} title={issueStatus(props.zapper,issue)}><Icon name={issue.details.status === "done" ? "check-circle" : issue.details.status === "blocked" ? "danger-triangle" : "clock-circle"} size={14} /></span>
-          <div class="zp-issue-content"><div class="zp-issue-title"><span class="zp-issue-number">ZAP-{issue.number}</span><strong>{issue.details.title}</strong></div><div class="zp-issue-meta"><span>{issueStatus(props.zapper,issue)}</span><span data-priority={issue.details.priority}>{issue.details.priority}</span><Show when={issue.details.owner || issue.details.assigned}><span>{ownerLabel(props.zapper,issue)}</span></Show><Show when={issue.details.dueDate}><span>Due {issue.details.dueDate}</span></Show><For each={issue.details.labels}>{label => <span class="zp-label">{label}</span>}</For></div></div>
+          <span class="zp-issue-status" title={issueStatus(props.zapper,issue)}><IssueStatusIcon status={issueStatus(props.zapper, issue) === "Queued" ? "todo" : issue.details.status} /></span>
+          <div class="zp-issue-content"><div class="zp-issue-title"><span class="zp-issue-number">ZAP-{issue.number}</span><strong>{issue.details.title}</strong></div><div class="zp-issue-meta"><span>{issueStatus(props.zapper,issue)}</span><span class="issue-metadata" data-priority={issue.details.priority}><IssuePriorityIcon priority={issue.details.priority} />{issue.details.priority}</span><Show when={issue.details.owner || issue.details.assigned}><span class="issue-metadata"><Show when={issue.details.owner?.type === "thread"}><IssueWorking working={issueAgentWorking(issue.details, props.zapper, state.connection.kind === "connected", id => effectiveIndicator(id, activityAt()), deviceOnline)} /></Show>{ownerLabel(props.zapper,issue)}</span></Show><Show when={issue.details.dueDate}><span>Due {issue.details.dueDate}</span></Show><For each={issue.details.labels}>{label => <span class="zp-label">{label}</span>}</For></div></div>
           <Icon name="alt-arrow-right" size={12} class="zp-issue-chevron" />
         </button>}
       </For></div>
@@ -190,11 +190,11 @@ function IssueEditor(props: {
         <div class="zp-form-grid">
           <label>
             Status
-            <ZapperSelect label="Issue status" value={draft().status} onChange={value => change("status", value as IssueStatus)} options={Object.entries(statuses).map(([value,label]) => ({value,label}))} />
+            <ZapperSelect label="Issue status" value={draft().status} onChange={value => change("status", value as IssueStatus)} options={Object.entries(statuses).map(([value,label]) => ({value,label,leading:<IssueStatusIcon status={value as IssueStatus} />}))} />
           </label>
           <label>
             Priority
-            <ZapperSelect label="Issue priority" value={draft().priority} onChange={value => change("priority", value as IssuePriority)} options={priorities.map(value => ({value,label:value[0]!.toUpperCase()+value.slice(1)}))} />
+            <ZapperSelect label="Issue priority" value={draft().priority} onChange={value => change("priority", value as IssuePriority)} options={priorities.map(value => ({value,label:value[0]!.toUpperCase()+value.slice(1),leading:<IssuePriorityIcon priority={value} />}))} />
           </label>
           <label>
             Due date
@@ -283,8 +283,8 @@ function IssueDetail(props: {
     <div class="zp-issue-detail">
       <div class="zp-section-heading">
         <span>
-          {issueStatus(props.zapper,props.issue)} ·{" "}
-          {props.issue.details.priority}
+          <span class="issue-metadata"><IssueStatusIcon status={issueStatus(props.zapper, props.issue) === "Queued" ? "todo" : props.issue.details.status} />{issueStatus(props.zapper,props.issue)}</span> ·{" "}
+          <span class="issue-metadata"><IssuePriorityIcon priority={props.issue.details.priority} />{props.issue.details.priority}</span>
           {` · ${ownerLabel(props.zapper,props.issue)}`}
         </span>
         <Button size="sm" onClick={props.edit}>

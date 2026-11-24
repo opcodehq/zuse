@@ -42,6 +42,14 @@ macro_rules! icon_assets {
 }
 
 icon_assets![
+    (ISSUE_BACKLOG, "issue-backlog"),
+    (ISSUE_TODO, "issue-todo"),
+    (ISSUE_PROGRESS, "issue-progress"),
+    (ISSUE_ATTENTION, "issue-attention"),
+    (ISSUE_BLOCKED, "issue-blocked"),
+    (ISSUE_DONE, "issue-done"),
+    (ISSUE_CANCELED, "issue-canceled"),
+    (PRIORITY_URGENT, "priority-urgent"),
     (PROJECT_DEFAULT, "project-default"),
     (REMOTE_SERVER, "remote-server"),
     (FAST_TIER, "fast-tier"),

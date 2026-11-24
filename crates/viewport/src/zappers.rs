@@ -1425,6 +1425,16 @@ impl WorkspaceView {
         });
         panel.update(cx, |p, cx| {
             p.thread_states(states, cx);
+            p.activity_connected(self.connected, cx);
+            p.running_threads(
+                zapper
+                    .workers
+                    .iter()
+                    .filter(|w| self.zapper_thread_status(&w.chat_id) == "working")
+                    .map(|w| w.chat_id.clone())
+                    .collect(),
+                cx,
+            );
             p.user_name(user, cx);
             p.sync(zapper.clone(), overview, self.zappers.pending.is_some(), cx);
             p.files(self.zappers.files.clone(), cx);

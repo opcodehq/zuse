@@ -56,11 +56,7 @@ fn issue(
             title: title.into(),
             description: "Make the flow work end to end and verify it on staging.".into(),
             status,
-            priority: if number % 3 == 0 {
-                ZapperIssuePriority::High
-            } else {
-                ZapperIssuePriority::Normal
-            },
+            priority: ZapperIssuePriority::ALL[number as usize % 4],
             assigned,
             owner: Some(match status {
                 ZapperIssueStatus::NeedsYou => ZapperIssueOwner::User,
@@ -335,18 +331,20 @@ impl Render for Board {
                     .child(headers),
             )
             .child(moods);
+        let light = std::env::var_os("ZAPPER_LIGHT").is_some();
+        zuse_viewport::palette::set_light(light);
         let panel = |child: Entity<IssuePanel>| {
             div()
                 .w(px(520.))
                 .p(px(16.))
-                .bg(rgb(0x101010))
+                .bg(rgb(if light { 0xffffff } else { 0x101010 }))
                 .border_1()
-                .border_color(rgb(0x262626))
+                .border_color(rgb(if light { 0xe1e7df } else { 0x262626 }))
                 .child(child)
         };
         div()
             .size_full()
-            .bg(rgb(0x0b0b0b))
+            .bg(rgb(if light { 0xf1f5ef } else { 0x0b0b0b }))
             .p(px(20.))
             .flex()
             .flex_col()
@@ -416,6 +414,27 @@ fn main() -> anyhow::Result<()> {
                     true,
                     false,
                 ),
+                issue(
+                    7,
+                    "Sketch the rollout follow-up",
+                    ZapperIssueStatus::Backlog,
+                    true,
+                    false,
+                ),
+                issue(
+                    8,
+                    "Triage the cache warning",
+                    ZapperIssueStatus::Todo,
+                    true,
+                    false,
+                ),
+                issue(
+                    9,
+                    "Drop the superseded upload task",
+                    ZapperIssueStatus::Canceled,
+                    true,
+                    false,
+                ),
             ];
             let board = sample_zapper(issues, 3);
             let states = [
@@ -439,6 +458,11 @@ fn main() -> anyhow::Result<()> {
                             cx.new(|cx| {
                                 let mut panel = IssuePanel::new(zapper, overview);
                                 panel.thread_states(states, cx);
+                                panel.activity_connected(true, cx);
+                                panel.running_threads(
+                                    ["zapper-worker-1".to_owned()].into_iter().collect(),
+                                    cx,
+                                );
                                 panel
                             })
                         };

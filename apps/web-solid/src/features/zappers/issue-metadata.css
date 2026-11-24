@@ -13,7 +13,8 @@
 .issue-metadata { display: inline-flex; align-items: center; gap: 5px; }
 .issue-working { display: inline-grid; grid-template-columns: repeat(3, 2px); gap: 1px; width: 8px; height: 8px; flex: none; margin-right: 4px; visibility: hidden; }
 .issue-working[data-working] { visibility: visible; }
-.issue-working i { background: var(--text-muted); border-radius: 1px; animation: issue-working-pulse 900ms ease-in-out infinite alternate; }
+.issue-working i { background: var(--text-muted); border-radius: 1px; }
+.issue-working[data-working] i { animation: issue-working-pulse 900ms ease-in-out infinite alternate; }
 @keyframes issue-working-pulse { from { opacity: .25; } to { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .issue-working i { animation: none; } }
-[data-reduce-motion="on"] .issue-working i { animation: none; }
+@media (prefers-reduced-motion: reduce) { .issue-working[data-working] i { animation: none; } }
+[data-reduce-motion="on"] .issue-working[data-working] i { animation: none; }

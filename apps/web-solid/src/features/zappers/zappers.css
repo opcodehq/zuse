@@ -683,12 +683,9 @@
 .zp-issue-number { font-size: 10px; color: var(--text-faint); flex: none; font-variant-numeric: tabular-nums; }
 .zp-issue-title strong { font-size: 12px; line-height: 17px; }
 .zp-issue-status { color: var(--text-faint); padding-top: 2px; flex: none; }
-.zp-issue-status[data-status="inProgress"], .zp-issue-status[data-status="inReview"] { color: var(--accent); }
-.zp-issue-status[data-status="needsYou"], .zp-issue-status[data-status="blocked"] { color: var(--warning); }
-.zp-issue-status[data-status="done"] { color: var(--success); }
 .zp-issue-meta { display: flex; flex-wrap: wrap; gap: 5px 8px; align-items: center; margin-top: 4px; font-size: 10px; line-height: 15px; color: var(--text-muted); }
 .zp-issue-meta > [data-priority="urgent"] { color: var(--danger); }
-.zp-issue-meta > [data-priority="high"] { color: var(--warning); }
+.zp-issue-meta > [data-priority="high"] { color: var(--syntax-number); }
 .zp-label { padding: 0 5px; background: var(--wash); border-radius: 4px; }
 .zp-issue-chevron { color: var(--text-faint); opacity: 0; margin-top: 3px; }
 .zp-issue-row:hover .zp-issue-chevron, .zp-issue-row:focus-visible .zp-issue-chevron { opacity: 1; }

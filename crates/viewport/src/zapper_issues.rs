@@ -42,6 +42,7 @@ pub struct IssuePanel {
     collapsed: HashSet<String>,
     thread_states: HashMap<String, ThreadState>,
     activity_connected: bool,
+    running_threads: HashSet<String>,
     /// The signed-in person's name, for their avatar on comments.
     user_name: Option<String>,
     menu: Option<&'static str>,
@@ -99,6 +100,7 @@ impl IssuePanel {
             needs_you_only: false,
             thread_states: HashMap::new(),
             activity_connected: false,
+            running_threads: HashSet::new(),
             user_name: None,
             collapsed: ["Done".to_owned(), "Canceled".to_owned()]
                 .into_iter()
@@ -179,6 +181,12 @@ impl IssuePanel {
     pub fn activity_connected(&mut self, connected: bool, cx: &mut Context<Self>) {
         if self.activity_connected != connected {
             self.activity_connected = connected;
+            cx.notify();
+        }
+    }
+    pub fn running_threads(&mut self, threads: HashSet<String>, cx: &mut Context<Self>) {
+        if self.running_threads != threads {
+            self.running_threads = threads;
             cx.notify();
         }
     }
@@ -506,17 +514,25 @@ impl IssuePanel {
         let assignee = self.owner_name(owner.as_ref());
         // Its thread waits for a slot: show Queued, not a running status.
         let queued = self.zapper.issue_queued_worker(issue).is_some();
-        let working = matches!(owner.as_ref(), Some(ZapperIssueOwner::Thread { chat_id })
+        let running = matches!(owner.as_ref(), Some(ZapperIssueOwner::Thread { chat_id })
             if self.zapper.workers.iter().any(|w| w.chat_id == *chat_id)
-                && self.thread_state(chat_id) == ThreadState::Working)
-            && issue_activity_allowed(issue.details.status, self.activity_connected, queued);
+                && self.running_threads.contains(chat_id));
+        let working = issue_activity_allowed(
+            issue.details.status,
+            self.activity_connected,
+            queued,
+            running,
+        );
         row()
             .id(SharedString::from(format!("issue-row-{id}")))
             .role(Role::Button)
             .aria_label(SharedString::from(format!(
-                "{} {}",
+                "{} {}, {}, {}, {}",
                 issue.code(),
-                issue.details.title
+                issue.details.title,
+                issue.details.status.label(),
+                issue.details.priority.label(),
+                assignee
             )))
             .w_full()
             .h(px(34.))
@@ -548,7 +564,10 @@ impl IssuePanel {
                 )
             })
             .when_some(issue.pull_requests.first(), |d, pr| d.child(pr_badge(pr)))
-            .child(issue_working(working, cx.reduce_motion()))
+            .when(
+                matches!(owner, Some(ZapperIssueOwner::Thread { .. })),
+                |d| d.child(issue_working(working, cx.reduce_motion())),
+            )
             .child(
                 div()
                     .id(SharedString::from(format!("issue-row-assignee-{id}")))
@@ -2312,9 +2331,16 @@ pub fn status_color(status: ZapperIssueStatus) -> u32 {
 }
 pub fn status_icon(status: ZapperIssueStatus) -> Div {
     div().size(px(14.)).flex_none().child(
-        icon(status_glyph(status))
-            .size(px(14.))
-            .text_color(rgb(status_color(status))),
+        div()
+            .id("issue-status-icon")
+            .role(Role::Image)
+            .aria_label(status.label())
+            .tip(status.label())
+            .child(
+                icon(status_glyph(status))
+                    .size(px(14.))
+                    .text_color(rgb(status_color(status))),
+            ),
     )
 }
 pub fn status_glyph(status: ZapperIssueStatus) -> &'static str {
@@ -2328,8 +2354,14 @@ pub fn status_glyph(status: ZapperIssueStatus) -> &'static str {
         ZapperIssueStatus::Canceled => "issue-canceled",
     }
 }
-fn issue_activity_allowed(status: ZapperIssueStatus, connected: bool, queued: bool) -> bool {
+fn issue_activity_allowed(
+    status: ZapperIssueStatus,
+    connected: bool,
+    queued: bool,
+    running: bool,
+) -> bool {
     connected
+        && running
         && !queued
         && !matches!(
             status,
@@ -2690,7 +2722,12 @@ fn priority_icon(priority: ZapperIssuePriority) -> Div {
         ZapperIssuePriority::Normal => 2,
         _ => 3,
     };
-    let mut bars = row().items_end().h(px(12.)).gap(px(2.));
+    let mut bars = row()
+        .items_end()
+        .w(px(14.))
+        .h(px(14.))
+        .flex_none()
+        .gap(px(2.));
     for i in 0..3 {
         bars = bars.child(
             div()
@@ -2710,7 +2747,30 @@ fn priority_icon(priority: ZapperIssuePriority) -> Div {
 }
 #[cfg(test)]
 mod presentation_tests {
-    use super::*;
+    use super::{ZapperIssueStatus, issue_activity_allowed, rgb, status_color, status_glyph};
+    use gpui::AssetSource;
+
+    #[test]
+    fn issue_glyphs_rasterize_with_visible_pixels() {
+        let assets = crate::assets::Assets;
+        let renderer = gpui::SvgRenderer::new(std::sync::Arc::new(crate::assets::Assets));
+        for name in ZapperIssueStatus::ALL
+            .into_iter()
+            .map(status_glyph)
+            .chain(["priority-urgent"])
+        {
+            let bytes = assets.load(&format!("icons/{name}.svg")).unwrap().unwrap();
+            let image = renderer.render_single_frame(&bytes, 1.).unwrap();
+            assert!(
+                image
+                    .as_bytes(0)
+                    .unwrap()
+                    .chunks_exact(4)
+                    .any(|pixel| pixel[3] != 0),
+                "{name}"
+            );
+        }
+    }
 
     #[test]
     fn issue_states_keep_distinct_shapes_and_semantic_colors() {
@@ -2757,15 +2817,18 @@ mod presentation_tests {
         assert!(issue_activity_allowed(
             ZapperIssueStatus::InProgress,
             true,
-            false
+            false,
+            true
         ));
         assert!(!issue_activity_allowed(
             ZapperIssueStatus::InProgress,
             false,
-            false
+            false,
+            true
         ));
         assert!(!issue_activity_allowed(
             ZapperIssueStatus::InProgress,
+            true,
             true,
             true
         ));
@@ -2775,7 +2838,17 @@ mod presentation_tests {
             ZapperIssueStatus::Done,
             ZapperIssueStatus::Canceled,
         ] {
-            assert!(!issue_activity_allowed(status, true, false));
+            assert!(!issue_activity_allowed(status, true, false, true));
+        }
+    }
+
+    #[test]
+    fn activity_tracks_confirmed_running_transitions_independently_of_issue_status() {
+        for running in [false, true, false] {
+            assert_eq!(
+                issue_activity_allowed(ZapperIssueStatus::InProgress, true, false, running),
+                running
+            );
         }
     }
 }

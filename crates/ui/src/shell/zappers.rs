@@ -1824,6 +1824,26 @@ impl Shell {
         });
         panel.update(cx, |p, cx| {
             p.thread_states(states, cx);
+            p.activity_connected(
+                matches!(self.state.read(cx).connection, ConnectionStatus::Ready),
+                cx,
+            );
+            p.running_threads(
+                zapper
+                    .workers
+                    .iter()
+                    .filter(|w| {
+                        self.zapper_thread_status(&w.chat_id, cx)
+                            == Some(zuse_protocol::SessionStatus::Working)
+                            && self
+                                .state
+                                .read(cx)
+                                .device_online(&w.device_id, chrono::Utc::now())
+                    })
+                    .map(|w| w.chat_id.clone())
+                    .collect(),
+                cx,
+            );
             p.user_name(user, cx);
             p.sync(zapper.clone(), overview, self.zapper_ui.pending, cx);
             p.files(self.zapper_ui.files.clone(), cx);
