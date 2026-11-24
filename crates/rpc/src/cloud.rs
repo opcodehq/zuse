@@ -27,9 +27,9 @@ pub struct Grant {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage_binding: Option<serde_json::Value>,
 }
-/// How often the guest checks its gateway socket. The gateway pings every 15s
-/// and drops a runtime it has not heard from in 45s; the guest mirrors that so
-/// neither side keeps a half-open socket.
+/// How often a gateway socket's owner (the guest, or a desktop channel) checks
+/// it. The gateway pings every 15s and drops a peer it has not heard from in
+/// 45s; both ends mirror that so neither keeps a half-open socket.
 const HEARTBEAT_TICK: Duration = Duration::from_secs(5);
 const PING_AFTER: Duration = Duration::from_secs(15);
 const SILENCE_LIMIT: Duration = Duration::from_secs(45);
@@ -202,37 +202,61 @@ pub async fn connect_channel(
         }
     };
     tokio::select! {biased; _=cancel.cancelled()=>return Err(RpcError::Closed),ready=tokio::time::timeout(Duration::from_secs(35),ready)=>ready.map_err(|_|RpcError::Transport("Cloud runtime did not become available".into()))??}
-    let (outgoing, mut out) = mpsc::channel::<String>(8);
+    let (outgoing, out) = mpsc::channel::<String>(8);
     let (input, incoming) = mpsc::channel::<String>(8);
     let closed = cancel.child_token();
-    let stop = closed.clone();
-    tokio::spawn(async move {
-        let _closed = stop.clone().drop_guard();
-        loop {
-            tokio::select! {biased;
-                _=stop.cancelled()=>break,
-                next=socket.next()=> match next {
-                    Some(Ok(Message::Text(text)))=> {
-                        if text.len()<=512 && serde_json::from_str::<serde_json::Value>(&text).ok().is_some_and(|v|v["_zuseGateway"]=="availability") {break;}
-                        if !matches!(tokio::time::timeout(Duration::from_secs(2),input.send(text.to_string())).await,Ok(Ok(()))) {break;}
-                    }
-                    Some(Ok(Message::Ping(bytes)))=>{if !matches!(tokio::time::timeout(Duration::from_secs(2),socket.send(Message::Pong(bytes))).await,Ok(Ok(()))) {break;}}
-                    Some(Ok(Message::Pong(_)))=>{},_=>break,
-                },
-                next=out.recv()=> {
-                    let Some(next)=next else {break;};
-                    if next.len()>zuse_protocol::cloud_gateway::MAX_PAYLOAD || !matches!(tokio::time::timeout(Duration::from_secs(2),socket.send(Message::Text(next))).await,Ok(Ok(()))) {break;}
-                }
-            }
-        }
-        let _ = tokio::time::timeout(Duration::from_secs(1), socket.close(None)).await;
-    });
+    tokio::spawn(pump(socket, input, out, closed.clone()));
     Ok(Channel {
         outgoing,
         incoming,
         closed,
         engine_info: None,
     })
+}
+/// Carries one desktop channel until either side ends it. The gateway pings
+/// every 15s, so a socket that stays silent for 45s (a sleeping laptop, a
+/// network change, a dropped NAT entry) is half-open: close it so the
+/// controller reconnects and every watch resubscribes, instead of leaving the
+/// chat on a transcript that silently stopped updating. The same bookkeeping
+/// keeps the runtime's side of the gateway honest.
+async fn pump<S>(
+    mut socket: tokio_tungstenite::WebSocketStream<S>,
+    input: mpsc::Sender<String>,
+    mut out: mpsc::Receiver<String>,
+    stop: CancellationToken,
+) where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    let _closed = stop.clone().drop_guard();
+    // Tokio's clock is the same monotonic clock in production; tests pause it.
+    let now = || tokio::time::Instant::now().into_std();
+    let mut liveness = Liveness::new(now());
+    let mut heartbeat = tokio::time::interval(HEARTBEAT_TICK);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    heartbeat.tick().await;
+    loop {
+        tokio::select! {biased;
+            _=stop.cancelled()=>break,
+            _=heartbeat.tick()=>match liveness.tick(now()) {
+                Heartbeat::Idle=>{},
+                Heartbeat::Ping=>{if !matches!(tokio::time::timeout(Duration::from_secs(2),socket.send(Message::Ping(Vec::new().into()))).await,Ok(Ok(()))) {break;}}
+                Heartbeat::Reconnect=>break,
+            },
+            next=socket.next()=> {liveness.received(now());match next {
+                Some(Ok(Message::Text(text)))=> {
+                    if text.len()<=512 && serde_json::from_str::<serde_json::Value>(&text).ok().is_some_and(|v|v["_zuseGateway"]=="availability") {break;}
+                    if !matches!(tokio::time::timeout(Duration::from_secs(2),input.send(text.to_string())).await,Ok(Ok(()))) {break;}
+                }
+                Some(Ok(Message::Ping(bytes)))=>{if !matches!(tokio::time::timeout(Duration::from_secs(2),socket.send(Message::Pong(bytes))).await,Ok(Ok(()))) {break;}}
+                Some(Ok(Message::Pong(_)))=>{},_=>break,
+            }},
+            next=out.recv()=> {
+                let Some(next)=next else {break;};
+                if next.len()>zuse_protocol::cloud_gateway::MAX_PAYLOAD || !matches!(tokio::time::timeout(Duration::from_secs(2),socket.send(Message::Text(next))).await,Ok(Ok(()))) {break;}
+            }
+        }
+    }
+    let _ = tokio::time::timeout(Duration::from_secs(1), socket.close(None)).await;
 }
 pub struct Connection {
     pub client: RpcClient,
@@ -513,6 +537,72 @@ mod liveness_tests {
         paused.received(at(4));
         assert_eq!(paused.tick(at(5)), Heartbeat::Idle);
         assert_eq!(paused.tick(at(5 + 1800)), Heartbeat::Reconnect);
+    }
+}
+#[cfg(test)]
+mod channel_liveness_tests {
+    use super::*;
+    use tokio_tungstenite::{WebSocketStream, tungstenite::protocol::Role};
+
+    async fn pair() -> (
+        WebSocketStream<tokio::io::DuplexStream>,
+        WebSocketStream<tokio::io::DuplexStream>,
+    ) {
+        let (client, server) = tokio::io::duplex(1 << 16);
+        (
+            WebSocketStream::from_raw_socket(client, Role::Client, None).await,
+            WebSocketStream::from_raw_socket(server, Role::Server, None).await,
+        )
+    }
+
+    /// A desktop channel whose gateway went silent (sleep, network change)
+    /// used to wait forever, so the chat's transcript froze mid-turn. It now
+    /// closes after the gateway's heartbeat window and the controller
+    /// reconnects.
+    #[tokio::test(start_paused = true)]
+    async fn silent_gateway_closes_the_desktop_channel() {
+        let (client, _server) = pair().await;
+        let (input, _incoming) = mpsc::channel(8);
+        let (_outgoing, out) = mpsc::channel(8);
+        let closed = CancellationToken::new();
+        let task = tokio::spawn(pump(client, input, out, closed.clone()));
+        tokio::time::sleep(SILENCE_LIMIT - Duration::from_secs(10)).await;
+        assert!(
+            !closed.is_cancelled(),
+            "a quiet but young socket stays open"
+        );
+        tokio::time::timeout(Duration::from_secs(30), closed.cancelled())
+            .await
+            .expect("a gateway silent past its heartbeat window is closed");
+        task.await.unwrap();
+    }
+
+    /// The gateway's 15s pings keep an idle channel open, and its frames
+    /// still reach the controller.
+    #[tokio::test(start_paused = true)]
+    async fn gateway_pings_keep_an_idle_desktop_channel_open() {
+        let (client, mut server) = pair().await;
+        let (input, mut incoming) = mpsc::channel(8);
+        let (_outgoing, out) = mpsc::channel(8);
+        let closed = CancellationToken::new();
+        let _task = tokio::spawn(pump(client, input, out, closed.clone()));
+        for _ in 0..12 {
+            tokio::time::sleep(Duration::from_secs(15)).await;
+            server.send(Message::Ping(Vec::new().into())).await.unwrap();
+            // Drain the channel's pongs and pings so the pipe never fills.
+            while let Ok(Some(Ok(_))) =
+                tokio::time::timeout(Duration::from_millis(1), server.next()).await
+            {}
+        }
+        assert!(
+            !closed.is_cancelled(),
+            "three minutes of pings keep it open"
+        );
+        server
+            .send(Message::Text("{\"id\":1}".into()))
+            .await
+            .unwrap();
+        assert_eq!(incoming.recv().await.as_deref(), Some("{\"id\":1}"));
     }
 }
 #[cfg(test)]
