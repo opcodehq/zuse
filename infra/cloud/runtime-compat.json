@@ -7,11 +7,6 @@
       "architecture": "x86_64"
     },
     {
-      "sha256": "cab296a28aef3ff11a5798da412642b886be03b8f3a9cd583deb5fe06c1a1a5c",
-      "version": "0.26.1+g7905b90747ca",
-      "architecture": "x86_64"
-    },
-    {
       "sha256": "a60ce8d9fdee05dc63fbfa8f1d2a438f988825bcc9fc547b9697c3474e2fcb5d",
       "version": "0.26.0+gccca87b76e11",
       "architecture": "x86_64"
