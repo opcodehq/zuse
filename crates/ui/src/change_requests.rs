@@ -276,18 +276,19 @@ pub(crate) fn pull_request_state_inline(
                 })
                 .tooltip_show_delay(std::time::Duration::from_millis(350))
         })
+        // The glyph's tone carries the state (open, draft, merged, closed);
+        // the word lives in the tooltip and the accessible label.
         .child(
             crate::icons::icon(model.tone.glyph())
-                .size(px(12.0))
+                .size(px(13.0))
                 .flex_none()
-                .text_color(color.opacity(0.9)),
+                .text_color(color),
         )
         .child(
             div()
                 .flex_none()
                 .child(SharedString::from(format!("#{}", model.number))),
         )
-        .child(model.state_label)
         .into_any_element()
 }
 

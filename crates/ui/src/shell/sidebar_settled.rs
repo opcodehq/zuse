@@ -185,7 +185,9 @@ impl Shell {
                             .flex()
                             .flex_col()
                             .gap(px(SIDEBAR_LIST_GAP))
-                            .children(rows),
+                            // A capped scroll area would otherwise squeeze
+                            // each row below its height.
+                            .children(rows.into_iter().map(|row| div().flex_none().child(row))),
                     )
                 })
                 .into_any_element(),
