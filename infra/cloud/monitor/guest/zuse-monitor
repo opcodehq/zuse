@@ -66,11 +66,13 @@ def serve():
         launch("zuse-display", env={**os.environ, "ZUSE_DISPLAY_PASSWORD": password,
                                    "ZUSE_DISPLAY_PORT": str(PORT)})
         (STATE / "password").write_text(password)
+        launch(sys.executable, "/usr/local/lib/poof/control.py")
         while all(p.poll() is None for p in children):
             time.sleep(0.25)
         raise RuntimeError("monitor process exited")
     finally:
         (STATE / "password").unlink(missing_ok=True)
+        (STATE / "control-password").unlink(missing_ok=True)
         for child in reversed(children):
             child.terminate()
             try:
@@ -115,6 +117,7 @@ def main():
     cmds.add_parser("launch", help="run an application on the shared display").add_argument("command", nargs=argparse.REMAINDER)
     cmds.add_parser("serve")
     cmds.add_parser("attach", help="start or join the monitor over a private SSH session")
+    cmds.add_parser("attach-control", help="attach an interactive desktop over private SSH")
     cmds.add_parser("password", help="show the private viewer password in a trusted terminal")
     shot = cmds.add_parser("screenshot")
     shot.add_argument("png", type=Path)
@@ -132,6 +135,21 @@ def main():
         serve()
     elif args.action == "attach":
         print(ensure_started(), flush=True)
+        sys.stdin.buffer.read(1)
+    elif args.action == "attach-control":
+        ensure_started()
+        for _ in range(50):
+            try:
+                key = (STATE / "control-password").read_text().strip()
+                request = urllib.request.Request("http://127.0.0.1:6912/ready",
+                    headers={"Authorization": "Bearer " + key})
+                with LOCAL.open(request, timeout=1):
+                    break
+            except OSError:
+                time.sleep(.1)
+        else:
+            raise RuntimeError("desktop controls did not start")
+        print(key, flush=True)
         sys.stdin.buffer.read(1)
     elif args.action == "start":
         ensure_started()

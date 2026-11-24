@@ -125,6 +125,7 @@ mod cloud_info;
 mod cloud_sidebar;
 mod cloud_start;
 mod cloud_tabs;
+mod desktop_panel;
 mod tabs;
 mod top_bar;
 mod voice_stage;
@@ -852,6 +853,7 @@ fn right_pane_takeover_width(viewport: f32, sidebar: f32) -> f32 {
 pub enum RightSurface {
     #[default]
     Picker,
+    Desktop,
     File(u64),
     Browser(u64),
     Simulator(u64),
@@ -2193,6 +2195,7 @@ pub struct Shell {
     state: Entity<AppState>,
     cloud_conversation: Option<Entity<cloud_conversation::CloudConversation>>,
     cloud_conversation_events: Option<Subscription>,
+    desktop_panel: desktop_panel::DesktopPanel,
     cloud_tabs: cloud_tabs::CloudTabs,
     /// Live status reports from every open cloud conversation.
     cloud_activity: cloud_activity::CloudActivity,
@@ -2950,6 +2953,7 @@ impl Shell {
             state: state.clone(),
             cloud_conversation: None,
             cloud_conversation_events: None,
+            desktop_panel: Default::default(),
             cloud_tabs: Default::default(),
             cloud_activity: Default::default(),
             desktop_import,
@@ -4147,6 +4151,7 @@ impl Shell {
                     .files
                     .contains_key(&key)
                     .then(|| (*surface, SharedString::from("Files"), false, None)),
+                RightSurface::Desktop => Some((*surface, "Desktop".into(), false, None)),
                 RightSurface::Picker => None,
             })
             .collect()
@@ -4195,6 +4200,7 @@ impl Shell {
         let path = match surface {
             RightSurface::File(id) => self.file_surface_paths.get(&id)?.clone(),
             RightSurface::Picker
+            | RightSurface::Desktop
             | RightSurface::Files
             | RightSurface::Diff(_)
             | RightSurface::Terminal(_)
@@ -4385,6 +4391,7 @@ impl Shell {
         if self.resolved_right_active(cx) != surface {
             use zuse_analytics::desktop::{Event, Surface};
             let category = match surface {
+                RightSurface::Desktop => Surface::Desktop,
                 RightSurface::Picker => Surface::Picker,
                 RightSurface::File(_) => Surface::File,
                 RightSurface::Browser(_) => Surface::Browser,
@@ -4449,7 +4456,7 @@ impl Shell {
             | RightSurface::Subagent(_)
             | RightSurface::Browser(_)
             | RightSurface::PullRequest(_) => {}
-            RightSurface::Picker => {}
+            RightSurface::Picker | RightSurface::Desktop => {}
         }
         self.sync_explorer_selection(cx);
         cx.notify();
@@ -5527,6 +5534,10 @@ impl Shell {
             tabs.retain(|s| *s != surface);
         }
         match surface {
+            RightSurface::Desktop => {
+                self.desktop_panel.choices.remove(&key);
+                self.disconnect_desktop(cx);
+            }
             RightSurface::File(_) => {}
             RightSurface::Simulator(id) => {
                 if let Some(pane) = self.simulators.remove(&id) {
@@ -14246,7 +14257,7 @@ impl Shell {
         })
     }
 
-    fn render_right_pane(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_right_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let exiting = self.fit_exit_width(1).is_some();
         let visible = self.horizontal_fit().right || exiting;
         let showing =
@@ -14267,6 +14278,7 @@ impl Shell {
         let theme = Theme::of(cx).clone();
         let content: AnyElement = if showing {
             match self.resolved_right_active(cx) {
+                RightSurface::Desktop => self.render_desktop_panel(window, cx),
                 RightSurface::Files => match self.files.get(&self.panel_key(cx)).cloned() {
                     Some(files) => {
                         if self.right_pane_open(cx) {
@@ -14594,6 +14606,7 @@ impl Shell {
                 RightSurface::Browser(_) => icons::GLOBE,
                 RightSurface::PullRequest(_) => icons::PULL_REQUEST,
                 RightSurface::Files => icons::FOLDER,
+                RightSurface::Desktop => icons::MONITOR,
                 RightSurface::Picker => icons::PLUS,
             };
             // Working chats and subagents swap their harness icon for the
@@ -15607,6 +15620,7 @@ impl Render for Shell {
                 )
             });
         }
+        self.sync_desktop_panel(simulator_active && selected == RightSurface::Desktop, cx);
         let source_control_active = window.is_window_active();
         let active_review = self.active_main_diff(cx);
         for (id, changes) in &self.diffs {

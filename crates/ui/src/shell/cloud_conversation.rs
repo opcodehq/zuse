@@ -14,6 +14,7 @@ mod load;
 pub(super) use load::{MachineLoad, machine_load};
 
 pub(super) enum CloudConversationEvent {
+    Desktop,
     Terminal,
     Files,
     OpenFile(String),
@@ -1229,8 +1230,7 @@ impl CloudConversation {
     }
 }
 impl Render for CloudConversation {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let monitor = self.computer.monitor_view(window, cx);
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
         self.sync_progress(cx);
         let composer_visible = self.authorized && self.computer.composer_enabled();
@@ -1244,9 +1244,6 @@ impl Render for CloudConversation {
             .flex()
             .flex_col()
             .pt(px(Theme::TITLEBAR_HEIGHT))
-            .when_some(monitor, |view, monitor| {
-                view.child(div().h(px(360.)).w_full().child(monitor))
-            })
             .children(self.render_older_history(cx))
             .child(div().flex_1().min_h_0().child(self.transcript.clone()))
             .when(show_tray || composer_visible, |view| {
@@ -1394,6 +1391,7 @@ impl Shell {
         self.mark_cloud_conversation_seen(view, cx);
         self.cloud_conversation_events =
             Some(cx.subscribe(view, |this, _, event, cx| match event {
+                CloudConversationEvent::Desktop => this.open_desktop_panel(cx),
                 CloudConversationEvent::Terminal => this.add_terminal_surface(cx),
                 CloudConversationEvent::Files => {
                     this.pending_workspace_command = Some(crate::composer::WorkspaceCommand::Files);

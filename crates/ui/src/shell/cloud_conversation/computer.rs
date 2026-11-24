@@ -220,6 +220,7 @@ pub(super) struct State {
     ssh: Option<crate::cloud_ssh::Prepared>,
     ssh_task: Option<Task<()>>,
     ssh_error: Option<String>,
+    monitor_connecting: bool,
     monitor: Option<super::monitor::Connection>,
     monitor_browser: Option<Entity<crate::browser::BrowserSurface>>,
     /// The apps this computer can open a folder in (the shell detects them).
@@ -921,6 +922,67 @@ impl CloudConversation {
         }
     }
     /// Whether the computer is up, so SSH can reach it.
+    pub(in crate::shell) fn desktop_view(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<crate::browser::BrowserSurface>> {
+        if !self.authorized || self.access_revoked || !self.computer_running() {
+            self.disconnect_desktop(cx);
+            return None;
+        }
+        if self.ready(cx)
+            && self.computer.monitor.is_none()
+            && self.computer.ssh_task.is_none()
+            && self.computer.ssh_error.is_none()
+        {
+            self.open_ssh(SshAction::Monitor, cx);
+        }
+        self.computer.monitor_view(window, cx)
+    }
+    pub(in crate::shell) fn connect_desktop(&mut self, cx: &mut Context<Self>) {
+        if self.authorized && !self.access_revoked {
+            if self.domain_sleeping() || self.status["state"] == "paused" {
+                self.watch_environment(true, cx);
+            } else {
+                self.open_ssh(SshAction::Monitor, cx);
+            }
+        }
+    }
+    pub(in crate::shell) fn desktop_status(&self) -> (&str, Option<&'static str>) {
+        if !self.authorized || self.access_revoked {
+            return ("Waiting for cloud access", None);
+        }
+        if !self.computer_running() {
+            let wake = (self.domain_sleeping() || self.status["state"] == "paused")
+                && self.operation.is_none()
+                && self.computer.execution_controls_enabled();
+            return (
+                "The cloud computer is offline",
+                wake.then_some("Wake computer"),
+            );
+        }
+        if self.computer.ssh_task.is_some() {
+            return ("Connecting to desktop…", None);
+        }
+        (
+            self.computer
+                .ssh_error
+                .as_deref()
+                .unwrap_or("Open this computer’s desktop"),
+            Some("Connect"),
+        )
+    }
+    pub(in crate::shell) fn disconnect_desktop(&mut self, cx: &mut Context<Self>) {
+        if self.computer.monitor_connecting {
+            self.computer.ssh_task.take();
+            self.computer.monitor_connecting = false;
+        }
+        self.computer.monitor.take();
+        if let Some(browser) = self.computer.monitor_browser.take() {
+            browser.update(cx, |v, cx| v.close(cx));
+        }
+    }
     fn computer_running(&self) -> bool {
         matches!(self.computer_summary().tone, Tone::Running)
     }
@@ -971,6 +1033,7 @@ impl CloudConversation {
         let workspace = self.target.workspace.clone();
         let port = self.boot.ipc_port;
         self.computer.ssh_error = None;
+        self.computer.monitor_connecting = action == SshAction::Monitor;
         self.computer.ssh_task = Some(cx.spawn(async move |this, cx| {
             let result: Result<crate::cloud_ssh::Prepared, String> = async {
                 let key = cx
@@ -1030,6 +1093,7 @@ impl CloudConversation {
             };
             let _ = this.update(cx, |this, cx| {
                 this.computer.ssh_task = None;
+                this.computer.monitor_connecting = false;
                 match result {
                     Ok(prepared) => {
                         this.computer.ssh = Some(prepared.clone());
@@ -1612,26 +1676,14 @@ impl CloudConversation {
             );
         }
 
-        if self.computer.monitor.is_some()
-            || (running && std::env::var("ZUSE_EXPERIMENTAL_MONITOR").as_deref() == Ok("1"))
-        {
+        if settings::cloud_desktop_enabled(cx) {
             menu = menu.child(
                 popover::menu_row(&theme, false, "computer-monitor")
                     .id("computer-monitor")
-                    .child(if self.computer.monitor.is_some() {
-                        "Close Monitor"
-                    } else {
-                        "Open Monitor"
-                    })
+                    .child("Open Desktop")
                     .on_click(cx.listener(|this, _, _, cx| {
-                        if this.computer.monitor.take().is_some() {
-                            if let Some(browser) = this.computer.monitor_browser.take() {
-                                browser.update(cx, |view, cx| view.close(cx));
-                            }
-                            this.close_computer(cx);
-                        } else {
-                            this.open_ssh(SshAction::Monitor, cx);
-                        }
+                        this.close_computer(cx);
+                        cx.emit(CloudConversationEvent::Desktop);
                     })),
             );
         }

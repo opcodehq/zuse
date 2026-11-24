@@ -12,6 +12,7 @@ pub(super) enum PanelChoice {
     Changes,
     Terminal,
     Browser,
+    Desktop,
     Simulator,
     /// The commit graph. Offered from the `+` menu only.
     History,
@@ -25,6 +26,7 @@ impl PanelChoice {
             Self::Changes => "Diff",
             Self::Terminal => "Terminal",
             Self::Browser => "Browser",
+            Self::Desktop => "Desktop",
             Self::Simulator => "Simulator",
             Self::History => "History",
         }
@@ -45,6 +47,7 @@ impl PanelChoice {
             Self::Changes => icons::GIT_COMPARE,
             Self::Terminal => icons::TERMINAL,
             Self::Browser => icons::GLOBE,
+            Self::Desktop => icons::MONITOR,
             Self::Simulator => icons::SMARTPHONE,
             Self::History => icons::GIT_BRANCH,
         }
@@ -57,6 +60,7 @@ impl PanelChoice {
             Self::Changes => "changes",
             Self::Terminal => "terminal",
             Self::Browser => "browser",
+            Self::Desktop => "desktop",
             Self::Simulator => "simulator",
             Self::History => "history",
         }
@@ -125,13 +129,17 @@ impl Shell {
             .chat_pull_request_url(cx)
             .map(|url| self.chat_pull_request_open(&url, cx));
         let review_open = self.review_surface(cx).is_some();
-        panel_choices(
+        let mut choices = panel_choices(
             files_open,
             pull_request,
             self.space_git_detected(cx),
             review_open,
             menu,
-        )
+        );
+        if settings::cloud_desktop_enabled(cx) {
+            choices.insert(1, PanelChoice::Desktop);
+        }
+        choices
     }
 
     fn panel_choice_shortcut(&self, choice: PanelChoice) -> Option<String> {
@@ -157,6 +165,7 @@ impl Shell {
             PanelChoice::Changes => self.open_review_tab(window, cx),
             PanelChoice::Terminal => self.add_terminal_surface(cx),
             PanelChoice::Browser => self.add_browser_surface(None, window, cx),
+            PanelChoice::Desktop => self.open_desktop_panel(cx),
             PanelChoice::Simulator => self.add_simulator_surface(window, cx),
             PanelChoice::History => self.add_history_surface(window, cx),
         }

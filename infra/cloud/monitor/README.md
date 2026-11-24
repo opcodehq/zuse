@@ -42,9 +42,9 @@ Chromium requires a working browser sandbox. If the container runtime blocks its
 
 ## Open from Zuse desktop
 
-Build with `--build-arg GUEST_IMAGE=<prepared Debian bookworm Zuse guest>` to keep the real guest's entrypoint. The derived image adds the graphical stack. Launch the desktop app with `ZUSE_EXPERIMENTAL_MONITOR=1`, open a running cloud conversation, then select **Computer → Open Monitor**. **Close Monitor** disconnects the viewer. An agent can independently run `zuse-monitor launch <application> [arguments...]` to start the same display, including from shells that filter environment variables.
+Enable **Settings → General → Cloud computer**, open a chat, and select **Desktop** from the right sidebar’s **+** menu. A cloud chat uses its own computer. A local chat lets you select an existing cloud computer. The sidebar’s expand button gives Desktop the conversation area.
 
-The app prepares the selected computer's SSH key and pinned host key through its existing authenticated cloud connection. SSH binds an ephemeral local port, forwards it to guest loopback port 6901, and invokes `zuse-monitor attach`. The guest returns its random viewer credential over SSH. The app opens the local viewer in an isolated browser context. Closing it drops SSH. The guest holds the display open until its supervisor or machine stops. A cold restart starts a fresh graphical session.
+Zuse prepares SSH with the computer’s pinned host key and runs `zuse-monitor attach-control`. The interactive viewer uses guest loopback port 6912 and a separate credential sent through the SSH session. Port 6901 remains available for read-only clients. Closing the tab disconnects the viewer. Applications continue running on the machine until the machine stops. Older guest images need the interactive monitor installed.
 
 ## Streaming implementation
 

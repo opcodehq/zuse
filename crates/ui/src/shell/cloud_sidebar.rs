@@ -166,7 +166,11 @@ impl Shell {
             .collect()
     }
     /// The conversation target for a cloud task row, when it can open.
-    fn cloud_row_target(&self, row: &Value, cx: &App) -> Option<crate::state::CloudTarget> {
+    pub(super) fn cloud_row_target(
+        &self,
+        row: &Value,
+        cx: &App,
+    ) -> Option<crate::state::CloudTarget> {
         let workspace = row["workspaceId"].as_str().filter(|id| !id.is_empty())?;
         let session = row["initialSessionId"]
             .as_str()

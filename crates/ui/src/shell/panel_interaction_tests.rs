@@ -413,3 +413,31 @@ fn panels_share_space_and_keep_rendered_geometry_through_their_lifecycle(cx: &mu
         expect(settled(&shell, cx), landed.widths);
     }
 }
+
+#[gpui::test]
+fn desktop_respects_preference_and_chat_panel_scope(cx: &mut TestAppContext) {
+    let (_dir, shell, cx) = setup(cx);
+    change(&shell, cx, |shell, _, cx| {
+        shell.open_desktop_panel(cx);
+        assert_ne!(shell.resolved_right_active(cx), RightSurface::Desktop);
+        settings::update(settings::SavePolicy::Immediate, cx, |s| {
+            s.cloud_desktop_enabled = true
+        });
+        shell.sync_desktop_panel(false, cx);
+        shell.open_desktop_panel(cx);
+        shell.open_desktop_panel(cx);
+        assert_eq!(shell.right_tabs["a"], [RightSurface::Desktop]);
+        assert!(shell.right_pane_open(cx));
+        shell.toggle_right_pane_expand(cx);
+        assert!(shell.right_pane_expanded);
+        select(shell, Some("b"), cx);
+        assert_ne!(shell.resolved_right_active(cx), RightSurface::Desktop);
+        select(shell, Some("a"), cx);
+        assert_eq!(shell.resolved_right_active(cx), RightSurface::Desktop);
+        settings::update(settings::SavePolicy::Immediate, cx, |s| {
+            s.cloud_desktop_enabled = false
+        });
+        shell.sync_desktop_panel(false, cx);
+        assert_ne!(shell.resolved_right_active(cx), RightSurface::Desktop);
+    });
+}

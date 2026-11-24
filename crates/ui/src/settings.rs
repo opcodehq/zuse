@@ -503,6 +503,13 @@ pub fn current(cx: &App) -> UiSettings {
         .unwrap_or_default()
 }
 
+pub(crate) fn cloud_desktop_enabled(cx: &App) -> bool {
+    zuse_viewport::cloud_gate::enabled()
+        && cx
+            .try_global::<SettingsStore>()
+            .is_some_and(|store| store.current.cloud_desktop_enabled)
+}
+
 pub(crate) fn split_diffs(cx: &App) -> bool {
     cx.try_global::<SettingsStore>()
         .is_some_and(|store| store.current.diff_split)
@@ -1183,6 +1190,8 @@ pub struct UiSettings {
     /// Desktop banners for newly discovered agent CLI releases. In-app chips
     /// remain enabled independently of this preference.
     pub agent_update_notifications: bool,
+    #[serde(default)]
+    pub cloud_desktop_enabled: bool,
     pub right_pane_width: f32,
     /// Width of the pull request pane beside the board.
     pub pull_request_pane_width: f32,
@@ -1364,6 +1373,7 @@ impl Default for UiSettings {
             notifications_background_only: true,
             files_panel_width: FILES_PANEL_DEFAULT,
             agent_update_notifications: false,
+            cloud_desktop_enabled: false,
             right_pane_width: RIGHT_PANE_DEFAULT,
             pull_request_pane_width: PULL_REQUEST_PANE_DEFAULT,
             right_pane_open: false,
@@ -2278,6 +2288,7 @@ impl UiSettings {
             notifications_background_only,
             files_panel_width,
             agent_update_notifications,
+            cloud_desktop_enabled,
             right_pane_width,
             pull_request_pane_width,
             right_pane_open,
@@ -3289,6 +3300,7 @@ mod tests {
             notifications_background_only: false,
             files_panel_width: 310.0,
             agent_update_notifications: false,
+            cloud_desktop_enabled: false,
             right_pane_width: 700.0,
             pull_request_pane_width: 820.0,
             right_pane_open: true,

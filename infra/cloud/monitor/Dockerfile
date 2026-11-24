@@ -19,10 +19,11 @@ RUN cargo build --release --locked
 FROM ${GUEST_IMAGE} AS guest
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    chromium chromium-sandbox openbox xvfb xauth xdotool ffmpeg python3-gi gir1.2-gtk-3.0 thunar mousepad xterm libxdamage1 liblz4-1 libdeflate0 libyuv0 libx264-164 \
+    python3-aiohttp python3-xlib chromium chromium-sandbox openbox xvfb xauth xdotool ffmpeg python3-gi gir1.2-gtk-3.0 thunar mousepad xterm libxdamage1 liblz4-1 libdeflate0 libyuv0 libx264-164 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=streamer /usr/local/bin/zuse-capture /usr/local/bin/
 COPY --from=streamer /src/target/release/zuse-display /usr/local/bin/zuse-display
+COPY demo/control.py demo/control.js /usr/local/lib/poof/
 COPY guest/assets/wallpaper.jpg /usr/local/share/zuse-monitor/wallpaper.jpg
 COPY --chmod=0755 guest/zuse-monitor guest/zuse-apps /usr/local/bin/
 ENV DISPLAY=:91 XAUTHORITY=/home/zuse/.local/state/zuse-monitor/Xauthority

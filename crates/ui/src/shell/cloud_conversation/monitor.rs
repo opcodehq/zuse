@@ -17,7 +17,7 @@ impl Connection {
             .and_then(|listener| listener.local_addr())
             .map_err(|_| "Could not reserve a local monitor port.")?
             .port();
-        let forward = format!("127.0.0.1:{port}:127.0.0.1:6901");
+        let forward = format!("127.0.0.1:{port}:127.0.0.1:6912");
         let mut ssh = Command::new("ssh")
             .args([
                 "-T",
@@ -35,7 +35,7 @@ impl Connection {
                 &forward,
                 "--",
                 host,
-                "/usr/local/bin/zuse-monitor attach",
+                "/usr/local/bin/zuse-monitor attach-control",
             ])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -62,7 +62,7 @@ impl Connection {
                 .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
         {
             return Err(
-                "Monitor could not start. Check SSH access and the experimental monitor image."
+                "Monitor could not start. Check SSH access and update the guest image to a version with Desktop."
                     .into(),
             );
         }

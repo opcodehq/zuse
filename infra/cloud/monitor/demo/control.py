@@ -36,8 +36,11 @@ async def video(request):
             "Content-Type": upstream.headers.get("Content-Type", "application/octet-stream"),
             "Cache-Control": "no-store"})
         await reply.prepare(request)
-        async for block in upstream.content.iter_any():
-            await reply.write(block)
+        try:
+            async for block in upstream.content.iter_any():
+                await reply.write(block)
+        except ConnectionResetError:
+            pass
         return reply
 
 
