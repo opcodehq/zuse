@@ -1197,13 +1197,6 @@ mod pinned_session_tests {
     }
 
     #[gpui::test]
-    // First run on macOS CI (never ran there before): the final drag of the
-    // pinned row onto an unpinned row leaves it pinned. Passes on Linux; needs
-    // checking on a Mac before this is un-ignored.
-    #[cfg_attr(
-        target_os = "macos",
-        ignore = "macOS: dragging a pinned row onto the unpinned section does not unpin it in this test"
-    )]
     fn session_section_drops_preserve_live_activity_order(cx: &mut gpui::TestAppContext) {
         exercise_session_section_drops(cx, false, true);
     }

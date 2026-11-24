@@ -4,8 +4,8 @@ use super::*;
 use serde_json::Value;
 use zuse_protocol::{ChangeRequestState, Chat};
 
-/// About five Settled rows show before the section scrolls on its own.
-const SETTLED_ROWS_MAX_HEIGHT: f32 = 5.5 * (SIDEBAR_SETTLED_ROW_HEIGHT + SIDEBAR_LIST_GAP);
+/// Rows an open Settled section shows when the lists above fill the sidebar.
+const SETTLED_ROWS_AT_REST: f32 = 5.5;
 
 impl Shell {
     pub(super) fn sidebar_settlement_profile(&self, cloud: bool, cx: &App) -> Option<String> {
@@ -166,27 +166,43 @@ impl Shell {
                 this.settled_open = !this.settled_open;
                 cx.notify();
             }));
+        // Open, the section asks for about five rows and grows into any
+        // space the lists above leave empty; its rows scroll on their own.
+        let row_count = rows.len();
+        let grows = open && row_count > 0;
+        let basis = spaces::SIDEBAR_DISCLOSURE_HEADER_HEIGHT
+            + Theme::SPACE_SM
+            + (row_count as f32).min(SETTLED_ROWS_AT_REST)
+                * (SIDEBAR_SETTLED_ROW_HEIGHT + SIDEBAR_LIST_GAP);
         Some(
             div()
                 .id("sidebar-settled-section")
-                .mt_auto()
-                .flex_none()
+                .debug_selector(|| "sidebar-settled-section".into())
+                .px(px(Theme::SPACE_SM))
                 .flex()
                 .flex_col()
                 .gap(px(SIDEBAR_LIST_GAP))
                 .pb(px(Theme::SPACE_SM))
+                .when(grows, |el| {
+                    el.flex_grow(1.0)
+                        .flex_shrink_0()
+                        .flex_basis(px(basis))
+                        .min_h_0()
+                })
+                .when(!grows, |el| el.mt_auto().flex_none())
                 .child(header)
-                .when(!rows.is_empty(), |el| {
+                .when(grows, |el| {
                     el.child(
                         div()
                             .id("sidebar-settled-rows")
-                            .max_h(px(SETTLED_ROWS_MAX_HEIGHT))
+                            .debug_selector(|| "sidebar-settled-rows".into())
+                            .flex_1()
+                            .min_h_0()
                             .overflow_y_scroll()
                             .flex()
                             .flex_col()
                             .gap(px(SIDEBAR_LIST_GAP))
-                            // A capped scroll area would otherwise squeeze
-                            // each row below its height.
+                            // Rows keep their height inside the scroll area.
                             .children(rows.into_iter().map(|row| div().flex_none().child(row))),
                     )
                 })

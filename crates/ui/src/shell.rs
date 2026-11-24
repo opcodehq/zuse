@@ -1210,7 +1210,9 @@ fn sidebar_row_height(compact: bool, show_label: bool, nested: bool) -> f32 {
 const SIDEBAR_ROW_SINGLE_HEIGHT: f32 = 28.0;
 const SIDEBAR_ROW_DOUBLE_HEIGHT: f32 = 50.0;
 /// One-line rows in the Settled section.
-pub(super) const SIDEBAR_SETTLED_ROW_HEIGHT: f32 = 34.0;
+pub(super) const SIDEBAR_SETTLED_ROW_HEIGHT: f32 = 36.0;
+/// Side padding inside a Settled row.
+const SIDEBAR_SETTLED_PAD_X: f32 = 10.0;
 /// The project badge on a Settled row.
 const SIDEBAR_SETTLED_AVATAR_SIZE: f32 = 16.0;
 /// Horizontal inset of Threads cards; headings above them share it.
@@ -9842,7 +9844,9 @@ impl Shell {
             } else {
                 SIDEBAR_ROW_RADIUS
             }))
-            .px(px(if sidebar && !compact {
+            .px(px(if sidebar && single_line {
+                SIDEBAR_SETTLED_PAD_X
+            } else if sidebar && !compact {
                 SIDEBAR_CARD_PAD_X
             } else {
                 Theme::SPACE_SM
@@ -11001,6 +11005,7 @@ impl Shell {
             .moving_row
             .map(|(row, height)| self.render_moving_sidebar_session(row, height, theme));
         let settled_section = session_rows.settled_section;
+        let settled_fills = self.settled_open && settled_section.is_some();
         let pinned_count = session_rows.pinned_count;
         let custom_count = session_rows.custom_count;
         let regular_start = pinned_count + custom_count;
@@ -11273,7 +11278,10 @@ impl Shell {
             true,
             div()
                 .relative()
-                .flex_1()
+                // With Settled open, the lists keep their own height and
+                // hand any spare space below to it.
+                .when(settled_fills, |el| el.flex_initial().flex().flex_col())
+                .when(!settled_fills, |el| el.flex_1())
                 .min_h_0()
                 .child(crate::overscroll::overscroll(
                     "sidebar-overscroll",
@@ -11281,7 +11289,11 @@ impl Shell {
                     div()
                         .id("sidebar-lists")
                         .relative()
-                        .size_full()
+                        .w_full()
+                        // While Settled is open the list is sized by its
+                        // rows and shrinks (scrolling) when they overflow.
+                        .when(settled_fills, |el| el.flex_initial().min_h_0())
+                        .when(!settled_fills, |el| el.h_full())
                         .overflow_y_scroll()
                         .track_scroll(&self.sidebar_scroll)
                         .on_drag_move::<SidebarSessionDrag>(cx.listener(
@@ -11342,10 +11354,7 @@ impl Shell {
             .child(filter_row)
             .child(sidebar_lists)
             // Settled sits below the scrolling lists and scrolls on its own.
-            .children(
-                settled_section
-                    .map(|section| div().flex_none().px(px(Theme::SPACE_SM)).child(section)),
-            )
+            .children(settled_section)
             // Global connection pill (durable-by-design UI truth): appears
             // whenever the edge posture is degraded; hidden while healthy —
             // appearing IS the signal.

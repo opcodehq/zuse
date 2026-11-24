@@ -1480,6 +1480,72 @@ mod tests {
     }
 
     #[gpui::test]
+    fn open_settled_fills_spare_space_and_yields_to_long_lists(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let directory = tempfile::tempdir().unwrap();
+        let (shell, cx) = mixed_sidebar(cx, &runtime, directory.path(), None);
+        shell.update(cx, |shell, cx| {
+            shell.settings.sidebar_organization = SidebarOrganization::InOneList;
+            shell.set_sidebar_thread_settled("local".into(), "local-pin".into(), true, cx);
+            shell.settled_open = true;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear());
+        // A short list leaves room: Settled starts right under its rows.
+        let last = cx
+            .debug_bounds("chat-cloud:task-1")
+            .or_else(|| cx.debug_bounds("chat-local-1"))
+            .unwrap();
+        let toggle = cx.debug_bounds("sidebar-settled-toggle").unwrap();
+        assert!(
+            toggle.top() - last.bottom() < px(40.0),
+            "Settled sits under a short list: {last:?} then {toggle:?}"
+        );
+        let row = cx.debug_bounds("chat-local-pin").unwrap();
+        assert_eq!(
+            row.size.height,
+            px(super::super::SIDEBAR_SETTLED_ROW_HEIGHT)
+        );
+
+        // A long list keeps scrolling above, and Settled still shows rows.
+        shell.update(cx, |shell, cx| {
+            shell.state.update(cx, |state, _| {
+                let template = state.chats[1].clone();
+                for ix in 0..40 {
+                    let mut chat = template.clone();
+                    chat.id = format!("extra-{ix}");
+                    state.chats.push(chat);
+                }
+            });
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear());
+        let section = cx.debug_bounds("sidebar-settled-section").unwrap();
+        let rows = cx.debug_bounds("sidebar-settled-rows").unwrap();
+        assert!(section.top() > px(450.0), "Settled stays low: {section:?}");
+        // The list scrolls inside its own box instead of spilling under Settled.
+        shell.read_with(cx, |shell, _| {
+            let lists = shell.sidebar_scroll.bounds();
+            assert!(
+                lists.bottom() <= section.top(),
+                "{lists:?} above {section:?}"
+            );
+            assert!(shell.sidebar_scroll.max_offset().y > px(0.0));
+        });
+        assert!(rows.size.height >= px(super::super::SIDEBAR_SETTLED_ROW_HEIGHT));
+        assert_eq!(
+            cx.debug_bounds("chat-local-pin").unwrap().size.height,
+            px(super::super::SIDEBAR_SETTLED_ROW_HEIGHT)
+        );
+    }
+
+    #[gpui::test]
     fn every_personal_row_offers_archive_on_hover_in_every_layout(cx: &mut TestAppContext) {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
