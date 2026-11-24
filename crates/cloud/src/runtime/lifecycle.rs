@@ -975,9 +975,8 @@ mod resume_failure_tests {
                     continue;
                 }
                 let source = std::fs::read_to_string(&path).unwrap();
-                // Unit-test modules inside production files are fixtures.
-                let production = source.split("#[cfg(test)]").next().unwrap_or("");
-                let count = production.matches("SET state='paused'").count();
+                // Split so this test's own source does not match.
+                let count = source.matches(&["SET state=", "'paused'"].concat()).count();
                 if count > 0 {
                     let relative = path
                         .strip_prefix(env!("CARGO_MANIFEST_DIR"))
