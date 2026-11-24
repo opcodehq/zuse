@@ -1131,6 +1131,14 @@ pub enum AgentEvent {
     Error {
         message: String,
     },
+    /// A transient, non-error status the agent reports mid-turn — today the
+    /// model stream dropped and the agent is reconnecting on its own
+    /// ("Reconnecting to the model… 2/5"). The engine shows it on the
+    /// session's working row and clears it when the agent streams again or
+    /// the turn ends; it never reaches the transcript. `None` clears it.
+    Notice {
+        message: Option<String>,
+    },
     #[serde(rename_all = "camelCase")]
     InputRequested {
         request_id: String,

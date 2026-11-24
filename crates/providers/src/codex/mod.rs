@@ -789,6 +789,13 @@ impl Harness for CodexHarness {
     fn deterministic_turn_end(&self) -> bool {
         true
     }
+    /// Codex reports every model-stream retry as it happens (each attempt has
+    /// its own idle timeout of a few minutes) and ends the turn itself once
+    /// retries run out, so a quarter hour of total silence with nothing in
+    /// flight means the app server wedged, not that the model is slow.
+    fn stall_timeout(&self) -> Option<std::time::Duration> {
+        Some(STALL_TIMEOUT)
+    }
     /// `turn/interrupt` ends the turn; the app-server and its thread — child
     /// agent threads included — stay up for the next `turn/start`.
     fn stops_turn_in_place(&self) -> bool {
@@ -2065,15 +2072,12 @@ async fn run_session(session: Session) {
                     }
 
                     "error" => {
-                        // 0.146.x nests it (`params.error.message`); older
-                        // builds were flat (`params.message`) — accept both.
-                        let message = params
-                            .pointer("/error/message")
-                            .and_then(Value::as_str)
-                            .or_else(|| params.get("message").and_then(Value::as_str))
-                            .unwrap_or("Codex error")
-                            .to_owned();
-                        if !send(&event_tx, AgentEvent::Error { message }).await {
+                        // A retry Codex runs on its own ("Reconnecting...
+                        // 2/5") is a transient notice, not an error; when
+                        // retries run out, `turn/completed` carries the
+                        // final failure and ends the turn.
+                        let event = normalize::error_notification_event(&params, "Codex error");
+                        if !send(&event_tx, event).await {
                             break 'main;
                         }
                     }
@@ -2321,6 +2325,8 @@ async fn run_session(session: Session) {
 /// How long an interrupted turn's commands get to exit before a process
 /// still running counts as background work.
 const COMMAND_EXIT_GRACE: Duration = Duration::from_secs(3);
+/// See `stall_timeout` on the Codex driver.
+const STALL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 /// Whether a process the app-server reported is still running.
 fn process_alive(pid: &str) -> bool {

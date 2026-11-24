@@ -2537,6 +2537,32 @@ impl Inner {
         }
     }
 
+    /// Publish (or clear, with `None`) the transient status the agent reported
+    /// mid-turn — a model reconnect — on `chat_id`'s session row, mirrored
+    /// like [`Self::set_running_subagents`]. An unchanged notice is a no-op,
+    /// so clearing on every streamed event costs one map lookup.
+    fn set_notice(&self, chat_id: &str, notice: Option<String>) {
+        let session = {
+            let mut statuses = lock(&self.statuses);
+            let Some(entry) = statuses.get_mut(chat_id) else {
+                return;
+            };
+            if entry.notice == notice {
+                return;
+            }
+            entry.notice = notice;
+            entry.updated_at = Utc::now();
+            let session = entry.clone();
+            let mut list: Vec<Session> = statuses.values().cloned().collect();
+            list.sort_by(|a, b| a.chat_id.cmp(&b.chat_id));
+            self.sessions_tx.send_replace(list);
+            session
+        };
+        if let Some(ws) = self.workspace() {
+            ws.record_session(&session);
+        }
+    }
+
     /// Publish the background tasks of `chat_id`'s runtime, mirrored like
     /// [`Self::set_running_subagents`]: a change is a status transition, an
     /// unchanged list is a no-op.
@@ -2601,9 +2627,15 @@ impl Inner {
                     running_subagents: 0,
                     awaiting_input: None,
                     background_tasks: Vec::new(),
+                    notice: None,
                 });
             if status != SessionStatus::AwaitingInput {
                 entry.awaiting_input = None;
+            }
+            // A reconnect notice belongs to the turn that reported it: a new
+            // turn, a question or a settled run never inherits it.
+            if status != SessionStatus::Working || fresh_start {
+                entry.notice = None;
             }
             // `started_at` is the elapsed-timer base and must only ever mean
             // "this turn". Entering Working from a settled state always
@@ -3341,6 +3373,29 @@ fn render_parts(parts: &[MessagePart]) -> Vec<MessagePart> {
 }
 
 /// The persisted assistant text of a folded segment (workspace preview source).
+/// Whether the turn's fold shows work still in flight: an unresolved tool
+/// call (a command legitimately silent for minutes) or an open question.
+/// The live-plan chip is a singleton that never resolves, so it never counts.
+fn turn_in_flight(parts: &[MessagePart]) -> bool {
+    parts.iter().any(|p| match p {
+        MessagePart::Tool {
+            id,
+            resolved: false,
+            ..
+        } => id != zuse_protocol::LIVE_PLAN_TOOL_ID,
+        MessagePart::Input {
+            resolved: false, ..
+        } => true,
+        _ => false,
+    })
+}
+
+/// The error a stalled turn ends with. Plain words, and nothing the composer
+/// would read as a transient reconnect, so it offers Retry.
+fn stalled_turn_message(agent: &str) -> String {
+    format!("{agent} stopped responding, so this turn was ended. Retry to send your message again.")
+}
+
 fn folded_text(parts: &[MessagePart]) -> String {
     parts
         .iter()
@@ -3859,6 +3914,24 @@ async fn drive_run(
         None => Some(std::time::Duration::from_secs(120)),
     };
     let mut last_stream_activity = tokio::time::Instant::now();
+    // TURN-STALL WATCHDOG: unlike the quiesce park above, this one ENDS the
+    // turn with an error. It is armed only for drivers that name a window
+    // (`Harness::stall_timeout`) and only while a turn is active with
+    // nothing in flight — an unresolved tool call (a long build, a subagent
+    // wait) or an open question disarms it, so legitimate long work is
+    // never cut. Any agent event, a reconnect notice included, restarts the
+    // window. When it trips, the agent stopped talking without a terminal
+    // frame: the runtime is torn down and the turn ends Errored, so the
+    // composer takes the next message (and offers Retry) instead of showing
+    // "is working" forever. `ZUSE_TURN_STALL_MS` overrides; 0 disables.
+    let stall_after: Option<std::time::Duration> = match std::env::var("ZUSE_TURN_STALL_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        Some(0) => None,
+        Some(ms) => Some(std::time::Duration::from_millis(ms)),
+        None => harness.stall_timeout(),
+    };
     // SELF-CONTINUED turns get a much SHORTER quiesce window. A turn the
     // agent starts on its own (background-task wake) can never receive a
     // harness Done: the adapter has no `session/prompt` outstanding to
@@ -4089,13 +4162,7 @@ async fn drive_run(
                     && idle_since.is_none()
                     && !interrupted
                     && steerable
-                    && !folded.iter().any(|p| match p {
-                        MessagePart::Tool { id, resolved: false, .. } => {
-                            id != zuse_protocol::LIVE_PLAN_TOOL_ID
-                        }
-                        MessagePart::Input { resolved: false, .. } => true,
-                        _ => false,
-                    }) =>
+                    && !turn_in_flight(&folded) =>
                 {
                     tracing::warn!(
                         chat = %chat_id,
@@ -4142,6 +4209,35 @@ async fn drive_run(
                         &chat_id, SessionStatus::Idle, false, completed_turn,
                     );
                     continue;
+                }
+                // Turn-stall watchdog (see the knob above). Subagent traffic
+                // is the agent's own work too, so it restarts the window.
+                _ = tokio::time::sleep_until(
+                    last_stream_activity.max(last_subagent_activity.unwrap_or(last_stream_activity))
+                        + stall_after.unwrap_or_default()
+                ), if stall_after.is_some()
+                    && idle_since.is_none()
+                    && !interrupted
+                    && !turn_in_flight(&folded) =>
+                {
+                    tracing::warn!(
+                        chat = %chat_id,
+                        quiet_ms = stall_after.unwrap_or_default().as_millis() as u64,
+                        "turn stalled: no agent event with nothing in flight; ending the turn"
+                    );
+                    if let Some(token) = lock(&inner.runs)
+                        .get(&chat_id)
+                        .filter(|h| h.run_id == run_id)
+                        .map(|h| h.interrupt_token.clone())
+                    {
+                        token.cancel();
+                    }
+                    AgentEvent::Done {
+                        status: DoneStatus::Errored,
+                        result: None,
+                        error: Some(stalled_turn_message(harness.display_name())),
+                        session_id: None,
+                    }
                 }
             };
 
@@ -4428,6 +4524,16 @@ async fn drive_run(
         // push the quiesce watchdog's window out.
         inner.touch_session(&chat_id);
         last_stream_activity = tokio::time::Instant::now();
+        // A transient notice (the agent reconnecting to its model) is live
+        // status for the working row, never transcript content. Any other
+        // event means the agent is streaming again, which clears it.
+        if let AgentEvent::Notice { message } = &event {
+            if idle_since.is_none() {
+                inner.set_notice(&chat_id, message.clone());
+            }
+            continue;
+        }
+        inner.set_notice(&chat_id, None);
         // The engine's input bridge is the sole authority on input requests:
         // it mints the id and parks the resolver BEFORE emitting the event,
         // so a legitimate id is always pending here. A harness emitting its

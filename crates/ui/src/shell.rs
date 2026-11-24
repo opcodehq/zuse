@@ -16967,6 +16967,7 @@ mod tests {
             running_subagents: 0,
             awaiting_input: None,
             background_tasks: Vec::new(),
+            notice: None,
         }
     }
 
@@ -21088,6 +21089,7 @@ impl Shell {
                         running_subagents: 1,
                         awaiting_input: None,
                         background_tasks: Vec::new(),
+                        notice: None,
                         chat_id: "browser-fixture".into(),
                         device_id: "local".into(),
                         status: zuse_protocol::SessionStatus::Working,
@@ -21123,6 +21125,7 @@ impl Shell {
                     state.apply_sessions(vec![zuse_protocol::Session {
                         last_completed_turn: None,
                         running_subagents: 0,
+                        notice: None,
                         awaiting_input: None,
                         background_tasks: vec![
                             task(

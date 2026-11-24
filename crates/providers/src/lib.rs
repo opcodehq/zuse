@@ -490,6 +490,15 @@ pub trait Harness: Send + Sync {
     fn authoritative_prompt_end(&self) -> bool {
         self.deterministic_turn_end()
     }
+    /// How long an active turn may go without ANY event from the agent — no
+    /// output, no reconnect notice — while no tool call or question is in
+    /// flight, before the engine ends it as stalled with a visible error.
+    /// A backstop for an agent that wedges mid-turn without ever sending its
+    /// terminal frame; long tool runs never count, because an unresolved tool
+    /// call disarms it. `None` (the default) disables it.
+    fn stall_timeout(&self) -> Option<std::time::Duration> {
+        None
+    }
     /// Whether this driver honors [`TurnControl::stop_turn`]: it ends only
     /// the in-flight turn (`Done { Interrupted }`) and the runtime stays up
     /// with its background work. Otherwise stopping a turn tears the runtime

@@ -2935,6 +2935,29 @@ fn waiting_for_subagents_label(count: u32) -> String {
     }
 }
 
+/// The working row's word. Sending, queueing and subagent waits outrank an
+/// agent's transient notice ("Reconnecting to the model… 2/5"), which in
+/// turn replaces the plain "<agent> is working". Pure.
+fn working_word(
+    queued: bool,
+    sending: bool,
+    waiting: u32,
+    notice: Option<String>,
+    agent: &str,
+) -> String {
+    if queued {
+        "Queued — will send automatically".to_owned()
+    } else if sending {
+        "Sending…".to_owned()
+    } else if waiting > 0 {
+        waiting_for_subagents_label(waiting)
+    } else if let Some(notice) = notice.filter(|notice| !notice.trim().is_empty()) {
+        notice
+    } else {
+        format!("{agent} is working")
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Highlight store (background, time-sliced, paint-only)
 // ---------------------------------------------------------------------------
@@ -9401,15 +9424,16 @@ impl Transcript {
             .map_or("Agent", |config| {
                 crate::pickers::harness_display_name(config.harness)
             });
-        let word = if queued {
-            "Queued — will send automatically".to_owned()
-        } else if sending {
-            "Sending…".to_owned()
-        } else if waiting > 0 {
-            waiting_for_subagents_label(waiting)
-        } else {
-            format!("{agent} is working")
-        };
+        // A transient status the agent reported (its model connection dropped
+        // and it is reconnecting) replaces the word until it streams again;
+        // the engine clears it on the next event or when the turn settles.
+        let notice = self
+            .chat_id
+            .as_deref()
+            .filter(|_| self.doc_override.is_none())
+            .and_then(|id| self.state.read(cx).session_for(id))
+            .and_then(|session| session.notice.clone());
+        let word = working_word(queued, sending, waiting, notice, agent);
         Some(self.render_activity_line(
             SharedString::from(word),
             Some(turn),
@@ -17895,6 +17919,7 @@ mod tests {
                             running_subagents: 0,
                             awaiting_input: None,
                             background_tasks: Vec::new(),
+                            notice: None,
                             chat_id: "chat".into(),
                             device_id: "test".into(),
                             status: zuse_protocol::SessionStatus::Working,
@@ -20516,6 +20541,34 @@ mod tests {
         ] {
             assert_eq!(format_elapsed(secs), expected, "elapsed seconds: {secs}");
         }
+    }
+
+    #[test]
+    fn a_reconnect_notice_replaces_the_working_word_until_it_clears() {
+        let notice = || Some("Reconnecting to the model… 2/5".to_owned());
+        assert_eq!(
+            working_word(false, false, 0, notice(), "Codex"),
+            "Reconnecting to the model… 2/5"
+        );
+        // Cleared (the agent streams again): back to the plain word.
+        assert_eq!(
+            working_word(false, false, 0, None, "Codex"),
+            "Codex is working"
+        );
+        assert_eq!(
+            working_word(false, false, 0, Some("  ".into()), "Codex"),
+            "Codex is working"
+        );
+        // Sending, queueing and subagent waits keep their own words.
+        assert_eq!(working_word(false, true, 0, notice(), "Codex"), "Sending…");
+        assert_eq!(
+            working_word(true, true, 0, notice(), "Codex"),
+            "Queued — will send automatically"
+        );
+        assert_eq!(
+            working_word(false, false, 2, notice(), "Codex"),
+            "Waiting for 2 subagents"
+        );
     }
 
     #[test]
