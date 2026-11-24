@@ -97,6 +97,9 @@ impl Updater {
                 return;
             }
         };
+        if let Err(error) = self.harnesses.confirm_staged(&offer) {
+            tracing::warn!(%error, "harness_update_confirmation_failed");
+        }
         for directive in offer.directives {
             if cancel.is_cancelled() {
                 return;

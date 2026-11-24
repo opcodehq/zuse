@@ -67,22 +67,65 @@ fn push_bounded(list: &mut Vec<String>, value: &str) {
 pub struct Harnesses {
     config: Config,
     state: RwLock<State>,
+    /// Agents whose bundle was already staged when this process started.
+    /// The server may have pulled that bundle since; it is adopted only once
+    /// an offer still names it (see [`Self::confirm_staged`]).
+    unconfirmed: RwLock<std::collections::BTreeSet<String>>,
 }
 
 impl Harnesses {
-    /// Load the store and adopt anything staged: at process start no harness
-    /// process exists yet, so this is always a safe boundary.
+    /// Load the store. A bundle staged before this start is not adopted on
+    /// the guest's own say-so: the server may have pulled it while the
+    /// computer slept. The first offer confirms or withdraws it.
     pub fn open(config: Config) -> Arc<Self> {
-        let state = read_json(&config.root.join("state.json")).unwrap_or_default();
+        let state: State = read_json(&config.root.join("state.json")).unwrap_or_default();
+        let unconfirmed = state.staged.keys().cloned().collect();
         let this = Arc::new(Self {
             config,
             state: RwLock::new(state),
+            unconfirmed: RwLock::new(unconfirmed),
         });
-        if let Err(error) = this.adopt_staged() {
-            tracing::warn!(%error, "harness_update_cold_adoption_failed");
-        }
         this.collect_garbage();
         this
+    }
+    /// Apply a server offer to bundles staged before this start: one the
+    /// offer still names for its agent may be adopted; any other is dropped
+    /// (pulled, or replaced by a newer target).
+    pub fn confirm_staged(&self, offer: &wire::HarnessOffer) -> Result<()> {
+        let pending: Vec<String> = self
+            .unconfirmed
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .cloned()
+            .collect();
+        for agent in pending {
+            let staged = self.state().staged.get(&agent).cloned();
+            let confirmed = staged.as_ref().is_some_and(|staged| {
+                offer.directives.iter().any(|d| {
+                    d.artifact.bundle.agent == agent && d.artifact.bundle.sha256 == staged.sha256
+                })
+            });
+            if !confirmed && staged.is_some() {
+                tracing::info!(%agent, "Staged harness bundle no longer offered; dropped");
+                self.update(|state| {
+                    state.staged.remove(&agent);
+                })?;
+            }
+            self.unconfirmed
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&agent);
+        }
+        Ok(())
+    }
+    /// A staged bundle may be adopted at a boundary now.
+    fn adoptable(&self, agent: &str) -> bool {
+        !self
+            .unconfirmed
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(agent)
     }
     pub fn config(&self) -> &Config {
         &self.config
@@ -201,8 +244,12 @@ impl Harnesses {
             || state.rejected_urls.iter().any(|u| u == url)
             || state.staged.values().any(|s| s.update_id == update_id)
     }
+    /// A staged bundle can be adopted at the next boundary.
     pub fn has_staged(&self) -> bool {
-        !self.state().staged.is_empty()
+        self.state()
+            .staged
+            .keys()
+            .any(|agent| self.adoptable(agent))
     }
 
     /// Install a verified bundle tree (in a private directory on the same
@@ -272,6 +319,9 @@ impl Harnesses {
         let staged = self.state().staged;
         let mut adopted = Vec::new();
         for (agent, staged) in staged {
+            if !self.adoptable(&agent) {
+                continue;
+            }
             let file = self.bundle_file(&staged.sha256);
             let checked = match &file {
                 Some(file) if file.bundle.agent == agent => {
