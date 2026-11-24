@@ -354,7 +354,7 @@ async fn fixture(pending: &[&str]) -> Fixture {
     if !pending.is_empty() {
         let mut tx = application.begin().await.unwrap();
         control
-            .reserve_pending_assets_tx(&mut tx, WS, &pending, now)
+            .reserve_pending_assets_tx(&mut tx, "user-test", WS, &pending, now)
             .await
             .unwrap();
         control
@@ -673,19 +673,25 @@ async fn leased(control: &RuntimeControl, now: i64) -> Vec<String> {
 #[tokio::test]
 #[ignore = "requires explicit isolated localhost PostgreSQL"]
 async fn a_first_turn_waits_for_files_still_uploading() {
-    let fixture = fixture(&["shot"]).await;
+    let fixture = fixture(&["shot", "notes"]).await;
     let (control, now) = (fixture.control.clone(), fixture.now);
     let launch = format!("launch:{WS}");
     assert!(
         leased(&control, now).await.is_empty(),
-        "file still uploading"
+        "files still uploading"
     );
     let wait = zuse_protocol::cloud_assets::PENDING_ASSET_WAIT_MS;
     assert!(leased(&control, now + wait - 1).await.is_empty());
-    let committed = upload(&control, "shot", now).await;
     // The commit records exactly what the first turn declared.
-    assert_eq!(committed, json!(fixture.pending[0]));
-    assert_eq!(leased(&control, now).await, vec![launch]);
+    let first = upload(&control, "shot", now + 1).await;
+    assert_eq!(first, json!(fixture.pending[0]));
+    assert!(
+        leased(&control, now + 2).await.is_empty(),
+        "still waiting for the last file"
+    );
+    let last = upload(&control, "notes", now + 3).await;
+    assert_eq!(last, json!(fixture.pending[1]));
+    assert_eq!(leased(&control, now + 4).await, vec![launch]);
     fixture.close().await;
 }
 

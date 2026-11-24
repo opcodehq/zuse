@@ -120,6 +120,8 @@ fn short_stage(message: &str) -> &str {
         other => other,
     }
 }
+/// Tries to archive a computer whose new chat was deleted or removed.
+const ARCHIVE_ATTEMPTS: u32 = 5;
 /// How long the server has to confirm a new cloud chat before its tab shows
 /// it as failed with Retry and Delete.
 pub(crate) const CLOUD_CREATE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(90);
@@ -1647,21 +1649,25 @@ impl Composer {
             {
                 if hold {
                     // The computer is starting: its first turn waits on the
-                    // server for these files.
-                    let progress = launch_upload::Progress::new(&staged);
-                    if this
-                        .update(cx, |this, cx| {
-                            this.on_launch(&key, cx, |this, cx| {
-                                this.cloud.accepted = Some(workspace.clone());
-                                this.cloud.upload = Some(progress.clone());
-                                cx.emit(ComposerEvent::CloudLaunchChanged);
-                                cx.notify();
-                            })
+                    // server for these files. A Retry skips files that
+                    // already committed.
+                    let mut progress = None;
+                    let _ = this.update(cx, |this, cx| {
+                        this.on_launch(&key, cx, |this, cx| {
+                            let resumed = launch_upload::Progress::resume(
+                                &staged,
+                                this.cloud.upload.as_ref(),
+                            );
+                            this.cloud.accepted = Some(workspace.clone());
+                            this.cloud.upload = Some(resumed.clone());
+                            progress = Some(resumed);
+                            cx.emit(ComposerEvent::CloudLaunchChanged);
+                            cx.notify();
                         })
-                        .is_err()
-                    {
+                    });
+                    let Some(progress) = progress else {
                         return;
-                    }
+                    };
                     let engine = controller.clone();
                     let account = subject.clone();
                     let scope = organization.clone();
@@ -2042,16 +2048,28 @@ impl Composer {
                     Err(_) => return,
                 },
             };
+            // One command identity across tries: a slow archive that did
+            // land is not archived twice. A dropped call is tried again so
+            // the computer never keeps running unnoticed.
             let params = json!({"workspaceId":workspace,
                 "expectedAccountId":request["expectedAccountId"],
                 "expectedOrganizationId":request["expectedOrganizationId"],
                 "commandId":uuid::Uuid::new_v4().to_string()});
-            if let Err(error) = controller
-                .client()
-                .call_scoped(methods::CLOUD_ARCHIVE, params)
-                .await
-            {
-                tracing::warn!(%error, "archiving an abandoned cloud launch failed");
+            for attempt in 1..=ARCHIVE_ATTEMPTS {
+                match controller
+                    .client()
+                    .call_scoped(methods::CLOUD_ARCHIVE, params.clone())
+                    .await
+                {
+                    Ok(_) => return,
+                    Err(error) => {
+                        tracing::warn!(%error, attempt, "archiving an abandoned cloud launch failed");
+                        if attempt < ARCHIVE_ATTEMPTS {
+                            tokio::time::sleep(std::time::Duration::from_secs(2u64.pow(attempt)))
+                                .await;
+                        }
+                    }
+                }
             }
         })
         .detach();

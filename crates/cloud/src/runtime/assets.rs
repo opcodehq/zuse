@@ -343,15 +343,24 @@ impl RuntimeControl {
     pub(in crate::runtime) async fn reserve_pending_assets_tx(
         &self,
         tx: &mut Transaction<'_, Postgres>,
+        owner: &str,
         workspace: &str,
         assets: &[Asset],
         now: i64,
     ) -> Result<(), ApiError> {
         for asset in assets {
-            sqlx::query("INSERT INTO zuse_rust_launch_assets(workspace_id,asset_id,state,created_at,updated_at) VALUES($1,$2,'uploading',$3,$3) ON CONFLICT DO NOTHING").bind(workspace).bind(&asset.asset_id).bind(now).execute(&mut **tx).await?;
+            // The wait runs from this declaration, even for an upload that
+            // was already started.
+            sqlx::query("INSERT INTO zuse_rust_launch_assets(workspace_id,asset_id,state,created_at,updated_at) VALUES($1,$2,'uploading',$3,$3) ON CONFLICT(workspace_id,asset_id) DO UPDATE SET created_at=$3,updated_at=$3 WHERE zuse_rust_launch_assets.state='uploading'").bind(workspace).bind(&asset.asset_id).bind(now).execute(&mut **tx).await?;
             let state: String = sqlx::query_scalar("SELECT state FROM zuse_rust_launch_assets WHERE workspace_id=$1 AND asset_id=$2 FOR UPDATE").bind(workspace).bind(&asset.asset_id).fetch_one(&mut **tx).await?;
-            if matches!(state.as_str(), "releasing" | "released") {
-                return Err(released());
+            match state.as_str() {
+                "releasing" | "released" => return Err(released()),
+                // Already committed: it must be the very file declared.
+                "ready" => {
+                    self.verify_launch_assets(tx, owner, workspace, std::slice::from_ref(asset))
+                        .await?
+                }
+                _ => {}
             }
         }
         Ok(())

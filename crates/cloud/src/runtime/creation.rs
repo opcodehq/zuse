@@ -27,12 +27,16 @@ fn valid_pending_attachments(body: &CreateWorkspace) -> bool {
                 && !name.is_empty()
                 && name.len() <= 255
                 && !name.chars().any(char::is_control)
-                && file.sha256.len() == 43
-                && file
-                    .sha256
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+                && canonical_digest(&file.sha256)
         })
+}
+/// A base64url (unpadded) SHA-256 digest exactly as a commit encodes it.
+fn canonical_digest(value: &str) -> bool {
+    use base64::Engine as _;
+    let codec = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    codec
+        .decode(value)
+        .is_ok_and(|bytes| bytes.len() == 32 && codec.encode(&bytes) == value)
 }
 fn validate(body: &CreateWorkspace) -> Result<(), ApiError> {
     if body
@@ -888,6 +892,15 @@ impl RuntimeControl {
             .chain(pending.iter())
             .cloned()
             .collect();
+        // One description per file: a pending upload can't also be named
+        // among the committed ones.
+        let mut ids = std::collections::HashSet::new();
+        if !launch_assets
+            .iter()
+            .all(|asset| ids.insert(&asset.asset_id))
+        {
+            return Err(ApiError::bad_request("invalid_launch_attachments"));
+        }
         let chat = format!("chat_{}", uuid::Uuid::new_v4());
         let session = format!("s_{}", uuid::Uuid::new_v4());
         let branch = body
@@ -1155,7 +1168,7 @@ impl RuntimeControl {
             }
             let row = self.write_fresh_admission_batch_tx(&mut tx, &plan).await?;
             if !pending.is_empty() {
-                self.reserve_pending_assets_tx(&mut tx, &plan.workspace_id, &pending, now)
+                self.reserve_pending_assets_tx(&mut tx, owner, &plan.workspace_id, &pending, now)
                     .await?;
             }
             if server_admitted && !launch_assets.is_empty() {
@@ -1263,8 +1276,12 @@ mod pending_attachment_tests {
         .unwrap()
     }
     fn file(upload: &str, name: &str) -> Value {
+        use base64::Engine as _;
+        use sha2::Digest as _;
+        let digest = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(sha2::Sha256::digest(name.as_bytes()));
         json!({"uploadId":upload,"mimeType":"image/png","originalName":name,"sizeBytes":10,
-            "sha256":"a".repeat(43)})
+            "sha256":digest})
     }
     /// Files still uploading only ride a server-admitted first turn, with
     /// exactly the metadata their commit records.
@@ -1294,6 +1311,10 @@ mod pending_attachment_tests {
         let mut huge = file("shot", "shot.png");
         huge["sizeBytes"] = json!(zuse_protocol::cloud_assets::MAX_BYTES + 1);
         assert!(!valid_pending_attachments(&body(mode, json!([huge]))));
+        // 43 characters, but not the encoding of any 32-byte digest.
+        let mut padded = file("shot", "shot.png");
+        padded["sha256"] = json!("a".repeat(43));
+        assert!(!valid_pending_attachments(&body(mode, json!([padded]))));
         let many: Vec<Value> = (0..=zuse_protocol::cloud_assets::MAX_ASSETS)
             .map(|n| file(&format!("f{n}"), &format!("f{n}.png")))
             .collect();

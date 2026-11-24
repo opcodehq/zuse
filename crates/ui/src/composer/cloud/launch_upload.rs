@@ -8,13 +8,17 @@
 //! ```
 //!
 //! The server holds the first turn until every declared file is committed,
-//! so the turn starts with its files, never without them.
+//! so the turn starts with its files. That hold ends after
+//! `PENDING_ASSET_WAIT_MS` (15 minutes): past it the computer takes the turn
+//! and reports the missing file. The whole upload therefore gets
+//! [`UPLOAD_BUDGET`], well inside that hold, and stops with Retry and Remove
+//! when it runs out, before the turn could start without its file.
 use super::*;
 use base64::Engine as _;
 use futures::FutureExt as _;
 use sha2::Digest as _;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 use zuse_protocol::cloud_assets::{CHUNK_BYTES, committed_name, mime_for_name};
 
@@ -26,6 +30,8 @@ pub(super) const COMMIT_TIMEOUT: Duration = Duration::from_secs(150);
 pub(super) const ATTEMPTS: u32 = 5;
 /// Chunks in flight at once; chunks are idempotent by sequence.
 const CONCURRENCY: usize = 2;
+/// The whole upload's deadline, inside the server's first-turn hold.
+pub(super) const UPLOAD_BUDGET: Duration = Duration::from_secs(12 * 60);
 /// How often the progress label repaints while bytes move.
 pub(super) const PAINT_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -41,7 +47,10 @@ pub(super) type Call<'a> = attachments::UploadCall<'a>;
 #[derive(Clone, Default)]
 pub(in crate::composer) struct Progress {
     sent: Arc<AtomicU64>,
-    retrying: Arc<AtomicBool>,
+    /// Requests waiting to be sent again.
+    retrying: Arc<AtomicUsize>,
+    /// Files already committed: a Retry skips them.
+    committed: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
     total: u64,
     name: String,
     files: usize,
@@ -61,6 +70,22 @@ impl Progress {
             ..Default::default()
         }
     }
+    /// Progress for a Retry: files `previous` committed count as sent and
+    /// are not uploaded again.
+    pub(super) fn resume(files: &[StagedAttachment], previous: Option<&Progress>) -> Self {
+        let progress = Self::new(files);
+        if let Some(previous) = previous {
+            let committed = previous.committed.lock().unwrap().clone();
+            let sent: u64 = files
+                .iter()
+                .filter(|file| committed.contains(&file.id))
+                .map(|file| file.bytes().len() as u64)
+                .sum();
+            progress.sent.store(sent, Ordering::Relaxed);
+            *progress.committed.lock().unwrap() = committed;
+        }
+        progress
+    }
     pub(super) fn sent(&self) -> u64 {
         self.sent.load(Ordering::Relaxed).min(self.total)
     }
@@ -71,7 +96,7 @@ impl Progress {
     /// dropped request is being sent again.
     pub(super) fn label(&self) -> String {
         let percent = self.percent();
-        if self.retrying.load(Ordering::Relaxed) {
+        if self.retrying.load(Ordering::Relaxed) > 0 {
             return format!("Retrying upload · {percent}%");
         }
         if self.files == 1 {
@@ -131,17 +156,51 @@ pub(super) async fn upload_files(
     files: &[StagedAttachment],
     progress: &Progress,
 ) -> Result<(), Failure> {
-    for file in files {
-        upload_file(call, executor, file, progress)
-            .await
-            .map_err(|error| Failure {
-                file: file.id.clone(),
-                name: file.name.clone(),
-                error,
-            })?;
+    let current = std::cell::RefCell::new(None::<&StagedAttachment>);
+    let upload = async {
+        for file in files {
+            if progress.committed.lock().unwrap().contains(&file.id) {
+                continue;
+            }
+            *current.borrow_mut() = Some(file);
+            upload_file(call, executor, file, progress)
+                .await
+                .map_err(|error| Failure {
+                    file: file.id.clone(),
+                    name: file.name.clone(),
+                    error,
+                })?;
+            progress.committed.lock().unwrap().insert(file.id.clone());
+        }
+        Ok(())
+    };
+    futures::pin_mut!(upload);
+    match futures::future::select(upload, executor.timer(UPLOAD_BUDGET)).await {
+        futures::future::Either::Left((result, _)) => result,
+        futures::future::Either::Right(_) => {
+            let file = current.borrow().or(files.first());
+            Err(Failure {
+                file: file.map(|file| file.id.clone()).unwrap_or_default(),
+                name: file.map(|file| file.name.clone()).unwrap_or_default(),
+                error: format!("upload exceeded {}s", UPLOAD_BUDGET.as_secs()),
+            })
+        }
     }
-    progress.retrying.store(false, Ordering::Relaxed);
-    Ok(())
+}
+
+/// Marks one request as waiting to be sent again until it settles (or is
+/// dropped), so the label says "Retrying" while any request is.
+struct Retrying<'a>(&'a AtomicUsize);
+impl<'a> Retrying<'a> {
+    fn start(count: &'a AtomicUsize) -> Self {
+        count.fetch_add(1, Ordering::Relaxed);
+        Self(count)
+    }
+}
+impl Drop for Retrying<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 async fn upload_file(
@@ -203,6 +262,7 @@ async fn send(
     progress: &Progress,
 ) -> Result<Value, String> {
     let mut attempt = 1;
+    let mut retrying = None;
     loop {
         let request = call(method, params.clone(), timeout);
         let timer = executor.timer(timeout);
@@ -211,13 +271,10 @@ async fn send(
             futures::future::Either::Right(_) => Err(format!("{method} timed out")),
         };
         match result {
-            Ok(value) => {
-                progress.retrying.store(false, Ordering::Relaxed);
-                return Ok(value);
-            }
+            Ok(value) => return Ok(value),
             Err(error) if attempt < ATTEMPTS => {
                 tracing::warn!(%error, attempt, method, "cloud launch upload retry");
-                progress.retrying.store(true, Ordering::Relaxed);
+                retrying.get_or_insert_with(|| Retrying::start(&progress.retrying));
                 executor.timer(backoff(attempt)).await;
                 attempt += 1;
             }
@@ -398,6 +455,93 @@ mod tests {
         assert_eq!(failure.file, files[0].id);
         assert_eq!(failure.name, "notes.txt");
         assert_eq!(failure.error, "Cloud service is unavailable.");
+    }
+
+    /// A Retry after one file committed and the next failed starts at the
+    /// file that failed, with the committed one counted as sent.
+    #[gpui::test]
+    async fn a_retry_skips_files_already_committed(cx: &mut gpui::TestAppContext) {
+        let files = vec![file("first.png", 100), file("second.png", 300)];
+        let failing = Rc::new(std::cell::Cell::new(true));
+        let calls = Rc::new(RefCell::new(Vec::<String>::new()));
+        let (seen, log, fail) = (files.clone(), calls.clone(), failing.clone());
+        let call = move |method: &'static str, params: Value, _: Duration| {
+            let upload = params["uploadId"].as_str().unwrap().to_owned();
+            log.borrow_mut().push(upload.clone());
+            let refuse = fail.get() && upload == seen[1].id;
+            let value = reply(method, &params, &seen);
+            async move {
+                if refuse {
+                    Err("Cloud service is unavailable.".to_string())
+                } else {
+                    Ok(value)
+                }
+            }
+            .boxed_local()
+        };
+        let executor = cx.background_executor.clone();
+        let first = Progress::new(&files);
+        let upload = upload_files(&call, &executor, &files, &first);
+        futures::pin_mut!(upload);
+        for attempt in 1..ATTEMPTS {
+            assert!(futures::poll!(upload.as_mut()).is_pending());
+            cx.background_executor.advance_clock(backoff(attempt));
+        }
+        assert!(matches!(
+            futures::poll!(upload.as_mut()),
+            std::task::Poll::Ready(Err(_))
+        ));
+        failing.set(false);
+        calls.borrow_mut().clear();
+        let retry = Progress::resume(&files, Some(&first));
+        assert_eq!(retry.sent(), 100, "the committed file counts as sent");
+        let upload = upload_files(&call, &executor, &files, &retry);
+        futures::pin_mut!(upload);
+        assert!(matches!(
+            futures::poll!(upload.as_mut()),
+            std::task::Poll::Ready(Ok(()))
+        ));
+        assert!(
+            calls.borrow().iter().all(|id| *id == files[1].id),
+            "only the failed file is sent again"
+        );
+        assert_eq!(retry.percent(), 100);
+    }
+
+    /// An upload that keeps crawling stops inside the server's first-turn
+    /// hold, so Retry and Remove show before the turn could start without it.
+    #[gpui::test]
+    async fn a_crawling_upload_stops_within_its_budget(cx: &mut gpui::TestAppContext) {
+        let files = vec![file("big.png", CHUNK_BYTES * 30)];
+        let progress = Progress::new(&files);
+        let executor = cx.background_executor.clone();
+        let seen = files.clone();
+        let call = move |method: &'static str, params: Value, _: Duration| {
+            let executor = executor.clone();
+            let value = reply(method, &params, &seen);
+            async move {
+                executor.timer(CHUNK_TIMEOUT - Duration::from_secs(1)).await;
+                Ok(value)
+            }
+            .boxed_local()
+        };
+        let executor = cx.background_executor.clone();
+        let upload = upload_files(&call, &executor, &files, &progress);
+        futures::pin_mut!(upload);
+        let mut elapsed = Duration::ZERO;
+        let failure = loop {
+            if let std::task::Poll::Ready(result) = futures::poll!(upload.as_mut()) {
+                break result.expect_err("the budget ends the upload");
+            }
+            cx.background_executor.advance_clock(Duration::from_secs(1));
+            elapsed += Duration::from_secs(1);
+        };
+        assert_eq!(elapsed, UPLOAD_BUDGET);
+        assert!(
+            UPLOAD_BUDGET.as_millis() < zuse_protocol::cloud_assets::PENDING_ASSET_WAIT_MS as u128
+        );
+        assert_eq!(failure.name, "big.png");
+        assert!(progress.percent() < 100);
     }
 
     /// A controller that admits the create at once. Chunk uploads wait for
