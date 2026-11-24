@@ -2,6 +2,8 @@
 // origin's storage, never in the URL, logs or settings, and the host can revoke it at any time.
 // Keys match the earlier web client so saved computers carry over.
 import { createStore } from "solid-js";
+import { frameId, inComputerFrame, notePrimaryRecipe } from "./multi/model";
+const tabKey = (key: string) => frameId() ? `${key}:computer:${frameId()}` : key;
 
 const SAVED = "zuse.paired-computers.v1";
 export const SELECTED = "zuse.paired-target.v1";
@@ -19,15 +21,17 @@ export interface SavedComputer {
 
 function read(storage: () => Storage, key: string): string | null {
   try {
-    return storage().getItem(key);
+    return storage().getItem(storage() === sessionStorage ? tabKey(key) : key);
   } catch {
     return null;
   }
 }
 function write(storage: () => Storage, key: string, value: string | null) {
   try {
-    if (value === null) storage().removeItem(key);
-    else storage().setItem(key, value);
+    const target = storage();
+    const scopedKey = target === sessionStorage ? tabKey(key) : key;
+    if (value === null) target.removeItem(scopedKey);
+    else target.setItem(scopedKey, value);
   } catch {
     // Storage can be unavailable (private windows); the pairing then lasts for this page only.
   }
@@ -117,6 +121,8 @@ export function openInThisTab(link: string) {
 
 /** Forget the computer this tab uses and return to the page's own engine. */
 export function forgetCurrent() {
+  if (inComputerFrame()) { parent.postMessage({ type: "zuse.computer.forget", frame: frameId() }, location.origin); return; }
+  notePrimaryRecipe({ kind: "owner" });
   const id = describeLink(selectedLink() ?? "")?.id;
   if (id) forget(id);
   selectLink(null);

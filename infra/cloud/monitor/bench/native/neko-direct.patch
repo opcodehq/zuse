@@ -1,0 +1,12 @@
+--- a/bench/nkclient.py
++++ b/bench/nkclient.py
+@@ -45 +45,5 @@
+-    pc = RTCPeerConnection()
++    from aiortc import RTCConfiguration
++    if os.environ.get("NEKO_RECEIVE_BYTES"):
++        import aioice.turn
++        aioice.turn.UDP_SOCKET_BUFFER_SIZE = int(os.environ["NEKO_RECEIVE_BYTES"])
++    pc = RTCPeerConnection(RTCConfiguration(iceServers=[]))
+@@ -96,0 +101,2 @@
++        first = await asyncio.wait_for(track.recv(), 25)
++        print('Neko decoded',first.width,first.height,file=sys.stderr)

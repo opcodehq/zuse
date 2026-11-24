@@ -512,6 +512,7 @@ impl WorkspaceDoc {
             .then(|| serde_json::to_string(&session.background_tasks))
             .transpose()?;
         set_opt_str(&row, "backgroundTasks", background.as_deref())?;
+        set_opt_str(&row, "notice", session.notice.as_deref())?;
         self.doc.commit();
         Ok(())
     }
@@ -818,6 +819,8 @@ pub(crate) struct RawSession {
     /// content (a newer writer's shape) reads as no tasks.
     #[serde(default)]
     background_tasks: Option<String>,
+    #[serde(default)]
+    notice: Option<String>,
 }
 
 impl From<RawSession> for Session {
@@ -835,6 +838,7 @@ impl From<RawSession> for Session {
                 .background_tasks
                 .and_then(|json| serde_json::from_str(&json).ok())
                 .unwrap_or_default(),
+            notice: raw.notice,
         }
     }
 }
@@ -948,6 +952,7 @@ mod tests {
             running_subagents: 0,
             awaiting_input: None,
             background_tasks: Vec::new(),
+            notice: None,
         }
     }
 
@@ -1062,6 +1067,13 @@ mod tests {
         ws.upsert_session(&busy).unwrap();
         assert_eq!(ws.read_sessions().unwrap(), vec![busy.clone()]);
         busy.background_tasks.clear();
+        ws.upsert_session(&busy).unwrap();
+        assert_eq!(ws.read_sessions().unwrap(), vec![busy.clone()]);
+        // A transient reconnect notice rides the row too; clearing removes it.
+        busy.notice = Some("Reconnecting to the model… 2/5".into());
+        ws.upsert_session(&busy).unwrap();
+        assert_eq!(ws.read_sessions().unwrap(), vec![busy.clone()]);
+        busy.notice = None;
         ws.upsert_session(&busy).unwrap();
         assert_eq!(ws.read_sessions().unwrap(), vec![busy]);
         ws.upsert_session(&session("chat-1", "dev-a", SessionStatus::Working))

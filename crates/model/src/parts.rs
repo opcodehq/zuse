@@ -565,7 +565,14 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
             });
         }
         AgentEvent::Done { error, .. } => {
-            if let Some(message) = error {
+            // A driver that reported the failure as it happened and then
+            // ends the turn with the same text (Codex after its retries run
+            // out) shows it once.
+            let repeated = matches!(
+                (error, out.last()),
+                (Some(message), Some(MessagePart::Error { message: last, .. })) if last == message
+            );
+            if let Some(message) = error.as_ref().filter(|_| !repeated) {
                 let id = format!("e{}", out.len());
                 out.push(MessagePart::Error {
                     id,
@@ -652,7 +659,9 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
         // AvailableCommands and McpServers feed engine caches, not the
         // transcript. UserMessage becomes its own doc ENTRY (the engine's
         // subagent sink writes it), never a part of the assistant message.
+        // A Notice is live working-row status on the session row only.
         AgentEvent::GeneratedImageData { .. }
+        | AgentEvent::Notice { .. }
         | AgentEvent::AssistantMessageCompleted { .. }
         | AgentEvent::Usage { .. }
         | AgentEvent::RequestUsage { .. }
@@ -939,6 +948,43 @@ mod tests {
 
     fn text_delta(s: &str) -> AgentEvent {
         AgentEvent::TextDelta { text: s.into() }
+    }
+
+    #[test]
+    fn notices_never_fold_and_a_repeated_final_error_shows_once() {
+        let mut parts = vec![];
+        fold_event_into_parts(&mut parts, &text_delta("Opening the PR."));
+        fold_event_into_parts(
+            &mut parts,
+            &AgentEvent::Notice {
+                message: Some("Reconnecting to the model… 2/5".into()),
+            },
+        );
+        assert_eq!(parts.len(), 1, "a notice is not transcript content");
+        let failure = "stream disconnected before completion";
+        let done = |error: &str| AgentEvent::Done {
+            status: zuse_protocol::DoneStatus::Errored,
+            result: None,
+            error: Some(error.into()),
+            session_id: None,
+        };
+        fold_event_into_parts(
+            &mut parts,
+            &AgentEvent::Error {
+                message: failure.into(),
+            },
+        );
+        fold_event_into_parts(&mut parts, &done(failure));
+        let errors = |parts: &[MessagePart]| {
+            parts
+                .iter()
+                .filter(|p| matches!(p, MessagePart::Error { .. }))
+                .count()
+        };
+        assert_eq!(errors(&parts), 1);
+        // A different final error is still shown.
+        fold_event_into_parts(&mut parts, &done("turn failed"));
+        assert_eq!(errors(&parts), 2);
     }
 
     #[test]

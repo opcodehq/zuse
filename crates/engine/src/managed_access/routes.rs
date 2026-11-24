@@ -28,6 +28,8 @@ struct Saved {
     version: u32,
     subject: String,
     computers: Vec<Computer>,
+    #[serde(default)]
+    removed: Vec<String>,
 }
 pub(super) struct Routes {
     root: PathBuf,
@@ -56,6 +58,7 @@ impl Routes {
                     version: 1,
                     subject: subject.into(),
                     computers: vec![],
+                    removed: vec![],
                 });
             }
             Err(_) => return Err(Error::Storage),
@@ -75,6 +78,8 @@ impl Routes {
         let saved: Saved = serde_json::from_slice(&bytes).map_err(|_| Error::Invalid)?;
         if saved.version != 1
             || saved.subject != subject
+            || saved.removed.len() > 512
+            || saved.removed.iter().any(|id| !valid_id(id))
             || saved.computers.len() > 256
             || saved.computers.iter().any(|c| {
                 !valid_id(&c.environment_id)
@@ -126,6 +131,10 @@ impl Routes {
         let _gate = self.gate.lock().unwrap_or_else(|e| e.into_inner());
         Ok(self.read(subject)?.computers)
     }
+    pub fn removed(&self, subject: &str) -> Result<Vec<String>> {
+        let _gate = self.gate.lock().unwrap_or_else(|e| e.into_inner());
+        Ok(self.read(subject)?.removed)
+    }
     pub fn remember(
         &self,
         subject: &str,
@@ -144,6 +153,7 @@ impl Routes {
         }
         let _gate = self.gate.lock().unwrap_or_else(|e| e.into_inner());
         let mut saved = self.read(subject)?;
+        saved.removed.retain(|id| id != environment);
         let mut computer = saved
             .computers
             .iter()
@@ -178,6 +188,12 @@ impl Routes {
         let _gate = self.gate.lock().unwrap_or_else(|e| e.into_inner());
         let mut saved = self.read(subject)?;
         saved.computers.retain(|c| c.environment_id != environment);
+        if !saved.removed.iter().any(|id| id == environment) {
+            if saved.removed.len() >= 512 {
+                return Err(Error::Invalid);
+            }
+            saved.removed.push(environment.into());
+        }
         self.write(&saved)?;
         Ok(saved.computers)
     }

@@ -1471,7 +1471,7 @@ impl Render for BrowserSurface {
             // else; over the browser they are inert.
             .on_mouse_down(MouseButton::Navigate(gpui::NavigationDirection::Back), |_, _, cx| cx.stop_propagation())
             .on_mouse_down(MouseButton::Navigate(gpui::NavigationDirection::Forward), |_, _, cx| cx.stop_propagation())
-            .child(toolbar)
+            .when(!self.hide_toolbar, |pane| pane.child(toolbar))
             .when_some(persistence_notice, |el, message| el.child(div().px(px(12.0)).py(px(8.0))
                 .text_size(crate::typography::text_xs()).text_color(theme.text_muted).child(message.to_owned())))
             .when_some(self.validation.clone(), |el, message| el.child(div().px(px(12.0)).py(px(8.0)).text_size(crate::typography::text_xs()).text_color(theme.danger).child(message)))

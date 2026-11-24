@@ -121,6 +121,7 @@ enum Page {
 /// What to do once SSH access is ready.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum SshAction {
+    Monitor,
     Terminal,
     Copy,
     /// Open the repository in an installed editor or terminal.
@@ -219,6 +220,9 @@ pub(super) struct State {
     ssh: Option<crate::cloud_ssh::Prepared>,
     ssh_task: Option<Task<()>>,
     ssh_error: Option<String>,
+    monitor_connecting: bool,
+    monitor: Option<super::monitor::Connection>,
+    monitor_browser: Option<Entity<crate::browser::BrowserSurface>>,
     /// The apps this computer can open a folder in (the shell detects them).
     open_targets: Vec<crate::shell::open_in::OpenTarget>,
     /// The apps this computer can open the cloud computer in over SSH.
@@ -230,6 +234,27 @@ pub(super) struct State {
     resources_wanted: Option<std::time::Instant>,
 }
 impl State {
+    pub(super) fn monitor_view(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<CloudConversation>,
+    ) -> Option<Entity<crate::browser::BrowserSurface>> {
+        let connection = self.monitor.as_ref()?;
+        if self.monitor_browser.is_none() {
+            // An isolated browser keeps the SSH-delivered credential out of shared history.
+            let browser = cx.new(|cx| {
+                crate::browser::BrowserSurface::new(Default::default(), false, window, cx)
+            });
+            browser.update(cx, |view, cx| {
+                view.hide_toolbar();
+                view.set_presentation(crate::browser::model::Presentation::Live, cx);
+                view.navigate(&connection.url, window, cx);
+            });
+            self.monitor_browser = Some(browser);
+        }
+        self.monitor_browser.clone()
+    }
+
     #[cfg(test)]
     pub(super) fn setup_output_for_test(&self) -> &Value {
         &self.logs
@@ -897,6 +922,70 @@ impl CloudConversation {
         }
     }
     /// Whether the computer is up, so SSH can reach it.
+    pub(in crate::shell) fn desktop_view(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<crate::browser::BrowserSurface>> {
+        if !self.authorized || self.access_revoked || !self.computer_running() {
+            self.disconnect_desktop(cx);
+            return None;
+        }
+        if self.ready(cx)
+            && self.computer.monitor.is_none()
+            && self.computer.ssh_task.is_none()
+            && self.computer.ssh_error.is_none()
+        {
+            self.open_ssh(SshAction::Monitor, cx);
+        }
+        self.computer.monitor_view(window, cx)
+    }
+    pub(in crate::shell) fn connect_desktop(&mut self, cx: &mut Context<Self>) {
+        if self.authorized && !self.access_revoked {
+            if self.domain_sleeping() || self.status["state"] == "paused" {
+                self.watch_environment(true, cx);
+            } else {
+                self.open_ssh(SshAction::Monitor, cx);
+            }
+        }
+    }
+    pub(in crate::shell) fn desktop_status(&self) -> (&str, Option<&'static str>) {
+        if !self.authorized || self.access_revoked {
+            return ("Waiting for cloud access", None);
+        }
+        if !self.computer_running() {
+            let wake = (self.domain_sleeping() || self.status["state"] == "paused")
+                && self.operation.is_none()
+                && self.computer.execution_controls_enabled();
+            return (
+                "The cloud computer is offline",
+                wake.then_some("Wake computer"),
+            );
+        }
+        if self.computer.ssh_task.is_some() {
+            return ("Connecting to desktop…", None);
+        }
+        (
+            self.computer
+                .ssh_error
+                .as_deref()
+                .unwrap_or("Open this computer’s desktop"),
+            Some("Connect"),
+        )
+    }
+    pub(in crate::shell) fn disconnect_desktop(&mut self, cx: &mut Context<Self>) {
+        if self.computer.monitor_connecting {
+            self.computer.ssh_task.take();
+            self.computer.monitor_connecting = false;
+        }
+        self.computer.monitor.take();
+        if let Some(browser) = self.computer.monitor_browser.take() {
+            browser.update(cx, |v, cx| {
+                v.set_presentation(crate::browser::model::Presentation::Hidden, cx);
+                v.close(cx);
+            });
+        }
+    }
     fn computer_running(&self) -> bool {
         matches!(self.computer_summary().tone, Tone::Running)
     }
@@ -947,6 +1036,7 @@ impl CloudConversation {
         let workspace = self.target.workspace.clone();
         let port = self.boot.ipc_port;
         self.computer.ssh_error = None;
+        self.computer.monitor_connecting = action == SshAction::Monitor;
         self.computer.ssh_task = Some(cx.spawn(async move |this, cx| {
             let result: Result<crate::cloud_ssh::Prepared, String> = async {
                 let key = cx
@@ -968,6 +1058,9 @@ impl CloudConversation {
                     .unwrap_or("/home/zuse/workspace")
                     .to_owned();
                 let host_key = prepared["hostKey"].as_str().map(str::to_owned);
+                if action == SshAction::Monitor && host_key.is_none() {
+                    return Err("Monitor requires a verified SSH host key.".into());
+                }
                 let host_workspace = workspace.clone();
                 let host_user = user.clone();
                 cx.background_executor()
@@ -985,12 +1078,36 @@ impl CloudConversation {
                 })
             }
             .await;
+            let monitor = if action == SshAction::Monitor {
+                if let Ok(prepared) = &result {
+                    let host = prepared.host.clone();
+                    Some(
+                        gpui_tokio::Tokio::spawn(cx, async move {
+                            super::monitor::Connection::open(&host).await
+                        })
+                        .await
+                        .unwrap_or_else(|_| Err("Monitor connection was interrupted.".into())),
+                    )
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
             let _ = this.update(cx, |this, cx| {
                 this.computer.ssh_task = None;
+                this.computer.monitor_connecting = false;
                 match result {
                     Ok(prepared) => {
                         this.computer.ssh = Some(prepared.clone());
                         match action {
+                            SshAction::Monitor => match monitor.expect("Monitor SSH handshake") {
+                                Ok(connection) => {
+                                    this.computer.monitor = Some(connection);
+                                    this.close_computer(cx);
+                                }
+                                Err(error) => this.computer.ssh_error = Some(error),
+                            },
                             SshAction::Copy => {
                                 cx.write_to_clipboard(ClipboardItem::new_string(format!(
                                     "ssh {}",
@@ -1562,6 +1679,18 @@ impl CloudConversation {
             );
         }
 
+        if settings::cloud_desktop_enabled(cx) {
+            more_rows.push(
+                popover::menu_row(&theme, false, "computer-monitor")
+                    .id("computer-monitor")
+                    .child("Open Desktop")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.close_computer(cx);
+                        cx.emit(CloudConversationEvent::Desktop);
+                    }))
+                    .into_any_element(),
+            );
+        }
         // SSH, while the computer runs: the main part opens a terminal, the
         // chevron lists every way in.
         let ssh_busy = self.computer.ssh_task.is_some();

@@ -236,13 +236,18 @@ impl PairingCard {
         );
         self.request(methods::CREATE_PAIRING, json!({"label":label}), cx);
     }
-    fn open_destination(&mut self, cx: &mut Context<Self>) {
+    fn open_destination(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let target = zuse_remote::PairedTarget::parse_link(self.destination.read(cx).text().trim());
         match target {
             Ok(target) => {
                 self.destination
                     .update(cx, |input, cx| input.set_text("", cx));
-                crate::open_paired_window(target, cx);
+                self.dialog = None;
+                crate::open_remote_workspace(
+                    crate::state::RemoteTarget::Paired(target),
+                    window,
+                    cx,
+                );
             }
             Err(_) => {
                 self.error =
@@ -969,14 +974,14 @@ impl PairingCard {
                         .track_focus(&self.dialog_focus)
                         .on_click(cx.listener(|this, _, window, cx| this.close_dialog(window, cx))),
                 )
-                .child(r::button("confirm-remote-dialog", caption).when(busy, |v| v.opacity(0.5)).on_click(cx.listener(move |this, _, _, cx| {
+                .child(r::button("confirm-remote-dialog", caption).when(busy, |v| v.opacity(0.5)).on_click(cx.listener(move |this, _, window, cx| {
                     if this.busy {
                         return;
                     }
                     match &dialog {
                         Dialog::Network if browser_running => this.request(methods::STOP_BROWSER_ACCESS, json!({}), cx),
                         Dialog::Network => this.start(cx),
-                        Dialog::Computer => this.open_destination(cx),
+                        Dialog::Computer => this.open_destination(window, cx),
                         Dialog::Pair => {}
                     }
                 })));

@@ -7,6 +7,17 @@
 - Add opt-in Slack cloud tasks with threaded status/results, sender/channel attribution, and a workspace/repository connection flow in Cloud settings. Server credentials stay encrypted; enablement requires the Slack migration and a rebuilt compatible runtime image.
 - Link a chat or a Zapper to a Slack channel from its right-click menu. Finished replies post into a Slack thread, your replies in that thread come back to the chat, and Zappers post under their own name and avatar. Their worker threads get their own threads in the same channel. Requires the new Slack migration and re-authorizing the Slack app for its added scopes.
 
+## 0.27.9 - 2026-11-24
+
+### Changed
+
+- The start screen fills the main area edge to edge, and tabs only appear inside a chat.
+
+### Fixed
+
+- When Codex loses its connection to the model and retries, the chat shows a quiet "Reconnecting to the model… 2/5" status instead of a red error, and it clears once Codex is streaming again. If the retries run out, the turn ends with one error and a Retry.
+- A Codex turn that goes silent for 15 minutes with no command or question open now ends with "Codex stopped responding" and a Retry instead of showing "working" forever.
+
 ## 0.27.8 - 2026-11-24
 
 ### Fixed

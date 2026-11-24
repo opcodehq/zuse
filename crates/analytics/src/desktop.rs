@@ -122,6 +122,7 @@ catalog!(Surface {
     File,
     Browser,
     Simulator,
+    Desktop,
     Diff,
     Terminal,
     Subagent,

@@ -381,6 +381,12 @@ pub struct Session {
     /// can list them. Read through `view::background_tasks`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub background_tasks: Vec<BackgroundTask>,
+    /// A transient status the agent reported mid-turn (the model connection
+    /// dropped and it is reconnecting). Shown on the working row in place of
+    /// "is working" and cleared as soon as the agent streams again or the
+    /// turn settles. Never an error. Absent from older engines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice: Option<String>,
 }
 
 /// What kind of work a background task is.

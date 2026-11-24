@@ -3514,7 +3514,8 @@ impl EngineRpc {
             }
             methods::LIST_ACCOUNT_ROUTES
             | methods::REMEMBER_ACCOUNT_ROUTE
-            | methods::FORGET_ACCOUNT_ROUTE => {
+            | methods::FORGET_ACCOUNT_ROUTE
+            | methods::REMOVE_ACCOUNT_COMPUTER => {
                 if params
                     .get("targetDeviceId")
                     .filter(|v| !v.is_null())
@@ -3540,6 +3541,16 @@ impl EngineRpc {
                         text("label")?,
                         text("origin")?,
                     ),
+                    methods::REMOVE_ACCOUNT_COMPUTER => {
+                        if text("environmentId")? == self.doc_host.device_id() {
+                            return Err(RpcError::BadParams(
+                                "Turn off remote access on this computer instead.".into(),
+                            ));
+                        }
+                        access
+                            .remove_computer(text("expectedSubject")?, text("environmentId")?)
+                            .await
+                    }
                     _ => access.forget_route(text("expectedSubject")?, text("environmentId")?),
                 }
                 .map_err(|e| RpcError::Failed(e.to_string()))?;

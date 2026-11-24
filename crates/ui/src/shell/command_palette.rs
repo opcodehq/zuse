@@ -284,6 +284,7 @@ impl Command {
 enum RowKind {
     Command(Command),
     Chat(String),
+    ComputerChat(super::remote_workspaces::ComputerChat),
     /// A path in the focused chat's workspace.
     File {
         path: String,
@@ -312,6 +313,9 @@ impl PaletteRow {
         let id = match &self.kind {
             RowKind::Command(command) => format!("command:{}", command.label()),
             RowKind::Chat(id) => format!("chat:{id}"),
+            RowKind::ComputerChat(target) => {
+                format!("computer-chat:{}:{}", target.computer, target.chat)
+            }
             RowKind::File { path, .. } => format!("file:{path}"),
             RowKind::Content(found) => {
                 format!("content:{}:{}:{}", found.path, found.line, found.column)
@@ -666,17 +670,35 @@ impl Shell {
         let threads = |limit| {
             PaletteSection::new(
                 Section::Threads,
-                self.thread_matches(&query, limit, cx)
-                    .into_iter()
-                    .map(RowKind::Chat),
+                self.global_thread_matches(&query, limit, cx)
+                    .map(|rows| {
+                        rows.into_iter()
+                            .map(RowKind::ComputerChat)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_else(|| {
+                        self.thread_matches(&query, limit, cx)
+                            .into_iter()
+                            .map(RowKind::Chat)
+                            .collect()
+                    }),
             )
         };
         let recent_threads = |limit| {
             PaletteSection::new(
                 Section::RecentThreads,
-                self.recent_threads(limit, cx)
-                    .into_iter()
-                    .map(RowKind::Chat),
+                self.global_thread_matches("", limit, cx)
+                    .map(|rows| {
+                        rows.into_iter()
+                            .map(RowKind::ComputerChat)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_else(|| {
+                        self.recent_threads(limit, cx)
+                            .into_iter()
+                            .map(RowKind::Chat)
+                            .collect()
+                    }),
             )
         };
         // Files opened here first, then the workspace's recently changed
@@ -883,7 +905,7 @@ impl Shell {
             RowKind::Command(Command::Settings) => PaletteAction::Settings,
             RowKind::Command(Command::Theme(_)) => PaletteAction::Theme,
             RowKind::Command(Command::ArchiveThread) => PaletteAction::ArchiveThread,
-            RowKind::Chat(_) => PaletteAction::Chat,
+            RowKind::Chat(_) | RowKind::ComputerChat(_) => PaletteAction::Chat,
             RowKind::File { is_dir: true, .. } => PaletteAction::Folder,
             RowKind::File { .. } => PaletteAction::File,
             RowKind::Content(_) => PaletteAction::Content,
@@ -903,6 +925,7 @@ impl Shell {
             RowKind::Command(Command::Theme(_)) => unreachable!(),
             RowKind::Command(Command::ArchiveThread) => self.archive_selected_chat(cx),
             RowKind::Chat(id) => self.open_chat(id, cx),
+            RowKind::ComputerChat(target) => self.open_computer_chat(target, cx),
             RowKind::File { path, is_dir } => {
                 self.open_palette_path(path, is_dir, None, window, cx)
             }
@@ -1093,6 +1116,45 @@ impl Shell {
                                 ranges,
                                 theme,
                             )),
+                    )
+                    .into_any_element()
+            }
+            RowKind::ComputerChat(target) => {
+                let source = self
+                    .computer_sources(cx)
+                    .into_iter()
+                    .find(|source| source.key == target.computer)?;
+                let state = source.state.read(cx);
+                let chat = state.chats.iter().find(|chat| chat.id == target.chat)?;
+                let title = chat.title.as_deref().unwrap_or("New session").to_owned();
+                let detail = format!(
+                    "{} · {}",
+                    source.label,
+                    state
+                        .space_for_chat(chat)
+                        .map(|space| space.display_name())
+                        .unwrap_or("No project")
+                );
+                let row = row.clone();
+                popover::menu_row(theme, active, format!("computer-palette-chat-{ix}"))
+                    .id(("computer-palette-chat", ix))
+                    .role(gpui::Role::Button)
+                    .aria_label(title.clone())
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.activate_palette_row(row.clone(), window, cx)
+                    }))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .min_w_0()
+                            .child(popover::search_highlight(title.into(), Some(query), theme))
+                            .child(
+                                div()
+                                    .text_size(crate::typography::text_xs())
+                                    .text_color(theme.text_muted)
+                                    .child(detail),
+                            ),
                     )
                     .into_any_element()
             }

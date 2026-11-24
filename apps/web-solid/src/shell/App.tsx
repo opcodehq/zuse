@@ -1,3 +1,4 @@
+import { inComputerFrame, multiMode } from "@/features/connection/multi/model";
 import { hostedBrowser } from "@/core/auth";
 // The window frame: sidebar, main pane and optional right panel, matching desktop's layout.
 import { narrowLayout, setSidebarVisible, setView, sidebarVisible, view } from "@/core/view";
@@ -150,7 +151,7 @@ function Frame() {
   let snap = false;
   const direct = () => snap || dragging();
 
-  const sidebarShown = () => sidebarVisible() && !narrowLayout();
+  const sidebarShown = () => !inComputerFrame() && !multiMode() && sidebarVisible() && !narrowLayout();
   const sidebarWidth = () => clamp(view.preferences.sidebarWidth, SIDEBAR_MIN, SIDEBAR_MAX);
   const rightOpen = () => (view.route.kind === "chat" || view.route.kind === "zappers") && !!view.rightPanel;
   // The width app-main shares between its cards once the sidebar settles: the window less the sidebar and three gutters.
@@ -211,7 +212,7 @@ function Frame() {
   // The drawer takes focus when it opens and gives it back to whatever opened it.
   let drawer: HTMLElement | undefined;
   let opener: HTMLElement | null = null;
-  createEffect(() => narrowLayout() && view.drawerOpen, (open) => {
+  createEffect(() => !inComputerFrame() && !multiMode() && narrowLayout() && view.drawerOpen, (open) => {
     if (open) {
       opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       queueMicrotask(() => drawer?.focus());

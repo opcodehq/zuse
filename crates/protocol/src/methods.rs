@@ -272,6 +272,8 @@ pub const SET_HARNESS_UPDATE_POLICY: &str = "SetHarnessUpdatePolicy";
 pub const LIST_ACCOUNT_ROUTES: &str = "ListAccountRoutes";
 pub const REMEMBER_ACCOUNT_ROUTE: &str = "RememberAccountRoute";
 pub const FORGET_ACCOUNT_ROUTE: &str = "ForgetAccountRoute";
+/// Unlink a computer from the account and forget this controller's saved route.
+pub const REMOVE_ACCOUNT_COMPUTER: &str = "RemoveAccountComputer";
 pub const BOOTSTRAP_ACCOUNT_CONNECTION: &str = "BootstrapAccountConnection";
 pub const LIST_ACCOUNT_ENVIRONMENTS: &str = "ListAccountEnvironments";
 pub const MANAGED_HOST_STATUS: &str = "ManagedHostStatus";

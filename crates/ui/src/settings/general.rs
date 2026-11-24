@@ -193,6 +193,39 @@ impl ShortcutsPage {
             .gap(px(16.))
             .child(self.language_preferences(theme, cx))
             .child(appearance)
+            .when(zuse_viewport::cloud_gate::enabled(), |v| {
+                let enabled = preferences.cloud_desktop_enabled;
+                v.child(
+                    widgets::section_card(theme).child(
+                        widgets::card_row(theme, true)
+                            .child(general_details(
+                                theme,
+                                "Cloud computer",
+                                "Show Desktop in the right sidebar of your chats.",
+                            ))
+                            .child(
+                                widgets::toggle_switch(theme, enabled, "cloud-desktop-enabled")
+                                    .id("cloud-desktop-enabled")
+                                    .role(gpui::Role::Switch)
+                                    .tab_index(0)
+                                    .aria_label("Cloud computer")
+                                    .aria_toggled(if enabled {
+                                        gpui::Toggled::True
+                                    } else {
+                                        gpui::Toggled::False
+                                    })
+                                    .cursor_pointer()
+                                    .on_key_down(contain_activation)
+                                    .on_click(cx.listener(|_, _, _, cx| {
+                                        crate::settings::update(SavePolicy::Immediate, cx, |s| {
+                                            s.cloud_desktop_enabled = !s.cloud_desktop_enabled
+                                        });
+                                        cx.refresh_windows();
+                                    })),
+                            ),
+                    ),
+                )
+            })
             .child(notifications)
             .child(self.analytics.clone())
     }

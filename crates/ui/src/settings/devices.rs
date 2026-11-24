@@ -20,7 +20,9 @@ use crate::settings::widgets;
 use crate::state::AppState;
 use crate::theme::Theme;
 mod workspace_storage;
+pub(crate) use super::managed_access::ComputerRemoved;
 pub(crate) use workspace_storage::{StorageEvent, WorkspaceStorage};
+impl gpui::EventEmitter<ComputerRemoved> for DevicesPage {}
 
 /// A device that pinged within this window shows a presence dot (engines
 /// heartbeat every 15s; 70s tolerates a couple of missed beats).
@@ -90,6 +92,10 @@ impl DevicesPage {
         let pairing = cx.new(|cx| crate::settings::pairing::PairingCard::new(state.clone(), cx));
         let managed =
             cx.new(|cx| crate::settings::managed_access::ManagedAccessCard::new(state.clone(), cx));
+        cx.subscribe(&managed, |_: &mut Self, _, event: &ComputerRemoved, cx| {
+            cx.emit(event.clone())
+        })
+        .detach();
         let managed_events = cx.subscribe(
             &managed,
             |this: &mut Self, _, _: &crate::settings::managed_access::AccessChanged, cx| {
@@ -115,6 +121,11 @@ impl DevicesPage {
             workspace_storage: None,
             storage_focus: cx.focus_handle().tab_stop(true),
         }
+    }
+
+    pub(crate) fn refresh_computers(&mut self, cx: &mut Context<Self>) {
+        self.pairing.update(cx, |pairing, cx| pairing.refresh(cx));
+        self.managed.update(cx, |managed, cx| managed.refresh(cx));
     }
 
     pub(crate) fn open_rename(

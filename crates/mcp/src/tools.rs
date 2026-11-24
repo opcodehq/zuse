@@ -2595,6 +2595,7 @@ mod tests {
             running_subagents: 0,
             awaiting_input: None,
             background_tasks: Vec::new(),
+            notice: None,
         };
         // No mid-turn capability is required for a live mailbox delivery.
         let sent = tools

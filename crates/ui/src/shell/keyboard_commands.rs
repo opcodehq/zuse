@@ -345,6 +345,9 @@ impl Shell {
     }
 
     fn step_desktop_chat(&mut self, forward: bool, cx: &mut Context<Self>) {
+        if self.navigate_computer_chat(forward, None, cx) {
+            return;
+        }
         let state = self.state.read(cx);
         let selected = state.selected_chat_row();
         let root = selected.map(|chat| chat.thread_id().to_owned());

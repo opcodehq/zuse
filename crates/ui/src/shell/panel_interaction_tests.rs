@@ -337,14 +337,13 @@ fn panels_share_space_and_keep_rendered_geometry_through_their_lifecycle(cx: &mu
     change(&shell, cx, |s, _, cx| s.toggle_right_pane(cx));
     draw(&shell, cx, 75);
     change(&shell, cx, |s, _, cx| select(s, None, cx));
-    expect(
-        draw(&shell, cx, 0),
-        [300.0, 0.0, 0.0, 1600.0 - 300.0 - GUTTERS],
-    );
-    expect(
-        settled(&shell, cx),
-        [300.0, 0.0, 0.0, 1600.0 - 300.0 - GUTTERS],
-    );
+    expect(draw(&shell, cx, 0), [300.0, 0.0, 0.0, 1600.0 - 300.0]);
+    expect(settled(&shell, cx), [300.0, 0.0, 0.0, 1600.0 - 300.0]);
+    // The start canvas fills the height and has no draft tab strip.
+    let canvas = cx.debug_bounds("conversation-column").unwrap();
+    near(f32::from(canvas.top()), 0.0);
+    near(f32::from(canvas.size.height), 900.0);
+    assert!(cx.debug_bounds("cloud-conversation-tabs").is_none());
     change(&shell, cx, |s, _, cx| select(s, Some("a"), cx));
     expect(
         settled(&shell, cx),
@@ -412,4 +411,32 @@ fn panels_share_space_and_keep_rendered_geometry_through_their_lifecycle(cx: &mu
         near(landed.widths.iter().sum::<f32>() + GUTTERS, 1600.0);
         expect(settled(&shell, cx), landed.widths);
     }
+}
+
+#[gpui::test]
+fn desktop_respects_preference_and_chat_panel_scope(cx: &mut TestAppContext) {
+    let (_dir, shell, cx) = setup(cx);
+    change(&shell, cx, |shell, _, cx| {
+        shell.open_desktop_panel(cx);
+        assert_ne!(shell.resolved_right_active(cx), RightSurface::Desktop);
+        settings::update(settings::SavePolicy::Immediate, cx, |s| {
+            s.cloud_desktop_enabled = true
+        });
+        shell.sync_desktop_panel(false, cx);
+        shell.open_desktop_panel(cx);
+        shell.open_desktop_panel(cx);
+        assert_eq!(shell.right_tabs["a"], [RightSurface::Desktop]);
+        assert!(shell.right_pane_open(cx));
+        shell.toggle_right_pane_expand(cx);
+        assert!(shell.right_pane_expanded);
+        select(shell, Some("b"), cx);
+        assert_ne!(shell.resolved_right_active(cx), RightSurface::Desktop);
+        select(shell, Some("a"), cx);
+        assert_eq!(shell.resolved_right_active(cx), RightSurface::Desktop);
+        settings::update(settings::SavePolicy::Immediate, cx, |s| {
+            s.cloud_desktop_enabled = false
+        });
+        shell.sync_desktop_panel(false, cx);
+        assert_ne!(shell.resolved_right_active(cx), RightSurface::Desktop);
+    });
 }

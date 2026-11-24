@@ -1,3 +1,5 @@
+import { frameId, frameRecipe, inComputerFrame, notePrimaryRecipe, savedPrimaryRecipe, type Recipe } from "./multi/model";
+import { computerTransport } from "./multi/transports";
 import { CloudTransport, readCloudTarget } from "./cloud";
 // Chooses what this tab connects to before the connection loop starts. A `#pair=` capability is
 // removed from the address bar immediately, before anything else can read or record it.
@@ -52,11 +54,16 @@ function controllerFactory(choice: Choice): () => Transport | Promise<Transport>
 }
 
 function usePaired(link: string) {
+  const id = describeLink(link)?.id;
+  if (id) notePrimaryRecipe({ kind: "paired", pairId: id });
   setArea(draft => { Object.assign(draft, { mode: "paired", origin: describeLink(link)?.origin ?? location.origin }); });
   setTransportFactory(() => new PairedTransport(link), { ownerSession: false });
 }
 
 function useAccount(target: AccountTarget, controller: () => Transport | Promise<Transport>) {
+  const link = selectedLink();
+  const id = link ? describeLink(link)?.id : null;
+  notePrimaryRecipe({ kind: "account", target, controller: id ? { kind: "paired", pairId: id } : { kind: "owner" } });
   setArea(draft => { Object.assign(draft, { mode: "account", account: target, origin: "" }); });
   setTransportFactory(
     () => {
@@ -72,7 +79,21 @@ function useAccount(target: AccountTarget, controller: () => Transport | Promise
   );
 }
 
+function installRecipe(recipe: Recipe) {
+  setArea(draft => { Object.assign(draft, { mode: recipe.kind === "owner" ? "owner" : recipe.kind === "account" ? "account" : "paired", account: recipe.kind === "account" ? recipe.target : null, origin: "" }); });
+  setTransportFactory(() => computerTransport(recipe), { ownerSession: recipe.kind === "owner" });
+}
 function install() {
+  if (inComputerFrame()) {
+    const recipe = frameRecipe(frameId()!);
+    if (recipe) { installRecipe(recipe); return; }
+    setTransportFactory(() => Promise.reject(new ConnectionBlocked({ kind: "pairingRequired", message: "This computer connection is no longer saved." })), { ownerSession: false });
+    return;
+  }
+  const saved = savedPrimaryRecipe();
+  if (saved && !["#pair=", "#token=", "#computer=", "#cloud="].some(prefix => location.hash.startsWith(prefix))) {
+    installRecipe(saved); notePrimaryRecipe(saved); return;
+  }
   if (location.hash.startsWith("#cloud=")) {
     try {
       const target = readCloudTarget()!;
@@ -102,6 +123,7 @@ function install() {
   }
   switch (choice.kind) {
     case "owner":
+      notePrimaryRecipe({ kind: "owner" });
       return;
     case "paired":
       return usePaired(choice.link);
@@ -137,6 +159,7 @@ function install() {
       setTransportFactory(
         async () => {
           if ((await checkSession()) === "owner") {
+            notePrimaryRecipe({ kind: "owner" });
             setTransportFactory(() => new OwnerTransport());
             return new OwnerTransport();
           }

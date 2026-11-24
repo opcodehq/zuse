@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 mod activity;
 mod computer;
 mod environment_card;
+mod monitor;
 
 pub(super) use computer::Tone;
 mod history;
@@ -13,6 +14,7 @@ mod load;
 pub(super) use load::{MachineLoad, machine_load};
 
 pub(super) enum CloudConversationEvent {
+    Desktop,
     Terminal,
     Files,
     OpenFile(String),
@@ -1457,6 +1459,7 @@ impl Shell {
         self.mark_cloud_conversation_seen(view, cx);
         self.cloud_conversation_events =
             Some(cx.subscribe(view, |this, _, event, cx| match event {
+                CloudConversationEvent::Desktop => this.open_desktop_panel(cx),
                 CloudConversationEvent::Terminal => this.add_terminal_surface(cx),
                 CloudConversationEvent::Files => {
                     this.pending_workspace_command = Some(crate::composer::WorkspaceCommand::Files);

@@ -3281,8 +3281,8 @@ impl Shell {
             return false;
         }
         let state = self.state.read(cx);
-        let visible: HashSet<String> = state
-            .sidebar_chats(Utc::now(), payload.filter.as_deref())
+        let visible: HashSet<String> = self
+            .computer_sidebar_chats(state, Utc::now(), payload.filter.as_deref())
             .into_iter()
             .map(|(_, chat)| chat.id.clone())
             .collect();
@@ -5177,8 +5177,8 @@ impl Shell {
             .map_or(saved_pins.as_slice(), |ids| ids.as_slice());
         let state = self.state.read(cx);
         let choices = self.sidebar_settlement_choices(profile_key.as_deref());
-        let mut chats: Vec<zuse_protocol::Chat> = state
-            .sidebar_chats(Utc::now(), filter.as_deref())
+        let mut chats: Vec<zuse_protocol::Chat> = self
+            .computer_sidebar_chats(state, Utc::now(), filter.as_deref())
             .into_iter()
             .filter(|(_, chat)| !Self::local_thread_is_settled(state, chat, choices))
             .map(|(_, chat)| chat.clone())
@@ -5253,7 +5253,11 @@ impl Shell {
 
     /// The group a chat's row sits under when the sidebar groups by device or
     /// by project; `None` in one list.
-    fn sidebar_group_key(&self, state: &AppState, chat: &zuse_protocol::Chat) -> Option<String> {
+    pub(super) fn sidebar_group_key(
+        &self,
+        state: &AppState,
+        chat: &zuse_protocol::Chat,
+    ) -> Option<String> {
         match self.settings.sidebar_organization {
             SidebarOrganization::ByDevice => Some(chat.device_id.clone()),
             SidebarOrganization::ByProject => Some(sidebar_project_group(state, chat).0),
@@ -5281,8 +5285,8 @@ impl Shell {
     pub(super) fn reveal_sidebar_chat(&mut self, chat_id: &str, cx: &mut Context<Self>) -> bool {
         let (active, archived) = {
             let state = self.state.read(cx);
-            let active = state
-                .sidebar_chats(Utc::now(), self.settings.space_filter.as_deref())
+            let active = self
+                .computer_sidebar_chats(state, Utc::now(), self.settings.space_filter.as_deref())
                 .into_iter()
                 .find(|(_, chat)| chat.id == chat_id)
                 .map(|(_, chat)| chat.clone());
@@ -5424,6 +5428,16 @@ impl Shell {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> SidebarSessionRows {
+        self.render_active_rows_for_computer(theme, None, cx)
+    }
+
+    pub(super) fn render_active_rows_for_computer(
+        &mut self,
+        theme: &Theme,
+        computer: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> SidebarSessionRows {
+        let mut projects = std::collections::HashMap::new();
         let mut cloud_groups = self.cloud_sidebar_groups(cx);
         let settled_cloud = self.take_settled_cloud_rows(&mut cloud_groups, cx);
         let group_labels = {
@@ -5444,8 +5458,8 @@ impl Shell {
         let (mut rows, settled_local) = {
             let state = self.state.read(cx);
             let choices = self.sidebar_settlement_choices(profile_key.as_deref());
-            let (settled, mut chats): (Vec<_>, Vec<_>) = state
-                .sidebar_chats(now, filter.as_deref())
+            let (settled, mut chats): (Vec<_>, Vec<_>) = self
+                .computer_sidebar_chats(state, now, filter.as_deref())
                 .into_iter()
                 .partition(|(_, chat)| Self::local_thread_is_settled(state, chat, choices));
             chats.sort_by(|left, right| {
@@ -5546,9 +5560,29 @@ impl Shell {
         }
         if self.settings.sidebar_organization == SidebarOrganization::ByProject {
             let state = self.state.read(cx);
-            // Projects without chats stay out of the sidebar (they remain in
-            // the composer's project picker), except the filtered project:
-            // its header must stay visible so the filter reads as active.
+            // Connected computers expose their projects even before the first chat.
+            if self.sidebar_owner.is_some() || !self.remote_workspaces.is_empty() {
+                for space in state.spaces.iter().filter(|space| {
+                    self.sidebar_owns_device(state, &space.device_id)
+                        && filter.as_deref().is_none_or(|id| id == space.id)
+                        && !zuse_protocol::projectless::is_projectless_cwd(Some(&space.path))
+                }) {
+                    let key = zuse_protocol::view::project_key(space);
+                    if !regular_groups
+                        .iter()
+                        .any(|(group, _)| group.as_ref().is_some_and(|(id, _)| id == &key))
+                    {
+                        regular_groups.push((
+                            Some((
+                                key,
+                                state.representative_space(space).display_name().to_owned(),
+                            )),
+                            Vec::new(),
+                        ));
+                    }
+                }
+            }
+            // A filtered project's heading remains visible even without chats.
             if let Some((key, name)) = filtered_project_group(state, filter.as_deref())
                 && !regular_groups
                     .iter()
@@ -5679,12 +5713,14 @@ impl Shell {
         // Flat top-to-bottom slot across groups: the same order
         // `sidebar_visible_order` hands the jump shortcuts and cycling, so a
         // chip always names the key that opens its row.
-        let visible_slots: std::collections::HashMap<_, _> = self
-            .sidebar_visible_order(cx)
-            .into_iter()
-            .enumerate()
-            .map(|(index, id)| (id, index))
-            .collect();
+        let visible_slots: std::collections::HashMap<_, _> =
+            self.computer_jump_slots.clone().unwrap_or_else(|| {
+                self.sidebar_visible_order(cx)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, id)| (id, index))
+                    .collect()
+            });
         let mut slot = 0usize;
         let mut rendered = Vec::new();
         let mut moving_row = None;
@@ -5971,7 +6007,22 @@ impl Shell {
                             .mb(px((extra_gap - SIDEBAR_LIST_GAP).min(0.0))),
                     )
                 });
-            let visible_label: SharedString = label.into();
+            if project_group {
+                let shared_key = self
+                    .state
+                    .read(cx)
+                    .spaces
+                    .iter()
+                    .find(|space| zuse_protocol::view::project_key(space) == key)
+                    .map(|space| super::remote_workspaces::shared_project_key(space))
+                    .unwrap_or_else(|| key.clone());
+                projects.insert(format!("g:{collapse_key}"), (shared_key, label.clone()));
+            }
+            let visible_label: SharedString = computer
+                .filter(|_| project_group)
+                .unwrap_or(&label)
+                .to_owned()
+                .into();
             let chevron = self.sidebar_disclosure_chevron(&motion_key, !collapsed, theme);
             let toggle_key = collapse_key.clone();
             let toggle_motion_key = motion_key.clone();
@@ -6034,6 +6085,7 @@ impl Shell {
                     )
                     .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                         cx.stop_propagation();
+                        this.activate_sidebar_computer(cx);
                         this.space_menu_active = 0;
                         this.space_menu.open((project.clone(), event.position()));
                         cx.notify();
@@ -6105,6 +6157,9 @@ impl Shell {
                     chevron,
                 )
             }
+            .when_some(computer.map(str::to_owned), |header, computer| {
+                header.debug_selector(move || format!("computer-checkout-{computer}-{key}"))
+            })
             .group(group_name)
             .id(SharedString::from(format!("sidebar-group-{collapse_key}")))
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -6210,6 +6265,7 @@ impl Shell {
             cx,
         );
         SidebarSessionRows {
+            projects,
             custom_count,
             rows: rendered,
             pinned_count,
@@ -6297,6 +6353,7 @@ impl Shell {
     }
 
     pub(super) fn open_add_space(&mut self, cx: &mut Context<Self>) {
+        self.activate_sidebar_computer(cx);
         self.open_project_setup(None, cx);
     }
 
