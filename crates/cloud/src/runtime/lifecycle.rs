@@ -909,7 +909,7 @@ const MISSING_CONFIRMATIONS: i32 = 3;
 pub(crate) const RESUME_FAILURE_DEADLINE_MS: i64 = super::effects::ALLOCATION_START_DEADLINE_MS;
 /// A retained launch failed and the automatic rollback and relaunch failed
 /// too: the image cannot launch this computer's runtime. Retrying is futile.
-pub(crate) const LAUNCH_INCOMPATIBLE: &str = "cloud_runtime_launch_incompatible";
+use super::launch_repair::LAUNCH_INCOMPATIBLE;
 /// Resume failures that settle the computer once overdue.
 pub(crate) fn resume_failure_terminal(code: &str) -> bool {
     matches!(
