@@ -71,6 +71,25 @@ struct Offer {
     state: String,
     error_code: Option<String>,
 }
+/// A report names the computer's current update attempt. Moving a
+/// provisional pin back to the serving runtime needs only that: even after
+/// an anonymous report closed the attempt, the named report from the
+/// restored runtime still repairs the pin, while a stale report for an older
+/// attempt (another id) and an anonymous one never touch it.
+fn names_current_attempt(current: Option<&str>, reported: Option<&str>) -> bool {
+    matches!((current, reported), (Some(current), Some(reported)) if current == reported)
+}
+#[cfg(test)]
+mod pin_repair_tests {
+    #[test]
+    fn only_a_report_naming_the_current_attempt_repairs_the_pin() {
+        use super::names_current_attempt as names;
+        assert!(names(Some("b"), Some("b")));
+        assert!(!names(Some("b"), Some("a")), "stale attempt");
+        assert!(!names(Some("b"), None), "anonymous");
+        assert!(!names(None, Some("b")));
+    }
+}
 async fn offer(conn: &mut PgConnection, id: &str, lock: bool) -> Result<Option<Offer>, ApiError> {
     let statement = if lock {
         "SELECT update_id,target_sha256,urgency,state,error_code FROM zuse_rust_runtime_updates WHERE workspace_id=$1 FOR UPDATE"
@@ -516,13 +535,10 @@ impl RuntimeControl {
                 // to another binary follows it back, for the attempt in
                 // flight only, named by its id (a stale or anonymous report
                 // never touches a newer pin).
-                let owns_attempt = prior.as_ref().is_some_and(|o| {
-                    matches!(o.state.as_str(), "pending" | "downloading")
-                        && attestation
-                            .update_id
-                            .as_deref()
-                            .is_some_and(|u| u == o.update_id)
-                });
+                let owns_attempt = names_current_attempt(
+                    prior.as_ref().map(|o| o.update_id.as_str()),
+                    attestation.update_id.as_deref(),
+                );
                 let mut config = row["request_config"].clone();
                 if owns_attempt
                     && config["runtimeRelease"]["provisional"] == true

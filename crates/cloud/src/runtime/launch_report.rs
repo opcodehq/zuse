@@ -128,14 +128,25 @@ pub(crate) async fn persist(pool: &sqlx::PgPool, workspace: &str) -> Result<(), 
         return Ok(());
     };
     let value = serde_json::to_value(&report).unwrap_or_default();
-    let written = sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{rustLastLaunchFailure}',$2) WHERE workspace_id=$1 AND provider_sandbox_id=$3")
+    // Never replace a newer stored report (an overlapping, older attempt).
+    let written = sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{rustLastLaunchFailure}',$2) WHERE workspace_id=$1 AND provider_sandbox_id=$3 AND COALESCE((request_config#>>'{rustLastLaunchFailure,at}')::bigint,0)<=$4")
         .bind(workspace)
         .bind(value)
         .bind(&machine)
+        .bind(report.at)
         .execute(pool)
         .await?;
-    // No row (the machine changed meanwhile) is not stored: keep it.
-    if written.rows_affected() == 1 {
+    // Stored, or superseded by a newer stored report: either way done. No
+    // row because the machine changed meanwhile keeps it.
+    let superseded = written.rows_affected() == 0
+        && sqlx::query_scalar::<_, bool>("SELECT COALESCE((request_config#>>'{rustLastLaunchFailure,at}')::bigint,0)>$3 FROM api_cloud_workspaces WHERE workspace_id=$1 AND provider_sandbox_id=$2")
+            .bind(workspace)
+            .bind(&machine)
+            .bind(report.at)
+            .fetch_optional(pool)
+            .await?
+            .unwrap_or(false);
+    if written.rows_affected() == 1 || superseded {
         stored(&machine, &report);
     }
     Ok(())
@@ -238,6 +249,27 @@ mod tests {
         assert!(take("machine-other").is_some());
         persist(&pool, "ws-report").await.unwrap();
         assert!(peek("machine-report").is_none(), "forgotten once stored");
+        // An older report never replaces a newer stored one.
+        {
+            let mut older = super::report(&failed(2, "older\n"), 1);
+            older.code = "older".into();
+            REPORTS
+                .lock()
+                .unwrap()
+                .push(("machine-report".into(), older));
+        }
+        persist(&pool, "ws-report").await.unwrap();
+        let kept: String = sqlx::query_scalar(
+            "SELECT request_config#>>'{rustLastLaunchFailure,code}' FROM api_cloud_workspaces",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(kept, "launcher_harness_release_refused");
+        assert!(
+            peek("machine-report").is_none(),
+            "a superseded report is dropped"
+        );
         let stored: serde_json::Value = sqlx::query_scalar(
             "SELECT request_config->'rustLastLaunchFailure' FROM api_cloud_workspaces",
         )
