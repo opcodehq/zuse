@@ -98,6 +98,70 @@ fn bounded_report(text: &str) -> String {
     report
 }
 
+fn input_report_marker(
+    zappers: &Zappers,
+    docs: &DocHost,
+    zapper: &str,
+    status: &zuse_protocol::Session,
+) -> Result<Option<String>> {
+    if status.status != SessionStatus::AwaitingInput {
+        zappers
+            .inner
+            .db
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?
+            .execute(
+                "DELETE FROM zapper_input_reports WHERE zapper=?1 AND chat=?2",
+                params![zapper, status.chat_id],
+            )?;
+        return Ok(None);
+    }
+    let request = docs
+        .open(&status.chat_id)
+        .ok()
+        .and_then(|doc| doc.doc_arc().read_entries().ok())
+        .and_then(|entries| {
+            entries.into_iter().rev().find_map(|entry| {
+                entry.parts.into_iter().rev().find_map(|part| match part {
+                    zuse_model::MessagePart::Input {
+                        request_id,
+                        resolved: false,
+                        ..
+                    } => Some(event_id(&["input", &entry.id, &request_id])),
+                    _ => None,
+                })
+            })
+        });
+    let mut db = zappers
+        .inner
+        .db
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?;
+    let tx = db.transaction()?;
+    let previous: Option<(Option<String>, String)> = tx
+        .query_row(
+            "SELECT request,marker FROM zapper_input_reports WHERE zapper=?1 AND chat=?2",
+            params![zapper, status.chat_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let marker = match &previous {
+        Some((old, marker)) if request.is_none() || old.is_none() || old == &request => {
+            marker.clone()
+        }
+        _ => request
+            .clone()
+            .unwrap_or_else(|| status.updated_at.to_rfc3339()),
+    };
+    let request = request.or_else(|| previous.and_then(|(request, _)| request));
+    tx.execute(
+        "INSERT OR REPLACE INTO zapper_input_reports VALUES(?1,?2,?3,?4)",
+        params![zapper, status.chat_id, request, marker],
+    )?;
+    tx.commit()?;
+    Ok(Some(marker))
+}
+
 /// Whether a pending delivery to `chat` may go out now. A Zapper runs at
 /// most `maxConcurrentWorkers` threads; a new thread that finds every slot
 /// taken is marked queued and stays pending, and a later pass starts it once
@@ -221,6 +285,7 @@ fn reconcile(
                 status.status == SessionStatus::Working,
                 status.last_completed_turn.as_deref(),
             )?;
+            let input_marker = input_report_marker(zappers, docs, &zapper.id, status)?;
             if status.status == SessionStatus::Working {
                 continue;
             }
@@ -305,7 +370,9 @@ fn reconcile(
                 SessionStatus::Errored => "failed",
                 _ => continue,
             };
-            let marker = if interrupted || status.status != SessionStatus::Idle {
+            let marker = if let Some(marker) = input_marker {
+                marker
+            } else if interrupted || status.status != SessionStatus::Idle {
                 status.updated_at.to_rfc3339()
             } else {
                 status
@@ -787,6 +854,29 @@ mod report_tests {
                 .unwrap();
         }
 
+        fn input(&self, id: &str) {
+            self.docs
+                .open("worker")
+                .unwrap()
+                .doc_arc()
+                .push_message(&zuse_doc::SessionMessageEntry {
+                    id: id.into(),
+                    role: zuse_model::MessageRole::Assistant,
+                    parts: vec![zuse_model::MessagePart::Input {
+                        id: format!("input-{id}"),
+                        request_id: id.into(),
+                        questions: vec![],
+                        resolved: false,
+                    }],
+                    created_at: 1000,
+                    device_id: "remote".into(),
+                    status: Some(zuse_model::MessageStatus::Streaming),
+                    continuation_of: None,
+                    duration_ms: None,
+                })
+                .unwrap();
+        }
+
         fn wakes(&self) -> Vec<zuse_doc::SessionCommandEntry> {
             let chat = self.store.get("release").unwrap().coordinator_chat_id;
             self.docs
@@ -863,6 +953,82 @@ mod report_tests {
             .unwrap();
         f.pass();
         assert_eq!(f.wakes().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn awaiting_input_heartbeats_do_not_repeat_reports_after_restart() {
+        let mut f = Fixture::new();
+        f.status(SessionStatus::AwaitingInput, 2000, Some("previous-success"));
+        f.pass();
+        let event = f.store.events("release").unwrap().remove(0);
+        f.store.acknowledge("release", &[event.id]).unwrap();
+        f.status(
+            SessionStatus::AwaitingInput,
+            17000,
+            Some("previous-success"),
+        );
+        f.pass();
+        assert_eq!(f.wakes().len(), 1);
+        f.store = Zappers::open(&f._dir.path().join("zappers"), "local").unwrap();
+        f.status(
+            SessionStatus::AwaitingInput,
+            32000,
+            Some("previous-success"),
+        );
+        f.pass();
+        assert_eq!(f.store.events("release").unwrap().len(), 1);
+        assert_eq!(f.wakes().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn delayed_input_and_new_questions_do_not_depend_on_observing_working() {
+        let mut f = Fixture::new();
+        f.status(SessionStatus::AwaitingInput, 2000, Some("previous-success"));
+        f.pass();
+        f.input("question-1");
+        f.status(
+            SessionStatus::AwaitingInput,
+            17000,
+            Some("previous-success"),
+        );
+        f.pass();
+        assert_eq!(f.wakes().len(), 1);
+        f.input("question-2");
+        f.pass();
+        assert_eq!(f.wakes().len(), 2);
+        f.store = Zappers::open(&f._dir.path().join("zappers"), "local").unwrap();
+        f.status(
+            SessionStatus::AwaitingInput,
+            32000,
+            Some("previous-success"),
+        );
+        f.pass();
+        assert_eq!(f.wakes().len(), 2);
+        f.input("question-3");
+        f.pass();
+        assert_eq!(f.wakes().len(), 3);
+        f.store
+            .command(command(
+                "release",
+                "release-input-worker",
+                ZapperAction::ReleaseWorker {
+                    chat_id: "worker".into(),
+                },
+            ))
+            .unwrap();
+        assert_eq!(
+            f.store
+                .inner
+                .db
+                .lock()
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM zapper_input_reports", [], |row| row
+                    .get::<_, i64>(
+                    0
+                ))
+                .unwrap(),
+            0
+        );
     }
 
     #[tokio::test]

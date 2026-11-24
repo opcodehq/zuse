@@ -301,7 +301,16 @@ mod tests {
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap();
-        assert_eq!(tables.len(), super::TABLES.len());
+        assert_eq!(tables.len(), super::TABLES.len() + 1);
+        assert!(tables.iter().any(|table| table == "zapper_input_reports"));
+        assert_eq!(
+            db.query_row("SELECT COUNT(*) FROM zapper_input_reports", [], |row| row
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+            0,
+        );
         for (old, new) in super::TABLES {
             assert!(!tables.iter().any(|t| t == old), "{old} survived");
             assert!(tables.iter().any(|t| t == new), "{new} missing");

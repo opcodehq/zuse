@@ -296,6 +296,7 @@ impl Zappers {
                 action TEXT NOT NULL, phase TEXT NOT NULL DEFAULT 'pending', error TEXT);
             CREATE TABLE IF NOT EXISTS zapper_delivery(id TEXT PRIMARY KEY, baseline TEXT, sent_at INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS zapper_notifications(id TEXT PRIMARY KEY);
+            CREATE TABLE IF NOT EXISTS zapper_input_reports(zapper TEXT NOT NULL, chat TEXT NOT NULL, request TEXT, marker TEXT NOT NULL, PRIMARY KEY(zapper,chat));
             CREATE TABLE IF NOT EXISTS zapper_turn_summaries(id TEXT PRIMARY KEY, summary TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS zapper_worker_context(chat TEXT PRIMARY KEY, home TEXT NOT NULL, zapper TEXT NOT NULL, revision INTEGER NOT NULL, instructions TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS zapper_binding_versions(chat TEXT NOT NULL, home TEXT NOT NULL, zapper TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(chat,home,zapper));
@@ -866,6 +867,10 @@ impl Zappers {
                 )?;
             }
             ZapperAction::ReleaseWorker { chat_id } => {
+                tx.execute(
+                    "DELETE FROM zapper_input_reports WHERE zapper=?1 AND chat=?2",
+                    params![zapper.id, chat_id],
+                )?;
                 if let Some(worker) = zapper.workers.iter().find(|w| w.chat_id == *chat_id) {
                     tx.execute(
                         "INSERT OR REPLACE INTO zapper_releases VALUES(?1,?2,?3,?4)",
@@ -948,6 +953,10 @@ impl Zappers {
                     [&zapper.id],
                 )?;
                 tx.execute("DELETE FROM zapper_workers WHERE zapper=?1", [&zapper.id])?;
+                tx.execute(
+                    "DELETE FROM zapper_input_reports WHERE zapper=?1",
+                    [&zapper.id],
+                )?;
                 tx.execute("DELETE FROM zapper_targets WHERE zapper=?1", [&zapper.id])?;
                 tx.execute(
                     "DELETE FROM zapper_coordinator_turns WHERE zapper=?1",
