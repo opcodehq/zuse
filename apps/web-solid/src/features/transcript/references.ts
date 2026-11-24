@@ -47,7 +47,7 @@ export function conversationReferences(zapper: Zapper | undefined, chats: Record
       if (references.length >= REFERENCE_LIMIT) break;
     }
   }
-  return references;
+  return references.length === REFERENCE_LIMIT ? references.filter(reference => reference.kind !== "pr" || !/^#\d+$/.test(reference.label)) : references;
 }
 
 export function referenceIndex(references: readonly InlineReference[]): Map<string, InlineReference> {

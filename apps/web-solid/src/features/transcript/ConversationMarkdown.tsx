@@ -1,6 +1,6 @@
 import { createMemo } from "solid-js";
 import { state } from "@/core/store";
-import { openChat } from "@/core/view";
+import { openChat, setView } from "@/core/view";
 import { zapperForChat } from "@/core/zappers";
 import { openSubagent } from "@/features/workspace/agents";
 import { workspace } from "@/features/workspace/store";
@@ -21,8 +21,15 @@ export function ConversationMarkdown(props: { text: string; live: boolean; chatI
     if (reference.kind === "thread") openChat(reference.target);
     else if (reference.kind === "agent") openSubagent(props.chatId, reference.target);
     else if (reference.kind === "issue" && owner()) {
-      showPage(owner()!.id, { kind: "issue", id: reference.target });
+      const zapper = owner()!;
+      const chatId = state.chats[props.chatId] ? props.chatId : zapper.coordinatorChatId;
+      showPage(zapper.id, { kind: "issue", id: reference.target });
       setInspectorOpen(true);
+      setView(draft => {
+        draft.route = { kind: "zappers", zapperId: zapper.id };
+        draft.rightPanel = null;
+        draft.selectedChatId = chatId;
+      });
     }
   };
   return <Markdown text={props.text} live={props.live} references={references()} onReference={open} />;

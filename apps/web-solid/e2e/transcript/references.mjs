@@ -57,6 +57,23 @@ try {
     await page.eval("document.documentElement.dataset.theme='light'");
     await page.screenshot(process.env.ZUSE_REFERENCE_SCREENSHOT.replace(/\.png$/, "-light.png"));
   }
+  await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/e2e/transcript/reference-navigation.html`);
+  await page.waitFor("!!window.referenceNavigation");
+  await page.eval("referenceNavigation.start()");
+  await page.waitFor("!!document.querySelector('.t-entry .md-reference[data-reference=\"ZAP-12\"]')");
+  assert.deepEqual(await page.eval("referenceNavigation.state()"), { route: { kind: "chat" }, chat: "linked", rightPanel: "files" });
+  assert.equal(await page.eval("document.querySelectorAll('.zp-inspector').length"), 0);
+  await page.press('.t-entry .md-reference[data-reference="ZAP-12"]');
+  await page.waitFor("!!document.querySelector('.zp-inspector .zp-issue-page')");
+  assert.deepEqual(await page.eval("referenceNavigation.state()"), { route: { kind: "zappers", zapperId: "captain" }, chat: "linked", rightPanel: null });
+  assert.equal(await page.eval("(() => {const issue=document.querySelector('.zp-inspector .zp-issue-page'); const rect=issue.getBoundingClientRect();return rect.width>0 && rect.height>0 && getComputedStyle(issue).visibility!=='hidden' && issue.textContent.includes('Match the desktop model picker');})()"), true);
+  await page.eval("referenceNavigation.coverInspector()");
+  await page.waitFor("!document.querySelector('.zp-inspector')");
+  await page.press('.t-entry .md-reference[data-reference="ZAP-12"]');
+  await page.waitFor("!!document.querySelector('.zp-inspector .zp-issue-page')");
+  assert.equal(await page.eval("referenceNavigation.state().rightPanel"), null);
+  await page.waitFor("!document.querySelector('.app-right')");
+  if (process.env.ZUSE_REFERENCE_SCREENSHOT) await page.screenshot(process.env.ZUSE_REFERENCE_SCREENSHOT.replace(/\.png$/, "-navigation.png"));
   assert.deepEqual(page.errors, []);
   console.log("PASS inline reference rendering, state updates, exclusions, navigation, accessibility, wrapping and bounds");
 } finally {

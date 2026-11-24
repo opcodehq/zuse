@@ -49,4 +49,12 @@ describe("conversation references", () => {
     assert.equal(referenceIndex([ref]).size, 0);
     assert.equal(referenceIndex(Array.from({ length: 1000 }, (_, i) => ({ ...ref, kind: "thread", label: `thread-${i}` }))).size, REFERENCE_LIMIT);
   });
+  test("truncated metadata cannot make a short PR alias falsely unambiguous", () => {
+    const source = structuredClone(zapper);
+    source.issues[0]!.pullRequests.push(...Array.from({ length: 300 }, (_, i) => ({ title: "Known PR", url: `https://github.com/owner/repo/pull/${100 + i}` })), { title: "Late conflict", url: "https://github.com/other/repo/pull/34" });
+    const index = referenceIndex(conversationReferences(source, chats, "parent", []));
+    assert.equal(index.has("#34"), false);
+    assert.equal(index.has("owner/repo#34"), true);
+    assert.equal([...index.keys()].some(label => /^#\d+$/.test(label)), false);
+  });
 });
