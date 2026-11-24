@@ -169,10 +169,12 @@ phase 1:
    attests itself, parks, and then the provider hibernates. Sleep becomes about
    1-2 s longer. Users don't see sleep (the Boxd hibernate confirmation already
    takes about 15 s). The next wake is an ordinary memory wake on the new runtime.
-3. **Swap for free on cold boots.** When memory is lost (Boat cold restore,
-   restore, recreation), the runtime starts anyway. If a verified file is
-   already staged, renaming before launch costs about 1 ms. Never download on
-   this path.
+3. **Swap after cold boots, once confirmed.** When memory is lost (Boat cold
+   restore, restore, recreation), the runtime starts anyway. A staged release
+   is *not* installed before enrollment on the guest's own say-so: a release
+   retired after it was staged must not land. The first offer after the start
+   that still names the staged release promotes it to `now`; an empty offer
+   discards it. Never download on this path.
 4. **Demand update** only when a send needs a capability that the runtime lacks
    *and* the runtime is outside the compatibility window. The UI shows "Updating
    computer…". This is the only blocking path, about 1.2-2.8 s, and it is rare

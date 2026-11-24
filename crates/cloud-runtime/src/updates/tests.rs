@@ -3,7 +3,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use ed25519_dalek::{Signer, SigningKey};
 use std::{os::unix::fs::PermissionsExt, time::Duration};
 use swap::{Decision, Phase};
-use zuse_protocol::cloud_runtime_updates::{Outcome, SignedRelease};
+use zuse_protocol::cloud_runtime_updates::{Outcome, SignedRelease, Urgency};
 
 fn signing() -> SigningKey {
     SigningKey::from_bytes(&[7u8; 32])
@@ -796,4 +796,64 @@ fn the_restart_uses_the_launcher_of_the_computers_layout() {
         command.get_program(),
         root.join("lib/launch-rust-runtime").as_os_str()
     );
+}
+/// Lifecycle invariant: a release staged before a cold start is never
+/// installed at cold boot on the guest's own say-so. Retiring it on the server
+/// must stop computers that staged it before they slept.
+#[test]
+fn cold_boot_never_installs_an_unconfirmed_staged_release() {
+    for f in [root(), owned()] {
+        write_executable(&f.config.binary, b"old");
+        stage_bytes(&f.config, "update-1", b"new");
+        assert_eq!(
+            swap::cold_boot(&f.config, &sha(b"old"), Duration::ZERO).unwrap(),
+            None
+        );
+        assert_eq!(std::fs::read(&f.config.binary).unwrap(), b"old");
+        assert!(!stage::request_path(&f.config).exists());
+        assert!(stage::read_pending(&f.config).is_none());
+        // Kept for the server to confirm or withdraw.
+        assert!(stage::latest(&f.config).is_some());
+    }
+}
+
+#[test]
+fn a_confirmed_staged_release_swaps_once_after_a_cold_start() {
+    let f = root();
+    stage_bytes(&f.config, "update-1", b"new");
+    let updater = Updater::new(f.config.clone(), "c".repeat(64), Vec::new()).unwrap();
+    assert_eq!(updater.confirmed_urgency(Urgency::Background), Urgency::Now);
+    assert_eq!(
+        updater.confirmed_urgency(Urgency::Background),
+        Urgency::Background
+    );
+    // Nothing staged at start: the server's urgency stands.
+    let f = root();
+    let updater = Updater::new(f.config.clone(), "c".repeat(64), Vec::new()).unwrap();
+    assert_eq!(
+        updater.confirmed_urgency(Urgency::Background),
+        Urgency::Background
+    );
+}
+
+#[test]
+fn a_withdrawn_offer_discards_the_staged_release() {
+    let f = root();
+    stage_bytes(&f.config, "update-1", b"new");
+    let updater = Updater::new(f.config.clone(), "c".repeat(64), Vec::new()).unwrap();
+    updater.withdrawn();
+    assert!(stage::latest(&f.config).is_none());
+    assert!(!updater.staged_for_next_start());
+    // A later offer of the same release is not promoted by the old start.
+    assert_eq!(
+        updater.confirmed_urgency(Urgency::Background),
+        Urgency::Background
+    );
+    // A swap in flight keeps its staged files until it is attested.
+    let f = root();
+    let staged = stage_bytes(&f.config, "update-2", b"newer");
+    swap::request_root(&f.config, &staged, &"c".repeat(64)).unwrap();
+    let updater = Updater::new(f.config.clone(), "c".repeat(64), Vec::new()).unwrap();
+    updater.withdrawn();
+    assert!(stage::latest(&f.config).is_some());
 }

@@ -7,7 +7,10 @@ use crate::Authority;
 use anyhow::Result;
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tokio::{io::AsyncWriteExt, sync::watch};
@@ -78,11 +81,17 @@ pub struct Updater {
     ready: watch::Sender<Option<Ready>>,
     poll: tokio::sync::Notify,
     woke: Mutex<Instant>,
+    /// A release was already staged when this process started (a cold start
+    /// after a pause without memory). Cold boot no longer installs it on its
+    /// own; the first offer that still names it promotes it to `now`.
+    staged_at_start: AtomicBool,
     download: reqwest::Client,
 }
 impl Updater {
     pub fn new(config: Config, running: String, capabilities: Vec<String>) -> Result<Arc<Self>> {
+        let staged_at_start = AtomicBool::new(stage::latest(&config).is_some());
         Ok(Arc::new(Self {
+            staged_at_start,
             config,
             running,
             capabilities,
@@ -149,9 +158,7 @@ impl Updater {
                         self.handle(&authority, &boot, activity.as_ref(), &cancel, directive)
                             .await
                     }
-                    None => {
-                        self.ready.send_replace(None);
-                    }
+                    None => self.withdrawn(),
                 },
                 // Older servers have no route; keep polling quietly.
                 Err(error) => tracing::debug!(%error, "runtime_update_poll_failed"),
@@ -213,15 +220,18 @@ impl Updater {
             self.refuse(authority, boot, &directive, code).await;
             return;
         }
-        let ready = Ready {
+        let mut ready = Ready {
             update_id: id.clone(),
             sha256: release.sha256.clone(),
             urgency: directive.urgency,
         };
         if stage::load(&self.config, &release.sha256).is_some_and(|s| s.file.update_id == id) {
+            ready.urgency = self.confirmed_urgency(directive.urgency);
             self.ready.send_replace(Some(ready));
             return;
         }
+        // The server targets another release: the staged one is stale.
+        self.staged_at_start.store(false, Ordering::Relaxed);
         if directive.urgency == Urgency::Background {
             tokio::select! {
                 _ = cancel.cancelled() => return,
@@ -243,6 +253,28 @@ impl Updater {
                 self.ready.send_replace(Some(ready));
             }
             Err(code) => self.refuse(authority, boot, &directive, code).await,
+        }
+    }
+
+    /// The server offers nothing: forget a staged release (it may have been
+    /// retired) so neither a later cold start nor a pause acts on it. A swap
+    /// already in flight keeps its files until it is attested.
+    pub fn withdrawn(&self) {
+        self.ready.send_replace(None);
+        self.staged_at_start.store(false, Ordering::Relaxed);
+        if stage::read_pending(&self.config).is_none() {
+            stage::discard_others(&self.config, None);
+        }
+    }
+
+    /// Urgency for a staged release the server just confirmed. The first
+    /// confirmation after a cold start installs it at once (the swap this
+    /// start was meant for); later ones keep the server's urgency.
+    pub fn confirmed_urgency(&self, offered: Urgency) -> Urgency {
+        if self.staged_at_start.swap(false, Ordering::Relaxed) {
+            Urgency::Now
+        } else {
+            offered
         }
     }
 

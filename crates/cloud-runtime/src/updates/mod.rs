@@ -6,7 +6,8 @@
 //! ```text
 //! poll ── UpdateOffer ──▶ verify signature + architecture (before download)
 //!      ──▶ download (presigned, no bearer) ──▶ zstd ──▶ sha256 ──▶ stage
-//! boundary (cold boot, sleep, or `now` once quiescent):
+//! boundary (`now` once quiescent; a release staged before a cold start is
+//! promoted to `now` once the server confirms it is still the target):
 //!   root base   : write request.json ──▶ root helper verifies, renames, writes result.json
 //!   owned binary: copy ──▶ verify ──▶ probe ──▶ journal ──▶ rename (keeps `previous`)
 //! ──▶ exec the installed path ──▶ new runtime starts ──▶ attest once per update id
@@ -310,9 +311,10 @@ fn stop_children() {
     }
 }
 
-/// Cold-boot boundary, before enrollment: finish or roll back an owned swap,
-/// then install an already verified staged release (never downloads). Returns
-/// the binary to exec when this process must restart.
+/// Cold-boot boundary, before enrollment: finish or roll back a swap already
+/// in flight. A staged release is never installed here (the server has not
+/// confirmed it yet); see [`swap::cold_boot`]. Returns the binary to exec when
+/// this process must restart.
 pub fn cold_boot(data: &Path) -> Option<PathBuf> {
     let _ = DATA.set(data.into());
     let config = Config::detect(data).ok()?;
