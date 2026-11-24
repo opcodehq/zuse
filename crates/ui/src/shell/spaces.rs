@@ -2495,11 +2495,9 @@ pub(super) fn sidebar_section_heading(
         .flex()
         .items_center()
         .gap(px(SIDEBAR_HEADING_GAP))
-        .pl(px(if matches!(label, "Threads" | "Zappers") {
-            Theme::SPACE_SM + super::SIDEBAR_CARD_PAD_X
-        } else {
-            Theme::SPACE_SM + 2.0
-        }))
+        // Every sidebar heading (Zappers, and Projects, Threads or Devices)
+        // shares one inset and size.
+        .pl(px(Theme::SPACE_SM + super::SIDEBAR_CARD_PAD_X))
         .pr(px(Theme::SPACE_SM))
         .pt(px(10.))
         .pb(px(4.))
@@ -2509,11 +2507,7 @@ pub(super) fn sidebar_section_heading(
                 .debug_selector(move || id.into())
                 .flex_1()
                 .min_w_0()
-                .text_size(if matches!(label, "Threads" | "Zappers") {
-                    crate::typography::text_sm()
-                } else {
-                    crate::typography::text_xs()
-                })
+                .text_size(crate::typography::text_sm())
                 .line_height(crate::typography::ui_rems(16.0))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(theme.text_muted)
