@@ -6,9 +6,7 @@ use std::{
     fs::{File, OpenOptions},
     path::{Component, Path, PathBuf},
 };
-use zuse_protocol::cloud::{
-    CloudRuntimeBootstrap, CloudRuntimeStorage, RUST_RUNTIME_STORAGE_FORMAT,
-};
+use zuse_protocol::cloud::{CloudRuntimeBootstrap, CloudRuntimeStorage};
 
 mod boot;
 
@@ -128,7 +126,7 @@ impl Storage {
             .clone()
             .ok_or_else(|| anyhow::anyhow!("runtime_storage_enrollment_required"))?;
         ensure!(
-            storage.format == RUST_RUNTIME_STORAGE_FORMAT
+            zuse_protocol::cloud::rust_runtime_storage_readable(&storage.format)
                 && storage.storage_incarnation_id == incarnation,
             "runtime_storage_binding_mismatch"
         );

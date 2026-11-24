@@ -806,7 +806,7 @@ impl RuntimeControl {
             let storage: zuse_protocol::cloud::CloudRuntimeStorage =
                 serde_json::from_value(config["rustRuntimeStorage"].clone())
                     .map_err(|_| ApiError::conflict("runtime_storage_enrollment_required"))?;
-            if storage.format != zuse_protocol::cloud::RUST_RUNTIME_STORAGE_FORMAT
+            if !zuse_protocol::cloud::rust_runtime_storage_readable(&storage.format)
                 || storage.storage_incarnation_id.is_empty()
                 || storage.storage_incarnation_id.len() > 128
             {

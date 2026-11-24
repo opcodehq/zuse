@@ -388,7 +388,7 @@ impl Authority {
                     .runtime_storage
                     .as_ref()
                     .is_some_and(|s| s.storage_incarnation_id == binding.incarnation
-                        && s.format == zuse_protocol::cloud::RUST_RUNTIME_STORAGE_FORMAT),
+                        && zuse_protocol::cloud::rust_runtime_storage_readable(&s.format)),
             "runtime_bootstrap_binding_mismatch"
         );
         let mut expected = self.origin.clone();
