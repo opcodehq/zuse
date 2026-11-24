@@ -20,6 +20,43 @@ const ROW_HEIGHT: f32 = 30.0;
 const ROW_PAD_X: f32 = 12.0;
 
 impl Composer {
+    pub(crate) fn subagent_summary_pill(&self, cx: &mut Context<Self>) -> Option<TrayPill> {
+        let faint = Theme::of(cx).text_faint;
+        let state = self.state.read(cx);
+        if self.side_chat || !state.selected_chat_is_zapper_coordinator() {
+            return None;
+        }
+        let agents = background_work::chat_agents(&state.transcript);
+        if agents.is_empty() {
+            return None;
+        }
+        let weak = cx.weak_entity();
+        let (title, summary) = background_work::agent_headline(&agents);
+        let summary = if matches!(
+            state.connection,
+            zuse_protocol::view::ConnectionStatus::Ready
+        ) {
+            summary
+        } else {
+            format!("Last known: {summary}")
+        };
+        let label = format!("{title}: {summary}. Open Overview");
+        Some(
+            TrayPill::new("tray-subagent-summary", title)
+                .glyph(icons::TOOL_AGENT)
+                .subtitle(summary)
+                .action(
+                    icon(icons::ALT_ARROW_RIGHT)
+                        .size(px(12.0))
+                        .text_color(faint),
+                )
+                .on_click(label, move |_, _, cx| {
+                    weak.update(cx, |_, cx| cx.emit(ComposerEvent::OpenSubagentOverview))
+                        .ok();
+                }),
+        )
+    }
+
     /// The selected chat's running subagents and processes, as one tray row.
     pub(crate) fn background_work_pill(&mut self, cx: &mut Context<Self>) -> Option<TrayPill> {
         let now = Utc::now();
@@ -29,7 +66,10 @@ impl Composer {
             let tasks = zuse_protocol::view::background_tasks(state.session_for(&chat_id), now);
             (
                 chat_id,
-                background_work::running_work(&state.transcript, tasks),
+                background_work::running_work(&state.transcript, tasks)
+                    .into_iter()
+                    .filter(|item| !state.selected_chat_is_zapper_coordinator() || !item.is_agent())
+                    .collect::<Vec<_>>(),
             )
         };
         // A requested stop lasts until the task leaves the live set.

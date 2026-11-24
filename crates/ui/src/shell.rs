@@ -2824,6 +2824,14 @@ impl Shell {
                     // Route observation drives the dock once selection commits.
                     cx.notify();
                 }
+                ComposerEvent::OpenSubagentOverview => {
+                    this.show_in_zapper_panel(
+                        zuse_protocol::presentation::zapper_panel::ZapperPage::Section(
+                            zuse_protocol::presentation::zapper_panel::ZapperTab::Overview,
+                        ),
+                        cx,
+                    );
+                }
                 ComposerEvent::OpenSubagent {
                     chat_id,
                     doc_id,

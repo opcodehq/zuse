@@ -6,6 +6,86 @@ use chrono::{DateTime, TimeZone as _, Utc};
 use gpui::SharedString;
 use zuse_doc::{MessagePart, SessionMessageEntry, SubagentStatus};
 use zuse_protocol::{BackgroundTask, BackgroundTaskKind};
+/// A spawned subagent of this chat, from its spawn chip.
+pub(crate) struct SummaryAgent {
+    pub(crate) doc_id: String,
+    pub(crate) title: SharedString,
+    pub(crate) status: zuse_doc::SubagentStatus,
+}
+
+/// The chat's subagents in spawn order, one per subagent doc.
+pub(crate) fn chat_agents(entries: &[zuse_doc::SessionMessageEntry]) -> Vec<SummaryAgent> {
+    use zuse_doc::{MessagePart, SubagentStatus};
+    let mut agents: Vec<SummaryAgent> = Vec::new();
+    for part in entries.iter().flat_map(|entry| &entry.parts) {
+        let MessagePart::Tool {
+            call,
+            is_error,
+            resolved,
+            subagent_ref: Some(doc_id),
+            subagent_status,
+            ..
+        } = part
+        else {
+            continue;
+        };
+        if !call.is_subagent_spawn() {
+            continue;
+        }
+        let status = subagent_status.unwrap_or(if *is_error {
+            SubagentStatus::Failed
+        } else if *resolved {
+            SubagentStatus::Done
+        } else {
+            SubagentStatus::Running
+        });
+        let agent = SummaryAgent {
+            doc_id: doc_id.clone(),
+            title: crate::transcript::subagent_tab_title(call),
+            status,
+        };
+        match agents.iter_mut().find(|known| known.doc_id == agent.doc_id) {
+            Some(known) => *known = agent,
+            None => agents.push(agent),
+        }
+    }
+    agents
+}
+
+pub(crate) fn status_label(status: SubagentStatus) -> &'static str {
+    match status {
+        SubagentStatus::Running => "Working",
+        SubagentStatus::Done => "Complete",
+        SubagentStatus::Failed => "Failed",
+    }
+}
+
+/// The composer line: one agent reads as its own name and state; several
+/// read as counts per state.
+pub(crate) fn agent_headline(agents: &[SummaryAgent]) -> (String, String) {
+    match agents {
+        [only] => (
+            "Subagent".to_owned(),
+            format!("{} · {}", only.title, status_label(only.status)),
+        ),
+        _ => (format!("{} subagents", agents.len()), agent_summary(agents)),
+    }
+}
+
+pub(crate) fn agent_summary(agents: &[SummaryAgent]) -> String {
+    [
+        (SubagentStatus::Running, "working"),
+        (SubagentStatus::Failed, "failed"),
+        (SubagentStatus::Done, "complete"),
+    ]
+    .into_iter()
+    .filter_map(|(status, label)| {
+        let count = agents.iter().filter(|agent| agent.status == status).count();
+        (count > 0).then(|| format!("{count} {label}"))
+    })
+    .collect::<Vec<_>>()
+    .join(" · ")
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum WorkKind {
@@ -129,6 +209,37 @@ pub(crate) fn oldest_start(items: &[WorkItem]) -> Option<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_summary_counts_latest_status_once_in_spawn_order() {
+        let entry: SessionMessageEntry = serde_json::from_value(serde_json::json!({
+            "id":"reply", "role":"assistant", "deviceId":"device", "createdAt":0,
+            "parts":[
+                {"id":"a","kind":"tool","call":{"kind":"unknown","name":"Agent: First"},"subagentRef":"a","subagentStatus":"running"},
+                {"id":"b","kind":"tool","call":{"kind":"unknown","name":"Agent: Second"},"subagentRef":"b","isError":true},
+                {"id":"c","kind":"tool","call":{"kind":"unknown","name":"Agent: First"},"subagentRef":"a","subagentStatus":"done"}
+            ]
+        })).unwrap();
+        let agents = chat_agents(&[entry]);
+        assert_eq!(
+            agents
+                .iter()
+                .map(|agent| agent.doc_id.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+        assert_eq!(agent_summary(&agents), "1 failed · 1 complete");
+        assert_eq!(
+            agent_headline(&agents),
+            ("2 subagents".to_owned(), "1 failed · 1 complete".to_owned())
+        );
+        assert_eq!(
+            agent_headline(&agents[..1]),
+            ("Subagent".to_owned(), "First · Complete".to_owned())
+        );
+        assert!(chat_agents(&[]).is_empty());
+        assert_eq!(agent_summary(&[]), "");
+    }
 
     fn task(id: &str, kind: BackgroundTaskKind, started: i64, ended: bool) -> BackgroundTask {
         BackgroundTask {

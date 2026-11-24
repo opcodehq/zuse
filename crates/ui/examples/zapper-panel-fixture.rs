@@ -243,12 +243,32 @@ fn main() -> anyhow::Result<()> {
                 )
                 .unwrap();
             state.update(cx, |_, cx| cx.notify());
+            let seeded = state.downgrade();
             // No activation: the capture reads this window only, and the
             // fixture must not take keyboard focus from the desktop.
             cx.spawn(async move |cx| {
                 let run: anyhow::Result<()> = async {
                     pause(cx, 1500).await;
                     for step in &steps {
+                        if step.starts_with("subagents-") {
+                            let statuses: &[&str] = match step.as_str() {
+                                "subagents-empty" => &[],
+                                "subagents-single" => &["done"],
+                                _ => &["running", "failed", "done"],
+                            };
+                            let parts: Vec<_> = statuses.iter().enumerate().map(|(i, status)| serde_json::json!({
+                                "id":format!("spawn-{i}"),"kind":"tool",
+                                "call":{"kind":"unknown","name":format!("Agent: {}", ["Review keyboard navigation", "Check compact layout", "Verify completed work"][i])},
+                                "subagentRef":format!("{COORDINATOR}--sub--{i}"),"subagentStatus":status
+                            })).collect();
+                            let entries = serde_json::from_value(serde_json::json!([{
+                                "id":"agents", "role":"assistant", "createdAt":0,"deviceId":device,"parts":parts
+                            }]))?;
+                            seeded.update(cx, |s, cx| {
+                                s.receive_transcript_frame(zuse_doc::TranscriptFrame::Reset { reset: entries }, cx).unwrap();
+                                cx.notify();
+                            })?;
+                        }
                         window.update(cx, |s, _, cx| s.fixture_zapper_panel(files(), step, cx))?;
                         pause(cx, 900).await;
                         window.update(cx, |s, _, cx| s.fixture_zapper_settle(step, cx))?;

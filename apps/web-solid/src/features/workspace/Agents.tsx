@@ -57,7 +57,7 @@ export function Agents(props: { chatId: string; active: boolean; docId?: string 
   });
   return (
     <div class="ws-agents">
-      <nav class="ws-agent-list" aria-label="Subagents">
+      <Show when={!props.docId}><nav class="ws-agent-list" aria-label="Subagents">
         <Show when={agents().length} fallback={<p class="ws-muted">Delegated agents appear here when your agent starts them.</p>}>
           <For each={agents()}>{part => <button type="button" class="ws-agent-row" aria-pressed={selected() === part.subagentRef ? "true" : "false"} onClick={() => props.docId ? openSubagent(props.chatId,part.subagentRef!) : setSelectedSubagent({ chatId: props.chatId, docId: part.subagentRef! })}>
             <Icon name="tool-agent" size={14} />
@@ -65,7 +65,7 @@ export function Agents(props: { chatId: string; active: boolean; docId?: string 
             <span class="ws-agent-state" data-status={agentStatus(part)}><span />{agentStatus(part) === "running" ? "Working" : agentStatus(part) === "done" ? "Complete" : "Failed"}</span>
           </button>}</For>
         </Show>
-      </nav>
+      </nav></Show>
       <Show when={selected()} fallback={<div class="ws-empty ws-muted">Select an agent to read its conversation.</div>}>
         <Show when={error()}>{message => <div role="alert" class="ws-empty">{message()} <button type="button" onClick={() => setRetry(value => value + 1)}>Try again</button></div>}</Show>
         <Show when={ready()} fallback={<Show when={!error()}><div class="ws-empty" role="status">Loading agent conversation…</div></Show>}>

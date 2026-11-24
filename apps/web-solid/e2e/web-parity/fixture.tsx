@@ -111,6 +111,17 @@ function Fixture() {
     startQueued: () => {setState(draft=>{delete draft.zappers[0]!.workers[0]!.queuePosition;draft.chats.worker={...draft.chats.parent!,id:"worker",title:"Ready worker"};});flush();},
     openQueued: () => {setView(draft=>{draft.selectedChatId="worker";draft.route={kind:"zappers",zapperId:"captain"};});flush();},
     openAgentPage: () => {openSubagent("parent","parent--sub--worker");flush();},
+    subagents: (statuses: string[]) => {
+      setState(draft => {
+        draft.transcript = {chatId:"parent",ready:true,contextUsage:null,notice:null,messages:[{...message,parts:statuses.map((status,i) => ({kind:"tool" as const,id:`spawn-${i}`,call:{kind:"unknown" as const,name:`Agent: ${["Review keyboard navigation", "Check compact layout", "Verify completed work"][i] ?? `Task ${i + 1}`}`},subagentRef:`parent--sub--${i}`,subagentStatus:status,subagentTail:status === "running" ? "Checking focus order and Overview navigation" : undefined}))}]};
+      }); flush();
+    },
+    subagentSession: (status: string, connected = true) => {
+      setState(draft => {
+        draft.sessions.parent = {chatId:"parent",status,runningSubagents:1};
+        draft.connection = {kind:connected ? "connected" : "connecting"};
+      }); flush();
+    },
     reviewChanges: () => {setView(draft=>{draft.rightPanel="changes";});flush();},
     configureZapper: () => {setView(draft=>{draft.route={kind:"newZapper",zapperId:"captain"};});flush();},
     panels: () => { setView(draft => { draft.rightPanel="files"; }); flush(); },

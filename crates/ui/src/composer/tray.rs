@@ -331,6 +331,8 @@ impl TrayPill {
             Some((handler, aria)) => body
                 .cursor_pointer()
                 .role(gpui::Role::Button)
+                .tab_index(0)
+                .focus_visible(|s| s.bg(theme.element_hover))
                 .aria_label(aria)
                 .on_click(handler),
             None => body,
@@ -621,6 +623,7 @@ impl Composer {
         rows.extend(sign_in.map(TrayRow::Pill));
         rows.extend(error.map(TrayRow::Pill));
         rows.extend(self.background_work_pill(cx).map(TrayRow::Pill));
+        rows.extend(self.subagent_summary_pill(cx).map(TrayRow::Pill));
         rows.extend(self.todo_tray_pill(window, cx).map(TrayRow::Pill));
         rows.extend(
             self.render_queue_panel(show_queue_latest_shortcut, window, cx)

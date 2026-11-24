@@ -7,6 +7,7 @@
 //! and a press elsewhere or choosing one of its rows dismisses it. It never
 //! takes room from the transcript or the composer.
 use super::*;
+use crate::background_work::{SummaryAgent, chat_agents};
 use crate::localization::message as tr;
 use zuse_i18n::messages as msg;
 
@@ -130,52 +131,6 @@ fn fade_rule(theme: &Theme) -> gpui::Div {
         .flex()
         .child(half(ink.opacity(0.0), ink))
         .child(half(ink, ink.opacity(0.0)))
-}
-
-/// A spawned subagent of this chat, from its spawn chip.
-struct SummaryAgent {
-    doc_id: String,
-    title: SharedString,
-    status: zuse_doc::SubagentStatus,
-}
-
-/// The chat's subagents in spawn order, one per subagent doc.
-fn chat_agents(entries: &[zuse_doc::SessionMessageEntry]) -> Vec<SummaryAgent> {
-    use zuse_doc::{MessagePart, SubagentStatus};
-    let mut agents: Vec<SummaryAgent> = Vec::new();
-    for part in entries.iter().flat_map(|entry| &entry.parts) {
-        let MessagePart::Tool {
-            call,
-            is_error,
-            resolved,
-            subagent_ref: Some(doc_id),
-            subagent_status,
-            ..
-        } = part
-        else {
-            continue;
-        };
-        if !call.is_subagent_spawn() {
-            continue;
-        }
-        let status = subagent_status.unwrap_or(if *is_error {
-            SubagentStatus::Failed
-        } else if *resolved {
-            SubagentStatus::Done
-        } else {
-            SubagentStatus::Running
-        });
-        let agent = SummaryAgent {
-            doc_id: doc_id.clone(),
-            title: crate::transcript::subagent_tab_title(call),
-            status,
-        };
-        match agents.iter_mut().find(|known| known.doc_id == agent.doc_id) {
-            Some(known) => *known = agent,
-            None => agents.push(agent),
-        }
-    }
-    agents
 }
 
 /// A subagent's state at a glance: a live dot, a check, or a cross.

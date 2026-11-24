@@ -108,7 +108,12 @@ fn list_row(
     div()
         .id(id.into())
         .role(gpui::Role::Button)
-        .aria_label(SharedString::from(title.clone()))
+        .aria_label(SharedString::from(match trailing.as_deref() {
+            Some(meta) => format!("{title}, {meta}"),
+            None => title.clone(),
+        }))
+        .tab_index(0)
+        .focus_visible(|s| s.bg(theme.element_hover))
         .mx(px(-8.0))
         .flex()
         .items_center()
@@ -1653,12 +1658,14 @@ impl Shell {
                 let header = self.zapper_overview(&zapper, &theme, cx);
                 let work = self.zapper_issue_surface(&zapper, true, cx);
                 let repositories = self.zapper_repositories(&zapper, &theme, cx);
+                let agents = self.zapper_subagents(&theme, cx);
                 div()
                     .flex()
                     .flex_col()
                     .gap(px(20.))
                     .child(header)
                     .child(work)
+                    .child(agents)
                     .child(repositories)
                     .into_any_element()
             }
@@ -2012,6 +2019,69 @@ impl Shell {
             view = view.child(needs);
         }
         view.into_any_element()
+    }
+
+    fn zapper_subagents(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let state = self.state.read(cx);
+        let chat_id = state.selected_chat.clone().unwrap_or_default();
+        let agents = crate::background_work::chat_agents(&state.transcript);
+        let connected = matches!(state.connection, ConnectionStatus::Ready);
+        let mut rows = vec![
+            div()
+                .px(px(2.0))
+                .flex()
+                .gap(px(6.0))
+                .text_size(crate::typography::ui_rems(12.0))
+                .text_color(theme.text_muted)
+                .child("Subagents")
+                .child(
+                    div()
+                        .text_color(theme.text_faint)
+                        .child(agents.len().to_string()),
+                )
+                .into_any_element(),
+        ];
+        if agents.is_empty() {
+            rows.push(muted("No subagents in this conversation yet.", theme).into_any_element());
+        }
+        for agent in agents {
+            let chat_id = chat_id.clone();
+            let settled = agent.status != zuse_doc::SubagentStatus::Running;
+            let label = crate::background_work::status_label(agent.status);
+            let tint = if agent.status == zuse_doc::SubagentStatus::Failed {
+                theme.danger
+            } else {
+                theme.text_muted
+            };
+            rows.push(list_row(
+                format!("zapper-subagent-{}", agent.doc_id),
+                icons::TOOL_AGENT,
+                tint,
+                agent.title.to_string(),
+                Some(if connected {
+                    label.to_owned()
+                } else {
+                    format!("Last known: {label}")
+                }),
+                theme,
+                move |this, _, _, cx| {
+                    this.add_subagent_surface(
+                        chat_id.clone(),
+                        agent.doc_id.clone(),
+                        agent.title.to_string(),
+                        settled,
+                        cx,
+                    )
+                },
+                cx,
+            ));
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(4.0))
+            .children(rows)
+            .into_any_element()
     }
 
     /// The repositories this Zapper works in, as a quiet line of chips.

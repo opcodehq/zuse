@@ -1,6 +1,8 @@
 // Pure transcript logic ported from crates/ui/src/transcript.rs and zuse_protocol::view.
 import type { MessagePart, SessionMessageEntry } from "@/core/protocol";
 import { state } from "@/core/store";
+import { agentStatus, callOf, isSubagentSpawn, type SubagentStatus } from "./agents";
+export { agentStatus, callOf, isSubagentSpawn, type SubagentStatus } from "./agents";
 
 export interface TodoItem {
   text: string;
@@ -38,10 +40,6 @@ export type ToolPart = Extract<MessagePart, { kind: "tool" }>;
 export type TextPart = Extract<MessagePart, { kind: "text" }>;
 export type ReasoningPart = Extract<MessagePart, { kind: "reasoning" }>;
 export type InputPart = Extract<MessagePart, { kind: "input" }>;
-
-export const callOf = (part: ToolPart) => part.call as unknown as ToolCall;
-
-export type SubagentStatus = "running" | "done" | "failed";
 
 /** One chip inside a tool group. Thoughts and notes are synthesized from reasoning and text parts. */
 export interface ToolItem {
@@ -116,21 +114,9 @@ export function protocolGroupSummary(tools: { call: ToolCall; isError: boolean }
   return summary.charAt(0).toUpperCase() + summary.slice(1);
 }
 
-export function isSubagentSpawn(call: ToolCall) {
-  const name = call.kind === "unknown" ? call.name : call.kind === "mcp" ? call.tool : null;
-  return name !== null && (name === "Agent" || name.startsWith("Agent: "));
-}
-
 export const isWorkflowRun = (call: ToolCall) => call.kind === "unknown" && call.name === "Workflow";
 
 export const isAgentItem = (item: ToolItem) => item.kind === "call" && isSubagentSpawn(callOf(item.part as ToolPart));
-
-export function agentStatus(part: ToolPart): SubagentStatus {
-  const status = part.subagentStatus as SubagentStatus | undefined;
-  if (status) return status;
-  if (part.isError) return "failed";
-  return part.resolved ? "done" : "running";
-}
 
 /** `tool_group_collapses`: ordinary tool groups fold behind a header; lone agents and pure thinking do not. */
 export function groupCollapses(tools: ToolItem[]) {

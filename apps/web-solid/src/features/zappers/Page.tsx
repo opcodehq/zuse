@@ -13,6 +13,7 @@ import { Icon } from "@/ui/Icon";
 import { Avatar, avatarOf } from "./Avatar";
 import { Issues, IssuePage } from "./Issues";
 import { Threads } from "./Threads";
+import { OverviewSubagents } from "./Subagents";
 import { Drive } from "./Drive";
 import {
   act,
@@ -325,6 +326,7 @@ function Overview(props: { zapper: Zapper; onOpenIssue: (id:string)=>void }) {
     <Show when={props.zapper.config.purpose.trim()}><p class="zp-purpose">{props.zapper.config.purpose}</p></Show>
     <Show when={asks().length || decisions().length}><div class="zp-needs-you"><h3>Needs you</h3><For each={asks()}>{issue=><button type="button" onClick={()=>props.onOpenIssue(issue.id)}><Icon name="status-question" size={14} /><div><strong>{issue.details.title}</strong><span>{[...issue.activity].reverse().find(event=>event.kind === "question")?.text ?? `ZAP-${issue.number}`}</span></div><span>Answer</span></button>}</For><For each={decisions()}>{item=><button type="button" onClick={()=>setDecision(item.id)}><Icon name="info-circle" size={14} /><div><strong>{item.question}</strong></div><span>Answer</span></button>}</For></div></Show>
     <div class="zp-section-heading"><h3>Work</h3><Button size="sm" onClick={()=>setTab("issues")}>All issues</Button></div><Issues zapper={props.zapper} compact onOpen={props.onOpenIssue} />
+    <OverviewSubagents />
     <h3>Repositories</h3><div class="zp-repository-chips"><For each={props.zapper.config.repositories}>{repo=><span><Icon name="folder" size={13} />{state.spaces[repo.spaceId]?.name ?? state.spaces[repo.spaceId]?.path ?? repo.spaceId}</span>}</For></div>
     <Show when={props.zapper.decisions.find(item=>item.id===decision() && item.answer===null)}>{item=><Dialog open onOpenChange={open=>{if(!open)setDecision(null);}} title="Your decision"><Decision zapper={props.zapper} decision={item()} onDone={()=>setDecision(null)} /></Dialog>}</Show>
   </>;

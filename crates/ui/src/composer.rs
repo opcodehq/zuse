@@ -5923,6 +5923,7 @@ impl Render for ComposerInput {
 #[derive(Debug, Clone)]
 pub enum ComposerEvent {
     CloudLaunchChanged,
+    OpenSubagentOverview,
     /// The Background work row asked to open a running subagent's transcript.
     OpenSubagent {
         chat_id: String,

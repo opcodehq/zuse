@@ -408,6 +408,14 @@ impl Shell {
                         | ComposerEvent::NewThreadTransitionStarted
                         | ComposerEvent::WorktreeSetup { .. }
                         | ComposerEvent::OpenFile(_) => {}
+                        ComposerEvent::OpenSubagentOverview => {
+                            this.show_in_zapper_panel(
+                                zuse_protocol::presentation::zapper_panel::ZapperPage::Section(
+                                    zuse_protocol::presentation::zapper_panel::ZapperTab::Overview,
+                                ),
+                                cx,
+                            );
+                        }
                         ComposerEvent::OpenSubagent {
                             chat_id,
                             doc_id,

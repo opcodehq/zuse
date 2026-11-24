@@ -10,6 +10,7 @@ import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-j
 import { catalog, draftSpace, resolve, selectedChat, setCatalog, spaceName } from "./catalog";
 import { readableDraft } from "./completion";
 import "./composer.css";
+import { SubagentSummary } from "@/features/zappers/Subagents";
 import { AccessPicker, AddMenu, ContextRing, PlanChip, PluginsButton, SendKey, type SendMode } from "./Controls";
 import { composer, draftFor, focusComposer, setDraft } from "./drafts";
 import { Editor, type EditorApi } from "./Editor";
@@ -271,6 +272,7 @@ function Live() {
         >
           <div class="cmp-tray">
             <TrayRows />
+            <SubagentSummary />
           </div>
         </Show>
         <div class="cmp-surface">

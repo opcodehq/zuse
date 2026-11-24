@@ -1021,6 +1021,28 @@ fn a_subagent_chip_in_a_zapper_chat_opens_as_a_zapper_panel_tab(cx: &mut TestApp
 }
 
 #[gpui::test]
+fn subagent_summary_reveals_overview_without_discarding_agent_tabs(cx: &mut TestAppContext) {
+    let (shell, cx) = zapper_chat(cx);
+    shell.update(cx, |shell, cx| {
+        shell.add_subagent_surface("other".into(), "zsub".into(), "Research".into(), false, cx);
+        shell.zapper_ui.panel_hidden = true;
+        shell
+            .composer
+            .update(cx, |_, cx| cx.emit(ComposerEvent::OpenSubagentOverview));
+    });
+    cx.run_until_parked();
+    shell.read_with(cx, |shell, cx| {
+        assert!(!shell.zapper_ui.panel_hidden);
+        assert_eq!(
+            shell.zapper_tabs().active(),
+            &ZapperPage::Section(zapper_panel::ZapperTab::Overview)
+        );
+        assert_eq!(shell.zapper_tabs().open_tabs(), [ZapperPage::Subagent(3)]);
+        assert_zapper_panel_hosts(shell, cx);
+    });
+}
+
+#[gpui::test]
 fn a_pull_request_and_a_diff_in_a_plain_chat_still_open_in_the_right_pane(cx: &mut TestAppContext) {
     let (shell, cx) = setup(cx);
     shell.update(cx, |shell, cx| {
