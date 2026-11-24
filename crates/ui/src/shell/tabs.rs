@@ -514,10 +514,9 @@ impl Shell {
         let sidebar_now = self.sidebar_now();
         let plus_inset = TITLEBAR_ACTION_SLOT_WIDTH * self.titlebar_plus_alpha(cx);
 
-        // Same glide as the old strip: content starts at the inset card's
-        // left edge while the sidebar is open, and slides toward the control
-        // cluster as it collapses.
-        let content_left = (sidebar_now + Theme::SPACE_SM).max(
+        // Keep the tabs one small space inside the card, and slide them toward
+        // the control cluster as the sidebar collapses.
+        let content_left = (sidebar_now + self.workspace_gutter() + Theme::SPACE_SM).max(
             self.title_bar_content_start()
                 + TITLEBAR_ACTION_SLOT_WIDTH * self.titlebar_plus_alpha(cx),
         );
@@ -890,6 +889,10 @@ impl Shell {
             .collect();
         let selected_id = selected.id.clone();
         let archived = selected.archived;
+        let empty_initial_conversation = selected.last_message_at.is_none()
+            && state.transcript.is_empty()
+            && state.pending_echoes().is_empty()
+            && state.queue.is_empty();
         let main_tab = self.active_main_tab(cx);
         let closable = rows.len() > 1;
         let tab_spinner = |id: &str, cx: &mut Context<Self>| {
@@ -916,6 +919,17 @@ impl Shell {
                 tab_close_button(id, label, active, group, &theme)
             };
         let main_chips = self.render_main_tab_chips(cx);
+        // A brand-new thread has only its empty initial conversation. Show
+        // the strip as soon as a prompt is sent, or when another tab needs it.
+        if rows.len() == 1
+            && closed_rows.is_empty()
+            && side_chats.is_empty()
+            && main_chips.is_empty()
+            && empty_initial_conversation
+            && working.is_empty()
+        {
+            return Empty.into_any_element();
+        }
         let conversation_chips = rows
             .into_iter()
             .map(|chat| {

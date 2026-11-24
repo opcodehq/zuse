@@ -13785,7 +13785,7 @@ impl Shell {
                     .get()
                     .map(|bounds| f32::from(bounds.size.height))
                     .unwrap_or(106.)
-                    + 68.))
+                    + 132.))
                 .child(
                     div()
                         .text_size(crate::typography::text_2xl())
