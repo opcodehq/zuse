@@ -305,7 +305,7 @@ fn reconcile(
                 SessionStatus::Errored => "failed",
                 _ => continue,
             };
-            let marker = if interrupted {
+            let marker = if interrupted || status.status != SessionStatus::Idle {
                 status.updated_at.to_rfc3339()
             } else {
                 status
@@ -428,7 +428,10 @@ fn reconcile(
                         .unwrap_or_else(|| "Worker thread".into())
                 };
                 let (source, body) = match pending.as_slice() {
-                    [(_, event)] => (source_of(event), event.summary.clone()),
+                    [(_, event)] => (
+                        source_of(event),
+                        format!("{} (event {})\n{}", event.kind, event.id, event.summary),
+                    ),
                     many => (
                         zapper.config.name.clone(),
                         many.iter()
@@ -660,6 +663,228 @@ fn reconcile(
 }
 
 #[cfg(test)]
+mod report_tests {
+    use super::*;
+    use crate::zappers::tests::{command, config, create, worker};
+
+    struct Fixture {
+        _dir: tempfile::TempDir,
+        store: Zappers,
+        workspace: WorkspaceHost,
+        docs: DocHost,
+        sessions: SessionsEngine,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let docs_store = Arc::new(crate::DocsStore::open(dir.path()).unwrap());
+            let workspace = WorkspaceHost::open(
+                docs_store.clone(),
+                crate::WorkspaceHostConfig {
+                    device_id: "local".into(),
+                    device_name: "Test".into(),
+                    platform: "linux".into(),
+                    org_id: "org".into(),
+                    user_id: "user".into(),
+                    edge: None,
+                    local_only: true,
+                },
+            )
+            .unwrap();
+            let docs = DocHost::new(
+                docs_store,
+                crate::DocHostConfig {
+                    device_id: "local".into(),
+                    default_harness: zuse_protocol::HarnessId::Mock,
+                    edge: None,
+                },
+            );
+            docs.set_workspace(workspace.clone());
+            let sessions = SessionsEngine::new(
+                "local".into(),
+                Arc::new(crate::RunJournal::open(dir.path().join("journal")).unwrap()),
+                Arc::new(crate::HarnessRegistry::new()),
+            );
+            let store = Zappers::open(&dir.path().join("zappers"), "local").unwrap();
+            create(&store, "release");
+            let mut remote_config = config();
+            remote_config.repositories[0].device_id = "remote".into();
+            store
+                .command(command(
+                    "release",
+                    "configure",
+                    ZapperAction::Configure {
+                        config: remote_config,
+                    },
+                ))
+                .unwrap();
+            store
+                .command(command(
+                    "release",
+                    "adopt",
+                    ZapperAction::AdoptWorker {
+                        worker: ZapperWorker {
+                            device_id: "remote".into(),
+                            ..worker()
+                        },
+                    },
+                ))
+                .unwrap();
+            Self {
+                _dir: dir,
+                store,
+                workspace,
+                docs,
+                sessions,
+            }
+        }
+
+        fn status(&self, status: SessionStatus, at: i64, completed: Option<&str>) {
+            self.workspace.record_session(&zuse_protocol::Session {
+                chat_id: "worker".into(),
+                device_id: "remote".into(),
+                status,
+                last_completed_turn: completed.map(str::to_owned),
+                started_at: None,
+                updated_at: chrono::DateTime::from_timestamp_millis(at).unwrap(),
+                running_subagents: 0,
+                awaiting_input: None,
+                background_tasks: vec![],
+                notice: None,
+            });
+        }
+
+        fn pass(&self) {
+            reconcile(
+                &self.store,
+                &self.sessions,
+                &self.workspace,
+                &self.docs,
+                &Default::default(),
+            )
+            .unwrap();
+        }
+
+        fn report(&self, id: &str, text: &str) {
+            self.docs
+                .open("worker")
+                .unwrap()
+                .doc_arc()
+                .push_message(&zuse_doc::SessionMessageEntry {
+                    id: id.into(),
+                    role: zuse_model::MessageRole::Assistant,
+                    parts: vec![zuse_model::MessagePart::Text {
+                        id: "text".into(),
+                        text: text.into(),
+                    }],
+                    created_at: 1000,
+                    device_id: "remote".into(),
+                    status: Some(zuse_model::MessageStatus::Complete),
+                    continuation_of: None,
+                    duration_ms: None,
+                })
+                .unwrap();
+        }
+
+        fn wakes(&self) -> Vec<zuse_doc::SessionCommandEntry> {
+            let chat = self.store.get("release").unwrap().coordinator_chat_id;
+            self.docs
+                .open(&chat)
+                .unwrap()
+                .doc_arc()
+                .read_commands()
+                .unwrap()
+        }
+    }
+
+    #[tokio::test]
+    async fn successful_report_is_queued_once_and_acknowledgment_is_separate() {
+        let mut f = Fixture::new();
+        f.status(SessionStatus::Working, 1000, None);
+        f.pass();
+        assert!(f.wakes().is_empty());
+        f.report("done-1", "Status: done\nVerified result");
+        f.status(SessionStatus::Idle, 2000, Some("done-1"));
+        f.pass();
+        f.pass();
+        let events = f.store.events("release").unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "settled");
+        assert!(!events[0].acknowledged);
+        assert_eq!(events[0].summary, "Status: done\nVerified result");
+        let wakes = f.wakes();
+        assert_eq!(wakes.len(), 1);
+        let SessionCommandPayload::Run { request, .. } = &wakes[0].payload else {
+            panic!("expected coordinator Run")
+        };
+        assert!(request.prompt.contains(&events[0].summary));
+        assert!(request.prompt.contains(&events[0].id));
+        assert!(request.prompt.contains("settled (event "));
+        f.store = Zappers::open(&f._dir.path().join("zappers"), "local").unwrap();
+        f.pass();
+        assert_eq!(f.wakes().len(), 1);
+        f.store
+            .acknowledge("release", &[events[0].id.clone()])
+            .unwrap();
+        f.pass();
+        assert!(f.store.events("release").unwrap()[0].acknowledged);
+        assert_eq!(f.wakes().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn paused_reports_wait_for_activation_and_keep_blocked_evidence() {
+        let f = Fixture::new();
+        f.store
+            .command(command(
+                "release",
+                "pause",
+                ZapperAction::SetStatus {
+                    status: ZapperStatus::Paused,
+                },
+            ))
+            .unwrap();
+        f.report("blocked-1", "Status: blocked\nNeed credentials");
+        f.status(SessionStatus::Idle, 2000, Some("blocked-1"));
+        f.pass();
+        assert_eq!(
+            f.store.events("release").unwrap()[0].summary,
+            "Status: blocked\nNeed credentials"
+        );
+        assert!(f.wakes().is_empty());
+        f.store
+            .command(command(
+                "release",
+                "resume",
+                ZapperAction::SetStatus {
+                    status: ZapperStatus::Active,
+                },
+            ))
+            .unwrap();
+        f.pass();
+        assert_eq!(f.wakes().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn distinct_failures_and_input_requests_after_a_completed_turn_each_wake() {
+        for status in [SessionStatus::Errored, SessionStatus::AwaitingInput] {
+            let f = Fixture::new();
+            f.status(status, 2000, Some("previous-success"));
+            f.pass();
+            f.pass();
+            assert_eq!(f.wakes().len(), 1);
+            f.status(SessionStatus::Working, 3000, Some("previous-success"));
+            f.pass();
+            f.status(status, 4000, Some("previous-success"));
+            f.pass();
+            f.pass();
+            assert_eq!(f.store.events("release").unwrap().len(), 2, "{status:?}");
+            assert_eq!(f.wakes().len(), 2, "{status:?}");
+        }
+    }
+}
+
+#[cfg(test)]
 mod abort_tests {
     use super::*;
     use zuse_doc::{SessionCommandEntry, SessionCommandStatus};
@@ -800,6 +1025,36 @@ mod queue_tests {
             .into_iter()
             .map(|w| (w.chat_id, w.queue_position))
             .collect()
+    }
+
+    #[test]
+    fn two_worker_budget_reserves_unknown_deliveries_and_queues_excess_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
+        store
+            .command(command(
+                "release",
+                "create",
+                ZapperAction::Create {
+                    config: ZapperConfig {
+                        max_concurrent_workers: DEFAULT_MAX_CONCURRENT_WORKERS,
+                        ..config()
+                    },
+                },
+            ))
+            .unwrap();
+        delegate(&store, "a", "one");
+        delegate(&store, "b", "two");
+        delegate(&store, "c", "three");
+        assert_eq!(pass(&store), ["a", "b"]);
+        assert_eq!(positions(&store)[2], ("c".into(), Some(1)));
+        store
+            .outbox_phase("a", "sending", Some("delivery outcome unknown"))
+            .unwrap();
+        assert!(pass(&store).is_empty());
+        store.settle("b").unwrap();
+        assert_eq!(pass(&store), ["c"]);
+        assert_eq!(store.reserved_workers("release").unwrap().len(), 2);
     }
 
     #[tokio::test]

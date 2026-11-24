@@ -54,7 +54,7 @@ function ConfigForm(props: { existing?: Zapper }) {
           model: null,
         },
         workerDeviceId: state.localDeviceId ?? "",
-        maxConcurrentWorkers: 4,
+        maxConcurrentWorkers: 2,
         maxFollowups: 3,
         avatar: defaultAvatar(id),
       },

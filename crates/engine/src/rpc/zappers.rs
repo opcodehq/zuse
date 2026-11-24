@@ -454,6 +454,45 @@ mod tests {
             .count();
         assert_eq!(reports, 1);
         assert_eq!(core.zappers.get("release").unwrap().workers.len(), 1);
+        let coordinator = core.zappers.get("release").unwrap().coordinator_chat_id;
+        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            loop {
+                if core
+                    .sessions
+                    .session_status(&coordinator)
+                    .is_some_and(|session| {
+                        session.status == zuse_protocol::SessionStatus::Idle
+                            && session.last_completed_turn.is_some()
+                    })
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("worker report should wake and complete a coordinator turn");
+        let entries = core
+            .doc_host
+            .open(&coordinator)
+            .unwrap()
+            .doc_arc()
+            .read_entries()
+            .unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.role == zuse_model::MessageRole::User
+                    && entry.parts.iter().any(
+                        |part| matches!(part, zuse_model::MessagePart::Text { text, .. }
+                if text.contains("Activity update") && text.contains("Worker report"))
+                    ))
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.role == zuse_model::MessageRole::Assistant)
+        );
         core.shutdown().await;
     }
 

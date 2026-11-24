@@ -4,6 +4,11 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 pub const CAPABILITY: &str = "zappers.v1";
+pub const DEFAULT_MAX_CONCURRENT_WORKERS: u32 = 2;
+
+fn default_max_concurrent_workers() -> u32 {
+    DEFAULT_MAX_CONCURRENT_WORKERS
+}
 
 /// Prefix of a coordinator conversation's id: `zapper-<zapper>-<n>`.
 pub const COORDINATOR_CHAT_PREFIX: &str = "zapper-";
@@ -165,6 +170,7 @@ pub struct ZapperConfig {
     pub repositories: Vec<ZapperRepository>,
     pub coordinator_model: ZapperModel,
     pub worker_device_id: String,
+    #[serde(default = "default_max_concurrent_workers")]
     pub max_concurrent_workers: u32,
     pub max_followups: u32,
     /// Saved pixel character; absent uses one derived from the Zapper's id.
@@ -1021,6 +1027,22 @@ impl Zapper {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn missing_worker_budget_defaults_to_two_and_explicit_budgets_are_preserved() {
+        let mut value = json!({
+            "name": "Test", "purpose": "Bounded work", "homeDeviceId": "local",
+            "repositories": [], "coordinatorModel": {"harness": "mock", "model": null},
+            "workerDeviceId": "local", "maxFollowups": 3
+        });
+        let config: ZapperConfig = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(config.max_concurrent_workers, 2);
+        for budget in [1, 4, 32] {
+            value["maxConcurrentWorkers"] = json!(budget);
+            let config: ZapperConfig = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(config.max_concurrent_workers, budget);
+        }
+    }
 
     #[test]
     fn action_may_arrive_as_a_json_string() {

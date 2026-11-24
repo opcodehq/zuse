@@ -1653,7 +1653,7 @@ fn worker_brief(id: &str, home: &str, name: Option<&str>) -> String {
 - For issues linked to this thread, record a pull request with zapper_command action linkIssuePullRequest {{issueId, url, title}}, and blockers or meaningful progress with commentIssue {{issueId, text}}. Use zapperId "{zapper}" and a new unique commandId for each command.
 - Build to the linked issue: its doneCriteria is the target and its outOfScope is off limits. If the work needs something out of scope, stop and say so in your report instead of widening it. Make the bounded change, not a broad rewrite.
 - Only the Zapper decides when an issue is done, so leave issue status alone. Never merge.
-- End with a short report the Zapper can act on. Its first line is exactly "Status: done" or "Status: blocked". Then: what changed (files, PR link), how you verified it, and anything left, unverified or risky. If blocked, say exactly what would unblock you. No filler, no "should work"."#
+- End with a short report the Zapper can act on. Its first line is exactly "Status: done" or "Status: blocked". Then: what changed (files, PR link), verification at the exact revision tested and how it meets doneCriteria, and anything left, unverified or risky. A process exit or green CI alone is not acceptance evidence. If blocked, say exactly what would unblock you. No filler, no "should work"."#
     )
 }
 

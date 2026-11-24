@@ -419,7 +419,7 @@ impl Shell {
         let (max_workers, max_followups) = zapper
             .as_ref()
             .map(|z| (z.config.max_concurrent_workers, z.config.max_followups))
-            .unwrap_or((4, 3));
+            .unwrap_or((zuse_protocol::zappers::DEFAULT_MAX_CONCURRENT_WORKERS, 3));
         Form {
             id,
             zapper,
