@@ -10,6 +10,8 @@ struct Probe {
     calls: AtomicUsize,
     launches: AtomicUsize,
     original: Mutex<Option<Request>>,
+    /// Provider sleeps requested (only a settled failed resume may ask).
+    sleeps: AtomicUsize,
 }
 #[async_trait]
 impl RetainedProvider for Probe {
@@ -20,7 +22,11 @@ impl RetainedProvider for Probe {
         Ok(Some(Machine {
             id: id.into(),
             name: "retained-original".into(),
-            state: MachineState::Running,
+            state: if self.sleeps.load(Ordering::SeqCst) > 0 {
+                MachineState::Stopped
+            } else {
+                MachineState::Running
+            },
             vcpu: None,
             memory_bytes: None,
         }))
@@ -28,8 +34,11 @@ impl RetainedProvider for Probe {
     async fn retained_launch_ready(&self, _: &str) -> Result<bool, ProviderError> {
         Ok(self.mode != "not-hydrated")
     }
-    async fn pause_retained(&self, _: &str) -> Result<(), ProviderError> {
-        panic!("no pause")
+    async fn pause_retained(&self, id: &str) -> Result<(), ProviderError> {
+        assert_eq!(self.mode, "refused-overdue", "no pause");
+        assert_eq!(id, "retained-source");
+        self.sleeps.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
     async fn wake_retained(&self, _: &str, _: &MachineState) -> Result<(), ProviderError> {
         panic!("no replacement/wake")
@@ -226,6 +235,7 @@ async fn boat_disabled_unit_retained_start_is_hydration_and_current_owner_fenced
             calls: AtomicUsize::new(0),
             launches: AtomicUsize::new(0),
             original: Mutex::new(None),
+            sleeps: AtomicUsize::new(0),
         };
         let result = tokio::time::timeout(
             Duration::from_secs(5),
@@ -252,15 +262,48 @@ async fn boat_disabled_unit_retained_start_is_hydration_and_current_owner_fenced
             }
         );
         if mode == "refused-overdue" {
-            // Stops visibly instead of retrying: paused with the failure, and
-            // the job is done, so no further helper call is made.
-            let (state, code, job): (String, String, String) = sqlx::query_as("SELECT w.state,w.status_code,j.state FROM api_cloud_workspaces w, zuse_rust_jobs j WHERE w.workspace_id='ws-bob' AND j.resource_id='ws-bob'")
+            // Stops visibly instead of retrying: the resume job is done, so no
+            // further helper call is made, and the failure stays visible.
+            let resume: String = sqlx::query_scalar("SELECT state FROM zuse_rust_jobs WHERE payload->>'operationId'='retained-operation'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(resume, "failed");
+            let (state, code): (String, String) = sqlx::query_as(
+                "SELECT state,status_code FROM api_cloud_workspaces WHERE workspace_id='ws-bob'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                (state.as_str(), code.as_str()),
+                ("pausing", "cloud_retained_provider_failed")
+            );
+            // Invariant: a settled resume never leaves its machine running.
+            // The machine booted, so the settlement sleeps it through the
+            // ordinary lifecycle, and the pause keeps the failure visible.
+            for _ in 0..10 {
+                sqlx::query("UPDATE zuse_rust_jobs SET due_at=0 WHERE state='pending'")
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                if !control.lifecycle_once(&probe, clock_ms()).await.unwrap() {
+                    break;
+                }
+            }
+            assert_eq!(probe.sleeps.load(Ordering::SeqCst), 1);
+            let (state, code, desired): (String, String, String) = sqlx::query_as("SELECT state,status_code,desired_state FROM api_cloud_workspaces WHERE workspace_id='ws-bob'")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
             assert_eq!(
-                (state.as_str(), code.as_str(), job.as_str()),
-                ("paused", "cloud_retained_provider_failed", "failed")
+                (state.as_str(), code.as_str(), desired.as_str()),
+                ("paused", "cloud_retained_provider_failed", "paused")
+            );
+            assert_eq!(
+                probe.calls.load(Ordering::SeqCst),
+                1,
+                "no further helper call"
             );
         }
         if matches!(mode, "pending" | "reply-lost") {

@@ -793,6 +793,13 @@ impl RuntimeControl {
     /// workspace settles to paused with the failure code, its saved messages
     /// stay queued, and Recreate becomes available (see
     /// `recreation::resume_failed`). Recreations own their wake failures.
+    ///
+    /// The provider machine is usually still running (it booted; only the
+    /// runtime would not start), so settling never just rewrites the row: it
+    /// hands the computer to a pause operation that puts the machine to sleep
+    /// through the ordinary retained lifecycle (bounded retries, then the
+    /// max-quiet-awake backstop, which watches `pausing`). That pause keeps
+    /// the failure code as the status once it completes.
     async fn settle_failed_resume(&self, job: &jobs::Job, code: &str) -> Result<bool, ApiError> {
         if !resume_failure_terminal(code) {
             return Ok(false);
@@ -803,26 +810,76 @@ impl RuntimeControl {
         let Some((action, created_at)) = op else {
             return Ok(false);
         };
-        if !resume_overdue(&action, code, created_at, clock_ms()) {
+        let now = clock_ms();
+        if !resume_overdue(&action, code, created_at, now) {
             return Ok(false);
         }
         let mut tx = self.pool.begin().await?;
-        let settled = sqlx::query("UPDATE api_cloud_workspaces SET state='paused',desired_state='paused',runtime_state='offline',status_code=$3,request_config=jsonb_set(request_config,'{rustLifecycleOperation,phase}','\"paused\"'),revision=revision+1,updated_at=GREATEST(updated_at+1,$4) WHERE workspace_id=$1 AND request_config->'rustLifecycleOperation'->>'id'=$2 AND request_config->'rustLifecycleOperation'->>'action'='resume' AND desired_state<>'deleted' AND state NOT IN ('deleting','deleted') AND (request_config->'rustRecreation'->>'operationId' IS NULL OR request_config->'rustRecreation'->>'phase' IN ('ready','cancelled'))")
-            .bind(&job.resource_id).bind(operation).bind(code).bind(clock_ms()).execute(&mut *tx).await?;
-        if settled.rows_affected() != 1 {
+        let (row, generation, _) = locking::workspace(&mut tx, &job.resource_id, true).await?;
+        let config = &row["request_config"];
+        if generation != job.generation
+            || config["rustLifecycleOperation"]["id"] != operation
+            || config["rustLifecycleOperation"]["action"] != "resume"
+            || deleted(&row)
+            || (config["rustRecreation"]["operationId"].is_string()
+                && !matches!(
+                    config["rustRecreation"]["phase"].as_str(),
+                    Some("ready" | "cancelled")
+                ))
+        {
             // Not this workspace's plain resume (a recreation wake, say):
             // leave the ordinary retry and attention handling in charge.
             return Ok(false);
         }
         // Workspace before job, the order every other lifecycle write uses.
         let failed = sqlx::query("UPDATE zuse_rust_jobs SET state='failed',last_error_code=$3,lease_token=NULL,lease_expires_at=NULL,updated_at=$4 WHERE job_id=$1 AND lease_token=$2 AND state='running'")
-            .bind(&job.id).bind(&job.lease_token).bind(code).bind(clock_ms()).execute(&mut *tx).await?;
+            .bind(&job.id).bind(&job.lease_token).bind(code).bind(now).execute(&mut *tx).await?;
         if failed.rows_affected() != 1 {
             return Ok(false);
         }
+        let mut config = config.clone();
+        let sleep = settle_sleep(&row);
+        if let Some((machine, disk)) = &sleep {
+            let pause = uuid::Uuid::new_v4().to_string();
+            progress(&mut config, &pause, Action::Pause, "quiesced");
+            config["rustResumeFailure"] = json!({
+                "operationId": operation,
+                "pauseOperationId": pause,
+                "code": code,
+                "at": now,
+            });
+            // No runtime came up, so there is nothing to quiesce.
+            sqlx::query("INSERT INTO zuse_rust_lifecycle_operations(operation_id,workspace_id,command_id,generation,source_machine_id,storage_incarnation_id,action,phase,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,'pause','quiesced',$7,$7)")
+                .bind(&pause).bind(&job.resource_id).bind(format!("resume-failed:{operation}")).bind(generation)
+                .bind(machine).bind(disk).bind(now).execute(&mut *tx).await?;
+            sqlx::query("UPDATE api_cloud_workspaces SET state='pausing',desired_state='paused',runtime_state='offline',status_code=$3,request_config=$2,revision=revision+1,updated_at=GREATEST(updated_at+1,$4),next_action_at=$4 WHERE workspace_id=$1")
+                .bind(&job.resource_id).bind(&config).bind(code).bind(now).execute(&mut *tx).await?;
+            let sleep_job = jobs::enqueue(
+                &mut tx,
+                &format!("lifecycle:{pause}"),
+                JOB_KIND,
+                &job.resource_id,
+                generation,
+                &json!({"operationId": pause}),
+                now,
+            )
+            .await?;
+            sqlx::query("UPDATE zuse_rust_jobs SET max_attempts=120 WHERE job_id=$1")
+                .bind(sleep_job)
+                .execute(&mut *tx)
+                .await?;
+        } else {
+            // No machine or retained disk to sleep: nothing keeps running.
+            config["rustLifecycleOperation"]["phase"] = json!("paused");
+            sqlx::query("UPDATE api_cloud_workspaces SET state='paused',desired_state='paused',runtime_state='offline',status_code=$3,request_config=$2,revision=revision+1,updated_at=GREATEST(updated_at+1,$4) WHERE workspace_id=$1")
+                .bind(&job.resource_id).bind(&config).bind(code).bind(now).execute(&mut *tx).await?;
+        }
         tx.commit().await?;
-        tracing::warn!(workspace = %job.resource_id, operation, code,
-            "Cloud resume could not start the computer; settled as paused");
+        tracing::warn!(workspace = %job.resource_id, operation, code, sleeping = sleep.is_some(),
+            "Cloud resume could not start the computer; settled as paused and sleeping its machine");
+        if sleep.is_some() {
+            wakeup::send();
+        }
         Ok(true)
     }
     /// Only consecutive "missing" answers count toward giving up.
@@ -834,6 +891,15 @@ impl RuntimeControl {
         Ok(())
     }
 }
+/// The machine and retained disk a settled resume must still put to sleep.
+fn settle_sleep(row: &Value) -> Option<(String, String)> {
+    let machine = row["provider_sandbox_id"].as_str()?;
+    let disk = row["request_config"]["rustRuntimeStorage"]["storageIncarnationId"].as_str()?;
+    Some((machine.to_owned(), disk.to_owned()))
+}
+/// Status a completed pause leaves: the failure that settled a resume (its
+/// pause keeps it visible), otherwise `paused`.
+pub(crate) const PAUSED_STATUS_SQL: &str = "CASE WHEN request_config#>>'{rustResumeFailure,pauseOperationId}'=request_config#>>'{rustLifecycleOperation,id}' THEN COALESCE(request_config#>>'{rustResumeFailure,code}','paused') ELSE 'paused' END";
 /// The provider no longer has the retained computer (in any cluster).
 pub(crate) const MACHINE_MISSING: &str = "cloud_retained_machine_missing";
 /// Consecutive "missing" observations before giving up.
@@ -841,19 +907,23 @@ const MISSING_CONFIRMATIONS: i32 = 3;
 /// How long a resume may keep failing to start its computer before it stops
 /// visibly; the same bound a first start has.
 pub(crate) const RESUME_FAILURE_DEADLINE_MS: i64 = super::effects::ALLOCATION_START_DEADLINE_MS;
+/// A retained launch failed and the automatic rollback and relaunch failed
+/// too: the image cannot launch this computer's runtime. Retrying is futile.
+pub(crate) const LAUNCH_INCOMPATIBLE: &str = "cloud_runtime_launch_incompatible";
 /// Resume failures that settle the computer once overdue.
 pub(crate) fn resume_failure_terminal(code: &str) -> bool {
     matches!(
         code,
-        "cloud_retained_provider_failed" | "cloud_lifecycle_timed_out"
+        "cloud_retained_provider_failed" | "cloud_lifecycle_timed_out" | LAUNCH_INCOMPATIBLE
     )
 }
-/// A resume that ran out of attempts stops at once; one whose provider keeps
-/// failing stops after [`RESUME_FAILURE_DEADLINE_MS`].
+/// A resume that ran out of attempts, or whose launch is permanently refused,
+/// stops at once; one whose provider keeps failing stops after
+/// [`RESUME_FAILURE_DEADLINE_MS`].
 fn resume_overdue(action: &str, code: &str, created_at: i64, now: i64) -> bool {
     action == "resume"
         && resume_failure_terminal(code)
-        && (code == "cloud_lifecycle_timed_out"
+        && (matches!(code, "cloud_lifecycle_timed_out" | LAUNCH_INCOMPATIBLE)
             || now.saturating_sub(created_at) >= RESUME_FAILURE_DEADLINE_MS)
 }
 #[cfg(test)]
@@ -880,6 +950,60 @@ mod resume_failure_tests {
             i64::MAX
         ));
         assert!(!resume_overdue("resume", MACHINE_MISSING, 0, i64::MAX));
+        // A launch the image permanently refuses settles at once.
+        assert!(resume_overdue("resume", LAUNCH_INCOMPATIBLE, 1_000, 1_001));
+        assert!(!resume_overdue("pause", LAUNCH_INCOMPATIBLE, 1_000, 1_001));
+    }
+    /// No silent machine cost: production code may mark a workspace paused
+    /// without a completed provider sleep only where no machine can be
+    /// running. Every other path goes through a pause operation (`pausing`),
+    /// which sleeps the machine and stays under the awake backstop. A new
+    /// direct `state='paused'` write must be reviewed and listed here.
+    #[test]
+    fn only_reviewed_paths_mark_a_workspace_paused_without_a_provider_sleep() {
+        fn scan(dir: &std::path::Path, found: &mut Vec<(String, usize)>) {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                if path.is_dir() {
+                    if name != "tests" {
+                        scan(&path, found);
+                    }
+                    continue;
+                }
+                if !name.ends_with(".rs") || name == "tests.rs" || name.ends_with("_tests.rs") {
+                    continue;
+                }
+                let source = std::fs::read_to_string(&path).unwrap();
+                // Unit-test modules inside production files are fixtures.
+                let production = source.split("#[cfg(test)]").next().unwrap_or("");
+                let count = production.matches("SET state='paused'").count();
+                if count > 0 {
+                    let relative = path
+                        .strip_prefix(env!("CARGO_MANIFEST_DIR"))
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned();
+                    found.push((relative, count));
+                }
+            }
+        }
+        let mut found = Vec::new();
+        scan(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut found,
+        );
+        found.sort();
+        assert_eq!(
+            found,
+            vec![
+                // Fixture in a test helper of a production file.
+                ("src/managed_bases/organization.rs".to_owned(), 1),
+                // The provider confirmed the machine is gone, and a settled
+                // resume with no machine or retained disk to sleep.
+                ("src/runtime/lifecycle.rs".to_owned(), 2),
+            ]
+        );
     }
 }
 
