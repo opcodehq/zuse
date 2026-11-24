@@ -1,13 +1,27 @@
-# Live cloud monitor experiment
+# poof
 
-The agent controls one 1920×1080 X11 desktop. An Applications bar launches Chromium, Thunar, Mousepad and XTerm. Viewers share one stream of H.264 frames and lossless scroll patches and can reconnect while applications keep running. The guest user owns the applications and their files. The guest CLI works from the existing agent shell.
+The agent controls one X11 desktop. Its default size is 1920×1080. Set `-e POOF_DISPLAY_SIZE=2560x1600` on the container for a larger monitor. An Applications bar launches Chromium, Thunar, Mousepad and XTerm. Viewers can disconnect and return to the same running applications. The Rust streamer sends changed regions as lossless patches and uses indexed images or H.264 when a viewer needs a full frame. The guest user owns the applications and their files. The guest CLI works from the existing agent shell.
+
+On a two-vCPU Boxd guest at 1080p, Chromium presented 60.1 distinct FPS over a 5 Mbps link with 60 ms RTT. Patched voxl presented 47.5 on the same test. During a two-job build the readings were 58.7 and 46.1 FPS. These are ten-second browser samples. [Full comparison and raw results](bench/native/RESULTS.md)
+
+## Click around from a Mac
+
+With Docker Desktop running, execute these commands from the checkout.
+
+```sh
+docker compose up -d --build --wait
+docker compose exec -T desktop cat /home/zuse/.local/state/zuse-monitor/vnc-password
+open vnc://127.0.0.1:5905
+```
+
+Enter the printed password in Screen Sharing. Click a dock icon or type in Mousepad. Screen Sharing uses VNC for this interactive demo and shares poof’s X11 display with the agent. The port is bound to the Mac’s loopback address. Run `docker compose stop` when finished.
 
 ## Run on one Linux machine
 
 Build the standalone image. Host networking makes the guest's loopback listener reachable on the Linux host. Use a machine where port 6901 is free.
 
 ```sh
-docker build -t zuse-monitor-mvp infra/cloud/monitor
+docker build -t zuse-monitor-mvp .
 docker run -d --name monitor --network host --shm-size=256m zuse-monitor-mvp
 docker exec monitor zuse-monitor password
 ```
@@ -34,9 +48,11 @@ The app prepares the selected computer's SSH key and pinned host key through its
 
 ## Streaming implementation
 
-The Rust service starts one capture worker when viewers connect. XDamage wakes the worker after a paint, and a short poll also catches cursor motion. The C adapter alternates between two MIT-SHM images. The Rust delta encoder compares a new image against its predecessor, estimates vertical translation and emits the changed scanline spans. The worker compresses these spans with LZ4. For changes outside the patch budget it uses libyuv and x264. A recovery keyframe at least once per second lets late and lagging viewers resume. The browser applies pixel patches to a canvas and decodes H.264 via WebCodecs. During continuous motion it allows up to 7 ms for arrival jitter. The first frame after idle is drawn immediately. FFmpeg handles on-demand PNG screenshots. HTTPS viewers use authenticated binary WebSockets so a proxy can forward each frame immediately. The embedded loopback viewer uses an authenticated HTTP stream through the SSH forward. Screenshots require the same guest credential.
+The Rust service shares a capture worker among viewers of each protocol version and stops it when the last viewer disconnects. XDamage wakes the worker after a paint. The capture adapter alternates between two MIT-SHM images. The Rust encoder locates the changed rectangle, estimates its vertical movement, and sends replacement pixels for the parts that differ. Patches use LZ4, with DEFLATE available for larger updates. Desktops with up to 256 colors can use a lossless indexed recovery image. Repeated scanlines share one row in its dictionary. Richer images fall back to libyuv and x264.
 
-The Zuse image builds from this directory. The only use of voxl in this experiment is as a separately installed benchmark competitor and a source of common measurement fixtures. The native H.264 fallback uses x264. Its licensing still applies to distribution.
+A viewer requests a recovery frame when it connects or falls behind. An idle desktop sends a heartbeat every five seconds. The legacy routes keep periodic keyframes for existing readers. The WebCodecs viewer applies each patch in order on the same canvas. During continuous motion it allows up to 7 ms for arrival jitter. The first frame after idle is drawn immediately. FFmpeg handles on-demand PNG screenshots. HTTPS viewers use authenticated binary WebSockets so a proxy can forward each frame immediately. The embedded loopback viewer uses an authenticated HTTP stream through the SSH forward. Screenshots require the same guest credential.
+
+The poof image builds from this directory. The only use of voxl in this experiment is as a separately installed benchmark competitor and a source of common measurement fixtures. The native H.264 fallback uses x264. Its licensing still applies to distribution.
 
 ## Reproduce the checks
 
@@ -48,17 +64,17 @@ export PLAYWRIGHT_NODE_MODULES=/tmp/monitor-tools/node_modules/
 export CHROMIUM=/usr/bin/chromium
 export DISPLAY=:91 XAUTHORITY="$HOME/.local/state/zuse-monitor/Xauthority"
 zuse-monitor start
-node infra/cloud/monitor/smoke.mjs /tmp/agent.png /tmp/viewer.png
-bash infra/cloud/monitor/bench.sh
+node ./checks/smoke.mjs /tmp/agent.png /tmp/viewer.png
+bash ./bench/bench.sh
 ```
 
-The smoke test compares guest input with the read-only viewer, exercises viewer reconnect, and captures both views. Set `MONITOR_VIEWER_PORT` to exercise a local SSH forward. On Linux, pipe `zuse-monitor password` to `python3 infra/cloud/monitor/webkit-probe.py /path/to/zuse-webkit <forwarded-port>` from a separate desktop display to test the real Zuse WebKit helper.
+The smoke test compares guest input with the read-only viewer, exercises viewer reconnect, and captures both views. Set `MONITOR_VIEWER_PORT` to exercise a local SSH forward. On Linux, pipe `zuse-monitor password` to `python3 ./checks/webkit-probe.py /path/to/zuse-webkit <forwarded-port>` from a separate desktop display to test the real Zuse WebKit helper.
 
 The benchmark builds its own X11 scrolling document. The viewer samples its binary frame counter at animation-frame boundaries and counts distinct IDs in ten seconds. A local TCP proxy applies a 30 Mbit/s limit and 30 or 60 ms RTT. A separate browser workload measures input-to-visible latency by checking a known color transition. CPU is capture worker process time divided by wall time. Run in an otherwise isolated guest with one capture worker.
 
 ## Matched comparison
 
-See [the head-to-head benchmark](BENCHMARK.md) for the common workload, repeated runs, build contention and reproduction instructions. The following sections document earlier prototypes.
+See the [Boxd native and browser comparison](bench/native/RESULTS.md) for 2560×1600 desktop measurements. See [the head-to-head benchmark](bench/BENCHMARK.md) for the common workload, repeated runs, build contention and reproduction instructions. The following sections document earlier prototypes.
 
 ## Native capture results
 
@@ -81,13 +97,13 @@ The standalone image measured 936 MB uncompressed with Chromium installed. A sep
 
 ## Independent streamer results
 
-Before the native capture worker, the Zuse server used FFmpeg/libx264 for video. These numbers describe that earlier implementation.
+Before the native capture worker, the poof server used FFmpeg/libx264 for video. These numbers describe that earlier implementation.
 
 | Implementation | 1080p distinct scrolling FPS at 30 ms RTT |
 |---|---:|
 | Original voxl baseline | 34.3 |
-| Zuse server with experimental VP8 encoding | 3.1 |
-| Zuse server with low-latency H.264 encoding | 19.7 |
+| poof server with experimental VP8 encoding | 3.1 |
+| poof server with low-latency H.264 encoding | 19.7 |
 
 These are single exploratory measurements with two CPUs shared by the guest and viewer. The H.264 experiment also reached 19.5 distinct scrolling FPS at 60 ms RTT. Encoder settings and delivered image quality differ. The final build also discards duplicate capture timestamps. Those exploratory runs preceded the matched experiment above.
 

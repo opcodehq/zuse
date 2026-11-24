@@ -1,0 +1,162 @@
+engine,configuration,workload,link,cores,process_count
+poof,original,anim1080,5/60,0.321,3
+voxl,stock x264,anim1080,5/60,1.027,2
+KasmVNC,default,anim1080,5/60,0.587,1
+noVNC,default,anim1080,5/60,0.294,4
+Selkies,without compositor,anim1080,5/60,0.77,2
+poof,original,scroll,lan,0.281,3
+voxl,stock x264,scroll,lan,0.698,2
+KasmVNC,default,scroll,lan,0.749,1
+noVNC,default,scroll,lan,0.235,4
+Selkies,without compositor,scroll,lan,0.504,2
+poof,original,scroll,10/40,0.273,3
+voxl,stock x264,scroll,10/40,0.716,2
+KasmVNC,default,scroll,10/40,0.296,1
+noVNC,default,scroll,10/40,0.18,4
+Selkies,without compositor,scroll,10/40,0.497,2
+poof,original,scroll,5/60,0.282,3
+voxl,stock x264,scroll,5/60,0.711,2
+KasmVNC,default,scroll,5/60,0.263,1
+noVNC,default,scroll,5/60,0.167,4
+Selkies,without compositor,scroll,5/60,0.486,2
+poof,original,animfull,lan,0.351,3
+voxl,stock x264,animfull,lan,1.188,2
+KasmVNC,default,animfull,lan,0.817,1
+noVNC,default,animfull,lan,0.405,4
+Selkies,without compositor,animfull,lan,1.122,2
+Neko,initial ICE,anim1080,lan,1.304,2
+Neko,initial ICE,scroll,lan,1.04,2
+Neko,initial ICE,animfull,lan,1.453,2
+poof,regional prototype,anim1080,lan,0.188,2
+poof,regional prototype,scroll,lan,0.144,2
+poof,regional prototype,anim1080,10/40,0.415,3
+poof,regional prototype,scroll,10/40,0.282,3
+poof,regional prototype,anim1080,5/60,0.405,3
+poof,regional prototype,scroll,5/60,0.285,3
+poof,regional prototype,animfull,lan,0.366,3
+Neko,initial ICE,anim1080,lan,1.351,2
+Neko,initial ICE,scroll,lan,0.998,2
+Neko,initial ICE,animfull,lan,1.465,2
+Neko,initial ICE,anim1080,10/40,1.459,2
+Neko,initial ICE,scroll,10/40,1.225,2
+Neko,initial ICE,anim1080,5/60,1.377,2
+Neko,initial ICE,scroll,5/60,1.221,2
+Neko tuned,initial ICE,anim1080,lan,1.616,2
+Sunshine,default,anim1080,lan,1.474,2
+Sunshine,default,scroll,lan,1.333,2
+Sunshine,default,animfull,lan,1.462,2
+Sunshine,default,anim1080,10/40,1.52,2
+Sunshine,default,scroll,10/40,1.334,2
+Sunshine,default,anim1080,5/60,1.531,2
+Sunshine,default,scroll,5/60,1.349,2
+Sunshine tuned,ultrafast,anim1080,lan,1.55,2
+Sunshine tuned,ultrafast,scroll,lan,1.351,2
+Sunshine tuned,ultrafast,animfull,lan,1.544,2
+Sunshine tuned,ultrafast,anim1080,10/40,1.589,2
+Sunshine tuned,ultrafast,scroll,10/40,1.354,2
+Sunshine tuned,ultrafast,anim1080,5/60,1.565,2
+Sunshine tuned,ultrafast,scroll,5/60,1.35,2
+poof,indexed prototype,anim1080,lan,0.406,3
+poof,indexed prototype,scroll,lan,0.315,3
+poof,indexed prototype,animfull,lan,0.385,3
+poof,indexed prototype,anim1080,10/40,0.442,3
+poof,indexed prototype,scroll,10/40,0.291,3
+poof,indexed prototype,anim1080,5/60,0.406,3
+poof,indexed prototype,scroll,5/60,0.312,3
+Neko,initial ICE,anim1080,lan,0.077,1
+Neko,initial ICE,scroll,lan,0.037,2
+Neko,initial ICE,animfull,lan,1.43,2
+Neko,initial ICE,anim1080,10/40,1.351,2
+Neko,initial ICE,scroll,10/40,1.138,2
+Neko,initial ICE,anim1080,5/60,1.32,2
+Neko,initial ICE,scroll,5/60,1.07,2
+Neko tuned,initial ICE,anim1080,lan,1.545,2
+Neko tuned,initial ICE,scroll,lan,1.372,2
+Neko tuned,initial ICE,animfull,lan,1.556,2
+Neko tuned,initial ICE,anim1080,10/40,1.445,2
+Neko tuned,initial ICE,scroll,10/40,0.677,2
+Neko tuned,initial ICE,anim1080,5/60,1.557,2
+Neko tuned,initial ICE,scroll,5/60,0.04,2
+poof,sparse prototype,anim1080,lan,0.389,3
+voxl,patched x264,anim1080,lan,0.745,2
+poof,sparse prototype,scroll,lan,0.259,3
+voxl,patched x264,scroll,lan,0.547,2
+poof,compression prototype,animfull,lan,0.332,3
+voxl,patched x264,animfull,lan,0.941,2
+poof,compression prototype,anim1080,10/40,0.384,3
+voxl,patched x264,anim1080,10/40,0.796,2
+poof,compression prototype,scroll,10/40,0.271,3
+voxl,patched x264,scroll,10/40,0.516,2
+poof,compression prototype,anim1080,5/60,0.395,3
+voxl,patched x264,anim1080,5/60,0.897,2
+poof,compression prototype,scroll,5/60,0.279,3
+voxl,patched x264,scroll,5/60,0.547,2
+voxl,patched x264,anim1080,lan,0.714,2
+poof,compression prototype,anim1080,lan,0.382,3
+voxl,patched x264,scroll,lan,0.503,2
+poof,release,scroll,lan,0.264,3
+voxl,patched x264,animfull,lan,0.931,2
+poof,release,animfull,lan,0.313,3
+voxl,patched x264,anim1080,10/40,0.793,2
+poof,release,anim1080,10/40,0.382,3
+voxl,patched x264,scroll,10/40,0.506,2
+poof,release,scroll,10/40,0.254,3
+voxl,patched x264,anim1080,5/60,0.871,2
+poof,release,anim1080,5/60,0.366,3
+voxl,patched x264,scroll,5/60,0.537,2
+poof,release,scroll,5/60,0.252,3
+poof,release,anim1080,lan,0.376,3
+voxl,patched x264,anim1080,lan,0.691,2
+poof,release,scroll,lan,0.239,3
+voxl,patched x264,scroll,lan,0.523,2
+poof,release,animfull,lan,0.331,3
+voxl,patched x264,animfull,lan,0.958,2
+poof,release,anim1080,10/40,0.395,3
+voxl,patched x264,anim1080,10/40,0.869,2
+poof,release,scroll,10/40,0.292,3
+voxl,patched x264,scroll,10/40,0.606,2
+poof,release,anim1080,5/60,0.399,3
+voxl,patched x264,anim1080,5/60,0.983,2
+poof,release,scroll,5/60,0.291,3
+voxl,patched x264,scroll,5/60,0.631,2
+poof,release,anim1080,lan,0.442,3
+poof,release,anim1080,lan,0.45,3
+poof,release,scroll,lan,0.265,3
+poof,release,animfull,lan,0.364,3
+poof,release,anim1080,10/40,0.4,3
+poof,release,scroll,10/40,0.269,3
+poof,release,anim1080,5/60,0.422,3
+poof,release,scroll,5/60,0.266,3
+poof,release,idle,lan,0.011,3
+voxl,patched x264,idle,lan,0.001,2
+KasmVNC,default,idle,lan,0.0,1
+KasmVNC,default,anim1080,lan,0.784,1
+noVNC,default,idle,lan,0.007,4
+noVNC,default,anim1080,lan,0.411,4
+Selkies,with compositor,idle,lan,1.026,2
+Selkies,with compositor,anim1080,lan,1.375,2
+Selkies,with compositor,scroll,lan,1.378,2
+Selkies,with compositor,animfull,lan,1.672,2
+Selkies,with compositor,anim1080,10/40,1.563,2
+Selkies,with compositor,scroll,10/40,1.405,2
+Selkies,with compositor,anim1080,5/60,1.576,2
+Selkies,with compositor,scroll,5/60,1.417,2
+Sunshine,default,idle,lan,1.547,2
+Sunshine tuned,ultrafast,idle,lan,1.598,2
+Neko,direct ICE,idle,lan,0.736,2
+Neko,direct ICE,anim1080,lan,1.434,2
+Neko,direct ICE,scroll,lan,1.25,2
+Neko,direct ICE,animfull,lan,1.426,2
+Neko,direct ICE,anim1080,10/40,1.362,2
+Neko,direct ICE,scroll,10/40,1.237,2
+Neko,direct ICE,anim1080,5/60,1.393,2
+Neko,4 MiB receive buffer,animfull,lan,1.238,2
+Neko,direct ICE,scroll,5/60,1.251,2
+Neko tuned,"direct ICE, 4 MiB receive buffer",idle,lan,1.344,2
+Neko tuned,"direct ICE, 4 MiB receive buffer",anim1080,lan,1.55,2
+Neko tuned,"direct ICE, 4 MiB receive buffer",scroll,lan,1.26,2
+Neko tuned,"direct ICE, 4 MiB receive buffer",animfull,lan,1.476,2
+Neko tuned,"direct ICE, 4 MiB receive buffer",anim1080,10/40,1.542,2
+Neko tuned,"direct ICE, 4 MiB receive buffer",scroll,10/40,0.044,2
+Neko tuned,"direct ICE, 4 MiB receive buffer",anim1080,5/60,1.579,2
+Neko tuned,"direct ICE, 4 MiB receive buffer",scroll,5/60,0.043,2

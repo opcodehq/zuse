@@ -3,7 +3,7 @@
   <meta charset="utf-8" /><meta
     name="viewport"
     content="width=device-width,initial-scale=1"
-  /><title>Zuse Monitor</title>
+  /><title>poof</title>
   <style>
     * {
       box-sizing: border-box;
@@ -39,7 +39,7 @@
     }
   </style>
   <header>
-    <strong>Zuse Monitor</strong
+    <strong>poof</strong
     ><span id="status" role="status">Connecting…</span>
   </header>
   <form hidden>
@@ -49,6 +49,7 @@
     <button>Connect</button>
   </form>
   <canvas width="1920" height="1080" aria-label="Live cloud desktop"></canvas>
+  <script src="/desktop-decoder.js"></script>
   <script>
     const statusText = document.querySelector("#status"),
       form = document.querySelector("form"),
@@ -67,8 +68,9 @@
     };
     // Proxies may buffer an HTTP response across multiple frames. Preserve
     // message boundaries across the public TLS hop. Local SSH uses loopback.
+    const streamPrefix = typeof DecompressionStream === "function" ? "/v2" : "";
     async function remoteReader(signal) {
-      const ws = new WebSocket("wss://" + location.host + "/live", ["zuse.monitor.v1", "bearer." + token]);
+      const ws = new WebSocket("wss://" + location.host + streamPrefix + "/live", ["zuse.monitor.v1", "bearer." + token]);
       ws.binaryType = "arraybuffer";
       signal.addEventListener("abort", () => ws.close(), { once: true });
       const stream = new ReadableStream({
@@ -99,7 +101,7 @@
         if (!window.VideoDecoder)
           throw Error("This browser needs WebCodecs. Open in Chrome or Edge.");
         const remote = location.protocol === "https:";
-        const response = await fetch(remote ? "/ready" : "/stream", {
+        const response = await fetch(remote ? "/ready" : streamPrefix + "/stream", {
           headers: { Authorization: "Bearer " + token },
           signal: controller.signal,
         });
@@ -118,11 +120,11 @@
           needKey = true;
         window.zuseMonitorStats = { codec: null, kbps: 0, fps: 0 };
         let pendingVideo = false;
-        function presented() {
+        function presented(codec) {
           count++;
           const now = performance.now();
           if (!window.zuseMonitorStats.codec) {
-            window.zuseMonitorStats.codec = "avc1.42c02a";
+            window.zuseMonitorStats.codec = codec;
             statusText.textContent = "Live · View only";
           }
           window.dispatchEvent(new Event("monitor-frame"));
@@ -136,95 +138,17 @@
             last = now;
           }
         }
-        // A patch is an LZ4 block prefixed with its little-endian decoded size.
-        const scratch = new Uint8ClampedArray(1024 * 1024);
-        function unpackPatch(src) {
-          const size = new DataView(src.buffer, src.byteOffset, src.byteLength).getUint32(0, true);
-          if (size < 2 || size > scratch.length) throw Error("Invalid patch size");
-          let read = 4, written = 0;
-          function length(n) {
-            if (n === 15) {
-              let extra;
-              do {
-                if (read >= src.length) throw Error("Truncated patch");
-                extra = src[read++];
-                n += extra;
-              } while (extra === 255);
-            }
-            return n;
-          }
-          while (read < src.length) {
-            const token = src[read++];
-            const literals = length(token >> 4);
-            if (read + literals > src.length || written + literals > size)
-              throw Error("Invalid literal length");
-            scratch.set(src.subarray(read, read + literals), written);
-            read += literals;
-            written += literals;
-            if (read === src.length) break;
-            if (read + 2 > src.length) throw Error("Missing match");
-            const distance = src[read++] | (src[read++] << 8);
-            let count = 4 + length(token & 15);
-            if (!distance || distance > written || written + count > size)
-              throw Error("Invalid match");
-            let available = distance;
-            while (count > 0) {
-              const n = Math.min(count, available);
-              scratch.copyWithin(written, written - available, written - available + n);
-              written += n;
-              count -= n;
-              available += n;
-            }
-          }
-          if (written !== size) throw Error("Incomplete patch");
-          return scratch.subarray(0, size);
-        }
-        async function paintPatch(encoded) {
-          if (pendingVideo) {
-            await decoder.flush();
-            pendingVideo = false;
-          }
-          const raw = unpackPatch(encoded);
-          const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
-          const shift = view.getInt16(0, true);
-          if (Math.abs(shift) > 32) throw Error("Invalid scroll offset");
-          if (shift) ctx.drawImage(ctx.canvas, 0, -shift);
-          for (let offset = 2; offset < raw.length; ) {
-            const left = view.getUint16(offset, true),
-              top = view.getUint16(offset + 2, true);
-            const width = view.getUint16(offset + 4, true);
-            if (!width || left + width > 1920 || top >= 1080)
-              throw Error("Invalid patch extent");
-            const start = offset;
-            let height = 0;
-            do {
-              offset += 6 + width * 4;
-              height++;
-            } while (
-              offset + 6 <= raw.length &&
-              view.getUint16(offset, true) === left &&
-              view.getUint16(offset + 2, true) === top + height &&
-              view.getUint16(offset + 4, true) === width
-            );
-            if (offset > raw.length || top + height > 1080)
-              throw Error("Incomplete patch");
-            const pixels = new ImageData(width, height);
-            for (let row = 0; row < height; row++) {
-              const pos = start + row * (6 + 4 * width) + 6;
-              pixels.data.set(
-                raw.subarray(pos, pos + 4 * width),
-                row * 4 * width,
-              );
-            }
-            ctx.putImageData(pixels, left, top);
-          }
-          presented();
-        }
+        const painter = createDesktopPainter(ctx);
         decoder = new VideoDecoder({
           output(frame) {
             try {
+              if (ctx.canvas.width !== frame.displayWidth || ctx.canvas.height !== frame.displayHeight) {
+                ctx.canvas.width = frame.displayWidth;
+                ctx.canvas.height = frame.displayHeight;
+              }
               ctx.drawImage(frame, 0, 0);
-              presented();
+              painter.invalidate();
+              presented("avc1.42c02a");
             } finally {
               frame.close();
             }
@@ -268,9 +192,19 @@
             const frame = data.subarray(i + 12, i + 12 + n);
             const key = (flags & 0x80000000) !== 0;
             await pace(Number(h.getBigUint64(4, true)) / 1000);
-            if (decoder.decodeQueueSize > 3) needKey = true;
+            if (decoder.decodeQueueSize > 3) throw Error("Decoder fell behind");
             if (flags & 0x40000000) {
-              if (!needKey) await paintPatch(frame);
+              if (pendingVideo) {
+                await decoder.flush();
+                pendingVideo = false;
+              }
+              if (key) {
+                await painter.paintIndexed(frame);
+                presented("indexed");
+                needKey = false;
+              } else if (!needKey && await painter.paintPatch(frame)) {
+                presented("lz4");
+              }
             } else if (key || !needKey) {
               pendingVideo = true;
               decoder.decode(

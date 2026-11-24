@@ -17,7 +17,6 @@ STATE = Path.home() / ".local/state/zuse-monitor"
 DISPLAY = ":91"
 PORT = 6901
 BASE = f"http://127.0.0.1:{PORT}"
-WIDTH, HEIGHT = 1920, 1080
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -29,6 +28,9 @@ LOCAL = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect(
 
 
 def serve():
+    size = os.environ.get("POOF_DISPLAY_SIZE", "1920x1080")
+    if size not in {"1920x1080", "2560x1600"}:
+        raise ValueError("Unsupported POOF_DISPLAY_SIZE")
     os.umask(0o077)
     STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
     lock = (STATE / "lock").open("a")
@@ -48,7 +50,7 @@ def serve():
 
     signal.signal(signal.SIGTERM, stop)
     try:
-        launch("Xvfb", DISPLAY, "-screen", "0", f"{WIDTH}x{HEIGHT}x24",
+        launch("Xvfb", DISPLAY, "-screen", "0", f"{size}x24",
                "-auth", str(authority), "-nolisten", "tcp", "-shmem")
         for _ in range(100):
             if children[0].poll() is not None:
@@ -152,7 +154,9 @@ def main():
                               height=int.from_bytes(data[20:24], "big"))))
     else:
         if args.action == "click":
-            if not (0 <= args.x < WIDTH and 0 <= args.y < HEIGHT):
+            width, height = map(int, subprocess.check_output(
+                ["xdotool", "getdisplaygeometry"], text=True).split())
+            if not (0 <= args.x < width and 0 <= args.y < height):
                 parser.error("click outside display")
             command = ["mousemove", str(args.x), str(args.y), "click", "1"]
         elif args.action == "type":

@@ -14,15 +14,16 @@ use bytes::Bytes;
 use futures_util::{Stream, StreamExt, stream};
 use std::{convert::Infallible, io, process::Stdio, sync::Arc, time::Duration};
 use tokio::{
-    io::AsyncReadExt,
+    io::{AsyncReadExt, AsyncWriteExt},
     process::Command,
-    sync::{OwnedSemaphorePermit, Semaphore, broadcast},
+    sync::{Notify, OwnedSemaphorePermit, Semaphore, broadcast},
 };
 
 #[derive(Clone)]
 struct Display {
     key: Arc<String>,
     frames: broadcast::Sender<Bytes>,
+    keyframe: Arc<Notify>,
     viewers: Arc<Semaphore>,
     screenshots: Arc<Semaphore>,
 }
@@ -48,53 +49,85 @@ fn grab() -> Command {
         "x11grab",
         "-framerate",
         "60",
-        "-video_size",
-        "1920x1080",
         "-i",
-        ":91",
+        &std::env::var("DISPLAY").unwrap_or_else(|_| ":91".into()),
     ]);
     cmd
 }
 
-async fn capture(tx: &broadcast::Sender<Bytes>) -> io::Result<()> {
-    let mut child = Command::new("zuse-capture")
+async fn capture(
+    tx: &broadcast::Sender<Bytes>,
+    keyframe: &Notify,
+    regional: bool,
+) -> io::Result<()> {
+    let mut command = Command::new("zuse-capture");
+    command.env_remove("POOF_REGION_PATCHES");
+    if regional {
+        command.env("POOF_REGION_PATCHES", "1");
+    }
+    let mut child = command
         .kill_on_drop(true)
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()?;
     let mut pipe = child.stdout.take().unwrap();
-    while tx.receiver_count() > 0 {
-        let mut header = [0; 12];
-        pipe.read_exact(&mut header).await?;
-        let length = (u32::from_le_bytes(header[..4].try_into().unwrap()) & 0x3fff_ffff) as usize;
-        if !(1..=8 * 1024 * 1024).contains(&length) {
-            return Err(io::Error::other("invalid capture packet"));
+    let mut control = child.stdin.take().unwrap();
+    let requests = async {
+        loop {
+            keyframe.notified().await;
+            if let Err(error) = control.write_all(b"K").await {
+                break Err(error);
+            }
         }
-        let mut packet = vec![0; 12 + length];
-        packet[..12].copy_from_slice(&header);
-        pipe.read_exact(&mut packet[12..]).await?;
-        let _ = tx.send(packet.into());
+    };
+    let forward = async {
+        while tx.receiver_count() > 0 {
+            let mut header = [0; 12];
+            pipe.read_exact(&mut header).await?;
+            let length =
+                (u32::from_le_bytes(header[..4].try_into().unwrap()) & 0x3fff_ffff) as usize;
+            if !(1..=8 * 1024 * 1024).contains(&length) {
+                return Err(io::Error::other("invalid capture packet"));
+            }
+            let mut packet = vec![0; 12 + length];
+            packet[..12].copy_from_slice(&header);
+            pipe.read_exact(&mut packet[12..]).await?;
+            let _ = tx.send(packet.into());
+        }
+        Ok(())
+    };
+    tokio::select! {
+        result = forward => result,
+        result = requests => result,
+        _ = tx.closed() => Ok(()),
     }
-    Ok(())
 }
 
 fn packets(
     frames: &broadcast::Sender<Bytes>,
+    keyframe: Arc<Notify>,
     permit: OwnedSemaphorePermit,
 ) -> impl Stream<Item = Result<Bytes, Infallible>> + use<> {
-    let state = (frames.subscribe(), true, permit);
-    stream::unfold(state, |(mut rx, mut needs_keyframe, permit)| async move {
-        loop {
-            match rx.recv().await {
-                Ok(frame) if !needs_keyframe || frame[3] & 0x80 != 0 => {
-                    return Some((Ok::<_, Infallible>(frame), (rx, false, permit)));
+    let state = (frames.subscribe(), true, permit, keyframe.clone());
+    keyframe.notify_one();
+    stream::unfold(
+        state,
+        |(mut rx, mut needs_keyframe, permit, keyframe)| async move {
+            loop {
+                match rx.recv().await {
+                    Ok(frame) if !needs_keyframe || frame[3] & 0x80 != 0 => {
+                        return Some((Ok::<_, Infallible>(frame), (rx, false, permit, keyframe)));
+                    }
+                    Ok(_) => (),
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        needs_keyframe = true;
+                        keyframe.notify_one();
+                    }
+                    Err(broadcast::error::RecvError::Closed) => return None,
                 }
-                Ok(_) => (),
-                Err(broadcast::error::RecvError::Lagged(_)) => needs_keyframe = true,
-                Err(broadcast::error::RecvError::Closed) => return None,
             }
-        }
-    })
+        },
+    )
 }
 
 async fn websocket(State(s): State<Display>, headers: HeaderMap, ws: WebSocketUpgrade) -> Response {
@@ -119,7 +152,7 @@ async fn websocket(State(s): State<Display>, headers: HeaderMap, ws: WebSocketUp
         .max_message_size(1024)
         .max_frame_size(1024)
         .on_upgrade(move |mut socket| async move {
-            let frames = packets(&s.frames, permit);
+            let frames = packets(&s.frames, s.keyframe, permit);
             tokio::pin!(frames);
             loop {
                 tokio::select! {
@@ -146,7 +179,7 @@ async fn video(State(s): State<Display>, headers: HeaderMap) -> Response {
     let Ok(permit) = s.viewers.try_acquire_owned() else {
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     };
-    let body = packets(&s.frames, permit);
+    let body = packets(&s.frames, s.keyframe, permit);
     (
         [
             (header::CONTENT_TYPE, "application/octet-stream"),
@@ -198,18 +231,37 @@ async fn screenshot(State(s): State<Display>, headers: HeaderMap) -> Response {
 async fn main() -> io::Result<()> {
     let key = std::env::var("ZUSE_DISPLAY_PASSWORD").expect("missing viewer credential");
     assert!(key.len() >= 32);
-    let (frames, _) = broadcast::channel(8);
-    let source = frames.clone();
-    tokio::spawn(async move {
-        loop {
-            if source.receiver_count() > 0
-                && let Err(e) = capture(&source).await
-            {
-                eprintln!("capture failed: {e}");
+    let key = Arc::new(key);
+    let viewers = Arc::new(Semaphore::new(16));
+    let screenshots = Arc::new(Semaphore::new(2));
+    let state = |regional| {
+        let (frames, _) = broadcast::channel(8);
+        let source = frames.clone();
+        let keyframe = Arc::new(Notify::new());
+        let requests = keyframe.clone();
+        tokio::spawn(async move {
+            loop {
+                while source.receiver_count() == 0 {
+                    requests.notified().await;
+                }
+                if let Err(e) = capture(&source, &requests, regional).await {
+                    eprintln!("capture failed: {e}");
+                    tokio::time::sleep(Duration::from_millis(120)).await;
+                }
             }
-            tokio::time::sleep(Duration::from_millis(120)).await;
+        });
+        Display {
+            key: key.clone(),
+            frames,
+            keyframe,
+            viewers: viewers.clone(),
+            screenshots: screenshots.clone(),
         }
-    });
+    };
+    let stream_routes = Router::new()
+        .route("/stream", get(video))
+        .route("/live", get(websocket))
+        .with_state(state(true));
     let app = Router::new()
         .route(
             "/",
@@ -217,6 +269,15 @@ async fn main() -> io::Result<()> {
                 (
                     [(header::REFERRER_POLICY, "no-referrer")],
                     Html(include_str!("viewer.html")),
+                )
+            }),
+        )
+        .route(
+            "/desktop-decoder.js",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "text/javascript")],
+                    include_str!("desktop-decoder.js"),
                 )
             }),
         )
@@ -233,12 +294,8 @@ async fn main() -> io::Result<()> {
         .route("/stream", get(video))
         .route("/live", get(websocket))
         .route("/screenshot", get(screenshot))
-        .with_state(Display {
-            key: Arc::new(key),
-            frames,
-            viewers: Arc::new(Semaphore::new(16)),
-            screenshots: Arc::new(Semaphore::new(2)),
-        });
+        .with_state(state(false))
+        .nest("/v2", stream_routes);
     let port = std::env::var("ZUSE_DISPLAY_PORT").unwrap_or_else(|_| "6901".into());
     axum::serve(
         tokio::net::TcpListener::bind(format!("127.0.0.1:{port}")).await?,

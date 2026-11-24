@@ -25,7 +25,7 @@ try {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw Error('invalid port');
   const password = tool('password');
   const start = performance.now();
-  await page.goto(`http://127.0.0.1:${port}/?token=${encodeURIComponent(password)}`);
+  await page.goto(`http://127.0.0.1:${port}/#${encodeURIComponent(password)}`);
   const visible = red => page.waitForFunction(red => {
     const video = document.querySelector('canvas');
     if (!video || !window.zuseMonitorStats?.codec) return false;

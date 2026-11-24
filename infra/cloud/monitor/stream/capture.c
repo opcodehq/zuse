@@ -1,6 +1,7 @@
 // Capture the 24-bit Xvfb root into a private shared-memory image. Convert
 // straight into x264's input planes and emit each complete access unit as it
 // becomes ready.
+#include "raster.h"
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/extensions/XShm.h>
@@ -8,19 +9,27 @@
 #include <endian.h>
 #include <errno.h>
 #include <libyuv/convert.h>
-#include <lz4.h>
 #include <poll.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/shm.h>
 #include <time.h>
+#include <unistd.h>
 #include <x264.h>
 
-enum { PATCH_LIMIT = 1024 * 1024 };
-extern size_t zuse_patch(const uint32_t *, const uint32_t *, size_t, int16_t *,
-                         uint8_t *, size_t);
+extern size_t zuse_patch(const uint32_t *, const uint32_t *, size_t, size_t,
+                         size_t, int16_t *, uint8_t *, size_t, bool);
+
+static bool emit(uint32_t flags, uint64_t timestamp, const uint8_t *data,
+                 size_t bytes) {
+  uint32_t header = htole32((uint32_t)bytes | flags);
+  return fwrite(&header, sizeof(header), 1, stdout) == 1 &&
+         fwrite(&timestamp, sizeof(timestamp), 1, stdout) == 1 &&
+         fwrite(data, 1, bytes, stdout) == bytes && fflush(stdout) == 0;
+}
 
 static uint64_t monotonic_ns(void) {
   struct timespec t;
@@ -59,7 +68,9 @@ int main(void) {
   Window root = RootWindow(display, screen);
   int width = DisplayWidth(display, screen),
       height = DisplayHeight(display, screen);
-  if (width != 1920 || height != 1080 || !XShmQueryExtension(display))
+  if (!((width == 1920 && height == 1080) ||
+        (width == 2560 && height == 1600)) ||
+      !XShmQueryExtension(display))
     return 1;
   XShmSegmentInfo segments[2] = {0};
   XImage *buffers[2];
@@ -93,26 +104,34 @@ int main(void) {
     return 1;
 
   uint8_t *patch = malloc(PATCH_LIMIT);
-  uint8_t *compressed = malloc(4 + LZ4_compressBound(PATCH_LIMIT));
-  if (!patch || !compressed)
-    return 1;
-
   int16_t last_shift = 0;
+  bool regional = getenv("POOF_REGION_PATCHES") != NULL;
+  struct raster_encoder *raster = raster_create(width, height, regional);
+  if (!patch || !raster)
+    return 1;
   int sent_patch = 0;
   int damage_event, damage_error;
   if (!XDamageQueryExtension(display, &damage_event, &damage_error))
     return 1;
   Damage damage = XDamageCreate(display, root, XDamageReportNonEmpty);
   XSync(display, False);
-  struct pollfd connection = {ConnectionNumber(display), POLLIN, 0};
-  uint64_t start = monotonic_ns(), last_key = 0, last_capture = 0;
+  struct pollfd inputs[] = {{ConnectionNumber(display), POLLIN, 0},
+                            {STDIN_FILENO, POLLIN, 0}};
+  uint64_t start = monotonic_ns(), last_key = 0, last_capture = 0,
+           last_emit = 0;
   int last_x = -1, last_y = -1;
   for (;;) {
     // Wake on a painted frame; the short timeout also tracks cursor-only
     // motion.
     if (!XPending(display) && last_capture) {
-      if (poll(&connection, 1, 16) < 0 && errno != EINTR)
+      if (poll(inputs, 2, 16) < 0 && errno != EINTR)
         return 1;
+    }
+    int requested = 0;
+    if (inputs[1].revents & POLLIN) {
+      char buffer[64];
+      requested = read(STDIN_FILENO, buffer, sizeof(buffer)) > 0;
+      inputs[1].revents = 0;
     }
     int dirty = 0;
     while (XPending(display)) {
@@ -127,8 +146,10 @@ int main(void) {
     int pointer = XQueryPointer(display, root, &returned_root, &child, &x, &y,
                                 &wx, &wy, &mask);
     uint64_t now = monotonic_ns();
-    int key_due = !last_key || now - last_key >= 1000000000;
-    if (!key_due && !dirty && x == last_x && y == last_y)
+    int key_due = requested || !last_key ||
+                  (!regional && now - last_key >= UINT64_C(1000000000));
+    int heartbeat = now - last_emit >= UINT64_C(5000000000);
+    if (!key_due && !heartbeat && !dirty && x == last_x && y == last_y)
       continue;
     // Coalesce very rapid updates without repeatedly encoding a partial
     // repaint.
@@ -160,28 +181,37 @@ int main(void) {
     size_t patch_size =
         !key_due ? zuse_patch((const uint32_t *)image->data,
                               (const uint32_t *)previous, image->bytes_per_line,
-                              &last_shift, patch, PATCH_LIMIT)
+                              width, height, &last_shift, patch, PATCH_LIMIT,
+                              regional)
                  : 0;
     if (patch_size) {
-      // Suppress unchanged frames, retaining the periodic recovery keyframe.
-      if (patch_size > 2 || patch[0] || patch[1]) {
-        uint32_t raw_length = htole32((uint32_t)patch_size);
-        memcpy(compressed, &raw_length, 4);
-        int packed =
-            LZ4_compress_default((const char *)patch, (char *)compressed + 4,
-                                 patch_size, LZ4_compressBound(patch_size));
-        if (!packed)
+      // Suppress unchanged updates between heartbeats.
+      if (patch_size > 2 || patch[0] || patch[1] || heartbeat) {
+        const uint8_t *payload;
+        size_t bytes = raster_compress(raster, patch, patch_size, &payload);
+        if (!bytes || !emit(UINT32_C(0x40000000), timestamp, payload, bytes))
           return 1;
-        size_t n = 4 + (size_t)packed;
-        uint32_t length = htole32((uint32_t)n | UINT32_C(0x40000000));
-        if (fwrite(&length, 4, 1, stdout) != 1 ||
-            fwrite(&timestamp, 8, 1, stdout) != 1 ||
-            fwrite(compressed, 1, n, stdout) != n || fflush(stdout))
-          return 1;
+        last_emit = last_capture;
         sent_patch = 1;
       }
     } else {
+      const uint8_t *payload;
+      size_t packed = regional && (key_due || sent_patch)
+                          ? raster_recovery(raster, image, &payload)
+                          : 0;
+      if (packed) {
+        if (!emit(UINT32_C(0xc0000000), timestamp, payload, packed))
+          return 1;
+        last_emit = last_key = last_capture;
+        sent_patch = 1;
+        index ^= 1;
+        input.i_pts++;
+        continue;
+      }
       input.i_type = sent_patch || key_due ? X264_TYPE_IDR : X264_TYPE_AUTO;
+      // ABR budgets bytes per encoded picture. With seconds of scroll patches
+      // between pictures it can collapse a recovery image to flat gray.
+      input.i_qpplus1 = input.i_type == X264_TYPE_IDR ? 25 : X264_QP_AUTO;
       if (key_due || sent_patch)
         last_key = last_capture;
       sent_patch = 0;
@@ -197,12 +227,9 @@ int main(void) {
       if (size < 0)
         return 1;
       if (size > 0) {
-        uint32_t length = htole32(
-            (uint32_t)size | (output.b_keyframe ? UINT32_C(0x80000000) : 0));
-        if (fwrite(&length, sizeof(length), 1, stdout) != 1 ||
-            fwrite(&timestamp, sizeof(timestamp), 1, stdout) != 1 ||
-            fwrite(nals[0].p_payload, 1, size, stdout) != (size_t)size ||
-            fflush(stdout))
+        last_emit = last_capture;
+        if (!emit(output.b_keyframe ? UINT32_C(0x80000000) : 0, timestamp,
+                  nals[0].p_payload, (size_t)size))
           return 1;
       }
     }
