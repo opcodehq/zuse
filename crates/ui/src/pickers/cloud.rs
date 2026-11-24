@@ -773,6 +773,13 @@ impl Pickers {
                         .any(|p| p["id"] == provider && p["commandAdmissionVersion"] == 2)
                 })
     }
+    /// The server starts a new chat's computer before its first-message
+    /// files finish uploading, and holds the first turn until they land.
+    pub(crate) fn cloud_launch_attachment_hold(&self, provider: &str) -> bool {
+        self.cloud_v2_available(provider)
+            && self.cloud.context["launchAttachmentHoldVersion"]
+                == zuse_protocol::cloud_assets::LAUNCH_ATTACHMENT_HOLD_VERSION
+    }
     pub(super) fn cloud_destination(&self, cx: &App) -> Option<Value> {
         let state = self.state.read(cx);
         availability::destination(

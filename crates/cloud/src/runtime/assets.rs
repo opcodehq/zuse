@@ -130,7 +130,12 @@ impl RuntimeControl {
             return Ok((tx, workspace));
         }
     }
-    fn asset_id(&self, owner: &str, workspace: &str, upload: &str) -> Result<String, ApiError> {
+    pub(in crate::runtime) fn asset_id(
+        &self,
+        owner: &str,
+        workspace: &str,
+        upload: &str,
+    ) -> Result<String, ApiError> {
         if !valid_id(upload) {
             return Err(invalid());
         }
@@ -308,8 +313,58 @@ impl RuntimeControl {
         let envelope: Value = serde_json::from_str(&sealed).map_err(|_| failed())?;
         sqlx::query("UPDATE zuse_rust_launch_assets SET manifest=$3,state='ready',updated_at=$4 WHERE workspace_id=$1 AND asset_id=$2").bind(&workspace).bind(&asset.asset_id).bind(envelope).bind(at).execute(&mut *tx).await?;
         tx.commit().await?;
+        // A first turn waiting for this file may go to the computer now.
+        let _ = self.mailbox_changes.send(());
         Ok(json!({"workspaceId":workspace,"asset":asset}))
     }
+    /// Whether this server can hold a new chat's first turn for files still
+    /// uploading: asset holds and per-computer asset uploads are migrated.
+    pub(in crate::runtime) async fn launch_attachment_hold_ready(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+    ) -> Result<bool, ApiError> {
+        Ok(self.asset_release_ready(&mut **tx).await?
+            && crate::db::schema::present_in(
+                &mut **tx,
+                "SELECT to_regclass('zuse_rust_task_asset_chunks') IS NOT NULL",
+            )
+            .await?)
+    }
+    /// [`Self::launch_attachment_hold_ready`] for the context a client reads
+    /// before it declares files still uploading.
+    pub async fn launch_attachment_hold_available(&self) -> Result<bool, ApiError> {
+        let mut tx = self.pool.begin().await?;
+        let ready = self.launch_attachment_hold_ready(&mut tx).await?;
+        tx.rollback().await?;
+        Ok(ready)
+    }
+    /// Record a new chat's first-message files before their bytes arrive, so
+    /// its launch command can hold them. Their uploads fill these rows.
+    pub(in crate::runtime) async fn reserve_pending_assets_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        workspace: &str,
+        assets: &[Asset],
+        now: i64,
+    ) -> Result<(), ApiError> {
+        for asset in assets {
+            sqlx::query("INSERT INTO zuse_rust_launch_assets(workspace_id,asset_id,state,created_at,updated_at) VALUES($1,$2,'uploading',$3,$3) ON CONFLICT DO NOTHING").bind(workspace).bind(&asset.asset_id).bind(now).execute(&mut **tx).await?;
+            let state: String = sqlx::query_scalar("SELECT state FROM zuse_rust_launch_assets WHERE workspace_id=$1 AND asset_id=$2 FOR UPDATE").bind(workspace).bind(&asset.asset_id).fetch_one(&mut **tx).await?;
+            if matches!(state.as_str(), "releasing" | "released") {
+                return Err(released());
+            }
+        }
+        Ok(())
+    }
+}
+/// Lease filter: a command whose held files are still uploading waits for
+/// them, at most [`wire::PENDING_ASSET_WAIT_MS`] after they were declared.
+/// Past that it goes to the computer, which reports the missing file instead
+/// of the turn waiting unseen. `{cutoff}` is `now - PENDING_ASSET_WAIT_MS`.
+pub(in crate::runtime) fn pending_asset_guard(cutoff: i64) -> String {
+    format!(
+        " AND NOT EXISTS (SELECT 1 FROM zuse_rust_launch_asset_holds h JOIN zuse_rust_launch_assets a ON a.workspace_id=h.workspace_id AND a.asset_id=h.asset_id WHERE h.workspace_id=c.workspace_id AND h.kind='command' AND h.holder=c.command_id AND a.state='uploading' AND a.created_at>{cutoff})"
+    )
 }
 impl RuntimeControl {
     pub(super) fn verify_launch_asset_rows(

@@ -1580,7 +1580,7 @@ impl CloudApi {
                         &[],
                     )
                     .await?;
-                json!({"accountId":account,"organizationId":organization,"ownerId":value["ownerId"],"apiOrigin":self.origin.as_str(),"projects":value["projects"],"agentCatalog":value["agentCatalog"],"providerAgentCatalogs":value["providerAgentCatalogs"],"computerCapabilities":value["computerCapabilities"],"commandAdmissionVersion":value["commandAdmissionVersion"],"agentConnections":value["agentConnections"]})
+                json!({"accountId":account,"organizationId":organization,"ownerId":value["ownerId"],"apiOrigin":self.origin.as_str(),"projects":value["projects"],"agentCatalog":value["agentCatalog"],"providerAgentCatalogs":value["providerAgentCatalogs"],"computerCapabilities":value["computerCapabilities"],"commandAdmissionVersion":value["commandAdmissionVersion"],"launchAttachmentHoldVersion":value["launchAttachmentHoldVersion"],"agentConnections":value["agentConnections"]})
             }
             zuse_protocol::methods::CLOUD_CREATE => {
                 let mut params = params;

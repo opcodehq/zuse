@@ -1072,8 +1072,16 @@ async fn context(
     } else {
         None
     };
+    // A new chat's first-message files may still be uploading when it is
+    // created: its first turn waits for them (server-admitted chats only).
+    let launch_attachment_hold_version = match (&state.runtime, command_admission_version) {
+        (Some(runtime), Some(_)) if runtime.launch_attachment_hold_available().await? => {
+            Some(zuse_protocol::cloud_assets::LAUNCH_ATTACHMENT_HOLD_VERSION)
+        }
+        _ => None,
+    };
     Ok(Json(
-        json!({"actor":access.actor,"scope":access.scope,"ownerId":access.owner_id,"accountEvents":state.store.events.is_some(),"projects":projects,"agentCatalog":catalog,"providerAgentCatalogs":provider_catalogs,"computerCapabilities":capabilities,"commandAdmissionVersion":command_admission_version,"agentConnections":if connections.is_some(){json!(connection_metadata)}else{Value::Null}}),
+        json!({"actor":access.actor,"scope":access.scope,"ownerId":access.owner_id,"accountEvents":state.store.events.is_some(),"projects":projects,"agentCatalog":catalog,"providerAgentCatalogs":provider_catalogs,"computerCapabilities":capabilities,"commandAdmissionVersion":command_admission_version,"launchAttachmentHoldVersion":launch_attachment_hold_version,"agentConnections":if connections.is_some(){json!(connection_metadata)}else{Value::Null}}),
     ))
 }
 

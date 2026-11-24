@@ -344,6 +344,10 @@ pub struct CloudWorkspaceCreateRequest {
     pub environment_revision: Option<i64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<crate::cloud_assets::Asset>,
+    /// First-message files whose bytes are still uploading. The computer
+    /// starts at once; the first turn waits until every one is committed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_attachments: Vec<crate::cloud_assets::PendingAsset>,
     pub project_id: String,
     pub provider_id: String,
     pub base_ref: String,

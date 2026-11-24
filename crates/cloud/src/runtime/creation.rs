@@ -4,6 +4,36 @@ use crate::{access::Access, store::Workspace};
 use zuse_protocol::cloud::CloudRuntimeMode;
 
 pub use zuse_protocol::cloud::CloudWorkspaceCreateRequest as CreateWorkspace;
+/// Files still uploading may only join a server-admitted first turn, which
+/// the mailbox holds until they are committed. Their metadata must already
+/// be what the later commit records.
+fn valid_pending_attachments(body: &CreateWorkspace) -> bool {
+    let mut uploads = std::collections::HashSet::new();
+    body.initial_message_delivery.as_deref() == Some(zuse_protocol::cloud_task_commands::MODE)
+        && body.attachments.len() + body.pending_attachments.len()
+            <= zuse_protocol::cloud_assets::MAX_ASSETS
+        && body.pending_attachments.iter().all(|file| {
+            let name = zuse_protocol::cloud_assets::committed_name(&file.original_name);
+            !file.upload_id.is_empty()
+                && file.upload_id.len() <= 64
+                && file
+                    .upload_id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+                && uploads.insert(file.upload_id.as_str())
+                && zuse_protocol::cloud_assets::supported_mime(&file.mime_type)
+                && (1..=zuse_protocol::cloud_assets::MAX_BYTES).contains(&file.size_bytes)
+                && name == file.original_name
+                && !name.is_empty()
+                && name.len() <= 255
+                && !name.chars().any(char::is_control)
+                && file.sha256.len() == 43
+                && file
+                    .sha256
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+        })
+}
 fn validate(body: &CreateWorkspace) -> Result<(), ApiError> {
     if body
         .agent_connection_id
@@ -21,6 +51,9 @@ fn validate(body: &CreateWorkspace) -> Result<(), ApiError> {
         || (!body.attachments.is_empty()
             && body.initial_message_delivery.as_deref() == Some("mailbox-v1"))
     {
+        return Err(ApiError::bad_request("invalid_launch_attachments"));
+    }
+    if !body.pending_attachments.is_empty() && !valid_pending_attachments(body) {
         return Err(ApiError::bad_request("invalid_launch_attachments"));
     }
     if body.idempotency_key.is_empty()
@@ -818,6 +851,43 @@ impl RuntimeControl {
                     .await?;
             }
         }
+        // Files still uploading join the first turn under the ids their
+        // commit will have; the mailbox holds the turn until they are ready.
+        let pending = body
+            .pending_attachments
+            .iter()
+            .map(|file| {
+                Ok(zuse_protocol::cloud_assets::Asset {
+                    asset_id: self.asset_id(owner, &id, &file.upload_id)?,
+                    mime_type: file.mime_type.clone(),
+                    original_name: file.original_name.clone(),
+                    size_bytes: file.size_bytes,
+                    sha256: file.sha256.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>, ApiError>>()?;
+        if !pending.is_empty() {
+            if !server_admitted
+                || facts.is_none()
+                || !staging
+                || !self.launch_attachment_hold_ready(&mut tx).await?
+            {
+                return Err(ApiError::unavailable(
+                    "cloud_launch_attachment_hold_unavailable",
+                ));
+            }
+            if build["settings"]["rustLaunchAssetsVersion"] != 1 {
+                return Err(ApiError::conflict(
+                    "cloud_launch_attachments_runtime_update_required",
+                ));
+            }
+        }
+        let launch_assets: Vec<_> = body
+            .attachments
+            .iter()
+            .chain(pending.iter())
+            .cloned()
+            .collect();
         let chat = format!("chat_{}", uuid::Uuid::new_v4());
         let session = format!("s_{}", uuid::Uuid::new_v4());
         let branch = body
@@ -859,8 +929,8 @@ impl RuntimeControl {
         if !body.model_options.is_empty() {
             intent["modelOptions"] = json!(body.model_options);
         }
-        if !body.attachments.is_empty() {
-            intent["attachments"] = json!(body.attachments);
+        if !launch_assets.is_empty() {
+            intent["attachments"] = json!(launch_assets);
         }
         let mailbox =
             server_admitted || body.initial_message_delivery.as_deref() == Some("mailbox-v1");
@@ -1084,7 +1154,11 @@ impl RuntimeControl {
                 )?);
             }
             let row = self.write_fresh_admission_batch_tx(&mut tx, &plan).await?;
-            if server_admitted && !body.attachments.is_empty() {
+            if !pending.is_empty() {
+                self.reserve_pending_assets_tx(&mut tx, &plan.workspace_id, &pending, now)
+                    .await?;
+            }
+            if server_admitted && !launch_assets.is_empty() {
                 // The first message's files are bound to its launch command.
                 self.hold_assets_tx(
                     &mut tx,
@@ -1093,7 +1167,7 @@ impl RuntimeControl {
                         session: &plan.session_id,
                         command: &plan.command_id,
                     },
-                    &body.attachments,
+                    &launch_assets,
                     now,
                 )
                 .await?;
@@ -1175,5 +1249,54 @@ pub(super) fn creation_actor_allowed(access: &Access) -> bool {
                 && matches!(member.role.slug.as_str(), "admin" | "member")
         }
         _ => false,
+    }
+}
+#[cfg(test)]
+mod pending_attachment_tests {
+    use super::*;
+    fn body(delivery: &str, pending: Value) -> CreateWorkspace {
+        serde_json::from_value(
+            json!({"projectId":"project","providerId":"boxd","baseRef":"main",
+            "agent":"codex","model":"fixture","idempotencyKey":"key","firstMessage":"Look",
+            "initialMessageDelivery":delivery,"pendingAttachments":pending}),
+        )
+        .unwrap()
+    }
+    fn file(upload: &str, name: &str) -> Value {
+        json!({"uploadId":upload,"mimeType":"image/png","originalName":name,"sizeBytes":10,
+            "sha256":"a".repeat(43)})
+    }
+    /// Files still uploading only ride a server-admitted first turn, with
+    /// exactly the metadata their commit records.
+    #[test]
+    fn pending_attachments_need_a_held_first_turn_and_committable_metadata() {
+        let mode = zuse_protocol::cloud_task_commands::MODE;
+        assert!(valid_pending_attachments(&body(
+            mode,
+            json!([file("shot", "shot.png")])
+        )));
+        assert!(!valid_pending_attachments(&body(
+            "mailbox-v1",
+            json!([file("shot", "shot.png")])
+        )));
+        assert!(!valid_pending_attachments(&body(
+            mode,
+            json!([file("shot", "shot.png"), file("shot", "again.png")])
+        )));
+        assert!(!valid_pending_attachments(&body(
+            mode,
+            json!([file("shot", "dir/shot.png")])
+        )));
+        assert!(!valid_pending_attachments(&body(
+            mode,
+            json!([file("bad id", "shot.png")])
+        )));
+        let mut huge = file("shot", "shot.png");
+        huge["sizeBytes"] = json!(zuse_protocol::cloud_assets::MAX_BYTES + 1);
+        assert!(!valid_pending_attachments(&body(mode, json!([huge]))));
+        let many: Vec<Value> = (0..=zuse_protocol::cloud_assets::MAX_ASSETS)
+            .map(|n| file(&format!("f{n}"), &format!("f{n}.png")))
+            .collect();
+        assert!(!valid_pending_attachments(&body(mode, json!(many))));
     }
 }

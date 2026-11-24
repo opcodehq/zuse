@@ -74,7 +74,33 @@ pub async fn create(
         anyhow::anyhow!("Cloud launch was interrupted. Retry the same request to check acceptance.")
     })?
 }
+/// Attempts per launch-file request. Chunks and commits are idempotent on the
+/// server, so a slow or dropped request is simply sent again.
+const LAUNCH_FILE_ATTEMPTS: u32 = 4;
 impl CloudApi {
+    async fn request_retried(
+        &self,
+        token: &str,
+        path: &[&str],
+        body: Value,
+        organization: Option<&str>,
+    ) -> Result<Value> {
+        let mut attempt = 1;
+        loop {
+            match self
+                .request_scoped(token, path, Some(body.clone()), organization, &[])
+                .await
+            {
+                Ok(value) => return Ok(value),
+                Err(error) if attempt < LAUNCH_FILE_ATTEMPTS => {
+                    tracing::warn!(%error, attempt, "cloud launch file request retry");
+                    tokio::time::sleep(std::time::Duration::from_secs(1 << (attempt - 1))).await;
+                    attempt += 1;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
     async fn upload_and_create(
         &self,
         token: &str,
@@ -130,34 +156,34 @@ impl CloudApi {
                 })
                 .await??;
             for (seq, chunk) in bytes.chunks(wire::CHUNK_BYTES).enumerate() {
-                self.request_scoped(
+                let body = serde_json::to_value(wire::Chunk {
+                    idempotency_key: request.idempotency_key.clone(),
+                    upload_id: transfer.upload_id.clone(),
+                    seq,
+                    bytes: URL_SAFE_NO_PAD.encode(chunk),
+                })?;
+                self.request_retried(
                     token,
                     &["v1", "cloud", "launch-assets", "chunk"],
-                    Some(serde_json::to_value(wire::Chunk {
-                        idempotency_key: request.idempotency_key.clone(),
-                        upload_id: transfer.upload_id.clone(),
-                        seq,
-                        bytes: URL_SAFE_NO_PAD.encode(chunk),
-                    })?),
+                    body,
                     organization,
-                    &[],
                 )
                 .await?;
             }
+            let body = serde_json::to_value(wire::Commit {
+                idempotency_key: request.idempotency_key.clone(),
+                upload_id: transfer.upload_id,
+                mime_type: mime,
+                original_name: transfer.file_name,
+                size_bytes: bytes.len(),
+                sha256: URL_SAFE_NO_PAD.encode(Sha256::digest(&bytes)),
+            })?;
             let result = self
-                .request_scoped(
+                .request_retried(
                     token,
                     &["v1", "cloud", "launch-assets", "commit"],
-                    Some(serde_json::to_value(wire::Commit {
-                        idempotency_key: request.idempotency_key.clone(),
-                        upload_id: transfer.upload_id,
-                        mime_type: mime,
-                        original_name: transfer.file_name,
-                        size_bytes: bytes.len(),
-                        sha256: URL_SAFE_NO_PAD.encode(Sha256::digest(&bytes)),
-                    })?),
+                    body,
                     organization,
-                    &[],
                 )
                 .await?;
             request

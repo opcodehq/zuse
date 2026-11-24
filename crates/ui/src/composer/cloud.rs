@@ -3,6 +3,7 @@ use super::*;
 use crate::localization::message as tr;
 use serde_json::{Value, json};
 use zuse_i18n::messages as msg;
+mod launch_upload;
 mod reupload;
 mod runtime_update;
 mod unknown;
@@ -52,6 +53,9 @@ pub(super) struct Launch {
     pub(super) failure: Option<SharedString>,
     /// When the new chat's first message was sent.
     started_at: Option<std::time::Instant>,
+    /// The new chat's first-message files uploading while its computer
+    /// starts (see [`launch_upload`]).
+    upload: Option<launch_upload::Progress>,
     /// A conversation just added beside the computer's others is still being
     /// recorded by the server (a few tens of milliseconds, no computer work):
     /// a send waits for it, so it never reaches the server unregistered.
@@ -78,6 +82,7 @@ impl Launch {
             staged: std::mem::take(&mut self.staged),
             failure: self.failure.take(),
             started_at: self.started_at.take(),
+            upload: self.upload.take(),
             owner: self.owner.clone(),
             organization: self.organization.clone(),
             ..Default::default()
@@ -92,6 +97,7 @@ impl Launch {
         self.staged = launch.staged;
         self.failure = launch.failure;
         self.started_at = launch.started_at;
+        self.upload = launch.upload;
     }
 }
 /// A new cloud chat being created in some tab: what its sidebar row and tab
@@ -936,6 +942,10 @@ impl Composer {
         if let Some((label, busy)) = self.cloud_creation_activity(cx) {
             let pill = super::tray::TrayPill::new("native-cloud-status", label.to_owned());
             if busy {
+                let pill = match self.cloud.upload.as_ref() {
+                    Some(upload) => pill.subtitle(upload.detail()),
+                    None => pill,
+                };
                 return Some(pill.icon_element(crate::loaders::mini_mono_spinner(
                     "native-cloud-status-spinner",
                     2.,
@@ -943,6 +953,39 @@ impl Composer {
                     cx.entity_id(),
                     cx,
                 )));
+            }
+            if self.launch_upload_failed() {
+                return Some(
+                    pill.glyph(crate::icons::DITHER_CLOUD)
+                        .tone(super::tray::TrayTone::Danger)
+                        .action(
+                            super::tray::tray_text_action(
+                                "retry-cloud-upload",
+                                "Retry",
+                                None,
+                                theme,
+                            )
+                            .tip("Upload the file again")
+                            .debug_selector(|| "retry-cloud-upload".into())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let text = this.input.read(cx).text().to_owned();
+                                this.send_cloud(text, cx);
+                            })),
+                        )
+                        .action(
+                            super::tray::tray_text_action(
+                                "remove-cloud-upload",
+                                "Remove",
+                                None,
+                                theme,
+                            )
+                            .tip("Remove the file and keep your message as a draft")
+                            .debug_selector(|| "remove-cloud-upload".into())
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.remove_failed_cloud_upload(cx)),
+                            ),
+                        ),
+                );
             }
             return Some(
                 pill.glyph(crate::icons::DITHER_CLOUD)
@@ -1002,6 +1045,9 @@ impl Composer {
             return None;
         }
         if self.cloud.task.is_some() {
+            if let Some(upload) = &self.cloud.upload {
+                return Some((upload.label(), true));
+            }
             let label = self
                 .cloud
                 .message
@@ -1473,13 +1519,21 @@ impl Composer {
             self.cloud.request = Some(
                 json!({"runtimeMode":runtime_mode,"agentConnectionId":connection,"projectId":project["projectId"],"providerId":project["providerId"],"sizeId":size,"baseRef":base_ref,"branch":branch,"agent":agent,"model":model,"reasoning":config.reasoning,"modelOptions":config.model_options,"idempotencyKey":uuid::Uuid::new_v4().to_string(),"firstMessage":text,"expectedAccountId":subject,"expectedOrganizationId":organization,"attachmentTransfers":staged.iter().map(|a|json!({"uploadId":a.id,"fileName":a.name})).collect::<Vec<_>>()}),
             );
-            if self
-                .pickers
-                .read(cx)
-                .cloud_v2_available(project["providerId"].as_str().unwrap_or("boxd"))
-            {
+            let provider = project["providerId"].as_str().unwrap_or("boxd");
+            if self.pickers.read(cx).cloud_v2_available(provider) {
                 self.cloud.request.as_mut().unwrap()["initialMessageDelivery"] =
                     json!("server-admitted-v2");
+            }
+            // Files declared up front: the computer starts now and the
+            // bytes upload beside it; the server holds the first turn until
+            // they land.
+            if !staged.is_empty()
+                && self.pickers.read(cx).cloud_launch_attachment_hold(provider)
+                && let Some(pending) = launch_upload::pending_attachments(&staged)
+            {
+                let request = self.cloud.request.as_mut().unwrap();
+                request["pendingAttachments"] = json!(pending);
+                request["attachmentTransfers"] = json!([]);
             }
             self.cloud.staged = staged.clone();
             self.input.update(cx, |input, cx| input.set_text("", cx));
@@ -1494,21 +1548,27 @@ impl Composer {
             .update(cx, |pickers, cx| pickers.freeze_cloud_launch(true, cx));
         let request = self.cloud.request.clone().unwrap();
         let accepted = self.cloud.accepted.clone();
+        let hold = request["pendingAttachments"]
+            .as_array()
+            .is_some_and(|files| !files.is_empty());
         self.cloud.message = Some(
-            if staged.is_empty() {
+            if staged.is_empty() || hold {
                 "Starting computer"
             } else {
                 "Uploading attachments…"
             }
             .into(),
         );
+        if let Some(upload) = self.cloud.upload.as_mut() {
+            upload.failed = None;
+        }
         self.failure = None;
         let launch_controller = controller.clone();
         // The launch belongs to this tab's draft: progress and the outcome land
         // on it even after the user moves to another tab or chat.
         let key = self.current_key.clone();
         self.cloud.task = Some(cx.spawn(async move |this, cx| {
-            if accepted.is_none() {
+            if accepted.is_none() && !hold {
                 for attachment in &staged {
                     if let Err(error) = attachments::upload_attachment(
                         &engine,
@@ -1585,6 +1645,58 @@ impl Composer {
             if workspace["commandDeliveryMode"] == "server-admitted-v2"
                 && workspace["commandAdmissionVersion"] == 2
             {
+                if hold {
+                    // The computer is starting: its first turn waits on the
+                    // server for these files.
+                    let progress = launch_upload::Progress::new(&staged);
+                    if this
+                        .update(cx, |this, cx| {
+                            this.on_launch(&key, cx, |this, cx| {
+                                this.cloud.accepted = Some(workspace.clone());
+                                this.cloud.upload = Some(progress.clone());
+                                cx.emit(ComposerEvent::CloudLaunchChanged);
+                                cx.notify();
+                            })
+                        })
+                        .is_err()
+                    {
+                        return;
+                    }
+                    let engine = controller.clone();
+                    let account = subject.clone();
+                    let scope = organization.clone();
+                    let call =
+                        launch_upload::asset_call(&engine, &id, &account, scope.as_deref());
+                    let executor = cx.background_executor().clone();
+                    let mut upload = std::pin::pin!(launch_upload::upload_files(
+                        &call, &executor, &staged, &progress
+                    ));
+                    let result = loop {
+                        let paint = executor.timer(launch_upload::PAINT_INTERVAL);
+                        match futures::future::select(upload.as_mut(), paint).await {
+                            futures::future::Either::Left((result, _)) => break result,
+                            futures::future::Either::Right(_) => {
+                                if this
+                                    .update(cx, |this, cx| {
+                                        this.on_launch(&key, cx, |_, cx| cx.notify())
+                                    })
+                                    .is_err()
+                                {
+                                    return;
+                                }
+                            }
+                        }
+                    };
+                    let _ = this.update(cx, |this, cx| {
+                        this.on_launch(&key, cx, |this, cx| match result {
+                            Ok(()) => {
+                                this.finish_admitted_launch(workspace, subject, organization, cx)
+                            }
+                            Err(failure) => this.launch_upload_failure(failure, cx),
+                        })
+                    });
+                    return;
+                }
                 let _ = this.update(cx, |this, cx| {
                     this.on_launch(&key, cx, |this, cx| {
                         this.finish_admitted_launch(workspace, subject, organization, cx)
@@ -1713,6 +1825,7 @@ impl Composer {
     ) {
         let launch = self.cloud.request.take().unwrap_or_default();
         self.cloud.accepted = None;
+        self.cloud.upload = None;
         self.cloud.staged.clear();
         self.cloud.issue = None;
         self.cloud.task = None;
@@ -1864,6 +1977,7 @@ impl Composer {
         self.cloud.message = None;
         self.cloud.issue = None;
         self.cloud.failure = None;
+        self.cloud.upload = None;
         let staged = std::mem::take(&mut self.cloud.staged);
         if self
             .failure_key
@@ -2012,6 +2126,53 @@ impl Composer {
         tracing::warn!(%reason, "cloud thread start refused");
         self.failure = Some(reason.to_owned().into());
         self.failure_key = None;
+        cx.notify();
+    }
+    /// A first-message file ran out of attempts while the computer started:
+    /// the launch waits with Retry (the same files to the same computer)
+    /// and Remove.
+    fn launch_upload_failure(&mut self, failure: launch_upload::Failure, cx: &mut Context<Self>) {
+        tracing::warn!(error = %failure.error, "cloud launch upload failed");
+        if let Some(upload) = self.cloud.upload.as_mut() {
+            upload.failed = Some(failure.file);
+        }
+        self.cloud_failure(
+            format!(
+                "Couldn't upload {}. Your message is saved here.",
+                failure.name
+            ),
+            cx,
+        );
+    }
+    /// The launch's upload stopped and offers Remove.
+    pub(super) fn launch_upload_failed(&self) -> bool {
+        self.cloud.task.is_none()
+            && self
+                .cloud
+                .upload
+                .as_ref()
+                .is_some_and(|upload| upload.failed.is_some())
+    }
+    /// Remove the file that wouldn't upload. The started computer is archived
+    /// (its first turn waits for that file), and the message with its other
+    /// files returns to the draft, ready to send again.
+    pub(crate) fn remove_failed_cloud_upload(&mut self, cx: &mut Context<Self>) {
+        let Some(failed) = self
+            .cloud
+            .upload
+            .as_ref()
+            .and_then(|upload| upload.failed.clone())
+        else {
+            return;
+        };
+        self.discard_cloud_launch(cx);
+        if let Some(files) = self.attachments.get_mut(&self.current_key) {
+            files.retain(|file| file.id != failed);
+        }
+        for (_, files) in &mut self.cloud.rejected_drafts {
+            files.retain(|file| file.id != failed);
+        }
+        self.sync_attachment_chips(cx);
         cx.notify();
     }
     pub(super) fn cloud_failure(&mut self, message: String, cx: &mut Context<Self>) {

@@ -450,6 +450,8 @@ impl RuntimeControl {
         }
         intent.commit(&mut tx, &current).await?;
         tx.commit().await?;
+        // A first turn waiting for this file may go to the computer now.
+        let _ = self.mailbox_changes.send(());
         Ok(json!({"workspaceId":id,"asset":expected}))
     }
 }
