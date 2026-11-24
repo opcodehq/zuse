@@ -21,6 +21,14 @@ macro_rules! assets {
     }
 }
 assets!(
+    "issue-backlog",
+    "issue-todo",
+    "issue-progress",
+    "issue-attention",
+    "issue-blocked",
+    "issue-done",
+    "issue-canceled",
+    "priority-urgent",
     "zuse-logo",
     "cloud-boxd",
     "site-github",

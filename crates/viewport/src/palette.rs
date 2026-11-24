@@ -23,6 +23,11 @@ pub fn usage_menu() -> Option<UsageMenuColors> {
 
 /// The Zuse brand green every authored accent uses (`0x89ca21`).
 const BRAND_GREEN: u32 = 0x89ca21;
+pub const DANGER: u32 = 0xf87171;
+pub const WARNING: u32 = 0xfacc15;
+pub const AMBER: u32 = 0xfbbf24;
+pub const SUCCESS: u32 = 0x34d399;
+pub const PURPLE: u32 = 0xc084fc;
 /// The active theme's accent, which replaces the brand green in every
 /// authored color; `None` keeps Zuse's own green.
 pub fn set_accent(accent: Option<gpui::Hsla>) {
@@ -42,6 +47,11 @@ pub fn rgb(value: u32) -> gpui::Rgba {
     }
     let value = if is_light() {
         match value {
+            DANGER => 0xdc2626,
+            WARNING => 0xa16207,
+            AMBER => 0x90600e,
+            SUCCESS => 0x15803d,
+            PURPLE => 0x7924b2,
             0x151515 => 0xf7f9f6,
             0x1e1e1e => 0xf1f5ef,
             0x121413 | 0x101010 | 0x141414 | 0x181916 | 0x181a18 => 0xffffff,

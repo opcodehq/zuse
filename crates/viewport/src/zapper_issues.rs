@@ -41,6 +41,7 @@ pub struct IssuePanel {
     needs_you_only: bool,
     collapsed: HashSet<String>,
     thread_states: HashMap<String, ThreadState>,
+    activity_connected: bool,
     /// The signed-in person's name, for their avatar on comments.
     user_name: Option<String>,
     menu: Option<&'static str>,
@@ -97,6 +98,7 @@ impl IssuePanel {
             selected: None,
             needs_you_only: false,
             thread_states: HashMap::new(),
+            activity_connected: false,
             user_name: None,
             collapsed: ["Done".to_owned(), "Canceled".to_owned()]
                 .into_iter()
@@ -171,6 +173,12 @@ impl IssuePanel {
     pub fn thread_states(&mut self, states: HashMap<String, ThreadState>, cx: &mut Context<Self>) {
         if self.thread_states != states {
             self.thread_states = states;
+            cx.notify();
+        }
+    }
+    pub fn activity_connected(&mut self, connected: bool, cx: &mut Context<Self>) {
+        if self.activity_connected != connected {
+            self.activity_connected = connected;
             cx.notify();
         }
     }
@@ -498,6 +506,10 @@ impl IssuePanel {
         let assignee = self.owner_name(owner.as_ref());
         // Its thread waits for a slot: show Queued, not a running status.
         let queued = self.zapper.issue_queued_worker(issue).is_some();
+        let working = matches!(owner.as_ref(), Some(ZapperIssueOwner::Thread { chat_id })
+            if self.zapper.workers.iter().any(|w| w.chat_id == *chat_id)
+                && self.thread_state(chat_id) == ThreadState::Working)
+            && issue_activity_allowed(issue.details.status, self.activity_connected, queued);
         row()
             .id(SharedString::from(format!("issue-row-{id}")))
             .role(Role::Button)
@@ -536,6 +548,7 @@ impl IssuePanel {
                 )
             })
             .when_some(issue.pull_requests.first(), |d, pr| d.child(pr_badge(pr)))
+            .child(issue_working(working, cx.reduce_motion()))
             .child(
                 div()
                     .id(SharedString::from(format!("issue-row-assignee-{id}")))
@@ -2287,35 +2300,80 @@ fn input_box(input: Entity<TextInput>, height: f32) -> Div {
         .border_color(rgb(BORDER))
         .child(input)
 }
-/// The Needs-you amber, shared by its status, question cards and badges.
-pub const NEEDS_YOU: u32 = 0xf2a14a;
+pub const NEEDS_YOU: u32 = crate::palette::DANGER;
 pub fn status_color(status: ZapperIssueStatus) -> u32 {
     match status {
-        ZapperIssueStatus::NeedsYou => NEEDS_YOU,
-        ZapperIssueStatus::InProgress | ZapperIssueStatus::InReview | ZapperIssueStatus::Done => {
-            0x00b80a
-        }
-        ZapperIssueStatus::Blocked => 0xd9bf60,
-        _ => MUTED,
+        ZapperIssueStatus::NeedsYou | ZapperIssueStatus::Blocked => NEEDS_YOU,
+        ZapperIssueStatus::InProgress => crate::palette::WARNING,
+        ZapperIssueStatus::InReview => crate::palette::SUCCESS,
+        ZapperIssueStatus::Done => crate::palette::PURPLE,
+        _ => 0x929292,
     }
 }
 pub fn status_icon(status: ZapperIssueStatus) -> Div {
-    let color = status_color(status);
-    div()
-        .size(px(12.))
-        .rounded_full()
-        .border_2()
-        .border_color(rgb(color))
-        .when(
-            matches!(
-                status,
-                ZapperIssueStatus::InProgress
-                    | ZapperIssueStatus::InReview
-                    | ZapperIssueStatus::Done
-                    | ZapperIssueStatus::NeedsYou
-            ),
-            |d| d.child(div().size(px(5.)).bg(rgb(color))),
+    div().size(px(14.)).flex_none().child(
+        icon(status_glyph(status))
+            .size(px(14.))
+            .text_color(rgb(status_color(status))),
+    )
+}
+pub fn status_glyph(status: ZapperIssueStatus) -> &'static str {
+    match status {
+        ZapperIssueStatus::Backlog => "issue-backlog",
+        ZapperIssueStatus::Todo | ZapperIssueStatus::InReview => "issue-todo",
+        ZapperIssueStatus::InProgress => "issue-progress",
+        ZapperIssueStatus::NeedsYou => "issue-attention",
+        ZapperIssueStatus::Blocked => "issue-blocked",
+        ZapperIssueStatus::Done => "issue-done",
+        ZapperIssueStatus::Canceled => "issue-canceled",
+    }
+}
+fn issue_activity_allowed(status: ZapperIssueStatus, connected: bool, queued: bool) -> bool {
+    connected
+        && !queued
+        && !matches!(
+            status,
+            ZapperIssueStatus::NeedsYou
+                | ZapperIssueStatus::Blocked
+                | ZapperIssueStatus::Done
+                | ZapperIssueStatus::Canceled
         )
+}
+fn issue_working(working: bool, reduced_motion: bool) -> Div {
+    let mut grid = div()
+        .w(px(8.))
+        .h(px(8.))
+        .flex_none()
+        .flex()
+        .flex_col()
+        .gap(px(1.));
+    for _ in 0..3 {
+        let mut line = row().gap(px(1.));
+        for _ in 0..3 {
+            line = line.child(div().size(px(2.)).rounded(px(0.5)).bg(rgb(0x929292)));
+        }
+        grid = grid.child(line);
+    }
+    if !working {
+        return grid.invisible();
+    }
+    let grid = grid
+        .id("issue-agent-activity")
+        .role(Role::Image)
+        .aria_label("Assigned agent is working");
+    if reduced_motion {
+        div().size(px(8.)).flex_none().child(grid)
+    } else {
+        div().size(px(8.)).flex_none().child(
+            grid.with_animation(
+                "issue-agent-working",
+                Animation::new(std::time::Duration::from_millis(900))
+                    .repeat()
+                    .with_easing(pulsating_between(0.3, 1.)),
+                |grid, delta| grid.opacity(delta),
+            ),
+        )
+    }
 }
 fn pr_badge(pr: &ZapperIssuePullRequest) -> Div {
     row()
@@ -2620,6 +2678,13 @@ fn pr_label(pr: &ZapperIssuePullRequest) -> String {
     )
 }
 fn priority_icon(priority: ZapperIssuePriority) -> Div {
+    if priority == ZapperIssuePriority::Urgent {
+        return div().size(px(14.)).flex_none().child(
+            icon("priority-urgent")
+                .size(px(14.))
+                .text_color(rgb(crate::palette::DANGER)),
+        );
+    }
     let count = match priority {
         ZapperIssuePriority::Low => 1,
         ZapperIssuePriority::Normal => 2,
@@ -2632,10 +2697,87 @@ fn priority_icon(priority: ZapperIssuePriority) -> Div {
                 .w(px(2.5))
                 .h(px(4. + i as f32 * 3.))
                 .rounded(px(1.))
-                .bg(rgb(if i < count { 0x929292 } else { 0x343434 })),
+                .bg(rgb(if i >= count {
+                    BORDER
+                } else if priority == ZapperIssuePriority::High {
+                    crate::palette::AMBER
+                } else {
+                    0x929292
+                })),
         );
     }
     bars
+}
+#[cfg(test)]
+mod presentation_tests {
+    use super::*;
+
+    #[test]
+    fn issue_states_keep_distinct_shapes_and_semantic_colors() {
+        assert_ne!(
+            status_glyph(ZapperIssueStatus::Backlog),
+            status_glyph(ZapperIssueStatus::Todo)
+        );
+        assert_ne!(
+            status_glyph(ZapperIssueStatus::NeedsYou),
+            status_glyph(ZapperIssueStatus::Blocked)
+        );
+        assert_eq!(
+            status_color(ZapperIssueStatus::NeedsYou),
+            crate::palette::DANGER
+        );
+        assert_eq!(
+            status_color(ZapperIssueStatus::InProgress),
+            crate::palette::WARNING
+        );
+        assert_eq!(
+            status_color(ZapperIssueStatus::InReview),
+            crate::palette::SUCCESS
+        );
+        assert_eq!(
+            status_color(ZapperIssueStatus::Done),
+            crate::palette::PURPLE
+        );
+        for light in [false, true] {
+            crate::palette::set_light(light);
+            assert_ne!(
+                rgb(status_color(ZapperIssueStatus::NeedsYou)),
+                rgb(status_color(ZapperIssueStatus::InReview))
+            );
+            assert_ne!(
+                rgb(status_color(ZapperIssueStatus::Done)),
+                rgb(status_color(ZapperIssueStatus::Todo))
+            );
+        }
+        crate::palette::set_light(false);
+    }
+
+    #[test]
+    fn issue_activity_requires_live_nonqueued_nonblocked_work() {
+        assert!(issue_activity_allowed(
+            ZapperIssueStatus::InProgress,
+            true,
+            false
+        ));
+        assert!(!issue_activity_allowed(
+            ZapperIssueStatus::InProgress,
+            false,
+            false
+        ));
+        assert!(!issue_activity_allowed(
+            ZapperIssueStatus::InProgress,
+            true,
+            true
+        ));
+        for status in [
+            ZapperIssueStatus::Blocked,
+            ZapperIssueStatus::NeedsYou,
+            ZapperIssueStatus::Done,
+            ZapperIssueStatus::Canceled,
+        ] {
+            assert!(!issue_activity_allowed(status, true, false));
+        }
+    }
 }
 /// "now", "5m", "3h", "2d": the row's narrow time column.
 fn short_time(millis: i64) -> String {

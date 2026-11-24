@@ -1,0 +1,19 @@
+.issue-state-icon, .issue-priority-icon { color: var(--text-muted); vertical-align: middle; }
+.issue-state-icon[data-status="needsYou"], .issue-state-icon[data-status="blocked"], .issue-priority-icon[data-priority="urgent"] { color: var(--danger); }
+.issue-state-icon[data-status="inProgress"] { color: var(--warning); }
+.issue-state-icon[data-status="inReview"] { color: var(--success); }
+.issue-state-icon[data-status="done"] { color: var(--syntax-keyword); }
+.issue-priority-icon[data-priority="high"] { color: var(--syntax-number); }
+.issue-priority-icon { display: inline-flex; width: 14px; height: 14px; flex: none; align-items: center; }
+.issue-priority-bars { display: flex; align-items: end; height: 12px; gap: 2px; }
+.issue-priority-bars i { width: 3px; height: 4px; border-radius: 1px; background: currentColor; opacity: .2; }
+.issue-priority-bars i:nth-child(2) { height: 8px; }
+.issue-priority-bars i:nth-child(3) { height: 12px; }
+.issue-priority-bars i[data-active="true"] { opacity: 1; }
+.issue-metadata { display: inline-flex; align-items: center; gap: 5px; }
+.issue-working { display: inline-grid; grid-template-columns: repeat(3, 2px); gap: 1px; width: 8px; height: 8px; flex: none; margin-right: 4px; visibility: hidden; }
+.issue-working[data-working] { visibility: visible; }
+.issue-working i { background: var(--text-muted); border-radius: 1px; animation: issue-working-pulse 900ms ease-in-out infinite alternate; }
+@keyframes issue-working-pulse { from { opacity: .25; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .issue-working i { animation: none; } }
+[data-reduce-motion="on"] .issue-working i { animation: none; }
