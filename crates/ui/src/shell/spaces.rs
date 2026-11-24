@@ -954,16 +954,21 @@ mod pinned_session_tests {
     }
 
     #[test]
-    fn density_takes_the_compact_toggles_place_only_in_projects() {
+    fn density_takes_the_compact_toggles_place_in_projects_and_devices() {
         use super::*;
         let compact = SIDEBAR_VIEW_ITEMS
             .iter()
             .position(|item| matches!(item, SidebarViewItem::Row(SidebarViewRow::Compact)))
             .unwrap();
-        assert!(matches!(
-            sidebar_view_item(compact, SidebarOrganization::ByProject),
-            Some(SidebarViewItem::Group(SIDEBAR_VIEW_DENSITY_GROUP))
-        ));
+        for organization in [
+            SidebarOrganization::ByProject,
+            SidebarOrganization::ByDevice,
+        ] {
+            assert!(matches!(
+                sidebar_view_item(compact, organization),
+                Some(SidebarViewItem::Group(SIDEBAR_VIEW_DENSITY_GROUP))
+            ));
+        }
         let (label, range) = sidebar_view_group(compact, SidebarOrganization::ByProject).unwrap();
         assert_eq!(*label, "Density");
         assert!(matches!(
@@ -973,16 +978,11 @@ mod pinned_session_tests {
                 SidebarViewRow::DensityDetailed
             ]
         ));
-        for organization in [
-            SidebarOrganization::InOneList,
-            SidebarOrganization::ByDevice,
-        ] {
-            assert!(matches!(
-                sidebar_view_item(compact, organization),
-                Some(SidebarViewItem::Row(SidebarViewRow::Compact))
-            ));
-            assert!(sidebar_view_group(compact, organization).is_none());
-        }
+        assert!(matches!(
+            sidebar_view_item(compact, SidebarOrganization::InOneList),
+            Some(SidebarViewItem::Row(SidebarViewRow::Compact))
+        ));
+        assert!(sidebar_view_group(compact, SidebarOrganization::InOneList).is_none());
     }
 
     #[test]
@@ -2226,7 +2226,7 @@ const SIDEBAR_VIEW_GROUPS: [(&str, std::ops::Range<usize>); 3] =
     [("Sort", 0..2), ("Show", 2..8), ("Density", 8..10)];
 
 /// The Density submenu, which takes the Compact toggle's place in the
-/// Projects view.
+/// Projects and Devices views.
 const SIDEBAR_VIEW_DENSITY_GROUP: usize = 2;
 
 const SIDEBAR_VIEW_ROWS: [SidebarViewRow; 10] = [
@@ -2242,12 +2242,12 @@ const SIDEBAR_VIEW_ROWS: [SidebarViewRow; 10] = [
     SidebarViewRow::DensityDetailed,
 ];
 
-/// The top-level row at `item` for this view. The Projects view shapes its
-/// rows with the Density submenu; other views keep the Compact toggle.
+/// The top-level row at `item` for this view. Projects and Devices shape
+/// their rows with the Density submenu; Threads keeps the Compact toggle.
 fn sidebar_view_item(item: usize, organization: SidebarOrganization) -> Option<SidebarViewItem> {
     match SIDEBAR_VIEW_ITEMS.get(item)? {
         SidebarViewItem::Row(SidebarViewRow::Compact)
-            if organization == SidebarOrganization::ByProject =>
+            if organization != SidebarOrganization::InOneList =>
         {
             Some(SidebarViewItem::Group(SIDEBAR_VIEW_DENSITY_GROUP))
         }
@@ -5749,7 +5749,7 @@ impl Shell {
                 };
                 drag.source_index = index;
                 let nested = !(section_index == 0 && pinned_count > 0)
-                    && self.settings.sidebar_organization == SidebarOrganization::ByProject
+                    && self.settings.sidebar_organization != SidebarOrganization::InOneList
                     && group
                         .as_ref()
                         .is_some_and(|(key, _)| !key.starts_with("section:"));
@@ -5859,6 +5859,13 @@ impl Shell {
                 && group
                     .as_ref()
                     .is_some_and(|(key, _)| !key.starts_with("section:"));
+            // Rows under a project or device heading share one shape; only
+            // project headings carry the avatar and actions.
+            let nested_rows = (project_group
+                || self.settings.sidebar_organization == SidebarOrganization::ByDevice)
+                && group
+                    .as_ref()
+                    .is_some_and(|(key, _)| !key.starts_with("section:"));
             let header_icon_chat = (project_group && self.settings.sidebar_show_project_icon)
                 .then(|| rows.first().map(|row| row.chat.id.clone()))
                 .flatten();
@@ -5879,7 +5886,7 @@ impl Shell {
                 let is_selected = selected.as_deref() == Some(chat.id.as_str());
                 // Under a project heading, the card names its branch instead
                 // of repeating the project.
-                let folder = if project_group {
+                let folder = if nested_rows {
                     let state = self.state.read(cx);
                     crate::change_requests::conversation_branch(&chat, &state.spaces)
                         .map(str::trim)
@@ -5895,9 +5902,9 @@ impl Shell {
                     .then(|| chat.config.as_ref().map(|c| c.harness))
                     .flatten();
                 let height = sidebar_row_height(
-                    self.sidebar_row_compact(project_group),
+                    self.sidebar_row_compact(nested_rows),
                     self.sidebar_project_labels(),
-                    project_group,
+                    nested_rows,
                 );
                 // Only rows a jump slot can reach wear a chip; row 10 onward
                 // keeps its time-ago.
@@ -5959,8 +5966,8 @@ impl Shell {
                     is_moving,
                     if is_moving { None } else { drag },
                     jump_label,
-                    self.settings.sidebar_show_project_icon && !project_group,
-                    project_group,
+                    self.settings.sidebar_show_project_icon && !nested_rows,
+                    nested_rows,
                     false,
                     None,
                     theme,

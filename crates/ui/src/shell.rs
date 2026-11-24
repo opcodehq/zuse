@@ -1192,8 +1192,8 @@ impl Shell {
             && self.settings.sidebar_organization != SidebarOrganization::InOneList
     }
 
-    /// Whether a row takes one line. Rows under a Projects heading follow
-    /// Density; Compact shapes the rest.
+    /// Whether a row takes one line. Rows under a project or device heading
+    /// follow Density; Compact shapes the rest.
     pub(crate) fn sidebar_row_compact(&self, nested: bool) -> bool {
         if nested {
             self.settings.sidebar_project_density == SidebarDensity::Compact

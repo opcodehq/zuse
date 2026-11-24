@@ -358,8 +358,9 @@ impl Shell {
                     .or_else(|| settings::remembered_cloud_agent(&workspace, cx))
             })
             .flatten();
+        // Under a project or device heading, rows take the nested shape.
         let project_group =
-            !settled && self.settings.sidebar_organization == SidebarOrganization::ByProject;
+            !settled && self.settings.sidebar_organization != SidebarOrganization::InOneList;
         let height = if settled {
             super::SIDEBAR_SETTLED_ROW_HEIGHT
         } else {
@@ -1717,7 +1718,25 @@ mod tests {
                 "{row}: mark sits beside the age"
             );
         }
-        // Density belongs to the Projects view: the Threads view keeps cards.
+        // Device groups draw the same rows, divided by machine.
+        shell.update(cx, |shell, cx| {
+            shell.settings.sidebar_organization = SidebarOrganization::ByDevice;
+            shell.sidebar_collapsed_groups.clear();
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear());
+        for (row, mark) in [
+            ("chat-local-1", "chat-computer-mark-local-1"),
+            ("chat-cloud:task-1", "chat-cloud-mark-cloud:task-1"),
+        ] {
+            assert_eq!(
+                f32::from(cx.debug_bounds(row).expect(row).size.height),
+                super::super::SIDEBAR_ROW_SINGLE_HEIGHT
+            );
+            assert!(cx.debug_bounds(mark).is_some(), "{mark}");
+        }
+        // Density belongs to Projects and Devices: the Threads view keeps cards.
         shell.update(cx, |shell, cx| {
             shell.settings.sidebar_organization = SidebarOrganization::InOneList;
             cx.notify();
