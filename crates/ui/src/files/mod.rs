@@ -21,6 +21,7 @@ use crate::{
 };
 
 pub mod client;
+pub(crate) mod computer_wake;
 mod context_menu;
 mod create;
 pub mod document;
@@ -341,6 +342,8 @@ pub struct FilesSurface {
     loads: HashMap<(String, Option<String>), Task<()>>,
     error: Option<SharedString>,
     started: bool,
+    /// An editor tab waiting on a sleeping cloud computer.
+    computer_wake: computer_wake::ComputerWake,
     _observe: Subscription,
     _search_events: Subscription,
 }
@@ -363,7 +366,9 @@ impl Render for FilesSurface {
         } else {
             Some(self.render_explorer_header(&theme, cx))
         };
-        let body = if is_editor {
+        let body = if let Some(view) = self.wake_view(cx) {
+            self.render_wake_view(view, &theme, cx)
+        } else if is_editor {
             self.render_preview(window, cx)
         } else {
             self.render_explorer(&theme, cx).into_any_element()
@@ -664,6 +669,7 @@ impl FilesSurface {
             if this.sync_target(cx) {
                 this.ensure_loaded(cx);
             }
+            this.observe_computer_wake(cx);
             this.sync_active_markdown_comments(cx);
         });
         // The list state exposes no scroll handle, so the floating rail
@@ -729,6 +735,7 @@ impl FilesSurface {
             loads: HashMap::new(),
             error: None,
             started: false,
+            computer_wake: Default::default(),
             _observe: observe,
             _search_events: search_events,
         };
@@ -890,6 +897,12 @@ impl FilesSurface {
 
     pub fn ensure_loaded(&mut self, cx: &mut Context<Self>) {
         self.sync_target(cx);
+        // A sleeping cloud computer is woken first; the read follows once its
+        // tools connect (see `observe_computer_wake`).
+        if self.awaiting_computer(cx) {
+            self.request_computer_wake(cx);
+            return;
+        }
         if self.request_context.is_none() {
             return;
         }

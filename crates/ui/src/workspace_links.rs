@@ -635,7 +635,7 @@ fn percent_decode_path(encoded: &str) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
-fn percent_encode_path(path: &str) -> String {
+pub(crate) fn percent_encode_path(path: &str) -> String {
     let mut out = String::new();
     for byte in path.bytes() {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/') {

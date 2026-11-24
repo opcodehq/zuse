@@ -16,6 +16,8 @@ use zuse_i18n::messages as msg;
 mod cloud;
 pub(crate) use cloud::CloudCanvasChoices;
 mod cloud_models;
+#[cfg(test)]
+pub(crate) use cloud_models::configurable_cloud_context_for_test;
 mod compact;
 mod creation_sources;
 mod import_chat;

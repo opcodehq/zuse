@@ -2663,6 +2663,45 @@ mod cached_tests {
         });
         drop(receive);
     }
+    /// Reasoning and fast mode picked in a cloud model's card ride the
+    /// create request, not just the card.
+    #[gpui::test]
+    fn new_cloud_request_carries_card_reasoning_and_fast_mode(cx: &mut gpui::TestAppContext) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let (send, receive) = tokio::sync::mpsc::channel(1);
+        let (_replies, replies) = tokio::sync::mpsc::channel(1);
+        let controller =
+            crate::state::EngineHandle::from_test_client(zuse_rpc::RpcClient::new(send, replies));
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            gpui_tokio::init_from_handle(cx, runtime.handle().clone());
+            crate::settings::init(crate::settings::UiSettings::default(), dir.path(), cx)
+        });
+        let state = cx.new(|_| {
+            let mut state = crate::state::AppState::new();
+            state.apply_cloud_account(json!({"user":{"id":"fixture-user"},"orgId":null}));
+            state.set_test_engine(controller);
+            state
+        });
+        let composer = cx.new(|cx| Composer::new(state, cx));
+        composer.update(cx, |composer, cx| {
+            composer.pickers.update(cx, |p, cx| {
+                p.seed_cloud_creation_for_test(
+                    crate::pickers::configurable_cloud_context_for_test(),
+                    json!({"projectId":"repository","accountId":"fixture-user","providerId":"boxd","defaultBranch":"main","canCreate":true,"supportsModelConfiguration":true}),
+                    cx,
+                );
+                p.set_card_settings_for_test(HarnessId::Codex, "gpt-sol", 3, true, cx);
+            });
+            assert!(composer.send_cloud("Use the configured model".into(), cx));
+            let request = composer.cloud.request.as_ref().unwrap();
+            assert_eq!(request["model"], "gpt-sol");
+            assert_eq!(request["reasoning"], "xhigh");
+            assert_eq!(request["modelOptions"]["serviceTier"], "fast");
+        });
+        drop(receive);
+    }
     /// Enter on a new cloud thread whose send is refused says why inline
     /// instead of doing nothing, and keeps the draft.
     #[gpui::test]

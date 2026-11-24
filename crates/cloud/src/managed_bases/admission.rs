@@ -305,6 +305,11 @@ async fn admission_case_with(
     assert!(control.admission_batch_available().await.unwrap());
     let mut store = crate::store::Store::from_pool(application.clone());
     store.connections = Some(authority);
+    // Managed computers honour launch reasoning and model options without a
+    // per-project build attesting them.
+    let projects = store.launch_projects("user-test").await.unwrap();
+    assert_eq!(projects[0]["projectId"], "project");
+    assert_eq!(projects[0]["supportsModelConfiguration"], true);
     let access = Access {
         actor: Principal {
             account_id: "user-test".into(),

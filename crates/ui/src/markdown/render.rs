@@ -2031,30 +2031,15 @@ fn text_element(
     let direct_file = opts
         .workspace_root
         .as_deref()
-        .and_then(|root| sole_file_reference(runs, root));
+        .and_then(|root| sole_file_reference(runs, root))
+        .or_else(|| sole_image_file_link(runs));
     let content = if let Some(path) = direct_file {
         div()
             .min_w_0()
             .flex()
             .items_center()
             .gap(px(4.0))
-            .child(
-                div()
-                    .size(px(20.0))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(4.0))
-                    .bg(crate::file_icons::well_bg(theme))
-                    .child(
-                        crate::file_icons::icon(
-                            crate::file_icons::FileIconIdentity::file(&path),
-                            theme.appearance,
-                        )
-                        .size(px(14.0)),
-                    ),
-            )
+            .child(file_icon_well(&path, theme))
             .child(div().min_w_0().flex_1().child(inner))
             .into_any_element()
     } else {
@@ -2064,6 +2049,27 @@ fn text_element(
         .text_size(crate::typography::ui_rems(size))
         .line_height(crate::typography::ui_rems(line_height))
         .child(content)
+        .into_any_element()
+}
+
+/// The file-type icon in its small rounded well, as it leads a paragraph that
+/// is one file link (a photo for an image). Inline images use the same lead.
+pub(crate) fn file_icon_well(path: &str, theme: &Theme) -> AnyElement {
+    div()
+        .size(px(20.0))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.0))
+        .bg(crate::file_icons::well_bg(theme))
+        .child(
+            crate::file_icons::icon(
+                crate::file_icons::FileIconIdentity::file(path),
+                theme.appearance,
+            )
+            .size(px(14.0)),
+        )
         .into_any_element()
 }
 
@@ -2088,6 +2094,31 @@ fn sole_workspace_file_link(runs: &[InlineRun], workspace_root: &str) -> Option<
     }
     crate::workspace_links::resolve_workspace_file_link(target?, workspace_root)
         .map(|link| link.path)
+}
+
+/// A paragraph that is one link to an image file keeps its photo lead even
+/// where no workspace root is known yet (a cloud chat whose rows are still
+/// loading, or a file outside every checkout), so image links always read
+/// the same.
+fn sole_image_file_link(runs: &[InlineRun]) -> Option<String> {
+    let mut target = None;
+    for run in runs.iter().filter(|run| !run.text.is_empty()) {
+        if run.style.image.is_some() || run.style.task.is_some() {
+            return None;
+        }
+        let link = run.style.link.as_deref()?;
+        match target {
+            Some(previous) if previous != link => return None,
+            None => target = Some(link),
+            _ => {}
+        }
+    }
+    let target = target?;
+    if target == super::mend::PENDING_LINK_URL || is_web_link(target) || target.contains("://") {
+        return None;
+    }
+    let path = target.split(['#', '?']).next().unwrap_or(target);
+    crate::attachments::is_image_path(path).then(|| path.to_owned())
 }
 
 /// A model sometimes emits a bare filename after being asked for a file list

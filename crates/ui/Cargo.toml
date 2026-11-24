@@ -10,6 +10,7 @@ simulator-fixture = ["gpui_platform/test-support", "gpui/bench"]
 voice-experimental = [] # Compatibility flag; native subscription voice uses Codex's packaged helper.
 project-palette-fixture = []
 compact-picker-fixture = ["gpui_platform/test-support", "gpui/bench"]
+image-links-fixture = ["appshots-fixture", "gpui/bench"]
 
 # Native captures explicitly present the freshly drawn scene, including when
 # a nested Wayland compositor has stopped requesting idle frames.
@@ -115,6 +116,10 @@ required-features = ["project-palette-fixture"]
 [[example]]
 name = "compact-picker-fixture"
 required-features = ["compact-picker-fixture"]
+
+[[example]]
+name = "image-links-fixture"
+required-features = ["image-links-fixture"]
 
 [dependencies]
 hayro = "0.9"
