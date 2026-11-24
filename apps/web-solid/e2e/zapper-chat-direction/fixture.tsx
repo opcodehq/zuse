@@ -1,13 +1,12 @@
 // Design-direction fixture: the current Zapper conversation (real App) beside a chat-first prototype.
 import { render } from "@solidjs/web";
-import { flush, Show, type JSX } from "solid-js";
+import { flush, For, Show, type JSX } from "solid-js";
 import { rpc } from "@/core/connection";
 import { setState } from "@/core/store";
 import { setView } from "@/core/view";
 import type { Zapper } from "@/core/zapper-types";
 import { App } from "@/shell/App";
 import { setInspectorOpen } from "@/features/zappers/state";
-import { Avatar, defaultAvatar } from "@/features/zappers/Avatar";
 import { Icon } from "@/ui/Icon";
 import "@/shell/shell.css";
 import "@/shell/theme";
@@ -65,47 +64,35 @@ function setupCurrent() {
   flush();
 }
 
-const ref = (label: string, kind: "issue" | "pr" | "thread", status?: string) => <a class="zc-ref" data-kind={kind} data-status={status} href="#"><span class="zc-ref-icon" aria-hidden="true">{kind === "issue" ? <i /> : <Icon name={kind === "pr" ? "pull-request" : "tool-agent"} size={12} />}</span>{label}</a>;
-
-function Sender(props: { live?: boolean }) {
-  return <div class="zc-sender"><Avatar avatar={defaultAvatar("captain")} size={20} /><strong>Release captain</strong><Show when={props.live}><span class="zc-live">working</span></Show></div>;
-}
-function Event(props: { icon: string; tone?: string; who: string; text: JSX.Element; when: string; action?: string }) {
-  return <div class="zc-event" data-tone={props.tone}><Icon name={props.icon} size={13} /><span class="zc-event-who">{props.who}</span><span class="zc-event-text">{props.text}</span><span class="zc-event-when">{props.when}</span><Show when={props.action}><button type="button" class="zc-link">{props.action}</button></Show></div>;
-}
+const glyph: Record<string, string> = {
+  inProgress: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 2.5a5.5 5.5 0 0 1 0 11Z" fill="currentColor"/></svg>',
+  done: '<svg viewBox="0 0 16 16"><path d="m3 8 3.2 3.2L13 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  needsYou: '<svg viewBox="0 0 16 16"><path d="m8 1.5 6.5 12h-13Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 5v4m0 2v.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+  inReview: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>',
+};
+const Grid = () => <span class="zc-grid" aria-hidden="true"><For each={[0, 1, 2, 3, 4, 5, 6, 7, 8]}>{() => <i />}</For></span>;
+const ref = (label: string, kind: "issue" | "pr" | "thread", status?: string) => <a class="zc-ref" data-kind={kind} data-status={status} href="#">{kind === "issue" ? <span class="zc-ref-icon" aria-hidden="true" innerHTML={glyph[status!]} /> : kind === "thread" ? <Grid /> : <span class="zc-ref-icon" aria-hidden="true"><Icon name="pull-request" size={12} /></span>}{label}</a>;
+const Event = (props: { children: JSX.Element }) => <div class="zc-event">{props.children}</div>;
+const Bot = (props: { children: JSX.Element }) => <div class="zc-bot">{props.children}</div>;
+const User = (props: { children: JSX.Element; reaction?: string; label?: string }) => <div class="zc-user"><Show when={props.reaction}><span class="zc-reaction" role="img" aria-label={props.label} title={props.label}>{props.reaction}</span></Show><div class="zc-bubble">{props.children}</div></div>;
 
 function Proposed() {
   return (
-    <div class="zc-page" data-standalone="true">
-      <header class="zc-head">
-        <Avatar avatar={defaultAvatar("captain")} size={22} />
-        <strong>Release captain</strong>
-        <span class="zc-head-status"><i />2 threads working</span>
-        <div class="zc-grow" />
-        <button type="button" class="zc-quiet"><Icon name="checklist" size={14} />Issues 2</button>
-        <button type="button" class="zc-quiet"><Icon name="info-circle" size={14} />Details</button>
-      </header>
-      <main class="zc-scroll"><div class="zc-column t-root">
-        <div class="zc-user"><div class="t-bubble">Reports from workers keep getting lost, and I can't tell when one is actually blocked. Can you sort that out?</div></div>
-        <div class="zc-turn">
-          <Sender />
-          <button type="button" class="zc-steps"><Icon name="alt-arrow-right" size={11} />Read 2 files, ran 1 search</button>
-          <p>I'll split this in two: one thread traces where reports disappear ({ref("ZAP-14", "issue", "inReview")}), another makes blocked workers visible here ({ref("ZAP-15", "issue", "needsYou")}). Both are starting now.</p>
-        </div>
-        <Event icon="check-circle" tone="success" who="Trace lost worker reports" text={<>finished · fix ready in {ref("#357", "pr")}</>} when="18m" action="Report" />
-        <div class="zc-turn">
-          <Sender />
-          <p>Found it. When a worker failed twice in a row, the second notice overwrote the first, so only the last report ever arrived. The fix is in {ref("#357", "pr")} with 71 tests passing. It's ready for your review whenever you have a minute.</p>
-        </div>
-        <div class="zc-ask">
-          <div class="zc-ask-head"><Icon name="danger-triangle" size={13} /><span>{ref("Show blocked workers in the chat", "thread")} needs your call</span><span class="zc-event-when">6m</span></div>
-          <p>Should a blocked worker interrupt the conversation, or wait until my next reply?</p>
-          <div class="zc-ask-actions"><button type="button" class="btn" data-variant="primary" data-size="sm">Answer</button><button type="button" class="btn" data-size="sm">Open thread</button></div>
-        </div>
-        <div class="zc-user"><div class="zc-bubble-wrap"><div class="t-bubble">Nice. Also keep the old report format working for chats saved before this change.</div><span class="zc-reaction" title="Release captain is working on this" aria-label="Seen, working on it">👀</span></div></div>
-        <div class="zc-turn"><Sender live /><div class="zc-typing" aria-label="Release captain is replying"><i /><i /><i /></div></div>
+    <div class="zc-page">
+      <main class="zc-scroll"><div class="zc-column">
+        <Event>Today 9:12 PM</Event>
+        <User reaction="👍" label="Handled">Reports from workers keep getting lost, and I can't tell when one is actually blocked. Can you sort that out?</User>
+        <Bot><p>I'll split this in two: one thread traces where reports disappear ({ref("ZAP-14", "issue", "inReview")}), another makes blocked workers visible here ({ref("ZAP-15", "issue", "needsYou")}). Both are starting now.</p></Bot>
+        <Event>{ref("Trace lost worker reports", "thread")} finished, worked for 23m</Event>
+        <Bot><p>Found it. When a worker failed twice in a row, the second notice overwrote the first, so only the last report ever arrived.</p><p>The fix is in {ref("#357", "pr")} with 71 tests passing, so {ref("ZAP-14", "issue", "inReview")} is ready for your review whenever you have a minute.</p></Bot>
+        <Bot>
+          <p>{ref("ZAP-15", "issue", "needsYou")} needs your call before it can continue: should a blocked worker interrupt this conversation, or wait until my next reply?</p>
+          <div class="zc-actions"><button type="button" class="btn" data-variant="primary" data-size="sm">Answer</button><button type="button" class="btn" data-size="sm">Open thread</button></div>
+        </Bot>
+        <Event>9:48 PM</Event>
+        <User reaction="👀" label="Seen, working on it">Interrupt. Also keep the old report format working for chats saved before this change.</User>
+        <Event>Working with {ref("Show blocked workers in the chat", "thread")}</Event>
       </div></main>
-      <footer class="zc-composer"><div class="zc-input">Reply to Release captain…<span class="zc-send"><Icon name="alt-arrow-up" size={14} /></span></div></footer>
     </div>
   );
 }
