@@ -8,7 +8,7 @@ import { state } from "@/core/store";
 import { Icon } from "@/ui/Icon";
 import { TerminalSpinner } from "@/ui/loaders";
 import { providerMarkdownHtml } from "@/ui/markdown";
-import { Button, IconButton, Menu, Spinner, Tabs, type MenuItem } from "@/ui/primitives";
+import { Button, Dialog, IconButton, Menu, Spinner, Tabs, type MenuItem } from "@/ui/primitives";
 import { createEffect, createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
 import { parsePatch } from "./diff";
 import { DiffView } from "./DiffView";
@@ -16,6 +16,8 @@ import { Banner, DiffStat, Empty, PrStateIcon } from "./parts";
 import { errorText, liveSubscribe, readErrorText, workspace, type Target } from "./store";
 import type { ChangeRequestCheck, ChangeRequestComment, ChangeRequestDetail, ChangeRequestListItem, ChangeRequestPage, ChangeRequestUpdate, SourceControlFrame } from "./types";
 import { copyText, plural, timeAgo } from "./util";
+import { PrConversation } from "./PrConversation";
+import { checkStatus, prStatus } from "./pr-conversation";
 
 type Filter = "authored" | "all" | "reviewing";
 const FILTERS: { value: Filter; label: string }[] = [
@@ -218,7 +220,7 @@ function CiLabel(props: { state: string }) {
   return <span data-tone={props.state === "failed" ? "danger" : props.state === "passed" ? "success" : undefined} class="ws-ci">{text()}</span>;
 }
 
-type DetailTab = "overview" | "activity" | "files";
+type DetailTab = "conversation" | "overview" | "activity" | "files";
 
 /** Comment drafts survive switching between pull requests in this tab. */
 const drafts = new Map<string, string>();
@@ -232,7 +234,13 @@ function PullRequestDetail(props: { target: Target; url: string; own: boolean; o
   // eslint-disable-next-line solid/reactivity
   const [notice, setNotice] = createSignal<string | null>(uncertain.has(props.url) ? "Comment delivery was uncertain. Check the discussion before posting again." : null);
   const [loading, setLoading] = createSignal(false);
-  const [tab, setTab] = createSignal<DetailTab>("overview");
+  const [tab, setTab] = createSignal<DetailTab>("conversation");
+  const [approval, setApproval] = createSignal<{ change: ChangeRequestUpdate; label: string; head: string; base?: string; baseName: string; state: string } | null>(null);
+  const approvalStale = () => {
+    const request = approval();
+    const current = detail();
+    return !request || !current || current.headRefOid !== request.head || current.baseRefOid !== request.base || current.baseRefName !== request.baseName || current.state !== request.state;
+  };
   const [updating, setUpdating] = createSignal<string | null>(null);
   const [patch, setPatch] = createSignal<string | null>(null);
   const [patchError, setPatchError] = createSignal<string | null>(null);
@@ -274,7 +282,15 @@ function PullRequestDetail(props: { target: Target; url: string; own: boolean; o
       M.WATCH_CHANGE_REQUEST,
       host({ url: props.url }),
       (frame) => {
-        if (frame.reset) (() => (setDetail(null), setPatch(null)))();
+        if (frame.reset) {
+          seq++;
+          seen = null;
+          seeded = false;
+          setApproval(null);
+          setDetail(null);
+          setPatch(null);
+          setLoading(false);
+        }
         if (frame.error) setError(frame.error);
         const snapshot = frame.snapshot as unknown as ChangeRequestDetail | null | undefined;
         if (frame.refreshing || !snapshot || typeof snapshot !== "object" || !("url" in snapshot)) return;
@@ -282,7 +298,7 @@ function PullRequestDetail(props: { target: Target; url: string; own: boolean; o
         if (key === seen) return void setError(null);
         if (!seeded) {
           seeded = true;
-          if (detail()) return;
+          if (detail() && !frame.reset) return;
         }
         seen = key;
         const old = detail();
@@ -301,18 +317,25 @@ function PullRequestDetail(props: { target: Target; url: string; own: boolean; o
     setPatchError(null);
     rpc.call<string | { patch?: string }>(M.GET_CHANGE_REQUEST_DIFF, host({ url: d.url, headRefOid: d.headRefOid, baseRefOid: d.baseRefOid })).then(
       (value) => {
-        if (detail()?.headRefOid !== d.headRefOid) return;
+        if (detail()?.headRefOid !== d.headRefOid || detail()?.baseRefOid !== d.baseRefOid) return;
         setPatch(typeof value === "string" ? value : value?.patch ?? "");
       },
-      (e) => setPatchError(readErrorText(e, "Couldn't read the diff.")),
+      (e) => { if (detail()?.headRefOid === d.headRefOid && detail()?.baseRefOid === d.baseRefOid) setPatchError(readErrorText(e, "Couldn't read the diff.")); },
     );
   };
-  createEffect(() => [(tab)(), (() => detail()?.headRefOid)()] as const, ([t, head]) => { void (t === "files" && head && patch() === null && loadPatch()); });
-  createEffect(() => detail()?.headRefOid, () => { void (setPatch(null)); }, { defer: true });
+  createEffect(() => [tab(), detail()?.headRefOid, detail()?.baseRefOid] as const, ([t, head, base], previous) => {
+    const changed = head !== previous?.[1] || base !== previous?.[2];
+    if (changed) setPatch(null);
+    if (t === "files" && head && (changed || patch() === null)) loadPatch();
+  });
 
-  const update = (change: ChangeRequestUpdate, label: string) => {
+  const update = (change: ChangeRequestUpdate, label: string, approved = false) => {
     const d = detail();
-    if (!d || updating()) return;
+    if (!d || updating() || !connected()) return;
+    if (!approved && ["merge", "enableAutoMerge", "close"].includes(change.kind)) {
+      setApproval({ change, label, head: d.headRefOid, base: d.baseRefOid, baseName: d.baseRefName, state: d.state });
+      return;
+    }
     const merging = change.kind === "merge" || change.kind === "enableAutoMerge";
     setUpdating(label);
     setNotice(null);
@@ -426,6 +449,20 @@ function PullRequestDetail(props: { target: Target; url: string; own: boolean; o
       <Show when={notice()}>
         <Banner tone="warning">{notice()}</Banner>
       </Show>
+      <Show when={detail() && approval()}>{request => (
+        <Dialog open onOpenChange={value => { if (!value) setApproval(null); }} title={`Confirm ${request().change.kind === "close" ? "closing" : request().change.kind === "enableAutoMerge" ? "auto-merge" : "merge"} #${detail()?.number}`} description={detail()?.title}
+          footer={<><Button onClick={() => setApproval(null)}>Cancel</Button><Button variant="primary" disabled={!connected() || !!updating() || approvalStale()} onClick={() => {
+            const pending = request();
+            if (approvalStale()) return;
+            setApproval(null);
+            update(pending.change, pending.label, true);
+          }}>Confirm {request().change.kind === "close" ? "close" : request().change.kind === "enableAutoMerge" ? "auto-merge" : "merge"}</Button></>}>
+          <p class="ws-small">{prStatus(detail()!)} </p>
+          <p class="ws-small ws-muted">{detail()?.headRefName} at <code>{request().head.slice(0, 7)}</code> → {detail()?.baseRefName}{"method" in request().change ? ` · ${(request().change as { method: string }).method}` : ""}</p>
+          <Show when={approvalStale()}><p role="alert">This pull request changed. Cancel and review its current state before trying again.</p></Show>
+          <p class="ws-small">This changes the pull request on GitHub. A chat message or reaction does not approve this action.</p>
+        </Dialog>
+      )}</Show>
       <Show when={detail()} fallback={<Show when={!error()}><div class="ws-empty"><Spinner label="Loading pull request" /></div></Show>}>
         {(d) => (
           <div class="ws-pr-detail">
@@ -449,19 +486,20 @@ function PullRequestDetail(props: { target: Target; url: string; own: boolean; o
                 </Show>
               </div>
             </div>
-            <div class="ws-subbar">
-              <Tabs
-                label="Pull request sections"
-                value={tab()}
-                onChange={setTab}
-                items={[
-                  { value: "overview", label: "Overview" },
-                  { value: "activity", label: activity().length ? `Activity ${activity().length}` : "Activity" },
-                  { value: "files", label: `Files ${d().files.length}` },
-                ]}
-              />
-            </div>
+            <nav class="ws-pr-navigation" aria-label="Pull request details">
+              <Show when={tab() !== "conversation"}><Button size="sm" variant="ghost" onClick={() => setTab("conversation")}>Back to conversation</Button></Show>
+              <Button size="sm" variant="ghost" aria-current={tab() === "overview" ? "page" : undefined} onClick={() => setTab("overview")}>Checks & details</Button>
+              <Button size="sm" variant="ghost" aria-current={tab() === "files" ? "page" : undefined} onClick={() => setTab("files")}>Files {d().files.length}</Button>
+              <Button size="sm" variant="ghost" aria-current={tab() === "activity" ? "page" : undefined} onClick={() => setTab("activity")}>GitHub discussion {activity().length || ""}</Button>
+            </nav>
             <Switch>
+              <Match when={tab() === "conversation"}>
+                <div class="ws-pr-scroll">
+                  <PrConversation detail={d()} chatId={props.target.chatId} archived={props.target.archived} disabled={!connected()} />
+                  <Show when={open()}><MergeBox detail={d()} busy={!!updating() || !connected()} onMerge={method => update({ kind: "merge", method }, "Merging")} onReady={() => update({ kind: "markReady" }, "Marking ready")} /></Show>
+                  <details class="ws-pr-description"><summary>Description</summary><MarkdownBody text={d().body.trim() || "No description provided."} /></details>
+                </div>
+              </Match>
               <Match when={tab() === "overview"}>
                 <div class="ws-pr-scroll">
                   <Show when={open()}>
@@ -497,7 +535,7 @@ function PullRequestDetail(props: { target: Target; url: string; own: boolean; o
                   <textarea
                     class="field ws-textarea"
                     rows={3}
-                    placeholder="Write a comment…"
+                    placeholder="Write a GitHub comment…"
                     aria-label="Comment"
                     value={comment()}
                     onInput={(e) => setComment(e.currentTarget.value)}
@@ -565,7 +603,7 @@ function MergeBox(props: { detail: ChangeRequestDetail; busy: boolean; onMerge: 
     if (pending()) return `${plural(pending(), "check")} still running.`;
     if (props.detail.reviewDecision.toUpperCase() === "CHANGES_REQUESTED") return "Changes were requested.";
     if (props.detail.reviewDecision.toUpperCase() === "REVIEW_REQUIRED") return "A review is required before merging.";
-    return "Ready to merge.";
+    return "Review the checks and discussion before merging.";
   };
   return (
     <section class="ws-pr-merge" aria-label="Merge">
@@ -588,10 +626,6 @@ function MergeBox(props: { detail: ChangeRequestDetail; busy: boolean; onMerge: 
       </Show>
     </section>
   );
-}
-
-function checkStatus(check: ChangeRequestCheck) {
-  return (check.conclusion || check.state || check.status || "").toUpperCase();
 }
 
 function CheckRow(props: { check: ChangeRequestCheck }) {
