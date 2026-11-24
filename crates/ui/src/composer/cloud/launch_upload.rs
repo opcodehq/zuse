@@ -49,8 +49,9 @@ pub(in crate::composer) struct Progress {
     sent: Arc<AtomicU64>,
     /// Requests waiting to be sent again.
     retrying: Arc<AtomicUsize>,
-    /// Files already committed: a Retry skips them.
-    committed: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    /// Files already committed, with what the server recorded for each: a
+    /// Retry skips them.
+    committed: Arc<std::sync::Mutex<std::collections::HashMap<String, Value>>>,
     total: u64,
     name: String,
     files: usize,
@@ -78,7 +79,7 @@ impl Progress {
             let committed = previous.committed.lock().unwrap().clone();
             let sent: u64 = files
                 .iter()
-                .filter(|file| committed.contains(&file.id))
+                .filter(|file| committed.contains_key(&file.id))
                 .map(|file| file.bytes().len() as u64)
                 .sum();
             progress.sent.store(sent, Ordering::Relaxed);
@@ -104,6 +105,15 @@ impl Progress {
         } else {
             format!("Uploading {} files · {percent}%", self.files)
         }
+    }
+    /// What the server recorded for each of `files` that has committed, in
+    /// their order.
+    pub(super) fn assets(&self, files: &[StagedAttachment]) -> Vec<Value> {
+        let committed = self.committed.lock().unwrap();
+        files
+            .iter()
+            .filter_map(|file| committed.get(&file.id).cloned())
+            .collect()
     }
     /// The status line's detail: bytes sent of the total.
     pub(super) fn detail(&self) -> String {
@@ -147,7 +157,8 @@ pub(super) struct Failure {
     pub error: String,
 }
 
-/// Upload every file to the new computer's storage in `CHUNK_BYTES` pieces.
+/// Upload every file to a computer's server storage in `CHUNK_BYTES`
+/// pieces, the size the server's commit expects.
 /// Each request is raced against its timeout and sent again with backoff;
 /// `progress` counts committed chunk bytes.
 pub(super) async fn upload_files(
@@ -159,18 +170,22 @@ pub(super) async fn upload_files(
     let current = std::cell::RefCell::new(None::<&StagedAttachment>);
     let upload = async {
         for file in files {
-            if progress.committed.lock().unwrap().contains(&file.id) {
+            if progress.committed.lock().unwrap().contains_key(&file.id) {
                 continue;
             }
             *current.borrow_mut() = Some(file);
-            upload_file(call, executor, file, progress)
+            let asset = upload_file(call, executor, file, progress)
                 .await
                 .map_err(|error| Failure {
                     file: file.id.clone(),
                     name: file.name.clone(),
                     error,
                 })?;
-            progress.committed.lock().unwrap().insert(file.id.clone());
+            progress
+                .committed
+                .lock()
+                .unwrap()
+                .insert(file.id.clone(), asset);
         }
         Ok(())
     };
@@ -208,7 +223,7 @@ async fn upload_file(
     executor: &gpui::BackgroundExecutor,
     file: &StagedAttachment,
     progress: &Progress,
-) -> Result<(), String> {
+) -> Result<Value, String> {
     use futures::TryStreamExt as _;
     let bytes = file.bytes();
     let name = committed_name(&file.name);
@@ -244,12 +259,12 @@ async fn upload_file(
         progress,
     )
     .await?;
-    // The committed file must be exactly what the first turn declared.
+    // The committed file must be exactly the attached one.
     let asset = &reply["asset"];
     if asset["sizeBytes"] != bytes.len() || asset["sha256"] != digest(bytes) {
         return Err("the stored file doesn't match the attached one".into());
     }
-    Ok(())
+    Ok(asset.clone())
 }
 
 /// One request with its timeout, sent again with backoff until [`ATTEMPTS`].

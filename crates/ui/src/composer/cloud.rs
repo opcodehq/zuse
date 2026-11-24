@@ -56,6 +56,8 @@ pub(super) struct Launch {
     /// The new chat's first-message files uploading while its computer
     /// starts (see [`launch_upload`]).
     upload: Option<launch_upload::Progress>,
+    /// A waiting message's files being copied to server storage.
+    waiting_copy: Option<waiting::WaitingCopy>,
     /// A conversation just added beside the computer's others is still being
     /// recorded by the server (a few tens of milliseconds, no computer work):
     /// a send waits for it, so it never reaches the server unregistered.
