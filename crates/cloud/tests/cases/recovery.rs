@@ -60,6 +60,8 @@ struct RecoveryMachine {
     uncertain_create: AtomicBool,
     uncertain_restore: AtomicBool,
     uncertain_launch: AtomicBool,
+    /// The launch command "succeeds" but no runtime ever starts.
+    silent_launch: AtomicBool,
     runtime: tokio::sync::Mutex<Option<tokio::process::Child>>,
 }
 impl RecoveryMachine {
@@ -222,6 +224,9 @@ impl zuse_cloud::runtime::allocation::AllocationProvider for RecoveryMachine {
         assert_eq!(id, "replacement-bob");
         assert_eq!(launch.generation, 3);
         assert_eq!(launch.incarnation, "packaged-storage");
+        if self.silent_launch.load(Ordering::SeqCst) {
+            return Ok(());
+        }
         let mut runtime = self.runtime.lock().await;
         if runtime
             .as_mut()
@@ -409,6 +414,7 @@ impl ArchiveFixture {
             uncertain_create: AtomicBool::new(false),
             uncertain_restore: AtomicBool::new(false),
             uncertain_launch: AtomicBool::new(false),
+            silent_launch: AtomicBool::new(false),
             runtime: tokio::sync::Mutex::new(None),
         };
         Self {
@@ -937,5 +943,117 @@ async fn restore_waits_for_original_wake_receipt_when_inspection_already_says_ru
     assert_eq!(effects["wake"]["receipt"]["operationId"],"original-replacement-wake");
     assert_eq!(f.machine.target_wakes.load(Ordering::SeqCst),1);
     assert!(f.machine.helper.lock().await.is_some());
+    f.finish().await;
+}
+
+/// Lifecycle invariant: a launch that keeps "succeeding" without a runtime
+/// (the launcher exits 0, the runtime dies) is not relaunched every two
+/// seconds forever. The restore stops visibly at its launch deadline, and
+/// Resume starts a fresh deadline.
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL and packaged guest"]
+async fn a_restore_whose_runtime_never_enrolls_stops_visibly_at_its_launch_deadline() {
+    use zuse_cloud::runtime::restore::{LAUNCH_DEADLINE_MS, LAUNCH_TIMED_OUT};
+    let f = ArchiveFixture::start().await;
+    sqlx::query(
+        "UPDATE api_cloud_workspaces SET project_id='create-project' WHERE workspace_id='ws-bob'",
+    )
+    .execute(&f.api.pool)
+    .await
+    .unwrap();
+    f.control
+        .begin_recovery("ws-bob", chrono::Utc::now().timestamp_millis())
+        .await
+        .unwrap()
+        .unwrap();
+    f.upload().await;
+    f.tick().await.unwrap();
+    f.tick().await.unwrap();
+    assert_eq!(f.phase().await, "retiring");
+    f.tick().await.unwrap();
+    assert_eq!(f.phase().await, "retired");
+    f.unarchive("unarchive-silent-launch").await;
+    async fn resume(origin: &str, command: &str) {
+        let (status, value) = runtime_post_for_url(
+            &format!("{origin}/v1/cloud/workspaces/ws-bob/resume"),
+            "bob",
+            &json!({"workspaceId":"ws-bob","commandId":command}),
+        )
+        .await;
+        assert_eq!(status, 200, "{value}");
+    }
+    resume(&f.api.origin, "resume-silent-launch").await;
+    f.machine.silent_launch.store(true, Ordering::SeqCst);
+    let launched = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            sqlx::query("UPDATE zuse_rust_jobs SET due_at=0 WHERE kind='workspace-restore'")
+                .execute(&f.api.pool)
+                .await
+                .unwrap();
+            let _ = f
+                .control
+                .restore_once(&f.machine, chrono::Utc::now().timestamp_millis())
+                .await;
+            let started: bool = sqlx::query_scalar("SELECT payload ? 'launchStartedAt' FROM zuse_rust_jobs WHERE kind='workspace-restore'")
+                .fetch_one(&f.api.pool)
+                .await
+                .unwrap();
+            if started {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(launched.is_ok(), "the restore never launched its machine");
+    assert!(f.machine.runtime.lock().await.is_none());
+    // Before the deadline it keeps relaunching.
+    sqlx::query("UPDATE zuse_rust_jobs SET due_at=0 WHERE kind='workspace-restore'")
+        .execute(&f.api.pool)
+        .await
+        .unwrap();
+    f.control
+        .restore_once(&f.machine, chrono::Utc::now().timestamp_millis())
+        .await
+        .unwrap();
+    let state: String = sqlx::query_scalar("SELECT state FROM zuse_rust_jobs WHERE kind='workspace-restore'")
+        .fetch_one(&f.api.pool)
+        .await
+        .unwrap();
+    assert_eq!(state, "pending");
+    // At the deadline it stops, visibly, and is not claimed again.
+    sqlx::query("UPDATE zuse_rust_jobs SET due_at=0,payload=jsonb_set(payload,'{launchStartedAt}',to_jsonb($1::bigint)) WHERE kind='workspace-restore'")
+        .bind(chrono::Utc::now().timestamp_millis() - LAUNCH_DEADLINE_MS - 1)
+        .execute(&f.api.pool)
+        .await
+        .unwrap();
+    let error = f
+        .control
+        .restore_once(&f.machine, chrono::Utc::now().timestamp_millis())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, LAUNCH_TIMED_OUT);
+    let (job, code): (String, String) = sqlx::query_as("SELECT j.state,w.status_code FROM zuse_rust_jobs j JOIN api_cloud_workspaces w ON w.workspace_id=j.resource_id WHERE j.kind='workspace-restore'")
+        .fetch_one(&f.api.pool)
+        .await
+        .unwrap();
+    assert_eq!((job.as_str(), code.as_str()), ("failed", LAUNCH_TIMED_OUT));
+    sqlx::query("UPDATE zuse_rust_jobs SET due_at=0 WHERE kind='workspace-restore'")
+        .execute(&f.api.pool)
+        .await
+        .unwrap();
+    assert!(
+        !f.control
+            .restore_once(&f.machine, chrono::Utc::now().timestamp_millis())
+            .await
+            .unwrap()
+    );
+    // Resume tries again with a fresh deadline.
+    resume(&f.api.origin, "resume-silent-launch-retry").await;
+    let (state, started): (String, bool) = sqlx::query_as("SELECT state,payload ? 'launchStartedAt' FROM zuse_rust_jobs WHERE kind='workspace-restore'")
+        .fetch_one(&f.api.pool)
+        .await
+        .unwrap();
+    assert_eq!((state.as_str(), started), ("pending", false));
     f.finish().await;
 }

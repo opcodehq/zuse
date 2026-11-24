@@ -20,6 +20,20 @@ fn fenced() -> ApiError {
 fn failed() -> ApiError {
     ApiError::unavailable("cloud_archive_restore_failed")
 }
+/// The restored machine was launched but no runtime enrolled in time.
+pub const LAUNCH_TIMED_OUT: &str = "cloud_restore_launch_timed_out";
+/// How long a restore may keep relaunching a runtime that never enrolls (a
+/// launcher that exits 0 but whose runtime dies, say) before it stops
+/// visibly instead of relaunching every two seconds forever. Counted from the
+/// first launch; Resume after the failure starts it again.
+pub const LAUNCH_DEADLINE_MS: i64 = 30 * 60 * 1000;
+/// The first launch is overdue and no runtime is serving.
+fn launch_overdue(payload: &Value, row: &Value, now: i64) -> bool {
+    payload["launchStartedAt"]
+        .as_i64()
+        .is_some_and(|first| now.saturating_sub(first) >= LAUNCH_DEADLINE_MS)
+        && !(row["runtime_state"] == "online" && storage_enrolled(row))
+}
 fn context(workspace: &str, operation: &str, generation: i64) -> String {
     format!("rust-workspace-restore-boot:{workspace}:{generation}:{operation}")
 }
@@ -276,7 +290,15 @@ impl RuntimeControl {
             let at = chrono::Utc::now().timestamp_millis();
             sqlx::query("UPDATE api_cloud_workspaces w SET status_code=$3,revision=revision+1 WHERE workspace_id=$1 AND request_config->>'rustRestoreOperationId'=$2 AND state='provisioning' AND desired_state='ready' AND EXISTS(SELECT 1 FROM zuse_rust_jobs j JOIN zuse_rust_control_owners o ON o.resource_kind='workspace' AND o.resource_id=j.resource_id AND o.backend='rust' AND o.generation=j.resource_generation WHERE j.job_id=$4 AND j.lease_token=$5 AND j.state='running' AND j.lease_expires_at>$6 AND j.resource_generation=$7)")
                 .bind(&job.resource_id).bind(job.payload["operationId"].as_str()).bind(error.code).bind(&job.id).bind(&job.lease_token).bind(at).bind(job.generation).execute(&self.pool).await?;
-            jobs::retry(&self.pool, job, at, error.code).await?;
+            if error.code == LAUNCH_TIMED_OUT {
+                // Permanent until Resume: never retried on its own.
+                sqlx::query("UPDATE zuse_rust_jobs SET state='failed',last_error_code=$3,lease_token=NULL,lease_expires_at=NULL,updated_at=$4 WHERE job_id=$1 AND lease_token=$2 AND state='running'")
+                    .bind(&job.id).bind(&job.lease_token).bind(error.code).bind(at).execute(&self.pool).await?;
+                tracing::warn!(workspace = %job.resource_id, operation = job.payload["operationId"].as_str().unwrap_or(""),
+                    "Cloud restore launched its machine but no runtime enrolled before the deadline; stopped");
+            } else {
+                jobs::retry(&self.pool, job, at, error.code).await?;
+            }
         }
         result.map(|_| true)
     }
@@ -489,6 +511,9 @@ impl RuntimeControl {
                     tx.commit().await?;
                     return Ok(());
                 }
+                if launch_overdue(&job.payload, &row, now) {
+                    return Err(ApiError::unavailable(LAUNCH_TIMED_OUT));
+                }
                 if restore["boot_expires_at"].as_i64().unwrap_or(0) <= now {
                     if !row["request_config"]["runtimeBootstrapReceipt"].is_null() {
                         return Err(ApiError::conflict("cloud_restore_boot_expired"));
@@ -513,6 +538,9 @@ impl RuntimeControl {
                 };
                 // Authorization is committed before the guest's HTTP bootstrap can acquire this row.
                 sqlx::query("UPDATE zuse_rust_restores SET phase='launching',updated_at=$2 WHERE operation_id=$1").bind(&operation).bind(now).execute(&mut *tx).await?;
+                // The launch deadline counts from the first launch.
+                sqlx::query("UPDATE zuse_rust_jobs SET payload=payload||jsonb_build_object('launchStartedAt',$3::bigint) WHERE job_id=$1 AND lease_token=$2 AND NOT payload ? 'launchStartedAt'")
+                    .bind(&job.id).bind(&job.lease_token).bind(now).execute(&mut *tx).await?;
                 sqlx::query("UPDATE zuse_rust_lifecycle_operations SET phase='launching',updated_at=$2 WHERE operation_id=$1").bind(&operation).bind(now).execute(&mut *tx).await?;
                 let mut config = row["request_config"].clone();
                 config["rustLifecycleOperation"]["phase"] = json!("launching");
@@ -558,5 +586,26 @@ impl RuntimeControl {
         Ok(Zeroizing::new(
             String::from_utf8(bytes.to_vec()).map_err(|_| failed())?,
         ))
+    }
+}
+#[cfg(test)]
+mod launch_deadline_tests {
+    use super::*;
+    #[test]
+    fn a_restore_stops_relaunching_once_its_first_launch_is_overdue() {
+        let offline = json!({"runtime_state":"offline","request_config":{}});
+        // Never launched yet: no deadline running.
+        assert!(!launch_overdue(&json!({}), &offline, i64::MAX));
+        let payload = json!({"launchStartedAt": 1_000});
+        assert!(!launch_overdue(
+            &payload,
+            &offline,
+            1_000 + LAUNCH_DEADLINE_MS - 1
+        ));
+        assert!(launch_overdue(
+            &payload,
+            &offline,
+            1_000 + LAUNCH_DEADLINE_MS
+        ));
     }
 }
