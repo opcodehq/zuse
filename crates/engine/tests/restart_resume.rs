@@ -221,7 +221,9 @@ async fn update_restart_resumes_unfinished_turn_without_duplicate_user_message()
         assert_eq!(requests.len(), 1);
         assert!(requests[0].prompt.contains("finish this task"));
         assert!(
-            requests[0].prompt.contains("interrupted your last turn"),
+            requests[0]
+                .prompt
+                .contains("Your last turn was interrupted before it finished."),
             "a resumed turn must not read as a brand new request"
         );
         assert!(
