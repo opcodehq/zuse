@@ -411,6 +411,11 @@ impl RuntimeControl {
             if machine.id != id || machine.name != name {
                 return Err(fenced());
             }
+            // A launched machine that stops answering readiness is still
+            // bound by the launch deadline.
+            if launch_overdue(&job.payload, &row, now) {
+                return Err(ApiError::unavailable(LAUNCH_TIMED_OUT));
+            }
             if machine.state == MachineState::Running && !runtime_ready {
                 defer(&mut tx, job, false, now).await?;
                 tx.commit().await?;

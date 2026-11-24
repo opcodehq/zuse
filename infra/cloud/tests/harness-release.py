@@ -133,6 +133,10 @@ class HarnessReleaseTest(unittest.TestCase):
         pin = self.directory / "bad-pin.json"
         pin.write_text(json.dumps({"release": "../outside"}))
         self.run_tool("exec", "--runtime-version", "0.25.1", "--pin", pin, "--", "/bin/true", okay=False)
+        # A malformed existing pin is rejected, never silently re-bound.
+        pin.write_text(json.dumps({"release": None}))
+        self.run_tool("exec", "--runtime-version", "0.25.1", "--pin", pin, "--", "/bin/true", okay=False)
+        self.assertEqual(json.loads(pin.read_text()), {"release": None})
 
     def test_recreation_onto_a_newer_image_rebinds_a_pin_the_image_does_not_carry(self):
         # Lifecycle invariant: the pin survives on the data disk, the release

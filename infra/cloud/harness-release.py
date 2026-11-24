@@ -334,8 +334,8 @@ def rollback(args):
 
 def environment(args):
     with locked(args.root, read_only=True):
-        identifier = None
-        if args.pin and args.pin.exists():
+        repin = not (args.pin and args.pin.exists())
+        if not repin:
             identifier = json.loads(args.pin.read_text())["release"]
             # The pin lives on the computer's data disk and survives a
             # recreation onto a newer image; the release directories are part
@@ -344,8 +344,7 @@ def environment(args):
             # image's channel instead of failing every cold start.
             if (isinstance(identifier, str) and DIGEST.fullmatch(identifier)
                     and not (args.root / "releases" / identifier).exists()):
-                identifier = None
-        repin = identifier is None
+                repin = True
         if repin:
             identifier = json.loads((args.root / "channels" / f"{args.channel}.json").read_text())["release"]
         directory, manifest = release(args.root, identifier)

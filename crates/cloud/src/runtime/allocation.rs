@@ -1179,6 +1179,28 @@ impl RuntimeControl {
         observations: &Value,
     ) -> Result<(), ApiError> {
         let now = clock_ms();
+        let mut tx = self.pool.begin().await?;
+        if delay_ms > 0 {
+            // A launch that succeeded is an observation, not a failed
+            // delivery. Without this, a runtime that never enrolls used up
+            // the 120 attempts in about four minutes of relaunches; an
+            // exhausted job is never claimed again, so the start deadline
+            // (checked at claim) never fired and the computer showed
+            // "Starting" forever. Bounded by the same ceiling as readiness,
+            // and committed together with the deferral below.
+            let ceiling = 120 + BOOT_TTL / 2000 + 1;
+            // Workspace before job, the order the deferral itself locks in.
+            sqlx::query("SELECT 1 FROM api_cloud_workspaces WHERE workspace_id=$1 FOR UPDATE")
+                .bind(&job.resource_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("UPDATE zuse_rust_jobs SET max_attempts=LEAST($3,max_attempts+1) WHERE job_id=$1 AND lease_token=$2 AND state='running'")
+                .bind(&job.id)
+                .bind(&job.lease_token)
+                .bind(ceiling as i32)
+                .execute(&mut *tx)
+                .await?;
+        }
         // The existing lease transition also saves measurements, in one roundtrip.
         // It grants no effect and never overwrites another runtime's config snapshot.
         sqlx::query(timings::DEFER_ALLOCATION_SQL)
@@ -1189,22 +1211,9 @@ impl RuntimeControl {
             .bind(observations)
             .bind(job.payload["operationId"].as_str())
             .bind(&job.resource_id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
-        if delay_ms > 0 {
-            // A launch that succeeded is an observation, not a failed
-            // delivery. Without this, a runtime that never enrolls used up
-            // the 120 attempts in about four minutes of relaunches; an
-            // exhausted job is never claimed again, so the start deadline
-            // (checked at claim) never fired and the computer showed
-            // "Starting" forever. Bounded by the same ceiling as readiness.
-            let ceiling = 120 + BOOT_TTL / 2000 + 1;
-            sqlx::query("UPDATE zuse_rust_jobs SET max_attempts=LEAST($2,max_attempts+1) WHERE job_id=$1 AND state='pending' AND lease_token IS NULL")
-                .bind(&job.id)
-                .bind(ceiling as i32)
-                .execute(&self.pool)
-                .await?;
-        }
+        tx.commit().await?;
         Ok(())
     }
 }
