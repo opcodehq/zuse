@@ -1,4 +1,10 @@
 {
   "_comment": "Previous stable runtime releases (newest first, at most 3) that CI runs the current server suite against. Entries are {sha256, version, architecture} of releases already uploaded by infra/cloud/runtime-release.py. Empty until the first releases exist. See infra/cloud/RUNTIME_RELEASES.md.",
-  "releases": []
+  "releases": [
+    {
+      "sha256": "e687c5de25ea492e9c985f6d068011ff9e0f7746e0eafda6cb776c2f69f5858d",
+      "version": "0.27.8+g32bfcb0652bd",
+      "architecture": "x86_64"
+    }
+  ]
 }
