@@ -73,7 +73,12 @@ at an idle boundary.
   {sha256, version, previousSha256, appliedAt}`. It changes only when a signed
   post-swap receipt arrives. Fresh-boot and retained-resume `imagePins` use
   `runtimeRelease.sha256` instead of the base pin. The other four pins stay as
-  the base's pins.
+  the base's pins. As built: the swapping runtime reports `installed` before
+  it restarts, which sets the record `provisional` so a retained start before
+  the commit verifies the binary on disk; `committed` confirms it, and a
+  `rolled-back`/`failed` report from the restored runtime moves a provisional
+  record back to the runtime that is serving. Offers and status ignore a
+  provisional record.
 
 ### Artifact and trust
 

@@ -85,6 +85,9 @@ pub struct Updater {
     /// after a pause without memory). Cold boot no longer installs it on its
     /// own; the first offer that still names it promotes it to `now`.
     staged_at_start: AtomicBool,
+    /// The authority link of the running poller, for the provisional
+    /// `installed` report a swap sends before it restarts.
+    link: Mutex<Option<(Authority, watch::Receiver<CloudRuntimeBootstrap>)>>,
     download: reqwest::Client,
 }
 impl Updater {
@@ -92,6 +95,7 @@ impl Updater {
         let staged_at_start = AtomicBool::new(stage::latest(&config).is_some());
         Ok(Arc::new(Self {
             staged_at_start,
+            link: Mutex::new(None),
             config,
             running,
             capabilities,
@@ -146,6 +150,11 @@ impl Updater {
         cancel: CancellationToken,
     ) {
         let nudges = zuse_rpc::cloud::runtime_update_poll_requests();
+        *self
+            .link
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some((authority.clone(), boot.clone()));
         loop {
             if cancel.is_cancelled() {
                 return;
@@ -406,7 +415,10 @@ impl Updater {
         .await;
         self.ready.send_replace(None);
         match installed {
-            Ok(Ok(Some(binary))) => Some(binary),
+            Ok(Ok(Some(binary))) => {
+                self.announce_installed(&ready).await;
+                Some(binary)
+            }
             Ok(Ok(None)) => {
                 // Attest whatever the helper or journal decided.
                 self.poll_now();
@@ -418,6 +430,41 @@ impl Updater {
                 None
             }
             Err(_) => None,
+        }
+    }
+
+    /// Tell the server the new binary is on disk before restarting into it,
+    /// so a computer stopped before the new runtime commits still resumes
+    /// against the file it has. One bounded attempt; never blocks the swap,
+    /// and older servers that reject the outcome change nothing.
+    async fn announce_installed(&self, ready: &Ready) {
+        let link = self
+            .link
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let Some((authority, boot)) = link else {
+            return;
+        };
+        let attestation = RuntimeAttestation {
+            update_id: Some(ready.update_id.clone()),
+            outcome: Outcome::Installed,
+            sha256: ready.sha256.clone(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            capabilities: self.capabilities.clone(),
+            previous_sha256: Some(self.running.clone()),
+            error_code: None,
+        };
+        let current = boot.borrow().clone();
+        match tokio::time::timeout(
+            Duration::from_secs(5),
+            authority.runtime_update_attestation(&current, &attestation),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::info!(%error, "runtime_update_installed_report_failed"),
+            Err(_) => tracing::info!("runtime_update_installed_report_timed_out"),
         }
     }
 

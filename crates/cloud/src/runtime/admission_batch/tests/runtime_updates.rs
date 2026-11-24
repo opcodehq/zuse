@@ -322,6 +322,36 @@ pub(super) async fn exercise(
     );
     in_flight_deadline(control, owner, pool, id, &directive.update_id, now + 1).await;
 
+    // The swapping runtime reports the binary installed before restarting:
+    // the pin follows the file on disk (provisional), so a retained start
+    // before the new runtime commits verifies the right binary.
+    let before_config = config(pool, id).await;
+    let before_install = before_config["runtimeRelease"].clone();
+    let mut installed = attestation(
+        u::Outcome::Installed,
+        Some(directive.update_id.clone()),
+        &new,
+        &old_caps,
+    );
+    installed.previous_sha256 = Some(old.clone());
+    installed.error_code = None;
+    control
+        .runtime_update_attest(id, CREDENTIAL, installed, now + 2)
+        .await
+        .unwrap();
+    let provisional = config(pool, id).await;
+    assert_eq!(provisional["runtimeRelease"]["sha256"], new);
+    assert_eq!(provisional["runtimeRelease"]["provisional"], true);
+    assert_eq!(
+        provisional["runtimeBootstrapReceipt"]["capabilities"],
+        before_config["runtimeBootstrapReceipt"]["capabilities"],
+        "capabilities change only on commit"
+    );
+    assert_eq!(
+        status(control, pool, id).await.state,
+        u::UpdateState::Downloading
+    );
+
     control
         .runtime_update_attest(
             id,
@@ -336,6 +366,14 @@ pub(super) async fn exercise(
         )
         .await
         .unwrap();
+    // The restored runtime's report moves the provisional pin back to it.
+    let reverted = config(pool, id).await["runtimeRelease"].clone();
+    assert_ne!(reverted["sha256"], new);
+    assert_eq!(
+        reverted["sha256"].as_str().unwrap_or(&old),
+        before_install["sha256"].as_str().unwrap_or(&old)
+    );
+    assert!(reverted["provisional"].is_null());
     let rolled = status(control, pool, id).await;
     assert_eq!(rolled.state, u::UpdateState::RolledBack);
     assert_eq!(
@@ -368,6 +406,7 @@ pub(super) async fn exercise(
         .unwrap();
     let stored = config(pool, id).await;
     assert_eq!(stored["runtimeRelease"]["sha256"], new);
+    assert!(stored["runtimeRelease"]["provisional"].is_null());
     assert_eq!(stored["runtimeRelease"]["version"], "1.1.0");
     assert_eq!(stored["runtimeRelease"]["previousSha256"], old);
     assert_eq!(stored["runtimeRelease"]["appliedAt"], now + 4);

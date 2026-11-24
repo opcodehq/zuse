@@ -98,7 +98,16 @@ fn in_flight(offer: &Offer, sha: &str) -> bool {
 /// The runtime this computer serves: its last committed update, else the
 /// base's pinned runtime.
 fn current_sha(config: &Value) -> Option<&str> {
-    config["runtimeRelease"]["sha256"]
+    // A provisional pin (installed, not yet committed) already guides the
+    // image checks of a retained start, but offers and status still judge
+    // the computer by the runtime that last committed.
+    let release = &config["runtimeRelease"];
+    let field = if release["provisional"] == true {
+        "previousSha256"
+    } else {
+        "sha256"
+    };
+    release[field]
         .as_str()
         .or_else(|| config["initialRuntimeBootstrap"]["runtimeSha256"].as_str())
         .filter(|s| registry::sha256_valid(s))
@@ -422,7 +431,12 @@ impl RuntimeControl {
                 let current = current_sha(&config).map(str::to_owned);
                 let pinned = config["runtimeRelease"].clone();
                 let release = if pinned["sha256"] == attestation.sha256.as_str() {
-                    // A repeated attestation keeps the original record.
+                    // A repeated attestation (or the commit of a provisional
+                    // install) keeps the original record, now confirmed.
+                    let mut pinned = pinned;
+                    if let Some(record) = pinned.as_object_mut() {
+                        record.remove("provisional");
+                    }
                     pinned
                 } else {
                     json!({
@@ -462,7 +476,58 @@ impl RuntimeControl {
                 // Messages queued while it updated go out now.
                 Self::resume_waiting_queues_tx(&mut tx, &row, now).await?;
             }
+            wire::Outcome::Installed => {
+                let version: String = sqlx::query_scalar(
+                    "SELECT version FROM zuse_rust_runtime_releases WHERE sha256=$1",
+                )
+                .bind(&attestation.sha256)
+                .fetch_optional(&mut *tx)
+                .await?
+                .ok_or_else(|| ApiError::conflict("cloud_runtime_release_unknown"))?;
+                let mut config = row["request_config"].clone();
+                if config["runtimeRelease"]["sha256"] != attestation.sha256.as_str() {
+                    let current = current_sha(&config).map(str::to_owned);
+                    config["runtimeRelease"] = json!({
+                        "sha256": attestation.sha256,
+                        "version": version,
+                        "previousSha256": current.or(attestation.previous_sha256.clone()),
+                        "appliedAt": now,
+                        "provisional": true,
+                    });
+                    sqlx::query("UPDATE api_cloud_workspaces SET request_config=$2,revision=revision+1,updated_at=GREATEST(updated_at+1,$3) WHERE workspace_id=$1")
+                        .bind(id)
+                        .bind(&config)
+                        .bind(now)
+                        .execute(&mut *tx)
+                        .await?;
+                }
+            }
             outcome @ (wire::Outcome::RolledBack | wire::Outcome::Failed) => {
+                // The reporting runtime is the one serving: a provisional pin
+                // to another binary follows it back.
+                let mut config = row["request_config"].clone();
+                if config["runtimeRelease"]["provisional"] == true
+                    && config["runtimeRelease"]["sha256"] != attestation.sha256.as_str()
+                {
+                    let base = config["initialRuntimeBootstrap"]["runtimeSha256"].clone();
+                    if base == attestation.sha256.as_str() {
+                        if let Some(object) = config.as_object_mut() {
+                            object.remove("runtimeRelease");
+                        }
+                    } else {
+                        config["runtimeRelease"] = json!({
+                            "sha256": attestation.sha256,
+                            "version": attestation.version,
+                            "appliedAt": now,
+                        });
+                    }
+                    sqlx::query("UPDATE api_cloud_workspaces SET request_config=$2,revision=revision+1,updated_at=GREATEST(updated_at+1,$3) WHERE workspace_id=$1")
+                        .bind(id)
+                        .bind(&config)
+                        .bind(now)
+                        .execute(&mut *tx)
+                        .await?;
+                }
                 let (state, default_code) = match outcome {
                     wire::Outcome::RolledBack => ("rolled-back", "runtime_update_rolled_back"),
                     _ => ("failed", "runtime_update_failed"),
