@@ -9,7 +9,7 @@
 //! status code it already writes.
 use crate::providers::ExecResult;
 use serde::Serialize;
-use std::{collections::HashMap, sync::Mutex};
+use std::sync::Mutex;
 
 /// Reports kept at once; older ones are dropped (a report is only useful to
 /// the attempt that produced it).
@@ -78,7 +78,24 @@ pub(crate) fn record(machine: &str, result: &ExecResult) {
     }
 }
 
+fn peek(machine: &str) -> Option<LaunchReport> {
+    REPORTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .find(|(id, _)| id == machine)
+        .map(|(_, report)| report.clone())
+}
+/// Forget `report` once stored; a newer report recorded meanwhile stays.
+fn stored(machine: &str, report: &LaunchReport) {
+    REPORTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .retain(|(id, kept)| !(id == machine && kept == report));
+}
+
 /// The last failed launch on `machine`, once.
+#[cfg(test)]
 pub(crate) fn take(machine: &str) -> Option<LaunchReport> {
     let mut reports = REPORTS
         .lock()
@@ -97,16 +114,21 @@ pub(crate) async fn persist(pool: &sqlx::PgPool, workspace: &str) -> Result<(), 
     .fetch_optional(pool)
     .await?
     .flatten();
-    let Some(report) = machine.as_deref().and_then(take) else {
+    let Some(machine) = machine else {
+        return Ok(());
+    };
+    // Kept until the write succeeds, so a failed write can be retried.
+    let Some(report) = peek(&machine) else {
         return Ok(());
     };
     let value = serde_json::to_value(&report).unwrap_or_default();
     sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{rustLastLaunchFailure}',$2) WHERE workspace_id=$1 AND provider_sandbox_id=$3")
         .bind(workspace)
         .bind(value)
-        .bind(machine)
+        .bind(&machine)
         .execute(pool)
         .await?;
+    stored(&machine, &report);
     Ok(())
 }
 
@@ -179,7 +201,19 @@ mod tests {
             "machine-report",
             &failed(1, "harness release failed: ValueError\n"),
         );
+        // A failed write keeps the report for the next attempt.
+        sqlx::query("ALTER TABLE api_cloud_workspaces RENAME TO api_cloud_workspaces_hidden")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(persist(&pool, "ws-report").await.is_err());
+        assert!(peek("machine-report").is_some());
+        sqlx::query("ALTER TABLE api_cloud_workspaces_hidden RENAME TO api_cloud_workspaces")
+            .execute(&pool)
+            .await
+            .unwrap();
         persist(&pool, "ws-report").await.unwrap();
+        assert!(peek("machine-report").is_none(), "forgotten once stored");
         let stored: serde_json::Value = sqlx::query_scalar(
             "SELECT request_config->'rustLastLaunchFailure' FROM api_cloud_workspaces",
         )

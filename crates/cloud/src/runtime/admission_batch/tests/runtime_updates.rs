@@ -368,11 +368,8 @@ pub(super) async fn exercise(
         .unwrap();
     // The restored runtime's report moves the provisional pin back to it.
     let reverted = config(pool, id).await["runtimeRelease"].clone();
-    assert_ne!(reverted["sha256"], new);
-    assert_eq!(
-        reverted["sha256"].as_str().unwrap_or(&old),
-        before_install["sha256"].as_str().unwrap_or(&old)
-    );
+    assert_eq!(reverted["sha256"], old);
+    assert_eq!(before_install["sha256"], old);
     assert!(reverted["provisional"].is_null());
     let rolled = status(control, pool, id).await;
     assert_eq!(rolled.state, u::UpdateState::RolledBack);

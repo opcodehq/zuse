@@ -35,7 +35,10 @@ pub async fn serve(
             let renewed = authority.renew(identity).await;
             publish(identity, &credentials);
             match renewed {
-                Ok(()) => outage.recovered(std::time::Instant::now()),
+                Ok(()) => {
+                    outage.recovered(std::time::Instant::now());
+                    backoff = backoff.min(RECONNECT_MAX_MS);
+                }
                 Err(error) if retryable(&error) => {
                     let cap = outage.failed(&error, std::time::Instant::now());
                     wait_ms(&cancel, jittered(backoff.min(cap))).await;
@@ -76,7 +79,10 @@ pub async fn serve(
                     continue;
                 }
                 Err(error) => return Err(error),
-                _ => outage.recovered(std::time::Instant::now()),
+                _ => {
+                    outage.recovered(std::time::Instant::now());
+                    backoff = backoff.min(RECONNECT_MAX_MS);
+                }
             }
         }
         let connection_started = std::time::Instant::now();

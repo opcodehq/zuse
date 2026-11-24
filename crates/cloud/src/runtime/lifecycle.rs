@@ -784,7 +784,7 @@ impl RuntimeControl {
                     "Retained computer missing at its provider; lifecycle stopped");
                 return result;
             }
-            if self.settle_failed_resume(job, error.code).await? {
+            if self.settle_failed_resume(provider, job, error.code).await? {
                 return result;
             }
             jobs::retry(&self.pool, &job, clock_ms(), error.code).await?;
@@ -806,7 +806,12 @@ impl RuntimeControl {
     /// through the ordinary retained lifecycle (bounded retries, then the
     /// max-quiet-awake backstop, which watches `pausing`). That pause keeps
     /// the failure code as the status once it completes.
-    async fn settle_failed_resume(&self, job: &jobs::Job, code: &str) -> Result<bool, ApiError> {
+    async fn settle_failed_resume(
+        &self,
+        provider: &dyn RetainedProvider,
+        job: &jobs::Job,
+        code: &str,
+    ) -> Result<bool, ApiError> {
         if !resume_failure_terminal(code) {
             return Ok(false);
         }
@@ -834,14 +839,33 @@ impl RuntimeControl {
             // A recreation's wake: the recreation owns the computer and its
             // attention state. Stop the wake at the same deadline (instead of
             // about 9.5 hours of retries); the recreation worker then turns
-            // the failed wake into `attention-required`.
+            // the failed wake into `attention-required`. The machine must
+            // not keep running meanwhile: the wake is reset to its start (so
+            // a recreation Retry wakes it again) and the machine is slept.
             let failed = sqlx::query("UPDATE zuse_rust_jobs SET state='failed',last_error_code=$3,lease_token=NULL,lease_expires_at=NULL,updated_at=$4 WHERE job_id=$1 AND lease_token=$2 AND state='running'")
                 .bind(&job.id).bind(&job.lease_token).bind(code).bind(now).execute(&mut *tx).await?;
             if failed.rows_affected() != 1 {
                 return Ok(false);
             }
+            sqlx::query("UPDATE zuse_rust_lifecycle_operations SET phase='waking',provider_effects=provider_effects-'wake',updated_at=$2 WHERE operation_id=$1")
+                .bind(operation).bind(now).execute(&mut *tx).await?;
+            sqlx::query("UPDATE api_cloud_workspaces SET runtime_state='offline',request_config=jsonb_set(request_config,'{rustLifecycleOperation,phase}','\"waking\"'),revision=revision+1,updated_at=GREATEST(updated_at+1,$2) WHERE workspace_id=$1")
+                .bind(&job.resource_id).bind(now).execute(&mut *tx).await?;
             tx.commit().await?;
-            tracing::warn!(workspace = %job.resource_id, operation, code,
+            let machine = row["provider_sandbox_id"].as_str().unwrap_or("");
+            let slept = if machine.is_empty() {
+                true
+            } else {
+                match provider.pause_retained(machine).await {
+                    Ok(()) => true,
+                    Err(error) => {
+                        tracing::warn!(workspace = %job.resource_id, machine, ?error,
+                            "Could not sleep the machine of a failed recreation wake; the provider's own idle limit applies");
+                        false
+                    }
+                }
+            };
+            tracing::warn!(workspace = %job.resource_id, operation, code, slept,
                 "Cloud recreation wake could not start the computer; stopped for the recreation to report");
             return Ok(true);
         }

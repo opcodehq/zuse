@@ -35,7 +35,10 @@ impl RetainedProvider for Probe {
         Ok(self.mode != "not-hydrated")
     }
     async fn pause_retained(&self, id: &str) -> Result<(), ProviderError> {
-        assert_eq!(self.mode, "refused-overdue", "no pause");
+        assert!(
+            matches!(self.mode, "refused-overdue" | "recreation-overdue"),
+            "no pause"
+        );
         assert_eq!(id, "retained-source");
         self.sleeps.fetch_add(1, Ordering::SeqCst);
         Ok(())
@@ -252,7 +255,7 @@ async fn boat_disabled_unit_retained_start_is_hydration_and_current_owner_fenced
                 .unwrap();
             assert!(
                 control
-                    .settle_failed_resume(&job, "cloud_retained_provider_failed")
+                    .settle_failed_resume(&probe, &job, "cloud_retained_provider_failed")
                     .await
                     .unwrap()
             );
@@ -271,7 +274,21 @@ async fn boat_disabled_unit_retained_start_is_hydration_and_current_owner_fenced
             .await
             .unwrap();
             assert_eq!(state, "provisioning");
-            assert_eq!(probe.sleeps.load(Ordering::SeqCst), 0);
+            // The machine is slept, the wake reset so a Retry wakes it again,
+            // and no lifecycle pause takes the computer from the recreation.
+            assert_eq!(probe.sleeps.load(Ordering::SeqCst), 1);
+            let (phase, effect): (String, Option<serde_json::Value>) = sqlx::query_as("SELECT phase,provider_effects->'wake' FROM zuse_rust_lifecycle_operations WHERE operation_id='retained-operation'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!((phase.as_str(), effect), ("waking", None));
+            let jobs: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM zuse_rust_jobs WHERE resource_id='ws-bob'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(jobs, 1, "no pause job queued");
             pool.close().await;
             sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
                 .execute(&admin)

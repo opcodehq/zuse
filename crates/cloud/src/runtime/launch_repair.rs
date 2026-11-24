@@ -188,29 +188,54 @@ pub(crate) fn tail(result: &ExecResult) -> String {
             }
         })
         .collect();
-    let scrubbed = text
-        .split(' ')
-        .filter(|w| !w.is_empty())
-        .map(scrub_word)
+    let words: Vec<&str> = text.split(' ').filter(|w| !w.is_empty()).collect();
+    // `password: value`, `token "value"`, `Authorization Bearer x`: the word
+    // after a credential label is a value, whatever its shape.
+    let scrubbed = words
+        .iter()
+        .enumerate()
+        .map(|(index, word)| {
+            if index > 0 && labels_secret(words[index - 1]) {
+                "[redacted]".to_owned()
+            } else {
+                scrub_word(word)
+            }
+        })
         .collect::<Vec<_>>()
         .join(" ");
     let cut = scrubbed.len().saturating_sub(TAIL_BYTES);
     scrubbed[cut..].to_owned()
 }
 
+const SECRET_KEYS: [&str; 7] = [
+    "token",
+    "secret",
+    "key",
+    "password",
+    "passwd",
+    "credential",
+    "authorization",
+];
+fn secret_name(name: &str) -> bool {
+    let lower = name
+        .trim_matches(|c: char| "\"'{},[]".contains(c))
+        .to_ascii_lowercase();
+    !lower.is_empty() && SECRET_KEYS.iter().any(|k| lower.contains(k))
+}
+/// A bare credential label whose value is the next word: `password:`,
+/// `"token":`, `secret`, `Authorization`.
+fn labels_secret(word: &str) -> bool {
+    let name = word.strip_suffix(':').unwrap_or(word);
+    word.eq_ignore_ascii_case("bearer")
+        || ((word.ends_with(':') || !word.contains(['=', ':'])) && secret_name(name))
+}
 fn scrub_word(word: &str) -> String {
-    const SECRET_KEYS: [&str; 6] = [
-        "token",
-        "secret",
-        "key",
-        "password",
-        "credential",
-        "authorization",
-    ];
-    if let Some((name, _)) = word.split_once('=') {
-        let lower = name.to_ascii_lowercase();
-        if SECRET_KEYS.iter().any(|k| lower.contains(k)) {
-            return format!("{name}=[redacted]");
+    // `name=value`, `name:value`, `"name":"value"`.
+    for separator in ['=', ':'] {
+        if let Some((name, value)) = word.split_once(separator) {
+            if !value.is_empty() && secret_name(name) {
+                return format!("{name}{separator}[redacted]");
+            }
         }
     }
     // Long opaque runs (JWTs, API keys, signatures) are never kept.
@@ -225,6 +250,36 @@ fn scrub_word(word: &str) -> String {
         "[redacted]".to_owned()
     } else {
         word.to_owned()
+    }
+}
+
+#[cfg(test)]
+mod scrub_tests {
+    use super::*;
+    fn scrubbed(stderr: &str) -> String {
+        tail(&ExecResult {
+            stdout: Vec::new(),
+            stderr: stderr.as_bytes().to_vec(),
+            exit_code: 1,
+        })
+    }
+    #[test]
+    fn credential_values_are_redacted_in_every_field_shape() {
+        for line in [
+            "password: correct-horse-battery-staple",
+            "token correct-horse-battery-staple",
+            "\"password\":\"correct-horse-battery-staple\"",
+            "secret=correct-horse-battery-staple",
+            "Authorization: Bearer correct-horse-battery-staple",
+        ] {
+            let out = scrubbed(line);
+            assert!(!out.contains("correct-horse"), "{line} -> {out}");
+        }
+        // Ordinary failure text stays readable.
+        assert_eq!(
+            scrubbed("harness release failed: ValueError"),
+            "harness release failed: ValueError"
+        );
     }
 }
 
