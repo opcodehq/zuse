@@ -408,6 +408,18 @@ pub enum ZapperAction {
         issue_id: String,
         url: String,
     },
+    /// Relate two issues of this Zapper, replacing any relation the pair
+    /// already had. blockedBy is stored as the target blocking this issue.
+    LinkIssueRelation {
+        issue_id: String,
+        kind: ZapperIssueRelationKind,
+        target_id: String,
+    },
+    /// Remove whatever relation two issues hold, from either side.
+    UnlinkIssueRelation {
+        issue_id: String,
+        target_id: String,
+    },
     CommentIssue {
         issue_id: String,
         text: String,
@@ -522,6 +534,16 @@ impl ZapperAction {
                 ..
             } => Targets(vec![issue_target(issue_id)]),
             Self::Decide { decision } => Targets(vec![decision_target(&decision.id)]),
+            // Both issues change, so a concurrent edit of either conflicts.
+            Self::LinkIssueRelation {
+                issue_id,
+                target_id,
+                ..
+            }
+            | Self::UnlinkIssueRelation {
+                issue_id,
+                target_id,
+            } => Targets(vec![issue_target(issue_id), issue_target(target_id)]),
             // Append-only, set-like or idempotent: the engine validates them
             // against the current state, and files carry their own version.
             Self::CreateIssue { .. }
@@ -698,6 +720,8 @@ pub fn command_summary(command: &ZapperCommand, result: Option<&Zapper>) -> serd
         | ZapperAction::LinkIssuePullRequest { issue_id, .. }
         | ZapperAction::UnlinkIssueThread { issue_id, .. }
         | ZapperAction::UnlinkIssuePullRequest { issue_id, .. }
+        | ZapperAction::LinkIssueRelation { issue_id, .. }
+        | ZapperAction::UnlinkIssueRelation { issue_id, .. }
         | ZapperAction::CommentIssue { issue_id, .. }
         | ZapperAction::AskUser { issue_id, .. }
         | ZapperAction::CloseIssue { issue_id, .. } => match issue(issue_id) {
@@ -880,9 +904,15 @@ pub struct ZapperIssueDetails {
     pub due_date: Option<String>,
     #[serde(default)]
     pub labels: Vec<String>,
-    /// Other issue ids in the same Zapper.
+    /// Related issue ids in the same Zapper. Related is symmetric: read it
+    /// through [`Zapper::issue_relations`], which also lists issues that name
+    /// this one.
     #[serde(default)]
     pub relations: Vec<String>,
+    /// Issue ids in the same Zapper that can't finish before this one. The
+    /// target's "blocked by" is this same link read from the other side.
+    #[serde(default)]
+    pub blocks: Vec<String>,
     /// Who holds the issue now: exactly one owner at a time. Absent on issues
     /// saved before owners, where `assigned` means the Zapper.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -928,6 +958,26 @@ impl ZapperIssueDetails {
                 }
             }
             _ => {}
+        }
+    }
+}
+/// How two issues in one Zapper relate. A pair holds at most one relation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ZapperIssueRelationKind {
+    /// This issue must finish before the other.
+    Blocks,
+    /// The other issue must finish before this one.
+    BlockedBy,
+    Related,
+}
+impl ZapperIssueRelationKind {
+    pub const ALL: [Self; 3] = [Self::Blocks, Self::BlockedBy, Self::Related];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Blocks => "Blocking",
+            Self::BlockedBy => "Blocked by",
+            Self::Related => "Related",
         }
     }
 }
@@ -992,6 +1042,51 @@ pub struct ZapperIssue {
 impl ZapperIssue {
     pub fn code(&self) -> String {
         format!("ZAP-{}", self.number)
+    }
+}
+impl Zapper {
+    /// Every relation of issue `id` as seen from it, in board order: what it
+    /// blocks, what blocks it (other issues' `blocks`), and related issues
+    /// named on either side. Links to missing issues are left out.
+    pub fn issue_relations(&self, id: &str) -> Vec<(ZapperIssueRelationKind, &ZapperIssue)> {
+        let Some(issue) = self.issues.iter().find(|i| i.id == id) else {
+            return vec![];
+        };
+        let mut out: Vec<(ZapperIssueRelationKind, &ZapperIssue)> = vec![];
+        for other in &self.issues {
+            if other.id == id {
+                continue;
+            }
+            let kind = if issue.details.blocks.contains(&other.id) {
+                ZapperIssueRelationKind::Blocks
+            } else if other.details.blocks.iter().any(|b| b == id) {
+                ZapperIssueRelationKind::BlockedBy
+            } else if issue.details.relations.contains(&other.id)
+                || other.details.relations.iter().any(|r| r == id)
+            {
+                ZapperIssueRelationKind::Related
+            } else {
+                continue;
+            };
+            out.push((kind, other));
+        }
+        out.sort_by_key(|(kind, other)| {
+            (
+                ZapperIssueRelationKind::ALL.iter().position(|k| k == kind),
+                other.number,
+            )
+        });
+        out
+    }
+    /// Open issues blocking `id`. Closed blockers no longer hold it up.
+    pub fn open_blockers(&self, id: &str) -> Vec<&ZapperIssue> {
+        self.issue_relations(id)
+            .into_iter()
+            .filter(|(kind, other)| {
+                *kind == ZapperIssueRelationKind::BlockedBy && !other.details.status.terminal()
+            })
+            .map(|(_, other)| other)
+            .collect()
     }
 }
 impl Zapper {
@@ -1082,6 +1177,8 @@ mod tests {
                 | ZapperAction::LinkIssuePullRequest { .. }
                 | ZapperAction::UnlinkIssueThread { .. }
                 | ZapperAction::UnlinkIssuePullRequest { .. }
+                | ZapperAction::LinkIssueRelation { .. }
+                | ZapperAction::UnlinkIssueRelation { .. }
                 | ZapperAction::CommentIssue { .. }
                 | ZapperAction::AskUser { .. }
                 | ZapperAction::CloseIssue { .. }

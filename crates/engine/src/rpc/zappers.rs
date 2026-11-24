@@ -229,6 +229,8 @@ mod tests {
         let mut forbidden = worker_command("close", "linked");
         forbidden["action"] = serde_json::json!({"type":"editIssue","issueId":"linked","details":{"title":"Closed","description":"","status":"done","dueDate":null}});
         assert!(service.handle("ZapperCommand", forbidden).await.is_err());
+        forbidden["action"] = serde_json::json!({"type":"linkIssueRelation","issueId":"linked","kind":"blocks","targetId":"unlinked"});
+        assert!(service.handle("ZapperCommand", forbidden).await.is_err());
         let zapper = core.zappers.get("release").unwrap();
         assert_eq!(
             zapper.issues[0].activity.last().unwrap().actor.as_deref(),

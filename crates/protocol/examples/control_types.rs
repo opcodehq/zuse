@@ -37,6 +37,7 @@ fn main() {
         ZapperIssuePriority,
         ZapperIssueOwner,
         ZapperIssueOutcome,
+        ZapperIssueRelationKind,
         ZapperIssueDetails,
         ZapperIssuePullRequest,
         ZapperIssueActivity,

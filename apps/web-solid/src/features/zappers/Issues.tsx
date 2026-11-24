@@ -2,6 +2,7 @@ import { Icon } from "@/ui/Icon";
 import { state } from "@/core/store";
 import { IssuePriorityIcon, IssueStatusIcon, IssueWorking, issueStatuses } from "./IssueMetadata";
 import { issueAgentWorking } from "./issue-activity";
+import { IssueRelations } from "./IssueRelations";
 import { deviceOnline } from "@/features/projects/hosts";
 import { effectiveIndicator } from "@/features/extras/util";
 import { ZapperSelect } from "./Controls";
@@ -225,28 +226,6 @@ function IssueEditor(props: {
         <label>Parent issue<ZapperSelect label="Parent issue" value={draft().parent ?? ""} options={[{value:"",label:"No parent"},...props.zapper.issues.filter(issue=>issue.id!==id).map(issue=>({value:issue.id,label:`ZAP-${issue.number} · ${issue.details.title}`}))]} onChange={value=>change("parent",value || undefined)} /></label>
         <label>Done when<textarea rows={2} placeholder="What needs to be true to close this issue?" value={draft().doneCriteria ?? ""} onInput={e => change("doneCriteria",e.currentTarget.value)} /></label>
         <label>Out of scope<textarea rows={2} placeholder="What should this task leave alone?" value={draft().outOfScope ?? ""} onInput={e => change("outOfScope",e.currentTarget.value)} /></label>
-        <fieldset>
-          <legend>Related issues</legend>
-          <For each={props.zapper.issues.filter((i) => i.id !== id)}>
-            {(i) => (
-              <label class="zp-check">
-                <input
-                  type="checkbox"
-                  checked={draft().relations.includes(i.id)}
-                  onChange={(e) =>
-                    change(
-                      "relations",
-                      e.currentTarget.checked
-                        ? [...draft().relations, i.id]
-                        : draft().relations.filter((r) => r !== i.id),
-                    )
-                  }
-                />
-                #{i.number} {i.details.title}
-              </label>
-            )}
-          </For>
-        </fieldset>
         <Show when={commandState.error}>
           <p class="zp-error" role="alert">
             {commandState.error}
@@ -300,11 +279,7 @@ function IssueDetail(props: {
       <Show when={props.issue.details.labels.length}>
         <p>{props.issue.details.labels.join(" · ")}</p>
       </Show>
-      <For each={props.issue.details.relations}>
-        {(id) => (
-          <button type="button" class="zp-link" onClick={()=>props.onOpen?.(id)}>Related: {props.zapper.issues.find(issue=>issue.id===id)?.details.title ?? id}</button>
-        )}
-      </For>
+      <IssueRelations zapper={props.zapper} issue={props.issue} onOpen={props.onOpen} />
       <Show when={props.issue.details.parent}><button type="button" class="zp-link" onClick={()=>props.onOpen?.(props.issue.details.parent!)}>Parent: {props.zapper.issues.find(issue=>issue.id===props.issue.details.parent)?.details.title ?? props.issue.details.parent}</button></Show>
       <Show when={!["done","canceled"].includes(props.issue.details.status)}><div class="zp-issue-actions"><Button size="sm" onClick={()=>{setNote("");setRecommendation("");setAction("ask");}}>Ask you</Button><Button size="sm" onClick={()=>{setNote("");setAction("close");}}>Close issue</Button></div></Show>
       <h3>Threads</h3>

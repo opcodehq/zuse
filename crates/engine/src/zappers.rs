@@ -691,6 +691,8 @@ impl Zappers {
             | ZapperAction::CommentIssue { .. }
             | ZapperAction::UnlinkIssueThread { .. }
             | ZapperAction::UnlinkIssuePullRequest { .. }
+            | ZapperAction::LinkIssueRelation { .. }
+            | ZapperAction::UnlinkIssueRelation { .. }
             | ZapperAction::AskUser { .. }
             | ZapperAction::CloseIssue { .. } => {}
             ZapperAction::Create { .. } => {

@@ -47,6 +47,7 @@ export type IssueStatus =
   | "inReview"
   | "done"
   | "canceled";
+export type IssueRelationKind = "blocks" | "blockedBy" | "related";
 export type IssuePriority = "urgent" | "high" | "normal" | "low";
 export type IssueOwner = { type: "zapper" } | { type: "user" } | { type: "thread"; chatId: string };
 export interface IssueDetails {
@@ -58,6 +59,8 @@ export interface IssueDetails {
   dueDate: string | null;
   labels: string[];
   relations: string[];
+  /** Issues that can't finish before this one; absent on issues saved before blocking links. */
+  blocks?: string[];
   owner?: IssueOwner;
   doneCriteria?: string;
   outOfScope?: string;
@@ -149,6 +152,8 @@ export type ZapperAction =
       title: string;
     }
   | { type: "unlinkIssuePullRequest"; issueId: string; url: string }
+  | { type: "linkIssueRelation"; issueId: string; kind: IssueRelationKind; targetId: string }
+  | { type: "unlinkIssueRelation"; issueId: string; targetId: string }
   | {
       type: "commentIssue";
       issueId: string;

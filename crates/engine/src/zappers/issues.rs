@@ -100,6 +100,79 @@ pub(super) fn apply(
             issue.details = details;
             (issue_id, "updated", changes.join(" · "))
         }
+        ZapperAction::LinkIssueRelation {
+            issue_id,
+            kind,
+            target_id,
+        } => {
+            ensure!(issue_id != target_id, "an issue can't relate to itself");
+            let target = find(zapper, target_id)?.code();
+            let source = find(zapper, issue_id)?.code();
+            let current = zapper
+                .issue_relations(issue_id)
+                .into_iter()
+                .find(|(_, other)| other.id == *target_id)
+                .map(|(kind, _)| kind);
+            if current == Some(*kind) {
+                return Ok(());
+            }
+            unrelate(zapper, issue_id, target_id);
+            match kind {
+                ZapperIssueRelationKind::Blocks => find(zapper, issue_id)?
+                    .details
+                    .blocks
+                    .push(target_id.clone()),
+                ZapperIssueRelationKind::BlockedBy => find(zapper, target_id)?
+                    .details
+                    .blocks
+                    .push(issue_id.clone()),
+                ZapperIssueRelationKind::Related => find(zapper, issue_id)?
+                    .details
+                    .relations
+                    .push(target_id.clone()),
+            }
+            for id in [issue_id, target_id] {
+                let details = find(zapper, id)?.details.clone();
+                validate_relations(zapper, id, &details)?;
+            }
+            let (inverse, verb) = match kind {
+                ZapperIssueRelationKind::Blocks => ("Blocked by", "Blocking"),
+                ZapperIssueRelationKind::BlockedBy => ("Blocking", "Blocked by"),
+                ZapperIssueRelationKind::Related => ("Related to", "Related to"),
+            };
+            mirror(
+                zapper,
+                target_id,
+                command,
+                actor,
+                now,
+                format!("{inverse} {source}"),
+            )?;
+            (issue_id, "relation", format!("{verb} {target}"))
+        }
+        ZapperAction::UnlinkIssueRelation {
+            issue_id,
+            target_id,
+        } => {
+            let target = find(zapper, target_id)?.code();
+            let source = find(zapper, issue_id)?.code();
+            if !unrelate(zapper, issue_id, target_id) {
+                return Ok(());
+            }
+            mirror(
+                zapper,
+                target_id,
+                command,
+                actor,
+                now,
+                format!("Removed relation to {source}"),
+            )?;
+            (
+                issue_id,
+                "relation",
+                format!("Removed relation to {target}"),
+            )
+        }
         ZapperAction::LinkIssueThread { issue_id, chat_id } => {
             ensure!(
                 zapper.workers.iter().any(|w| w.chat_id == *chat_id),
@@ -352,6 +425,28 @@ pub(super) fn coordinator_view(zapper: &Zapper) -> Result<serde_json::Value> {
                 "activityCount": issue.activity.len(),
                 "recentActivity": recent,
             });
+            let relations: Vec<_> = zapper
+                .issue_relations(&issue.id)
+                .into_iter()
+                .map(|(kind, other)| {
+                    serde_json::json!({
+                        "kind": kind,
+                        "id": other.id,
+                        "code": other.code(),
+                        "title": other.details.title,
+                        "status": other.details.status,
+                    })
+                })
+                .collect();
+            if !relations.is_empty() {
+                view["relations"] = relations.into();
+                let blockers: Vec<String> = zapper
+                    .open_blockers(&issue.id)
+                    .iter()
+                    .map(|i| i.code())
+                    .collect();
+                view["openBlockers"] = blockers.into();
+            }
             // Its thread waits for a slot: the stored inProgress isn't running yet.
             if let Some(worker) = zapper.issue_queued_worker(issue) {
                 view["queued"] = serde_json::json!(true);
@@ -434,6 +529,138 @@ fn find<'a>(zapper: &'a mut Zapper, id: &str) -> Result<&'a mut ZapperIssue> {
         .find(|i| i.id == id)
         .context("issue not found")
 }
+/// Drop every relation between two issues, from both sides. Returns whether
+/// there was one.
+fn unrelate(zapper: &mut Zapper, a: &str, b: &str) -> bool {
+    let mut removed = false;
+    for issue in &mut zapper.issues {
+        let other = if issue.id == a {
+            b
+        } else if issue.id == b {
+            a
+        } else {
+            continue;
+        };
+        let before = issue.details.blocks.len() + issue.details.relations.len();
+        issue.details.blocks.retain(|id| id != other);
+        issue.details.relations.retain(|id| id != other);
+        removed |= before != issue.details.blocks.len() + issue.details.relations.len();
+    }
+    removed
+}
+/// The other issue of a relation change records it too, so both timelines
+/// read true.
+fn mirror(
+    zapper: &mut Zapper,
+    id: &str,
+    command: &ZapperCommand,
+    actor: Option<&str>,
+    now: i64,
+    text: String,
+) -> Result<()> {
+    let issue = find(zapper, id)?;
+    issue.updated_at = now;
+    issue.activity.push(ZapperIssueActivity {
+        actor: actor.map(str::to_owned),
+        id: format!("{}-relation", command.command_id),
+        created_at: now,
+        kind: "relation".into(),
+        text,
+        reply_to: None,
+    });
+    Ok(())
+}
+/// Relations of `id` with `details` in place of its stored record: every
+/// target exists and is another issue, a pair holds one relation, and the
+/// blocking links stay acyclic.
+fn validate_relations(zapper: &Zapper, id: &str, details: &ZapperIssueDetails) -> Result<()> {
+    for (name, list) in [
+        ("relations", &details.relations),
+        ("blocks", &details.blocks),
+    ] {
+        ensure!(
+            !list.iter().any(|r| r == id),
+            "{name} must reference other issues, not the issue itself"
+        );
+        let unknown: Vec<&str> = list
+            .iter()
+            .filter(|r| !zapper.issues.iter().any(|i| i.id == **r))
+            .map(String::as_str)
+            .collect();
+        ensure!(
+            unknown.is_empty(),
+            "{name} must reference existing issues in this Zapper; unknown: {}. Create those issues first (createIssue, one command each), then add the relation with linkIssueRelation, or leave {name} empty for now",
+            unknown.join(", ")
+        );
+        let unique: std::collections::HashSet<&String> = list.iter().collect();
+        ensure!(unique.len() == list.len(), "{name} lists an issue twice");
+    }
+    let code = |other: &str| {
+        zapper
+            .issues
+            .iter()
+            .find(|i| i.id == other)
+            .map_or_else(|| other.to_owned(), ZapperIssue::code)
+    };
+    for target in &details.blocks {
+        let other = zapper.issues.iter().find(|i| i.id == *target);
+        ensure!(
+            !details.relations.contains(target)
+                && !other.is_some_and(|o| o.details.relations.iter().any(|r| r == id)),
+            "{} is already related; a pair of issues holds one relation, so use linkIssueRelation, which replaces it",
+            code(target)
+        );
+    }
+    for target in &details.relations {
+        ensure!(
+            !zapper
+                .issues
+                .iter()
+                .any(|o| o.id == *target && o.details.blocks.iter().any(|b| b == id)),
+            "{} already blocks this issue; a pair of issues holds one relation",
+            code(target)
+        );
+    }
+    // Walk the blocking links with this record in place; reaching the issue
+    // again means it would block itself.
+    let blocks = |issue: &str| -> Vec<String> {
+        if issue == id {
+            details.blocks.clone()
+        } else {
+            zapper
+                .issues
+                .iter()
+                .find(|i| i.id == issue)
+                .map(|i| i.details.blocks.clone())
+                .unwrap_or_default()
+        }
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut stack: Vec<Vec<String>> = details
+        .blocks
+        .iter()
+        .map(|b| vec![id.to_owned(), b.clone()])
+        .collect();
+    while let Some(path) = stack.pop() {
+        let issue = path.last().unwrap().clone();
+        if issue == id {
+            let chain: Vec<String> = path.iter().map(|p| code(p)).collect();
+            bail!(
+                "blocking links can't form a cycle: {} would block itself",
+                chain.join(" → ")
+            );
+        }
+        if !seen.insert(issue.clone()) {
+            continue;
+        }
+        for next in blocks(&issue) {
+            let mut path = path.clone();
+            path.push(next);
+            stack.push(path);
+        }
+    }
+    Ok(())
+}
 fn validate(zapper: &Zapper, id: &str, details: &ZapperIssueDetails) -> Result<()> {
     ensure!(
         !details.title.trim().is_empty() && details.title.len() <= 500,
@@ -457,21 +684,7 @@ fn validate(zapper: &Zapper, id: &str, details: &ZapperIssueDetails) -> Result<(
             "due date must be YYYY-MM-DD"
         );
     }
-    ensure!(
-        !details.relations.iter().any(|r| r == id),
-        "relations must reference other issues, not the issue itself"
-    );
-    let unknown: Vec<&str> = details
-        .relations
-        .iter()
-        .filter(|r| !zapper.issues.iter().any(|i| i.id == **r))
-        .map(String::as_str)
-        .collect();
-    ensure!(
-        unknown.is_empty(),
-        "relations must reference existing issues in this Zapper; unknown: {}. Create those issues first (createIssue, one command each), then add the relation with editIssue, or leave relations empty for now",
-        unknown.join(", ")
-    );
+    validate_relations(zapper, id, details)?;
     if let Some(ZapperIssueOwner::Thread { chat_id }) = &details.owner {
         ensure!(
             zapper.workers.iter().any(|w| w.chat_id == *chat_id),
@@ -629,6 +842,152 @@ mod tests {
                 },
             ))
             .unwrap();
+    }
+    fn add_issue(store: &Zappers, id: &str) {
+        store
+            .command(command(
+                "release",
+                &format!("create-{id}"),
+                ZapperAction::CreateIssue {
+                    issue_id: id.into(),
+                    details: details(),
+                },
+            ))
+            .unwrap();
+    }
+    fn relate(
+        store: &Zappers,
+        command_id: &str,
+        from: &str,
+        kind: ZapperIssueRelationKind,
+        to: &str,
+    ) -> Result<Option<Zapper>> {
+        store.command(command(
+            "release",
+            command_id,
+            ZapperAction::LinkIssueRelation {
+                issue_id: from.into(),
+                kind,
+                target_id: to.into(),
+            },
+        ))
+    }
+    fn view(zapper: &Zapper, id: &str) -> Vec<(ZapperIssueRelationKind, String)> {
+        zapper
+            .issue_relations(id)
+            .into_iter()
+            .map(|(kind, other)| (kind, other.id.clone()))
+            .collect()
+    }
+    #[test]
+    fn blocking_is_one_link_read_from_both_sides_and_related_is_symmetric() {
+        use ZapperIssueRelationKind::*;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
+        create(&store, "release");
+        for id in ["a", "b", "c"] {
+            add_issue(&store, id);
+        }
+        relate(&store, "ab", "a", Blocks, "b").unwrap();
+        relate(&store, "cb", "c", BlockedBy, "b").unwrap();
+        let zapper = store.get("release").unwrap();
+        assert_eq!(view(&zapper, "a"), vec![(Blocks, "b".into())]);
+        assert_eq!(
+            view(&zapper, "b"),
+            vec![(Blocks, "c".into()), (BlockedBy, "a".into())]
+        );
+        assert_eq!(view(&zapper, "c"), vec![(BlockedBy, "b".into())]);
+        assert_eq!(zapper.issues[1].details.blocks, vec!["c"]);
+        let b = &zapper.issues[1];
+        assert_eq!(b.activity.last().unwrap().text, "Blocking ZAP-3");
+        assert_eq!(
+            zapper.issues[2].activity.last().unwrap().text,
+            "Blocked by ZAP-2"
+        );
+        // A new relation replaces the old one, and either side can remove it.
+        relate(&store, "ba-related", "b", Related, "a").unwrap();
+        let zapper = store.get("release").unwrap();
+        assert_eq!(view(&zapper, "a"), vec![(Related, "b".into())]);
+        assert!(zapper.issues[0].details.blocks.is_empty());
+        store
+            .command(command(
+                "release",
+                "unlink",
+                ZapperAction::UnlinkIssueRelation {
+                    issue_id: "a".into(),
+                    target_id: "b".into(),
+                },
+            ))
+            .unwrap();
+        let zapper = store.get("release").unwrap();
+        assert!(view(&zapper, "a").is_empty() && view(&zapper, "b").len() == 1);
+        // Closed blockers no longer hold an issue up.
+        assert_eq!(zapper.open_blockers("c").len(), 1);
+    }
+    #[test]
+    fn impossible_relations_are_rejected_without_changing_either_issue() {
+        use ZapperIssueRelationKind::*;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
+        create(&store, "release");
+        for id in ["a", "b", "c"] {
+            add_issue(&store, id);
+        }
+        relate(&store, "ab", "a", Blocks, "b").unwrap();
+        relate(&store, "bc", "b", Blocks, "c").unwrap();
+        let before = store.get("release").unwrap();
+        let cycle = relate(&store, "ca", "c", Blocks, "a")
+            .unwrap_err()
+            .to_string();
+        assert!(cycle.contains("ZAP-3 → ZAP-1 → ZAP-2 → ZAP-3"), "{cycle}");
+        assert!(relate(&store, "self", "a", Related, "a").is_err());
+        assert!(relate(&store, "missing", "a", Related, "nowhere").is_err());
+        // Editing the record by hand gets the same checks.
+        let mut edited = before.issues[2].details.clone();
+        edited.blocks = vec!["a".into()];
+        let edit = |id: &str, details: ZapperIssueDetails| {
+            store.command(command(
+                "release",
+                id,
+                ZapperAction::EditIssue {
+                    issue_id: "c".into(),
+                    details,
+                },
+            ))
+        };
+        assert!(edit("edit-cycle", edited.clone()).is_err());
+        edited.blocks = vec![];
+        edited.relations = vec!["b".into(), "b".into()];
+        assert!(edit("edit-duplicate", edited.clone()).is_err());
+        edited.relations = vec!["b".into()];
+        assert!(
+            edit("edit-both", edited)
+                .unwrap_err()
+                .to_string()
+                .contains("one relation")
+        );
+        assert_eq!(store.get("release").unwrap().issues, before.issues);
+    }
+    #[test]
+    fn coordinator_view_lists_relations_and_open_blockers() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
+        create(&store, "release");
+        for id in ["a", "b"] {
+            add_issue(&store, id);
+        }
+        relate(&store, "ab", "a", ZapperIssueRelationKind::Blocks, "b").unwrap();
+        let view = coordinator_view(&store.get("release").unwrap()).unwrap();
+        let b = &view["issues"][1];
+        assert_eq!(b["relations"][0]["kind"], "blockedBy");
+        assert_eq!(b["relations"][0]["code"], "ZAP-1");
+        assert_eq!(b["openBlockers"], serde_json::json!(["ZAP-1"]));
+        assert!(
+            view["issues"][0]["openBlockers"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
     #[test]
     fn coordinator_view_keeps_recent_activity_and_flags_clipped_descriptions() {
