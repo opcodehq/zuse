@@ -87,6 +87,10 @@ impl Shell {
         cx.notify();
     }
 
+    /// Cloud threads settle only by an explicit choice. Unlike local
+    /// threads ([`Self::local_thread_is_settled`]), a merged pull request
+    /// does not settle them: the account's workspace list carries a branch
+    /// but no pull request state to read.
     pub(super) fn take_settled_cloud_rows(
         &self,
         groups: &mut [super::cloud_sidebar::CloudSidebarGroup],

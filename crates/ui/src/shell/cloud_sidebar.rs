@@ -361,10 +361,12 @@ impl Shell {
             )
         };
         let id = format!("{}{workspace}", super::CLOUD_ROW_PREFIX);
-        // Under a project heading, the card names its branch.
+        // Under a project heading, the card names its branch, as local
+        // cards do, while Branch is shown.
         let description = project_group.then(|| {
             ["branch", "branchName", "headBranch"]
                 .into_iter()
+                .filter(|_| self.settings.sidebar_show_branch)
                 .find_map(|key| row[key].as_str().map(str::trim))
                 .unwrap_or_default()
                 .to_owned()

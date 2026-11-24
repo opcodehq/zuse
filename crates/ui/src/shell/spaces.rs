@@ -5728,6 +5728,7 @@ impl Shell {
                     let state = self.state.read(cx);
                     crate::change_requests::conversation_branch(&chat, &state.spaces)
                         .map(str::trim)
+                        .filter(|_| self.settings.sidebar_show_branch)
                         .unwrap_or_default()
                         .to_owned()
                 } else {
