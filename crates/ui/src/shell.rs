@@ -10252,6 +10252,29 @@ impl Shell {
             let mut cloud_mark = cloud_mark;
             if !two_line && settle_button.is_none() && !show_archive {
                 corner_cloud = cloud_mark.take();
+                // Compact rows under a project heading name where they run
+                // beside the age: the cloud, or this computer.
+                if nested && !cloud {
+                    corner_cloud = Some(
+                        div()
+                            .id(SharedString::from(format!("{row_id}-computer")))
+                            .debug_selector({
+                                let id = id.clone();
+                                move || format!("chat-computer-mark-{id}")
+                            })
+                            .size(px(SIDEBAR_CLOUD_MARK_SIZE))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .aria_label("Runs on a computer")
+                            .child(
+                                icon(icons::DITHER_MONITOR)
+                                    .size(px(SIDEBAR_CLOUD_MARK_SIZE))
+                                    .text_color(faint),
+                            ),
+                    );
+                }
             }
             let mut card_actions = card_actions;
             let trailing_info: AnyElement = if let Some(actions) = card_actions.take() {
@@ -10305,13 +10328,9 @@ impl Shell {
                     .child(mark)
                     .into_any_element()
             } else {
-                let label: SharedString = match compact_jump_label.clone() {
-                    Some(label) => label,
-                    None if nested && !two_line && time_ago.as_ref() != "now" => {
-                        format!("{time_ago} ago").into()
-                    }
-                    None => time_ago.clone(),
-                };
+                let label: SharedString = compact_jump_label
+                    .clone()
+                    .unwrap_or_else(|| time_ago.clone());
                 div()
                     .flex()
                     .items_center()
@@ -10329,8 +10348,8 @@ impl Shell {
                     .into_any_element()
             };
             // Only the time slot can hold the cloud; anywhere else it stays
-            // beside the title.
-            let cloud_mark = cloud_mark.or(corner_cloud);
+            // beside the title. A computer mark appears only beside the age.
+            let cloud_mark = cloud_mark.or(corner_cloud.filter(|_| cloud));
             let trailing = div()
                 .id(SharedString::from(format!("{row_id}-corner")))
                 .debug_selector({

@@ -1701,6 +1701,22 @@ mod tests {
             heights(&shell, cx, settings::SidebarDensity::Compact),
             [super::super::SIDEBAR_ROW_SINGLE_HEIGHT; 2]
         );
+        // Compact rows name where they run just left of the age.
+        for (row, corner, mark) in [
+            ("local-1", "chat-time-local-1", "chat-computer-mark-local-1"),
+            (
+                "cloud:task-1",
+                "chat-time-cloud:task-1",
+                "chat-cloud-mark-cloud:task-1",
+            ),
+        ] {
+            let mark = cx.debug_bounds(mark).expect(mark);
+            let corner = cx.debug_bounds(corner).unwrap();
+            assert!(
+                corner.contains(&mark.center()),
+                "{row}: mark sits beside the age"
+            );
+        }
         // Density belongs to the Projects view: the Threads view keeps cards.
         shell.update(cx, |shell, cx| {
             shell.settings.sidebar_organization = SidebarOrganization::InOneList;
