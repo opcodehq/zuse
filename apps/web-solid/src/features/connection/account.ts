@@ -1,3 +1,5 @@
+import { frameId, inComputerFrame, notePrimaryRecipe, savedPrimaryRecipe } from "./multi/model";
+import { openComputer } from "./multi/navigation";
 // Account computers: a controller engine (this tab's own engine or paired computer) issues a
 // short-lived grant, and this tab speaks RPC directly to the selected computer with it.
 // The tab URL carries only public metadata; the grant never leaves memory.
@@ -53,15 +55,19 @@ export function takeAccountTarget(): AccountTarget | null {
   return saved ? parseTarget(JSON.parse(saved)) : null;
 }
 
-/** Open an account computer in a new tab, isolated from this one. */
+/** Open an account computer in the current tab, keeping the controller in its connection path. */
 export function openAccountComputer(target: AccountTarget) {
-  const url = `${location.origin}${location.pathname}${location.search}#computer=${encodeURIComponent(JSON.stringify(target))}`;
-  const child = window.open(url, "_blank");
-  if (!child) throw new Error("Allow pop-ups to open this computer in a new tab");
-  child.opener = null;
+  const validated = parseTarget(target);
+  if (openComputer({ kind: "account", target: validated })) return;
+  writeAccountTarget(JSON.stringify(validated));
+  history.replaceState(null, "", `${location.pathname}${location.search}#computer=${encodeURIComponent(JSON.stringify(validated))}`);
+  location.reload();
 }
 
 export function returnToController() {
+  if (inComputerFrame()) { parent.postMessage({ type: "zuse.computer.return", frame: frameId() }, location.origin); return; }
+  const recipe = savedPrimaryRecipe();
+  notePrimaryRecipe(recipe?.kind === "account" ? recipe.controller : { kind: "owner" });
   writeAccountTarget(null);
   location.replace(location.pathname + location.search);
 }

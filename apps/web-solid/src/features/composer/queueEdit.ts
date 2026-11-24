@@ -1,3 +1,4 @@
+import { frameId } from "@/features/connection/multi/model";
 // Editing a queued message in the composer under the host's edit lease.
 import { chatRequest } from "@/core/chat";
 import { rpc } from "@/core/connection";
@@ -31,7 +32,7 @@ export { edit as queueEdit };
 
 const instance = crypto.randomUUID();
 // Per tab, so a reload hands back the lease it held instead of leaving the row locked until it expires.
-const LEASE = "zuse.web.queueEdit.v1";
+const LEASE = "zuse.web.queueEdit.v1" + (frameId() ? `:computer:${frameId()}` : "");
 interface HeldLease { chatId: string; id: string; leaseId: string; hash: string }
 function rememberLease(lease: HeldLease | null) {
   try {

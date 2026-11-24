@@ -314,7 +314,7 @@ impl AccountClient {
     }
     pub async fn environments(&self) -> Result<Environments> {
         let lease = self.lease().await?;
-        let result: Environments = self
+        let mut result: Environments = self
             .bearer(&lease, Method::GET, "/v1/environments", None)
             .await?;
         if result.environments.len() > 512
@@ -324,6 +324,11 @@ impl AccountClient {
         {
             return Err(Error::Invalid);
         }
+        let removed = self.routes.removed(&lease.subject)?;
+        result
+            .environments
+            .retain(|environment| !removed.contains(&environment.environment_id));
+        lease.check(&self.account)?;
         Ok(result)
     }
     pub async fn clients(&self) -> Result<Clients> {
@@ -530,6 +535,31 @@ impl AccountClient {
             return Err(Error::Invalid);
         }
         Ok(result)
+    }
+    pub async fn remove_computer(
+        &self,
+        expected: &str,
+        environment: &str,
+    ) -> Result<Vec<routes::Computer>> {
+        if !valid_id(environment) {
+            return Err(Error::Invalid);
+        }
+        let lease = self.lease().await?;
+        if lease.subject != expected {
+            return Err(Error::Changed);
+        }
+        let _: Value = self
+            .bearer(
+                &lease,
+                Method::POST,
+                "/v1/client/environment-unlink",
+                Some(&json!({"environmentId": environment})),
+            )
+            .await?;
+        lease.check(&self.account)?;
+        let computers = self.routes.forget(&lease.subject, environment)?;
+        lease.check(&self.account)?;
+        Ok(computers)
     }
     pub async fn unlink(&self, environment: &str) -> Result<()> {
         if !valid_id(environment) {

@@ -92,6 +92,7 @@ mod panel_layout;
 mod panel_menu;
 mod pr_watch;
 mod project_setup;
+mod remote_workspaces;
 mod ssh_open;
 mod update_notes;
 mod update_restart;
@@ -1502,6 +1503,7 @@ struct PinnedSessionDragState {
 type SidebarKeyedRow = (String, f32, AnyElement);
 
 struct SidebarSessionRows {
+    projects: std::collections::HashMap<String, (String, String)>,
     custom_count: usize,
     rows: Vec<SidebarKeyedRow>,
     pinned_count: usize,
@@ -2188,6 +2190,15 @@ fn dismiss_update_prompt(cx: &mut App) {
 }
 
 pub struct Shell {
+    computer_registry: remote_workspaces::Registry,
+    computer_navigation: Vec<remote_workspaces::ComputerChat>,
+    computer_jump_slots: Option<std::collections::HashMap<String, usize>>,
+    computer_jump_hints: bool,
+    remote_workspaces: Vec<remote_workspaces::Workspace>,
+    active_remote_workspace: Option<usize>,
+    sidebar_owner: Option<gpui::WeakEntity<Shell>>,
+    sidebar_is_active: bool,
+    local_computer_collapsed: bool,
     update_restart: Option<update_restart::RestartPlan>,
     update_restart_task: Option<Task<()>>,
     zapper_ui: zappers::ZapperUi,
@@ -3148,6 +3159,15 @@ impl Shell {
             runtime_change_error: None,
             import_task: None,
             import_current: None,
+            computer_registry: Default::default(),
+            computer_navigation: Vec::new(),
+            computer_jump_slots: None,
+            computer_jump_hints: false,
+            remote_workspaces: Vec::new(),
+            active_remote_workspace: None,
+            sidebar_owner: None,
+            sidebar_is_active: true,
+            local_computer_collapsed: false,
             boot,
             data_dir,
             settings_base: settings::current(cx),
@@ -5642,7 +5662,25 @@ impl Shell {
     }
 
     pub fn prepare_window_close(&mut self, cx: &mut Context<Self>) -> bool {
-        self.prepare_exit(PendingExit::CloseWindow, cx)
+        for (index, workspace) in self.remote_workspaces.iter().enumerate() {
+            if !workspace
+                .shell
+                .update(cx, |shell, cx| shell.prepare_window_close(cx))
+            {
+                self.active_remote_workspace = Some(index);
+                cx.notify();
+                return false;
+            }
+        }
+        let ready = self.prepare_exit(PendingExit::CloseWindow, cx);
+        if ready && !self.flush_computers(cx) {
+            return false;
+        }
+        if !ready {
+            self.active_remote_workspace = None;
+            cx.notify();
+        }
+        ready
     }
 
     /// The first rung of `⌘W` / Window > Close Window: when the right pane is
@@ -5655,6 +5693,11 @@ impl Shell {
     /// closes — the same cascade browsers use. The native traffic-light close
     /// deliberately skips this rung: it always closes the window.
     pub fn close_active_surface(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if let Some(index) = self.active_remote_workspace {
+            return self.remote_workspaces[index]
+                .shell
+                .update(cx, |shell, cx| shell.close_active_surface(window, cx));
+        }
         // The Pull requests route's pane holds pull request tabs instead.
         if matches!(self.route, Route::PullRequests) {
             return self.close_active_pull_request_tab(cx);
@@ -5693,7 +5736,25 @@ impl Shell {
     }
 
     pub fn prepare_quit(&mut self, cx: &mut Context<Self>) -> bool {
-        self.prepare_exit(PendingExit::Quit, cx)
+        for (index, workspace) in self.remote_workspaces.iter().enumerate() {
+            if !workspace
+                .shell
+                .update(cx, |shell, cx| shell.prepare_quit(cx))
+            {
+                self.active_remote_workspace = Some(index);
+                cx.notify();
+                return false;
+            }
+        }
+        let ready = self.prepare_exit(PendingExit::Quit, cx);
+        if ready && !self.flush_computers(cx) {
+            return false;
+        }
+        if !ready {
+            self.active_remote_workspace = None;
+            cx.notify();
+        }
+        ready
     }
 
     fn prepare_exit(&mut self, action: PendingExit, cx: &mut Context<Self>) -> bool {
@@ -6066,6 +6127,7 @@ impl Shell {
     }
 
     fn set_route(&mut self, route: Route, cx: &mut Context<Self>) {
+        self.activate_sidebar_computer(cx);
         self.record_route(route, cx);
         if matches!(self.route, Route::Settings(SettingsSection::Archived))
             && !matches!(route, Route::Settings(SettingsSection::Archived))
@@ -6396,6 +6458,11 @@ impl Shell {
         // of an unreachable tab.
         let section = section.reopenable(self.state.read(cx).cloud_access());
         self.command_palette = None;
+        if section == SettingsSection::Devices {
+            if let Some(page) = &self.devices_page {
+                page.update(cx, |page, cx| page.refresh_computers(cx));
+            }
+        }
         // Re-probe installed providers on each visit while preserving active sign-ins.
         if section == SettingsSection::Harnesses {
             if let Some(page) = &self.harnesses_page {
@@ -6930,6 +6997,7 @@ impl Shell {
     /// Start editing `chat_id`'s title in place on its row: the sidebar's
     /// session row, or — for a side chat — its conversation tab.
     fn open_rename_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
+        self.activate_sidebar_computer(cx);
         self.close_chat_menu(cx);
         if self.chat_rename.is_some() {
             self.finish_rename_chat(true, cx);
@@ -7175,11 +7243,21 @@ impl Shell {
 
     fn active_sidebar_pin_profile_key(&self, cx: &App) -> Option<String> {
         let state = self.state.read(cx);
-        sidebar_pin_profile_key(
+        let key = sidebar_pin_profile_key(
             state.workspace_scope,
             state.auth.as_ref(),
             self.boot.org_id.as_deref(),
-        )
+        )?;
+        // Local profiles on different computers can have the same chat ids;
+        // their pins and drag payloads must stay scoped to their computer.
+        if self.sidebar_owner.is_some() && state.workspace_scope == Some(WorkspaceScope::Local) {
+            Some(format!(
+                "{key}:computer:{}",
+                state.local_device_id.as_deref()?
+            ))
+        } else {
+            Some(key)
+        }
     }
 
     fn active_sidebar_pins(&self, cx: &App) -> Vec<String> {
@@ -7413,6 +7491,9 @@ impl Shell {
     /// grouping view options permute the list, and the chip on a row must
     /// name the key that opens it.
     fn jump_to_session(&mut self, slot: usize, cx: &mut Context<Self>) {
+        if self.navigate_computer_chat(true, Some(slot), cx) {
+            return;
+        }
         let Some(chat_id) = self.sidebar_visible_order(cx).into_iter().nth(slot) else {
             return;
         };
@@ -7474,6 +7555,22 @@ impl Shell {
     }
 
     pub(super) fn set_jump_hints(&mut self, visible: bool, cx: &mut Context<Self>) {
+        if let Some(owner) = self.sidebar_owner.clone() {
+            cx.defer(move |cx| {
+                let _ = owner.update(cx, |owner, cx| owner.set_jump_hints(visible, cx));
+            });
+            return;
+        }
+        if !self.remote_workspaces.is_empty() && self.computer_jump_hints != visible {
+            self.computer_jump_hints = visible;
+            for workspace in &self.remote_workspaces {
+                workspace.shell.update(cx, |shell, cx| {
+                    shell.jump_hints = visible;
+                    cx.notify();
+                });
+            }
+            cx.notify();
+        }
         if self.jump_hints != visible {
             self.jump_hints = visible;
             cx.notify();
@@ -9422,6 +9519,7 @@ impl Shell {
     ) -> AnyElement {
         // The Plugins page owns the main area, so no chat reads as current.
         let selected = selected
+            && self.sidebar_is_active
             && !matches!(
                 self.route,
                 Route::Plugins | Route::Archives | Route::Usage | Route::Zapper
@@ -9870,6 +9968,7 @@ impl Shell {
                         if cloud_locked {
                             return;
                         }
+                        this.activate_sidebar_computer(cx);
                         this.chat_menu.open(ChatMenuState {
                             tab: None,
                             chat_id: menu_id.clone(),
@@ -10756,7 +10855,11 @@ impl Shell {
         )
     }
 
-    fn render_chat_sidebar(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+    fn render_sidebar_session_items(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> (AnyElement, Option<AnyElement>) {
         if self.sidebar_session_transfer.as_ref().is_some_and(|drag| {
             !cx.has_active_drag() || !self.sidebar_session_transfer_is_valid(&drag.payload, cx)
         }) {
@@ -10935,9 +11038,6 @@ impl Shell {
             })
             .collect();
 
-        // The space filter lives ABOVE the scroll region (fixed) so its
-        // dropdown can float without being clipped by the list's overflow.
-        let filter_row = self.render_spaces_filter(theme, cx);
         let active_list = if !list_items.is_empty() {
             let mut pinned_items = list_items;
             let mut custom_items = pinned_items.split_off(pinned_count);
@@ -11035,6 +11135,16 @@ impl Shell {
                 .child(SharedString::from("No sessions yet"))
                 .into_any_element()
         };
+
+        (active_list, moving_row)
+    }
+
+    fn render_chat_sidebar(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        if !self.remote_workspaces.is_empty() {
+            return self.render_multi_computer_sidebar(theme, cx);
+        }
+        let (active_list, moving_row) = self.render_sidebar_session_items(theme, cx);
+        let filter_row = self.render_spaces_filter(theme, cx);
 
         // The (filtered) Sessions list scrolls inside an EdgeFade scope —
         // a true per-glyph gradient at active overflow edges. Glass-safe
@@ -15591,6 +15701,14 @@ fn header_icon_button_base(
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.pull_settings(cx);
+        self.restore_computers(cx);
+        self.reconcile_computer_identities(cx);
+        self.persist_computers(cx);
+        if let Some(index) = self.active_remote_workspace {
+            let remote = self.remote_workspaces[index].shell.clone();
+            return remote.into_any_element();
+        }
         self.sync_cloud_tab_scope(cx);
         // Every repaint (state frame, input, or the clock firing) reschedules
         // the next clock-driven one; the sidebar and transcript follow this
@@ -16692,7 +16810,20 @@ impl Render for Shell {
             // element at the window edges.
             .children(Self::render_linux_resize_borders(window));
         self.render_time = None;
-        root
+        // A connection gate belongs to one computer, while the shared sidebar
+        // must remain usable to reach every other computer.
+        if (self.sidebar_owner.is_some() || !self.remote_workspaces.is_empty())
+            && (!matches!(gate, GatePhase::Ready) || onboarding || restart_required)
+        {
+            div()
+                .size_full()
+                .flex()
+                .child(self.render_sidebar(cx))
+                .child(div().flex_1().min_w_0().h_full().child(root))
+                .into_any_element()
+        } else {
+            root.into_any_element()
+        }
     }
 }
 

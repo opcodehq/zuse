@@ -122,6 +122,7 @@ name = "image-links-fixture"
 required-features = ["image-links-fixture"]
 
 [dependencies]
+tempfile.workspace = true
 hayro = "0.9"
 # Pairing codes shown in Remote access, the same encoder `zuse pair` uses.
 qrcode = { version = "0.14", default-features = false }
@@ -214,7 +215,6 @@ x11rb = { version = "0.14.0", features = ["image"] }
 [dev-dependencies]
 zuse-serve.workspace = true
 gpui = { workspace = true, features = ["test-support"] }
-tempfile.workspace = true
 mimalloc.workspace = true
 tracing-subscriber.workspace = true
 

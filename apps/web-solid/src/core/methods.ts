@@ -201,6 +201,7 @@ export const M = {
   RELAY_COMMAND: "RelayCommand",
   RELEASE_HOME_FOLDER_SEARCH: "ReleaseHomeFolderSearch",
   REMEMBER_ACCOUNT_ROUTE: "RememberAccountRoute",
+  REMOVE_ACCOUNT_COMPUTER: "RemoveAccountComputer",
   REMOVE_QUEUED_MESSAGE: "RemoveQueuedMessage",
   RENEW_QUEUED_MESSAGE_EDIT: "RenewQueuedMessageEdit",
   REPORT_VOICE_MEDIA_V2: "ReportVoiceMediaV2",

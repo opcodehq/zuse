@@ -1,3 +1,4 @@
+import { frameId } from "@/features/connection/multi/model";
 // Local view state: what is open, not what exists. Persisted preferences live here too.
 import { createEffect, createRoot, createSignal, createStore } from "solid-js";
 import { zapperForChat } from "./zappers";
@@ -62,7 +63,7 @@ export interface ViewState {
 }
 
 // What this tab had open survives a reload, as desktop reopens the last chat. Per tab, so two tabs can differ.
-const TAB = "zuse.web.tab.v1";
+const TAB = "zuse.web.tab.v1" + (frameId() ? `:computer:${frameId()}` : "");
 type TabState = Pick<ViewState, "selectedChatId" | "draftProjectPath" | "rightPanel">;
 function loadTab(): TabState {
   const empty: TabState = { selectedChatId: null, draftProjectPath: null, rightPanel: null };
