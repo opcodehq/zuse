@@ -164,6 +164,7 @@ impl AllocationProvider for Boxd {
         self.upload(machine, &staged, launch.boot_token.as_bytes())
             .await?;
         let result = self.exec(machine, &command).await?;
+        super::launch_report::record(machine, &result);
         if result.exit_code != 0 {
             return Err(ProviderError::Unavailable);
         }
@@ -409,6 +410,9 @@ impl RuntimeControl {
             self.prepare_allocation_access(job).instrument(span)
         );
         if let Err(error) = &result {
+            if let Err(stored) = super::launch_report::persist(&self.pool, &job.resource_id).await {
+                tracing::debug!(%stored, "launch_report_not_stored");
+            }
             // Keep the original failure even if telemetry storage is unavailable.
             // Save before retry/hold releases this exact attempt's lease.
             if let Some(context) = diagnostic_context.as_ref() {

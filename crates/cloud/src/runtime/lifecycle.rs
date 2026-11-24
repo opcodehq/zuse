@@ -185,7 +185,9 @@ impl RetainedProvider for Boxd {
         let layout = super::machine_layout::Layout::Root;
         let command =
             retained_launch_command(layout.run_as_task(), layout.launcher(), d, workspace, api);
-        if self.exec(&d.source_machine_id, &command).await?.exit_code != 0 {
+        let result = self.exec(&d.source_machine_id, &command).await?;
+        super::launch_report::record(&d.source_machine_id, &result);
+        if result.exit_code != 0 {
             return Err(ProviderError::Unavailable);
         }
         Ok(())
@@ -758,6 +760,10 @@ impl RuntimeControl {
     ) -> Result<(), ApiError> {
         let result = self.lifecycle_step(provider, job, now).await;
         if let Err(error) = &result {
+            // Diagnostics only: never let them change the failure handling.
+            if let Err(stored) = super::launch_report::persist(&self.pool, &job.resource_id).await {
+                tracing::debug!(%stored, "launch_report_not_stored");
+            }
             // A computer its provider no longer has will not come back. Count
             // consecutive "missing" answers (claims and other outcomes don't
             // count) and stop after a few, leaving the workspace settled so

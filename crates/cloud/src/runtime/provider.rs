@@ -260,6 +260,7 @@ impl AllocationProvider for RuntimeProvider {
                 self.provider.execute(machine, &command),
             )
             .await?;
+        super::launch_report::record(machine, &result);
         if result.exit_code == 78 {
             return Err(ProviderError::Rejected);
         }
@@ -573,13 +574,12 @@ impl RetainedProvider for RuntimeProvider {
             workspace,
             api,
         );
-        if self
+        let result = self
             .provider
             .execute(&d.source_machine_id, &command)
-            .await?
-            .exit_code
-            != 0
-        {
+            .await?;
+        super::launch_report::record(&d.source_machine_id, &result);
+        if result.exit_code != 0 {
             return Err(ProviderError::Unavailable);
         }
         Ok(())

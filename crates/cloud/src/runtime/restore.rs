@@ -286,6 +286,9 @@ impl RuntimeControl {
     ) -> Result<bool, ApiError> {
         let result = self.restore_step(provider, job, now).await;
         if let Err(error) = &result {
+            if let Err(stored) = super::launch_report::persist(&self.pool, &job.resource_id).await {
+                tracing::debug!(%stored, "launch_report_not_stored");
+            }
             // A late provider response cannot overwrite a newer generation's status.
             let at = chrono::Utc::now().timestamp_millis();
             sqlx::query("UPDATE api_cloud_workspaces w SET status_code=$3,revision=revision+1 WHERE workspace_id=$1 AND request_config->>'rustRestoreOperationId'=$2 AND state='provisioning' AND desired_state='ready' AND EXISTS(SELECT 1 FROM zuse_rust_jobs j JOIN zuse_rust_control_owners o ON o.resource_kind='workspace' AND o.resource_id=j.resource_id AND o.backend='rust' AND o.generation=j.resource_generation WHERE j.job_id=$4 AND j.lease_token=$5 AND j.state='running' AND j.lease_expires_at>$6 AND j.resource_generation=$7)")

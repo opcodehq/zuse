@@ -34,6 +34,7 @@ pub mod harness_updates;
 mod internal_observations;
 pub mod keep_running;
 mod launch_repair;
+mod launch_report;
 pub mod lifecycle;
 pub(crate) mod machine_layout;
 pub mod mailbox;

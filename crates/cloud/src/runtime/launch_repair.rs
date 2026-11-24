@@ -78,6 +78,7 @@ pub(crate) async fn launch(
         .exec(machine, launch)
         .await
         .map_err(LaunchFailure::Provider)?;
+    super::launch_report::record(machine, &first);
     if first.exit_code == 0 {
         return Ok(());
     }
@@ -129,6 +130,7 @@ pub(crate) async fn launch(
         .exec(machine, launch)
         .await
         .map_err(LaunchFailure::Provider)?;
+    super::launch_report::record(machine, &second);
     if second.exit_code == 0 {
         return Ok(());
     }
