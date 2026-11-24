@@ -3737,6 +3737,8 @@ pub struct Transcript {
     /// computer starting or a first message on its way to the agent. While
     /// set, the working line under the last message shows it.
     external_activity: Option<SharedString>,
+    /// The session notice the working row last showed, to repaint on change.
+    last_notice: Option<String>,
     /// Memory-only viewport state for primary chats visited in this window.
     /// A transcript instance is shared across tabs, so the active ListState is
     /// reset on every attach and cannot retain these positions by itself.
@@ -4422,6 +4424,7 @@ impl Transcript {
             land_end_pending: doc_override.is_some() && !follow,
             doc_live: doc_override.is_some() && follow,
             external_activity: None,
+            last_notice: None,
             doc_override,
             saved_viewports: SavedViewportCache::default(),
             history_loader: None,
@@ -5830,6 +5833,18 @@ impl Transcript {
         let history_loading = history == Some(true);
         if history_loading != self.history_loading {
             self.history_loading = history_loading;
+            cx.notify();
+        }
+        // The working row reads the session's reconnect notice; a change to
+        // it alone moves no transcript revision, so repaint for it here.
+        let notice = self
+            .chat_id
+            .as_deref()
+            .filter(|_| self.doc_override.is_none())
+            .and_then(|id| self.state.read(cx).session_for(id))
+            .and_then(|session| session.notice.clone());
+        if notice != self.last_notice {
+            self.last_notice = notice;
             cx.notify();
         }
         let source = (

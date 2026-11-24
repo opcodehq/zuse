@@ -3812,6 +3812,10 @@ async fn drive_run(
     // folding the echo would mint an orphan chip mid-text in the NEXT
     // segment — the mid-word transcript splits.
     let mut seen_tools: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Tool calls of the active turn still awaiting their result, kept apart
+    // from `folded` because a steer boundary resets the fold while a command
+    // keeps running. The stall watchdog stays disarmed while any is open.
+    let mut open_tools: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut seen_images = std::collections::HashSet::new();
     for entry in doc_ref.read_entries().unwrap_or_default() {
         for part in entry.parts {
@@ -3914,6 +3918,9 @@ async fn drive_run(
         None => Some(std::time::Duration::from_secs(120)),
     };
     let mut last_stream_activity = tokio::time::Instant::now();
+    // Last background-workflow progress report during an active turn. Only
+    // the stall watchdog reads it; the quiesce park keeps its own window.
+    let mut last_workflow_activity: Option<tokio::time::Instant> = None;
     // TURN-STALL WATCHDOG: unlike the quiesce park above, this one ENDS the
     // turn with an error. It is armed only for drivers that name a window
     // (`Harness::stall_timeout`) and only while a turn is active with
@@ -4199,6 +4206,7 @@ async fn drive_run(
                         inner.note_message(&chat_id, &folded_text(&folded));
                     }
                     folded.clear();
+                    open_tools.clear();
                     dirty = false;
                     entry_id = new_id();
                     segment_started = now_ms();
@@ -4210,14 +4218,17 @@ async fn drive_run(
                     );
                     continue;
                 }
-                // Turn-stall watchdog (see the knob above). Subagent traffic
+                // Turn-stall watchdog (see the knob above). Subagent and workflow traffic
                 // is the agent's own work too, so it restarts the window.
                 _ = tokio::time::sleep_until(
-                    last_stream_activity.max(last_subagent_activity.unwrap_or(last_stream_activity))
+                    last_stream_activity
+                        .max(last_subagent_activity.unwrap_or(last_stream_activity))
+                        .max(last_workflow_activity.unwrap_or(last_stream_activity))
                         + stall_after.unwrap_or_default()
                 ), if stall_after.is_some()
                     && idle_since.is_none()
                     && !interrupted
+                    && open_tools.is_empty()
                     && !turn_in_flight(&folded) =>
                 {
                     tracing::warn!(
@@ -4489,6 +4500,12 @@ async fn drive_run(
         if let AgentEvent::WorkflowProgress { tool_use_id, call } = &event {
             inner.publish(&chat_id, &event);
             inner.touch_session(&chat_id);
+            // Workflow progress is the agent's own work: it restarts the
+            // stall window. A parked turn has no window, so this never
+            // reopens one.
+            if idle_since.is_none() {
+                last_workflow_activity = Some(tokio::time::Instant::now());
+            }
             let first_report = live_workflows.insert(tool_use_id.clone());
             let chip_streaming = folded
                 .iter()
@@ -4534,6 +4551,11 @@ async fn drive_run(
             continue;
         }
         inner.set_notice(&chat_id, None);
+        // A result settles its call wherever it lands, even as a stale echo
+        // the filter below drops.
+        if let AgentEvent::ToolResult { id, .. } = &event {
+            open_tools.remove(id);
+        }
         // The engine's input bridge is the sole authority on input requests:
         // it mints the id and parks the resolver BEFORE emitting the event,
         // so a legitimate id is always pending here. A harness emitting its
@@ -4681,7 +4703,9 @@ async fn drive_run(
                 if !in_segment(&folded, id) && seen_tools.contains(id) {
                     continue;
                 }
-                seen_tools.insert(id.clone());
+                if seen_tools.insert(id.clone()) {
+                    open_tools.insert(id.clone());
+                }
             }
             AgentEvent::ToolResult { id, .. }
                 if !in_segment(&folded, id) && seen_tools.contains(id) =>
@@ -4935,6 +4959,7 @@ async fn drive_run(
         }
         analytics_turn.observe(&event);
         if let AgentEvent::Done { status, .. } = &event {
+            open_tools.clear();
             if analytics_turn_open {
                 if let Some(analytics) = inner.analytics.get() {
                     let event = match status {

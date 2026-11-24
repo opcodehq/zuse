@@ -395,3 +395,53 @@ async fn an_open_tool_call_never_stalls() {
     assert!(transcript_errors(&rig.core).is_empty());
     rig.core.sessions.shutdown().await;
 }
+
+/// A steer boundary resets the transcript segment while a command keeps
+/// running; the command still holds the watchdog off, and its late result
+/// re-arms it.
+#[tokio::test]
+async fn a_tool_call_open_across_a_steer_boundary_never_stalls() {
+    let rig = start("run the slow build").await;
+    rig.feed.send(session_started()).unwrap();
+    rig.feed
+        .send(AgentEvent::ToolCall {
+            id: "tool-slow".into(),
+            call: ToolCall::Exec {
+                command: "cargo build --release".into(),
+            },
+        })
+        .unwrap();
+    rig.feed
+        .send(AgentEvent::Steered {
+            assistant_message_id: None,
+            next_assistant_message_id: None,
+        })
+        .unwrap();
+    wait_for(
+        || status(&rig.core) == Some(SessionStatus::Working),
+        "the turn to start",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(STALL_MS * 4)).await;
+    assert_eq!(
+        status(&rig.core),
+        Some(SessionStatus::Working),
+        "the command outlives the segment, and so does its hold"
+    );
+    // The result lands (a stale echo for the new segment): the next silence
+    // is a stall again.
+    rig.feed
+        .send(AgentEvent::ToolResult {
+            id: "tool-slow".into(),
+            is_error: false,
+            output: None,
+            diff: None,
+        })
+        .unwrap();
+    wait_for(
+        || status(&rig.core) == Some(SessionStatus::Errored),
+        "the silent turn to end after the command finished",
+    )
+    .await;
+    rig.core.sessions.shutdown().await;
+}
