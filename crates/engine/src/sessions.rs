@@ -1044,7 +1044,7 @@ impl SessionsEngine {
         let admission = self.filesystem_admission().await;
         self.require_unarchived(chat_id)?;
         if !idle {
-            self.cancel_usage_resume(chat_id)?;
+            self.clear_usage_resume(chat_id)?;
         }
         let _activity = self.claim_filesystem_admission(chat_id);
         drop(admission);
@@ -2939,6 +2939,7 @@ impl Inner {
         if runs.get(chat_id).is_some_and(|h| h.run_id == run_id) {
             runs.remove(chat_id);
         }
+        lock(&self.usage_resume).stopped_runs.remove(run_id);
     }
 }
 
@@ -3547,6 +3548,7 @@ async fn drive_run(
     let mut usage_reset_unknown = false;
     let user_prompt = request.prompt.clone();
     let mut source_message_id = resume_state.user_message_id.clone();
+    let mut consumed_request: Option<RunRequest> = None;
     let run_cwd = request.cwd.clone();
     if request.resume.is_none() {
         let _ = doc.clear_context_usage();
@@ -4739,6 +4741,16 @@ async fn drive_run(
             // this runtime's provider session.
             if let Some(steer) = &confirmed {
                 source_message_id = steer.message_id.clone();
+                consumed_request = steer
+                    .request
+                    .as_deref()
+                    .cloned()
+                    .or_else(|| lock(&inner.last_requests).get(&chat_id).cloned())
+                    .map(|mut request| {
+                        request.prompt = steer.prompt.clone();
+                        request.resume = None;
+                        request
+                    });
                 turn.forget_steer(&steer.message_id);
             }
             if confirmed.is_some_and(|steer| steer.fork_history)
@@ -5105,9 +5117,10 @@ async fn drive_run(
         let engine = SessionsEngine {
             inner: inner.clone(),
         };
-        if let Some(request) = engine.last_request(&chat_id) {
+        if let Some(request) = consumed_request.or_else(|| engine.last_request(&chat_id)) {
             if let Err(error) = engine.record_usage_limit(
                 &chat_id,
+                &run_id,
                 harness_id,
                 request,
                 Some(source_message_id.clone()),

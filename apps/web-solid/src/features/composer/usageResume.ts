@@ -33,15 +33,18 @@ export function useUsageResume(chat: Accessor<string | null>) {
   const timer = setInterval(() => void load(), 2000);
   onCleanup(() => { generation++; clearInterval(timer); });
   const mutate = async (method: typeof M.SET_USAGE_RESUME | typeof M.RESUME_USAGE_LIMIT, enabled?: boolean) => {
-    if (busy() || state.connection.kind !== "connected") return;
+    if (busy() || state.connection.kind !== "connected") return false;
     const current = ++generation;
     setBusy(true);
     setError(null);
     try {
       const value = await rpc.call<UsageResumeStatus>(method, { ...params(), ...(enabled === undefined ? {} : { enabled }) });
-      if (current === generation) setStatus(value);
+      if (current !== generation) return false;
+      setStatus(value);
+      return true;
     } catch (cause) {
       if (current === generation) setError(cause instanceof Error ? cause.message : String(cause));
+      return false;
     } finally { setBusy(false); }
   };
   return { status, busy, error, setEnabled: (enabled: boolean) => mutate(M.SET_USAGE_RESUME, enabled), resume: () => mutate(M.RESUME_USAGE_LIMIT) };

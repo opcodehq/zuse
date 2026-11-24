@@ -269,7 +269,7 @@ function ProviderRows() {
               </Show>
               <CopyDismiss copy={e().message} onDismiss={() => {
                 if (k() === "usage" && pending()?.enabled) {
-                  void recovery.setEnabled(false).then(() => { if (!recovery.error()) dismiss(e().id); });
+                  void recovery.setEnabled(false).then((cancelled) => { if (cancelled) dismiss(e().id); });
                 } else dismiss(e().id);
               }} />
             </TrayPill>

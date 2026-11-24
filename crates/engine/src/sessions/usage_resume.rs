@@ -24,6 +24,7 @@ struct Saved {
 pub(super) struct Store {
     path: PathBuf,
     saved: Saved,
+    pub(super) stopped_runs: std::collections::HashSet<String>,
 }
 impl Store {
     pub(super) fn open(path: PathBuf) -> Self {
@@ -34,8 +35,37 @@ impl Store {
             }),
             Err(_) => Saved::default(),
         };
-        Self { path, saved }
+        Self {
+            path,
+            saved,
+            stopped_runs: Default::default(),
+        }
     }
+    fn clear_pending(&mut self, chat: &str) -> Result<(), EngineError> {
+        if self.saved.pending.contains_key(chat) {
+            self.update(|saved| {
+                saved.pending.remove(chat);
+            })?;
+        }
+        Ok(())
+    }
+
+    fn cancel(&mut self, chat: &str, run_id: Option<&str>) -> Result<(), EngineError> {
+        if let Some(run_id) = run_id {
+            self.stopped_runs.insert(run_id.to_owned());
+        }
+        self.clear_pending(chat)
+    }
+
+    fn record(&mut self, chat: &str, run_id: &str, pending: Pending) -> Result<(), EngineError> {
+        if self.stopped_runs.contains(run_id) {
+            return Ok(());
+        }
+        self.update(|saved| {
+            saved.pending.insert(chat.to_owned(), pending);
+        })
+    }
+
     fn update(&mut self, change: impl FnOnce(&mut Saved)) -> Result<(), EngineError> {
         let mut next = self.saved.clone();
         change(&mut next);
@@ -97,37 +127,43 @@ impl SessionsEngine {
         Ok(())
     }
 
-    pub(super) fn cancel_usage_resume(&self, chat: &str) -> Result<(), EngineError> {
+    pub(super) fn clear_usage_resume(&self, chat: &str) -> Result<(), EngineError> {
         let mut store = lock(&self.inner.usage_resume);
-        if store.saved.pending.contains_key(chat) {
-            store.update(|saved| {
-                saved.pending.remove(chat);
-            })?;
-        }
-        Ok(())
+        store.clear_pending(chat)
+    }
+
+    pub(super) fn cancel_usage_resume(&self, chat: &str) -> Result<(), EngineError> {
+        // Lock order is runs → usage_resume, also used by remove_run. Holding
+        // both prevents a late recording from recreating a stopped schedule.
+        let runs = lock(&self.inner.runs);
+        let mut store = lock(&self.inner.usage_resume);
+        store.cancel(chat, runs.get(chat).map(|run| run.run_id.as_str()))
     }
 
     pub(super) fn record_usage_limit(
         &self,
         chat: &str,
+        run_id: &str,
         harness: HarnessId,
         request: RunRequest,
         message_id: Option<String>,
         resets_at: Option<i64>,
     ) -> Result<(), EngineError> {
-        lock(&self.inner.usage_resume).update(|saved| {
-            saved.pending.insert(
-                chat.to_owned(),
-                Pending {
-                    harness,
-                    request,
-                    message_id,
-                    // A stale timestamp must not cause an immediate retry loop.
-                    resets_at: resets_at.filter(|time| *time > now_ms()),
-                    enabled: saved.enabled,
-                },
-            );
-        })?;
+        let mut store = lock(&self.inner.usage_resume);
+        let enabled = store.saved.enabled;
+        store.record(
+            chat,
+            run_id,
+            Pending {
+                harness,
+                request,
+                message_id,
+                // A stale timestamp must not cause an immediate retry loop.
+                resets_at: resets_at.filter(|time| *time > now_ms()),
+                enabled,
+            },
+        )?;
+        drop(store);
         self.start_usage_scheduler();
         Ok(())
     }
@@ -149,7 +185,7 @@ impl SessionsEngine {
             .inner
             .doc_host()
             .ok_or_else(|| EngineError::Other("Chat host unavailable.".into()))?;
-        if let Some(workspace) = host.workspace() {
+        let cwd = if let Some(workspace) = host.workspace() {
             let row = workspace
                 .chat(chat)?
                 .ok_or_else(|| EngineError::Other("Thread no longer exists.".into()))?;
@@ -158,7 +194,10 @@ impl SessionsEngine {
                     "Thread moved to another computer.".into(),
                 ));
             }
-        }
+            row.cwd
+        } else {
+            None
+        };
         let pending = {
             let mut store = lock(&self.inner.usage_resume);
             if scheduled
@@ -173,6 +212,12 @@ impl SessionsEngine {
             let pending = store.saved.pending.get(chat).cloned().ok_or_else(|| {
                 EngineError::Other("There is no usage-limit continuation to resume.".into())
             })?;
+            if cwd.as_deref().is_some_and(|cwd| cwd != pending.request.cwd) {
+                return Err(EngineError::Other(
+                    "The chat's working directory changed. Send a new message to continue there."
+                        .into(),
+                ));
+            }
             // Persist the claim before dispatch. Reconnects and multiple clients
             // cannot dispatch the same schedule twice.
             store.update(|saved| {
@@ -180,18 +225,6 @@ impl SessionsEngine {
             })?;
             pending
         };
-        if let Some(workspace) = host.workspace() {
-            if workspace
-                .chat(chat)?
-                .and_then(|row| row.cwd)
-                .is_some_and(|cwd| cwd != pending.request.cwd)
-            {
-                return Err(EngineError::Other(
-                    "The chat's working directory changed. Send a new message to continue there."
-                        .into(),
-                ));
-            }
-        }
         let mut request = pending.request.clone();
         request.resume = None; // Resolve the provider session using normal dispatch.
         lock(&self.inner.continuing_turns).insert(chat.to_owned());
@@ -268,6 +301,46 @@ impl SessionsEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stop_wins_over_recording_in_either_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("resume.json"));
+        let pending = || Pending {
+            harness: HarnessId::Mock,
+            request: serde_json::from_value(
+                serde_json::json!({"prompt":"finish","cwd":"/tmp","sandbox":"workspace-write"}),
+            )
+            .unwrap(),
+            message_id: Some("message".into()),
+            resets_at: Some(now_ms() + 60_000),
+            enabled: true,
+        };
+        // Stop can arrive before the errored turn persists its continuation.
+        store.cancel("chat", Some("stopped-run")).unwrap();
+        store.record("chat", "stopped-run", pending()).unwrap();
+        assert!(!store.saved.pending.contains_key("chat"));
+        // A different chat and a later run in the stopped chat still work.
+        store.record("other", "other-run", pending()).unwrap();
+        store.record("chat", "new-run", pending()).unwrap();
+        assert!(store.saved.pending.contains_key("other"));
+        assert!(store.saved.pending.contains_key("chat"));
+        // Recording before Stop must also leave no scheduled continuation.
+        store.cancel("chat", Some("new-run")).unwrap();
+        assert!(!store.saved.pending.contains_key("chat"));
+        assert!(
+            Store::open(store.path.clone())
+                .saved
+                .pending
+                .contains_key("other")
+        );
+        assert!(
+            !Store::open(store.path.clone())
+                .saved
+                .pending
+                .contains_key("chat")
+        );
+    }
+
     #[test]
     fn settings_survive_reopening() {
         let dir = tempfile::tempdir().unwrap();
