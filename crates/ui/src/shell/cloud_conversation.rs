@@ -1505,19 +1505,17 @@ impl Shell {
             self.select_cloud_tab(index, cx);
             return;
         }
-        if self.cloud_tabs.is_empty() {
-            self.track_current_cloud_canvas(cx);
-        }
+        self.track_current_cloud_canvas(cx);
         let session = target.initial_session.clone();
         // A conversation still working in the background comes back as is.
         let view = match self.background_cloud_conversation(&target, cx) {
             Some(view) => view,
             None => self.new_cloud_conversation_view(target, row, launch, cx),
         };
-        // A tab still creating a chat keeps it; this one opens beside it.
-        self.ensure_free_cloud_tab(cx);
+        // The chat shows its own tabs; a canvas still creating a chat keeps
+        // it (the sidebar reopens it).
+        self.retain_cloud_tab(&view, cx);
         self.subscribe_cloud_conversation(&view, cx);
-        self.cloud_tabs.set_current(view.clone(), cx);
         self.cloud_conversation = Some(view);
         self.active_chat = session;
         self.state

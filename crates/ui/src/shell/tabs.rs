@@ -444,7 +444,6 @@ impl Shell {
         if !self.cloud_tab_navigation_ready(cx) {
             return;
         }
-        self.cloud_tabs.clear_current();
         self.cloud_conversation = None;
         self.cloud_conversation_events = None;
         self.command_palette = None;
