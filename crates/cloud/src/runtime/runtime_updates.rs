@@ -485,14 +485,14 @@ impl RuntimeControl {
                 .await?
                 .ok_or_else(|| ApiError::conflict("cloud_runtime_release_unknown"))?;
                 let mut config = row["request_config"].clone();
-                // Only for the attempt still in flight: a late report must not
-                // re-pin a release whose rollback was already reported.
+                // Only for the attempt still in flight, named by its id: a late
+                // or anonymous report must not re-pin a rolled-back release.
                 let in_flight = prior.as_ref().is_some_and(|o| {
                     matches!(o.state.as_str(), "pending" | "downloading")
                         && attestation
                             .update_id
                             .as_deref()
-                            .is_none_or(|u| u == o.update_id)
+                            .is_some_and(|u| u == o.update_id)
                 });
                 if in_flight && config["runtimeRelease"]["sha256"] != attestation.sha256.as_str() {
                     let current = current_sha(&config).map(str::to_owned);
@@ -514,13 +514,14 @@ impl RuntimeControl {
             outcome @ (wire::Outcome::RolledBack | wire::Outcome::Failed) => {
                 // The reporting runtime is the one serving: a provisional pin
                 // to another binary follows it back, for the attempt in
-                // flight only (a stale report never touches a newer pin).
+                // flight only, named by its id (a stale or anonymous report
+                // never touches a newer pin).
                 let owns_attempt = prior.as_ref().is_some_and(|o| {
                     matches!(o.state.as_str(), "pending" | "downloading")
                         && attestation
                             .update_id
                             .as_deref()
-                            .is_none_or(|u| u == o.update_id)
+                            .is_some_and(|u| u == o.update_id)
                 });
                 let mut config = row["request_config"].clone();
                 if owns_attempt

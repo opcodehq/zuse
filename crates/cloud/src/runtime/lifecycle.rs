@@ -853,18 +853,11 @@ impl RuntimeControl {
                 .bind(&job.resource_id).bind(now).execute(&mut *tx).await?;
             tx.commit().await?;
             let machine = row["provider_sandbox_id"].as_str().unwrap_or("");
-            let slept = if machine.is_empty() {
-                true
-            } else {
-                match provider.pause_retained(machine).await {
-                    Ok(()) => true,
-                    Err(error) => {
-                        tracing::warn!(workspace = %job.resource_id, machine, ?error,
-                            "Could not sleep the machine of a failed recreation wake; the provider's own idle limit applies");
-                        false
-                    }
-                }
-            };
+            let slept = machine.is_empty() || sleep_confirmed(provider, machine).await;
+            if !slept {
+                tracing::error!(workspace = %job.resource_id, machine,
+                    "Could not sleep the machine of a failed recreation wake; it needs an operator");
+            }
             tracing::warn!(workspace = %job.resource_id, operation, code, slept,
                 "Cloud recreation wake could not start the computer; stopped for the recreation to report");
             return Ok(true);
@@ -929,6 +922,28 @@ impl RuntimeControl {
         Ok(())
     }
 }
+/// Ask the provider to sleep `machine` and confirm it, a few bounded times.
+async fn sleep_confirmed(provider: &dyn RetainedProvider, machine: &str) -> bool {
+    for attempt in 0..SLEEP_ATTEMPTS {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+        if let Err(error) = provider.pause_retained(machine).await {
+            tracing::warn!(machine, attempt, ?error, "Machine sleep request failed");
+            continue;
+        }
+        if let Ok(Some(found)) = provider.inspect_retained(machine).await
+            && matches!(
+                found.state,
+                MachineState::Standby | MachineState::Paused | MachineState::Stopped
+            )
+        {
+            return true;
+        }
+    }
+    false
+}
+const SLEEP_ATTEMPTS: u32 = 3;
 /// An unfinished recreation owns the current wake.
 fn recreation_owns_wake(config: &Value) -> bool {
     config["rustRecreation"]["operationId"].is_string()

@@ -342,6 +342,14 @@ pub(super) async fn exercise(
     let provisional = config(pool, id).await;
     assert_eq!(provisional["runtimeRelease"]["sha256"], new);
     assert_eq!(provisional["runtimeRelease"]["provisional"], true);
+    // A report that names no attempt never moves the pin.
+    let mut anonymous = attestation(u::Outcome::Installed, None, &old, &old_caps);
+    anonymous.error_code = None;
+    control
+        .runtime_update_attest(id, CREDENTIAL, anonymous, now + 2)
+        .await
+        .unwrap();
+    assert_eq!(config(pool, id).await["runtimeRelease"]["sha256"], new);
     assert_eq!(
         provisional["runtimeBootstrapReceipt"]["capabilities"],
         before_config["runtimeBootstrapReceipt"]["capabilities"],

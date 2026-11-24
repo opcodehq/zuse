@@ -24,7 +24,12 @@ pub(crate) struct LaunchReport {
     /// Printable, credential-scrubbed tail of stderr (else stdout).
     pub detail: String,
     pub at: i64,
+    /// Distinguishes identical failures recorded in the same millisecond.
+    #[serde(skip)]
+    pub id: u64,
 }
+
+static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 static REPORTS: Mutex<Vec<(String, LaunchReport)>> = Mutex::new(Vec::new());
 
@@ -54,6 +59,7 @@ pub(crate) fn report(result: &ExecResult, now: i64) -> LaunchReport {
         code: classify(result.exit_code, &detail),
         detail,
         at: now,
+        id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
     }
 }
 
@@ -122,13 +128,16 @@ pub(crate) async fn persist(pool: &sqlx::PgPool, workspace: &str) -> Result<(), 
         return Ok(());
     };
     let value = serde_json::to_value(&report).unwrap_or_default();
-    sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{rustLastLaunchFailure}',$2) WHERE workspace_id=$1 AND provider_sandbox_id=$3")
+    let written = sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{rustLastLaunchFailure}',$2) WHERE workspace_id=$1 AND provider_sandbox_id=$3")
         .bind(workspace)
         .bind(value)
         .bind(&machine)
         .execute(pool)
         .await?;
-    stored(&machine, &report);
+    // No row (the machine changed meanwhile) is not stored: keep it.
+    if written.rows_affected() == 1 {
+        stored(&machine, &report);
+    }
     Ok(())
 }
 
@@ -159,6 +168,10 @@ mod tests {
         assert!(!report.detail.contains(secret), "{}", report.detail);
         assert!(report.detail.len() <= 4 * 1024);
         assert!(take("machine-a").is_none(), "taken once");
+        // Identical failures in the same millisecond stay distinct.
+        let a = super::report(&failed(1, "same\n"), 7);
+        let b = super::report(&failed(1, "same\n"), 7);
+        assert_ne!(a, b);
         // A later success clears an older failure.
         record("machine-b", &failed(1, "runtime_supervisor_missing\n"));
         record("machine-b", &failed(0, ""));
@@ -201,17 +214,28 @@ mod tests {
             "machine-report",
             &failed(1, "harness release failed: ValueError\n"),
         );
-        // A failed write keeps the report for the next attempt.
-        sqlx::query("ALTER TABLE api_cloud_workspaces RENAME TO api_cloud_workspaces_hidden")
+        // A failed UPDATE (the lookup works) keeps the report for next time.
+        sqlx::raw_sql("CREATE FUNCTION refuse() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN RAISE EXCEPTION 'refused'; END$$; CREATE TRIGGER refuse BEFORE UPDATE ON api_cloud_workspaces FOR EACH ROW EXECUTE FUNCTION refuse()")
             .execute(&pool)
             .await
             .unwrap();
         assert!(persist(&pool, "ws-report").await.is_err());
         assert!(peek("machine-report").is_some());
-        sqlx::query("ALTER TABLE api_cloud_workspaces_hidden RENAME TO api_cloud_workspaces")
+        sqlx::raw_sql("DROP TRIGGER refuse ON api_cloud_workspaces")
             .execute(&pool)
             .await
             .unwrap();
+        // An UPDATE that matches no row (the machine changed) keeps it too.
+        sqlx::query("UPDATE api_cloud_workspaces SET provider_sandbox_id='machine-other'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        record("machine-other", &failed(1, "other\n"));
+        sqlx::query("UPDATE api_cloud_workspaces SET provider_sandbox_id='machine-report'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(take("machine-other").is_some());
         persist(&pool, "ws-report").await.unwrap();
         assert!(peek("machine-report").is_none(), "forgotten once stored");
         let stored: serde_json::Value = sqlx::query_scalar(

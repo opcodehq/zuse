@@ -191,15 +191,37 @@ pub(crate) fn tail(result: &ExecResult) -> String {
     let words: Vec<&str> = text.split(' ').filter(|w| !w.is_empty()).collect();
     // `password: value`, `token "value"`, `Authorization Bearer x`: the word
     // after a credential label is a value, whatever its shape.
+    // A quoted value runs until its closing quote, across spaces.
+    let mut quote: Option<char> = None;
     let scrubbed = words
         .iter()
         .enumerate()
         .map(|(index, word)| {
-            if index > 0 && labels_secret(words[index - 1]) {
-                "[redacted]".to_owned()
-            } else {
-                scrub_word(word)
+            if let Some(open) = quote {
+                if word.ends_with(open) {
+                    quote = None;
+                }
+                return "[redacted]".to_owned();
             }
+            let value = if index > 0 && labels_secret(words[index - 1]) {
+                Some(*word)
+            } else {
+                // `"password":"value…` keeps its value after the separator.
+                word.split_once(['=', ':'])
+                    .filter(|(name, value)| !value.is_empty() && secret_name(name))
+                    .map(|(_, value)| value)
+            };
+            if let Some(value) = value {
+                if let Some(open) = value.chars().next().filter(|c| matches!(c, '"' | '\''))
+                    && (value.len() == 1 || !value[1..].ends_with(open))
+                {
+                    quote = Some(open);
+                }
+                if index > 0 && labels_secret(words[index - 1]) {
+                    return "[redacted]".to_owned();
+                }
+            }
+            scrub_word(word)
         })
         .collect::<Vec<_>>()
         .join(" ");
@@ -271,9 +293,15 @@ mod scrub_tests {
             "\"password\":\"correct-horse-battery-staple\"",
             "secret=correct-horse-battery-staple",
             "Authorization: Bearer correct-horse-battery-staple",
+            "password: \"correct horse battery staple\" then",
+            "\"password\":\"correct horse battery staple\",\"user\":\"x\"",
+            "token 'correct horse battery staple'",
         ] {
             let out = scrubbed(line);
-            assert!(!out.contains("correct-horse"), "{line} -> {out}");
+            assert!(
+                !out.contains("correct") && !out.contains("horse") && !out.contains("staple"),
+                "{line} -> {out}"
+            );
         }
         // Ordinary failure text stays readable.
         assert_eq!(
