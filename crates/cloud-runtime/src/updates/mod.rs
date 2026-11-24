@@ -135,6 +135,16 @@ pub(crate) fn valid_sha(value: &str) -> bool {
             .bytes()
             .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
+/// The root helper's update id alphabet (`SAFE` in runtime-update.py); never
+/// a path separator or `..` alone.
+pub(crate) fn valid_update_id(value: &str) -> bool {
+    (1..=160).contains(&value.len())
+        && value != "."
+        && value != ".."
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b':' | b'-'))
+}
 pub(crate) fn read_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
     let bytes = std::fs::read(path).ok()?;
     if bytes.len() > 64 * 1024 {

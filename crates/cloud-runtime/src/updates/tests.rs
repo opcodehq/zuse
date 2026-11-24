@@ -603,6 +603,46 @@ fn root_result_for_another_update_is_ignored() {
     assert_eq!(swap::decision(&f.config, &pending), Decision::Undecided);
 }
 
+/// A later helper run overwrote the shared result slot; the update's own
+/// result still decides, so its attestation cannot go stale.
+#[test]
+fn an_updates_own_root_result_survives_a_later_attempt() {
+    let f = root();
+    let staged = stage_bytes(&f.config, "update-1", b"new");
+    swap::request_root(&f.config, &staged, &"c".repeat(64)).unwrap();
+    let pending = stage::read_pending(&f.config).unwrap();
+    std::fs::create_dir_all(f.root.join("results")).unwrap();
+    std::fs::write(
+        f.root.join("results/update-1.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "updateId": "update-1",
+            "outcome": "committed",
+            "sha256": staged.file.release.sha256,
+            "previousSha256": "c".repeat(64),
+            "errorCode": null,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        f.root.join("result.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "updateId": "update-2",
+            "outcome": "failed",
+            "sha256": "d".repeat(64),
+            "previousSha256": staged.file.release.sha256,
+            "errorCode": "runtime_update_request_withdrawn",
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(swap::decision(&f.config, &pending), Decision::Installed);
+    // Ids that could escape the results directory are never used as paths.
+    assert!(!valid_update_id("../result"));
+    assert!(!valid_update_id(".."));
+    assert!(valid_update_id("update-1"));
+}
+
 #[test]
 fn cold_boot_discards_a_rejected_release() {
     let f = root();

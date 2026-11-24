@@ -65,7 +65,15 @@ pub struct RootResult {
     pub error_code: Option<String>,
 }
 pub fn root_result(path: &Path, update_id: &str) -> Option<RootResult> {
-    read_json::<RootResult>(path).filter(|r| r.update_id == update_id)
+    // Newer helpers keep each update's own outcome next to the shared slot,
+    // so a later attempt cannot hide one this runtime still has to attest.
+    let own = super::valid_update_id(update_id)
+        .then(|| path.parent())
+        .flatten()
+        .map(|dir| dir.join("results").join(format!("{update_id}.json")))
+        .and_then(|own| read_json::<RootResult>(&own));
+    own.or_else(|| read_json::<RootResult>(path))
+        .filter(|r| r.update_id == update_id)
 }
 
 /// SHA-256 of the image this process is running, even after a rename.
