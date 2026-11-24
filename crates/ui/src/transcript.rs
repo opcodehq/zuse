@@ -4242,8 +4242,11 @@ impl Transcript {
             return;
         };
         let source_session = source_session.or_else(|| self.link_source_session());
+        // The path is already resolved; escape it so the link resolver's one
+        // decode restores it exactly (a literal `%20` or `#` stays as is).
+        let target = crate::workspace_links::percent_encode_path(&path);
         let activation = render::LinkActivation {
-            target: render::LinkTarget::new(file_badge_name(&path), path.as_str()),
+            target: render::LinkTarget::new(file_badge_name(&path), target.as_str()),
             action: render::LinkAction::Primary,
             source_session,
         };
@@ -15553,6 +15556,21 @@ mod tests {
         assert_eq!(
             forwarded.borrow().last().map(String::as_str),
             Some("/home/zuse/workspace/artifacts/shot.png")
+        );
+        // A resolved path is escaped, so the resolver's decode restores it
+        // exactly instead of splitting at `#` or decoding a literal `%20`.
+        transcript.update_in(cx, |this, window, cx| {
+            this.open_in_file_tab(
+                "/home/zuse/workspace/notes#2 %20.png".into(),
+                None,
+                window,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            forwarded.borrow().last().map(String::as_str),
+            Some("/home/zuse/workspace/notes%232%20%2520.png")
         );
         cx.update(|_, cx| assert!(crate::toast::messages(cx).is_empty()));
     }
