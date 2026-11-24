@@ -1355,8 +1355,6 @@ const GITHUB_REPO_URL: &str = "https://github.com/opcodehq/zuse";
 /// hero reaches below the composer, giving its lower mask room to dissolve
 /// gradually into the otherwise empty lower canvas.
 const NEW_THREAD_BACKGROUND_FROSTED_OPACITY: f32 = 0.84;
-const NEW_THREAD_BACKGROUND_VIEWPORT_RATIO: f32 = 0.91;
-const NEW_THREAD_BACKGROUND_MAX_HEIGHT: f32 = 960.0;
 
 /// Drag marker for the sidebar resize handle.
 struct SidebarResize;
@@ -1632,8 +1630,7 @@ pub(crate) fn new_thread_background_opacity(is_frost: bool) -> f32 {
 }
 
 pub(crate) fn new_thread_background_height(viewport_height: f32) -> f32 {
-    (viewport_height.max(0.0) * NEW_THREAD_BACKGROUND_VIEWPORT_RATIO)
-        .min(NEW_THREAD_BACKGROUND_MAX_HEIGHT)
+    viewport_height.max(0.0)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -13233,23 +13230,9 @@ impl Shell {
         transcript_width: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        // Active cloud tabs share the normal header's tab row. Draft tabs
-        // retain their canvas strip until a conversation is admitted.
-        let strip = self
-            .cloud_conversation
-            .is_none()
-            .then(|| self.render_cloud_tabs(cx))
-            .flatten();
-        let content = self.render_main_content(window, main_content_width, transcript_width, cx);
-        div()
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .flex()
-            .flex_col()
-            .children(strip)
-            .child(content)
-            .into_any_element()
+        // The start canvas fills the column. Conversation tabs belong to the
+        // titlebar once a chat exists, rather than a strip above the artwork.
+        self.render_main_content(window, main_content_width, transcript_width, cx)
     }
 
     fn render_main_content(
@@ -16436,6 +16419,13 @@ impl Render for Shell {
                 // beneath the row), and the row overlays that band.
                 let tab_row = (on_chat && self.conversation_tab_row_visible(cx))
                     .then(|| self.render_conversation_tab_row(cx));
+                // Let the start canvas meet the window edges, including the
+                // top, while established chats keep their inset surface.
+                let canvas_gutter = if on_chat && !self.has_conversation(cx) {
+                    0.0
+                } else {
+                    self.workspace_gutter()
+                };
                 let card: AnyElement = div()
                     .id("conversation-column")
                     .debug_selector(|| "conversation-column".into())
@@ -16446,7 +16436,7 @@ impl Render for Shell {
                     .flex_row()
                     .overflow_hidden()
                     .opacity(under_stage)
-                    .when(self.workspace_gutter() > 0., |view| {
+                    .when(canvas_gutter > 0., |view| {
                         view.rounded(px(zuse_viewport::workspace_style::RADIUS))
                             .bg(Theme::of(cx).panel_bg())
                             .border_1()
@@ -16455,7 +16445,7 @@ impl Render for Shell {
                     // Flush, the conversation still reads as its own panel:
                     // the content tone against the translucent sidebar,
                     // parted by one hairline.
-                    .when(self.workspace_gutter() <= 0., |view| {
+                    .when(canvas_gutter <= 0., |view| {
                         view.bg(Theme::of(cx).panel_bg())
                             .when(self.sidebar_content_width() > 0., |view| {
                                 view.border_l_1().border_color(crate::theme::hairline(0.06))
@@ -16485,7 +16475,7 @@ impl Render for Shell {
                 // so the sidebar's right gutter stays exactly as wide as its
                 // left one — a 5px flex child here read as lopsided spacing.
                 let sidebar_seam = div()
-                    .w(px(self.workspace_gutter()))
+                    .w(px(canvas_gutter))
                     .h_full()
                     .flex_none()
                     .relative()
@@ -16540,8 +16530,8 @@ impl Render for Shell {
                                     .h_full()
                                     .flex()
                                     .flex_col()
-                                    .py(px(self.workspace_gutter()))
-                                    .pr(px(self.workspace_gutter()))
+                                    .py(px(canvas_gutter))
+                                    .pr(px(canvas_gutter))
                                     .child(card),
                             )
                             // The right pane is ONE container: the surface
