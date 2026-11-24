@@ -1340,9 +1340,11 @@ mod tests {
                     .debug_bounds(row_selector)
                     .unwrap_or_else(|| panic!("{id} paints in {layout:?}"));
                 // Checked at rest: a hovered card swaps its marks for actions.
+                // Under a machine heading the heading names the cloud instead.
+                let marked = cloud && layout != SidebarOrganization::ByDevice;
                 assert_eq!(
                     cx.debug_bounds(mark).is_some(),
-                    cloud,
+                    marked,
                     "{id} in {layout:?}: cloud mark only on cloud rows"
                 );
                 cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::default());
@@ -1718,7 +1720,8 @@ mod tests {
                 "{row}: mark sits beside the age"
             );
         }
-        // Device groups draw the same rows, divided by machine.
+        // Device groups draw the same rows, divided by machine; the heading
+        // names the machine, so rows drop their own mark.
         shell.update(cx, |shell, cx| {
             shell.settings.sidebar_organization = SidebarOrganization::ByDevice;
             shell.sidebar_collapsed_groups.clear();
@@ -1734,7 +1737,7 @@ mod tests {
                 f32::from(cx.debug_bounds(row).expect(row).size.height),
                 super::super::SIDEBAR_ROW_SINGLE_HEIGHT
             );
-            assert!(cx.debug_bounds(mark).is_some(), "{mark}");
+            assert!(cx.debug_bounds(mark).is_none(), "{mark}");
         }
         // Each machine's heading leads with the kind of machine it is.
         for heading in [

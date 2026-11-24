@@ -9592,6 +9592,10 @@ impl Shell {
         let sidebar = search_query.is_none();
         // Rows under a Projects heading follow Density; Compact shapes the rest.
         let compact = sidebar && self.sidebar_row_compact(nested);
+        // Under a machine heading the heading already says where a row runs.
+        let device_row = sidebar
+            && nested
+            && self.settings.sidebar_organization == crate::settings::SidebarOrganization::ByDevice;
         let show_label = !single_line && (search_query.is_some() || self.sidebar_project_labels());
         let two_line = sidebar && !compact && (nested || show_label);
         let avatar_size = if two_line {
@@ -10224,7 +10228,7 @@ impl Shell {
             } else {
                 SIDEBAR_CLOUD_MARK_SIZE
             };
-            let cloud_mark = cloud.then(|| {
+            let cloud_mark = (cloud && !device_row).then(|| {
                 div()
                     .id(SharedString::from(format!("{row_id}-cloud")))
                     .debug_selector({
@@ -10254,7 +10258,7 @@ impl Shell {
                 corner_cloud = cloud_mark.take();
                 // Compact rows under a project heading name where they run
                 // beside the age: the cloud, or this computer.
-                if nested && !cloud {
+                if nested && !cloud && !device_row {
                     corner_cloud = Some(
                         div()
                             .id(SharedString::from(format!("{row_id}-computer")))
@@ -10532,7 +10536,7 @@ impl Shell {
                 (avatar, None)
             };
             // A card names where it runs: the cloud, or this computer.
-            let computer_mark = (two_line && !cloud).then(|| {
+            let computer_mark = (two_line && !cloud && !device_row).then(|| {
                 div()
                     .id(SharedString::from(format!("{row_id}-computer")))
                     .debug_selector({
