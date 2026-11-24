@@ -56,7 +56,11 @@ The script builds the common workload with a C compiler and X11/Xext headers. Se
 
 ```sh
 CARGO_TARGET_DIR="$(mktemp -d)" taskset -c 0,1 cargo build --release --locked --offline -j2 \
-  --manifest-path ./stream/Cargo.toml
+  --manifest-path ./stream/Cargo.toml &
+build_pid=$!
+taskset -c 0,1 bash ./bench/compare.sh zuse 60
+kill -0 "$build_pid" || echo "Discard this sample: build ended before measurement finished" >&2
+wait "$build_pid"
 ```
 
 For the application benchmark, run `bench/bench.sh` from the repository root. To verify the Rust encoder's pixel reconstruction independently, run:

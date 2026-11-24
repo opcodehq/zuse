@@ -980,7 +980,10 @@ impl CloudConversation {
         }
         self.computer.monitor.take();
         if let Some(browser) = self.computer.monitor_browser.take() {
-            browser.update(cx, |v, cx| v.close(cx));
+            browser.update(cx, |v, cx| {
+                v.set_presentation(crate::browser::model::Presentation::Hidden, cx);
+                v.close(cx);
+            });
         }
     }
     fn computer_running(&self) -> bool {
@@ -1677,14 +1680,15 @@ impl CloudConversation {
         }
 
         if settings::cloud_desktop_enabled(cx) {
-            menu = menu.child(
+            more_rows.push(
                 popover::menu_row(&theme, false, "computer-monitor")
                     .id("computer-monitor")
                     .child("Open Desktop")
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.close_computer(cx);
                         cx.emit(CloudConversationEvent::Desktop);
-                    })),
+                    }))
+                    .into_any_element(),
             );
         }
         // SSH, while the computer runs: the main part opens a terminal, the

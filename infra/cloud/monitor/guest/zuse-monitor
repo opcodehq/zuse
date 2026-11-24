@@ -34,7 +34,10 @@ def serve():
     os.umask(0o077)
     STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
     lock = (STATE / "lock").open("a")
-    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit(os.EX_TEMPFAIL)  # Another serve process owns startup.
     authority = Path(os.environ["XAUTHORITY"])
     authority.touch(mode=0o600, exist_ok=True)
     subprocess.run(["xauth", "-f", str(authority), "source", "-"],
@@ -51,7 +54,7 @@ def serve():
     signal.signal(signal.SIGTERM, stop)
     try:
         launch("Xvfb", DISPLAY, "-screen", "0", f"{size}x24",
-               "-auth", str(authority), "-nolisten", "tcp", "-shmem")
+               "-auth", str(authority), "-nolisten", "tcp")
         for _ in range(100):
             if children[0].poll() is not None:
                 raise RuntimeError("virtual display exited")
@@ -99,10 +102,18 @@ def ensure_started():
             except OSError:
                 pass
             if process is None:
+                with (STATE / "lock").open("a") as owner:
+                    try:
+                        fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        time.sleep(0.1)
+                        continue
                 with (STATE / "server.log").open("w") as log:
                     process = subprocess.Popen([sys.executable, __file__, "serve"],
                         stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
-            elif process.poll() is not None:
+            elif process.poll() == os.EX_TEMPFAIL:
+                process = None
+            elif process.returncode is not None:
                 raise RuntimeError("monitor startup failed; check server.log")
             time.sleep(0.1)
         else:

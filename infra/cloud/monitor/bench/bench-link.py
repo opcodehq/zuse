@@ -8,7 +8,11 @@ async def pipe(reader, writer, delay):
     async def schedule():
         available = loop.time()
         while True:
-            data = await reader.read(32768)
+            try:
+                data = await reader.read(32768)
+            except Exception as error:
+                await queue.put((loop.time(), error))
+                return
             available = max(available, loop.time()) + len(data) * 8 / 30_000_000
             await queue.put((available + delay, data))
             if not data:
@@ -17,6 +21,8 @@ async def pipe(reader, writer, delay):
     try:
         while True:
             when, data = await queue.get()
+            if isinstance(data, Exception):
+                raise data
             await asyncio.sleep(max(0, when-loop.time()))
             if not data:
                 break
@@ -35,4 +41,5 @@ async def main():
     listener = await asyncio.start_server(connect,'127.0.0.1',7902)
     async with listener:
         await listener.serve_forever()
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())

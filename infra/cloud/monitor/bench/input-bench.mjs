@@ -82,8 +82,10 @@ try {
     window.addEventListener('monitor-frame',frame);
     setTimeout(() => {
       window.removeEventListener('monitor-frame',frame);
-      resolve({frames:gaps.length, stallsOver50ms:gaps.filter(ms => ms>50).length,
-        maxGapMs:Math.round(Math.max(...gaps)), meanKbps:Math.round(bitrate.reduce((a,b)=>a+b,0)/bitrate.length)});
+      const frames = gaps.length;
+      gaps.push(performance.now() - last);
+      resolve({frames, stallsOver50ms:gaps.filter(ms => ms>50).length,
+        maxGapMs:Math.round(Math.max(...gaps)), meanKbps:bitrate.length ? Math.round(bitrate.reduce((a,b)=>a+b,0)/bitrate.length) : 0});
     }, 5000);
   }));
   const elapsed = (performance.now()-windowStart)/1000;

@@ -57,7 +57,13 @@ impl Shell {
                 .desktop_panel
                 .live
                 .as_ref()
-                .is_some_and(|(key, _, _)| *key != self.panel_key(cx))
+                .is_some_and(|(key, owner, _)| {
+                    *key != self.panel_key(cx)
+                        || self
+                            .cloud_conversation
+                            .as_ref()
+                            .is_some_and(|front| front != owner)
+                })
         {
             self.disconnect_desktop(cx);
         }

@@ -16,7 +16,7 @@ try {
   const app = await guest.newPage({ viewport: null });
   await app.goto('data:text/html,' + encodeURIComponent(
     '<style>body{font:36px sans-serif;margin:60px}input{font:inherit;height:160px}</style>' +
-    '<label>Monitor acceptance<br><input oninput="this.style.backgroundColor=&quot;lime&quot;" placeholder="Type here"></label>'));
+    '<label>Monitor acceptance<br><input placeholder="Type here"></label>'));
   await app.bringToFront();
   // Locate the input in desktop coordinates including the browser chrome.
   tool('key', 'F11');
@@ -27,6 +27,11 @@ try {
             Math.round(r.y + r.height / 2)];
   });
   const value = 'Zuse-' + randomBytes(4).toString('hex');
+  await app.locator('input').evaluate((input, expected) => {
+    input.addEventListener('input', () => {
+      input.style.backgroundColor = input.value === expected ? 'lime' : 'white';
+    });
+  }, value);
   viewer = await chromium.launch(options);
   const context = await viewer.newContext({ httpCredentials: { username: 'viewer', password: tool('password') },
     viewport: { width, height } });
