@@ -1,0 +1,20 @@
+.t-root .md a.md-reference, .md a.md-reference {
+  color: var(--syntax-function);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.t-root .md a.md-reference:hover, .md a.md-reference:hover { text-decoration: underline; text-underline-offset: 3px; }
+.t-root .md a.md-reference:focus-visible, .md a.md-reference:focus-visible { border-radius: 2px; }
+.md-reference-lead { white-space: nowrap; }
+.md-reference-icon {
+  display: inline-block;
+  width: 0.9em;
+  height: 0.9em;
+  margin-inline-end: 0.2em;
+  vertical-align: -0.12em;
+  background: currentColor;
+  mask: url("@repo/crates/ui/assets/icons/tool-agent.svg") center / contain no-repeat;
+}
+.md-reference[data-kind="pr"] .md-reference-icon { mask-image: url("@repo/crates/ui/assets/icons/git-lane-pr.svg"); }
+.md-reference[data-kind="issue"] .md-reference-icon { mask: none; background: none; }
+.md-reference-icon svg { display: block; width: 100%; height: 100%; }

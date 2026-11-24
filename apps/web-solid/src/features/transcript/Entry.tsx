@@ -11,7 +11,7 @@ import { FORK_MENU, forkChat } from "./actions";
 import { copyText } from "./clipboard";
 import { frameThrottled } from "./frame";
 import { buildItems, foldsTurn, type Item } from "./layout";
-import { Markdown } from "./Markdown";
+import { ConversationMarkdown } from "./ConversationMarkdown";
 import { type AgentIdentity, assistantCopyText, formatElapsed, formatTimestamp, parseAttachments, userNeedsCollapse, userRawText, } from "./model";
 import { AgentSwitch, Attachments, ErrorChip, ForkMarker, GeneratedImage, InputChip, UiBlockNotice } from "./parts";
 import { isOpen, toggleOpen } from "./resources";
@@ -66,7 +66,7 @@ function UserEntry(props: { entry: SessionMessageEntry; ctx: EntryContext }) {
         <div class="t-user-row">
           <div class="t-bubble">
             <div id={bodyId()} class="t-bubble-text" data-collapsed={collapsible() && !expanded() ? "true" : undefined}>
-              <Markdown text={parsed().text} live={false} />
+              <ConversationMarkdown text={parsed().text} live={false} chatId={props.ctx.chatId} />
             </div>
             <Show when={collapsible()}>
               <button type="button" class="t-bubble-toggle" aria-expanded={(expanded()) ? "true" : "false"} aria-controls={bodyId()} onClick={() => toggleOpen(foldKey())}>
@@ -123,7 +123,7 @@ function ItemView(props: { item: Item; entry: SessionMessageEntry; ctx: EntryCon
     <div class="t-item" data-kind={props.item.kind}>
       <Switch>
         <Match when={props.item.kind === "text" && props.item}>
-          {(it) => <TextItem part={it().part} live={streaming()} />}
+          {(it) => <TextItem part={it().part} live={streaming()} chatId={props.ctx.chatId} />}
         </Match>
         <Match when={props.item.kind === "group" && props.item}>
           {(it) => <ToolGroup id={it().key} tools={it().tools} live={it().live} ctx={group} />}
@@ -161,10 +161,10 @@ function ItemView(props: { item: Item; entry: SessionMessageEntry; ctx: EntryCon
   );
 }
 
-function TextItem(props: { part: Extract<MessagePart, { kind: "text" }>; live: boolean }) {
+function TextItem(props: { part: Extract<MessagePart, { kind: "text" }>; live: boolean; chatId: string }) {
   // Tokens land in the store as they arrive; the DOM sees at most one update per frame.
   const text = frameThrottled(() => props.part.text, () => props.live);
-  return <Markdown text={text()} live={props.live} />;
+  return <ConversationMarkdown text={text()} live={props.live} chatId={props.chatId} />;
 }
 
 // ---------------------------------------------------------------------------
