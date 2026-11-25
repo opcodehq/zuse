@@ -5906,7 +5906,7 @@ impl Shell {
                 let is_selected = selected.as_deref() == Some(chat.id.as_str());
                 // Under a project heading, the card names its branch instead
                 // of repeating the project.
-                let folder = if nested_rows {
+                let folder = if project_group {
                     let state = self.state.read(cx);
                     crate::change_requests::conversation_branch(&chat, &state.spaces)
                         .map(str::trim)
