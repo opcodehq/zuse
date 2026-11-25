@@ -9406,8 +9406,13 @@ impl Transcript {
             .filter(|_| self.doc_override.is_none())
             .and_then(|id| self.state.read(cx).session_for(id))
             .and_then(|session| session.notice.clone());
-        let word = if !queued && !sending && waiting == 0 && turn > 0
-            && notice.as_ref().is_none_or(|notice| notice.trim().is_empty())
+        let word = if !queued
+            && !sending
+            && waiting == 0
+            && turn > 0
+            && notice
+                .as_ref()
+                .is_none_or(|notice| notice.trim().is_empty())
         {
             tr(cx, |l10n| {
                 msg::chat::turn_working_for(l10n, &format_elapsed(elapsed_secs))
