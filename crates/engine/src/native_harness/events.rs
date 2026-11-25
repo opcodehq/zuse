@@ -92,6 +92,7 @@ impl Mapper {
                     result.push(AgentEvent::Steered {
                         assistant_message_id: self.items.remove(&agent),
                         next_assistant_message_id: Some(uuid::Uuid::new_v4().to_string()),
+                        message_id: None,
                     });
                 }
             }

@@ -415,6 +415,7 @@ async fn a_tool_call_open_across_a_steer_boundary_never_stalls() {
         .send(AgentEvent::Steered {
             assistant_message_id: None,
             next_assistant_message_id: None,
+            message_id: None,
         })
         .unwrap();
     wait_for(

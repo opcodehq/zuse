@@ -2679,6 +2679,7 @@ async fn stale_tool_echo_after_steer_boundary_does_not_split_text() {
         AgentEvent::Steered {
             assistant_message_id: Some("a-1".into()),
             next_assistant_message_id: Some("a-2".into()),
+            message_id: None,
         },
         AgentEvent::TextDelta {
             text: "part ".into(),
@@ -2782,6 +2783,7 @@ async fn parked_steer_restamps_started_at_and_idle_clears_it() {
                         .send(Ok(AgentEvent::Steered {
                             assistant_message_id: None,
                             next_assistant_message_id: None,
+                            message_id: None,
                         }))
                         .await;
                     let _ = tx
@@ -3029,6 +3031,7 @@ async fn pending_steer_handoff_does_not_publish_a_completion() {
         tx.send(AgentEvent::Steered {
             assistant_message_id: Some("a-1".into()),
             next_assistant_message_id: Some("a-steered".into()),
+            message_id: None,
         })
         .unwrap();
         tx.send(AgentEvent::TextDelta {
@@ -3772,5 +3775,177 @@ async fn mcp_command_answers_with_a_card_and_never_reaches_the_agent() {
         SessionCommandStatus::Rejected
     );
     assert_eq!(entries(&core).len(), 4);
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn late_known_tool_result_amends_frozen_subagent_without_reopening() {
+    let dir = tempfile::tempdir().unwrap();
+    let tagged = |event| AgentEvent::Subagent {
+        parent_tool_use_id: "spawn-late".into(),
+        event: Box::new(event),
+    };
+    let core = assemble(
+        dir.path(),
+        Arc::new(MockHarness {
+            script: vec![
+                AgentEvent::ToolCall {
+                    id: "spawn-late".into(),
+                    call: ToolCall::Unknown {
+                        name: "Agent: worker".into(),
+                        input: None,
+                    },
+                },
+                tagged(AgentEvent::ToolCall {
+                    id: "child-tool".into(),
+                    call: ToolCall::Exec {
+                        command: "echo result".into(),
+                    },
+                }),
+                tagged(done(DoneStatus::Completed)),
+                AgentEvent::ToolResult {
+                    id: "spawn-late".into(),
+                    is_error: false,
+                    output: None,
+                    diff: None,
+                },
+                tagged(AgentEvent::ToolResult {
+                    id: "unknown-tool".into(),
+                    is_error: true,
+                    output: Some("ignore".into()),
+                    diff: None,
+                }),
+                tagged(AgentEvent::ToolResult {
+                    id: "child-tool".into(),
+                    is_error: true,
+                    output: Some("late result".into()),
+                    diff: None,
+                }),
+                done(DoneStatus::Completed),
+            ],
+        }),
+    );
+    core.sessions
+        .dispatch(CHAT, HarnessId::Mock, run_request("work"), None)
+        .await
+        .unwrap();
+    wait_for(
+        || {
+            core.sessions
+                .session_status(CHAT)
+                .is_some_and(|s| s.status == SessionStatus::Idle)
+        },
+        "turn complete",
+    )
+    .await;
+    let all = entries(&core);
+    let (sub_id, chip_status) = all
+        .iter()
+        .flat_map(|entry| &entry.parts)
+        .find_map(|part| match part {
+            MessagePart::Tool {
+                id,
+                subagent_ref,
+                subagent_status,
+                ..
+            } if id == "spawn-late" => Some((subagent_ref.clone().unwrap(), *subagent_status)),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(chip_status, Some(SubagentStatus::Done));
+    let child = entries_for(&core, &sub_id);
+    assert_eq!(child.len(), 1, "no new transcript entry: {child:?}");
+    assert_eq!(child[0].status, Some(MessageStatus::Complete));
+    assert_eq!(child[0].parts.len(), 1, "unknown results are ignored");
+    assert!(
+        matches!(&child[0].parts[0], MessagePart::Tool { id, resolved: true, is_error: true, .. } if id == "child-tool"),
+        "{child:?}"
+    );
+    assert_eq!(
+        core.sessions
+            .session_status(CHAT)
+            .unwrap()
+            .running_subagents,
+        0
+    );
+    let store = DocsStore::open(dir.path().join("orgs/dev-org/dev-user")).unwrap();
+    let blob = store
+        .read_tool_blob(&format!("{CHAT}/{sub_id}"), 0, 1024 * 1024)
+        .unwrap()
+        .unwrap();
+    assert!(blob.done);
+    let frozen: Vec<SessionMessageEntry> = serde_json::from_str(&blob.text).unwrap();
+    assert_eq!(
+        frozen, child,
+        "the frozen snapshot includes the late result"
+    );
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn failed_subagent_document_open_never_stamps_a_chip_reference() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = DocsStore::open(dir.path().join("orgs/dev-org/dev-user")).unwrap();
+    let sub_id = format!("{CHAT}--sub--spawn-unavailable");
+    store.save_snapshot(&sub_id, b"invalid snapshot").unwrap();
+    let core = assemble(
+        dir.path(),
+        Arc::new(MockHarness {
+            script: vec![
+                AgentEvent::ToolCall {
+                    id: "spawn-unavailable".into(),
+                    call: ToolCall::Unknown {
+                        name: "Agent: worker".into(),
+                        input: None,
+                    },
+                },
+                AgentEvent::Subagent {
+                    parent_tool_use_id: "spawn-unavailable".into(),
+                    event: Box::new(AgentEvent::TextDelta {
+                        text: "first attempt".into(),
+                    }),
+                },
+                AgentEvent::Subagent {
+                    parent_tool_use_id: "spawn-unavailable".into(),
+                    event: Box::new(AgentEvent::TextDelta {
+                        text: "retry".into(),
+                    }),
+                },
+                done(DoneStatus::Completed),
+            ],
+        }),
+    );
+    core.sessions
+        .dispatch(CHAT, HarnessId::Mock, run_request("work"), None)
+        .await
+        .unwrap();
+    wait_for(
+        || {
+            core.sessions
+                .session_status(CHAT)
+                .is_some_and(|s| s.status == SessionStatus::Idle)
+        },
+        "turn complete",
+    )
+    .await;
+    assert!(
+        core.doc_host.open(&sub_id).is_err(),
+        "fixture must fail to open"
+    );
+    let all = entries(&core);
+    assert!(
+        all.iter()
+            .flat_map(|entry| &entry.parts)
+            .any(|part| matches!(part,
+        MessagePart::Tool { id, subagent_ref: None, .. } if id == "spawn-unavailable")),
+        "{all:?}"
+    );
+    assert_eq!(
+        core.sessions
+            .session_status(CHAT)
+            .unwrap()
+            .running_subagents,
+        0
+    );
     core.shutdown().await;
 }

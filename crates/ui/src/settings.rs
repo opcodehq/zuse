@@ -536,6 +536,14 @@ pub fn direct_steer_enabled(cx: &App) -> bool {
         .is_some_and(|store| store.current.direct_steer_enabled)
 }
 
+/// Whether the runner game plays above the composer while an agent works.
+/// On by default, including before a settings store is installed.
+pub fn runner_game_enabled(cx: &App) -> bool {
+    cx.try_global::<SettingsStore>()
+        .map(|store| store.current.runner_game_enabled)
+        .unwrap_or(true)
+}
+
 pub fn quit_gesture(cx: &App) -> QuitGesture {
     cx.try_global::<SettingsStore>()
         .map(|store| store.current.quit_gesture)
@@ -1287,6 +1295,8 @@ pub struct UiSettings {
     /// the narration between them) fold into one collapsed accordion, so only
     /// the reply text stays visible.
     pub transcript_compact_mode: bool,
+    /// Shows the runner game above the composer while an agent works.
+    pub runner_game_enabled: bool,
     /// Destination shared by PR badges and the pull-request board.
     pub pull_request_destination: PullRequestDestination,
     /// Last explicitly selected PR scope, restored when no project is selected.
@@ -1434,6 +1444,7 @@ impl Default for UiSettings {
             transcript_width: TRANSCRIPT_WIDTH_DEFAULT,
             open_web_links_in_zuse: true,
             transcript_compact_mode: false,
+            runner_game_enabled: true,
             pull_request_destination: PullRequestDestination::Native,
             last_pull_request_repository: None,
             last_pull_request_device: None,
@@ -2342,6 +2353,7 @@ impl UiSettings {
             transcript_width,
             open_web_links_in_zuse,
             transcript_compact_mode,
+            runner_game_enabled,
             files_autosave_enabled,
             files_autosave_delay_ms,
             files_word_wrap,
@@ -3394,6 +3406,7 @@ mod tests {
             transcript_width: 960.0,
             open_web_links_in_zuse: false,
             transcript_compact_mode: true,
+            runner_game_enabled: false,
             pull_request_destination: PullRequestDestination::External,
             last_pull_request_repository: Some("acme/zuse".into()),
             last_pull_request_device: Some("remote-device".into()),
@@ -3447,6 +3460,7 @@ mod tests {
         assert_eq!(UiSettings::load(dir.path()), settings);
         assert!(json.contains(r#""codeFencesFitContent": true"#));
         assert!(json.contains(r#""openWebLinksInZuse": false"#));
+        assert!(json.contains(r#""runnerGameEnabled": false"#));
         assert!(json.contains(r#""newThreadBackgroundEffect": "scanlines""#));
         assert!(json.contains(r#""focalX": 0.25"#));
         assert!(json.contains(r#""focalY": 0.75"#));
@@ -3457,6 +3471,13 @@ mod tests {
         assert!(json.contains(r#""terminalFontSize": 15.0"#));
         assert!(json.contains(r#""codeFontFamily": "geistSans""#));
         assert!(json.contains(r#""codeFontSize": 11.0"#));
+    }
+
+    #[test]
+    fn runner_game_stays_on_for_settings_files_from_before_the_toggle() {
+        // A file written before `runnerGameEnabled` existed keeps the game.
+        let legacy: UiSettings = serde_json::from_str(r#"{"sidebarWidth":300}"#).unwrap();
+        assert!(legacy.runner_game_enabled);
     }
 
     #[test]

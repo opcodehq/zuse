@@ -80,6 +80,13 @@ def turn_start(request, params):
         'disposition': 'started', 'startedNewTurn': True}})
     event('turn/started', {'turnId': state['turn'], 'commandId': params['commandId']})
     text = params.get('displayText', '')
+    if text == 'background':
+        finish()
+        state['turn'] = 'background-turn'
+        state['running'] = True
+        event('turn/started', {'turnId': state['turn']})
+        finish()
+        return
     if text == 'gap':
         after = str(state['cursor'])
         state['gap'] = []

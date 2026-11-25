@@ -561,3 +561,34 @@ async fn live_muse_lists_models_and_answers() {
     assert_eq!(dones(&events)[0].0, DoneStatus::Completed, "{events:?}");
     assert!(text(&events).to_lowercase().contains("pong"), "{events:?}");
 }
+
+#[tokio::test]
+async fn background_turn_splits_without_a_delivery_receipt() {
+    let dir = tempfile::tempdir().unwrap();
+    let (controls, _tx, token, _, _) = controls("Yes");
+    let mut stream: Stream = harness(dir.path(), "")
+        .run(request(dir.path(), "background"), controls)
+        .await
+        .unwrap();
+    let first = until_done(&mut stream).await;
+    assert_eq!(dones(&first), [(DoneStatus::Completed, None)]);
+    let background = until_done(&mut stream).await;
+    assert!(
+        matches!(
+            background[0],
+            AgentEvent::SteerBoundary {
+                message_id: None,
+                ..
+            }
+        ),
+        "{background:?}"
+    );
+    assert!(
+        !background.iter().any(|event| matches!(
+            event,
+            AgentEvent::Steered { .. } | AgentEvent::DeliveryAcknowledged { .. }
+        )),
+        "{background:?}"
+    );
+    token.cancel();
+}

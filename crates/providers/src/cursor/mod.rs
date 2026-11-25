@@ -729,6 +729,7 @@ async fn run_session(session: Session) {
                             if !send(AgentEvent::Steered {
                                 assistant_message_id: Some(prev),
                                 next_assistant_message_id: Some(assistant_message_id.clone()),
+                                message_id: None,
                             }).await { break 'main; }
                         }
                         _ => {

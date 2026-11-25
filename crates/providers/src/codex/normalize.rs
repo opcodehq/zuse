@@ -605,6 +605,7 @@ impl ChildStream {
                 return vec![AgentEvent::Steered {
                     assistant_message_id: None,
                     next_assistant_message_id: None,
+                    message_id: None,
                 }];
             }
             return Vec::new();

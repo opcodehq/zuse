@@ -6,6 +6,18 @@
 
 - Add opt-in Slack cloud tasks with threaded status/results, sender/channel attribution, and a workspace/repository connection flow in Cloud settings. Server credentials stay encrypted; enablement requires the Slack migration and a rebuilt compatible runtime image.
 - Link a chat or a Zapper to a Slack channel from its right-click menu. Finished replies post into a Slack thread, your replies in that thread come back to the chat, and Zappers post under their own name and avatar. Their worker threads get their own threads in the same channel. Requires the new Slack migration and re-authorizing the Slack app for its added scopes.
+- Devin Fusion's sidekick shows up as a subagent: each handoff gets a Sidekick chip you can open to watch its commands and edits, instead of its work mixing into the lead's.
+- Settings → General → Composer: turn off the runner game that plays above the composer while an agent works.
+
+### Changed
+
+- Steering a running Devin turn sends your message straight into it instead of cancelling and re-prompting, and an idle Devin chat stays warm for 30 minutes so the next message skips a full conversation reload.
+
+### Fixed
+
+- Devin chats no longer show a stray "Waiting for 1 subagent" from the lead's own usage updates, and sidekick chips settle before the turn ends.
+- A steered Devin turn no longer leaves the running command's chip stuck before the steer.
+- Devin retries reopening a conversation another process still holds for about five seconds before starting a fresh session; if it stays locked, the new session starts without the earlier context.
 
 ## 0.27.9 - 2026-11-25
 

@@ -6,7 +6,7 @@ import type { Tokens } from "marked";
 import { createEffect, createMemo, createSignal, For, Match, onCleanup, Show, Switch, untrack, type Accessor } from "solid-js";
 import { copyText } from "./clipboard";
 import { highlight, paintWindowed, renderTokens, SPAN_LINES } from "./highlight";
-import { blockHtml, IncrementalMarkdown, listItemHtml, tableCellHtml } from "./markdown";
+import { blockHtml, IncrementalMarkdown, listItemHtml, tableCellHtml } from "./incremental-markdown";
 
 /** Tail renders costing more than this stretch the interval between renders. */
 const BUDGET_MS = 6;

@@ -1950,6 +1950,7 @@ async fn run_session(session: Session) {
                     if !send(&event_tx, AgentEvent::Steered {
                         assistant_message_id: Some(prev),
                         next_assistant_message_id: Some(next),
+                        message_id: None,
                     }).await {
                         consumer_gone = true;
                         break;
@@ -2214,6 +2215,7 @@ async fn run_session(session: Session) {
                             let _ = send(&event_tx, AgentEvent::Steered {
                                 assistant_message_id: Some(prev),
                                 next_assistant_message_id: Some(next),
+                                message_id: None,
                             }).await;
                             let adopted = match &steer.config {
                                 Some(next) => adopt_config(&server, &session_id, dir, next)

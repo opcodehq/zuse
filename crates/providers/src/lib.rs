@@ -506,6 +506,13 @@ pub trait Harness: Send + Sync {
     fn stops_turn_in_place(&self) -> bool {
         false
     }
+    /// How long a parked (between-turns) runtime may idle before the engine
+    /// reaps it, when reaping costs a cold restart — e.g. an agent whose
+    /// `session/load` replays the whole conversation. `None` keeps the
+    /// engine's default window.
+    fn parked_idle_window(&self) -> Option<std::time::Duration> {
+        None
+    }
     /// Whether a live runtime started for `live` can take `next` as its
     /// next prompt. Only a difference that changes how the runtime was
     /// launched needs a fresh one — replacing a runtime kills its background

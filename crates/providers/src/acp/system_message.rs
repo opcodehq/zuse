@@ -96,6 +96,7 @@ impl SystemMessageEchoFilter {
             boundary @ (AgentEvent::SessionStarted { .. }
             | AgentEvent::AssistantMessageCompleted { .. }
             | AgentEvent::Steered { .. }
+            | AgentEvent::SteerBoundary { .. }
             | AgentEvent::UserMessage { .. }
             | AgentEvent::Done { .. }) => {
                 let mut events = self.finish();
@@ -155,6 +156,31 @@ pub(crate) fn strip_system_message_echoes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provisional_boundary_flushes_partial_text_in_the_old_segment() {
+        let mut filter = SystemMessageEchoFilter::default();
+        assert_eq!(
+            filter.apply(AgentEvent::TextDelta {
+                text: "<SYS".into()
+            }),
+            vec![]
+        );
+        let boundary = AgentEvent::SteerBoundary {
+            assistant_message_id: None,
+            next_assistant_message_id: None,
+            message_id: Some("pending".into()),
+        };
+        assert_eq!(
+            filter.apply(boundary.clone()),
+            vec![
+                AgentEvent::TextDelta {
+                    text: "<SYS".into()
+                },
+                boundary
+            ]
+        );
+    }
 
     const WAKEUP: &str = "<SYSTEM_MESSAGE>\n[Message] timestamp=2026-09-18T10:07:35Z \
         sender=1420b5b8/task-156 priority=MESSAGE_PRIORITY_HIGH content=Task id \

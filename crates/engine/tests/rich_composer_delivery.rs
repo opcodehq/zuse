@@ -134,7 +134,7 @@ impl Harness for RecordingHarness {
                     message = controls.steering.recv() => {
                         let message = message?;
                         delivery.send(Delivery::Steer(message.prompt, message.attachments)).unwrap();
-                        Some((Ok(AgentEvent::Steered { assistant_message_id: None, next_assistant_message_id: None }), (controls, delivery)))
+                        Some((Ok(AgentEvent::Steered { assistant_message_id: None, next_assistant_message_id: None, message_id: None }), (controls, delivery)))
                     }
                 }
             },

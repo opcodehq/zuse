@@ -1148,11 +1148,20 @@ pub enum AgentEvent {
     InputResolved {
         request_id: String,
     },
-    /// A saved host delivery was already consumed. Retire its exact delivery
-    /// ledger entry without starting a turn or resetting streamed content.
+    /// A delivery was consumed successfully, including saved host replays.
+    /// Retire its exact ledger entry without resetting streamed content.
     #[serde(rename_all = "camelCase")]
     DeliveryAcknowledged {
         message_id: String,
+    },
+    /// Split the transcript without confirming delivery. A named boundary
+    /// selects the execution owner but leaves its recovery receipt pending.
+    /// An unnamed boundary represents autonomous background work.
+    #[serde(rename_all = "camelCase")]
+    SteerBoundary {
+        assistant_message_id: Option<String>,
+        next_assistant_message_id: Option<String>,
+        message_id: Option<String>,
     },
     /// A confirmed new assignment. When tagged as Subagent, this reopens the
     /// same child transcript even if the provider does not echo the user text.
@@ -1160,6 +1169,11 @@ pub enum AgentEvent {
     Steered {
         assistant_message_id: Option<String>,
         next_assistant_message_id: Option<String>,
+        /// The steer this boundary delivers, when the driver knows it: confirms
+        /// exactly that ledger entry (nothing, if it was already confirmed).
+        /// `None` confirms the oldest pending steer.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message_id: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
     Done {

@@ -1726,6 +1726,7 @@ async fn run_session(session: Session) {
                             if !send(&event_tx, AgentEvent::Steered {
                                 assistant_message_id: Some(prev),
                                 next_assistant_message_id: Some(next),
+                                message_id: None,
                             }).await {
                                 break 'main;
                             }
@@ -1794,6 +1795,7 @@ async fn run_session(session: Session) {
                                 if !send(&event_tx, AgentEvent::Steered {
                                     assistant_message_id: Some(prev),
                                     next_assistant_message_id: Some(next),
+                                    message_id: None,
                                 }).await {
                                     break 'main;
                                 }
@@ -1900,6 +1902,7 @@ async fn run_session(session: Session) {
                             if !send(&event_tx, AgentEvent::Steered {
                                 assistant_message_id: Some(prev),
                                 next_assistant_message_id: Some(next),
+                                message_id: None,
                             }).await {
                                 break 'main;
                             }
@@ -2393,6 +2396,7 @@ async fn steer_as_new_turn(
                 AgentEvent::Steered {
                     assistant_message_id: Some(prev),
                     next_assistant_message_id: Some(next),
+                    message_id: None,
                 },
             )
             .await

@@ -484,14 +484,17 @@ impl Runner {
 
     /// Whether the strip should be on screen. A run in progress outlives the
     /// agent's turn; once it ends, the keyboard goes back to the composer.
+    /// `enabled` is the runner-game setting: off unmounts the strip and
+    /// releases any game in play, exactly like the not-mounted path.
     pub fn mounted(
         &mut self,
         agent_working: bool,
+        enabled: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         self.agent_working = agent_working;
-        let mounted = agent_working || self.game.in_play();
+        let mounted = enabled && (agent_working || self.game.in_play());
         if !mounted {
             self.game.release();
             self.last_tick = None;
@@ -500,6 +503,12 @@ impl Runner {
             }
         }
         mounted
+    }
+
+    /// Test hook: put the strip's game in play as a click would.
+    #[cfg(test)]
+    pub(crate) fn take_over_for_test(&mut self) {
+        self.game.take_over();
     }
 
     /// The composer decides whether the strip stays once the agent is idle.
