@@ -6,6 +6,7 @@
 //! content out, because "what is behind the window" is not a paintable color.
 
 use std::cell::RefCell;
+use std::time::{Duration, Instant};
 
 use gpui::{
     AnyElement, App, Bounds, EdgeFade, Element, Global, GlobalElementId, InspectorElementId,
@@ -249,6 +250,7 @@ impl Element for EdgeFaded {
             left &= scrolled > 1.0;
             if self.smooth_overflow_x {
                 let overflow = (max_scroll - scrolled).max(0.0);
+                band_left = Some(px(scrolled.clamp(0.0, self.band)));
                 right &= overflow > 0.0;
                 outset_right = label_fade_outset(overflow, self.band);
             } else {
@@ -294,6 +296,149 @@ impl Element for EdgeFaded {
             .push((window.window_handle().window_id(), fade));
         window.with_edge_fade(Some(fade), |window| self.child.paint(window, cx));
         cx.global::<PaintFades>().0.borrow_mut().pop();
+    }
+}
+
+/// A title inside a tracked, clipped div. The parent measures the actual text
+/// overflow before this child runs, so fitting titles never animate.
+pub(crate) struct SlidingLabel {
+    child: AnyElement,
+    scroll: ScrollHandle,
+    hovered: bool,
+}
+
+impl IntoElement for SlidingLabel {
+    type Element = Self;
+
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl SlidingLabel {
+    pub(crate) fn new(label: impl IntoElement, scroll: ScrollHandle, hovered: bool) -> Self {
+        Self {
+            child: label.into_any_element(),
+            scroll,
+            hovered,
+        }
+    }
+}
+
+struct LabelTravel {
+    from: f32,
+    to: f32,
+    started: Instant,
+    duration: Duration,
+}
+
+impl LabelTravel {
+    fn position(&self, now: Instant) -> f32 {
+        let elapsed = now.saturating_duration_since(self.started);
+        if elapsed >= self.duration {
+            return self.to;
+        }
+        let progress = elapsed.as_secs_f32() / self.duration.as_secs_f32();
+        crate::motion::lerp(
+            self.from,
+            self.to,
+            crate::motion::EASE_IN_OUT.eval(progress),
+        )
+    }
+}
+
+impl Element for SlidingLabel {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        Some("sliding-label".into())
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        (self.child.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        id: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let overflow = f32::from(self.scroll.max_offset().x);
+        let offset = if overflow > 0.5 && !crate::motion::reduced_motion(cx) {
+            let now = cx.background_executor().now();
+            let to = if self.hovered { overflow } else { 0.0 };
+            window.with_element_state(
+                id.expect("sliding label has an id"),
+                |previous: Option<LabelTravel>, window| {
+                    let travel = match previous {
+                        Some(travel) if travel.to == to => travel,
+                        previous => {
+                            let from = previous
+                                .map_or(0.0, |travel| travel.position(now))
+                                .min(overflow);
+                            let (started, duration) = if to == from {
+                                (now, Duration::ZERO)
+                            } else if self.hovered {
+                                let delay = if from == 0.0 { 180 } else { 0 };
+                                let millis = ((to - from).abs() * 25.0).clamp(420.0, 3200.0);
+                                (
+                                    now + Duration::from_millis(delay),
+                                    Duration::from_millis(millis as u64),
+                                )
+                            } else {
+                                (now, Duration::from_millis(300))
+                            };
+                            LabelTravel {
+                                from,
+                                to,
+                                started,
+                                duration,
+                            }
+                        }
+                    };
+                    if now < travel.started + travel.duration {
+                        window.request_animation_frame();
+                    }
+                    (travel.position(now).min(overflow), travel)
+                },
+            )
+        } else {
+            0.0
+        };
+        let previous = self.scroll.offset();
+        let next = gpui::point(px(-offset), previous.y);
+        // The parent already applied its old offset. Move by the difference
+        // and update the handle so the two fade edges use the painted offset.
+        window.with_element_offset(next - previous, |window| self.child.prepaint(window, cx));
+        self.scroll.set_offset(next);
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.child.paint(window, cx);
     }
 }
 
@@ -521,6 +666,77 @@ mod tests {
             assert!(previous - edge_alpha < 0.02);
             previous = edge_alpha;
         }
+    }
+
+    #[gpui::test]
+    fn hovered_label_slides_only_when_clipped_and_returns_on_leave(cx: &mut gpui::TestAppContext) {
+        struct Fixture {
+            scroll: ScrollHandle,
+            hovered: bool,
+            content_width: f32,
+        }
+        impl Render for Fixture {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .id("label")
+                    .w(px(100.0))
+                    .overflow_hidden()
+                    .track_scroll(&self.scroll)
+                    .flex()
+                    .child(
+                        div().flex_none().child(SlidingLabel::new(
+                            div()
+                                .id("label-text")
+                                .debug_selector(|| "label-text".into())
+                                .w(px(self.content_width))
+                                .h(px(16.0)),
+                            self.scroll.clone(),
+                            self.hovered,
+                        )),
+                    )
+            }
+        }
+        let scroll = ScrollHandle::new();
+        let (fixture, cx) = cx.add_window_view(|_, cx| {
+            crate::motion::set_reduced_motion(cx, false);
+            Fixture {
+                scroll: scroll.clone(),
+                hovered: true,
+                content_width: 80.0,
+            }
+        });
+        cx.run_until_parked();
+        let resting = cx.debug_bounds("label-text").unwrap().left();
+        cx.executor().advance_clock(Duration::from_secs(1));
+        cx.update(|window, cx| window.draw(cx).clear());
+        assert_eq!(scroll.offset().x, px(0.0));
+
+        fixture.update(cx, |view, cx| {
+            view.content_width = 120.0;
+            cx.notify();
+        });
+        cx.update(|window, cx| window.draw(cx).clear());
+        cx.executor().advance_clock(Duration::from_millis(340));
+        cx.update(|window, cx| window.draw(cx).clear());
+        assert!(scroll.offset().x < px(0.0) && scroll.offset().x > px(-20.0));
+        let laid_out = cx.debug_bounds("label-text").unwrap().left();
+        // Layout snaps to device pixels; the scroll handle retains the
+        // subpixel offset used by the fade.
+        assert!(f32::from(laid_out - resting - scroll.offset().x).abs() <= 0.5);
+
+        cx.executor().advance_clock(Duration::from_millis(350));
+        cx.update(|window, cx| window.draw(cx).clear());
+        assert_eq!(scroll.offset().x, px(-20.0));
+        fixture.update(cx, |view, cx| {
+            view.hovered = false;
+            cx.notify();
+        });
+        cx.update(|window, cx| window.draw(cx).clear());
+        assert_eq!(scroll.offset().x, px(-20.0));
+        cx.executor().advance_clock(Duration::from_millis(330));
+        cx.update(|window, cx| window.draw(cx).clear());
+        assert_eq!(scroll.offset().x, px(0.0));
+        assert_eq!(cx.debug_bounds("label-text").unwrap().left(), resting);
     }
 }
 

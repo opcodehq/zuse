@@ -855,7 +855,11 @@ impl Shell {
         }
         self.sidebar_is_active = self.active_remote_workspace.is_none();
         self.computer_navigation.clear();
-        let (local, moving) = self.render_sidebar_session_items(theme, cx);
+        let SidebarSessionItems {
+            list: local,
+            moving_row: moving,
+            settled_section: local_settled,
+        } = self.render_sidebar_session_items(theme, cx);
         if !self.local_computer_collapsed {
             self.computer_navigation
                 .extend(
@@ -881,7 +885,7 @@ impl Shell {
                     cx,
                 ))
                 .when(!self.local_computer_collapsed, |el| {
-                    el.child(local).children(moving)
+                    el.child(local).children(moving).children(local_settled)
                 })
                 .into_any_element(),
         ];
@@ -901,7 +905,7 @@ impl Shell {
             .collect();
         for (index, label, collapsed, shell) in computers {
             let key = self.remote_workspaces[index].key.clone();
-            let (label, status, items, moving) = shell.update(cx, |shell, cx| {
+            let (label, status, items, moving, settled) = shell.update(cx, |shell, cx| {
                 let label = {
                     let state = shell.state.read(cx);
                     state
@@ -913,7 +917,11 @@ impl Shell {
                 };
                 shell.sidebar_is_active = self.active_remote_workspace == Some(index);
                 let status = shell.computer_status(cx);
-                let (items, moving) = shell.render_sidebar_session_items(theme, cx);
+                let SidebarSessionItems {
+                    list: items,
+                    moving_row: moving,
+                    settled_section: settled,
+                } = shell.render_sidebar_session_items(theme, cx);
                 if !collapsed {
                     self.computer_navigation.extend(
                         shell
@@ -925,7 +933,7 @@ impl Shell {
                             }),
                     );
                 }
-                (label, status, items, moving)
+                (label, status, items, moving, settled)
             });
             groups.push(
                 div()
@@ -934,7 +942,9 @@ impl Shell {
                     .flex()
                     .flex_col()
                     .child(self.computer_heading(Some(index), label, collapsed, status, theme, cx))
-                    .when(!collapsed, |el| el.child(items).children(moving))
+                    .when(!collapsed, |el| {
+                        el.child(items).children(moving).children(settled)
+                    })
                     .into_any_element(),
             );
         }

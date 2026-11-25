@@ -21,7 +21,8 @@ impl Shell {
     /// This never changes its connection state or installs a local composer.
     pub(super) fn render_offline_cloud_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();
-        let groups = self.cloud_sidebar_groups(cx);
+        let mut groups = self.cloud_sidebar_groups(cx);
+        let settled = self.take_settled_cloud_rows(&mut groups, cx);
         let mut elements = Vec::new();
         for group in groups {
             let project = group.project;
@@ -61,12 +62,26 @@ impl Shell {
                 );
             let mut rows = Vec::new();
             for row in group.rows {
-                if let Some((_, _, row)) = self.render_cloud_sidebar_row(row, &theme, cx) {
+                if let Some((_, _, row)) = self.render_cloud_sidebar_row(row, false, &theme, cx) {
                     rows.push(row)
                 }
             }
             elements.push(div().child(header).children(rows).into_any_element());
         }
+        let settled_count = settled.len();
+        let settled_rows = if self.settled_open {
+            settled
+                .into_iter()
+                .filter_map(|row| self.render_cloud_sidebar_row(row, true, &theme, cx))
+                .map(|(_, _, row)| row)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        // Settled sits beside the project scroller, as in the main sidebar,
+        // so its rows scroll on their own and it can take spare space.
+        let settled_section = self.render_settled_section(settled_count, settled_rows, &theme, cx);
+        let settled_fills = self.settled_open && settled_section.is_some();
         div()
             .id("offline-cloud-sidebar")
             .w(px(self.settings.sidebar_width.max(SIDEBAR_MIN)))
@@ -88,12 +103,14 @@ impl Shell {
             .child(
                 div()
                     .id("offline-cloud-projects")
-                    .flex_1()
+                    .when(settled_fills, |el| el.flex_initial())
+                    .when(!settled_fills, |el| el.flex_1())
                     .min_h_0()
                     .overflow_y_scroll()
                     .px(px(6.))
                     .children(elements),
             )
+            .children(settled_section)
             .child(
                 div()
                     .px(px(16.))
@@ -286,6 +303,7 @@ impl Shell {
     pub(super) fn render_cloud_sidebar_row(
         &self,
         row: Value,
+        settled: bool,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Option<(String, f32, AnyElement)> {
@@ -327,14 +345,43 @@ impl Shell {
             .unwrap_or(now);
         let time_ago = zuse_protocol::view::format_time_ago(updated, now);
         let status = self.cloud_row_status(&row, cx);
-        let project_group = self.settings.sidebar_organization == SidebarOrganization::ByProject;
-        let height = sidebar_row_height(
-            self.sidebar_compact_rows(),
-            self.sidebar_project_labels(),
-            project_group,
-        );
+        let harness = self
+            .settings
+            .sidebar_show_harness
+            .then(|| {
+                self.cloud_conversation
+                    .as_ref()
+                    .map(|view| view.read(cx))
+                    .filter(|view| view.target.workspace == workspace)
+                    .and_then(|view| view.harness(Some(&row)))
+                    .or_else(|| super::cloud_conversation::cloud_harness(&row))
+                    .or_else(|| settings::remembered_cloud_agent(&workspace, cx))
+            })
+            .flatten();
+        // Under a project or device heading, rows take the nested shape.
+        let project_group =
+            !settled && self.settings.sidebar_organization != SidebarOrganization::InOneList;
+        let height = if settled {
+            super::SIDEBAR_SETTLED_ROW_HEIGHT
+        } else {
+            sidebar_row_height(
+                self.sidebar_row_compact(project_group),
+                self.sidebar_project_labels(),
+                project_group,
+            )
+        };
         let id = format!("{}{workspace}", super::CLOUD_ROW_PREFIX);
-        let project = self.cloud_row_project_name(&row, cx);
+        // Under a project heading, the card names its branch, as local
+        // cards do, while Branch is shown.
+        let description = project_group.then(|| {
+            ["branch", "branchName", "headBranch"]
+                .into_iter()
+                .filter(|_| self.settings.sidebar_show_branch)
+                .find_map(|key| row[key].as_str().map(str::trim))
+                .unwrap_or_default()
+                .to_owned()
+        });
+        let project = description.unwrap_or_else(|| self.cloud_row_project_name(&row, cx));
         let element = self.render_chat_row(
             id.clone(),
             title.into(),
@@ -342,7 +389,7 @@ impl Shell {
             project.into(),
             None,
             None,
-            None,
+            harness,
             status,
             selected,
             false,
@@ -351,6 +398,7 @@ impl Shell {
             None,
             self.settings.sidebar_show_project_icon && !project_group,
             project_group,
+            settled,
             None,
             theme,
             cx,
@@ -1041,8 +1089,8 @@ mod tests {
             );
         });
         let pill = cx
-            .debug_bounds("chat-time-cloud:task-2")
-            .expect("cloud rows show the archive pill on hover");
+            .debug_bounds("chat-archive-cloud:task-2")
+            .expect("cloud rows show Archive on hover");
         cx.simulate_click(pill.center(), gpui::Modifiers::default());
         settle(&runtime, &archiver, 2, cx);
         assert_eq!(archiver.calls.lock().unwrap().len(), 2);
@@ -1193,7 +1241,7 @@ mod tests {
                         &json!({"accountId":"owner","organizationId":organization,"workspaces":[{
                             "workspaceId":"task-1","projectId":"project","providerId":"boxd",
                             "chatId":"session-1","initialSessionId":"session-1",
-                            "title":"Cloud chat","branch":"task/cloud","state":"ready","desiredState":"ready",
+                            "title":"Cloud chat","agent":"codex","branch":"task/cloud","state":"ready","desiredState":"ready",
                             "createdAt":1,"updatedAt":1
                         }]})
                     ));
@@ -1291,6 +1339,14 @@ mod tests {
                 let row = cx
                     .debug_bounds(row_selector)
                     .unwrap_or_else(|| panic!("{id} paints in {layout:?}"));
+                // Checked at rest: a hovered card swaps its marks for actions.
+                // Under a machine heading the heading names the cloud instead.
+                let marked = cloud && layout != SidebarOrganization::ByDevice;
+                assert_eq!(
+                    cx.debug_bounds(mark).is_some(),
+                    marked,
+                    "{id} in {layout:?}: cloud mark only on cloud rows"
+                );
                 cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::default());
                 cx.run_until_parked();
                 cx.update(|window, cx| window.draw(cx).clear());
@@ -1307,13 +1363,237 @@ mod tests {
                         "a row without an archive action keeps its age"
                     );
                 }
-                assert_eq!(
-                    cx.debug_bounds(mark).is_some(),
-                    cloud,
-                    "{id} in {layout:?}: cloud mark only on cloud rows"
-                );
             }
         }
+    }
+
+    #[gpui::test]
+    fn settling_a_cloud_thread_keeps_it_openable_and_can_be_undone(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let directory = tempfile::tempdir().unwrap();
+        let (shell, cx) = mixed_sidebar(cx, &runtime, directory.path(), None);
+        let redraw = |cx: &mut gpui::VisualTestContext| {
+            cx.run_until_parked();
+            cx.update(|window, cx| window.draw(cx).clear());
+            cx.update(|window, cx| window.draw(cx).clear());
+        };
+        redraw(cx);
+        let row = cx.debug_bounds("chat-cloud:task-1").unwrap();
+        let cloud = cx.debug_bounds("chat-cloud-mark-cloud:task-1").unwrap();
+        let agent = cx.debug_bounds("chat-agent-cloud:task-1").unwrap();
+        assert!(cloud.right() < agent.left());
+        assert!(agent.top() > row.center().y);
+        cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::default());
+        redraw(cx);
+        let settle = cx.debug_bounds("chat-settle-cloud:task-1").unwrap();
+        let archive = cx.debug_bounds("chat-archive-cloud:task-1").unwrap();
+        assert!(settle.right() < archive.left());
+        cx.simulate_click(settle.center(), gpui::Modifiers::default());
+        redraw(cx);
+        assert!(cx.debug_bounds("chat-cloud:task-1").is_none());
+        let disclosure = cx.debug_bounds("sidebar-settled-toggle").unwrap();
+        shell.read_with(cx, |shell, cx| {
+            assert!(
+                shell
+                    .state
+                    .read(cx)
+                    .cloud_sidebar_workspace("task-1")
+                    .is_some()
+            );
+            assert!(shell.cloud_conversation.is_none());
+        });
+        cx.simulate_click(disclosure.center(), gpui::Modifiers::default());
+        redraw(cx);
+        let row = cx.debug_bounds("chat-cloud:task-1").unwrap();
+        let expanded_disclosure = cx.debug_bounds("sidebar-settled-toggle").unwrap();
+        assert!(row.top() >= expanded_disclosure.bottom());
+        cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::default());
+        redraw(cx);
+        let unsettle = cx.debug_bounds("chat-settle-cloud:task-1").unwrap();
+        cx.simulate_click(unsettle.center(), gpui::Modifiers::default());
+        redraw(cx);
+        assert!(cx.debug_bounds("chat-cloud:task-1").is_some());
+        assert!(cx.debug_bounds("sidebar-settled-toggle").is_none());
+    }
+
+    #[gpui::test]
+    fn a_merged_pull_request_settles_its_thread_even_with_pr_badges_hidden(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let directory = tempfile::tempdir().unwrap();
+        let (shell, cx) = mixed_sidebar(cx, &runtime, directory.path(), None);
+        let branch = "feature/merged";
+        let now = Utc::now();
+        shell.update(cx, |shell, cx| {
+            shell.settings.sidebar_show_pull_request = false;
+            shell.state.update(cx, |state, cx| {
+                let chat = state
+                    .chats
+                    .iter_mut()
+                    .find(|chat| chat.id == "local-pin")
+                    .unwrap();
+                chat.source_context = Some(zuse_protocol::ConversationSourceContext {
+                    checkout_id: "checkout".into(),
+                    repo_root: "/projects/zuse".into(),
+                    cwd: "/projects/zuse".into(),
+                    branch: branch.into(),
+                    head_sha: None,
+                    observed_at: now,
+                });
+                state.fixture_sidebar_change_request(zuse_protocol::CheckoutChangeRequestStatus {
+                    checkout_id: "checkout".into(),
+                    device_id: "local".into(),
+                    cwd: "/projects/zuse".into(),
+                    branch: branch.into(),
+                    error: None,
+                    updated_at: now,
+                    change_request: Some(zuse_protocol::ChangeRequestSummary {
+                        provider: "github".into(),
+                        number: 1,
+                        title: "Merged change".into(),
+                        url: "https://github.com/owner/zuse/pull/1".into(),
+                        state: zuse_protocol::ChangeRequestState::Merged,
+                        base_ref: "main".into(),
+                        head_ref: branch.into(),
+                        is_draft: false,
+                        review_decision: Default::default(),
+                    }),
+                });
+                cx.notify();
+            });
+            assert!(
+                !shell
+                    .sidebar_visible_order(cx)
+                    .contains(&"local-pin".into())
+            );
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear());
+        assert!(cx.debug_bounds("chat-local-pin").is_none());
+        assert!(cx.debug_bounds("chat-local-1").is_some());
+        assert!(cx.debug_bounds("sidebar-settled-toggle").is_some());
+        shell.update(cx, |shell, cx| {
+            shell.set_sidebar_thread_settled("local".into(), "local-pin".into(), false, cx);
+            assert!(
+                shell
+                    .sidebar_visible_order(cx)
+                    .contains(&"local-pin".into())
+            );
+            assert!(shell.active_sidebar_pins(cx).contains(&"local-pin".into()));
+        });
+    }
+
+    #[gpui::test]
+    fn project_filter_menu_opens_beside_its_icon(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let directory = tempfile::tempdir().unwrap();
+        let (shell, cx) = mixed_sidebar(cx, &runtime, directory.path(), None);
+        shell.update(cx, |shell, cx| {
+            shell.settings.sidebar_organization = SidebarOrganization::InOneList;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            shell.update(cx, |shell, cx| shell.open_spaces_menu(window, cx));
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear());
+        let button = cx
+            .debug_bounds("spaces-filter-button")
+            .expect("filter button");
+        let row = cx
+            .debug_bounds("spaces-menu-row-0")
+            .expect("project menu row");
+        let threads = cx.debug_bounds("chat-local-1").unwrap();
+        assert!(
+            row.left() > threads.center().x,
+            "the project menu opens to the right, not over the list: {row:?} vs {threads:?}"
+        );
+        assert!(
+            row.left() >= button.right() && row.left() - button.right() < px(16.0),
+            "it opens right beside its icon: {row:?} vs {button:?}"
+        );
+        assert_eq!(row.size.height, px(30.0));
+    }
+
+    #[gpui::test]
+    fn open_settled_fills_spare_space_and_yields_to_long_lists(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let directory = tempfile::tempdir().unwrap();
+        let (shell, cx) = mixed_sidebar(cx, &runtime, directory.path(), None);
+        shell.update(cx, |shell, cx| {
+            shell.settings.sidebar_organization = SidebarOrganization::InOneList;
+            shell.set_sidebar_thread_settled("local".into(), "local-pin".into(), true, cx);
+            shell.settled_open = true;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear());
+        // A short list leaves room: Settled starts right under its rows.
+        let last = cx
+            .debug_bounds("chat-cloud:task-1")
+            .or_else(|| cx.debug_bounds("chat-local-1"))
+            .unwrap();
+        let toggle = cx.debug_bounds("sidebar-settled-toggle").unwrap();
+        assert!(
+            toggle.top() - last.bottom() < px(40.0),
+            "Settled sits under a short list: {last:?} then {toggle:?}"
+        );
+        let row = cx.debug_bounds("chat-local-pin").unwrap();
+        assert_eq!(
+            row.size.height,
+            px(super::super::SIDEBAR_SETTLED_ROW_HEIGHT)
+        );
+
+        // A long list keeps scrolling above, and Settled still shows rows.
+        shell.update(cx, |shell, cx| {
+            shell.state.update(cx, |state, _| {
+                let template = state.chats[1].clone();
+                for ix in 0..40 {
+                    let mut chat = template.clone();
+                    chat.id = format!("extra-{ix}");
+                    state.chats.push(chat);
+                }
+            });
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear());
+        let section = cx.debug_bounds("sidebar-settled-section").unwrap();
+        let rows = cx.debug_bounds("sidebar-settled-rows").unwrap();
+        assert!(section.top() > px(450.0), "Settled stays low: {section:?}");
+        // The list scrolls inside its own box instead of spilling under Settled.
+        shell.read_with(cx, |shell, _| {
+            let lists = shell.sidebar_scroll.bounds();
+            assert!(
+                lists.bottom() <= section.top(),
+                "{lists:?} above {section:?}"
+            );
+            assert!(shell.sidebar_scroll.max_offset().y > px(0.0));
+        });
+        assert!(rows.size.height >= px(super::super::SIDEBAR_SETTLED_ROW_HEIGHT));
+        assert_eq!(
+            cx.debug_bounds("chat-local-pin").unwrap().size.height,
+            px(super::super::SIDEBAR_SETTLED_ROW_HEIGHT)
+        );
     }
 
     #[gpui::test]
@@ -1390,6 +1670,92 @@ mod tests {
         cx.run_until_parked();
         cx.update(|window, cx| window.draw(cx).clear());
         assert!(cx.debug_bounds("chat-peek-card").is_none());
+    }
+
+    #[gpui::test]
+    fn project_density_shapes_rows_under_project_headings(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let directory = tempfile::tempdir().unwrap();
+        let (shell, cx) = mixed_sidebar(cx, &runtime, directory.path(), None);
+        let heights = |shell: &Entity<Shell>,
+                       cx: &mut gpui::VisualTestContext,
+                       density: settings::SidebarDensity| {
+            shell.update(cx, |shell, cx| {
+                shell.settings.sidebar_organization = SidebarOrganization::ByProject;
+                shell.settings.sidebar_project_density = density;
+                shell.sidebar_collapsed_groups.clear();
+                cx.notify();
+            });
+            cx.run_until_parked();
+            cx.update(|window, cx| window.draw(cx).clear());
+            ["chat-local-1", "chat-cloud:task-1"]
+                .map(|row| f32::from(cx.debug_bounds(row).expect(row).size.height))
+        };
+        // Detailed, the default, draws cards; Compact draws one-line rows.
+        assert_eq!(
+            heights(&shell, cx, settings::SidebarDensity::Detailed),
+            [super::super::SIDEBAR_ROW_DOUBLE_HEIGHT; 2]
+        );
+        assert_eq!(
+            heights(&shell, cx, settings::SidebarDensity::Compact),
+            [super::super::SIDEBAR_ROW_SINGLE_HEIGHT; 2]
+        );
+        // Compact rows name where they run just left of the age.
+        for (row, corner, mark) in [
+            ("local-1", "chat-time-local-1", "chat-computer-mark-local-1"),
+            (
+                "cloud:task-1",
+                "chat-time-cloud:task-1",
+                "chat-cloud-mark-cloud:task-1",
+            ),
+        ] {
+            let mark = cx.debug_bounds(mark).expect(mark);
+            let corner = cx.debug_bounds(corner).unwrap();
+            assert!(
+                corner.contains(&mark.center()),
+                "{row}: mark sits beside the age"
+            );
+        }
+        // Device groups draw the same rows, divided by machine; the heading
+        // names the machine, so rows drop their own mark.
+        shell.update(cx, |shell, cx| {
+            shell.settings.sidebar_organization = SidebarOrganization::ByDevice;
+            shell.sidebar_collapsed_groups.clear();
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear());
+        for (row, mark) in [
+            ("chat-local-1", "chat-computer-mark-local-1"),
+            ("chat-cloud:task-1", "chat-cloud-mark-cloud:task-1"),
+        ] {
+            assert_eq!(
+                f32::from(cx.debug_bounds(row).expect(row).size.height),
+                super::super::SIDEBAR_ROW_SINGLE_HEIGHT
+            );
+            assert!(cx.debug_bounds(mark).is_none(), "{mark}");
+        }
+        // Each machine's heading leads with the kind of machine it is.
+        for heading in [
+            "sidebar-device-icon-local",
+            "sidebar-device-icon-cloud-computers",
+        ] {
+            assert!(cx.debug_bounds(heading).is_some(), "{heading}");
+        }
+        // Density belongs to Projects and Devices: the Threads view keeps cards.
+        shell.update(cx, |shell, cx| {
+            shell.settings.sidebar_organization = SidebarOrganization::InOneList;
+            cx.notify();
+        });
+        cx.update(|window, cx| window.draw(cx).clear());
+        assert_eq!(
+            f32::from(cx.debug_bounds("chat-local-1").unwrap().size.height),
+            super::super::SIDEBAR_ROW_DOUBLE_HEIGHT
+        );
     }
 }
 

@@ -208,6 +208,7 @@ struct DiffSyncInner {
     /// How long an entry may sit chat-less before reconcile removes it.
     orphan_grace: Duration,
     diffs_tx: watch::Sender<Vec<CheckoutDiff>>,
+    diff_summaries_tx: watch::Sender<Vec<CheckoutDiff>>,
     statuses_tx: watch::Sender<Vec<zuse_protocol::CheckoutGitStatus>>,
     /// chat_id → turn-start tree (see [`TurnSnapshot`]).
     turn_trees: Mutex<HashMap<String, TurnSnapshot>>,
@@ -365,6 +366,7 @@ impl CheckoutDiffSync {
                 identities: Mutex::new(HashMap::new()),
                 orphan_grace,
                 diffs_tx,
+                diff_summaries_tx: watch::channel(Vec::new()).0,
                 statuses_tx: watch::channel(Vec::new()).0,
                 turn_trees: Mutex::new(HashMap::new()),
                 turn_gates: Mutex::new(HashMap::new()),
@@ -401,6 +403,11 @@ impl CheckoutDiffSync {
     /// `WatchCheckoutDiffs` source: every tracked checkout's latest diff.
     pub fn watch_diffs(&self) -> watch::Receiver<Vec<CheckoutDiff>> {
         self.inner.diffs_tx.subscribe()
+    }
+
+    /// Patch-free totals are ready before the full review snapshot.
+    pub(crate) fn watch_diff_summaries(&self) -> watch::Receiver<Vec<CheckoutDiff>> {
+        self.inner.diff_summaries_tx.subscribe()
     }
 
     /// Consumers filter this shared cache; subscribing never starts another Git scan.
@@ -882,7 +889,7 @@ async fn entry_task(
     mut kick_rx: mpsc::UnboundedReceiver<()>,
     cancel: CancellationToken,
 ) {
-    let mut last_capture = Duration::ZERO;
+    let mut last_capture: Option<Duration> = None;
     let mut poll = tokio::time::interval(UNWATCHED_POLL_INTERVAL);
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     poll.tick().await;
@@ -895,16 +902,18 @@ async fn entry_task(
                 }
                 // Bound trailing debounce so continuous build activity cannot
                 // indefinitely postpone the initial snapshot or later updates.
-                let debounce = (last_capture * 2).clamp(WATCH_DEBOUNCE_MIN, WATCH_DEBOUNCE);
-                let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
-                loop {
-                    let quiet = (tokio::time::Instant::now() + debounce).min(deadline);
-                    tokio::select! {
-                        _ = cancel.cancelled() => return,
-                        _ = tokio::time::sleep_until(quiet) => break,
-                        kick = kick_rx.recv() => {
-                            if kick.is_none() { return; }
-                            if tokio::time::Instant::now() >= deadline { break; }
+                if let Some(last_capture) = last_capture {
+                    let debounce = (last_capture * 2).clamp(WATCH_DEBOUNCE_MIN, WATCH_DEBOUNCE);
+                    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+                    loop {
+                        let quiet = (tokio::time::Instant::now() + debounce).min(deadline);
+                        tokio::select! {
+                            _ = cancel.cancelled() => return,
+                            _ = tokio::time::sleep_until(quiet) => break,
+                            kick = kick_rx.recv() => {
+                                if kick.is_none() { return; }
+                                if tokio::time::Instant::now() >= deadline { break; }
+                            }
                         }
                     }
                 }
@@ -933,7 +942,7 @@ async fn entry_task(
             _ = cancel.cancelled() => return,
             _ = sync_entry(&inner, &entry) => {}
         }
-        last_capture = started.elapsed();
+        last_capture = Some(started.elapsed());
         // Give expensive captures a full idle interval before polling again.
         poll.reset();
     }
@@ -962,19 +971,26 @@ async fn sync_entry(inner: &Arc<DiffSyncInner>, entry: &Arc<CheckoutEntry>) {
         let (files, complete) = git_status::parse(&status.stdout, status.truncated);
         git_status::publish(inner, entry, files, complete);
     }
-    let snapshot =
-        match capture_diff_with_status(&inner.repos, &entry.identity.root, None, status.ok()).await
-        {
-            Ok(snapshot) => snapshot,
-            Err(err) => {
-                tracing::debug!(checkout = %entry.identity.root.display(), error = %err,
+    let snapshot = match capture_scoped_diff_with_status(
+        &inner.repos,
+        &entry.identity.root,
+        None,
+        "working",
+        status.ok(),
+        Some((inner, entry)),
+    )
+    .await
+    {
+        Ok(snapshot) => snapshot,
+        Err(err) => {
+            tracing::debug!(checkout = %entry.identity.root.display(), error = %err,
                 "diff-sync: capture failed");
-                if !status_available {
-                    git_status::publish(inner, entry, Vec::new(), false);
-                }
-                return;
+            if !status_available {
+                git_status::publish(inner, entry, Vec::new(), false);
             }
-        };
+            return;
+        }
+    };
 
     if let Some((files, complete)) = &snapshot.git_status {
         git_status::publish(inner, entry, files.clone(), *complete);
@@ -1048,6 +1064,45 @@ async fn sync_entry(inner: &Arc<DiffSyncInner>, entry: &Arc<CheckoutEntry>) {
     }
 }
 
+fn publish_diff_summary(inner: &DiffSyncInner, entry: &CheckoutEntry, capture: &DiffFiles) {
+    let entries = lock(&inner.entries);
+    if !entries
+        .get(&entry.identity.id)
+        .is_some_and(|live| std::ptr::eq(live.as_ref(), entry))
+    {
+        return;
+    }
+    inner.diff_summaries_tx.send_if_modified(|summaries| {
+        match summaries.binary_search_by(|summary| summary.checkout_id.cmp(&entry.identity.id)) {
+            Ok(index)
+                if summaries[index].files == capture.files
+                    && summaries[index].truncated == capture.truncated =>
+            {
+                false
+            }
+            position => {
+                let summary = CheckoutDiff {
+                    checkout_id: entry.identity.id.clone(),
+                    device_id: inner.device_id.clone(),
+                    cwd: entry.identity.root.to_string_lossy().into_owned(),
+                    patch: String::new(),
+                    files: capture.files.clone(),
+                    additions: capture.additions,
+                    deletions: capture.deletions,
+                    truncated: capture.truncated,
+                    checksum: crate::repos::hex(&Sha256::digest(capture.files_json.as_bytes())),
+                    updated_at: chrono::Utc::now(),
+                };
+                match position {
+                    Ok(index) => summaries[index] = summary,
+                    Err(index) => summaries.insert(index, summary),
+                }
+                true
+            }
+        }
+    });
+}
+
 /// Re-emit the watch channel from the current entries' cached diffs, replacing (or
 /// inserting) `updated`.
 fn publish_watch_with(inner: &Arc<DiffSyncInner>, updated: Option<CheckoutDiff>) {
@@ -1069,10 +1124,15 @@ fn publish_watch_with(inner: &Arc<DiffSyncInner>, updated: Option<CheckoutDiff>)
 
 fn publish_watch(inner: &Arc<DiffSyncInner>) {
     publish_watch_with(inner, None);
-    let live: HashSet<String> = lock(&inner.entries).keys().cloned().collect();
+    let entries = lock(&inner.entries);
+    inner.diff_summaries_tx.send_if_modified(|summaries| {
+        let before = summaries.len();
+        summaries.retain(|summary| entries.contains_key(&summary.checkout_id));
+        before != summaries.len()
+    });
     inner.statuses_tx.send_if_modified(|statuses| {
         let before = statuses.len();
-        statuses.retain(|status| live.contains(&status.checkout_id));
+        statuses.retain(|status| entries.contains_key(&status.checkout_id));
         before != statuses.len()
     });
 }
@@ -1293,34 +1353,38 @@ fn parse_name_status(value: &[u8]) -> Vec<DiffFileSummary> {
 
 fn apply_numstat(files: &mut [DiffFileSummary], value: &[u8]) {
     // With -z, a rename record is `adds<TAB>dels<TAB><NUL>old<NUL>new<NUL>`.
-    let records: Vec<String> = value
-        .split(|b| *b == 0)
-        .map(|part| String::from_utf8_lossy(part).to_string())
-        .collect();
-    let mut i = 0usize;
-    while i < records.len() {
-        let record = &records[i];
-        if record.is_empty() {
-            i += 1;
+    let mut records = value.split(|byte| *byte == 0);
+    let mut counts = HashMap::with_capacity(files.len());
+    while let Some(record) = records.next() {
+        let mut columns = record.splitn(3, |byte| *byte == b'\t');
+        let (Some(adds), Some(dels), Some(path)) = (columns.next(), columns.next(), columns.next())
+        else {
             continue;
-        }
-        let mut parts = record.splitn(3, '\t');
-        let adds = parts.next().unwrap_or_default().to_string();
-        let dels = parts.next().unwrap_or_default().to_string();
-        let inline_path = parts.next().unwrap_or_default().to_string();
-        let path = if inline_path.is_empty() {
-            // Rename: the next two records are old, new.
-            let new_path = records.get(i + 2).cloned().unwrap_or_default();
-            i += 2;
-            new_path
-        } else {
-            inline_path
         };
-        i += 1;
-        if let Some(file) = files.iter_mut().find(|f| f.path == path) {
-            file.additions = adds.parse().unwrap_or(0);
-            file.deletions = dels.parse().unwrap_or(0);
-            file.binary = adds == "-" || dels == "-";
+        let path = if path.is_empty() {
+            let Some(renamed) = records.nth(1) else {
+                break;
+            };
+            renamed
+        } else {
+            path
+        };
+        let count = |bytes: &[u8]| {
+            std::str::from_utf8(bytes)
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(0)
+        };
+        counts.insert(
+            String::from_utf8_lossy(path),
+            (count(adds), count(dels), adds == b"-" || dels == b"-"),
+        );
+    }
+    for file in files {
+        if let Some((adds, dels, binary)) = counts.remove(file.path.as_str()) {
+            file.additions = adds;
+            file.deletions = dels;
+            file.binary = binary;
         }
     }
 }
@@ -1546,7 +1610,7 @@ pub async fn capture_diff_against(
     root: &Path,
     base_override: Option<&str>,
 ) -> Result<DiffSnapshot, EngineError> {
-    capture_diff_with_status(repos, root, base_override, None).await
+    capture_scoped_diff(repos, root, base_override, "working").await
 }
 
 /// Explicit index/worktree scopes used by native mobile review tabs.
@@ -1556,17 +1620,15 @@ pub async fn capture_scoped_diff(
     base_override: Option<&str>,
     scope: &str,
 ) -> Result<DiffSnapshot, EngineError> {
-    capture_scoped_diff_with_status(repos, root, base_override, scope, None).await
+    capture_scoped_diff_with_status(repos, root, base_override, scope, None, None).await
 }
 
-/// The working-tree capture, reusing a status the caller already read.
-async fn capture_diff_with_status(
-    repos: &Repos,
-    root: &Path,
-    base_override: Option<&str>,
-    status: Option<Capture>,
-) -> Result<DiffSnapshot, EngineError> {
-    capture_scoped_diff_with_status(repos, root, base_override, "working", status).await
+struct DiffFiles {
+    files: Vec<DiffFileSummary>,
+    files_json: String,
+    additions: u32,
+    deletions: u32,
+    truncated: bool,
 }
 
 async fn capture_scoped_diff_with_status(
@@ -1575,6 +1637,7 @@ async fn capture_scoped_diff_with_status(
     base_override: Option<&str>,
     scope: &str,
     status: Option<Capture>,
+    summary: Option<(&DiffSyncInner, &CheckoutEntry)>,
 ) -> Result<DiffSnapshot, EngineError> {
     let head = capture_git(root, &["rev-parse", "--verify", "HEAD"], 256)
         .await
@@ -1585,11 +1648,6 @@ async fn capture_scoped_diff_with_status(
         None if head.is_empty() => EMPTY_TREE_SHA,
         None => &head,
     };
-    let branch = repos
-        .current_branch(root)
-        .await
-        .unwrap_or_else(|_| "HEAD".into());
-
     let scope_args: Vec<&str> = match scope {
         "staged" => vec!["--cached", base],
         "unstaged" => vec![],
@@ -1621,7 +1679,6 @@ async fn capture_scoped_diff_with_status(
     .concat();
     let names = capture_git(root, &names_args, 2 * 1024 * 1024).await?;
     let nums = capture_git(root, &nums_args, 2 * 1024 * 1024).await?;
-    let tracked = capture_git(root, &patch_args, MAX_PATCH_BYTES).await?;
     // Untracked listing via porcelain status; `--no-optional-locks` keeps this
     // read-only (a status-triggered index refresh would re-kick our own watcher).
     let status = match status {
@@ -1644,17 +1701,10 @@ async fn capture_scoped_diff_with_status(
 
     let mut files = parse_name_status(&names.stdout);
     apply_numstat(&mut files, &nums.stdout);
-    let mut patch = String::from_utf8_lossy(&tracked.stdout).to_string();
-    let mut truncated = tracked.truncated || names.truncated || nums.truncated || status.truncated;
-    if has_non_utf8_status_path(&status.stdout) {
-        truncated = true;
-    }
-
-    if tracked.truncated {
-        let boundary = patch.rfind('\n').unwrap_or(0);
-        patch.truncate(boundary);
-        patch.push_str("\n# Zuse diff truncated\n");
-    }
+    let mut truncated = names.truncated
+        || nums.truncated
+        || status.truncated
+        || has_non_utf8_status_path(&status.stdout);
 
     // `?? path` records; rename records (`R  new\0old`) consume their extra field.
     let mut untracked: Vec<String> = Vec::new();
@@ -1680,6 +1730,7 @@ async fn capture_scoped_diff_with_status(
     // work bounded even when thousands of those files are binary or too large
     // to fit in the patch; their Git statuses remain complete independently.
     let mut untracked_budget = MAX_PATCH_BYTES;
+    let mut untracked_text = Vec::new();
     for path in untracked {
         if untracked_budget == 0 {
             truncated = true;
@@ -1732,15 +1783,7 @@ async fn capture_scoped_diff_with_status(
                         } else {
                             (text.split('\n').count() - usize::from(text.ends_with('\n'))) as u32
                         };
-                        let addition = untracked_patch(&path, &text);
-                        if patch.len() + addition.len() <= MAX_PATCH_BYTES {
-                            if !patch.is_empty() && !patch.ends_with('\n') {
-                                patch.push('\n');
-                            }
-                            patch.push_str(&addition);
-                        } else {
-                            truncated = true;
-                        }
+                        untracked_text.push((files.len(), text));
                     }
                 }
                 Err(_) => continue, // vanished between status and read
@@ -1756,10 +1799,40 @@ async fn capture_scoped_diff_with_status(
         });
     }
 
-    let additions: u32 = files.iter().map(|f| f.additions).sum();
-    let deletions: u32 = files.iter().map(|f| f.deletions).sum();
-    let files_json = serde_json::to_string(&files)
-        .map_err(|e| EngineError::Other(format!("diff files serialize: {e}")))?;
+    let capture = DiffFiles {
+        additions: files.iter().map(|file| file.additions).sum(),
+        deletions: files.iter().map(|file| file.deletions).sum(),
+        files_json: serde_json::to_string(&files)
+            .map_err(|e| EngineError::Other(format!("diff files serialize: {e}")))?,
+        files,
+        truncated,
+    };
+    if let Some((inner, entry)) = summary {
+        publish_diff_summary(inner, entry, &capture);
+    }
+    let branch = repos
+        .current_branch(root)
+        .await
+        .unwrap_or_else(|_| "HEAD".into());
+    let tracked = capture_git(root, &patch_args, MAX_PATCH_BYTES).await?;
+    let mut patch = String::from_utf8_lossy(&tracked.stdout).into_owned();
+    if tracked.truncated {
+        let boundary = patch.rfind('\n').unwrap_or(0);
+        patch.truncate(boundary);
+        patch.push_str("\n# Zuse diff truncated\n");
+        truncated = true;
+    }
+    for (index, text) in untracked_text {
+        let addition = untracked_patch(&capture.files[index].path, &text);
+        if patch.len() + addition.len() <= MAX_PATCH_BYTES {
+            if !patch.is_empty() && !patch.ends_with('\n') {
+                patch.push('\n');
+            }
+            patch.push_str(&addition);
+        } else {
+            truncated = true;
+        }
+    }
     let mut hasher = Sha256::new();
     hasher.update(branch.as_bytes());
     hasher.update([0u8]);
@@ -1767,7 +1840,7 @@ async fn capture_scoped_diff_with_status(
     hasher.update([0u8]);
     hasher.update(patch.as_bytes());
     hasher.update([0u8]);
-    hasher.update(files_json.as_bytes());
+    hasher.update(capture.files_json.as_bytes());
     hasher.update(if truncated { b"1" } else { b"0" });
     let checksum = crate::repos::hex(&hasher.finalize());
 
@@ -1776,9 +1849,9 @@ async fn capture_scoped_diff_with_status(
         branch,
         head_sha: (!head.is_empty()).then_some(head),
         patch,
-        files,
-        additions,
-        deletions,
+        files: capture.files,
+        additions: capture.additions,
+        deletions: capture.deletions,
         truncated,
         checksum,
     })

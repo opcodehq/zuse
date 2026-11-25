@@ -57,7 +57,7 @@ use crate::settings::shortcuts::{ShortcutsEvent, ShortcutsPage};
 use crate::settings::{
     self, CHAT_PANEL_MIN, ComposerSendBehavior, FILES_PANEL_MIN, JUMP_SLOTS, KeymapConfig,
     RIGHT_PANE_MIN, SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN, SavePolicy, ShortcutId,
-    SidebarOrganization, SidebarSort, TERMINAL_DEFAULT_HEIGHT, TERMINAL_MAX_VH,
+    SidebarDensity, SidebarOrganization, SidebarSort, TERMINAL_DEFAULT_HEIGHT, TERMINAL_MAX_VH,
     TERMINAL_MIN_HEIGHT, UiSettings, badge_combo, jump_hints_visible, modifier_send_hint_visible,
     platform_combo, sidebar_pin_profile_key,
 };
@@ -109,6 +109,7 @@ mod side_chats;
 mod sidebar_controls;
 mod sidebar_pins;
 mod sidebar_sections;
+mod sidebar_settled;
 mod slack_link;
 pub(crate) mod spaces;
 mod summary_pull_request;
@@ -1191,6 +1192,16 @@ impl Shell {
             && self.settings.sidebar_organization != SidebarOrganization::InOneList
     }
 
+    /// Whether a row takes one line. Rows under a project or device heading
+    /// follow Density; Compact shapes the rest.
+    pub(crate) fn sidebar_row_compact(&self, nested: bool) -> bool {
+        if nested {
+            self.settings.sidebar_project_density == SidebarDensity::Compact
+        } else {
+            self.sidebar_compact_rows()
+        }
+    }
+
     pub(crate) fn sidebar_project_labels(&self) -> bool {
         self.settings.sidebar_show_project_label
             || self.settings.sidebar_organization == SidebarOrganization::InOneList
@@ -1200,15 +1211,26 @@ impl Shell {
 /// Sidebar row ids for cloud tasks: `cloud:<workspace id>`.
 pub(crate) const CLOUD_ROW_PREFIX: &str = "cloud:";
 
+/// Cards (Threads, and rows under a Projects heading) take two lines. Rows
+/// take one when Compact (or, under a heading, Density) says so, or when
+/// they have no second line.
 fn sidebar_row_height(compact: bool, show_label: bool, nested: bool) -> f32 {
-    if compact || nested || !show_label {
-        SIDEBAR_ROW_SINGLE_HEIGHT
-    } else {
+    if !compact && (nested || show_label) {
         SIDEBAR_ROW_DOUBLE_HEIGHT
+    } else {
+        SIDEBAR_ROW_SINGLE_HEIGHT
     }
 }
 const SIDEBAR_ROW_SINGLE_HEIGHT: f32 = 28.0;
-const SIDEBAR_ROW_DOUBLE_HEIGHT: f32 = 44.0;
+const SIDEBAR_ROW_DOUBLE_HEIGHT: f32 = 50.0;
+/// One-line rows in the Settled section.
+pub(super) const SIDEBAR_SETTLED_ROW_HEIGHT: f32 = 36.0;
+/// Side padding inside a Settled row.
+const SIDEBAR_SETTLED_PAD_X: f32 = 10.0;
+/// The project badge on a Settled row.
+const SIDEBAR_SETTLED_AVATAR_SIZE: f32 = 16.0;
+/// Horizontal inset of Threads cards; headings above them share it.
+const SIDEBAR_CARD_PAD_X: f32 = 6.0;
 /// Sidebar session rows round like the reference list rows.
 const SIDEBAR_ROW_RADIUS: f32 = 7.0;
 
@@ -1275,6 +1297,11 @@ const SIDEBAR_LIST_PAD_TOP: f32 = 4.0;
 const SIDEBAR_ACTIVE_HARNESS_ICON_SIZE: f32 = 13.0;
 /// The cloud glyph on a sidebar row that runs on a cloud computer.
 const SIDEBAR_CLOUD_MARK_SIZE: f32 = 16.0;
+/// Hover actions (Settle, Archive) on a sidebar row, and the space between them.
+const SIDEBAR_ROW_ACTION_SIZE: f32 = 18.0;
+const SIDEBAR_ROW_ACTION_GAP: f32 = 2.0;
+/// The cloud and agent marks on a card's metadata line.
+const SIDEBAR_CARD_MARK_SIZE: f32 = 12.0;
 /// The working chat's pixel loader in a sidebar row: smaller than the
 /// 13px status slot so the motion stays a quiet accent beside the label.
 const SIDEBAR_WORKING_LOADER: f32 = 10.0;
@@ -1294,7 +1321,22 @@ pub(crate) fn sidebar_faded_label(
     fill: bool,
     label: impl IntoElement,
 ) -> impl IntoElement {
+    sidebar_label(id, fill, label, None)
+}
+
+fn sidebar_label(
+    id: SharedString,
+    fill: bool,
+    label: impl IntoElement,
+    slide_on_hover: Option<bool>,
+) -> impl IntoElement {
     let overflow = gpui::ScrollHandle::new();
+    let label = match slide_on_hover {
+        Some(hovered) => {
+            crate::edge_fade::SlidingLabel::new(label, overflow.clone(), hovered).into_any_element()
+        }
+        None => label.into_any_element(),
+    };
     crate::edge_fade::edge_faded(
         20.0,
         false,
@@ -1309,6 +1351,7 @@ pub(crate) fn sidebar_faded_label(
             .flex()
             .child(div().flex_none().whitespace_nowrap().child(label)),
     )
+    .fade_left(slide_on_hover.is_some())
     .fade_right(true)
     .fade_label_overflow(&overflow)
 }
@@ -1507,7 +1550,16 @@ struct SidebarSessionRows {
     custom_count: usize,
     rows: Vec<SidebarKeyedRow>,
     pinned_count: usize,
+    settled_section: Option<AnyElement>,
     moving_row: Option<(AnyElement, f32)>,
+}
+
+/// One computer's rendered session list, its in-flight drag row, and
+/// its Settled section.
+pub(super) struct SidebarSessionItems {
+    list: AnyElement,
+    moving_row: Option<AnyElement>,
+    settled_section: Option<AnyElement>,
 }
 
 /// Ghost chip following the pointer while a surface tab drags.
@@ -2249,6 +2301,7 @@ pub struct Shell {
     new_thread_artwork_ready: crate::new_thread_background_effects::Readiness,
     /// The Pinned disclosure: open by default, session-transient.
     pub(super) pinned_open: bool,
+    settled_open: bool,
     /// Ephemeral collapsed project/device sections, keyed by organization + id.
     pub(super) sidebar_collapsed_groups: std::collections::HashSet<String>,
     /// In-flight disclosure tweens, shared by project/device groups and Pinned.
@@ -2875,10 +2928,7 @@ impl Shell {
         let transcript_events = cx.subscribe(&transcript, Self::on_transcript_event);
         let data_dir = boot.data_dir.clone();
         let mut settings = settings::current(cx);
-        state.update(cx, |state, cx| {
-            state.watch_clock_transitions(cx);
-            state.set_change_requests_visible(settings.sidebar_show_pull_request, cx)
-        });
+        state.update(cx, |state, cx| state.watch_clock_transitions(cx));
         crate::appshots::set_enabled(settings.appshots_enabled);
         crate::appshots::set_capture_sound_enabled(settings.appshot_sound_enabled);
         // Bind the customizable shortcuts from the persisted keymap.
@@ -2994,6 +3044,7 @@ impl Shell {
             composer_dock: Default::default(),
             new_thread_artwork_ready: Default::default(),
             pinned_open: true,
+            settled_open: false,
             sidebar_collapsed_groups: std::collections::HashSet::new(),
             sidebar_reveal_motions: std::collections::HashSet::new(),
             sidebar_disclosure_motion: std::collections::HashMap::new(),
@@ -9513,6 +9564,9 @@ impl Shell {
         project_icon: bool,
         // A one-line row under a project heading: branch glyph, title, size.
         nested: bool,
+        // A one-line card (avatar, title, age) whatever the label setting,
+        // as Settled threads use.
+        single_line: bool,
         search_query: Option<&str>,
         theme: &Theme,
         cx: &mut Context<Self>,
@@ -9524,12 +9578,9 @@ impl Shell {
                 self.route,
                 Route::Plugins | Route::Archives | Route::Usage | Route::Zapper
             );
-        // Activity, not position: status is a small colored
-        // word + glyph in the row's top-right corner — Working animates the
-        // composer-strip spinner, Done wears a check; Idle rows show the
-        // relative time instead. Hovering the ROW swaps the corner for the
-        // ARCHIVE button. Compact rows keep status first and elapsed time last;
-        // their archive control occupies the remote-icon slot on hover.
+        // Cards show an activity mark or the elapsed time in the top-right
+        // corner. Row hover offers Settle and Archive in that same corner.
+        // Compact rows keep their leading status and trailing controls.
         // A chat can appear on both surfaces at once. Namespace every hover
         // key and child id so the palette never animates the sidebar copy.
         let row_id = if search_query.is_some() {
@@ -9537,45 +9588,34 @@ impl Shell {
         } else {
             format!("chat-{id}")
         };
-        let pr_error = {
-            let state = self.state.read(cx);
-            state
-                .chats
-                .iter()
-                .find(|chat| chat.id == id)
-                .and_then(|chat| state.change_request_error_for_chat(chat))
-                .map(str::to_owned)
-        };
-        let pr_device = self
-            .state
-            .read(cx)
-            .chats
-            .iter()
-            .find(|chat| chat.id == id)
-            .map(|chat| chat.device_id.clone());
         // The sidebar's own row layout; the palette keeps its three-line card.
         let sidebar = search_query.is_none();
-        let compact = sidebar && self.sidebar_compact_rows();
-        let show_label = search_query.is_some() || self.sidebar_project_labels();
-        let diff_stat = sidebar
-            .then(|| {
-                let state = self.state.read(cx);
-                let chat = state.chats.iter().find(|chat| chat.id == id)?;
-                state.diff_stat_for_chat(chat)
-            })
-            .flatten();
-        let remote = self
-            .state
-            .read(cx)
-            .chats
-            .iter()
-            .find(|chat| chat.id == id)
-            .is_some_and(|chat| {
-                self.state.read(cx).local_device_id.as_deref() != Some(chat.device_id.as_str())
-            });
-        let project_icon = (project_icon && search_query.is_none() && !nested).then(|| {
-            self.render_project_icon(&id, spaces::SIDEBAR_PROJECT_AVATAR_SIZE, selected, cx)
-        });
+        // Rows under a Projects heading follow Density; Compact shapes the rest.
+        let compact = sidebar && self.sidebar_row_compact(nested);
+        // Under a machine heading the heading already says where a row runs.
+        let device_row = sidebar
+            && nested
+            && self.settings.sidebar_organization == crate::settings::SidebarOrganization::ByDevice;
+        let show_label = !single_line && (search_query.is_some() || self.sidebar_project_labels());
+        let two_line = sidebar && !compact && (nested || show_label);
+        let avatar_size = if two_line {
+            14.0
+        } else if single_line {
+            SIDEBAR_SETTLED_AVATAR_SIZE
+        } else {
+            spaces::SIDEBAR_PROJECT_AVATAR_SIZE
+        };
+        let state = self.state.read(cx);
+        let chat = state.chats.iter().find(|chat| chat.id == id);
+        let pr_error = chat
+            .and_then(|chat| state.change_request_error_for_chat(chat))
+            .map(str::to_owned);
+        let pr_device = chat.map(|chat| chat.device_id.clone());
+        let diff_stat = chat
+            .filter(|_| sidebar)
+            .and_then(|chat| state.diff_stat_for_chat(chat));
+        let remote = chat
+            .is_some_and(|chat| state.local_device_id.as_deref() != Some(chat.device_id.as_str()));
         // A cloud task row (`cloud:<workspace>`) opens its conversation. Its
         // menu and hover pill only archive (through the account control
         // plane); the local-only actions (rename, pin, copy) don't apply.
@@ -9586,24 +9626,22 @@ impl Shell {
         let cloud_locked = cloud
             && (self.state.read(cx).cloud_organization_id().is_some()
                 || id[CLOUD_ROW_PREFIX.len()..].starts_with(cloud_sidebar::PENDING_LAUNCH_PREFIX));
-        // Cloud rows wear a small cloud beside their age, green only while
-        // the computer is up. An open conversation follows the computer's
-        // live state; otherwise the account list's row decides.
+        // The cloud mark is green only while the computer is up. Prefer
+        // an open conversation's live state, then the state in the account list.
         let cloud_online = id
             .strip_prefix(CLOUD_ROW_PREFIX)
             .is_some_and(|workspace| self.cloud_row_online(workspace, cx));
-        let corner_hovered = !preview
-            && !cloud_locked
-            && !(cloud && archived)
-            && self.chat_status_hover.as_deref() == Some(row_id.as_str());
+        let settlement_profile = (sidebar
+            && !preview
+            && !archived
+            && !id.strip_prefix(CLOUD_ROW_PREFIX).is_some_and(|workspace| {
+                workspace.starts_with(cloud_sidebar::PENDING_LAUNCH_PREFIX)
+            }))
+        .then(|| self.sidebar_settlement_profile(cloud, cx))
+        .flatten();
+        let row_hovered = !preview && self.chat_status_hover.as_deref() == Some(row_id.as_str());
+        let corner_hovered = row_hovered && !cloud_locked && !(cloud && archived);
         let archived_muted = archived && search_query.is_none() && !selected && !corner_hovered;
-        let project_icon = project_icon.map(|icon| {
-            div()
-                .flex_none()
-                .opacity(if archived_muted { 0.4 } else { 1.0 })
-                .child(icon)
-                .into_any_element()
-        });
         let content_id = id.clone();
         // Send-truth overrides: a send unadopted past the grace window is
         // FAILED (explicit, with the transcript's retry affordance); a send
@@ -9627,6 +9665,25 @@ impl Shell {
         } else {
             spaces::status_dot_color(status, theme)
         };
+        let has_settle_slot = settlement_profile.is_some();
+        let settle_on_hover = settlement_profile.filter(|_| row_hovered);
+        let settled = settle_on_hover.as_deref().is_some_and(|profile| {
+            let choices = self.sidebar_settlement_choices(Some(profile));
+            if let Some(chat) = chat {
+                Self::local_thread_is_settled(state, chat, choices)
+            } else {
+                choices.and_then(|choices| choices.get(&id)) == Some(&true)
+            }
+        });
+        let project_icon = (project_icon && search_query.is_none() && !nested)
+            .then(|| self.render_project_icon(&id, avatar_size, selected, cx));
+        let project_icon = project_icon.map(|icon| {
+            div()
+                .flex_none()
+                .opacity(if archived_muted { 0.4 } else { 1.0 })
+                .child(icon)
+                .into_any_element()
+        });
         let status_label: Option<&'static str> = if undelivered {
             Some("Failed")
         } else if queued {
@@ -9653,7 +9710,7 @@ impl Shell {
         };
         let queued = queued && !undelivered;
         let working = status == zuse_protocol::ChatIndicator::Working && !queued && !undelivered;
-        let compact_status = sidebar.then(|| {
+        let compact_status = (sidebar && !two_line).then(|| {
             let glyph = if working {
                 loaders::retro_loader(
                     format!("{row_id}-working"),
@@ -9883,8 +9940,7 @@ impl Shell {
         // The row a context menu was opened on stays lit while the menu is
         // up; the pointer leaving it for the menu must not drop the wash.
         let menu_target = !preview && self.chat_menu_targets(&id);
-        // Brightness is the read state: titles rest gray and an unseen finish
-        // stands out in full white, with no status mark beside it.
+        // Brightness records the read state independently of the status icon.
         let finished_unseen =
             status == zuse_protocol::ChatIndicator::Completed && !queued && !undelivered;
         let rest_text = if selected || (finished_unseen && !archived) {
@@ -9899,7 +9955,9 @@ impl Shell {
                 let row_id = row_id.clone();
                 move || row_id.clone()
             })
-            .h(px(if sidebar {
+            .h(px(if sidebar && single_line {
+                SIDEBAR_SETTLED_ROW_HEIGHT
+            } else if sidebar {
                 sidebar_row_height(compact, show_label, nested)
             } else {
                 chat_row_height(branch.is_some(), change_request.is_some())
@@ -9912,7 +9970,13 @@ impl Shell {
             } else {
                 SIDEBAR_ROW_RADIUS
             }))
-            .px(px(Theme::SPACE_SM))
+            .px(px(if sidebar && single_line {
+                SIDEBAR_SETTLED_PAD_X
+            } else if sidebar && !compact {
+                SIDEBAR_CARD_PAD_X
+            } else {
+                Theme::SPACE_SM
+            }))
             .when(sidebar, |el| el.justify_center())
             .when(!sidebar, |el| el.py(px(6.0)))
             .text_color(if menu_target {
@@ -10026,7 +10090,7 @@ impl Shell {
                             // The hit test is final by paint, so popovers
                             // over the row still occlude it.
                             let hovered = hitbox.is_hovered(window) && !cx.has_active_drag();
-                            if hovered == corner_hovered {
+                            if hovered == row_hovered {
                                 return;
                             }
                             window.defer(cx, move |_, cx| {
@@ -10050,37 +10114,176 @@ impl Shell {
         };
         let row = if sidebar {
             // Sidebar rows: one line under a project heading (branch glyph,
-            // title, size or age), or the one-list card (avatar; title + age;
-            // project + size). The trailing slot swaps to the archive control
-            // on hover and to the jump legend while the modifier is held.
-            let two_line = !(compact || nested || !show_label);
-            // Threads view cards also badge attention (input, failure,
-            // queued) on the avatar and set an unseen finish in bold, as the
-            // reference thread list does.
-            let avatar_badge = !nested && working && project_icon.is_some();
+            // title, size or age), or a card with title and age above its
+            // metadata. The trailing slot swaps to the archive control on
+            // hover and to the jump legend while the modifier is held.
+            let avatar_badge = !two_line && !nested && working && project_icon.is_some();
             let unread = two_line && finished_unseen;
-            let attention_badge = two_line
-                && !working
-                && !finished_unseen
-                && status_label.is_some()
-                && project_icon.is_some();
-            // Waiting on the user reads amber on the card, apart from the
-            // routine activity tones.
-            let attention_color =
-                if status == zuse_protocol::ChatIndicator::AwaitingInput && !queued && !undelivered
-                {
-                    theme.warning
-                } else {
-                    status_color
-                };
             let faint = theme.text_muted.opacity(0.6);
             let show_legend = compact_jump_label.is_some();
             let show_archive = corner_hovered && !show_legend && !preview;
+            // Cards keep their age in the corner and swap the cloud and
+            // agent marks for these actions; one-line rows use the corner.
+            let card_archive = show_archive && two_line;
+            let show_archive = show_archive && !two_line;
+            let settle_button = settle_on_hover.filter(|_| !show_legend).map(|profile| {
+                let id = id.clone();
+                let label = if settled { "Unsettle" } else { "Settle" };
+                div()
+                    .id(SharedString::from(format!("{row_id}-settle")))
+                    .debug_selector({
+                        let id = id.clone();
+                        move || format!("chat-settle-{id}")
+                    })
+                    .role(gpui::Role::Button)
+                    .aria_label(label)
+                    .tip_above(label)
+                    .cursor_pointer()
+                    .size(px(SIDEBAR_ROW_ACTION_SIZE))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.0))
+                    .hover(|style| style.bg(crate::theme::wash(0.10)))
+                    .child(
+                        icon(if settled {
+                            icons::RESTART
+                        } else {
+                            icons::CHECK
+                        })
+                        .size(px(13.0))
+                        .text_color(theme.text_muted),
+                    )
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.set_sidebar_thread_settled(profile.clone(), id.clone(), !settled, cx);
+                    }))
+            });
+            let card_archive_button = card_archive.then(|| {
+                let archive_id = id.clone();
+                div()
+                    .id(SharedString::from(format!("{row_id}-archive")))
+                    .debug_selector({
+                        let id = id.clone();
+                        move || format!("chat-archive-{id}")
+                    })
+                    .role(gpui::Role::Button)
+                    .aria_label(if archived { "Unarchive" } else { "Archive" })
+                    .tip_above(if archived {
+                        "Unarchive session"
+                    } else {
+                        ShortcutId::ArchiveSession.label()
+                    })
+                    .cursor_pointer()
+                    .size(px(SIDEBAR_ROW_ACTION_SIZE))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.0))
+                    .hover(|style| style.bg(crate::theme::wash(0.10)))
+                    .child(
+                        icon(if archived {
+                            icons::ARCHIVE_UP_MINIMALISTIC
+                        } else {
+                            icons::ARCHIVE_MINIMALISTIC
+                        })
+                        .size(px(13.0))
+                        .text_color(theme.text_muted),
+                    )
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.chat_hover_resync = true;
+                        this.set_chat_archived(archive_id.clone(), !archived, cx);
+                    }))
+            });
+            let (settle_button, card_settle_button) = if two_line {
+                (None, settle_button)
+            } else {
+                (settle_button, None)
+            };
+            let card_actions = (card_settle_button.is_some() || card_archive_button.is_some())
+                .then(|| {
+                    // On a card these take the age's place in the corner.
+                    div()
+                        .h(px(14.0))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(px(SIDEBAR_ROW_ACTION_GAP))
+                        .children(card_settle_button)
+                        .children(card_archive_button)
+                });
+            let hover_actions = card_actions.is_some();
             let text_hint = compact_jump_label
                 .as_ref()
                 .is_some_and(|label| label.chars().count() > 3);
             let archive_id = id.clone();
-            let trailing_info: AnyElement = if show_archive {
+            // Card metadata marks stay small and monochrome.
+            let cloud_mark_size = if two_line {
+                SIDEBAR_CARD_MARK_SIZE
+            } else {
+                SIDEBAR_CLOUD_MARK_SIZE
+            };
+            let cloud_mark = (cloud && !device_row).then(|| {
+                div()
+                    .id(SharedString::from(format!("{row_id}-cloud")))
+                    .debug_selector({
+                        let id = id.clone();
+                        move || format!("chat-cloud-mark-{id}")
+                    })
+                    .size(px(cloud_mark_size))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .aria_label("Runs on a cloud computer")
+                    .child(
+                        icon(icons::DITHER_CLOUD)
+                            .size(px(cloud_mark_size))
+                            .text_color(cloud_conversation::header_status_color(
+                                cloud_online,
+                                theme,
+                            )),
+                    )
+            });
+            // At rest a one-line row keeps its cloud beside the age; on hover
+            // it steps left of the row actions.
+            let mut corner_cloud = None;
+            let mut cloud_mark = cloud_mark;
+            if !two_line && settle_button.is_none() && !show_archive {
+                corner_cloud = cloud_mark.take();
+                // Compact rows under a project heading name where they run
+                // beside the age: the cloud, or this computer.
+                if nested && !cloud && !device_row {
+                    corner_cloud = Some(
+                        div()
+                            .id(SharedString::from(format!("{row_id}-computer")))
+                            .debug_selector({
+                                let id = id.clone();
+                                move || format!("chat-computer-mark-{id}")
+                            })
+                            .size(px(SIDEBAR_CLOUD_MARK_SIZE))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .aria_label("Runs on a computer")
+                            .child(
+                                icon(icons::DITHER_MONITOR)
+                                    .size(px(SIDEBAR_CLOUD_MARK_SIZE))
+                                    .text_color(faint),
+                            ),
+                    );
+                }
+            }
+            let mut card_actions = card_actions;
+            let trailing_info: AnyElement = if let Some(actions) = card_actions.take() {
+                actions.into_any_element()
+            } else if show_archive {
                 div()
                     .id(SharedString::from(format!("{row_id}-archive")))
                     .debug_selector({
@@ -10103,37 +10306,54 @@ impl Shell {
                 (show_legend, two_line, diff_stat)
             {
                 sidebar_diff_stat(additions, deletions, 1.0, theme).into_any_element()
-            } else if let (false, true, true, Some(label)) =
-                (show_legend, two_line, attention_badge, status_label)
-            {
-                // A card waiting on the user names why in place of its age.
-                div()
-                    .whitespace_nowrap()
-                    .text_size(crate::typography::text_xs())
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(attention_color)
-                    .child(if label == "Input" {
-                        "Needs input"
-                    } else {
-                        label
-                    })
-                    .into_any_element()
-            } else {
-                let label: SharedString = match compact_jump_label.clone() {
-                    Some(label) => label,
-                    None if nested && time_ago.as_ref() != "now" => {
-                        format!("{time_ago} ago").into()
-                    }
-                    None => time_ago.clone(),
+            } else if let (false, true, Some(label)) = (show_legend, two_line, status_label) {
+                let mark: AnyElement = match label {
+                    "Working" => loaders::working_mark(
+                        format!("{row_id}-working-corner"),
+                        14.0,
+                        theme.accent,
+                    )
+                    .into_any_element(),
+                    "Done" => icon(icons::CHECK_CIRCLE)
+                        .size(px(14.0))
+                        .text_color(theme.success)
+                        .into_any_element(),
+                    _ => attention_mark(13.0),
                 };
                 div()
-                    .whitespace_nowrap()
-                    .text_right()
-                    .text_size(crate::typography::text_xs())
-                    .text_color(faint)
-                    .child(label)
+                    .id(SharedString::from(format!("{row_id}-status")))
+                    .debug_selector({
+                        let id = id.clone();
+                        move || format!("chat-status-{id}")
+                    })
+                    .aria_label(label)
+                    .tip_above(label)
+                    .flex_none()
+                    .child(mark)
+                    .into_any_element()
+            } else {
+                let label: SharedString = compact_jump_label
+                    .clone()
+                    .unwrap_or_else(|| time_ago.clone());
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .gap(px(4.0))
+                    .children(corner_cloud.take())
+                    .child(
+                        div()
+                            .whitespace_nowrap()
+                            .text_right()
+                            .text_size(crate::typography::text_xs())
+                            .text_color(faint)
+                            .child(label),
+                    )
                     .into_any_element()
             };
+            // Only the time slot can hold the cloud; anywhere else it stays
+            // beside the title. A computer mark appears only beside the age.
+            let cloud_mark = cloud_mark.or(corner_cloud.filter(|_| cloud));
             let trailing = div()
                 .id(SharedString::from(format!("{row_id}-corner")))
                 .debug_selector({
@@ -10144,7 +10364,16 @@ impl Shell {
                     el.min_w(crate::typography::ui_rems(COMPACT_JUMP_HINT_WIDTH))
                 })
                 // Holds "17m" so swapping in the archive glyph never moves it.
-                .when(!text_hint, |el| el.min_w(px(30.0)))
+                .when(!text_hint, |el| {
+                    // Row actions hug each other; only the age needs a column.
+                    el.min_w(px(if hover_actions || show_archive {
+                        0.0
+                    } else if cloud && !has_settle_slot {
+                        22.0
+                    } else {
+                        30.0
+                    }))
+                })
                 .h(px(14.0))
                 .flex_none()
                 .flex()
@@ -10153,7 +10382,7 @@ impl Shell {
                 .aria_label(if show_archive {
                     if archived { "Unarchive" } else { "Archive" }
                 } else {
-                    "Session time"
+                    "Thread status or age"
                 })
                 .when(show_archive, |el| {
                     el.cursor_pointer()
@@ -10173,19 +10402,18 @@ impl Shell {
             // Activity (working, input, done, failed) takes the lead glyph's
             // place; idle rows under a project wear their branch, tinted by
             // the pull request's state.
-            // A working card wears its spinner as a badge on the avatar (the
-            // title stays clean); other activity leads the title.
+            // Two-line cards show their only activity mark in the corner.
             let status_mark = status_label
                 .filter(|_| !finished_unseen)
                 .and(compact_status);
-            let (status_glyph, title_glyph) = if nested {
-                (status_mark, None)
-            } else if avatar_badge || attention_badge || unread {
+            let (status_glyph, title_glyph) = if two_line || avatar_badge {
                 (None, None)
+            } else if nested {
+                (status_mark, None)
             } else {
                 (None, status_mark)
             };
-            let lead: Option<AnyElement> = if nested {
+            let lead: Option<AnyElement> = if nested && !two_line {
                 Some(
                     div()
                         .size(px(20.0))
@@ -10217,32 +10445,6 @@ impl Shell {
                 None
             };
             let project_icon = project_icon.map(|icon| {
-                if attention_badge {
-                    return div()
-                        .relative()
-                        .flex_none()
-                        .child(icon)
-                        .child(
-                            div()
-                                .id(SharedString::from(format!("{row_id}-attention-badge")))
-                                .debug_selector({
-                                    let id = id.clone();
-                                    move || format!("chat-status-{id}")
-                                })
-                                .aria_label(status_label.unwrap_or("Idle"))
-                                .absolute()
-                                .right(px(-4.0))
-                                .bottom(px(-4.0))
-                                .size(px(13.0))
-                                .rounded_full()
-                                .bg(theme.bg)
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(attention_mark(10.0)),
-                        )
-                        .into_any_element();
-                }
                 if !avatar_badge {
                     return icon;
                 }
@@ -10279,10 +10481,12 @@ impl Shell {
                 .then(|| {
                     project_icon.or_else(|| {
                         harness
+                            .clone()
+                            .filter(|_| !cloud && !two_line)
                             .map(crate::pickers::harness_brand_icon)
                             .map(|(path, tint)| {
                                 div()
-                                    .size(px(spaces::SIDEBAR_PROJECT_AVATAR_SIZE))
+                                    .size(px(avatar_size))
                                     .flex_none()
                                     .flex()
                                     .items_center()
@@ -10303,43 +10507,60 @@ impl Shell {
                     input,
                     theme,
                 ),
-                None => sidebar_faded_label(
+                None => sidebar_label(
                     format!("chat-title-{content_id}").into(),
                     true,
                     div()
-                        .text_size(crate::typography::text_sm())
-                        .line_height(crate::typography::ui_rems(18.0))
+                        .text_size(if two_line {
+                            crate::typography::text_md()
+                        } else {
+                            crate::typography::text_sm()
+                        })
+                        .line_height(crate::typography::ui_rems(if two_line {
+                            20.0
+                        } else {
+                            18.0
+                        }))
                         .when(unread, |el| {
                             el.font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(theme.text_strong)
                         })
                         .child(title),
+                    (!preview).then_some(row_hovered),
                 )
                 .into_any_element(),
             };
-            // Stays put while the trailing slot swaps to Archive on hover.
-            let cloud_mark = cloud.then(|| {
+            let (title_avatar, repo_avatar) = if two_line {
+                (None, avatar)
+            } else {
+                (avatar, None)
+            };
+            // A card names where it runs: the cloud, or this computer.
+            let computer_mark = (two_line && !cloud && !device_row).then(|| {
                 div()
-                    .id(SharedString::from(format!("{row_id}-cloud")))
+                    .id(SharedString::from(format!("{row_id}-computer")))
                     .debug_selector({
                         let id = id.clone();
-                        move || format!("chat-cloud-mark-{id}")
+                        move || format!("chat-computer-mark-{id}")
                     })
-                    .size(px(SIDEBAR_CLOUD_MARK_SIZE))
+                    .size(px(SIDEBAR_CARD_MARK_SIZE))
                     .flex_none()
                     .flex()
                     .items_center()
                     .justify_center()
-                    .aria_label("Runs on a cloud computer")
+                    .aria_label("Runs on a computer")
+                    .tip_above("Computer")
                     .child(
-                        icon(icons::DITHER_CLOUD)
-                            .size(px(SIDEBAR_CLOUD_MARK_SIZE))
-                            .text_color(cloud_conversation::header_status_color(
-                                cloud_online,
-                                theme,
-                            )),
+                        icon(icons::DITHER_MONITOR)
+                            .size(px(SIDEBAR_CARD_MARK_SIZE))
+                            .text_color(faint),
                     )
             });
+            let (title_cloud, meta_cloud) = if two_line {
+                (None, cloud_mark.or(computer_mark))
+            } else {
+                (cloud_mark, None)
+            };
             let title_line = div()
                 .w_full()
                 .min_w_0()
@@ -10349,15 +10570,27 @@ impl Shell {
                 .gap(px(6.0))
                 .children(title_glyph)
                 .child(title_el)
-                .children(cloud_mark)
-                .child(trailing);
+                .child(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(px(if settle_button.is_some() {
+                            SIDEBAR_ROW_ACTION_GAP
+                        } else {
+                            3.0
+                        }))
+                        .children(title_cloud)
+                        .children(settle_button)
+                        .child(trailing),
+                );
             let body = if two_line {
-                // Line 2: project, then the pull request (state glyph,
-                // number, state word), then the diff stat at the far right.
+                // Keep the PR and its diff counts together, with the
+                // computer and agent marks right-aligned.
                 let meta = div()
                     .w_full()
                     .min_w_0()
-                    .h(px(14.0))
+                    .h(px(16.0))
                     .flex()
                     .flex_row()
                     .items_center()
@@ -10365,11 +10598,19 @@ impl Shell {
                     .text_size(crate::typography::text_xs())
                     .line_height(px(14.0))
                     .text_color(faint)
-                    .child(sidebar_faded_label(
-                        format!("chat-device-{content_id}").into(),
-                        false,
-                        div().child(space_name),
-                    ))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .children(repo_avatar)
+                            .child(sidebar_faded_label(
+                                format!("chat-device-{content_id}").into(),
+                                false,
+                                div().child(space_name),
+                            )),
+                    )
                     .children(change_request.clone().map(|summary| {
                         crate::change_requests::pull_request_state_inline(
                             format!("{row_id}-pr").into(),
@@ -10380,11 +10621,42 @@ impl Shell {
                             theme,
                         )
                     }))
-                    .child(div().flex_1())
                     .children(diff_stat.map(|(additions, deletions)| {
                         sidebar_diff_stat(additions, deletions, 0.75, theme)
-                            .text_size(crate::typography::text_xs())
-                    }));
+                    }))
+                    // Hover clears the marks so the row actions stand alone.
+                    .when(
+                        !row_hovered && (harness.is_some() || meta_cloud.is_some()),
+                        |el| {
+                            el.child(
+                                div()
+                                    .ml_auto()
+                                    .flex_none()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.0))
+                                    .children(meta_cloud)
+                                    .children(harness.map(|harness| {
+                                        let name = crate::pickers::harness_display_name(harness);
+                                        let (path, _) = crate::pickers::harness_brand_icon(harness);
+                                        div()
+                                            .id(SharedString::from(format!("{row_id}-agent")))
+                                            .debug_selector({
+                                                let id = id.clone();
+                                                move || format!("chat-agent-{id}")
+                                            })
+                                            .aria_label(name)
+                                            .tip_above(name)
+                                            .flex_none()
+                                            .child(
+                                                icon(path)
+                                                    .size(px(SIDEBAR_CARD_MARK_SIZE))
+                                                    .text_color(faint),
+                                            )
+                                    })),
+                            )
+                        },
+                    );
                 div()
                     .flex_1()
                     .min_w_0()
@@ -10407,9 +10679,9 @@ impl Shell {
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap(px(if two_line { 10.0 } else { 8.0 }))
+                    .gap(px(8.0))
                     .children(lead)
-                    .children(avatar)
+                    .children(title_avatar)
                     .child(body),
             )
         } else {
@@ -10859,7 +11131,7 @@ impl Shell {
         &mut self,
         theme: &Theme,
         cx: &mut Context<Self>,
-    ) -> (AnyElement, Option<AnyElement>) {
+    ) -> SidebarSessionItems {
         if self.sidebar_session_transfer.as_ref().is_some_and(|drag| {
             !cx.has_active_drag() || !self.sidebar_session_transfer_is_valid(&drag.payload, cx)
         }) {
@@ -10882,6 +11154,7 @@ impl Shell {
         let moving_row = session_rows
             .moving_row
             .map(|(row, height)| self.render_moving_sidebar_session(row, height, theme));
+        let settled_section = session_rows.settled_section;
         let pinned_count = session_rows.pinned_count;
         let custom_count = session_rows.custom_count;
         let regular_start = pinned_count + custom_count;
@@ -11136,14 +11409,23 @@ impl Shell {
                 .into_any_element()
         };
 
-        (active_list, moving_row)
+        SidebarSessionItems {
+            list: active_list,
+            moving_row,
+            settled_section,
+        }
     }
 
     fn render_chat_sidebar(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         if !self.remote_workspaces.is_empty() {
             return self.render_multi_computer_sidebar(theme, cx);
         }
-        let (active_list, moving_row) = self.render_sidebar_session_items(theme, cx);
+        let SidebarSessionItems {
+            list: active_list,
+            moving_row,
+            settled_section,
+        } = self.render_sidebar_session_items(theme, cx);
+        let settled_fills = self.settled_open && settled_section.is_some();
         let filter_row = self.render_spaces_filter(theme, cx);
 
         // The (filtered) Sessions list scrolls inside an EdgeFade scope —
@@ -11161,7 +11443,10 @@ impl Shell {
             true,
             div()
                 .relative()
-                .flex_1()
+                // With Settled open, the lists keep their own height and
+                // hand any spare space below to it.
+                .when(settled_fills, |el| el.flex_initial().flex().flex_col())
+                .when(!settled_fills, |el| el.flex_1())
                 .min_h_0()
                 .child(crate::overscroll::overscroll(
                     "sidebar-overscroll",
@@ -11169,7 +11454,11 @@ impl Shell {
                     div()
                         .id("sidebar-lists")
                         .relative()
-                        .size_full()
+                        .w_full()
+                        // While Settled is open the list is sized by its
+                        // rows and shrinks (scrolling) when they overflow.
+                        .when(settled_fills, |el| el.flex_initial().min_h_0())
+                        .when(!settled_fills, |el| el.h_full())
                         .overflow_y_scroll()
                         .track_scroll(&self.sidebar_scroll)
                         .on_drag_move::<SidebarSessionDrag>(cx.listener(
@@ -11229,6 +11518,8 @@ impl Shell {
             .children(self.render_cloud_sidebar_status(theme, cx))
             .child(filter_row)
             .child(sidebar_lists)
+            // Settled sits below the scrolling lists and scrolls on its own.
+            .children(settled_section)
             // Global connection pill (durable-by-design UI truth): appears
             // whenever the edge posture is degraded; hidden while healthy —
             // appearing IS the signal.

@@ -1602,7 +1602,30 @@ async fn diff_sync_publishes_without_rewriting_chat_branch() {
         .expect("chat row");
     core.diff_sync.reconcile_now().await;
 
-    // Initial snapshot lands after the debounce; poll the watch.
+    let client = zuse_rpc::memory_client(core.rpc_service());
+    let mut summaries = client
+        .subscribe_checked(
+            methods::WATCH_CHECKOUT_DIFFS,
+            serde_json::json!({"summaryOnly": true}),
+        )
+        .await
+        .expect("summary watch");
+    let summary = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let frame = summaries.recv().await.expect("summary frame");
+            let summaries: Vec<zuse_protocol::CheckoutDiff> =
+                serde_json::from_value(frame).expect("compatible diff format");
+            if let Some(summary) = summaries.into_iter().next() {
+                break summary;
+            }
+        }
+    })
+    .await
+    .expect("summary published before timeout");
+    assert!(summary.patch.is_empty());
+    assert_eq!((summary.additions, summary.deletions), (1, 0));
+
+    // The Changes pane still receives the complete patch.
     let mut diffs_rx = core.diff_sync.watch_diffs();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     let diff = loop {
@@ -1621,6 +1644,9 @@ async fn diff_sync_publishes_without_rewriting_chat_branch() {
     assert!(diff.patch.contains("+edited"));
     assert!(!diff.checkout_id.is_empty());
     assert!(!diff.checksum.is_empty());
+    assert_eq!(summary.checkout_id, diff.checkout_id);
+    assert_eq!(summary.files, diff.files);
+    assert!(summary.updated_at <= diff.updated_at);
 
     // Branch identity is conversation-owned: the checkout watcher must NOT
     // relabel chat rows with the live branch — only a dispatch stamps it.

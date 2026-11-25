@@ -962,6 +962,17 @@ pub enum SidebarSort {
     Created,
 }
 
+/// How chats under a project heading draw in the Projects view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum SidebarDensity {
+    /// One-line rows.
+    Compact,
+    /// Two-line cards: title and age, then the branch.
+    #[default]
+    Detailed,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowGeometry {
@@ -1124,6 +1135,8 @@ pub struct UiSettings {
     /// session title.
     pub sidebar_show_project_label: bool,
     pub sidebar_compact: bool,
+    /// Row density under project headings in the Projects view.
+    pub sidebar_project_density: SidebarDensity,
     pub sidebar_show_project_icon: bool,
     pub sidebar_show_harness: bool,
     pub sidebar_show_branch: bool,
@@ -1162,6 +1175,10 @@ pub struct UiSettings {
     /// Device-local pins for local profiles; synced profiles use registry pins.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub sidebar_pinned_session_ids_by_profile: HashMap<String, Vec<String>>,
+    /// Device-local thread settlement choices. `false` keeps a reopened thread
+    /// active even if its linked pull request is already merged.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub sidebar_settlement_by_profile: HashMap<String, HashMap<String, bool>>,
     /// Legacy: per-space tab order, from when tabs were the selected space's
     /// non-archived sessions. Kept for file compatibility; no longer read.
     #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
@@ -1348,6 +1365,7 @@ impl Default for UiSettings {
             sidebar_sort: SidebarSort::LastUpdated,
             sidebar_show_project_label: true,
             sidebar_compact: true,
+            sidebar_project_density: SidebarDensity::Detailed,
             sidebar_show_project_icon: true,
             sidebar_show_harness: true,
             sidebar_show_branch: true,
@@ -1361,6 +1379,7 @@ impl Default for UiSettings {
             open_tabs: None,
             space_filter: None,
             sidebar_pinned_session_ids_by_profile: HashMap::new(),
+            sidebar_settlement_by_profile: HashMap::new(),
             sidebar_sections_by_profile: HashMap::new(),
             tab_order: std::collections::HashMap::new(),
             space_order: Vec::new(),
@@ -2263,6 +2282,7 @@ impl UiSettings {
             sidebar_sort,
             sidebar_show_project_label,
             sidebar_compact,
+            sidebar_project_density,
             sidebar_show_project_icon,
             sidebar_show_harness,
             sidebar_show_branch,
@@ -2277,6 +2297,7 @@ impl UiSettings {
             space_filter,
             sidebar_sections_by_profile,
             sidebar_pinned_session_ids_by_profile,
+            sidebar_settlement_by_profile,
             tab_order,
             space_order,
             sound_enabled,
@@ -3260,6 +3281,7 @@ mod tests {
             sidebar_organization: SidebarOrganization::ByDevice,
             sidebar_sort: SidebarSort::Created,
             sidebar_compact: true,
+            sidebar_project_density: SidebarDensity::Compact,
             sidebar_show_project_icon: false,
             sidebar_show_project_label: false,
             sidebar_show_harness: false,
@@ -3287,6 +3309,13 @@ mod tests {
                     vec!["synced-1".to_string()],
                 ),
             ]),
+            sidebar_settlement_by_profile: HashMap::from([(
+                "local".into(),
+                HashMap::from([
+                    ("settled-thread".into(), true),
+                    ("reopened-thread".into(), false),
+                ]),
+            )]),
             tab_order: std::collections::HashMap::from([(
                 "space-1".to_string(),
                 vec!["b".to_string(), "a".to_string()],

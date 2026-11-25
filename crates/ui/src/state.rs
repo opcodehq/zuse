@@ -1144,7 +1144,6 @@ pub struct AppState {
     change_request_tasks: HashMap<ChangeRequestWatchKey, Task<()>>,
     diff_stat_tasks: HashMap<Option<String>, Task<()>>,
     queue_task: Option<Task<()>>,
-    change_requests_visible: bool,
     /// SUBAGENT transcripts keyed by subagent doc id (the right pane's
     /// subagent tabs read these). Independent of `selected_chat`: a tab's
     /// feed must survive chat switches — the tab itself is what scopes it.
@@ -1300,7 +1299,6 @@ impl AppState {
             change_request_tasks: HashMap::new(),
             diff_stat_tasks: HashMap::new(),
             queue_task: None,
-            change_requests_visible: true,
             sub_transcripts: HashMap::new(),
             sub_history: HashMap::new(),
             sub_watch_tasks: HashMap::new(),
@@ -4060,13 +4058,11 @@ impl AppState {
             self.change_request_tasks.clear();
             return;
         };
-        let targets = if self.change_requests_visible {
-            desired_watch_targets(&self.chats, &self.spaces, |device| {
-                !self.change_requests.is_supported(device)
-            })
-        } else {
-            HashSet::new()
-        };
+        // Watch even while the sidebar hides pull request badges: a merge
+        // is what settles a thread. The badge is hidden where rows render.
+        let targets = desired_watch_targets(&self.chats, &self.spaces, |device| {
+            !self.change_requests.is_supported(device)
+        });
 
         self.change_request_tasks
             .retain(|target, _| targets.contains(target));
@@ -4084,13 +4080,6 @@ impl AppState {
                 local_device_id.clone(),
             );
             self.change_request_tasks.insert(target, task);
-        }
-    }
-
-    pub fn set_change_requests_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
-        if self.change_requests_visible != visible {
-            self.change_requests_visible = visible;
-            self.reconcile_change_request_watches(cx);
         }
     }
 
@@ -8350,9 +8339,9 @@ pub struct CheckoutDiffStat {
     pub files: u32,
 }
 
-#[cfg(feature = "project-palette-fixture")]
+#[cfg(any(test, feature = "project-palette-fixture"))]
 impl AppState {
-    /// Seed provider metadata for the isolated native sidebar review fixture.
+    /// Seed provider metadata for native sidebar fixtures.
     pub fn fixture_sidebar_change_request(
         &mut self,
         snapshot: zuse_protocol::CheckoutChangeRequestStatus,

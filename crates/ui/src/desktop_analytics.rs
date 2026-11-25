@@ -99,6 +99,7 @@ fn changes(before: &UiSettings, after: &UiSettings) -> Vec<Event> {
         sidebar_organization,
         sidebar_sort,
         sidebar_compact,
+        sidebar_project_density,
         sidebar_show_project_label,
         sidebar_show_project_icon,
         sidebar_show_harness,
