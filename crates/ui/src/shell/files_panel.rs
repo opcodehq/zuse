@@ -543,17 +543,34 @@ mod tests {
                 assert_eq!(shell.files["first"].entity_id(), explorer);
                 assert_eq!(shell.right_surface_rows(cx).len(), 1);
                 // Files open in the main area, beside the conversation.
+                let tab_order = |shell: &Shell, cx: &App| {
+                    shell
+                        .main_tab_rows(cx)
+                        .into_iter()
+                        .map(|row| row.tab)
+                        .collect::<Vec<_>>()
+                };
                 shell.add_file_surface("src/main.rs".into(), window, cx);
+                let first = shell.active_main_tab(cx).unwrap();
+                shell.add_file_surface("src/lib.rs".into(), window, cx);
+                let second = shell.active_main_tab(cx).unwrap();
+                assert_eq!(tab_order(shell, cx), [second, first]);
+                shell.add_file_surface("README.md".into(), window, cx);
+                let third = shell.active_main_tab(cx).unwrap();
+                assert_eq!(tab_order(shell, cx), [third, second, first]);
+                shell.activate_main_tab(Some(first), cx);
+                assert_eq!(tab_order(shell, cx), [third, second, first]);
                 shell.add_file_surface("src/main.rs".into(), window, cx);
-                assert_eq!(shell.file_surfaces.len(), 1);
+                assert_eq!(shell.active_main_tab(cx), Some(first));
+                assert_eq!(tab_order(shell, cx), [first, third, second]);
+                assert_eq!(shell.file_surfaces.len(), 3);
                 assert_eq!(shell.right_surface_rows(cx).len(), 1);
                 assert!(shell.active_main_file(cx).is_some());
-                assert_eq!(shell.main_tab_rows(cx).len(), 1);
                 assert!(shell.files_tab_shown(cx));
                 // The shortcut hides the pane while it shows the tree.
                 shell.toggle_files_panel(window, cx);
                 assert!(!shell.right_pane_open(cx));
-                assert_eq!(shell.file_surfaces.len(), 1);
+                assert_eq!(tab_order(shell, cx), [first, third, second]);
                 assert!(shell.pending_file_closes.is_empty());
                 shell.active_chat = "second".into();
                 assert!(!shell.files_tab_shown(cx));

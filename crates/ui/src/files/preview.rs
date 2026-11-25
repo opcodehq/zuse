@@ -2419,7 +2419,7 @@ impl FilesSurface {
             .flex_1()
             .truncate()
             .font_family(theme.font_sans.clone())
-            .text_size(px(11.0))
+            .text_size(crate::typography::text_sm())
             .text_color(theme.text_muted)
             .child(path.to_string());
         crumbs = crumbs

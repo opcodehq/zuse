@@ -596,7 +596,7 @@ impl Shell {
             .into_iter()
             .map(|index| {
                 let view = &self.cloud_tabs.views[index];
-                let title = view.read(cx).title.clone();
+                let title = view.read(cx).tab_title(cx);
                 let harness = {
                     let view = view.read(cx);
                     view.harness(
@@ -1300,6 +1300,87 @@ mod tests {
             .update(cx, |_, window, _| window.remove_window())
             .unwrap();
     }
+    #[gpui::test]
+    fn new_cloud_tab_uses_first_prompt_then_live_title(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        let window = draft_shell(cx, dir.path());
+        let shell = window.entity(cx).unwrap();
+        let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
+            std::sync::Arc::new(Pending),
+        ));
+        let (first, added) = shell.update(cx, |shell, cx| {
+            shell.open_cloud_conversation(
+                crate::state::CloudTarget {
+                    controller: controller.clone(),
+                    subject: "owner".into(),
+                    organization: None,
+                    workspace: "task1".into(),
+                    initial_session: "session1".into(),
+                },
+                json!({"workspaceId":"task1","initialSessionId":"session1","title":"First tab"}),
+                Value::Null,
+                cx,
+            );
+            let first = shell.cloud_conversation.clone().unwrap();
+            shell.open_cloud_conversation_tab(&first, "session2".into(), true, cx);
+            (first, shell.cloud_conversation.clone().unwrap())
+        });
+        let state = added.read_with(cx, |view, cx| {
+            assert_eq!(view.tab_title(cx), "New chat");
+            view.state.clone()
+        });
+        let row = |id: &str, title: Option<&str>| {
+            serde_json::from_value::<zuse_protocol::Chat>(json!({
+                "id": id, "title": title, "deviceId": "cloud:task1", "archived": false,
+                "createdAt": "2026-11-24T00:00:00Z",
+            }))
+            .unwrap()
+        };
+        let notifications = std::rc::Rc::new(std::cell::Cell::new(0));
+        let _subscription = cx.update(|cx| {
+            let notifications = notifications.clone();
+            cx.observe(&shell, move |_, _| {
+                notifications.set(notifications.get() + 1)
+            })
+        });
+        state.update(cx, |state, cx| {
+            state.set_test_engine(controller);
+            state.apply_chats(vec![
+                row("session1", Some("First tab")),
+                row("session2", None),
+            ]);
+            state.push_echo("session2", serde_json::from_value(json!({
+                "id": "prompt", "role": "user", "createdAt": 1, "deviceId": "cloud:task1",
+                "parts": [{"id":"text", "kind":"text", "text":"Improve the sidebar\nKeep the buttons aligned"}],
+            })).unwrap());
+            cx.notify();
+        });
+        added.read_with(cx, |view, cx| {
+            assert_eq!(view.tab_title(cx), "Improve the sidebar")
+        });
+        let after_prompt = notifications.get();
+        state.update(cx, |state, cx| {
+            state.apply_chats(vec![
+                row("session1", Some("First tab")),
+                row("session2", Some("Sidebar polish")),
+            ]);
+            cx.notify();
+        });
+        added.read_with(cx, |view, cx| {
+            assert_eq!(view.tab_title(cx), "Sidebar polish")
+        });
+        first.read_with(cx, |view, cx| assert_eq!(view.tab_title(cx), "First tab"));
+        assert!(
+            notifications.get() > after_prompt,
+            "the shell redraws when the live title arrives"
+        );
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+    }
+
     #[gpui::test]
     fn each_cloud_chat_shows_its_own_tabs_and_new_thread_leaves_them(cx: &mut TestAppContext) {
         let runtime = tokio::runtime::Runtime::new().unwrap();

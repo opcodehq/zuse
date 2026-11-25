@@ -57,6 +57,12 @@ pub(super) fn resolve_cloud_harness(
         .or(remembered)
 }
 
+fn prompt_tab_title(prompt: &str) -> Option<String> {
+    let display = zuse_protocol::file_mentions::mention_display_text(prompt);
+    let first_line = display.trim().lines().next()?;
+    Some(first_line.chars().take(60).collect())
+}
+
 /// Whether the agent has replied (with text) after the latest user message.
 fn latest_message_answered(transcript: &[zuse_model::SessionMessageEntry]) -> bool {
     let Some(last_user) = transcript
@@ -91,6 +97,7 @@ pub(super) struct CloudConversation {
     admissions: Value,
     pub(super) first_message: Option<String>,
     pub(super) title: String,
+    title_is_placeholder: bool,
     error: Option<String>,
     authorized: bool,
     access_revoked: bool,
@@ -247,6 +254,12 @@ impl CloudConversation {
             }),
             cx.observe(&composer, |_: &mut Self, _, cx| cx.notify()),
             cx.observe(&state, |this: &mut Self, state, cx| {
+                if !this.access_revoked
+                    && let Some(title) = this.live_tab_title(state.read(cx))
+                {
+                    this.title = zuse_protocol::file_mentions::mention_display_text(title);
+                    this.title_is_placeholder = false;
+                }
                 // A file tab opened while the computer sleeps asks for it.
                 let requests = state.read(cx).cloud_wake_requests;
                 if requests != this.answered_wake_requests {
@@ -273,10 +286,10 @@ impl CloudConversation {
         let title = config["title"]
             .as_str()
             .filter(|s| !s.trim().is_empty())
-            .map(str::to_owned)
-            .or_else(|| first_message.clone())
-            .map(|title| zuse_protocol::file_mentions::mention_display_text(&title))
-            .unwrap_or_else(|| if added { "New chat" } else { "Cloud chat" }.into());
+            .map(zuse_protocol::file_mentions::mention_display_text)
+            .or_else(|| first_message.as_deref().and_then(prompt_tab_title));
+        let title_is_placeholder = title.is_none();
+        let title = title.unwrap_or_else(|| if added { "New chat" } else { "Cloud chat" }.into());
         let initial_metadata = config.clone();
         let learned_harness = cloud_harness(&config);
         let remembered_harness = crate::settings::remembered_cloud_agent(&target.workspace, cx);
@@ -297,6 +310,7 @@ impl CloudConversation {
             admissions: Value::Null,
             first_message,
             title,
+            title_is_placeholder,
             error: None,
             authorized: false,
             access_revoked: false,
@@ -796,6 +810,40 @@ impl CloudConversation {
             self.registered.push(chat);
         }
     }
+
+    fn live_tab_title<'a>(&self, state: &'a AppState) -> Option<&'a str> {
+        if !state.chats_synced || state.engine().is_none() {
+            return None;
+        }
+        state
+            .chats
+            .iter()
+            .find(|chat| chat.id == self.target.initial_session)?
+            .title
+            .as_deref()
+            .filter(|title| !title.trim().is_empty())
+    }
+
+    pub(super) fn tab_title(&self, cx: &App) -> String {
+        if self.title_is_placeholder && !self.access_revoked {
+            let state = self.state.read(cx);
+            if let Some(title) = state
+                .transcript
+                .iter()
+                .chain(state.pending_echoes())
+                .filter(|entry| entry.role == zuse_model::MessageRole::User)
+                .flat_map(|entry| &entry.parts)
+                .find_map(|part| match part {
+                    zuse_model::MessagePart::Text { text, .. } => prompt_tab_title(text),
+                    _ => None,
+                })
+            {
+                return title;
+            }
+        }
+        self.title.clone()
+    }
+
     fn params(&self) -> Value {
         json!({"workspaceId":self.target.workspace,"sessionId":self.target.initial_session,
             "expectedAccountId":self.target.subject,"expectedOrganizationId":self.target.organization})
@@ -1015,13 +1063,14 @@ impl CloudConversation {
             self.state
                 .update(cx, |state, cx| state.prepare_runtime_replacement(cx));
         }
-        if let Some(title) = head
+        let saved_title = head
             .chat
             .title
-            .as_ref()
-            .filter(|title| !title.trim().is_empty())
-        {
+            .as_deref()
+            .filter(|title| !title.trim().is_empty());
+        if let Some(title) = self.live_tab_title(self.state.read(cx)).or(saved_title) {
             self.title = zuse_protocol::file_mentions::mention_display_text(title);
+            self.title_is_placeholder = false;
         }
         self.first_message = None;
         self.error = None;

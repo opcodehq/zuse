@@ -405,25 +405,6 @@ impl FilesSurface {
         theme: &crate::theme::Theme,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        let projectless_root = {
-            let state = self.state.read(cx);
-            state
-                .chats
-                .iter()
-                .find(|chat| chat.id == self.chat_id && chat.space_id.is_none())
-                .map(|chat| {
-                    let device = state
-                        .device_name(&chat.device_id)
-                        .unwrap_or(&chat.device_id);
-                    // A projectless chat's folder is an implementation detail.
-                    match chat.cwd.as_deref() {
-                        Some(cwd) if !zuse_protocol::projectless::is_projectless_cwd(Some(cwd)) => {
-                            format!("Files in {cwd} · {device}")
-                        }
-                        _ => format!("Files · {device}"),
-                    }
-                })
-        };
         let phase = self.tree.node("").map(|root| root.load.clone());
         let content = if !self.search_state.query.is_empty() {
             self.render_search_results(cx)
@@ -478,19 +459,6 @@ impl FilesSurface {
             .min_w_0()
             .flex()
             .flex_col()
-            .when_some(projectless_root, |element, label| {
-                element.child(
-                    div()
-                        .id("files-projectless-root")
-                        .flex_none()
-                        .px(px(10.0))
-                        .py(px(5.0))
-                        .text_size(px(10.0))
-                        .text_color(theme.text_faint)
-                        .truncate()
-                        .child(SharedString::from(label)),
-                )
-            })
             .when_some(self.git_status_notice(cx), |element, notice| {
                 element.child(
                     div()
@@ -1334,6 +1302,28 @@ impl FilesSurface {
     /// The explorer's header (reference file tree): a FILES label and three
     /// 24px buttons — new file, new folder, search. Search opens a row with
     /// the filter field and the hidden-files toggle.
+    fn explorer_location(&self, cx: &gpui::App) -> Option<SharedString> {
+        let state = self.state.read(cx);
+        let chat = state
+            .chats
+            .iter()
+            .find(|chat| chat.id == self.chat_id && chat.space_id.is_none())?;
+        let device = state.device_name(&chat.device_id).unwrap_or_else(|| {
+            if state.hosted_on_cloud_computer {
+                "Cloud computer"
+            } else {
+                &chat.device_id
+            }
+        });
+        let location = match chat.cwd.as_deref() {
+            Some(cwd) if !zuse_protocol::projectless::is_projectless_cwd(Some(cwd)) => {
+                format!("{cwd} · {device}")
+            }
+            _ => device.to_owned(),
+        };
+        Some(location.into())
+    }
+
     fn render_explorer_header(
         &mut self,
         theme: &crate::theme::Theme,
@@ -1348,6 +1338,24 @@ impl FilesSurface {
             )
         });
         let label = if partial { "Files (partial)" } else { "Files" };
+        let location = self.explorer_location(cx).map(|location| {
+            let tooltip = location.clone();
+            div()
+                .id("files-explorer-location")
+                .debug_selector(|| "files-explorer-location".into())
+                .min_w_0()
+                .truncate()
+                .text_size(crate::typography::text_xs())
+                .text_color(theme.text_muted)
+                .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
+                    cx.new(|_| preview::FileEditorTooltip {
+                        text: tooltip.clone(),
+                    })
+                    .into()
+                })
+                .tooltip_show_delay(Duration::from_millis(350))
+                .child(location)
+        });
         let header_button = |id: &'static str, label: &'static str, glyph: &'static str| {
             toolbar_button(id, label)
                 .debug_selector(move || id.into())
@@ -1373,11 +1381,19 @@ impl FilesSurface {
                     div()
                         .flex_1()
                         .min_w_0()
-                        .truncate()
-                        .text_size(crate::typography::text_xs())
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(theme.text_muted)
-                        .child(SharedString::from(label.to_string())),
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(
+                            div()
+                                .debug_selector(|| "files-explorer-label".into())
+                                .flex_none()
+                                .text_size(crate::typography::text_md())
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(theme.text)
+                                .child(label),
+                        )
+                        .children(location),
                 )
                 .child(
                     header_button("files-new-file", "New File", crate::icons::DOCUMENT_ADD)
@@ -1517,7 +1533,18 @@ mod explorer_tests {
             cx.set_global(crate::theme::Theme::default());
         });
         let (files, cx) = cx.add_window_view(|_, cx| {
-            let state = cx.new(|_| AppState::new());
+            let state = cx.new(|_| {
+                let mut state = AppState::new();
+                state.hosted_on_cloud_computer = true;
+                state.chats.push(serde_json::from_value(serde_json::json!({
+                    "id": "chat",
+                    "deviceId": "unnamed-cloud-device",
+                    "archived": false,
+                    "cwd": "/home/zuse/a-very-long-workspace-folder-that-should-not-push-out-the-file-actions",
+                    "createdAt": "2026-11-24T00:00:00Z",
+                })).unwrap());
+                state
+            });
             FilesSurface::new_explorer(state, "chat".into(), false, cx)
         });
         cx.update(|window, _| window.activate_window());
@@ -1534,6 +1561,16 @@ mod explorer_tests {
         // The header carries the FILES label and its three buttons; the
         // search row opens under it from the magnifier.
         let header = cx.debug_bounds("files-explorer-header").unwrap();
+        let label = cx.debug_bounds("files-explorer-label").unwrap();
+        let location = cx.debug_bounds("files-explorer-location").unwrap();
+        assert!(location.left() >= label.right());
+        assert_eq!(label.center().y, location.center().y);
+        assert!(location.right() <= cx.debug_bounds("files-new-file").unwrap().left());
+        files.read_with(cx, |files, cx| {
+            let location = files.explorer_location(cx).unwrap();
+            assert!(location.ends_with(" · Cloud computer"));
+            assert!(!location.contains("unnamed-cloud-device"));
+        });
         for button in ["files-new-file", "files-new-folder", "files-search-toggle"] {
             let bounds = cx.debug_bounds(button).unwrap();
             assert_eq!(bounds.size.width, px(24.0));

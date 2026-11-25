@@ -132,9 +132,11 @@ impl FilesSurface {
         let mut trigger = toolbar_button("files-open-with-system", "Open in…")
             .debug_selector(|| "files-open-in-trigger".into())
             .relative()
-            .w(px(78.0))
+            .w(gpui::Length::Auto)
+            .min_w(px(78.0))
+            .px(px(8.0))
             .gap(px(5.0))
-            .text_size(px(11.0))
+            .text_size(crate::typography::text_sm())
             .text_color(theme.text_muted)
             .aria_expanded(open)
             .on_mouse_down(

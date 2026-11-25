@@ -38,7 +38,15 @@ impl Shell {
         if self.cloud_activity.watches.contains_key(&id) {
             return;
         }
-        let changes = cx.observe(view, |this, view, cx| this.report_cloud_activity(&view, cx));
+        let mut title = view.read(cx).tab_title(cx);
+        let changes = cx.observe(view, move |this, view, cx| {
+            let next_title = view.read(cx).tab_title(cx);
+            if next_title != title {
+                title = next_title;
+                cx.notify();
+            }
+            this.report_cloud_activity(&view, cx);
+        });
         let release = cx.observe_release(view, move |this, view, cx| {
             this.cloud_activity.watches.remove(&id);
             if !this.cloud_scope_matches(&view.target, cx) {
