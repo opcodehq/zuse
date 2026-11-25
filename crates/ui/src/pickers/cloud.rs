@@ -158,6 +158,9 @@ impl Pickers {
             );
         }
         if let Some(saved) = choice {
+            // The picks belong to the canvas now in front: the selection
+            // change that brought it back must not drop them.
+            self.draft_owner = self.state.read(cx).selected_chat.clone();
             self.config = saved.draft;
             self.source_picker
                 .update(cx, |picker, cx| picker.restore_selection(saved.source, cx));
