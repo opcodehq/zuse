@@ -158,6 +158,9 @@ impl Pickers {
             );
         }
         if let Some(saved) = choice {
+            // The picks belong to the canvas now in front: the selection
+            // change that brought it back must not drop them.
+            self.draft_owner = self.state.read(cx).selected_chat.clone();
             self.config = saved.draft;
             self.source_picker
                 .update(cx, |picker, cx| picker.restore_selection(saved.source, cx));
@@ -302,6 +305,12 @@ impl Pickers {
 
     pub(crate) fn start_without_project(&mut self, cx: &mut Context<Self>) {
         self.pick_no_project(cx);
+    }
+    /// The new-chat canvas goes back to a local destination, keeping its
+    /// project and device.
+    pub(crate) fn leave_cloud_canvas(&mut self, cx: &mut Context<Self>) {
+        self.leave_cloud(cx);
+        cx.notify();
     }
     pub(super) fn leave_cloud(&mut self, cx: &mut Context<Self>) {
         self.state.update(cx, |state, _| state.cloud_project = None);

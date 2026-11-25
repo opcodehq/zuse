@@ -6,7 +6,9 @@
 //! new-chat entries) is a standalone canvas without a strip, whose send
 //! creates a new cloud chat on a new computer. A canvas whose chat is still
 //! being created is set aside when the user moves on: the chat keeps being
-//! created, keeps its sidebar row and reopens from it.
+//! created, keeps its sidebar row and reopens from it. An unsent canvas
+//! stays as it was left (text, files, destination and choices) until it is
+//! sent: New thread comes back to it from any chat or page.
 use super::cloud_conversation::CloudConversation;
 use super::*;
 
@@ -39,6 +41,17 @@ pub(super) struct CloudTabs {
     canvas: Option<CloudDraft>,
     /// Canvases whose new chat is still being created, set aside.
     launches: Vec<CloudDraft>,
+    /// The unsent canvas, set aside while a set-aside launch is in front;
+    /// New thread brings it back.
+    parked: Option<CloudDraft>,
+    /// Where the new-chat canvas was headed when the user last left it.
+    left_on: Option<CanvasDestination>,
+}
+/// A new-chat canvas's destination: a local project or a Cloud repository.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum CanvasDestination {
+    Local,
+    Cloud(serde_json::Value),
 }
 impl CloudTabs {
     pub(super) fn retained_index(
@@ -111,13 +124,25 @@ impl Shell {
             draft.project = state.cloud_project.clone();
             draft.device = state.selected_device.clone();
             draft.space = state.selected_space.clone();
+            let cloud = state.cloud_project.is_some();
             let composer = self.composer.read(cx);
             draft.key = canvas_key;
-            draft.choice = Some(composer.pickers().read(cx).cloud_canvas_choices(cx));
+            // On Local the pickers hold local choices; its Cloud ones stay.
+            if cloud {
+                draft.choice = Some(composer.pickers().read(cx).cloud_canvas_choices(cx));
+            }
         }
     }
     pub(super) fn track_current_cloud_canvas(&mut self, cx: &mut Context<Self>) {
-        if !self.cloud_canvas_in_front(cx) || self.state.read(cx).cloud_project.is_none() {
+        if !self.cloud_canvas_in_front(cx) {
+            return;
+        }
+        self.cloud_tabs.left_on = Some(match self.state.read(cx).cloud_project.clone() {
+            Some(project) => CanvasDestination::Cloud(project),
+            None => CanvasDestination::Local,
+        });
+        // A canvas switched to Local keeps its key; it notes that too.
+        if self.state.read(cx).cloud_project.is_none() && self.cloud_tabs.canvas.is_none() {
             return;
         }
         let scope = {
@@ -143,10 +168,51 @@ impl Shell {
             .canvas
             .iter()
             .chain(&self.cloud_tabs.launches)
+            .chain(&self.cloud_tabs.parked)
             .any(|draft| draft.key == key)
     }
+    /// The key the unsent new-chat canvas drafts under: its cloud canvas
+    /// (in front or parked), or the local `""` draft.
+    fn unsent_canvas_key(&self, cx: &App) -> String {
+        let composer = self.composer.read(cx);
+        self.cloud_tabs
+            .canvas
+            .iter()
+            .chain(&self.cloud_tabs.parked)
+            .find(|draft| !composer.has_cloud_launch(&draft.key))
+            .map(|draft| draft.key.clone())
+            .unwrap_or_default()
+    }
+    /// Where New thread goes back to: the destination the new-chat canvas
+    /// was left on, while it still holds an unsent draft. Read once.
+    pub(super) fn take_unsent_canvas_destination(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<CanvasDestination> {
+        let key = self.unsent_canvas_key(cx);
+        let destination = match self.cloud_tabs.parked.as_ref() {
+            // The unsent draft is the parked one: it has its own destination.
+            Some(parked) if parked.key == key => {
+                self.cloud_tabs.left_on = None;
+                match parked.project.clone() {
+                    Some(project) => CanvasDestination::Cloud(project),
+                    None => CanvasDestination::Local,
+                }
+            }
+            _ => {
+                // Leaving from the canvas itself (or a page over it) notes it now.
+                self.track_current_cloud_canvas(cx);
+                self.cloud_tabs.left_on.take()?
+            }
+        };
+        self.composer
+            .read(cx)
+            .key_has_draft(&key, cx)
+            .then_some(destination)
+    }
     /// The canvas makes way for another: a chat it is still creating goes on
-    /// in the background (its sidebar row reopens it); an unsent draft goes.
+    /// in the background (its sidebar row reopens it); an unsent draft is
+    /// parked for New thread to bring back.
     fn set_cloud_canvas_aside(&mut self, cx: &mut Context<Self>) {
         // Only the choices are read here: the new canvas's project, device
         // and space may already be in the state.
@@ -165,43 +231,96 @@ impl Shell {
         }
         if self.composer.read(cx).has_cloud_launch(&draft.key) {
             self.cloud_tabs.launches.push(draft);
-        } else {
+        } else if let Some(old) = self.cloud_tabs.parked.replace(draft) {
             self.composer.update(cx, |composer, cx| {
-                composer.discard_cloud_canvas_keys(&[draft.key], cx)
+                composer.discard_cloud_canvas_keys(&[old.key], cx)
             });
         }
     }
-    /// A fresh new-chat canvas: with Cloud as its destination, its send
+    /// The new-chat canvas: the unsent one as it was left, or a fresh one
+    /// once the last was sent. With Cloud as its destination, its send
     /// creates a new cloud chat on a new computer.
     pub(super) fn initialize_new_cloud_canvas(&mut self, cx: &mut Context<Self>) {
-        self.set_cloud_canvas_aside(cx);
-        let state = self.state.read(cx);
-        if state.cloud_project.is_none() {
-            self.composer
-                .update(cx, |composer, cx| composer.set_cloud_canvas_key(None, cx));
-            return;
+        // A canvas still creating its chat goes aside; an unsent one stays.
+        let launching = self
+            .cloud_tabs
+            .canvas
+            .as_ref()
+            .is_some_and(|draft| self.composer.read(cx).has_cloud_launch(&draft.key));
+        if launching {
+            self.set_cloud_canvas_aside(cx);
         }
+        if self.cloud_tabs.canvas.is_none()
+            && let Some(parked) = self.cloud_tabs.parked.take()
+        {
+            // A launch reopened meanwhile set its own project and device.
+            let (device, space) = (parked.device.clone(), parked.space.clone());
+            self.state.update(cx, |state, cx| {
+                if let Some(device) = device {
+                    state.select_device(device, cx);
+                }
+                state.select_space(space, cx);
+            });
+            self.cloud_tabs.canvas = Some(parked);
+        }
+        let state = self.state.read(cx);
+        let Some(project) = state.cloud_project.clone() else {
+            // Local: an unsent canvas keeps its key (and draft) while Local.
+            let key = self
+                .cloud_tabs
+                .canvas
+                .as_ref()
+                .map(|draft| draft.key.clone());
+            self.composer
+                .update(cx, |composer, cx| composer.set_cloud_canvas_key(key, cx));
+            return;
+        };
         let scope = state.cloud_user_id().map(|id| {
             (
                 id.to_owned(),
                 state.cloud_organization_id().map(str::to_owned),
             )
         });
-        let draft = CloudDraft {
-            project: state.cloud_project.clone(),
-            device: state.selected_device.clone(),
-            space: state.selected_space.clone(),
-            ..CloudDraft::default()
-        };
+        let device = state.selected_device.clone();
+        let space = state.selected_space.clone();
         self.cloud_tabs.scope = scope;
-        let key = draft.key.clone();
-        let project = draft.project.clone();
-        self.cloud_tabs.canvas = Some(draft);
+        let (key, choice) = match self.cloud_tabs.canvas.as_mut() {
+            Some(draft) => {
+                // Its choices apply while it stays on the same repository.
+                let same = draft.project.as_ref().is_some_and(|left| {
+                    left["projectId"] == project["projectId"]
+                        && left["accountId"] == project["accountId"]
+                });
+                let choice = draft.choice.clone().filter(|_| same);
+                draft.project = Some(project.clone());
+                draft.device = device;
+                draft.space = space;
+                (draft.key.clone(), choice)
+            }
+            None => {
+                // A local draft typed on this canvas moves with it to Cloud.
+                let key = if self.composer.read(cx).cloud_canvas_key().is_none() {
+                    self.composer
+                        .update(cx, |composer, cx| composer.adopt_new_chat_draft(cx))
+                } else {
+                    CloudDraft::default().key
+                };
+                self.cloud_tabs.canvas = Some(CloudDraft {
+                    key: key.clone(),
+                    project: Some(project.clone()),
+                    device,
+                    space,
+                    choice: None,
+                });
+                (key, None)
+            }
+        };
         self.composer.update(cx, |composer, cx| {
             composer.set_cloud_canvas_key(Some(key), cx);
-            composer
-                .pickers()
-                .update(cx, |pickers, cx| pickers.start_cloud_canvas(project, cx));
+            composer.pickers().update(cx, |pickers, cx| match choice {
+                Some(choice) => pickers.restore_cloud_canvas(Some(project), Some(choice), cx),
+                None => pickers.start_cloud_canvas(Some(project), cx),
+            });
         });
     }
     pub(super) fn sync_cloud_tab_scope(&mut self, cx: &mut Context<Self>) {
@@ -230,6 +349,7 @@ impl Shell {
                 .canvas
                 .iter()
                 .chain(&self.cloud_tabs.launches)
+                .chain(&self.cloud_tabs.parked)
                 .map(|draft| draft.key.clone())
                 .collect::<Vec<_>>();
             let active = self.cloud_conversation.is_some();
@@ -864,7 +984,9 @@ mod tests {
         })
     }
     #[gpui::test]
-    fn canvas_plus_starts_a_new_chat_and_scope_change_clears_its_draft(cx: &mut TestAppContext) {
+    fn canvas_plus_keeps_the_unsent_new_chat_and_scope_change_clears_its_draft(
+        cx: &mut TestAppContext,
+    ) {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let _entered = runtime.enter();
         let dir = tempfile::tempdir().unwrap();
@@ -905,8 +1027,11 @@ mod tests {
                 let first_key = shell.composer.read(cx).current_key.clone();
                 shell.open_new_conversation_tab(cx);
                 let second_key = shell.composer.read(cx).current_key.clone();
-                assert_ne!(first_key, second_key);
-                assert!(shell.composer.read(cx).input.read(cx).text().is_empty());
+                assert_eq!(first_key, second_key, "plus on the canvas keeps its draft");
+                assert_eq!(
+                    shell.composer.read(cx).input.read(cx).text(),
+                    "First unsent draft"
+                );
                 shell.composer.update(cx, |c, cx| {
                     c.pickers().update(cx, |p, cx| {
                         p.seed_cloud_creation_for_test(
@@ -938,10 +1063,6 @@ mod tests {
                 assert!(
                     shell.cloud_tabs.views.is_empty() && shell.render_cloud_tabs(cx).is_none(),
                     "plus on the new-chat canvas starts another new chat, never a tab"
-                );
-                assert!(
-                    !shell.composer.read(cx).attachments.contains_key(&first_key),
-                    "the replaced unsent draft goes, as New chat discards it"
                 );
                 shell.composer.update(cx, |c, cx| {
                     c.pickers().update(cx, |p, cx| {
@@ -977,6 +1098,229 @@ mod tests {
         window
             .update(cx, |_, window, _| window.remove_window())
             .unwrap();
+    }
+    fn local_chat_row(id: &str) -> zuse_protocol::Chat {
+        serde_json::from_value(json!({
+            "id": id, "title": "Local chat", "deviceId": "local-device", "archived": false,
+            "createdAt": "2026-11-24T00:00:00Z",
+        }))
+        .unwrap()
+    }
+    fn issue_source(number: u64) -> zuse_protocol::creation_source::Resolution {
+        zuse_protocol::creation_source::Resolution::Issue {
+            number,
+            title: "Issue on the new chat".into(),
+            attachment_path: "issue.md".into(),
+            markdown: "Issue body".into(),
+            upload_id: None,
+        }
+    }
+    /// The unsent new chat (Cloud as its destination) is as it was left when
+    /// New thread comes back from a local chat, a cloud chat or a page: its
+    /// text, files, repository and choices. Each chat keeps its own draft,
+    /// and a sent new chat leaves a fresh canvas behind.
+    #[gpui::test]
+    fn new_thread_brings_back_the_unsent_cloud_new_chat(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        let window = draft_shell(cx, dir.path());
+        let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
+            std::sync::Arc::new(Pending),
+        ));
+        // Each step is its own update, so the composer follows the selection
+        // between steps as it does in the app.
+        let mut step = |f: &mut dyn FnMut(&mut Shell, &mut Context<Shell>)| {
+            window.update(cx, |shell, _, cx| f(shell, cx)).unwrap();
+        };
+        let mut key = String::new();
+        step(&mut |shell, cx| {
+            shell.state.update(cx, |state, _| {
+                // The canvas stays in front: no boot landing on the chat.
+                state.auto_selected = true;
+                state.apply_chats(vec![local_chat_row("local-a")]);
+            });
+            shell.open_new_session(None, cx);
+        });
+        step(&mut |shell, cx| {
+            shell.composer.update(cx, |c, cx| {
+                c.pickers().update(cx, |p, cx| {
+                    p.seed_cloud_creation_for_test(
+                        draft_context(),
+                        json!({"projectId":"q","accountId":"owner","providerId":"e2b"}),
+                        cx,
+                    );
+                    p.seed_cloud_source_for_test(issue_source(7), cx);
+                });
+                c.input
+                    .update(cx, |input, cx| input.set_text("Unsent cloud chat", cx));
+                c.attachments.insert(
+                    c.current_key.clone(),
+                    vec![crate::attachments::StagedAttachment::from_file(
+                        "notes.txt",
+                        b"notes".to_vec(),
+                    )],
+                );
+            });
+            key = shell.composer.read(cx).current_key.clone();
+            assert!(key.starts_with("cloud-canvas:"));
+        });
+        let assert_restored = |shell: &Shell, cx: &App, key: &str, from: &str| {
+            let c = shell.composer.read(cx);
+            assert_eq!(c.current_key, key, "{from}: same new chat");
+            assert_eq!(c.input.read(cx).text(), "Unsent cloud chat", "{from}: text");
+            assert_eq!(c.staged()[0].name, "notes.txt", "{from}: files");
+            assert_eq!(
+                shell.state.read(cx).cloud_project.as_ref().unwrap()["projectId"],
+                "q",
+                "{from}: repository"
+            );
+            assert_eq!(
+                c.pickers().read(cx).source_issue(cx).map(|(n, _)| n),
+                Some(7),
+                "{from}: choices"
+            );
+            assert!(shell.cloud_conversation.is_none());
+            assert!(shell.state.read(cx).selected_chat.is_none());
+        };
+        // A local chat, with a draft of its own.
+        step(&mut |shell, cx| shell.open_chat("local-a".into(), cx));
+        step(&mut |shell, cx| {
+            assert!(shell.composer.read(cx).input.read(cx).text().is_empty());
+            shell.composer.update(cx, |c, cx| {
+                c.input
+                    .update(cx, |input, cx| input.set_text("Local chat draft", cx))
+            });
+        });
+        step(&mut |shell, cx| shell.open_new_session(None, cx));
+        step(&mut |shell, cx| assert_restored(shell, cx, &key, "local chat"));
+        // A cloud chat.
+        step(&mut |shell, cx| {
+            shell.open_cloud_conversation(
+                crate::state::CloudTarget {
+                    controller: controller.clone(),
+                    subject: "owner".into(),
+                    organization: None,
+                    workspace: "task".into(),
+                    initial_session: "session".into(),
+                },
+                json!({"workspaceId":"task","projectId":"p"}),
+                Value::Null,
+                cx,
+            )
+        });
+        step(&mut |shell, cx| shell.open_new_session(None, cx));
+        step(&mut |shell, cx| assert_restored(shell, cx, &key, "cloud chat"));
+        // A page.
+        step(&mut |shell, cx| shell.open_settings(SettingsSection::General, cx));
+        step(&mut |shell, cx| shell.open_new_session(None, cx));
+        step(&mut |shell, cx| assert_restored(shell, cx, &key, "settings"));
+        // The local chat kept its own draft.
+        step(&mut |shell, cx| shell.open_chat("local-a".into(), cx));
+        step(&mut |shell, cx| {
+            assert_eq!(
+                shell.composer.read(cx).input.read(cx).text(),
+                "Local chat draft"
+            );
+        });
+        step(&mut |shell, cx| shell.open_new_session(None, cx));
+        step(&mut |shell, cx| assert_restored(shell, cx, &key, "local chat again"));
+        // Sent: its chat is being created; New thread is a fresh canvas.
+        step(&mut |shell, cx| {
+            shell.composer.update(cx, |c, cx| {
+                c.seed_pending_cloud_creation_for_test(json!({"firstMessage":"Unsent cloud chat"}));
+                c.attachments.remove(&c.current_key);
+                c.input.update(cx, |input, cx| input.set_text("", cx));
+            });
+        });
+        step(&mut |shell, cx| shell.open_chat("local-a".into(), cx));
+        step(&mut |shell, cx| shell.open_new_session(None, cx));
+        step(&mut |shell, cx| {
+            let c = shell.composer.read(cx);
+            assert_ne!(c.current_key, key);
+            assert!(c.input.read(cx).text().is_empty());
+            assert!(c.staged().is_empty());
+            assert!(
+                c.has_cloud_launch(&key),
+                "the sent chat is still being created"
+            );
+        });
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+    }
+    /// A new chat headed Local comes back Local with its text, though New
+    /// thread would otherwise start on Cloud here.
+    #[gpui::test]
+    fn new_thread_brings_back_the_unsent_local_new_chat(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        for switched in [false, true] {
+            let window = draft_shell(cx, dir.path());
+            let mut step = |f: &mut dyn FnMut(&mut Shell, &mut Context<Shell>)| {
+                window.update(cx, |shell, _, cx| f(shell, cx)).unwrap();
+            };
+            let mut key = String::new();
+            step(&mut |shell, cx| {
+                shell.state.update(cx, |state, _| {
+                    // The canvas stays in front: no boot landing on the chat.
+                    state.auto_selected = true;
+                    state.apply_chats(vec![local_chat_row("local-a")]);
+                });
+                if switched {
+                    // Opened on Cloud, then switched to Local.
+                    shell.open_new_session(None, cx);
+                    assert!(shell.state.read(cx).cloud_project.is_some());
+                    let pickers = shell.composer.read(cx).pickers().clone();
+                    pickers.update(cx, |p, cx| p.leave_cloud_canvas(cx));
+                }
+            });
+            step(&mut |shell, cx| {
+                assert!(shell.state.read(cx).cloud_project.is_none());
+                shell.composer.update(cx, |c, cx| {
+                    c.input
+                        .update(cx, |input, cx| input.set_text("Unsent local chat", cx));
+                    c.attachments.insert(
+                        c.current_key.clone(),
+                        vec![crate::attachments::StagedAttachment::from_file(
+                            "local.txt",
+                            b"local".to_vec(),
+                        )],
+                    );
+                });
+                key = shell.composer.read(cx).current_key.clone();
+                assert_eq!(key.is_empty(), !switched);
+            });
+            step(&mut |shell, cx| shell.open_chat("local-a".into(), cx));
+            step(&mut |shell, cx| {
+                assert!(shell.composer.read(cx).input.read(cx).text().is_empty());
+            });
+            step(&mut |shell, cx| shell.open_new_session(None, cx));
+            step(&mut |shell, cx| {
+                let c = shell.composer.read(cx);
+                assert_eq!(c.current_key, key);
+                assert_eq!(c.input.read(cx).text(), "Unsent local chat");
+                assert_eq!(c.staged()[0].name, "local.txt");
+                assert!(
+                    shell.state.read(cx).cloud_project.is_none(),
+                    "it stays Local"
+                );
+            });
+            // An empty new chat opens where New thread starts it.
+            step(&mut |shell, cx| {
+                shell.composer.update(cx, |c, cx| {
+                    c.attachments.remove(&c.current_key);
+                    c.input.update(cx, |input, cx| input.set_text("", cx));
+                });
+            });
+            step(&mut |shell, cx| shell.open_chat("local-a".into(), cx));
+            step(&mut |shell, cx| shell.open_new_session(None, cx));
+            step(&mut |shell, cx| assert!(shell.state.read(cx).cloud_project.is_some()));
+            window
+                .update(cx, |_, window, _| window.remove_window())
+                .unwrap();
+        }
     }
     /// New thread while a new cloud chat is still being created leaves it,
     /// as New thread leaves a local chat: a standalone canvas (no strip, no
@@ -1195,8 +1539,16 @@ mod tests {
                     cx
                 ));
                 assert_eq!(shell.composer.read(cx).appshots[&first].len(), 1);
-                // A new chat replaces the canvas: a late shot for the old one
-                // is refused, not staged on the new one.
+                // New thread keeps the unsent canvas and its shot.
+                shell.open_new_session(None, cx);
+                assert_eq!(shell.composer.read(cx).current_key, first);
+                assert_eq!(shell.composer.read(cx).appshots[&first].len(), 1);
+                // Once that canvas is closed, a late shot for it is refused,
+                // not staged on the new one.
+                shell.composer.update(cx, |c, cx| {
+                    c.discard_cloud_canvas_keys(std::slice::from_ref(&first), cx)
+                });
+                shell.cloud_tabs.canvas = None;
                 shell.open_new_session(None, cx);
                 let second = shell.composer.read(cx).current_key.clone();
                 assert_ne!(first, second);

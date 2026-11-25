@@ -7844,6 +7844,48 @@ impl Composer {
         )
     }
 
+    /// Whether the draft kept under `key` holds anything: the live editor
+    /// when `key` is in front, its saved text and staged files otherwise.
+    pub(crate) fn key_has_draft(&self, key: &str, cx: &App) -> bool {
+        if key == self.current_key {
+            return self.has_draft(cx);
+        }
+        let state = self.state.read(cx);
+        self.drafts.get(key).is_some_and(|text| !text.is_empty())
+            || self.attachments.get(key).is_some_and(|a| !a.is_empty())
+            || self.appshots.get(key).is_some_and(|a| !a.is_empty())
+            || !state.review_comments(key).is_empty()
+            || !state.context_items(key).is_empty()
+    }
+
+    /// A Cloud key for the local new-chat draft (`""`), which moves to it:
+    /// text, files, screenshots. A chat still in front keeps its own draft.
+    pub(crate) fn adopt_new_chat_draft(&mut self, cx: &mut Context<Self>) -> String {
+        if self.current_key.is_empty() {
+            return self.ensure_cloud_canvas_key(cx);
+        }
+        let key = format!("cloud-canvas:{}", uuid::Uuid::new_v4());
+        if let Some(value) = self.drafts.remove("") {
+            self.drafts.insert(key.clone(), value);
+        }
+        if let Some(value) = self.attachments.remove("") {
+            self.attachments.insert(key.clone(), value);
+        }
+        if let Some(value) = self.attachment_drafts.remove("") {
+            self.attachment_drafts.insert(key.clone(), value);
+        }
+        if let Some(value) = self.appshots.remove("") {
+            self.appshots.insert(key.clone(), value);
+        }
+        key
+    }
+
+    /// The key the new-chat canvas drafts under while Cloud is its
+    /// destination (or was, this canvas); `None` drafts under `""`.
+    pub(crate) fn cloud_canvas_key(&self) -> Option<&str> {
+        self.cloud_canvas_key.as_deref()
+    }
+
     #[cfg(test)]
     pub(crate) fn failure(&self) -> Option<&SharedString> {
         self.failure.as_ref()
