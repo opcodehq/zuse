@@ -187,15 +187,22 @@ impl Shell {
         id
     }
 
-    /// Add a file editor's tab to `panel_key`'s strip (after its other tabs)
-    /// and show it.
+    /// Put a newly opened or reopened file first among the file tabs and show it.
     pub(super) fn push_main_file_tab(&mut self, panel_key: &str, id: u64, cx: &mut Context<Self>) {
         let key = self.main_tabs_key_for(panel_key, cx);
         let tabs = self.main_tabs.entry(key).or_default();
-        if !tabs.tabs.contains(&MainTab::File(id)) {
-            tabs.tabs.push(MainTab::File(id));
+        let file = MainTab::File(id);
+        let first_file = tabs
+            .tabs
+            .iter()
+            .position(|tab| matches!(tab, MainTab::File(_)))
+            .unwrap_or(tabs.tabs.len());
+        if tabs.tabs.get(first_file) != Some(&file) {
+            tabs.tabs.retain(|tab| *tab != file);
+            tabs.tabs.insert(first_file, file);
+            cx.notify();
         }
-        self.activate_main_tab(Some(MainTab::File(id)), cx);
+        self.activate_main_tab(Some(file), cx);
     }
 
     /// Show `id`'s file tab in `panel_key`'s strip without navigating there
