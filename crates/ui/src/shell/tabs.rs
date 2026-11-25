@@ -927,6 +927,7 @@ impl Shell {
             && main_chips.is_empty()
             && empty_initial_conversation
             && working.is_empty()
+            && self.review_surface(cx).is_none()
         {
             return Empty.into_any_element();
         }

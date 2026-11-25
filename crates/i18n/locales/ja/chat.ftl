@@ -1876,7 +1876,7 @@ chat-cloud_history_load_earlier = 以前のメッセージを読み込む
 # Variables: count
 chat-tool_activity_summary_edited_files = { $count } 件のファイルを編集
 # Variables: count
-chat-tool_group_updates = { $count } 件の進捗報告
+chat-tool_group_updates = { $count } 件の更新
 chat-tool_command_label = コマンド
 chat-tool_output_label = 出力
 

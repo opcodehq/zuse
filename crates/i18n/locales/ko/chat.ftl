@@ -1886,4 +1886,4 @@ chat-turn_working_for = 작업 중 · { $duration }
 # Variables: duration
 chat-turn_worked_for = 작업 시간 · { $duration }
 chat-turn_thought = 생각
-chat-tool_shell_label = 셸
+chat-tool_shell_label = 쉘
