@@ -54,6 +54,8 @@ impl Shell {
         if !self.cloud_tab_navigation_ready(cx) {
             return;
         }
+        // The canvas in front keeps its choices before its project changes.
+        self.track_current_cloud_canvas(cx);
         self.state
             .update(cx, |state, _| state.cloud_project = Some(project.clone()));
         // Cloud is a destination of the native composer, not another window.

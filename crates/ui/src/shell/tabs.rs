@@ -333,6 +333,8 @@ impl Shell {
 
     /// Open a session from the sidebar: select it, the main area follows.
     pub(crate) fn open_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
+        // Leaving the new-chat canvas notes it as it is, for New thread.
+        self.track_current_cloud_canvas(cx);
         let same_thread = {
             let state = self.state.read(cx);
             let target = state.chats.iter().find(|chat| chat.id == chat_id);
@@ -372,6 +374,38 @@ impl Shell {
         self.sync_cloud_tab_scope(cx);
         if !self.cloud_tab_navigation_ready(cx) {
             return;
+        }
+        // An unsent new chat comes back where it was headed, unless a
+        // project (or the sidebar filter) asks for another.
+        let unsent = self.take_unsent_canvas_destination(cx);
+        if project.is_none() && self.settings.space_filter.is_none() {
+            match unsent {
+                Some(super::cloud_tabs::CanvasDestination::Cloud(row)) => {
+                    let row = {
+                        let state = self.state.read(cx);
+                        (!state.cloud_access().withholds_cloud())
+                            .then(|| {
+                                state.cloud_sidebar_projects().into_iter().find(|project| {
+                                    project["canCreate"] != false
+                                        && project["projectId"] == row["projectId"]
+                                        && project["accountId"] == row["accountId"]
+                                })
+                            })
+                            .flatten()
+                    };
+                    if let Some(row) = row {
+                        self.start_cloud_canvas(row, None, cx);
+                        return;
+                    }
+                }
+                Some(super::cloud_tabs::CanvasDestination::Local) => {
+                    let pickers = self.composer.read(cx).pickers().clone();
+                    pickers.update(cx, |pickers, cx| pickers.leave_cloud_canvas(cx));
+                    self.reset_new_session_canvas(None, cx);
+                    return;
+                }
+                None => {}
+            }
         }
         if project.is_none() {
             let cloud_only = {

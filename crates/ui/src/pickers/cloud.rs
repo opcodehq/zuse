@@ -303,6 +303,12 @@ impl Pickers {
     pub(crate) fn start_without_project(&mut self, cx: &mut Context<Self>) {
         self.pick_no_project(cx);
     }
+    /// The new-chat canvas goes back to a local destination, keeping its
+    /// project and device.
+    pub(crate) fn leave_cloud_canvas(&mut self, cx: &mut Context<Self>) {
+        self.leave_cloud(cx);
+        cx.notify();
+    }
     pub(super) fn leave_cloud(&mut self, cx: &mut Context<Self>) {
         self.state.update(cx, |state, _| state.cloud_project = None);
         if let Some((branch, checkout)) = self.cloud.local_checkout.take() {

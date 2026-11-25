@@ -7844,6 +7844,23 @@ impl Composer {
         )
     }
 
+    /// Whether the draft kept under `key` holds anything: the live editor
+    /// when `key` is in front, its saved text and staged files otherwise.
+    pub(crate) fn key_has_draft(&self, key: &str, cx: &App) -> bool {
+        if key == self.current_key {
+            return self.has_draft(cx);
+        }
+        self.drafts.get(key).is_some_and(|text| !text.is_empty())
+            || self.attachments.get(key).is_some_and(|a| !a.is_empty())
+            || self.appshots.get(key).is_some_and(|a| !a.is_empty())
+    }
+
+    /// The key the new-chat canvas drafts under while Cloud is its
+    /// destination (or was, this canvas); `None` drafts under `""`.
+    pub(crate) fn cloud_canvas_key(&self) -> Option<&str> {
+        self.cloud_canvas_key.as_deref()
+    }
+
     #[cfg(test)]
     pub(crate) fn failure(&self) -> Option<&SharedString> {
         self.failure.as_ref()
