@@ -34,6 +34,9 @@ pub const MD_BLOCK_GAP: f32 = 12.0;
 /// Body text size / line height (zuse: 14px / 22px).
 pub const MD_TEXT_SIZE: f32 = crate::typography::TEXT_MD;
 pub const MD_LINE_HEIGHT: f32 = 22.0;
+pub(crate) const TRANSCRIPT_BLOCK_GAP: f32 = 13.0;
+pub(crate) const TRANSCRIPT_TEXT_SIZE: f32 = 14.0;
+pub(crate) const TRANSCRIPT_LINE_HEIGHT: f32 = 22.0;
 /// Default code block metrics; the rendered size comes from the theme.
 pub const CODE_TEXT_SIZE: f32 = 12.5;
 pub const CODE_LINE_HEIGHT: f32 = 18.0;
@@ -69,6 +72,8 @@ pub fn table_hairline() -> Hsla {
 /// Options for one rendered tree (a transcript row or a whole live message).
 #[derive(Clone)]
 pub struct RenderOptions {
+    /// Use the conversation's prose spacing and text hierarchy.
+    pub(crate) transcript: bool,
     pub tasks: Option<TaskUi>,
     pub media: Option<MediaUi>,
     /// Stable row key — prefixes element ids (scroll state, animations).
@@ -386,6 +391,7 @@ impl RenderOptions {
     /// Options for a completed (non-streaming) row — no veil, no cache.
     pub fn settled(row_key: SharedString) -> Self {
         Self {
+            transcript: false,
             row_key,
             media: None,
             tasks: None,
@@ -396,6 +402,22 @@ impl RenderOptions {
             link: None,
             workspace_root: None,
             code: None,
+        }
+    }
+
+    fn prose_text_size(&self) -> f32 {
+        if self.transcript {
+            TRANSCRIPT_TEXT_SIZE
+        } else {
+            MD_TEXT_SIZE
+        }
+    }
+
+    fn prose_line_height(&self) -> f32 {
+        if self.transcript {
+            TRANSCRIPT_LINE_HEIGHT
+        } else {
+            MD_LINE_HEIGHT
         }
     }
 }
@@ -480,7 +502,11 @@ pub fn render_tree(
     div()
         .flex()
         .flex_col()
-        .gap(px(MD_BLOCK_GAP))
+        .gap(px(if opts.transcript {
+            TRANSCRIPT_BLOCK_GAP
+        } else {
+            MD_BLOCK_GAP
+        }))
         .children(tree.blocks.iter().enumerate().map(|(ix, top)| {
             let document = highlight(ix);
             render_block(
@@ -547,11 +573,12 @@ pub fn render_block(
     window: &Window,
     highlight: CodeHighlight,
 ) -> AnyElement {
+    let prose_line_height = opts.prose_line_height();
     match block {
         Block::Paragraph { runs } => text_element(
             runs,
-            MD_TEXT_SIZE,
-            MD_LINE_HEIGHT,
+            opts.prose_text_size(),
+            prose_line_height,
             false,
             top_ix,
             ix,
@@ -560,7 +587,17 @@ pub fn render_block(
         ),
         Block::Heading { level, runs } => {
             let (size, line) = heading_metrics(*level);
-            text_element(runs, size, line, true, top_ix, ix, opts, theme)
+            let adjustment = if opts.transcript { 1.0 } else { 0.0 };
+            text_element(
+                runs,
+                size - adjustment,
+                line - adjustment,
+                true,
+                top_ix,
+                ix,
+                opts,
+                theme,
+            )
         }
         Block::CodeBlock { language, code } => render_code_block(
             language.as_deref(),
@@ -606,9 +643,14 @@ pub fn render_block(
             .flex_col()
             .gap(px(4.0))
             .children(items.iter().enumerate().map(|(item_ix, item)| {
-                // Accent markers (the inline-code hue): ordered numbers as
-                // tinted text, unordered as a REAL 5px disc — the glyph "•"
-                // reads too small at 14px.
+                let marker_color = if opts.transcript {
+                    theme.text_muted
+                } else {
+                    theme.accent
+                };
+                let line_height = crate::typography::ui_rems(prose_line_height);
+                // Use a drawn disc for unordered lists so its size is independent
+                // of the selected body font.
                 let task = item
                     .first()
                     .and_then(|block| match block {
@@ -628,7 +670,7 @@ pub fn render_block(
                     div()
                         .flex_none()
                         .min_w(px(18.0))
-                        .h(px(MD_LINE_HEIGHT))
+                        .h(line_height)
                         .flex()
                         .items_center()
                         .child(
@@ -681,16 +723,16 @@ pub fn render_block(
                         Some(start) => div()
                             .flex_none()
                             .min_w(px(18.0))
-                            .text_size(crate::typography::ui_rems(MD_TEXT_SIZE))
-                            .line_height(crate::typography::ui_rems(MD_LINE_HEIGHT))
-                            .text_color(theme.accent)
+                            .text_size(crate::typography::ui_rems(opts.prose_text_size()))
+                            .line_height(line_height)
+                            .text_color(marker_color)
                             .child(SharedString::from(format!("{}.", start + item_ix as u64)))
                             .into_any_element(),
                         None => div()
                             .flex_none()
                             .min_w(px(18.0))
                             // Center the disc on the first text line's cap band.
-                            .h(px(MD_LINE_HEIGHT))
+                            .h(line_height)
                             .flex()
                             .items_center()
                             .child(
@@ -699,7 +741,7 @@ pub fn render_block(
                                     .w(px(5.0))
                                     .h(px(5.0))
                                     .rounded_full()
-                                    .bg(theme.accent),
+                                    .bg(marker_color),
                             )
                             .into_any_element(),
                     }
@@ -805,14 +847,18 @@ fn table_cell_ix(ix: usize, r: usize, c: usize) -> usize {
 
 /// Apply identical geometry to semantic header and data cells. All rows use
 /// the same measured column proportions and minimum widths.
-fn style_table_cell<E: Styled>(cell: E, natural: f32, minimum: f32) -> E {
+fn style_table_cell<E: Styled>(cell: E, natural: f32, minimum: f32, opts: &RenderOptions) -> E {
     cell.flex_grow(natural)
         .flex_shrink(natural)
         .flex_basis(px(0.0))
         .min_w(px(minimum))
         .px(px(TABLE_CELL_PADDING))
-        .py(px(TABLE_CELL_PADDING_Y))
-        .text_size(crate::typography::ui_rems(MD_TEXT_SIZE))
+        .py(px(if opts.transcript {
+            6.0
+        } else {
+            TABLE_CELL_PADDING_Y
+        }))
+        .text_size(crate::typography::ui_rems(opts.prose_text_size()))
         .line_height(crate::typography::ui_rems(MD_LINE_HEIGHT))
 }
 
@@ -843,7 +889,7 @@ fn render_table(
 
     // Flatten every cell (cache-aware) and take per-column max-content widths.
     let text_system = window.text_system();
-    let font_size = crate::typography::ui_rems(MD_TEXT_SIZE).to_pixels(window.rem_size());
+    let font_size = crate::typography::ui_rems(opts.prose_text_size()).to_pixels(window.rem_size());
     let mut flats: Vec<Vec<Option<Rc<FlatText>>>> = Vec::with_capacity(all.len());
     let mut content = vec![0.0f32; cols];
     for (r, row) in all.iter().enumerate() {
@@ -914,8 +960,12 @@ fn render_table(
             .items_start()
             .when(r > 0, |row| row.border_t_1().border_color(theme.border))
             .when(is_header, |row| {
-                row.bg(theme.glass_hover())
-                    .rounded_t(px(TABLE_CORNER_RADIUS - 1.0))
+                row.bg(if opts.transcript {
+                    theme.ink(0.04)
+                } else {
+                    theme.glass_hover()
+                })
+                .rounded_t(px(TABLE_CORNER_RADIUS - 1.0))
             });
         for (c, cell_flat) in row.iter().enumerate() {
             let mut cell = div().w_full().min_w_0();
@@ -934,7 +984,7 @@ fn render_table(
             {
                 cell = cell.child(text_element(
                     &all[r][c],
-                    MD_TEXT_SIZE,
+                    opts.prose_text_size(),
                     MD_LINE_HEIGHT,
                     has_header && r == 0,
                     top_ix,
@@ -956,12 +1006,14 @@ fn render_table(
                     TableHead::new(cell_id, c + 1).child(cell),
                     geo.naturals[c],
                     geo.minimums[c],
+                    opts,
                 ))
             } else {
                 row_el.child(style_table_cell(
                     TableCell::new(cell_id, c + 1).child(cell),
                     geo.naturals[c],
                     geo.minimums[c],
+                    opts,
                 ))
             };
         }
@@ -1032,12 +1084,28 @@ pub fn flatten_runs(runs: &[InlineRun], theme: &Theme, bold_default: bool) -> Fl
         } else {
             FontWeight::NORMAL
         },
+        false,
     )
 }
 
 /// [`flatten_runs`] with an explicit base weight (table headers are 700 per
 /// zuse's `table.headerWeight`; strong runs never drop below semibold).
-fn flatten_runs_weighted(runs: &[InlineRun], theme: &Theme, base_weight: FontWeight) -> FlatText {
+fn flatten_runs_weighted(
+    runs: &[InlineRun],
+    theme: &Theme,
+    base_weight: FontWeight,
+    transcript: bool,
+) -> FlatText {
+    let body_color = if transcript {
+        theme.transcript_text()
+    } else {
+        theme.text
+    };
+    let emphasis_color = if body_color == theme.text {
+        theme.text_strong
+    } else {
+        crate::theme::mix(body_color, theme.text_strong, 0.55)
+    };
     let mut text = String::new();
     let mut out: Vec<TextRun> = Vec::with_capacity(runs.len());
     let mut links: Vec<(Range<usize>, String)> = Vec::new();
@@ -1101,14 +1169,17 @@ fn flatten_runs_weighted(runs: &[InlineRun], theme: &Theme, base_weight: FontWei
         if web && !run.style.code && f.weight.0 < FontWeight::MEDIUM.0 {
             f.weight = FontWeight::MEDIUM;
         }
-        // Inline code uses the neutral code ink; everything else
-        // stays the monochrome foreground.
+        // Keep inline code, links, and emphasis clear against the prose.
         let color = if run.style.code {
             inline_code_text(theme)
         } else if web {
             crate::site_links::link_color(theme)
-        } else {
+        } else if is_link {
             theme.text
+        } else if transcript && f.weight.0 >= FontWeight::SEMIBOLD.0 {
+            emphasis_color
+        } else {
+            body_color
         };
         if run.style.code {
             // Merge adjacent code runs into one wash box (like links below).
@@ -1184,6 +1255,14 @@ fn flatten_cached(
     opts: &RenderOptions,
     theme: &Theme,
 ) -> Rc<FlatText> {
+    let flatten = || {
+        Rc::new(flatten_runs_weighted(
+            runs,
+            theme,
+            base_weight,
+            opts.transcript,
+        ))
+    };
     match &opts.cache {
         Some(cache) => {
             let mut cache = cache.borrow_mut();
@@ -1191,10 +1270,10 @@ fn flatten_cached(
             cache
                 .flats
                 .entry((opts.row_key.clone(), top_ix, ix))
-                .or_insert_with(|| Rc::new(flatten_runs_weighted(runs, theme, base_weight)))
+                .or_insert_with(flatten)
                 .clone()
         }
-        None => Rc::new(flatten_runs_weighted(runs, theme, base_weight)),
+        None => flatten(),
     }
 }
 
@@ -3835,7 +3914,7 @@ mod tests {
             text: "Header".into(),
             style: InlineStyle::default(),
         }];
-        let flat = flatten_runs_weighted(&runs, &theme, TABLE_HEADER_WEIGHT);
+        let flat = flatten_runs_weighted(&runs, &theme, TABLE_HEADER_WEIGHT, false);
         assert_eq!(flat.runs[0].font.weight, FontWeight::SEMIBOLD);
         // Strong runs retain the same header weight.
         let bold_runs = vec![InlineRun {
@@ -3845,8 +3924,29 @@ mod tests {
                 ..Default::default()
             },
         }];
-        let flat = flatten_runs_weighted(&bold_runs, &theme, TABLE_HEADER_WEIGHT);
+        let flat = flatten_runs_weighted(&bold_runs, &theme, TABLE_HEADER_WEIGHT, false);
         assert_eq!(flat.runs[0].font.weight, FontWeight::SEMIBOLD);
+    }
+
+    #[test]
+    fn dark_transcript_softens_body_text_and_retains_emphasis() {
+        use crate::theme::{contrast_ratio, flatten};
+
+        let theme = Theme::dark();
+        let tree = super::super::parser::parse_full("Body and **emphasis**.");
+        let Block::Paragraph { runs } = &tree.blocks[0].block else {
+            panic!("expected a paragraph");
+        };
+        let flat = flatten_runs_weighted(runs, &theme, FontWeight::NORMAL, true);
+        let body = flat.runs[0].color;
+        let bubble = flatten(theme.user_bubble_fill(), theme.bg);
+        assert_eq!(flat.runs[0].font.weight, FontWeight::NORMAL);
+        assert!(contrast_ratio(body, theme.bg) < contrast_ratio(theme.text, theme.bg));
+        assert!(contrast_ratio(body, bubble) >= 4.5);
+        let emphasis = contrast_ratio(flat.runs[1].color, theme.bg);
+        assert!(emphasis > contrast_ratio(body, theme.bg));
+        assert!(emphasis < contrast_ratio(theme.text_strong, theme.bg));
+        assert_eq!(flat.runs[1].font.weight, FontWeight::SEMIBOLD);
     }
 
     #[test]

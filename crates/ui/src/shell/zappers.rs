@@ -2578,18 +2578,9 @@ impl Shell {
                 tree
             }
         };
-        let options = crate::markdown::render::RenderOptions {
-            tasks: None,
-            media: None,
-            row_key: format!("zapper-document-{path}").into(),
-            veil: None,
-            cache: None,
-            now: std::time::Instant::now(),
-            copy: None,
-            link: None,
-            workspace_root: None,
-            code: None,
-        };
+        let options = crate::markdown::render::RenderOptions::settled(
+            format!("zapper-document-{path}").into(),
+        );
         let z = zapper.clone();
         let header = div()
             .flex()

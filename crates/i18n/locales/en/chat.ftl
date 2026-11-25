@@ -2818,7 +2818,7 @@ chat-tool_activity_using = Using { $tool }…
 chat-tool_group_thinking = Thinking
 # Variables: running, total
 chat-tool_group_agents_running = { $running } of { $total } running
-chat-tool_activity_summary_separator = { ", " }
+chat-tool_activity_summary_separator = { " · " }
 chat-tool_group_status_separator = { " · " }
 # Variables: count
 chat-tool_activity_summary_commands =
@@ -2843,6 +2843,12 @@ chat-tool_activity_summary_edits =
     { $count ->
        [one] made { $count } edit
        *[other] made { $count } edits
+    }
+# Variables: count
+chat-tool_activity_summary_edited_files =
+    { $count ->
+       [one] edited { $count } file
+       *[other] edited { $count } files
     }
 # Variables: count
 chat-tool_activity_summary_writes =
@@ -2890,6 +2896,14 @@ chat-tool_group_messages =
        [one] { $count } message
        *[other] { $count } messages
     }
+# Variables: count
+chat-tool_group_updates =
+    { $count ->
+       [one] { $count } update
+       *[other] { $count } updates
+    }
+chat-tool_command_label = Command
+chat-tool_output_label = Output
 
 chat-find_in_chat_placeholder = Find in chat
 chat-find_in_chat_count = { $current } of { $total }
@@ -2917,3 +2931,11 @@ chat-worktree_offline = Couldn't reach the remote · using local { $branch }
 
 # Native and browser history pagination; translations remain draft.
 chat-cloud_history_load_earlier = Load earlier messages
+
+# Elapsed work for the current assistant turn or a settled turn.
+# Variables: duration
+chat-turn_working_for = Working for { $duration }
+# Variables: duration
+chat-turn_worked_for = Worked for { $duration }
+chat-turn_thought = Thought
+chat-tool_shell_label = Shell
