@@ -329,6 +329,15 @@ async fn operations_another_path_still_owns_are_left_alone() {
             .unwrap();
             tx.commit().await.unwrap();
         }
+        // Filtered before the batch limit, so skipped computers never
+        // crowd out one that needs settling.
+        let found: Vec<String> = sqlx::query_scalar(CANDIDATES)
+            .bind(now - DEADLINE_MS)
+            .bind(100_i64)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert!(found.is_empty(), "{name}: a candidate");
         let before = row(&pool).await;
         assert_eq!(
             c.settle_stale_lifecycle(now).await.unwrap(),
@@ -343,6 +352,13 @@ async fn operations_another_path_still_owns_are_left_alone() {
     let operation = leave(&pool, &config, now, &incident()).await;
     sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{rustMemoryTransportRecovery}',jsonb_build_object('operationId',$1::text)) WHERE workspace_id='ws-bob'")
         .bind(&operation).execute(&pool).await.unwrap();
+    let found: Vec<String> = sqlx::query_scalar(CANDIDATES)
+        .bind(now - DEADLINE_MS)
+        .bind(100_i64)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert!(found.is_empty(), "memory recovery: a candidate");
     assert_eq!(c.settle_stale_lifecycle(now).await.unwrap(), 0);
     drop_schema(admin, pool, schema).await;
 }
