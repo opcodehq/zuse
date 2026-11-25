@@ -17,6 +17,7 @@ pub(super) mod memory_authority;
 mod memory_recovery;
 mod reconciliation_pause;
 pub mod scheduling;
+pub mod stale;
 pub mod wakeup;
 pub(super) use memory_recovery::{memory_recovery_for, valid_memory_recovery};
 pub(super) use reconciliation_pause::PauseAdmission;
@@ -868,47 +869,20 @@ impl RuntimeControl {
         if failed.rows_affected() != 1 {
             return Ok(false);
         }
-        let mut config = config.clone();
-        let sleep = settle_sleep(&row);
-        if let Some((machine, disk)) = &sleep {
-            let pause = uuid::Uuid::new_v4().to_string();
-            progress(&mut config, &pause, Action::Pause, "quiesced");
-            config["rustResumeFailure"] = json!({
-                "operationId": operation,
-                "pauseOperationId": pause,
-                "code": code,
-                "at": now,
-            });
-            // No runtime came up, so there is nothing to quiesce.
-            sqlx::query("INSERT INTO zuse_rust_lifecycle_operations(operation_id,workspace_id,command_id,generation,source_machine_id,storage_incarnation_id,action,phase,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,'pause','quiesced',$7,$7)")
-                .bind(&pause).bind(&job.resource_id).bind(format!("resume-failed:{operation}")).bind(generation)
-                .bind(machine).bind(disk).bind(now).execute(&mut *tx).await?;
-            sqlx::query("UPDATE api_cloud_workspaces SET state='pausing',desired_state='paused',runtime_state='offline',status_code=$3,request_config=$2,revision=revision+1,updated_at=GREATEST(updated_at+1,$4),next_action_at=$4 WHERE workspace_id=$1")
-                .bind(&job.resource_id).bind(&config).bind(code).bind(now).execute(&mut *tx).await?;
-            let sleep_job = jobs::enqueue(
-                &mut tx,
-                &format!("lifecycle:{pause}"),
-                JOB_KIND,
-                &job.resource_id,
-                generation,
-                &json!({"operationId": pause}),
-                now,
-            )
-            .await?;
-            sqlx::query("UPDATE zuse_rust_jobs SET max_attempts=120 WHERE job_id=$1")
-                .bind(sleep_job)
-                .execute(&mut *tx)
-                .await?;
-        } else {
-            // No machine or retained disk to sleep: nothing keeps running.
-            config["rustLifecycleOperation"]["phase"] = json!("paused");
-            sqlx::query("UPDATE api_cloud_workspaces SET state='paused',desired_state='paused',runtime_state='offline',status_code=$3,request_config=$2,revision=revision+1,updated_at=GREATEST(updated_at+1,$4) WHERE workspace_id=$1")
-                .bind(&job.resource_id).bind(&config).bind(code).bind(now).execute(&mut *tx).await?;
-        }
+        let sleeping = settle_to_sleep(
+            &mut tx,
+            &row,
+            generation,
+            Some(operation),
+            &format!("resume-failed:{operation}"),
+            code,
+            now,
+        )
+        .await?;
         tx.commit().await?;
-        tracing::warn!(workspace = %job.resource_id, operation, code, sleeping = sleep.is_some(),
+        tracing::warn!(workspace = %job.resource_id, operation, code, sleeping,
             "Cloud resume could not start the computer; settled as paused and sleeping its machine");
-        if sleep.is_some() {
+        if sleeping {
             wakeup::send();
         }
         Ok(true)
@@ -921,6 +895,63 @@ impl RuntimeControl {
             .await?;
         Ok(())
     }
+}
+/// Settle a computer whose lifecycle operation will not finish: hand it to a
+/// pause that puts its machine to sleep through the ordinary retained
+/// lifecycle (bounded retries, then the max-quiet-awake backstop, which
+/// watches `pausing`), keeping `code` as its status. With no machine or
+/// retained disk to sleep, nothing keeps running and it is simply paused.
+/// `failed_resume` records the resume being settled, so the failure stays
+/// visible once the pause completes and Recreate is offered. Returns whether
+/// a sleep was queued. The caller holds the workspace lock and commits.
+async fn settle_to_sleep(
+    tx: &mut Transaction<'_, Postgres>,
+    row: &Value,
+    generation: i64,
+    failed_resume: Option<&str>,
+    command: &str,
+    code: &str,
+    now: i64,
+) -> Result<bool, ApiError> {
+    let id = required(row, "workspace_id")?;
+    let mut config = row["request_config"].clone();
+    let Some((machine, disk)) = settle_sleep(row) else {
+        config["rustLifecycleOperation"]["phase"] = json!("paused");
+        sqlx::query("UPDATE api_cloud_workspaces SET state='paused',desired_state='paused',runtime_state='offline',status_code=$3,request_config=$2,revision=revision+1,updated_at=GREATEST(updated_at+1,$4) WHERE workspace_id=$1")
+            .bind(id).bind(&config).bind(code).bind(now).execute(&mut **tx).await?;
+        return Ok(false);
+    };
+    let pause = uuid::Uuid::new_v4().to_string();
+    progress(&mut config, &pause, Action::Pause, "quiesced");
+    if let Some(operation) = failed_resume {
+        config["rustResumeFailure"] = json!({
+            "operationId": operation,
+            "pauseOperationId": pause,
+            "code": code,
+            "at": now,
+        });
+    }
+    // No runtime is up, so there is nothing to quiesce.
+    sqlx::query("INSERT INTO zuse_rust_lifecycle_operations(operation_id,workspace_id,command_id,generation,source_machine_id,storage_incarnation_id,action,phase,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,'pause','quiesced',$7,$7)")
+        .bind(&pause).bind(id).bind(command).bind(generation)
+        .bind(&machine).bind(&disk).bind(now).execute(&mut **tx).await?;
+    sqlx::query("UPDATE api_cloud_workspaces SET state='pausing',desired_state='paused',runtime_state='offline',status_code=$3,request_config=$2,revision=revision+1,updated_at=GREATEST(updated_at+1,$4),next_action_at=$4 WHERE workspace_id=$1")
+        .bind(id).bind(&config).bind(code).bind(now).execute(&mut **tx).await?;
+    let sleep_job = jobs::enqueue(
+        tx,
+        &format!("lifecycle:{pause}"),
+        JOB_KIND,
+        id,
+        generation,
+        &json!({"operationId": pause}),
+        now,
+    )
+    .await?;
+    sqlx::query("UPDATE zuse_rust_jobs SET max_attempts=120 WHERE job_id=$1")
+        .bind(sleep_job)
+        .execute(&mut **tx)
+        .await?;
+    Ok(true)
 }
 /// Ask the provider to sleep `machine` and confirm it, a few bounded times.
 async fn sleep_confirmed(provider: &dyn RetainedProvider, machine: &str) -> bool {
