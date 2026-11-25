@@ -92,6 +92,10 @@ fn review_stays_out_of_conversation_tabs(cx: &mut TestAppContext) {
     let chat_id = cx.update(|window, cx| {
         shell.update(cx, |shell, cx| {
             let chat_id = shell.state.read(cx).selected_chat.clone().unwrap();
+            shell.state.update(cx, |state, cx| {
+                state.chats[0].last_message_at = Some(Utc::now());
+                cx.notify();
+            });
             shell.active_chat = chat_id.clone();
             shell.open_review_tab(window, cx);
             assert!(shell.review_surface(cx).is_some());
@@ -110,6 +114,24 @@ fn review_stays_out_of_conversation_tabs(cx: &mut TestAppContext) {
     assert!(chat.right() <= add.left());
     assert!(chat.top() >= px(0.) && chat.bottom() <= px(Theme::TITLEBAR_HEIGHT));
     assert_eq!(chat.size.height, px(28.));
+}
+
+#[gpui::test]
+fn empty_thread_shows_conversation_tabs_after_first_message(cx: &mut TestAppContext) {
+    let (shell, cx) = setup(cx);
+    cx.update(|window, cx| window.draw(cx).clear());
+    assert!(cx.debug_bounds("thread-conversation-chat").is_none());
+    assert!(cx.debug_bounds("add-thread-conversation").is_none());
+
+    shell.update(cx, |shell, cx| {
+        shell.state.update(cx, |state, cx| {
+            state.chats[0].last_message_at = Some(Utc::now());
+            cx.notify();
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear());
+    assert!(cx.debug_bounds("thread-conversation-chat").is_some());
+    assert!(cx.debug_bounds("add-thread-conversation").is_some());
 }
 
 #[gpui::test]
