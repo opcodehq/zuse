@@ -1939,3 +1939,26 @@ chat-worktree_offline = Dépôt distant injoignable · utilisation de { $branch 
 
 # Native and browser history pagination; translations remain draft.
 chat-cloud_history_load_earlier = Charger les messages précédents
+
+# Variables: count
+chat-tool_activity_summary_edited_files =
+    { $count ->
+       [one] a modifié { $count } fichier
+       *[other] a modifié { $count } fichiers
+    }
+# Variables: count
+chat-tool_group_updates =
+    { $count ->
+       [one] { $count } mise à jour
+       *[other] { $count } mises à jour
+    }
+chat-tool_command_label = Commande
+chat-tool_output_label = Sortie
+
+# Elapsed work for the current assistant turn or a settled turn.
+# Variables: duration
+chat-turn_working_for = En cours depuis { $duration }
+# Variables: duration
+chat-turn_worked_for = A travaillé pendant { $duration }
+chat-turn_thought = Réflexion
+chat-tool_shell_label = Terminal

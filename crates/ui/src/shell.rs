@@ -13785,7 +13785,7 @@ impl Shell {
                     .get()
                     .map(|bounds| f32::from(bounds.size.height))
                     .unwrap_or(106.)
-                    + 68.))
+                    + 132.))
                 .child(
                     div()
                         .text_size(crate::typography::text_2xl())
@@ -14002,9 +14002,8 @@ impl Shell {
     /// the subagent pane so both read as one control. `anim_key`/`hover_key`
     /// must be distinct per instance (they key global animation state).
     ///
-    /// `min-h-6 rounded-md border-border/60 bg-card px-2 text-[10px]`: a
-    /// chevron, or a pulsing dot while the reply is still streaming in out
-    /// of view.
+    /// A chevron marks the jump action. A pulsing dot indicates a reply
+    /// streaming out of view.
     fn jump_pill(
         &self,
         anim_key: &'static str,
@@ -14041,12 +14040,12 @@ impl Shell {
         };
         let pill = div()
             .id(anim_key)
-            .min_h(px(24.0))
+            .min_h(px(22.0))
             .flex()
             .items_center()
             .gap(px(4.0))
-            .px(px(8.0))
-            .py(px(2.0))
+            .px(px(6.0))
+            .py(px(1.0))
             .rounded(px(6.0))
             .border_1()
             .border_color(motion::hover_blend(
@@ -14057,7 +14056,8 @@ impl Shell {
             .when(!glass, |el| el.shadow_sm())
             .cursor_pointer()
             .bg(base)
-            .text_size(px(10.0))
+            .text_size(px(11.0))
+            .line_height(px(16.0))
             .text_color(motion::hover_blend(hover_key, theme.text_muted, theme.text))
             .role(gpui::Role::Button)
             .aria_label(tr(cx, msg::chat::jump_to_latest_pill_jump_to_latest))

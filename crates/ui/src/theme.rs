@@ -1284,6 +1284,20 @@ impl Theme {
         }
     }
 
+    /// A softer body color for long-form conversation text in dark themes.
+    pub(crate) fn transcript_text(&self) -> Hsla {
+        if self.appearance != Appearance::Dark {
+            return self.text;
+        }
+        let bubble = flatten(self.user_bubble_fill(), self.bg);
+        let softened = flatten(self.text.opacity(0.88), self.bg);
+        if contrast_ratio(self.text, self.bg) > 10.0 && contrast_ratio(softened, bubble) >= 4.5 {
+            softened
+        } else {
+            self.text
+        }
+    }
+
     /// The muted fill (chips, segmented tracks, toolbar washes).
     pub fn muted_fill(&self) -> Hsla {
         match self.variant_id.as_ref() {
