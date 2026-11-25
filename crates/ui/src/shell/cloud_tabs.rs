@@ -189,14 +189,10 @@ impl Shell {
         &mut self,
         cx: &mut Context<Self>,
     ) -> Option<CanvasDestination> {
-        let launch_in_front = self
-            .cloud_tabs
-            .canvas
-            .as_ref()
-            .is_some_and(|draft| self.composer.read(cx).has_cloud_launch(&draft.key));
+        let key = self.unsent_canvas_key(cx);
         let destination = match self.cloud_tabs.parked.as_ref() {
-            // A reopened launch is in front: the parked canvas has its own.
-            Some(parked) if launch_in_front => {
+            // The unsent draft is the parked one: it has its own destination.
+            Some(parked) if parked.key == key => {
                 self.cloud_tabs.left_on = None;
                 match parked.project.clone() {
                     Some(project) => CanvasDestination::Cloud(project),
@@ -209,7 +205,6 @@ impl Shell {
                 self.cloud_tabs.left_on.take()?
             }
         };
-        let key = self.unsent_canvas_key(cx);
         self.composer
             .read(cx)
             .key_has_draft(&key, cx)
@@ -255,8 +250,18 @@ impl Shell {
         if launching {
             self.set_cloud_canvas_aside(cx);
         }
-        if self.cloud_tabs.canvas.is_none() {
-            self.cloud_tabs.canvas = self.cloud_tabs.parked.take();
+        if self.cloud_tabs.canvas.is_none()
+            && let Some(parked) = self.cloud_tabs.parked.take()
+        {
+            // A launch reopened meanwhile set its own project and device.
+            let (device, space) = (parked.device.clone(), parked.space.clone());
+            self.state.update(cx, |state, cx| {
+                if let Some(device) = device {
+                    state.select_device(device, cx);
+                }
+                state.select_space(space, cx);
+            });
+            self.cloud_tabs.canvas = Some(parked);
         }
         let state = self.state.read(cx);
         let Some(project) = state.cloud_project.clone() else {
@@ -296,7 +301,7 @@ impl Shell {
                 // A local draft typed on this canvas moves with it to Cloud.
                 let key = if self.composer.read(cx).cloud_canvas_key().is_none() {
                     self.composer
-                        .update(cx, |composer, cx| composer.ensure_cloud_canvas_key(cx))
+                        .update(cx, |composer, cx| composer.adopt_new_chat_draft(cx))
                 } else {
                     CloudDraft::default().key
                 };
@@ -1131,6 +1136,8 @@ mod tests {
         let mut key = String::new();
         step(&mut |shell, cx| {
             shell.state.update(cx, |state, _| {
+                // The canvas stays in front: no boot landing on the chat.
+                state.auto_selected = true;
                 state.apply_chats(vec![local_chat_row("local-a")]);
             });
             shell.open_new_session(None, cx);
@@ -1257,6 +1264,8 @@ mod tests {
             let mut key = String::new();
             step(&mut |shell, cx| {
                 shell.state.update(cx, |state, _| {
+                    // The canvas stays in front: no boot landing on the chat.
+                    state.auto_selected = true;
                     state.apply_chats(vec![local_chat_row("local-a")]);
                 });
                 if switched {
