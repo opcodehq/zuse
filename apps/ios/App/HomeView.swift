@@ -10,6 +10,7 @@ struct HomeView: View {
   let newCloudChat: () -> Void
   var addProject: () -> Void = {}
   var openZapper: (String) -> Void = { _ in }
+  var openPullRequests: () -> Void = {}
   private var isTablet: Bool {
     #if os(iOS)
       UIDevice.current.userInterfaceIdiom == .pad
@@ -99,6 +100,12 @@ struct HomeView: View {
       }
       if let problem = workspace.cloudCatalogProblem {
         HomeNotice(text: problem, icon: "cloud.bolt")
+      }
+      if workspace.pullRequests.available && search.isEmpty && archiveFilter == .active
+        && (!workspace.pullRequests.repositories.isEmpty || workspace.pullRequests.preview)
+      {
+        PullRequestHomeRow(store: workspace.pullRequests, open: openPullRequests)
+          .homeRow(leading: 16)
       }
       ZapperHomeSection(
         workspace: workspace, search: search, filter: archiveFilter, open: openZapper)
