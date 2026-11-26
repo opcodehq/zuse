@@ -673,7 +673,7 @@ impl Transcript {
                             .line_height(px(OUTLINE_TITLE_LH))
                             .text_size(crate::typography::text_md())
                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(popup.text_strong)
+                            .text_color(popup.text)
                             .line_clamp(1)
                             .child(title),
                     )
