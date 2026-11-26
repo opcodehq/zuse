@@ -4,18 +4,11 @@ import ZuseCore
 struct RuntimeSettingsView: View {
   enum Target {
     case computer(RPCClient)
-    case cloud(CloudClient)
-    var isCloud: Bool {
-      if case .cloud = self { return true }
-      return false
-    }
-    var title: String { isCloud ? "Cloud preferences" : "Computer settings" }
+    var title: String { "Computer settings" }
   }
   let target: Target
   init(rpc: RPCClient) { target = .computer(rpc) }
-  init(cloud: CloudClient) { target = .cloud(cloud) }
   @Environment(\.dismiss) private var dismiss
-  @State private var revision = 0
   @State private var original: JSONValue = .null
   @State private var edited: JSONValue = .null
   @State private var schema: SettingsSchema?
@@ -40,9 +33,7 @@ struct RuntimeSettingsView: View {
           let properties = schema.properties
           Section {
             Text(
-              target.isCloud
-                ? "Defaults for your cloud workspaces. Use a setting's context menu to restore its inherited default."
-                : "Preferences for the connected computer. Device appearance is set separately in Settings."
+              "Preferences for the connected computer. Device appearance is set separately in Settings."
             )
             .font(.caption).foregroundStyle(.secondary)
           }
@@ -55,13 +46,6 @@ struct RuntimeSettingsView: View {
               name: settingLabel(name), value: field(name), definition: properties[name] ?? .null,
               schema: schema
             )
-            .contextMenu {
-              if target.isCloud, edited[name] != .null {
-                Button("Use inherited default") {
-                  edited = edited.removing(name)
-                }
-              }
-            }
           }
         }
       }.settingsList().searchable(text: $search, prompt: "Find a setting")
@@ -89,18 +73,15 @@ struct RuntimeSettingsView: View {
         throw ClientError("The settings schema is missing. Rebuild the native app.")
       }
       let document = try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: url))
-      schema = SettingsSchema(document: target.isCloud ? document["workspaceSettings"] : document)
-      let response: JSONValue
+      schema = SettingsSchema(document: document)
+      let values: JSONValue
       switch target {
-      case .computer(let rpc): response = try await rpc.call("settings.get")
-      case .cloud(let client): response = try await client.request("/v1/cloud/settings")
+      case .computer(let rpc): values = try await rpc.call("settings.get")
       }
-      let values = target.isCloud ? response["values"] : response
       guard case .object = values else {
         throw ClientError("The server returned invalid settings. Reconnect and try again.")
       }
       original = values
-      revision = response["revision"].int ?? 0
       edited = original
     } catch { failure = error.localizedDescription }
   }
@@ -120,14 +101,6 @@ struct RuntimeSettingsView: View {
             "\(settingLabel(key)) changed on another client. Reload settings before saving.")
         }
         original = try await rpc.call("settings.update", ["patch": .object(changes)])
-      case .cloud(let client):
-        let response = try await client.request(
-          "/v1/cloud/settings", method: "PUT",
-          body: .object([
-            "expectedRevision": .number(Double(revision)), "values": edited,
-          ]))
-        original = response["values"]
-        revision = response["revision"].int ?? revision
       }
       edited = original
     } catch { failure = error.localizedDescription }

@@ -14,7 +14,7 @@ SWIFT_VERSION = '6.0'
 MARKETING_VERSION = '0.1.0'
 # Bundled as-is; see README.md for where each resource comes from.
 RESOURCES = %w[
-  ModelCatalog.json SettingsSchema.json UIParser.js Assets.xcassets
+  SettingsSchema.json UIParser.js Assets.xcassets
   Diagram.html Mermaid.js Mermaid-LICENSE.txt ThirdPartyNotices.txt
 ].freeze
 

@@ -116,9 +116,13 @@ final class Account: NSObject, ASWebAuthenticationPresentationContextProviding {
     let value = credentials?.user?.email ?? credentials?.claims?["email"].string
     return value?.isEmpty == false ? value : nil
   }
+  /// The organization the session is signed in to; cloud requests act in its workspace.
+  var organizationID: String? {
+    credentials?.claims?["org_id"].string.flatMap { $0.isEmpty ? nil : $0 }
+  }
   var archiveIdentity: String? {
     guard let claims = credentials?.claims, let subject = claims["sub"].string else { return nil }
-    return "\(apiURL.absoluteString)|\(subject)|\(claims["org_id"].string ?? "personal")"
+    return "\(apiURL.absoluteString)|\(subject)|\(organizationID ?? "personal")"
   }
   // Public configuration is copied from the shared deployment contract at project generation.
   private var clientID: String {
@@ -132,6 +136,11 @@ final class Account: NSObject, ASWebAuthenticationPresentationContextProviding {
   override init() {
     super.init()
     #if DEBUG
+      if CloudPreview.enabled {
+        credentials = try? JSONDecoder().decode(Credentials.self, from: CloudPreview.credentials)
+        signedIn = credentials != nil
+        return
+      }
       if ProcessInfo.processInfo.arguments.contains("--native-preview")
         || ProcessInfo.processInfo.arguments.contains("--rpc-fixture")
       {

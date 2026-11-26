@@ -38,28 +38,20 @@ import Testing
   #expect(SettingsSchema.patch(original: original, edited: original).isEmpty)
 }
 
-@Test func generatedCloudAuthMetadataResolvesClassReferences() throws {
-  // Exercise the actual shipped metadata, including Effect's root $ref class encoding.
-  let root = URL(fileURLWithPath: #filePath).resolvingSymlinksInPath()
-    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-  let document = try JSONDecoder().decode(
-    JSONValue.self, from: Data(contentsOf: root.appendingPathComponent("App/SettingsSchema.json")))
-  let auth = SettingsSchema(document: document["cloudAuthConfigure"])
-  #expect(
-    auth.resolve(auth.field("providerId"))["enum"].array.compactMap(\.string) == [
-      "claude", "codex", "cursor", "grok",
-    ])
-  #expect(
-    auth.resolve(auth.field("method"))["enum"].array.compactMap(\.string) == [
-      "subscription", "api-key", "custom",
-    ])
-  #expect(auth.properties["baseUrl"] != nil)
-  #expect(auth.properties["modelProvider"] != nil)
-  let login = SettingsSchema(document: document["cloudAuthLogin"])
-  #expect(
-    login.resolve(login.field("providerId"))["enum"].array.compactMap(\.string) == [
-      "codex", "grok",
-    ])
+@Test func rootClassReferencesResolveToTheirProperties() {
+  let schema = SettingsSchema(
+    document: .object([
+      "$ref": .string("#/$defs/Request"),
+      "$defs": .object([
+        "Request": .object([
+          "type": .string("object"),
+          "properties": .object([
+            "agent": .object(["type": .string("string"), "enum": .array([.string("codex")])])
+          ]),
+        ])
+      ]),
+    ]))
+  #expect(schema.resolve(schema.field("agent"))["enum"].array.compactMap(\.string) == ["codex"])
 }
 
 @Test func generatedProviderSettingsSupportCustomAgentsAndProtectRequiredFields() throws {
