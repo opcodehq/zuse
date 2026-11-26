@@ -57,33 +57,3 @@ struct PullRequestNavigator: View {
     }
   }
 }
-
-/// The home list's entry to pull requests, above Zappers.
-struct PullRequestHomeRow: View {
-  let store: PullRequestStore
-  let open: () -> Void
-  var body: some View {
-    Button(action: open) {
-      HStack(spacing: 10) {
-        PullRequestGlyph(state: .open, size: 16).frame(width: 20, height: 20)
-          .accessibilityHidden(true)
-        Text("Pull requests").font(.system(size: 16)).foregroundStyle(.primary.opacity(0.92))
-        Spacer(minLength: 6)
-        if let count = store.openCount {
-          Text(count.formatted()).font(.system(size: 13)).monospacedDigit()
-            .foregroundStyle(.secondary)
-        } else if store.resolvingRepositories {
-          ProgressView().controlSize(.mini)
-        }
-        Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold))
-          .foregroundStyle(.tertiary).frame(width: 16)
-      }
-      .frame(minHeight: 44).contentShape(Rectangle())
-    }
-    .buttonStyle(.plain)
-    .accessibilityLabel(
-      "Pull requests" + (store.openCount.map { ", \($0) open" } ?? "")
-    )
-    .accessibilityIdentifier("home-pull-requests")
-  }
-}

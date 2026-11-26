@@ -11,7 +11,7 @@ private let snapshotJSON = #"""
     "revision": 12,
     "activityRevision": 4,
     "config": {
-      "name": "Release captain",
+      "name": "Release lead",
       "purpose": "Ship the 2.4 release and keep main green.",
       "homeDeviceId": "mac-studio",
       "repositories": [{"deviceId": "mac-studio", "spaceId": "space-zuse"}],

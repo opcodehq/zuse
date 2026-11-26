@@ -100,8 +100,9 @@ final class NativeChatTests: XCTestCase {
     add(draft)
 
     app.terminate()
-    app.launchArguments = ["--native-preview", "--home-preview"]
+    app.launchArguments = ["--native-preview", "--home-preview", "--tab=chats"]
     app.launch()
+    app.buttons["New chat options"].tap()
     app.buttons["New chat"].tap()
     XCTAssertTrue(app.navigationBars["New Chat"].waitForExistence(timeout: 5))
     let newPrompt = app.textFields["new-chat-prompt"]
@@ -120,7 +121,7 @@ final class NativeChatTests: XCTestCase {
 
   @MainActor func testHomePreviewOpensConversation() throws {
     let app = XCUIApplication()
-    app.launchArguments = ["--native-preview", "--home-preview"]
+    app.launchArguments = ["--native-preview", "--home-preview", "--tab=chats"]
     app.launch()
     let row = app.staticTexts["Polish the mobile navigation"]
     XCTAssertTrue(row.waitForExistence(timeout: 15))
@@ -129,32 +130,25 @@ final class NativeChatTests: XCTestCase {
     XCTAssertFalse(app.buttons["Send message"].isEnabled)
   }
 
-  @MainActor func testHomeKeepsSettingsSeparateAndSearchesChats() throws {
+  @MainActor func testTabsFilterChatsAndReachComputers() throws {
     let app = XCUIApplication()
-    app.launchArguments = ["--native-preview", "--home-preview"]
+    app.launchArguments = ["--native-preview", "--home-preview", "--tab=chats"]
     app.launch()
     XCTAssertTrue(app.staticTexts["Polish the mobile navigation"].waitForExistence(timeout: 15))
     XCTAssertFalse(app.buttons["Sign in to Zuse"].exists)
     XCTAssertFalse(app.buttons["Connect a computer"].exists)
-    let search = app.textFields["Search chats"]
-    search.tap()
-    search.typeText("authentication")
-    XCTAssertTrue(app.staticTexts["Review authentication changes"].exists)
-    XCTAssertFalse(app.staticTexts["Polish the mobile navigation"].exists)
-    app.buttons["Clear search"].tap()
     let archivedRow = app.buttons["Try the old sidebar, archived"]
     XCTAssertFalse(archivedRow.exists)
     app.buttons["archive-filter"].tap()
     app.buttons["Archived"].firstMatch.tap()
     XCTAssertTrue(archivedRow.waitForExistence(timeout: 5))
     XCTAssertFalse(app.staticTexts["Polish the mobile navigation"].exists)
-    app.buttons["archive-filter"].tap()
-    app.buttons["Active"].firstMatch.tap()
+    app.buttons["Show all chats"].tap()
     XCTAssertTrue(app.staticTexts["Polish the mobile navigation"].waitForExistence(timeout: 5))
-    app.buttons["Open settings"].tap()
-    XCTAssertTrue(app.buttons["Sign in to Zuse"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.staticTexts["Not signed in"].exists)
-    XCTAssertFalse(app.staticTexts["Archived chats"].exists)
+    app.buttons["More"].firstMatch.tap()
+    XCTAssertTrue(app.buttons["more-account"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts["Sign in"].exists)
+    XCTAssertTrue(app.staticTexts["Archived chats"].exists)
     app.buttons["settings-computers"].tap()
     XCTAssertTrue(app.staticTexts["Connect your computer"].waitForExistence(timeout: 5))
     let computers = XCTAttachment(screenshot: app.screenshot())
@@ -166,6 +160,23 @@ final class NativeChatTests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Connect with SSH"].exists)
     XCTAssertFalse(app.secureTextFields["Connection token"].exists)
     XCTAssertFalse(app.staticTexts["Nearby computers"].exists)
+  }
+
+  @MainActor func testSearchFindsChatsAndZappers() throws {
+    let app = XCUIApplication()
+    app.launchArguments = [
+      "--native-preview", "--home-preview", "--zapper-preview", "--search=authentication",
+    ]
+    app.launch()
+    XCTAssertTrue(app.staticTexts["Review authentication changes"].waitForExistence(timeout: 15))
+    XCTAssertFalse(app.staticTexts["Polish the mobile navigation"].exists)
+    let search = app.searchFields.firstMatch
+    XCTAssertTrue(search.waitForExistence(timeout: 5))
+    search.tap()
+    search.buttons["Clear text"].tap()
+    search.typeText("Release")
+    let zapper = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Release lead'"))
+    XCTAssertTrue(zapper.firstMatch.waitForExistence(timeout: 5))
   }
 
   @MainActor func testTranscriptScrollsWithKeyboardAndDraftRestsCompactly() throws {
@@ -223,7 +234,7 @@ final class NativeChatTests: XCTestCase {
       throw XCTSkip("Run scripts/test-simulator.sh to start the local RPC fixture.")
     }
     let app = XCUIApplication()
-    app.launchArguments = ["--rpc-fixture"]
+    app.launchArguments = ["--rpc-fixture", "--tab=chats"]
     app.launchEnvironment["ZUSE_IOS_FIXTURE_URL"] = url
     app.launch()
     let chat = app.buttons["Fixture conversation"]
@@ -234,18 +245,20 @@ final class NativeChatTests: XCTestCase {
       XCTAssertTrue(link.waitForExistence(timeout: 10))
       link.tap()
     }
-    // Changes is enabled only once the chat is connected.
+    let composer = app.textFields["chat-composer"]
+    XCTAssertTrue(composer.waitForExistence(timeout: 15))
+    composer.tap()
+    composer.typeText("Hello from native UI")
+    app.buttons["Send message"].tap()
+    XCTAssertTrue(app.staticTexts["Received: Hello from native UI"].waitForExistence(timeout: 10))
+    // Changes lives in the chat's ··· sheet and is enabled once the chat is connected.
+    app.buttons["chat-actions"].tap()
     let changes = app.buttons["Changes"]
     XCTAssertTrue(changes.waitForExistence(timeout: 15))
     wait(
       for: [expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: changes)],
       timeout: 15)
-    let composer = app.textFields["chat-composer"]
-    composer.tap()
-    composer.typeText("Hello from native UI")
-    app.buttons["Send message"].tap()
-    XCTAssertTrue(app.staticTexts["Received: Hello from native UI"].waitForExistence(timeout: 10))
-    app.buttons["Changes"].tap()
+    changes.tap()
     XCTAssertTrue(app.staticTexts["example.swift"].waitForExistence(timeout: 10))
     XCTAssertTrue(app.staticTexts["+let value = 2"].exists)
     let diffCapture = XCTAttachment(screenshot: app.screenshot())
@@ -270,11 +283,12 @@ final class NativeChatTests: XCTestCase {
       throw XCTSkip("Run scripts/test-simulator.sh to start the local RPC fixture.")
     }
     let app = XCUIApplication()
-    app.launchArguments = ["--rpc-fixture"]
+    app.launchArguments = ["--rpc-fixture", "--tab=chats"]
     app.launchEnvironment["ZUSE_IOS_FIXTURE_URL"] = url
     app.launch()
     XCTAssertTrue(app.staticTexts["Fixture conversation"].firstMatch.waitForExistence(timeout: 15))
     XCTAssertTrue(app.staticTexts["#42"].waitForExistence(timeout: 10))
+    app.buttons["chats-more"].tap()
     app.buttons["New chat"].tap()
     XCTAssertTrue(app.buttons["new-chat-destination"].waitForExistence(timeout: 5))
     let create = app.buttons["new-chat-create"]

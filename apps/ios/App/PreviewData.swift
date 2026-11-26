@@ -44,6 +44,10 @@
             id: "preview-\(index)", projectId: "preview-project", title: title,
             providerId: "Preview", model: "sample-balanced", worktreeId: nil)
         }
+        sessions.append(
+          SessionRow(
+            id: "preview-5", projectId: "preview-website", title: "Refresh the pricing page",
+            providerId: "sample-anthropic", model: "sample-sonnet", worktreeId: nil))
         archivedSessions = [
           SessionRow(
             id: "preview-archived", projectId: "preview-project", title: "Try the old sidebar",
@@ -51,6 +55,9 @@
         ]
       }
       projects = [ProjectRow(id: "preview-project", name: "Zuse · Preview")]
+      if ProcessInfo.processInfo.arguments.contains("--home-preview") {
+        projects.append(ProjectRow(id: "preview-website", name: "Website"))
+      }
       if ProcessInfo.processInfo.arguments.contains("--zapper-preview") { loadZapperPreview() }
       selectedProject = projects.first
       let count = ProcessInfo.processInfo.arguments.contains("--large-transcript") ? 10_000 : 30
@@ -219,7 +226,7 @@
       let release = Zapper(
         id: "release", revision: 42, activityRevision: 9,
         config: config(
-          "Release captain",
+          "Release lead",
           "Get Zuse 2.4 out the door: keep main green, land the open fixes and write the release notes.",
           "bolt", "teal"),
         status: .active, coordinatorChatId: "zapper-release-2",
@@ -318,7 +325,7 @@
         "zapper-worker-notes": "Draft 2.4 release notes",
         "zapper-worker-onboarding": "Tighten onboarding copy",
         "zapper-worker-guide": "Document the Zappers page",
-        "zapper-release-2": "Release captain", "zapper-release-0": "Release captain · planning",
+        "zapper-release-2": "Release lead", "zapper-release-0": "Release lead · planning",
         "zapper-docs-0": "Docs gardener",
       ]
       var chats: [String: ZapperChatInfo] = [:]
@@ -330,6 +337,12 @@
             ? "Main is green again. Two threads are running and one needs your call on the release notes."
             : nil,
           lastMessageAt: id == "zapper-worker-onboarding" ? nil : Date().addingTimeInterval(-600))
+      }
+      // Ordinary chats get ages too, so the Chats list reads like a live one.
+      for (index, minutes) in [4.0, 50, 180, 1_500, 4_400, 13_000].enumerated() {
+        chats["preview-\(index)"] = ZapperChatInfo(
+          spaceId: index == 5 ? "preview-website" : "preview-project", archived: false,
+          lastMessageAt: Date().addingTimeInterval(-minutes * 60))
       }
       let notes = """
         # Release notes in progress
@@ -353,7 +366,7 @@
         ZapperFile(
           path: "INSTRUCTIONS.md", version: 2,
           content:
-            "# Release captain\n\nGet Zuse 2.4 out the door.\n\n- Keep `main` green; fix before you add.\n- One thread per issue, small pull requests.\n- Ask before anything that changes pricing or public copy."
+            "# Release lead\n\nGet Zuse 2.4 out the door.\n\n- Keep `main` green; fix before you add.\n- One thread per issue, small pull requests.\n- Ask before anything that changes pricing or public copy."
         ),
         ZapperFile(path: "NOTES.md", version: 1, content: "# Notes\n\nStarted the 2.4 checklist."),
         ZapperFile(

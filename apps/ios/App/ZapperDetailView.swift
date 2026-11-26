@@ -1,12 +1,12 @@
 import SwiftUI
 import ZuseCore
 
-/// Pages pushed inside a Zapper.
+/// Pages pushed for Zappers. Each carries its Zapper, so any stack can show them.
 enum ZapperRoute: Hashable {
-  case overview
+  case overview(String)
   case chat(SessionRow)
-  case issue(String)
-  case document(String)
+  case issue(zapper: String, issue: String)
+  case document(zapper: String, path: String)
 }
 
 enum ZapperSection: String, CaseIterable, Identifiable {
@@ -22,8 +22,28 @@ enum ZapperSection: String, CaseIterable, Identifiable {
   }
 }
 
-/// A Zapper's own navigation stack in the detail column. It opens on the coordinator's
-/// conversation; its title in the header opens the overview, with threads, issues and docs.
+/// The page for one Zapper route, in whichever stack pushed it.
+struct ZapperDestination<Chat: View>: View {
+  let workspace: WorkspaceModel
+  let route: ZapperRoute
+  let push: (ZapperRoute) -> Void
+  let close: () -> Void
+  @ViewBuilder let chat: (SessionRow) -> Chat
+  var body: some View {
+    switch route {
+    case .overview(let id):
+      ZapperDetailView(workspace: workspace, zapperID: id, push: push, close: close)
+    case .chat(let session): chat(session)
+    case .issue(let zapper, let issue):
+      ZapperIssueView(workspace: workspace, zapperID: zapper, issueID: issue, push: push)
+    case .document(let zapper, let path):
+      ZapperDocumentView(store: workspace.zappers, zapperID: zapper, path: path)
+    }
+  }
+}
+
+/// A Zapper's own navigation stack. It opens on the coordinator's conversation; its title in
+/// the header opens the overview, with threads, issues and docs.
 struct ZapperNavigator<Chat: View>: View {
   let workspace: WorkspaceModel
   let zapperID: String
@@ -37,15 +57,8 @@ struct ZapperNavigator<Chat: View>: View {
     NavigationStack(path: $path) {
       root
         .navigationDestination(for: ZapperRoute.self) { route in
-          switch route {
-          case .overview:
-            ZapperDetailView(workspace: workspace, zapperID: zapperID, push: push, close: close)
-          case .chat(let session): chat(session)
-          case .issue(let id):
-            ZapperIssueView(workspace: workspace, zapperID: zapperID, issueID: id, push: push)
-          case .document(let path):
-            ZapperDocumentView(store: store, zapperID: zapperID, path: path)
-          }
+          ZapperDestination(
+            workspace: workspace, route: route, push: push, close: close, chat: chat)
         }
     }
     .onChange(of: path) { _, path in selectVisibleChat(path) }
@@ -54,7 +67,8 @@ struct ZapperNavigator<Chat: View>: View {
     if let zapper = store.zapper(zapperID) {
       let session = coordinator(zapper)
       chat(session)
-        .onAppear { select(session) }
+        // A fresh conversation changes the coordinator chat under the same page.
+        .task(id: session.id) { if path.isEmpty { select(session) } }
     } else {
       // Still loading, or removed: the overview explains either.
       ZapperDetailView(workspace: workspace, zapperID: zapperID, push: push, close: close)
@@ -249,7 +263,7 @@ struct ZapperDetailView: View {
           Button {
             switch item {
             case .decision(let decision): answering = decision
-            case .issue(let id, _, _, _): push(.issue(id))
+            case .issue(let id, _, _, _): push(.issue(zapper: zapper.id, issue: id))
             }
           } label: {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -293,7 +307,7 @@ struct ZapperDetailView: View {
               section = .issues
             } label: {
               HStack(spacing: 10) {
-                Image(systemName: status.symbol).foregroundStyle(status.tint).frame(width: 20)
+                IssueStatusIcon(status: status).frame(width: 20)
                 Text(status.label).foregroundStyle(.primary)
                 Spacer()
                 Text("\(count)").monospacedDigit().foregroundStyle(.secondary)
@@ -335,7 +349,7 @@ struct ZapperDetailView: View {
             if !event.workerChatId.isEmpty {
               push(.chat(threadSession(event.workerChatId, fallback: "Thread")))
             } else if let code = event.issueCode {
-              push(.issue(code))
+              push(.issue(zapper: zapper.id, issue: code))
             }
           }
           .swipeActions {
@@ -530,15 +544,15 @@ struct ZapperDetailView: View {
     Section {
       ForEach(issues) { issue in
         Button {
-          push(.issue(issue.id))
+          push(.issue(zapper: zapper.id, issue: issue.id))
         } label: {
-          ZapperIssueRow(issue: issue, statusLabel: zapper.issueStatusLabel(issue))
+          IssueListRow(issue: issue, zapper: zapper, account: workspace.account)
         }
         .buttonStyle(.plain)
       }
     } header: {
       HStack(spacing: 6) {
-        Image(systemName: status.symbol).foregroundStyle(status.tint)
+        IssueStatusIcon(status: status, size: 13)
         Text(status.label)
         Text("\(issues.count)").monospacedDigit().foregroundStyle(.tertiary)
       }
@@ -561,7 +575,7 @@ struct ZapperDetailView: View {
       Section {
         ForEach(documents) { file in
           Button {
-            push(.document(file.path))
+            push(.document(zapper: zapper.id, path: file.path))
           } label: {
             HStack(alignment: .top, spacing: 12) {
               Image(systemName: "doc.text").font(.system(size: 17)).foregroundStyle(.secondary)
@@ -621,8 +635,9 @@ struct ZapperDetailView: View {
         }
       }
     } label: {
-      Label("Manage", systemImage: "ellipsis.circle")
+      Label("Manage", systemImage: "ellipsis")
     }
+    .tint(.primary)
     .disabled(store.busy[zapper.id] != nil)
     .accessibilityIdentifier("zapper-manage")
   }
@@ -745,7 +760,7 @@ private struct ZapperHero: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       HStack(spacing: 14) {
-        ZapperAvatarView(zapper: zapper, size: 52)
+        ZapperTile(zapper: zapper, size: 56)
         VStack(alignment: .leading, spacing: 3) {
           Text(zapper.config.name).font(.title3.weight(.bold)).lineLimit(2)
           HStack(spacing: 6) {
