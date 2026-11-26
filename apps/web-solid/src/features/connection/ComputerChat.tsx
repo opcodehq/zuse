@@ -129,6 +129,9 @@ export function ComputerChat(props: { chatId: string }) {
               </Btn>
             )}
           </For>
+          {/* One bounded region, so long output never pushes the editor
+              or a Stop button out of view. */}
+          <div style={{ "max-height": "40vh", "overflow-y": "auto" }}>
           <For each={pending()}>
             {(request) => (
               <div>
@@ -171,11 +174,6 @@ export function ComputerChat(props: { chatId: string }) {
                 <p>
                   {run.computer} · {run.result.status}
                 </p>
-                <pre>
-                  {run.command}
-                  {"\n"}
-                  {run.result.output}
-                </pre>
                 <Show when={run.state === "running"}>
                   <Btn
                     disabled={busy()}
@@ -184,9 +182,15 @@ export function ComputerChat(props: { chatId: string }) {
                     Stop
                   </Btn>
                 </Show>
+                <pre style={{ "max-height": "12em", "overflow-y": "auto" }}>
+                  {run.command}
+                  {"\n"}
+                  {run.result.output}
+                </pre>
               </div>
             )}
           </For>
+          </div>
           <Show when={error()}>
             {(message) => <ErrorStrip message={message()} />}
           </Show>
