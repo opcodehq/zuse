@@ -786,10 +786,6 @@ impl Composer {
         let primary = self.primary_claim(&request, cx);
         self.failure = None;
         self.cloud.task = Some(cx.spawn(async move |this, cx| {
-            if let Some((target, chat)) = primary {
-                super::computers::claim_primary(target, chat, cx.background_executor().clone())
-                    .await;
-            }
             if !staged.is_empty() && !computer_files_delivered(&request, staged.len()) {
                 // A message's files go straight to its computer, never to server
                 // storage, whether it runs now or waits in the queue: wake it,
@@ -809,6 +805,12 @@ impl Composer {
                 set_computer_files(&mut request, paths);
                 // Retain the uploaded paths so a retry doesn't upload again.
                 let _=this.update(cx,|this,_|this.cloud.pending_native=Some(request.clone()));
+            }
+            // Only a send that is about to be submitted moves the chat's
+            // primary computer; a failed upload above leaves it unchanged.
+            if let Some((target, chat)) = primary {
+                super::computers::claim_primary(target, chat, cx.background_executor().clone())
+                    .await;
             }
             // A message that has to wait for its computer (runtime update,
             // Update computer) is queued on the server, not refused.

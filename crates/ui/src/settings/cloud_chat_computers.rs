@@ -22,9 +22,13 @@ pub struct CloudChatComputers {
     owner: Option<String>,
     /// This computer's connector.
     status: Option<BridgeStatus>,
+    /// A connector or catalog action is in flight; others wait for it.
     busy: bool,
     error: Option<SharedString>,
+    /// The last status read failed; the last known status stays shown.
+    stale: bool,
     task: Option<Task<()>>,
+    refresh: Option<Task<()>>,
     _poll: Task<()>,
     _observe: Subscription,
 }
@@ -39,7 +43,9 @@ impl CloudChatComputers {
             status: None,
             busy: false,
             error: None,
+            stale: false,
             task: None,
+            refresh: None,
             _observe: observe,
             // Refreshed while Settings shows it; the list less often.
             _poll: cx.spawn(async move |this, cx| {
@@ -88,11 +94,17 @@ impl CloudChatComputers {
             .unwrap_or_else(|| "This computer".into());
         let action = action.to_owned();
         let user_action = action != "refresh";
+        if self.busy {
+            // One action at a time, so none of their outcomes is lost.
+            return;
+        }
         if user_action {
             self.busy = true;
+            // A status read started earlier must not land over this action's result.
+            self.refresh = None;
             cx.notify();
         }
-        self.task = Some(cx.spawn(async move |this, cx| {
+        let task = cx.spawn(async move |this, cx| {
             let client = engine.client();
             let acted = match action.as_str() {
                 "start" => client
@@ -112,6 +124,7 @@ impl CloudChatComputers {
                     .await
                     .map(drop),
             };
+            // `None` when the read failed: keep showing the last known state.
             let status = client
                 .call("ComputerBridgeStatus", serde_json::json!({}))
                 .await
@@ -129,11 +142,16 @@ impl CloudChatComputers {
                 _ => None,
             };
             this.update(cx, |page, cx| {
-                page.busy = false;
+                if user_action {
+                    page.busy = false;
+                }
                 if let Err(error) = acted {
                     page.error = Some(error.to_string().into());
                 }
-                page.status = status;
+                page.stale = status.is_none();
+                if let Some(status) = status {
+                    page.status = Some(status);
+                }
                 if page.state.read(cx).cloud_user_id() != account.as_deref() {
                     page.computers.clear();
                     page.owner = None;
@@ -152,7 +170,12 @@ impl CloudChatComputers {
                 cx.notify();
             })
             .ok();
-        }));
+        });
+        if user_action {
+            self.task = Some(task);
+        } else {
+            self.refresh = Some(task);
+        }
     }
 
     fn render_card(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
@@ -173,10 +196,19 @@ impl CloudChatComputers {
         if let Some(error) = status.error.clone().filter(|_| on) {
             meta.push(div().child(error).into_any_element());
         }
+        if self.stale {
+            meta.push(
+                div()
+                    .text_color(theme.warning)
+                    .child("Couldn't refresh")
+                    .into_any_element(),
+            );
+        }
         let busy = self.busy;
         let action = if on {
             widgets::text_action(theme, widgets::ActionTone::Quiet, "Stop")
                 .id("bridge-stop")
+                .when(busy, |el| el.opacity(0.5))
                 .role(gpui::Role::Button)
                 .tab_index(0)
                 .on_click(cx.listener(|page, _, _, cx| page.bridge_action("stop", None, true, cx)))
@@ -264,6 +296,7 @@ impl CloudChatComputers {
                                         "Revoke always",
                                     )
                                     .id(("bridge-revoke", index))
+                                    .when(busy, |el| el.opacity(0.5))
                                     .role(gpui::Role::Button)
                                     .on_click(cx.listener(
                                         move |page, _, _, cx| {
@@ -280,6 +313,7 @@ impl CloudChatComputers {
                             .child(
                                 widgets::text_action(theme, widgets::ActionTone::Quiet, "Remove")
                                     .id(("bridge-forget", index))
+                                    .when(busy, |el| el.opacity(0.5))
                                     .role(gpui::Role::Button)
                                     .on_click(cx.listener(move |page, _, _, cx| {
                                         page.bridge_action("forget", Some(forget.clone()), true, cx)

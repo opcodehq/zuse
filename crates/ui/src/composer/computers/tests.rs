@@ -36,7 +36,11 @@ fn cloud_composer(
                 workspace: "task".into(),
                 initial_session: "session".into(),
             };
-            c.set_cloud_task(target, json!({"agent":"codex","model":"gpt"}), cx);
+            c.set_cloud_task(
+                target,
+                json!({"agent":"codex","model":"gpt-6.1-sol","runtimeMode":"full-access"}),
+                cx,
+            );
         }
         c.sync_computers(cx);
     });
@@ -330,4 +334,67 @@ fn sends_claim_this_computer_as_primary_before_the_message(cx: &mut gpui::TestAp
                 .primary_claim(&json!({"sessionId":"session"}), cx))
             .is_none()
     );
+}
+
+#[gpui::test]
+fn a_send_claims_the_primary_first_and_still_goes_out_when_refused(cx: &mut gpui::TestAppContext) {
+    let runtime = runtime();
+    let _entered = runtime.enter();
+    let (composer, _, mut requests, replies) = cloud_composer(cx, true);
+    serve(cx, &runtime, &mut requests, &replies, account);
+    composer.update(cx, |c, cx| {
+        assert!(c.send_cloud_task("Fix the build".into(), false, cx));
+    });
+    let asked = serve(
+        cx,
+        &runtime,
+        &mut requests,
+        &replies,
+        |label, params| match label {
+            "ClaimComputerPrimary" => Err("this computer's connector is off"),
+            methods::CLOUD_TASK_COMMAND => Ok(json!({"accountId":"owner","organizationId":null,
+                "data":{"commandId":params["request"]["commandId"],"durablyAdmitted":true}})),
+            _ => account(label, params),
+        },
+    );
+    let order: Vec<&str> = asked
+        .iter()
+        .filter_map(|r| r["method"].as_str())
+        .filter(|m| matches!(*m, "ClaimComputerPrimary" | methods::CLOUD_TASK_COMMAND))
+        .collect();
+    assert_eq!(
+        order,
+        vec!["ClaimComputerPrimary", methods::CLOUD_TASK_COMMAND]
+    );
+    let claim = asked
+        .iter()
+        .find(|r| r["method"] == "ClaimComputerPrimary")
+        .unwrap();
+    assert_eq!(claim["params"]["workspaceId"], "task");
+    assert_eq!(claim["params"]["chatId"], "session");
+}
+
+#[gpui::test]
+fn a_full_read_clears_requests_after_the_last_computer_is_detached(cx: &mut gpui::TestAppContext) {
+    let runtime = runtime();
+    let _entered = runtime.enter();
+    let (composer, _, mut requests, replies) = cloud_composer(cx, true);
+    serve(cx, &runtime, &mut requests, &replies, account);
+    composer.read_with(cx, |c, _| assert_eq!(c.computers.pending.len(), 2));
+    composer.update(cx, |c, cx| c.refresh_computers(cx));
+    serve(
+        cx,
+        &runtime,
+        &mut requests,
+        &replies,
+        |label, params| match label {
+            "attached" | "pending" | "results" => Ok(json!([])),
+            _ => account(label, params),
+        },
+    );
+    composer.read_with(cx, |c, _| {
+        assert!(c.computers.attached.is_empty());
+        assert!(c.computers.pending.is_empty(), "stale approvals stayed");
+        assert!(c.computers.runs.is_empty());
+    });
 }

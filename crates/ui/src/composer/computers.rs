@@ -194,7 +194,6 @@ struct Fetched {
 async fn fetch(scope: Scope, slow: bool, watching: bool) -> Fetched {
     let client = scope.controller.client();
     let mut out = Fetched::default();
-    let mut watching = watching;
     let call = |action: &str| client.call("CloudComputerControl", scope.params(action));
     if slow {
         // A missing local connector (older engine) is not an error here.
@@ -208,15 +207,13 @@ async fn fetch(scope: Scope, slow: bool, watching: bool) -> Fetched {
             Err(error) => out.error = Some(error.to_string()),
         }
         match call("attached").await {
-            Ok(ids) => {
-                let ids = parse_attached(ids);
-                watching |= !ids.is_empty();
-                out.attached = Some(ids);
-            }
+            Ok(ids) => out.attached = Some(parse_attached(ids)),
             Err(error) => out.error = Some(error.to_string()),
         }
     }
-    if watching {
+    // Every full read reconciles requests, so detaching the last computer
+    // still clears its approvals; the fast reads only run while one matters.
+    if slow || watching {
         match call("pending").await {
             Ok(rows) => out.pending = serde_json::from_value(rows).ok(),
             Err(error) => out.error = Some(error.to_string()),
