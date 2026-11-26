@@ -1895,6 +1895,18 @@ fn scrollbar_thumb_colors(theme: &Theme) -> (Hsla, Hsla, Hsla) {
 fn sync_gpui_base_scrollbar(theme: &Theme, cx: &mut App) {
     zuse_viewport::sidebar_controls::set_plan_ink(crate::popover::dither_ink(theme), cx);
     zuse_viewport::palette::set_accent(crate::popover::themed_accent(theme));
+    zuse_viewport::palette::set_settings(
+        (!matches!(theme.variant_id.as_ref(), "zuse-dark" | "zuse-light")
+            || theme.wallpaper_color.is_some())
+        .then_some(zuse_viewport::palette::SettingsColors {
+            frame: theme.settings_frame_bg(),
+            card: theme.surface_card,
+            border: theme.border,
+            text: theme.text_strong,
+            muted: theme.text_muted,
+            faint: theme.text_faint,
+        }),
+    );
     zuse_viewport::palette::set_usage_menu(
         (theme.family_id.as_ref() != "zuse" || theme.wallpaper_color.is_some()).then_some(
             zuse_viewport::palette::UsageMenuColors {

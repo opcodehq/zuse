@@ -7,6 +7,11 @@ use gpui::{prelude::*, *};
 const DITHER_RADIUS: f32 = 6.;
 
 pub fn dither_background(primary: bool, enabled: bool) -> AnyElement {
+    let ink = if primary {
+        crate::palette::accent_or(rgb(0x97b74c).into())
+    } else {
+        rgb(0x5c6068).into()
+    };
     canvas(
         |_, _, _| (),
         move |bounds, _, window, _| {
@@ -19,7 +24,6 @@ pub fn dither_background(primary: bool, enabled: bool) -> AnyElement {
             } else {
                 0.0
             };
-            let seed = if primary { 0x97b74c } else { 0x5c6068 };
             let bayer = [
                 0., 8., 2., 10., 12., 4., 14., 6., 3., 11., 1., 9., 15., 7., 13., 5.,
             ];
@@ -60,7 +64,7 @@ pub fn dither_background(primary: bool, enabled: bool) -> AnyElement {
                             px(2f32.min(height - y as f32 * 2.)),
                         ),
                     );
-                    window.paint_quad(fill(cell, rgba((seed << 8) | ((alpha * 255.) as u32))));
+                    window.paint_quad(fill(cell, ink.opacity(alpha)));
                 }
             }
         },
@@ -94,7 +98,12 @@ pub fn dither_action(
         .text_size(px(11.))
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(0xffffff))
-        .bg(rgb(0x13150f))
+        .bg(if primary {
+            let accent = crate::palette::accent_or(rgb(0x97b74c).into());
+            hsla(accent.h, (accent.s * 0.4).min(0.2), 0.07, 1.)
+        } else {
+            rgb(0x13150f).into()
+        })
         .when(!enabled, |d| d.opacity(0.45))
         .when(enabled, |d| d.cursor_pointer().hover(|d| d.opacity(0.95)))
         .child(dither_background(primary, enabled))

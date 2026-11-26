@@ -48,10 +48,14 @@ pub const TITLE_SIZE: f32 = 12.;
 pub const DESCRIPTION_SIZE: f32 = 11.;
 pub const CONTROL_HEIGHT: f32 = 28.;
 pub fn frame_bg() -> Hsla {
-    tone(FRAME_BG, hsla(105. / 360., 0.18, 0.94, 1.))
+    crate::palette::settings()
+        .map(|colors| colors.frame)
+        .unwrap_or_else(|| tone(FRAME_BG, hsla(105. / 360., 0.18, 0.94, 1.)))
 }
 pub fn card_bg() -> Hsla {
-    tone(CARD_BG, hsla(0., 0., 1., 1.))
+    crate::palette::settings()
+        .map(|colors| colors.card)
+        .unwrap_or_else(|| tone(CARD_BG, hsla(0., 0., 1., 1.)))
 }
 pub fn sidebar_bg() -> Hsla {
     tone(SIDEBAR_BG, hsla(105. / 360., 0.22, 0.95, 1.))
@@ -63,7 +67,9 @@ pub fn sidebar_border() -> Hsla {
     tone(SIDEBAR_BORDER, hsla(110. / 360., 0.13, 0.89, 1.))
 }
 pub fn card_border() -> Hsla {
-    tone(CARD_BORDER, hsla(110. / 360., 0.13, 0.89, 1.))
+    crate::palette::settings()
+        .map(|colors| colors.border)
+        .unwrap_or_else(|| tone(CARD_BORDER, hsla(110. / 360., 0.13, 0.89, 1.)))
 }
 pub fn destructive_text() -> Hsla {
     tone(hsla(0., 0.921, 0.604, 1.), hsla(0., 0.742, 0.529, 1.))
