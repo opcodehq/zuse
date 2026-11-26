@@ -79,74 +79,49 @@ extension CloudClient {
   public func environments() async throws -> [RemoteEnvironment] {
     try await request("/v1/environments")["environments"].decode([RemoteEnvironment].self)
   }
+  /// Reaches a linked computer through the account. The cloud only issues managed connections
+  /// (`requireManaged`, wire protocol 1), so computers that don't advertise them can't be reached.
   public func connectEnvironment(_ id: String, proof: DeviceProof, canonicalAccount: Bool = false)
     async throws -> RPCClient
   {
-    if canonicalAccount {
-      let rpc = RPCClient(
-        accountEnvironmentID: id,
-        grant: {
-          let device = try await request("/v1/client/dpop-token", method: "POST", proof: proof)
-          guard let access = device["accessToken"].string else {
-            throw ClientError("Missing device grant.")
-          }
-          let encoder = JSONEncoder()
-          encoder.outputFormatting = [.sortedKeys]
-          let keyID = Data(SHA256.hash(data: try encoder.encode(proof.publicJWK))).map {
-            String(format: "%02x", $0)
-          }.joined()
-          _ = try await request(
-            "/v1/mobile/devices", method: "POST",
-            body: .object([
-              "deviceId": .string("ios-" + keyID), "platform": .string("ios"),
-              "dpopJwk": proof.publicJWK,
-            ]), proof: proof, deviceToken: access)
-          let encoded = id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
-          let connection = try await request(
-            "/v1/environments/\(encoded)/connect", method: "POST",
-            body: .object(["requireManaged": .bool(true), "wireProtocolVersion": .number(1)]),
-            proof: proof, deviceToken: access)
-          guard let endpoint = connection["endpoint"]["wsBaseUrl"].string,
-            endpoint.hasPrefix("wss://"),
-            let token = connection["connectToken"].string, let expiry = connection["expiresAt"].int
-          else { throw ClientError("Missing managed computer endpoint.") }
-          return AccountGrant(
-            environmentID: id, origin: "https://" + endpoint.dropFirst(6), token: token,
-            expiresAt: expiry)
-        }, session: session)
-      do {
-        try await rpc.connect()
-        return rpc
-      } catch {
-        await rpc.close()
-        throw error
-      }
+    guard canonicalAccount else {
+      throw ClientError(
+        "This computer runs an older version of Zuse. Update Zuse on it, then run zuse link again.",
+        code: "protocol-incompatible")
     }
-    let grant = try await request("/v1/client/dpop-token", method: "POST", proof: proof)
-    guard let access = grant["accessToken"].string else {
-      throw ClientError("Invalid device grant.")
-    }
-    let encoded = id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
-    let connection = try await request(
-      "/v1/environments/\(encoded)/connect", method: "POST", proof: proof, deviceToken: access)
-    guard let address = connection["endpoint"]["wsBaseUrl"].string,
-      var url = URLComponents(string: address), url.scheme == "wss",
-      let token = connection["connectToken"].string
-    else { throw ClientError("The computer did not return a secure endpoint.") }
-    url.queryItems =
-      (url.queryItems ?? []).filter { $0.name != "token" } + [
-        URLQueryItem(name: "token", value: token)
-      ]
-    guard let endpoint = url.url else { throw ClientError("Invalid computer endpoint.") }
-    let rpc = try RPCClient(url: endpoint)
+    let rpc = RPCClient(
+      accountEnvironmentID: id,
+      grant: {
+        let device = try await request("/v1/client/dpop-token", method: "POST", proof: proof)
+        guard let access = device["accessToken"].string else {
+          throw ClientError("Missing device grant.")
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let keyID = Data(SHA256.hash(data: try encoder.encode(proof.publicJWK))).map {
+          String(format: "%02x", $0)
+        }.joined()
+        _ = try await request(
+          "/v1/mobile/devices", method: "POST",
+          body: .object([
+            "deviceId": .string("ios-" + keyID), "platform": .string("ios"),
+            "dpopJwk": proof.publicJWK,
+          ]), proof: proof, deviceToken: access)
+        let encoded = id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
+        let connection = try await request(
+          "/v1/environments/\(encoded)/connect", method: "POST",
+          body: .object(["requireManaged": .bool(true), "wireProtocolVersion": .number(1)]),
+          proof: proof, deviceToken: access)
+        guard let endpoint = connection["endpoint"]["wsBaseUrl"].string,
+          endpoint.hasPrefix("wss://"),
+          let token = connection["connectToken"].string, let expiry = connection["expiresAt"].int
+        else { throw ClientError("Missing managed computer endpoint.") }
+        return AccountGrant(
+          environmentID: id, origin: "https://" + endpoint.dropFirst(6), token: token,
+          expiresAt: expiry)
+      }, session: session)
     do {
       try await rpc.connect()
-      let descriptor = try await rpc.call("connect.describe")
-      guard descriptor["environmentId"].string == id else {
-        throw ClientError(
-          "The connected computer does not match the selected account device.",
-          code: "identity-changed")
-      }
       return rpc
     } catch {
       await rpc.close()

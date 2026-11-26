@@ -58,11 +58,15 @@ accessibility or rendering performance. Check those by hand before a release.
 
 These files in `App/` are committed snapshots that nothing in this repository regenerates:
 
-- `ModelCatalog.json`: agents and models offered when launching a cloud chat.
-- `SettingsSchema.json`: JSON Schema used to build the settings editors.
+- `SettingsSchema.json`: JSON Schema used to build the computer settings editor.
 - `UIParser.js`: generative UI spec parser, run in JavaScriptCore by `UISpecView`.
 - `Mermaid.js` and `Mermaid-LICENSE.txt`: Mermaid 11.15.0 for `Diagram.html`.
 
 They came from the original TypeScript workspace (see
 `internal-docs/mobile-import.md`). When the RPC settings contract changes, update
 `SettingsSchema.json` by hand to match.
+
+Cloud chats take their repositories, agents and models from the cloud API's
+`/v1/cloud/context`, so nothing about cloud launch is bundled. Run with
+`--native-preview --new-chat-preview --cloud-preview` (add `--cloud-agents-preview`
+for the agent connections sheet) to see the cloud screens against built-in fixtures.

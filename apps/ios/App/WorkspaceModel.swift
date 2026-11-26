@@ -253,8 +253,12 @@ import ZuseCore
     #endif
   }
   var cloud: CloudClient {
+    #if DEBUG
+      if CloudPreview.enabled { return CloudPreview.client() }
+    #endif
     let generation = account.generation
-    return CloudClient(baseURL: account.apiURL) { [account] in
+    return CloudClient(baseURL: account.apiURL, organizationID: account.organizationID) {
+      [account] in
       try await account.token(expectedGeneration: generation)
     }
   }

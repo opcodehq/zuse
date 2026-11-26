@@ -308,7 +308,11 @@ struct NewChatSetupView: View {
     self.workspace = workspace
     self.showsClose = showsClose
     self.close = close
-    _cloud = State(initialValue: initialCloud)
+    #if DEBUG
+      _cloud = State(initialValue: initialCloud || CloudPreview.enabled)
+    #else
+      _cloud = State(initialValue: initialCloud)
+    #endif
   }
   @State private var cloud = false
   @State private var draft = ""

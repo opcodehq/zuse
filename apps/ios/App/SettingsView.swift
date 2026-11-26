@@ -211,7 +211,6 @@ struct AccountSettingsView: View {
   @State private var refreshing = false
   @State private var confirmSignOut = false
   @State private var showCloud = false
-  @State private var showCloudPreferences = false
   var body: some View {
     let account = workspace.account
     List {
@@ -271,7 +270,7 @@ struct AccountSettingsView: View {
             showCloud = true
           } label: {
             SettingsRow(
-              title: "Zuse Cloud and agents", subtitle: "Workspaces and agent connections",
+              title: "Cloud agents", subtitle: "Claude, Codex and Grok for cloud chats",
               icon: "cloud")
           }
           Button {
@@ -281,23 +280,6 @@ struct AccountSettingsView: View {
               title: refreshing ? "Refreshing…" : "Refresh account",
               subtitle: "Linked computers and cloud chats", icon: "arrow.clockwise")
           }.disabled(refreshing)
-        }
-        Section {
-          Button {
-            showCloudPreferences = true
-          } label: {
-            SettingsRow(title: "Cloud preferences", icon: "slider.horizontal.3")
-          }
-          NavigationLink {
-            CloudInfrastructureView(workspace: workspace)
-          } label: {
-            SettingsRow(title: "Cloud providers", icon: "server.rack")
-          }
-          NavigationLink {
-            RegisteredDevicesView(workspace: workspace)
-          } label: {
-            SettingsRow(title: "Registered devices", icon: "iphone.gen3")
-          }
         }
         Section {
           Button {
@@ -321,9 +303,6 @@ struct AccountSettingsView: View {
       )
     }
     .sheet(isPresented: $showCloud) { CloudSettingsView(workspace: workspace).nativeSheetSize() }
-    .sheet(isPresented: $showCloudPreferences) {
-      RuntimeSettingsView(cloud: workspace.cloud).nativeSheetSize()
-    }
   }
   private func signIn() {
     guard !signingIn else { return }
