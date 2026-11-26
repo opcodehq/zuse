@@ -25,6 +25,7 @@ pub mod cloud_billing;
 mod command_labels;
 pub mod composer;
 pub mod defaults;
+pub mod cloud_chat_computers;
 pub mod devices;
 pub mod files;
 pub mod harnesses;

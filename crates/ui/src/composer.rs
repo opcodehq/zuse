@@ -57,6 +57,7 @@ use crate::theme::Theme;
 
 mod chip;
 pub(crate) mod cloud;
+pub(crate) mod computers;
 mod editing;
 mod message_recall;
 pub use editing::StashedPrompt;
@@ -6658,6 +6659,8 @@ struct AttachmentDestination {
 }
 pub struct Composer {
     cloud: cloud::Launch,
+    /// Computers attached to the cloud chat in front, and their requests.
+    computers: computers::State,
     /// New cloud chats still being created in tabs that are not in front,
     /// by their draft key. Each tab owns its launch; the composer serves
     /// the tab in front.
@@ -7575,6 +7578,7 @@ impl Composer {
             advance_task: None,
             send_task: None,
             cloud: Default::default(),
+            computers: Default::default(),
             parked_launches: HashMap::new(),
             parked_launch_run: false,
             unarchive_task: None,
@@ -13515,6 +13519,7 @@ impl Render for Composer {
             .selected_chat_row()
             .filter(|chat| chat.archived)
             .cloned();
+        self.sync_computers(cx);
         if let Some(chat) = archived {
             // This early return skips the mounted call below; with the
             // setting off a game in play must still release here, or it
@@ -13682,6 +13687,9 @@ impl Render for Composer {
             let wizard = self.render_wizard(window, cx);
             return container.child(motion::fade_quick("composer-wizard", div().child(wizard)));
         }
+        // A cloud chat's computer request waits above the card, as a local
+        // permission prompt does.
+        let container = container.children(self.render_computer_approval(&theme, cx));
 
         // What is waiting to be sent, stacked directly above the box it was
         // typed in — the queue is a property of this composer, not a panel
@@ -14146,6 +14154,9 @@ impl Render for Composer {
                         theme.text,
                     )),
             );
+        let computers_chip = self
+            .render_computers_chip(&theme, cx)
+            .map(|chip| div().opacity(beneath_voice).child(chip));
         let stash_count = Self::stashed_prompts(cx).len();
         let stash_open = matches!(self.list, Some(ComposerList::Stash { .. }));
         let stash_label = tr(cx, |l10n| msg::chat::stash_open(l10n, stash_count as i64));
@@ -14255,6 +14266,7 @@ impl Render for Composer {
                                 !self.side_chat && zuse_viewport::cloud_gate::enabled(),
                                 |el| el.child(plugins),
                             )
+                            .children(computers_chip)
                             .children(voice_track),
                     )
                     .child(

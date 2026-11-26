@@ -72,10 +72,8 @@ pub struct DevicesPage {
     scroll: widgets::PageScroll,
     pairing: Entity<crate::settings::pairing::PairingCard>,
     managed: Entity<crate::settings::managed_access::ManagedAccessCard>,
-    bridge: Vec<serde_json::Value>,
-    bridge_owner: Option<String>,
-    bridge_pending: Vec<serde_json::Value>,
-    bridge_attached: Vec<String>,
+    /// Cloud chats using this computer: its own section, apart from remote access.
+    cloud_chats: Entity<crate::settings::cloud_chat_computers::CloudChatComputers>,
     rename: Option<RenameDialog>,
     /// Device id whose id-chip shows "Copied" right now.
     copied: Option<String>,
@@ -108,18 +106,18 @@ impl DevicesPage {
         );
         let managed_paint = cx.observe(&managed, |_, _, cx| cx.notify());
         let pairing_paint = cx.observe(&pairing, |_, _, cx| cx.notify());
+        let cloud_chats = cx.new(|cx| {
+            crate::settings::cloud_chat_computers::CloudChatComputers::new(state.clone(), cx)
+        });
         Self {
             _managed: managed_events,
             _managed_paint: managed_paint,
             _pairing_paint: pairing_paint,
             managed,
             pairing,
+            cloud_chats,
             state,
             scroll: widgets::PageScroll::default(),
-            bridge: Vec::new(),
-            bridge_owner: None,
-            bridge_pending: Vec::new(),
-            bridge_attached: Vec::new(),
             rename: None,
             copied: None,
             error: None,
@@ -204,84 +202,6 @@ impl DevicesPage {
             .ok();
         }));
         cx.notify();
-    }
-
-    fn bridge_action(&mut self, action: &str, id: Option<String>, cx: &mut Context<Self>) {
-        let state = self.state.read(cx);
-        let Some(engine) = state.engine().map(|e| e.controller()) else {
-            return;
-        };
-        let Some(account) = state.cloud_user_id().map(str::to_owned) else {
-            return;
-        };
-        let label = state
-            .devices
-            .iter()
-            .find(|d| Some(d.id.as_str()) == state.local_device_id.as_deref())
-            .map(|d| d.name.clone())
-            .unwrap_or_else(|| "Computer".into());
-        let action = action.to_owned();
-        self.task=Some(cx.spawn(async move|this,cx|{
-            let result=async{
-                match action.as_str(){
-                    "start"=>{engine.client().call("StartComputerBridge",serde_json::json!({"label":label})).await?;}
-                    "stop"=>{engine.client().call("StopComputerBridge",serde_json::json!({})).await?;}
-                    "list"=>{}
-                    _=>{engine.client().call("CloudComputerControl",serde_json::json!({"expectedAccountId":account,"action":action,"deviceId":id})).await?;}
-                }
-                engine.client().call("CloudComputerControl",serde_json::json!({"expectedAccountId":account,"action":"list"})).await
-            }.await;
-            this.update(cx,|page,cx|{
-                if page.state.read(cx).cloud_user_id()!=Some(account.as_str()){
-                    page.bridge.clear();page.bridge_owner=None;cx.notify();return;
-                }
-                page.bridge_owner=Some(account);
-                match result{
-                    Ok(rows)=>page.bridge=serde_json::from_value(rows).unwrap_or_default(),
-                    Err(e)=>{page.bridge.clear();page.error=Some(e.to_string().into());}
-                }
-                cx.notify();
-            }).ok();
-        }));
-    }
-
-    fn bridge_chat_action(
-        &mut self,
-        action: &str,
-        id: Option<String>,
-        decision: Option<String>,
-        cx: &mut Context<Self>,
-    ) {
-        let state = self.state.read(cx);
-        let Some(target) = state.engine().and_then(|e| e.cloud_target()) else {
-            return;
-        };
-        let Some(chat) = state.selected_chat.clone() else {
-            return;
-        };
-        let action = action.to_owned();
-        self.task=Some(cx.spawn(async move|this,cx|{
-            let result=async{
-                let mut params=serde_json::json!({"expectedAccountId":target.subject,"workspaceId":target.workspace,"chatId":chat,"action":action,"deviceId":id,"requestId":id,"decision":decision});
-                if action!="refresh"{target.controller.client().call("CloudComputerControl",params.clone()).await?;}
-                params["action"]=serde_json::json!("pending");
-                let pending=target.controller.client().call("CloudComputerControl",params.clone()).await?;
-                params["action"]=serde_json::json!("attached");
-                let attached=target.controller.client().call("CloudComputerControl",params).await?;
-                Ok::<_,zuse_rpc::RpcError>((pending,attached))
-            }.await;
-            this.update(cx,|page,cx|{
-                let state=page.state.read(cx);
-                if state.selected_chat.as_deref()!=Some(chat.as_str()) || state.engine().and_then(|e|e.cloud_workspace()).as_deref()!=Some(target.workspace.as_str()){
-                    page.bridge_pending.clear();page.bridge_attached.clear();cx.notify();return;
-                }
-                match result{
-                    Ok((pending,attached))=>{page.bridge_pending=serde_json::from_value(pending).unwrap_or_default();page.bridge_attached=serde_json::from_value(attached).unwrap_or_default();}
-                    Err(e)=>{page.bridge_pending.clear();page.error=Some(e.to_string().into());}
-                }
-                cx.notify();
-            }).ok();
-        }));
     }
 
     fn copy_id(&mut self, device_id: String, cx: &mut Context<Self>) {
@@ -545,156 +465,7 @@ impl Render for DevicesPage {
             }
             block
         };
-        let mut bridge = widgets::section_card(&theme).child(
-            widgets::card_row(&theme, true)
-                .child(widgets::row_title(&theme, "Cloud chat computers"))
-                .child(
-                    widgets::text_action(&theme, widgets::ActionTone::Quiet, "Load computers")
-                        .id("bridge-load")
-                        .on_click(
-                            cx.listener(|page, _, _, cx| page.bridge_action("list", None, cx)),
-                        ),
-                ),
-        );
-        if self.bridge_owner.as_deref() != self.state.read(cx).cloud_user_id() {
-            self.bridge.clear();
-            self.bridge_owner = None;
-        }
-        bridge = bridge.child(
-            widgets::card_row(&theme, false)
-                .child(
-                    widgets::text_action(
-                        &theme,
-                        widgets::ActionTone::Quiet,
-                        "Allow cloud chats to use this computer",
-                    )
-                    .id("bridge-start")
-                    .on_click(cx.listener(|page, _, _, cx| page.bridge_action("start", None, cx))),
-                )
-                .child(
-                    widgets::text_action(
-                        &theme,
-                        widgets::ActionTone::Quiet,
-                        "Stop computer connector",
-                    )
-                    .id("bridge-stop")
-                    .on_click(cx.listener(|page, _, _, cx| page.bridge_action("stop", None, cx))),
-                ),
-        );
-        let cloud_chat = self
-            .state
-            .read(cx)
-            .engine()
-            .and_then(|e| e.cloud_target())
-            .is_some();
-        if cloud_chat {
-            bridge = bridge.child(
-                widgets::card_row(&theme, false).child(
-                    widgets::text_action(
-                        &theme,
-                        widgets::ActionTone::Quiet,
-                        "Load this chat's computer approvals",
-                    )
-                    .id("bridge-chat-refresh")
-                    .on_click(cx.listener(|page, _, _, cx| {
-                        page.bridge_chat_action("refresh", None, None, cx)
-                    })),
-                ),
-            );
-        }
-        for (index, computer) in self.bridge.iter().enumerate() {
-            let id = computer["deviceId"].as_str().unwrap_or("").to_owned();
-            let forget = id.clone();
-            let mut row = widgets::card_row(&theme, false).child(widgets::row_title(
-                &theme,
-                format!(
-                    "{} · {}",
-                    computer["name"].as_str().unwrap_or("Computer"),
-                    computer["platform"].as_str().unwrap_or("")
-                ),
-            ));
-            if cloud_chat {
-                let device = id.clone();
-                let attached = self.bridge_attached.contains(&device);
-                row = row.child(
-                    widgets::text_action(
-                        &theme,
-                        widgets::ActionTone::Quiet,
-                        if attached {
-                            "Detach from this chat"
-                        } else {
-                            "Attach to this chat"
-                        },
-                    )
-                    .id(("bridge-attach", index))
-                    .on_click(cx.listener(move |page, _, _, cx| {
-                        page.bridge_chat_action(
-                            if attached { "detach" } else { "attach" },
-                            Some(device.clone()),
-                            None,
-                            cx,
-                        )
-                    })),
-                );
-            }
-            if computer["alwaysAllowed"] == true {
-                row = row.child(
-                    widgets::text_action(&theme, widgets::ActionTone::Quiet, "Revoke always allow")
-                        .id(("bridge-revoke", index))
-                        .on_click(cx.listener(move |page, _, _, cx| {
-                            page.bridge_action("revoke", Some(id.clone()), cx)
-                        })),
-                );
-            }
-            bridge = bridge.child(
-                row.child(
-                    widgets::text_action(&theme, widgets::ActionTone::Quiet, "Remove computer")
-                        .id(("bridge-forget", index))
-                        .on_click(cx.listener(move |page, _, _, cx| {
-                            page.bridge_action("forget", Some(forget.clone()), cx)
-                        })),
-                ),
-            );
-        }
-        if cloud_chat {
-            for (index, request) in self.bridge_pending.iter().enumerate() {
-                let title = format!(
-                    "{} · {} · {}\n{}\n{}",
-                    request["computerName"].as_str().unwrap_or("Computer"),
-                    request["osUser"].as_str().unwrap_or(""),
-                    request["shell"].as_str().unwrap_or(""),
-                    request["cwd"].as_str().unwrap_or(""),
-                    request["command"].as_str().unwrap_or("")
-                );
-                let mut row = div().flex().flex_col().child(title);
-                for (decision, label) in [
-                    ("once", "Approve once"),
-                    ("session", "Approve for this session"),
-                    ("always", "Approve always"),
-                    ("deny", "Deny"),
-                ] {
-                    let id = request["id"].as_str().unwrap_or("").to_owned();
-                    row = row.child(
-                        widgets::text_action(&theme, widgets::ActionTone::Quiet, label)
-                            .id((
-                                SharedString::from(format!("bridge-decide-{decision}")),
-                                index,
-                            ))
-                            .on_click(cx.listener(move |page, _, _, cx| {
-                                page.bridge_chat_action(
-                                    "decide",
-                                    Some(id.clone()),
-                                    Some(decision.into()),
-                                    cx,
-                                )
-                            })),
-                    );
-                }
-                bridge = bridge.child(widgets::card_row(&theme, false).child(row));
-            }
-        }
         let card = div()
-            .child(bridge)
             .flex()
             .flex_col()
             .gap(px(16.))
@@ -764,7 +535,13 @@ impl Render for DevicesPage {
                                                 .children(pairing.advanced)
                                                 .child(card)
                                                 .children(self.render_workspace_storage(cx))))
-                                }),
+                                })
+                                .child(div().mt(px(40.)).child(widgets::section_title(
+                                    &theme,
+                                    "Cloud chat computers",
+                                    "Let your cloud chats run commands on this computer. Each command asks you first.",
+                                )))
+                                .child(div().mt(px(20.)).child(self.cloud_chats.clone())),
                         ),
                 )
                 .fade_overflow_y(&self.scroll.scroll),

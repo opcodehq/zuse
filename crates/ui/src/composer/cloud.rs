@@ -215,6 +215,10 @@ impl Composer {
     pub(crate) fn is_native_cloud(&self) -> bool {
         self.cloud.native.is_some()
     }
+    /// The cloud chat this composer is bound to, if any.
+    pub(super) fn native_cloud_target(&self) -> Option<&crate::state::CloudTarget> {
+        self.cloud.native.as_ref().map(|task| &task.target)
+    }
     /// Hold sends while the server records this new conversation.
     pub(crate) fn set_cloud_registering(&mut self, registering: bool, cx: &mut Context<Self>) {
         self.cloud.registering = registering;
@@ -779,8 +783,13 @@ impl Composer {
             return;
         };
         let staged = self.cloud.native_staged.clone();
+        let primary = self.primary_claim(&request, cx);
         self.failure = None;
         self.cloud.task = Some(cx.spawn(async move |this, cx| {
+            if let Some((target, chat)) = primary {
+                super::computers::claim_primary(target, chat, cx.background_executor().clone())
+                    .await;
+            }
             if !staged.is_empty() && !computer_files_delivered(&request, staged.len()) {
                 // A message's files go straight to its computer, never to server
                 // storage, whether it runs now or waits in the queue: wake it,
