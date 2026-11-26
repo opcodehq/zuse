@@ -589,17 +589,12 @@ impl SettingsSection {
         SettingsSection::CloudAgents,
     ];
 
-    /// The sidebar heading this section opens for `access`, if it starts a
-    /// group. Plan & usage opens on Usage, or on Billing when Usage (Cloud
-    /// compute, subscribers only) is not listed.
-    fn heading(self, access: CloudAccess) -> Option<&'static str> {
+    /// The sidebar heading this section opens, if it starts a group.
+    fn heading(self) -> Option<&'static str> {
         match self {
             SettingsSection::Harnesses => Some("Local agents"),
             SettingsSection::Cloud => Some("Cloud computer"),
             SettingsSection::Usage => Some("Plan & usage"),
-            SettingsSection::Billing if !SettingsSection::Usage.visible_in_nav(access) => {
-                Some("Plan & usage")
-            }
             SettingsSection::General => Some("App"),
             _ => None,
         }
@@ -614,7 +609,6 @@ impl SettingsSection {
             SettingsSection::CloudEnvironments => CloudView::Environments,
             SettingsSection::CloudMachine => CloudView::Machine,
             SettingsSection::CloudAgents => CloudView::Agents,
-            SettingsSection::Usage => CloudView::Compute,
             SettingsSection::Billing => CloudView::Billing,
             _ => return None,
         })
@@ -643,11 +637,8 @@ impl SettingsSection {
         }
     }
 
-    /// Whether the Settings menu lists this section for `access`. The Cloud
-    /// computer group and Usage (Cloud compute) need an active Cloud
-    /// subscription; Billing needs a signed-in account (so it can sell one).
-    /// Local agents and App sections are always listed. Local model usage
-    /// lives in the sidebar footer's usage menu, not here.
+    /// The Cloud computer group requires a subscription, and Billing requires
+    /// a signed-in account. Usage is always available for local agent tokens.
     fn visible_in_nav(self, access: CloudAccess) -> bool {
         self.offered_by_build()
             && (!self.needs_subscription() || access.subscribed())
@@ -673,10 +664,9 @@ impl SettingsSection {
         self.visible_in_nav(access) || (!access.settled() && self.offered_by_build())
     }
 
-    /// Sections only a Cloud subscriber sees: the Cloud computer group and
-    /// Usage, which shows Cloud compute.
+    /// Sections only a Cloud subscriber sees.
     fn needs_subscription(self) -> bool {
-        self.cloud_computer() || self == Self::Usage
+        self.cloud_computer()
     }
 
     /// The Cloud computer group: cloud computers, their repositories,
@@ -2412,6 +2402,7 @@ pub struct Shell {
     devices_page: Option<Entity<DevicesPage>>,
     archived_page: Option<Entity<ArchivedPage>>,
     archive_project: Option<String>,
+    usage_settings_tokens: bool,
     usage_dashboard: Option<Entity<zuse_viewport::usage_dashboard::UsageDashboard>>,
     usage_tasks: std::collections::BTreeMap<u64, Task<()>>,
     usage_project: Option<String>,
@@ -3111,6 +3102,7 @@ impl Shell {
             devices_page: None,
             archived_page: None,
             archive_project: None,
+            usage_settings_tokens: false,
             usage_dashboard: None,
             usage_tasks: Default::default(),
             usage_project: None,
@@ -6205,16 +6197,18 @@ impl Shell {
                 page.update(cx, |page, cx| page.on_hidden(cx));
             }
         }
-        // The model-usage dashboard shows on the Usage route only; it loads
-        // on entry and stops on exit.
-        let shows_usage = matches!(self.route, Route::Usage);
-        let will_show_usage = matches!(route, Route::Usage);
-        if shows_usage && !will_show_usage {
-            if let Some(dashboard) = self.usage_dashboard.clone() {
-                dashboard.update(cx, |dashboard, cx| dashboard.hide(cx));
-            }
+        let current_usage = matches!(
+            self.route,
+            Route::Usage | Route::Settings(SettingsSection::Usage)
+        );
+        let next_usage = matches!(
+            route,
+            Route::Usage | Route::Settings(SettingsSection::Usage)
+        );
+        if current_usage && !next_usage {
+            self.hide_usage_dashboard(cx);
         }
-        if will_show_usage && !shows_usage {
+        if route == Route::Usage && self.route != Route::Usage {
             self.usage_pending = true;
         }
         self.route = route;
@@ -6784,13 +6778,13 @@ impl Shell {
             | SettingsSection::CloudEnvironments
             | SettingsSection::CloudMachine
             | SettingsSection::CloudAgents
-            | SettingsSection::Usage
             | SettingsSection::Billing => {
                 let view = section.cloud_view().unwrap_or_default();
                 let page = self.ensure_cloud_page(window, cx);
                 page.update(cx, |page, cx| page.set_view(view, cx));
                 page.into_any_element()
             }
+            SettingsSection::Usage => self.usage_settings(window, cx),
             SettingsSection::Devices => {
                 if self.devices_page.is_none() {
                     self.devices_page = Some(self.create_devices_page(cx));
@@ -9430,7 +9424,7 @@ impl Shell {
                                 .into_iter()
                                 .filter(|item| item.visible_in_nav(access))
                                 .flat_map(|item| {
-                                    let heading = item.heading(access).map(|heading| {
+                                    let heading = item.heading().map(|heading| {
                                         if compact {
                                             div()
                                                 .mx(px(8.))
@@ -22816,11 +22810,11 @@ mod settings_modal_regressions {
 
     #[test]
     fn cloud_settings_follow_the_account_and_its_subscription() {
-        // App and Local agents are listed for everyone.
         let always = [
             SettingsSection::General,
             SettingsSection::Harnesses,
             SettingsSection::Appearance,
+            SettingsSection::Usage,
         ];
         for access in [
             CloudAccess::Unknown,
@@ -22835,13 +22829,6 @@ mod settings_modal_regressions {
             }
             let cloud = CLOUD_GROUP.iter().filter(|s| sections.contains(s)).count();
             assert_eq!(cloud, if access.subscribed() { 5 } else { 0 }, "{access:?}");
-            // Usage is Cloud compute only; local model usage lives in the
-            // sidebar footer's usage menu.
-            assert_eq!(
-                sections.contains(&SettingsSection::Usage),
-                access.subscribed(),
-                "{access:?}"
-            );
             assert_eq!(
                 sections.contains(&SettingsSection::Billing),
                 access.signed_in(),
@@ -22851,19 +22838,21 @@ mod settings_modal_regressions {
         let headings = |access| -> Vec<_> {
             listed(access)
                 .into_iter()
-                .filter_map(|section| section.heading(access))
+                .filter_map(SettingsSection::heading)
                 .collect()
         };
         assert_eq!(
             headings(CloudAccess::Subscribed),
             ["App", "Plan & usage", "Local agents", "Cloud computer"]
         );
-        // Without Usage, Plan & usage opens on Billing.
         assert_eq!(
             headings(CloudAccess::SignedIn),
             ["App", "Plan & usage", "Local agents"]
         );
-        assert_eq!(headings(CloudAccess::SignedOut), ["App", "Local agents"]);
+        assert_eq!(
+            headings(CloudAccess::SignedOut),
+            ["App", "Plan & usage", "Local agents"]
+        );
     }
 
     #[test]
@@ -22891,18 +22880,18 @@ mod settings_modal_regressions {
             SettingsSection::Billing.reopenable(CloudAccess::SignedOut),
             SettingsSection::General
         );
-        // Usage (Cloud compute) follows the Cloud computer pages.
+        // Tokens remain reachable without a Cloud subscription.
         assert_eq!(
             SettingsSection::Usage.reopenable(CloudAccess::Subscribed),
             SettingsSection::Usage
         );
         assert_eq!(
             SettingsSection::Usage.reopenable(CloudAccess::SignedIn),
-            SettingsSection::Billing
+            SettingsSection::Usage
         );
         assert_eq!(
             SettingsSection::Usage.reopenable(CloudAccess::SignedOut),
-            SettingsSection::General
+            SettingsSection::Usage
         );
         assert_eq!(
             SettingsSection::Usage.reopenable(CloudAccess::Checking),
@@ -23321,6 +23310,93 @@ mod settings_modal_regressions {
         shell.read_with(cx, |shell, _| {
             assert_eq!(shell.route, Route::Chat);
             assert_eq!(shell.settings.settings_section, SettingsSection::Devices);
+        });
+    }
+
+    #[gpui::test]
+    fn usage_settings_toggles_between_cloud_and_tokens(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        init_settings_test(settings::UiSettings::default(), dir.path(), cx);
+        let (shell, cx) = cx.add_window_view(|_, cx| test_shell(dir.path(), cx));
+
+        shell.update(cx, |shell, cx| {
+            shell.debug_gate = Some(GatePhase::Ready);
+            shell.state.update(cx, |state, cx| {
+                state.apply_cloud_account(serde_json::json!({"user":{"id":"owner"},"orgId":null}));
+                state.set_cloud_subscription_for_test(true);
+                cx.notify();
+            });
+            shell.open_settings(SettingsSection::Usage, cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear());
+
+        let tokens_tab = cx
+            .debug_bounds("usage-view-tokens")
+            .expect("subscribed user sees Cloud/Tokens toggle");
+        assert!(cx.debug_bounds("usage-view-cloud").is_some());
+        shell.read_with(cx, |shell, cx| {
+            assert!(!shell.usage_settings_tokens);
+            assert!(
+                shell
+                    .usage_dashboard
+                    .as_ref()
+                    .is_none_or(|d| !d.read(cx).visible())
+            );
+        });
+
+        cx.simulate_click(tokens_tab.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear());
+
+        shell.read_with(cx, |shell, cx| {
+            assert!(shell.usage_settings_tokens);
+            let dashboard = shell
+                .usage_dashboard
+                .as_ref()
+                .expect("Tokens tab mounts usage dashboard")
+                .read(cx);
+            assert!(dashboard.embedded());
+            assert!(dashboard.visible());
+        });
+
+        let cloud_tab = cx
+            .debug_bounds("usage-view-cloud")
+            .expect("Cloud tab remains visible");
+        cx.simulate_click(cloud_tab.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear());
+
+        shell.read_with(cx, |shell, cx| {
+            assert!(!shell.usage_settings_tokens);
+            let dashboard = shell.usage_dashboard.as_ref().unwrap().read(cx);
+            assert!(!dashboard.visible());
+        });
+
+        // Without a Cloud subscription, Usage opens directly on embedded Tokens.
+        shell.update(cx, |shell, cx| {
+            shell.state.update(cx, |state, cx| {
+                state.set_cloud_subscription_for_test(false);
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear());
+
+        assert!(cx.debug_bounds("usage-view-cloud").is_none());
+        assert!(cx.debug_bounds("usage-view-tokens").is_none());
+        shell.read_with(cx, |shell, cx| {
+            let dashboard = shell.usage_dashboard.as_ref().unwrap().read(cx);
+            assert!(dashboard.embedded());
+            assert!(dashboard.visible());
+        });
+
+        // Leaving Settings hides the embedded usage dashboard.
+        shell.update(cx, |shell, cx| shell.close_settings(cx));
+        cx.run_until_parked();
+        shell.read_with(cx, |shell, cx| {
+            assert_eq!(shell.route, Route::Chat);
+            assert!(!shell.usage_dashboard.as_ref().unwrap().read(cx).visible());
         });
     }
 }
