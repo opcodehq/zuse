@@ -14,7 +14,7 @@ struct NewChatView: View {
   @State private var mode = "main"
   @State private var branch = ""
   @State private var worktree = ""
-  @State private var runtimeMode = "approval-required"
+  @State private var runtimeMode = AccessLevel.ask
   @State private var permissionMode = "default"
   @State private var catalog: [ModelProvider] = []
   @State private var branches: [GitBranch] = []
@@ -157,10 +157,9 @@ struct NewChatView: View {
     NavigationStack {
       Form {
         Picker("Permissions", selection: $runtimeMode) {
-          Text("Ask before changes").tag("approval-required")
-          Text("Allow edits").tag("auto-accept-edits")
-          Text("Allow edits & commands").tag("auto-accept-edits-and-bash")
-          Text("Full access").tag("full-access")
+          ForEach(AccessLevel.choices(for: provider), id: \.self) { level in
+            Text(AccessLevel.label(level)).tag(level)
+          }
         }
         Toggle(
           "Plan mode",

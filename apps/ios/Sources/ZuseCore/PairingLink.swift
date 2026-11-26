@@ -34,6 +34,8 @@ public struct PairingLink: Sendable, Equatable {
       return values == [127, 0, 0, 1] || values[0] == 10 || (values[0] == 192 && values[1] == 168)
         || (values[0] == 172 && (16...31).contains(values[1]))
         || (values[0] == 169 && values[1] == 254)
+        // 100.64.0.0/10: Tailscale and Headscale tailnets, which the host also accepts.
+        || (values[0] == 100 && (64...127).contains(values[1]))
     }
     return host.hasPrefix("fe80:")
       || ((host.hasPrefix("fc") || host.hasPrefix("fd")) && host.contains(":"))

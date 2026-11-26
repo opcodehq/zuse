@@ -141,11 +141,16 @@ struct WorkspaceView: View {
             try Task.checkCancellation()
             modelCatalog = models
             if let session = workspace.selectedSession {
-              var payload: [String: JSONValue] = ["folderId": .string(session.projectId)]
-              if let worktree = session.worktreeId { payload["worktreeId"] = .string(worktree) }
-              let status = try await rpc.call("git.status", payload)
+              let branch: String?
+              if await rpc.canonical {
+                branch = try await CanonicalWorkspace(rpc).branch(chatID: session.id)
+              } else {
+                var payload: [String: JSONValue] = ["folderId": .string(session.projectId)]
+                if let worktree = session.worktreeId { payload["worktreeId"] = .string(worktree) }
+                branch = try await rpc.call("git.status", payload)["branch"].string
+              }
               try Task.checkCancellation()
-              branchName = status["branch"].string
+              branchName = branch
             }
           } catch {
             // The session's current model remains visible when discovery is unavailable.

@@ -9,6 +9,17 @@ import Testing
   import Crypto
 #endif
 
+@Test func tailnetAddressesCountAsPrivate() throws {
+  #expect(PairingLink.isPrivateHost("100.64.0.1"))
+  #expect(PairingLink.isPrivateHost("100.101.102.103"))
+  #expect(PairingLink.isPrivateHost("100.127.255.254"))
+  #expect(!PairingLink.isPrivateHost("100.63.0.1"))
+  #expect(!PairingLink.isPrivateHost("100.128.0.1"))
+  #expect(PairingLink.isPrivateHost("[fd7a:115c:a1e0::1]"))
+  try PairingLink.validate(
+    #require(URL(string: "ws://100.101.102.103:27657/api/paired-rpc/x")), webSocket: true)
+}
+
 @Test func pairingLinksRequireSecurePublicTransport() throws {
   let link = try PairingLink.parse("https://computer.example/#pair=ABCD-1234")
   #expect(link.webSocketURL.absoluteString == "wss://computer.example/rpc")

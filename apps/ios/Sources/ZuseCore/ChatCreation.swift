@@ -71,3 +71,32 @@ public struct ChatCreation: Codable, Sendable, Equatable {
     return value
   }
 }
+
+/// The engine's sandbox levels (`SandboxLevel`), labelled as on desktop.
+public enum AccessLevel {
+  public static let ask = "workspace-write"
+  public static let automatic = "auto"
+  public static let full = "danger-full-access"
+
+  /// "Approve for me" needs an agent with its own automatic approver.
+  public static func choices(for harness: String) -> [String] {
+    ["claude-code", "codex"].contains(harness) ? [ask, automatic, full] : [ask, full]
+  }
+
+  public static func label(_ level: String) -> String {
+    switch level {
+    case automatic: "Approve for me"
+    case full: "Full access"
+    default: "Ask for approval"
+    }
+  }
+
+  /// Maps a saved choice, including modes from older app versions, to an engine level.
+  public static func sandbox(_ mode: String) -> String {
+    switch mode {
+    case ask, automatic, full: mode
+    case "full-access": full
+    default: ask
+    }
+  }
+}
