@@ -403,6 +403,16 @@ private let samplePatch = """
   #expect(files[4].change == .deleted && files[4].deletions == 1)
 }
 
+@Test func parsesCRLFPatchesLineByLine() {
+  // As Characters "\r\n" is a single grapheme, so the parser must split on the LF scalar.
+  let files = PullRequestDiff.parse(samplePatch.replacingOccurrences(of: "\n", with: "\r\n"))
+  #expect(files.map(\.path) == PullRequestDiff.parse(samplePatch).map(\.path))
+  let first = files[0]
+  #expect(first.additions == 2 && first.deletions == 1)
+  #expect(first.hunks[1].lines.map(\.newLine) == [250, 251, 252])
+  #expect(first.hunks[0].lines[2].text == "    let b = 3;")
+}
+
 @Test func unquotesGitPaths() {
   #expect(PullRequestDiff.unquote(#""caf\303\251 menu.txt""#) == "café menu.txt")
   let (a, b) = PullRequestDiff.headerPaths(#""a/caf\303\251.txt" "b/caf\303\251.txt""#)

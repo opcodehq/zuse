@@ -28,6 +28,7 @@ import ZuseCore
     let repositories = scope(repository)
     loading = true
     error = nil
+    cursors = [:]
     defer { if current == generation { loading = false } }
     guard !repositories.isEmpty else {
       items = []
@@ -77,7 +78,7 @@ import ZuseCore
   }
 
   func loadMore(filter: PullRequestFilter) async {
-    guard !loadingMore, !cursors.isEmpty else { return }
+    guard !loading, !loadingMore, !cursors.isEmpty else { return }
     loadingMore = true
     defer { loadingMore = false }
     let current = generation
@@ -89,6 +90,7 @@ import ZuseCore
         items = Self.sorted(items + page.items.filter { !known.contains($0.url) }, filter: filter)
         cursors[slug] = page.nextCursor
       } catch {
+        guard current == generation, !Task.isCancelled else { return }
         failures[slug] = PullRequestErrorText.readable(error)
         cursors[slug] = nil
       }

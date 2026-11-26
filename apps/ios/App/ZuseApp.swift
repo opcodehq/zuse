@@ -186,7 +186,13 @@ struct WorkspaceView: View {
         )
         .nativeSheetSize(width: 720, height: 820)
       }
-      .onChange(of: workspace.operationScope) { if zapperRoute != nil { closeZapper() } }
+      .onChange(of: workspace.operationScope) {
+        if zapperRoute != nil { closeZapper() }
+        pullRequestEntry = nil
+        pullRequestPath = []
+        linkedPullRequest = nil
+        linkedPullRequestPath = []
+      }
   }
   #if DEBUG
     /// Debug launches: `SIMCTL_CHILD_ZUSE_PAIR_LINK=<invitation> xcrun simctl launch …` pairs

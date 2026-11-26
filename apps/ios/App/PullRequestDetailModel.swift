@@ -95,7 +95,9 @@ import ZuseCore
     defer { loadingFiles = false }
     do {
       let parsed = try await store.diff(link, head: detail.headRefOid, base: detail.baseRefOid)
-      guard !Task.isCancelled else { return }
+      guard !Task.isCancelled, let now = self.detail,
+        now.headRefOid + ".." + now.baseRefOid == revision
+      else { return }
       files = parsed
       filesRevision = revision
       filesError = nil
@@ -117,10 +119,14 @@ import ZuseCore
     detail = current
   }
 
+  /// Sends against `head`, the commit the user confirmed; refuses if newer commits have arrived.
   /// Returns GitHub's reason when it declined.
-  func update(_ update: PullRequestUpdate) async throws -> String? {
+  func update(_ update: PullRequestUpdate, head: String) async throws -> String? {
     guard let detail else { throw ClientError("Refresh the pull request first.") }
-    let refusal = try await store.update(link, update, head: detail.headRefOid)
+    guard detail.headRefOid == head else {
+      throw ClientError("New commits arrived. Review them before trying again.")
+    }
+    let refusal = try await store.update(link, update, head: head)
     await load(refresh: true)
     return refusal
   }

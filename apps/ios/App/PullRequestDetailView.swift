@@ -75,8 +75,8 @@ struct PullRequestDetailView: View {
     .onAppear(perform: applyLaunchPreview)
     .sheet(isPresented: $showsMerge) {
       if let detail = model.detail {
-        PullRequestMergeSheet(detail: detail) { update in
-          let refusal = try await model.update(update)
+        PullRequestMergeSheet(detail: detail) { update, head in
+          let refusal = try await model.update(update, head: head)
           if refusal == nil, case .merge = update {
             notice = "Merged into \(detail.baseRefName)."
           }
@@ -125,7 +125,9 @@ struct PullRequestDetailView: View {
     }
     .overlay(alignment: .bottom) { bottomBar(detail) }
     .onPreferenceChange(PullRequestBarHeight.self) { barHeight = $0 }
-    .task(id: tab) { if tab == .files { await model.loadFiles() } }
+    .task(id: "\(tab)|\(model.detail?.headRefOid ?? "")|\(model.detail?.baseRefOid ?? "")") {
+      if tab == .files { await model.loadFiles() }
+    }
   }
 
   @ViewBuilder private func conversation(_ detail: PullRequestDetail) -> some View {

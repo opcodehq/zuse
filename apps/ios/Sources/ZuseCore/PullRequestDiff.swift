@@ -69,8 +69,10 @@ public enum PullRequestDiff {
       current = nil
     }
 
-    for raw in patch.split(separator: "\n", omittingEmptySubsequences: false) {
-      let text = raw.hasSuffix("\r") ? String(raw.dropLast()) : String(raw)
+    // Split on the LF scalar: as Characters, "\r\n" is one grapheme that never equals "\n".
+    for raw in patch.unicodeScalars.split(separator: "\n", omittingEmptySubsequences: false) {
+      let line = String(Substring(raw))
+      let text = line.hasSuffix("\r") ? String(line.dropLast()) : line
       if text.hasPrefix("diff --git ") {
         closeFile()
         let (a, b) = headerPaths(String(text.dropFirst("diff --git ".count)))

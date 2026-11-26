@@ -5,10 +5,12 @@ import ZuseCore
 /// can't merge yet, says why and offers what can be done instead.
 struct PullRequestMergeSheet: View {
   let detail: PullRequestDetail
-  /// Sends an update; returns GitHub's reason when it declined.
-  let perform: (PullRequestUpdate) async throws -> String?
+  /// Sends an update against the confirmed head; returns GitHub's reason when it declined.
+  let perform: (PullRequestUpdate, String) async throws -> String?
   @Environment(\.dismiss) private var dismiss
   @State private var confirming: PullRequestUpdate?
+  /// The head on screen when the confirmation opened: the only commit it may act on.
+  @State private var confirmedHead: String?
   @State private var working = false
   @State private var failure: String?
   @State private var height: CGFloat = 340
@@ -46,6 +48,13 @@ struct PullRequestMergeSheet: View {
     .presentationBackground(AppTheme.surface)
     .interactiveDismissDisabled(working)
     .animation(.snappy(duration: 0.22), value: confirming)
+    .onChange(of: confirming) { _, value in confirmedHead = value == nil ? nil : detail.headRefOid }
+    .onChange(of: detail.headRefOid) {
+      // New commits void a confirmation the user hasn't sent yet.
+      guard confirming != nil, !working else { return }
+      confirming = nil
+      failure = "New commits arrived. Review them before trying again."
+    }
     .animation(.snappy(duration: 0.22), value: failure)
     .onAppear {
       #if DEBUG
@@ -286,12 +295,13 @@ struct PullRequestMergeSheet: View {
   }
 
   private func run(_ update: PullRequestUpdate) {
+    guard let head = confirmedHead else { return }
     working = true
     failure = nil
     Task {
       defer { working = false }
       do {
-        if let refusal = try await perform(update) {
+        if let refusal = try await perform(update, head) {
           failure = refusal
         } else {
           dismiss()
