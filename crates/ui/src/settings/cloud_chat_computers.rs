@@ -1,11 +1,9 @@
-//! Settings: whether cloud chats may run commands on this computer, and the
-//! account's enrolled computers. Separate from remote access and pairing:
-//! a cloud chat reaches this computer only through its own enrolled
-//! connector, and every command asks first.
+//! Settings → Cloud computer → Your computers: whether cloud chats may run
+//! commands on this computer, and the account's enrolled computers. Names
+//! come only from each computer's enrollment, and every command asks first.
 use crate::composer::computers::{BridgeStatus, Computer};
 use crate::composer::{ComposerInput, ComposerInputEvent};
 use crate::popover;
-use crate::settings::devices::platform_label;
 use crate::settings::widgets;
 use crate::state::AppState;
 use crate::theme::Theme;
@@ -96,13 +94,6 @@ impl CloudChatComputers {
             return;
         };
         let account = state.cloud_user_id().map(str::to_owned);
-        let label = state
-            .devices
-            .iter()
-            .find(|d| Some(d.id.as_str()) == state.local_device_id.as_deref())
-            .map(|d| d.name.clone())
-            .filter(|name| !name.trim().is_empty())
-            .unwrap_or_else(|| "This computer".into());
         let action = action.to_owned();
         let user_action = action != "refresh";
         let name = self.new_name.take();
@@ -121,7 +112,8 @@ impl CloudChatComputers {
             let client = engine.client();
             let acted = match action.as_str() {
                 "start" => client
-                    .call("StartComputerBridge", serde_json::json!({ "label": label }))
+                    // The engine names it after the computer; it can be renamed here.
+                    .call("StartComputerBridge", serde_json::json!({}))
                     .await
                     .map(drop),
                 "stop" => client
@@ -313,7 +305,7 @@ impl CloudChatComputers {
             }
             meta.push(
                 div()
-                    .child(platform_label(&computer.platform).to_string())
+                    .child(platform_name(&computer.platform).to_owned())
                     .into_any_element(),
             );
             meta.push(if computer.connected {
@@ -449,6 +441,15 @@ impl CloudChatComputers {
             );
         }
         card.into_any_element()
+    }
+}
+
+fn platform_name(platform: &str) -> &str {
+    match platform {
+        "macos" => "macOS",
+        "linux" => "Linux",
+        "windows" => "Windows",
+        other => other,
     }
 }
 

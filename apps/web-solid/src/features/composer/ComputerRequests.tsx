@@ -1,8 +1,8 @@
 import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { rpc } from "@/core/connection";
 import { state } from "@/core/store";
-import { readCloudTarget } from "./cloud";
-import { Btn, ErrorStrip } from "./ui";
+import { readCloudTarget } from "@/features/connection/cloud";
+import { Action as Btn, ErrorStrip } from "@/features/plugins-cloud/ui";
 
 type Computer = { deviceId: string; name: string; platform: string; connected: boolean };
 type Run = {
@@ -21,7 +21,7 @@ type Preview = {
   shell: string;
   osUser: string;
 };
-export function ComputerChat(props: { chatId: string }) {
+export function ComputerRequests(props: { chatId: string }) {
   const target = readCloudTarget();
   const [open, setOpen] = createSignal(false);
   const [computers, setComputers] = createSignal<Computer[]>([]);
@@ -173,7 +173,7 @@ export function ComputerChat(props: { chatId: string }) {
           </For>
           </div>
           <Show when={error()}>
-            {(message) => <ErrorStrip message={message()} />}
+            {(message) => <ErrorStrip>{message()}</ErrorStrip>}
           </Show>
         </Show>
       </div>

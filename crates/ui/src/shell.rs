@@ -539,6 +539,8 @@ pub enum SettingsSection {
     CloudMachine,
     /// Agent subscriptions cloud tasks sign in with.
     CloudAgents,
+    /// The owner's own computers that cloud chats may run commands on.
+    CloudComputers,
     /// Model usage on this computer's agents, plus Cloud compute.
     Usage,
     /// The Cloud plan, money left, credits and payment.
@@ -567,7 +569,7 @@ impl SettingsSection {
     /// Sections shown in Settings. `Agents` is a legacy Accounts route alias.
     /// App settings first, followed by plan, local agents and cloud computer.
     /// See [`Self::heading`].
-    pub const ALL: [SettingsSection; 19] = [
+    pub const ALL: [SettingsSection; 20] = [
         SettingsSection::General,
         SettingsSection::Appearance,
         SettingsSection::Notifications,
@@ -587,6 +589,7 @@ impl SettingsSection {
         SettingsSection::CloudEnvironments,
         SettingsSection::CloudMachine,
         SettingsSection::CloudAgents,
+        SettingsSection::CloudComputers,
     ];
 
     /// The sidebar heading this section opens, if it starts a group.
@@ -679,6 +682,7 @@ impl SettingsSection {
                 | Self::CloudEnvironments
                 | Self::CloudMachine
                 | Self::CloudAgents
+                | Self::CloudComputers
         )
     }
 
@@ -707,6 +711,7 @@ impl SettingsSection {
             SettingsSection::CloudEnvironments => "cloud-environments",
             SettingsSection::CloudMachine => "cloud-machine",
             SettingsSection::CloudAgents => "cloud-agents",
+            SettingsSection::CloudComputers => "cloud-computers",
             SettingsSection::Usage => "usage",
             SettingsSection::Billing => "billing",
             SettingsSection::Devices => "devices",
@@ -733,6 +738,7 @@ impl SettingsSection {
             "cloud-environments" | "environments" => SettingsSection::CloudEnvironments,
             "cloud-machine" | "machine" => SettingsSection::CloudMachine,
             "cloud-agents" => SettingsSection::CloudAgents,
+            "cloud-computers" => SettingsSection::CloudComputers,
             "usage" => SettingsSection::Usage,
             "billing" => SettingsSection::Billing,
             "devices" => SettingsSection::Devices,
@@ -761,6 +767,7 @@ impl SettingsSection {
             SettingsSection::CloudEnvironments => "Environments",
             SettingsSection::CloudMachine => "Machine",
             SettingsSection::CloudAgents => "Agent accounts",
+            SettingsSection::CloudComputers => "Your computers",
             SettingsSection::Usage => "Usage",
             SettingsSection::Billing => "Billing",
             SettingsSection::Devices => "Remote access",
@@ -2400,6 +2407,7 @@ pub struct Shell {
     /// next subscribed answer is a fresh purchase (see `follow_cloud_access`).
     cloud_seen_unsubscribed: bool,
     devices_page: Option<Entity<DevicesPage>>,
+    cloud_computers_page: Option<Entity<settings::cloud_chat_computers::CloudChatComputers>>,
     archived_page: Option<Entity<ArchivedPage>>,
     archive_project: Option<String>,
     usage_settings_tokens: bool,
@@ -3100,6 +3108,7 @@ impl Shell {
             cloud_first_chat: None,
             cloud_seen_unsubscribed: false,
             devices_page: None,
+            cloud_computers_page: None,
             archived_page: None,
             archive_project: None,
             usage_settings_tokens: false,
@@ -6147,6 +6156,9 @@ impl Shell {
                     SettingsSection::CloudEnvironments => SettingsPage::CloudEnvironments,
                     SettingsSection::CloudMachine => SettingsPage::CloudMachine,
                     SettingsSection::CloudAgents => SettingsPage::CloudAgents,
+                    // Counted with the Cloud computer pages until analytics
+                    // has its own name for this one.
+                    SettingsSection::CloudComputers => SettingsPage::CloudComputers,
                     SettingsSection::Usage => SettingsPage::Usage,
                     SettingsSection::Billing => SettingsPage::Billing,
                     SettingsSection::Devices => SettingsPage::Devices,
@@ -6785,6 +6797,32 @@ impl Shell {
                 page.into_any_element()
             }
             SettingsSection::Usage => self.usage_settings(window, cx),
+            SettingsSection::CloudComputers => {
+                let page = self
+                    .cloud_computers_page
+                    .get_or_insert_with(|| {
+                        let state = self.state.clone();
+                        cx.new(|cx| {
+                            settings::cloud_chat_computers::CloudChatComputers::new(state, cx)
+                        })
+                    })
+                    .clone();
+                let theme = Theme::of(cx).for_settings_surface();
+                div()
+                    .id("cloud-computers-page")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .child(
+                        settings::widgets::settings_page_column(window)
+                            .child(settings::widgets::section_title(
+                                &theme,
+                                "Your computers",
+                                "Run commands from cloud chats on your own computers. Each command asks you first.",
+                            ))
+                            .child(settings::widgets::section_stack().child(page)),
+                    )
+                    .into_any_element()
+            }
             SettingsSection::Devices => {
                 if self.devices_page.is_none() {
                     self.devices_page = Some(self.create_devices_page(cx));
@@ -9396,6 +9434,7 @@ impl Shell {
             SettingsSection::CloudEnvironments => icons::DITHER_TERMINAL,
             SettingsSection::CloudMachine => icons::DITHER_MONITOR,
             SettingsSection::CloudAgents => icons::DITHER_KEY,
+            SettingsSection::CloudComputers => icons::LAPTOP,
             SettingsSection::Usage => icons::DASHBOARD_SPEED,
             SettingsSection::Billing => icons::TAG,
         };
@@ -22800,12 +22839,13 @@ mod settings_modal_regressions {
             .collect()
     }
 
-    const CLOUD_GROUP: [SettingsSection; 5] = [
+    const CLOUD_GROUP: [SettingsSection; 6] = [
         SettingsSection::Cloud,
         SettingsSection::CloudRepositories,
         SettingsSection::CloudEnvironments,
         SettingsSection::CloudMachine,
         SettingsSection::CloudAgents,
+        SettingsSection::CloudComputers,
     ];
 
     #[test]
@@ -22828,7 +22868,7 @@ mod settings_modal_regressions {
                 assert!(sections.contains(&section), "{access:?} {section:?}");
             }
             let cloud = CLOUD_GROUP.iter().filter(|s| sections.contains(s)).count();
-            assert_eq!(cloud, if access.subscribed() { 5 } else { 0 }, "{access:?}");
+            assert_eq!(cloud, if access.subscribed() { 6 } else { 0 }, "{access:?}");
             assert_eq!(
                 sections.contains(&SettingsSection::Billing),
                 access.signed_in(),

@@ -72,8 +72,6 @@ pub struct DevicesPage {
     scroll: widgets::PageScroll,
     pairing: Entity<crate::settings::pairing::PairingCard>,
     managed: Entity<crate::settings::managed_access::ManagedAccessCard>,
-    /// Cloud chats using this computer: its own section, apart from remote access.
-    cloud_chats: Entity<crate::settings::cloud_chat_computers::CloudChatComputers>,
     rename: Option<RenameDialog>,
     /// Device id whose id-chip shows "Copied" right now.
     copied: Option<String>,
@@ -106,16 +104,12 @@ impl DevicesPage {
         );
         let managed_paint = cx.observe(&managed, |_, _, cx| cx.notify());
         let pairing_paint = cx.observe(&pairing, |_, _, cx| cx.notify());
-        let cloud_chats = cx.new(|cx| {
-            crate::settings::cloud_chat_computers::CloudChatComputers::new(state.clone(), cx)
-        });
         Self {
             _managed: managed_events,
             _managed_paint: managed_paint,
             _pairing_paint: pairing_paint,
             managed,
             pairing,
-            cloud_chats,
             state,
             scroll: widgets::PageScroll::default(),
             rename: None,
@@ -535,13 +529,7 @@ impl Render for DevicesPage {
                                                 .children(pairing.advanced)
                                                 .child(card)
                                                 .children(self.render_workspace_storage(cx))))
-                                })
-                                .child(div().mt(px(40.)).child(widgets::section_title(
-                                    &theme,
-                                    "Cloud chat computers",
-                                    "Let your cloud chats run commands on this computer. Each command asks you first.",
-                                )))
-                                .child(div().mt(px(20.)).child(self.cloud_chats.clone())),
+                                }),
                         ),
                 )
                 .fade_overflow_y(&self.scroll.scroll),

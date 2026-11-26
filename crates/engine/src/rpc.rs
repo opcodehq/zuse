@@ -3808,11 +3808,18 @@ impl EngineRpc {
                     }
                     "ComputerBridgeStatus" => RpcReply::value(&gateway.computer_bridge_status()),
                     _ => {
-                        let label = params["label"]
-                            .as_str()
-                            .ok_or_else(|| RpcError::BadParams("Specify a computer name".into()))?;
+                        // Without a name the computer is enrolled under its
+                        // OS host name; the owner can rename it later.
+                        let label = match params["label"].as_str() {
+                            Some(label) => label.to_owned(),
+                            None => gethostname::gethostname()
+                                .into_string()
+                                .ok()
+                                .filter(|name| !name.trim().is_empty())
+                                .unwrap_or_else(|| "Computer".into()),
+                        };
                         let id = gateway
-                            .start_computer_bridge(label)
+                            .start_computer_bridge(&label)
                             .await
                             .map_err(|e| RpcError::Failed(e.to_string()))?;
                         RpcReply::value(&serde_json::json!({"deviceId": id}))

@@ -28,7 +28,7 @@ pub(super) async fn enroll(
     let id: String = sqlx::query_scalar(
         "INSERT INTO api_bridge_computers(owner_id,enrollment_id,key_thumbprint,label,platform)
         VALUES ($1,$2,$3,$4,$5) ON CONFLICT(owner_id,key_thumbprint)
-        DO UPDATE SET label=excluded.label,platform=excluded.platform RETURNING enrollment_id",
+        DO UPDATE SET platform=excluded.platform RETURNING enrollment_id",
     )
     .bind(owner)
     .bind(uuid::Uuid::new_v4().to_string())

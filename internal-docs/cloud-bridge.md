@@ -15,7 +15,7 @@ User-facing text always uses the computer's own name (its device name at enrollm
 
 ## Start a connector
 
-**Desktop app.** Settings → Devices → **Cloud chat computers** (its own section, separate from remote access) shows this computer's connector with its status, a single Allow/Stop action, and the enrolled computers with rename, revoke and remove.
+**Desktop app.** Settings → Cloud computer → **Your computers** shows this computer's connector with its status, a single Allow/Stop action, and the enrolled computers with rename, revoke and remove. It is not part of remote access: the bridge has its own enrollments, IDs, keys and routes, and names come only from bridge enrollment (the OS host name by default). On the web, Cloud → Setup lists the same computers.
 
 Allowing enrolls the computer and starts the engine-owned connector. The choice is saved in the profile (`computer-bridge/connector.json`), so the connector comes back after an app or engine restart. It is bound to the account that allowed it: while another account (or none) is signed in it pauses, and it resumes when that account returns. Network failures, sleep and Wi-Fi changes reconnect with exponential backoff (1 s doubling to 30 s, reset after a minute online). Settings shows `online`, `starting`, `reconnecting` (with the reason) or `paused`. **Stop** stops running commands, stops admission and forgets the choice.
 

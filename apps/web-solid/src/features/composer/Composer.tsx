@@ -1,4 +1,4 @@
-import { ComputerChat } from "@/features/connection/ComputerChat";
+import { ComputerRequests } from "./ComputerRequests";
 // The chat composer: landing heading, context and queue trays, the editor card and its toolbar.
 import { rpc } from "@/core/connection";
 import { registerShortcut } from "@/core/keys";
@@ -39,7 +39,7 @@ export function Composer() {
   const landing = () => !view.selectedChatId;
   return (
     <div class="cmp-root" data-landing={(landing()) ? "true" : "false"}>
-      <Show when={view.selectedChatId}>{id => <ComputerChat chatId={id()} />}</Show>
+      <Show when={view.selectedChatId}>{id => <ComputerRequests chatId={id()} />}</Show>
       <Show when={selectedChat()?.archived} fallback={<Live />}>
         <ArchivedFooter />
       </Show>

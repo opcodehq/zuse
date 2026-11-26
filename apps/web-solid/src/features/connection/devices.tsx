@@ -1,4 +1,3 @@
-import { ComputerBridge } from "./ComputerBridge";
 // Settings → Devices: remote access to this computer, connect links, other computers, connected
 // and account devices, direct and relay routes, and the device registry. Mirrors crates/ui
 // settings/devices.rs, pairing.rs and managed_access.rs; browser-only rows come from the web client.
@@ -51,7 +50,6 @@ export function DevicesSettings() {
           <ServeMethod open={open} />
           <NetworkMethod open={open} />
         </Frame>
-        <ComputerBridge />
         <ConnectCard open={open} />
         <ComputersCard open={open} />
         <PeersCard />

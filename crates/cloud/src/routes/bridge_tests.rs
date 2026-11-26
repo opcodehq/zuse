@@ -753,6 +753,14 @@ fn the_bridge_does_not_depend_on_remote_access() {
         ("bridge_computers.rs", include_str!("bridge_computers.rs")),
         ("bridge_proof.rs", include_str!("bridge_proof.rs")),
         ("bridge_tasks.rs", include_str!("bridge_tasks.rs")),
+        (
+            "ui composer/computers.rs",
+            include_str!("../../../ui/src/composer/computers.rs"),
+        ),
+        (
+            "ui settings/cloud_chat_computers.rs",
+            include_str!("../../../ui/src/settings/cloud_chat_computers.rs"),
+        ),
     ];
     let remote_access = [
         "managed_access",
@@ -760,18 +768,45 @@ fn the_bridge_does_not_depend_on_remote_access() {
         "relay_access",
         "direct_access",
         "browser_access",
+        "remote_connection",
         "zuse_remote",
         "tunnels",
         "cloud_ssh",
         "device_proof",
         "devices::",
         "store.devices",
+        "state.devices",
+        "local_device_id",
     ];
     for (file, source) in sources {
         for module in remote_access {
             assert!(
                 !source.contains(module),
                 "{file} references remote-access code ({module})"
+            );
+        }
+    }
+    // And remote access knows nothing about the bridge.
+    let remote = [
+        ("cloud devices.rs", include_str!("../devices.rs")),
+        (
+            "engine managed_access.rs",
+            include_str!("../../../engine/src/managed_access.rs"),
+        ),
+        (
+            "ui settings/devices.rs",
+            include_str!("../../../ui/src/settings/devices.rs"),
+        ),
+        (
+            "ui settings/pairing.rs",
+            include_str!("../../../ui/src/settings/pairing.rs"),
+        ),
+    ];
+    for (file, source) in remote {
+        for bridge in ["bridge", "cloud_chat_computers", "CloudComputerControl"] {
+            assert!(
+                !source.contains(bridge),
+                "{file} references the cloud bridge ({bridge})"
             );
         }
     }
