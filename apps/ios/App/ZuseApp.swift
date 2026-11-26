@@ -57,6 +57,14 @@ struct WorkspaceView: View {
   @State private var zapperRoute: String?
   @State private var zapperPath: [ZapperRoute] = []
   @State private var zapperChat: String?
+  /// The pull request stack in the detail column (from home), and one opened from a link.
+  @State private var pullRequestEntry: PullRequestEntry?
+  @State private var pullRequestPath: [PullRequestRoute] = []
+  @State private var linkedPullRequest: PullRequestLink?
+  @State private var linkedPullRequestPath: [PullRequestRoute] = []
+  /// The open chat's pull request, shown beside its branch in the header.
+  @State private var chatPullRequest: PullRequestCheckoutSummary?
+  @Environment(\.openURL) private var openURL
   @Environment(\.scenePhase) private var scenePhase
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   #if os(iOS)
@@ -75,6 +83,7 @@ struct WorkspaceView: View {
   }
   /// New chat is a page in the detail column: pushed on iPhone, full width elsewhere.
   private func openNewChat(cloud: Bool) {
+    pullRequestEntry = nil
     newChat = NewChatRoute(cloud: cloud)
     preferredColumn = .detail
     if !isCompact && columnVisibility != .detailOnly {
@@ -88,11 +97,31 @@ struct WorkspaceView: View {
   }
   private func openZapper(_ id: String) {
     if newChat != nil { closeNewChat() }
+    pullRequestEntry = nil
     if zapperRoute != id { zapperPath = [] }
     zapperRoute = id
     // A chat tapped next always reads as a new selection and leaves the Zapper.
     selection = nil
     preferredColumn = .detail
+  }
+  private func openPullRequests() {
+    if newChat != nil { closeNewChat() }
+    zapperRoute = nil
+    zapperPath = []
+    pullRequestPath = []
+    pullRequestEntry = .list
+    selection = nil
+    preferredColumn = .detail
+  }
+  /// A pull request link: its own stack in a sheet, or GitHub when this computer can't show it.
+  private func openPullRequestLink(_ url: String) {
+    guard let link = PullRequestLink(url) else { return }
+    guard workspace.pullRequests.available else {
+      if let address = URL(string: link.url) { openURL(address) }
+      return
+    }
+    linkedPullRequestPath = []
+    linkedPullRequest = link
   }
   private func closeZapper() {
     zapperRoute = nil
@@ -150,12 +179,44 @@ struct WorkspaceView: View {
         }
       }
       .sheet(isPresented: $showSettings) { SettingsView(workspace: workspace) }
-      .onChange(of: workspace.operationScope) { if zapperRoute != nil { closeZapper() } }
+      .sheet(item: $linkedPullRequest) { link in
+        PullRequestNavigator(
+          store: workspace.pullRequests, entry: .detail(link), path: $linkedPullRequestPath,
+          close: { linkedPullRequest = nil }
+        )
+        .nativeSheetSize(width: 720, height: 820)
+      }
+      .onChange(of: workspace.operationScope) {
+        if zapperRoute != nil { closeZapper() }
+        pullRequestEntry = nil
+        pullRequestPath = []
+        linkedPullRequest = nil
+        linkedPullRequestPath = []
+      }
   }
   #if DEBUG
     /// Debug launches: `SIMCTL_CHILD_ZUSE_PAIR_LINK=<invitation> xcrun simctl launch …` pairs
     /// without the camera or a confirmation, then `--zapper-detail-preview` opens the first Zapper's overview
     /// (`--zapper-chat-preview` stops at its conversation).
+    /// `--native-preview --pr-preview` opens the sample pull request list; the detail
+    /// arguments (see `PullRequestPreview`) push one sample on top of it. Without
+    /// `--native-preview` (a paired computer), `--pr-preview` opens the live list and
+    /// `--pr-url <link>` a live pull request.
+    private func openPullRequestPreview(_ arguments: [String]) {
+      guard arguments.contains(where: { $0.hasPrefix("--pr-") }) else { return }
+      let sample = arguments.contains("--native-preview")
+      if sample { workspace.pullRequests.loadSamplePreview() }
+      guard !arguments.contains("--pr-home-preview") else { return }
+      openPullRequests()
+      let live = arguments.firstIndex(of: "--pr-url").flatMap {
+        arguments.indices.contains($0 + 1) ? arguments[$0 + 1] : nil
+      }
+      if let url = sample ? PullRequestPreview.entryURL(arguments) : live,
+        let link = PullRequestLink(url)
+      {
+        pullRequestPath = [.detail(link)]
+      }
+    }
     private func openZapperPreview(_ arguments: [String]) async {
       if let link = ProcessInfo.processInfo.environment["ZUSE_PAIR_LINK"], !link.isEmpty {
         do { try await workspace.pair(link) } catch { workspace.error = error.localizedDescription }
@@ -182,6 +243,7 @@ struct WorkspaceView: View {
   #endif
   private var interactiveWorkspace: some View {
     navigation
+      .pullRequestLinks()
       #if os(iOS)
         .onReceive(
           NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)
@@ -197,6 +259,9 @@ struct WorkspaceView: View {
       }
       .onReceive(NotificationCenter.default.publisher(for: .nativeSettings)) { _ in
         showSettings = true
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .nativeOpenPullRequest)) { note in
+        if let url = note.object as? String { openPullRequestLink(url) }
       }
       .task(id: workspace.connectionState + (workspace.selectedSession?.id ?? "")) {
         modelCatalog = []
@@ -231,6 +296,12 @@ struct WorkspaceView: View {
           }
         }
       }
+      .task(id: "pr|" + workspace.connectionState + (workspace.selectedSession?.id ?? "")) {
+        chatPullRequest = nil
+        guard workspace.connectionState == "Connected", let session = workspace.selectedSession
+        else { return }
+        chatPullRequest = await workspace.pullRequests.checkoutPullRequest(chatID: session.id)
+      }
       .onChange(of: workspace.selectedSession) { _, session in
         selection = session
         if session != nil {
@@ -244,10 +315,13 @@ struct WorkspaceView: View {
           newChat = nil
           zapperRoute = nil
           zapperPath = []
+          pullRequestEntry = nil
+          pullRequestPath = []
         }
       }
       .onChange(of: selection) {
         if let selection, zapperRoute != nil, selection.id != zapperChat { closeZapper() }
+        if selection != nil { pullRequestEntry = nil }
         if let selection, selection.id != workspace.selectedSession?.id {
           workspace.selectSession(selection)
         }
@@ -274,6 +348,7 @@ struct WorkspaceView: View {
           if arguments.contains("--new-chat-preview") { openNewChat(cloud: false) }
           if arguments.contains("--pairing-preview") { connectionMethod = .add }
           await openZapperPreview(arguments)
+          openPullRequestPreview(arguments)
         #endif
       }
       .fileImporter(
@@ -328,7 +403,8 @@ struct WorkspaceView: View {
         workspace: workspace, selection: $selection,
         settings: { showSettings = true }, connect: { connectionMethod = .add },
         newChat: { openNewChat(cloud: false) }, newCloudChat: { openNewChat(cloud: true) },
-        addProject: { showProject = true }, openZapper: openZapper
+        addProject: { showProject = true }, openZapper: openZapper,
+        openPullRequests: openPullRequests
       )
       .disabled(workspace.clearingAccount)
       .navigationSplitViewColumnWidth(min: 230, ideal: 280, max: 340)
@@ -339,6 +415,9 @@ struct WorkspaceView: View {
           workspace: workspace, initialCloud: route.cloud, showsClose: !isCompact,
           close: closeNewChat
         ).id(route.id)
+      } else if let entry = pullRequestEntry {
+        PullRequestNavigator(store: workspace.pullRequests, entry: entry, path: $pullRequestPath)
+          .id(entry.id)
       } else if let zapperID = zapperRoute {
         ZapperNavigator(
           workspace: workspace, zapperID: zapperID, path: $zapperPath,
@@ -463,7 +542,9 @@ struct WorkspaceView: View {
             title: session.title.isEmpty ? "Chat" : session.title,
             subtitle: [
               workspace.projects.first { $0.id == session.projectId }?.name, branchName,
-            ].compactMap { $0 }.joined(separator: " · "))
+            ].compactMap { $0 }.joined(separator: " · "),
+            pullRequest: chatPullRequest,
+            openPullRequest: { openPullRequestLink($0.url) })
         }
         ToolbarItem(placement: .primaryAction) {
           Button("Changes", systemImage: "plusminus") { showDiff = true }
@@ -728,14 +809,37 @@ extension JSONValue {
 private struct ChatHeaderTitle: View {
   let title: String
   let subtitle: String
+  var pullRequest: PullRequestCheckoutSummary?
+  var openPullRequest: (PullRequestCheckoutSummary) -> Void = { _ in }
   var body: some View {
     VStack(spacing: 1) {
       Text(title).font(.system(size: 17, weight: .semibold)).lineLimit(1)
-      if !subtitle.isEmpty {
-        Text(subtitle).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
+      if !subtitle.isEmpty || pullRequest != nil {
+        HStack(spacing: 5) {
+          if !subtitle.isEmpty {
+            Text(subtitle).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
+          }
+          if let pullRequest {
+            // The checkout's pull request opens in the app.
+            Button {
+              openPullRequest(pullRequest)
+            } label: {
+              HStack(spacing: 3) {
+                PullRequestGlyph(state: pullRequest.state, draft: pullRequest.isDraft, size: 11)
+                Text("#\(pullRequest.number)").font(.system(size: 13, weight: .medium))
+                  .monospacedDigit()
+              }
+              .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Pull request \(pullRequest.number)")
+            .accessibilityIdentifier("chat-pull-request")
+          }
+        }
       }
     }
     .frame(maxWidth: 240)
-    .accessibilityElement(children: .combine).accessibilityAddTraits(.isHeader)
+    .accessibilityElement(children: pullRequest == nil ? .combine : .contain)
+    .accessibilityAddTraits(.isHeader)
   }
 }

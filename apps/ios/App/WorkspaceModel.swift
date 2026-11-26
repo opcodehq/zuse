@@ -7,6 +7,7 @@ import ZuseCore
   let account = Account()
   /// Zappers hosted by the open computer, live from `WatchZappers`.
   let zappers = ZapperStore()
+  let pullRequests = PullRequestStore()
   var cloudChats: [CloudChat] = []
   private(set) var cloudRequestsBusy = Set<String>()
   private(set) var pendingCloudActions: [String: CloudWorkspaceAction] = [:]
@@ -712,6 +713,7 @@ import ZuseCore
         rpc = client
         healthySince = .now
         zappers.attach(client)
+        pullRequests.attach(client)
         if !ProcessInfo.processInfo.arguments.contains("--rpc-fixture") {
           try rememberWorkspace(self.source ?? source)
         }
@@ -1344,6 +1346,7 @@ import ZuseCore
     if let rpc { Task { await rpc.close() } }
     rpc = nil
     zappers.detach()
+    pullRequests.detach()
     if let lease = sshLease {
       let port = sshForwardPort
       Task {

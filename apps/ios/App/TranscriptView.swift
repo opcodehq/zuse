@@ -437,6 +437,8 @@ struct MessageCell: View {
       Button("Copy", systemImage: "doc.on.doc") { NativePlatform.copy(message.text) }
       ShareLink(item: message.text)
     }
+    // Cells are hosted outside the window's SwiftUI tree, so they route PR links themselves.
+    .pullRequestLinks()
   }
   @ViewBuilder private var attachments: some View {
     if message.kind == "user_rich" {
