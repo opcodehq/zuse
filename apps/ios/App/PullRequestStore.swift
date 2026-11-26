@@ -88,6 +88,10 @@ struct PullRequestRepository: Hashable, Identifiable {
     }
   }
 
+  func setOpenCount(_ count: Int) {
+    if !preview { openCount = count }
+  }
+
   func refreshOpenCount(cached: Bool = false) async {
     guard !preview, !repositories.isEmpty else { return }
     var total = 0

@@ -84,6 +84,10 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
   #expect(old.ci.state == .unknown && old.headRefOid.isEmpty && old.viewerDidAuthor == nil)
   #expect(old.reviewDecision == .unknown && old.state == .merged)
   #expect(old.author.isBot && old.author.displayName == "release-bot[bot]")
+  // Listing authors come from GraphQL: an app is `dependabot` with an `/in/` avatar.
+  let app = PullRequestActor(
+    login: "dependabot", avatarURL: URL(string: "https://avatars.githubusercontent.com/in/29110"))
+  #expect(app.isBot && !first.author.isBot)
 }
 
 @Test func decodesTheDetail() throws {
@@ -206,7 +210,7 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
   let snippet = PullRequestHunkSnippet.lines(
     detail.reviewThreads?.first?.comments.first?.diffHunk ?? "")
   #expect(snippet.count == 4)
-  #expect(snippet.last?.text == "     done();" && snippet.last?.newLine == 463)
+  #expect(snippet.last?.text == "    done();" && snippet.last?.newLine == 463)
   #expect(snippet.first?.kind == .addition && snippet.first?.newLine == 460)
 }
 

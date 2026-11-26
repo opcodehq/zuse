@@ -18,7 +18,11 @@ import ZuseCore
 
   var hasMore: Bool { !cursors.isEmpty }
 
-  func load(filter: PullRequestFilter, repository: String?, refresh: Bool = false) async {
+  /// Shows the engine's stored first pages at once, then reads them again when they've aged
+  /// past a minute. `refresh` always asks the provider.
+  func load(
+    filter: PullRequestFilter, repository: String?, refresh: Bool = false, cached: Bool = true
+  ) async {
     generation += 1
     let current = generation
     let repositories = scope(repository)
@@ -34,13 +38,14 @@ import ZuseCore
     var counts = 0
     var nextCursors: [String: String] = [:]
     var failed: [String: String] = [:]
+    var stale = false
+    let useCache = cached && !refresh
     await withTaskGroup(of: (String, Result<PullRequestPage, Error>).self) { group in
       for slug in repositories {
         group.addTask { [store] in
           do {
-            // The stored first page shows at once; a refresh always asks GitHub.
             let page = try await store.page(
-              slug, filter: filter, refresh: refresh, cached: !refresh)
+              slug, filter: filter, refresh: refresh, cached: useCache)
             return (slug, .success(page))
           } catch { return (slug, .failure(error)) }
         }
@@ -51,6 +56,9 @@ import ZuseCore
           loaded += page.items
           counts += page.totalCount ?? page.items.count
           if let cursor = page.nextCursor { nextCursors[slug] = cursor }
+          if useCache, let fetched = page.fetchedAt, Date().timeIntervalSince(fetched) > 60 {
+            stale = true
+          }
         case .failure(let error):
           failed[slug] = PullRequestErrorText.readable(error)
         }
@@ -62,6 +70,10 @@ import ZuseCore
     cursors = nextCursors
     failures = failed
     if loaded.isEmpty, let first = failed.values.first { error = first }
+    if stale {
+      loading = false
+      await load(filter: filter, repository: repository, cached: false)
+    }
   }
 
   func loadMore(filter: PullRequestFilter) async {
@@ -134,11 +146,20 @@ struct PullRequestListView: View {
     .compactNavigationTitle()
     .task(id: "\(filterRaw)|\(repository ?? "")|\(store.repositories.map(\.slug))") {
       await model.load(filter: filter, repository: repository)
+      updateOpenCount()
     }
     .refreshable {
+      await store.resolveRepositories()
       await model.load(filter: filter, repository: repository, refresh: true)
-      if filter == .all && repository == nil { await store.refreshOpenCount() }
+      updateOpenCount()
     }
+  }
+
+  /// The home row's count follows the freshest full open listing.
+  private func updateOpenCount() {
+    guard filter == .all, repository == nil, model.failures.isEmpty, let total = model.total
+    else { return }
+    store.setOpenCount(total)
   }
 
   // MARK: Filters

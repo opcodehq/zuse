@@ -67,8 +67,11 @@ public struct PullRequestActor: Sendable, Hashable, Decodable {
     login = c.lenient(String.self, .login) ?? ""
     avatarURL = c.lenient(String.self, .avatarUrl).flatMap(PullRequestActor.safeURL)
   }
-  /// Apps post as `name[bot]` (REST) or `app/name` (GraphQL).
-  public var isBot: Bool { login.hasSuffix("[bot]") || login.hasPrefix("app/") }
+  /// Apps post as `name[bot]` (REST) or `app/name` (GraphQL), with an app avatar (`/in/<id>`).
+  public var isBot: Bool {
+    login.hasSuffix("[bot]") || login.hasPrefix("app/")
+      || (avatarURL?.path.hasPrefix("/in/") ?? false)
+  }
   /// The login as people read it: no `app/` prefix.
   public var displayName: String {
     if login.isEmpty { return "Unknown author" }

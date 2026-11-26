@@ -437,21 +437,20 @@ struct PullRequestDetailView: View {
       let arguments = ProcessInfo.processInfo.arguments
       if arguments.contains("--pr-files-preview") { tab = .files }
       if arguments.contains("--pr-commits-preview") { tab = .commits }
-      if ["--pr-merge-preview", "--pr-blocked-preview", "--pr-confirm-preview"].contains(
-        where: arguments.contains)
-      {
-        Task {
-          try? await Task.sleep(for: .milliseconds(500))
-          showsMerge = true
-        }
-      }
-      if arguments.contains("--pr-checks-preview") {
-        Task {
-          try? await Task.sleep(for: .milliseconds(500))
-          showsChecks = true
-        }
-      }
       if arguments.contains("--pr-expanded-preview") { expandedSummary = true }
+      let merge = ["--pr-merge-preview", "--pr-blocked-preview", "--pr-confirm-preview"]
+        .contains(where: arguments.contains)
+      let checks = arguments.contains("--pr-checks-preview")
+      guard merge || checks else { return }
+      Task {
+        // Open once the pull request has loaded, however long that takes.
+        for _ in 0..<240 where model.detail == nil {
+          try? await Task.sleep(for: .milliseconds(250))
+        }
+        try? await Task.sleep(for: .milliseconds(500))
+        if merge { showsMerge = true }
+        if checks { showsChecks = true }
+      }
     #endif
   }
 }

@@ -332,7 +332,12 @@ public enum PullRequestActivity: Sendable, Hashable, Identifiable {
 public enum PullRequestHunkSnippet {
   /// The last `limit` lines of a comment's `diffHunk`, ending at the commented line.
   public static func lines(_ hunk: String, limit: Int = 4) -> [DiffLine] {
-    let lines = DiffLine.parse(hunk).filter { $0.kind != .header }
+    // `DiffLine.parse` keeps each line's `+`/`-`/space prefix; the snippet draws its own.
+    let lines = DiffLine.parse(hunk).filter { $0.kind != .header }.map { line in
+      DiffLine(
+        id: line.id, text: String(line.text.dropFirst()), kind: line.kind, oldLine: line.oldLine,
+        newLine: line.newLine)
+    }
     return Array(lines.suffix(limit))
   }
 }

@@ -193,13 +193,21 @@ struct WorkspaceView: View {
     /// without the camera or a confirmation, then `--zapper-detail-preview` opens the first Zapper's overview
     /// (`--zapper-chat-preview` stops at its conversation).
     /// `--native-preview --pr-preview` opens the sample pull request list; the detail
-    /// arguments (see `PullRequestPreview`) push one sample on top of it.
+    /// arguments (see `PullRequestPreview`) push one sample on top of it. Without
+    /// `--native-preview` (a paired computer), `--pr-preview` opens the live list and
+    /// `--pr-url <link>` a live pull request.
     private func openPullRequestPreview(_ arguments: [String]) {
       guard arguments.contains(where: { $0.hasPrefix("--pr-") }) else { return }
-      workspace.pullRequests.loadSamplePreview()
+      let sample = arguments.contains("--native-preview")
+      if sample { workspace.pullRequests.loadSamplePreview() }
       guard !arguments.contains("--pr-home-preview") else { return }
       openPullRequests()
-      if let url = PullRequestPreview.entryURL(arguments), let link = PullRequestLink(url) {
+      let live = arguments.firstIndex(of: "--pr-url").flatMap {
+        arguments.indices.contains($0 + 1) ? arguments[$0 + 1] : nil
+      }
+      if let url = sample ? PullRequestPreview.entryURL(arguments) : live,
+        let link = PullRequestLink(url)
+      {
         pullRequestPath = [.detail(link)]
       }
     }
