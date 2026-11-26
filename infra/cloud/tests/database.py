@@ -49,12 +49,60 @@ class DatabaseBootstrapTest(unittest.TestCase):
         self.url = f"postgresql://zuse_test@127.0.0.1:{self.port}/{name}?sslmode=disable"
 
     def test_release_manifest_contains_command_and_recreation_after_admission(self):
-        expected=("0036_harness_bundles.sql","0037_user_images.sql","0038_app_role_grants.sql","0041_user_image_repositories.sql","0042_machine_versions_grants.sql","0043_work_wakeups.sql","0044_worker_due_index.sql","0045_auth_wakeups.sql","0046_plugin_wakeups.sql","0048_executor_wakeups.sql","0049_change_hints.sql","0050_archive_machine_deletion.sql","0051_archive_machine_due_cap.sql","0052_one_environment_credential.sql","0053_provider_machine_reconciliation.sql","0054_machine_minute_plans.sql")
-        self.assertEqual(database.FILES[-16:],expected)
-        self.assertEqual(len(database.FILES),49)
+        expected=("0036_harness_bundles.sql","0037_user_images.sql","0038_app_role_grants.sql","0041_user_image_repositories.sql","0042_machine_versions_grants.sql","0043_work_wakeups.sql","0044_worker_due_index.sql","0045_auth_wakeups.sql","0046_plugin_wakeups.sql","0048_executor_wakeups.sql","0049_change_hints.sql","0050_archive_machine_deletion.sql","0051_archive_machine_due_cap.sql","0052_one_environment_credential.sql","0053_provider_machine_reconciliation.sql","0054_machine_minute_plans.sql","0055_device_command_approvals.sql")
+        self.assertEqual(database.FILES[-len(expected):],expected)
+        self.assertEqual(len(database.FILES),50)
         self.assertIn("0026_task_command_admission.sql",database.FILES)
         self.assertNotIn("0022_computer_recreations.sql",database.FILES)
         self.assertNotIn("0022_recreation.sql",database.FILES)
+
+    def test_detach_removes_only_matching_requests_and_session_grants(self):
+        database.execute(self.url, database.render("staging"))
+        rows = database.execute(self.url, """
+            SET search_path TO zuse_staging;
+            ALTER TABLE api_cloud_workspaces
+                DROP CONSTRAINT api_cloud_workspaces_project_id_api_cloud_projects_project_id_fk,
+                DROP CONSTRAINT api_cloud_workspaces_build_id_api_cloud_project_builds_build_id_fk;
+            INSERT INTO api_cloud_workspaces(workspace_id,account_id,project_id,build_id,provider,
+                chat_id,initial_session_id,branch,base_ref,state,desired_state,status_code,idempotency_key,
+                next_action_at,created_at,updated_at,last_activity_at)
+                SELECT w,o,'p','b','boxd',w,'chat',w,'main','ready','ready','ready',w,1,1,1,1
+                FROM (VALUES ('w','a'),('w2','b')) AS hosts(w,o);
+            INSERT INTO zuse_rust_task_command_policies
+                SELECT workspace_id,account_id,1,'{}',1,1 FROM api_cloud_workspaces;
+            INSERT INTO zuse_rust_task_command_sessions(workspace_id,session_id,thread_id,state,created_at)
+                SELECT workspace_id,'chat','thread','active',1 FROM api_cloud_workspaces;
+            INSERT INTO api_bridge_computers VALUES
+                ('a','mac','key1','Mac','macos'),('a','linux','key2','Linux','linux'),
+                ('b','mac','key3','Mac','macos');
+            INSERT INTO api_bridge_attachments VALUES
+                ('a','w','chat','mac'), ('a','w','chat','linux'), ('b','w2','chat','mac');
+            INSERT INTO api_bridge_session_grants SELECT * FROM api_bridge_attachments;
+            INSERT INTO api_bridge_always_grants VALUES ('a','mac');
+            INSERT INTO api_bridge_requests
+                (request_id,owner_id,workspace_id,chat_id,enrollment_id,computer_name,
+                 os_user,shell,cwd,command,timeout_ms)
+                SELECT gen_random_uuid(),owner_id,workspace_id,chat_id,enrollment_id,
+                    'host','me','sh','/tmp','pwd',1000 FROM api_bridge_attachments;
+            DELETE FROM api_bridge_attachments
+                WHERE owner_id='a' AND workspace_id='w' AND chat_id='chat' AND enrollment_id='mac';
+            SELECT json_build_object(
+                'requests',(SELECT count(*) FROM api_bridge_requests),
+                'sessions',(SELECT count(*) FROM api_bridge_session_grants),
+                'always',(SELECT count(*) FROM api_bridge_always_grants),
+                'detachedPending',EXISTS(SELECT FROM api_bridge_requests WHERE owner_id='a' AND enrollment_id='mac'));
+        """)
+        self.assertEqual(rows[-1], {"requests": 2, "sessions": 2, "always": 1, "detachedPending": False})
+
+        after_archive = database.execute(self.url, """
+            SET search_path TO zuse_staging;
+            UPDATE zuse_rust_task_command_sessions SET state='archived' WHERE workspace_id='w';
+            DELETE FROM api_bridge_computers WHERE owner_id='a' AND enrollment_id='mac';
+            SELECT json_build_object('requests',(SELECT count(*) FROM api_bridge_requests),
+                'sessions',(SELECT count(*) FROM api_bridge_session_grants),
+                'always',(SELECT count(*) FROM api_bridge_always_grants));
+        """)
+        self.assertEqual(after_archive[-1], {"requests": 1, "sessions": 1, "always": 0})
 
     def test_each_desktop_app_keeps_one_credential_row(self):
         database.execute(self.url, database.render("production"))
@@ -208,6 +256,10 @@ SELECT kind||':'||resource_id||':'||payload::text FROM zuse_rust_account_event_o
             url = self.url.replace("zuse_test@", role + ":synthetic-test-password@")
             result = database.execute(url, f"SELECT json_build_object('schema',current_schema(),'otherUsage',has_schema_privilege(current_user,'{other}','USAGE'),'ledgerWrite',has_table_privilege(current_user,'zuse_cloud_schema_migrations','UPDATE'),'workspaceWrite',has_table_privilege(current_user,'api_cloud_workspaces','INSERT'),'baseWrite',has_table_privilege(current_user,'cloud_managed_bases','INSERT,UPDATE,DELETE'),'baseLockExecutable',has_function_privilege(current_user,current_schema()||'.zuse_rust_managed_base_admission_lock(text,text)','EXECUTE')); ")[-1]
             self.assertEqual(result, {"schema": f"zuse_{environment}", "otherUsage": False, "ledgerWrite": False, "workspaceWrite": True, "baseWrite": False, "baseLockExecutable": True})
+            rights = database.execute(url, """SELECT json_build_object(
+                'editCommand',has_column_privilege(current_user,'api_bridge_requests','command','UPDATE'),
+                'decide',has_column_privilege(current_user,'api_bridge_requests','decision','UPDATE'));""")[-1]
+            self.assertEqual(rights, {"editCommand": False, "decide": True})
         key = json.loads(provision.signing_key())
         self.assertEqual(key["crv"], "Ed25519")
         self.assertEqual(len(key["d"]), 43)

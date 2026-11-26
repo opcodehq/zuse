@@ -311,6 +311,7 @@ pub fn handles(method: &str) -> bool {
     matches!(
         method,
         LIST | READ
+            | "CloudComputerControl"
             | zuse_protocol::methods::SLACK_CONNECTIONS
             | zuse_protocol::methods::SLACK_CONNECT
             | zuse_protocol::methods::SLACK_DISCONNECT
@@ -938,6 +939,146 @@ impl CloudApi {
             self.syncs.hydrate(self, auth, &account)?;
         }
         let mut result = match method {
+            "CloudComputerControl" => {
+                ensure!(
+                    organization.is_none()
+                        && params["expectedAccountId"].as_str() == Some(account.as_str()),
+                    "Reopen Computers after signing in"
+                );
+                let action = params["action"].as_str().unwrap_or("list");
+                let text = |key: &str| -> Result<&str> {
+                    params[key]
+                        .as_str()
+                        .filter(|s| !s.is_empty() && s.len() <= 512)
+                        .ok_or_else(|| anyhow::anyhow!("Missing {key}"))
+                };
+                let (path, body, verb) = match action {
+                    "list" => (
+                        vec!["v1", "cloud", "bridge", "computers"],
+                        None,
+                        reqwest::Method::GET,
+                    ),
+                    "forget" => (
+                        vec!["v1", "cloud", "bridge", "computers", text("deviceId")?],
+                        None,
+                        reqwest::Method::DELETE,
+                    ),
+                    "revoke" => (
+                        vec![
+                            "v1",
+                            "cloud",
+                            "bridge",
+                            "computers",
+                            text("deviceId")?,
+                            "always-allow",
+                        ],
+                        None,
+                        reqwest::Method::DELETE,
+                    ),
+                    "attached" => (
+                        vec![
+                            "v1",
+                            "cloud",
+                            "workspaces",
+                            text("workspaceId")?,
+                            "chats",
+                            text("chatId")?,
+                            "attached-computers",
+                        ],
+                        None,
+                        reqwest::Method::GET,
+                    ),
+                    "tasks" => (
+                        vec![
+                            "v1",
+                            "cloud",
+                            "workspaces",
+                            text("workspaceId")?,
+                            "chats",
+                            text("chatId")?,
+                            "computer-tasks",
+                        ],
+                        None,
+                        reqwest::Method::GET,
+                    ),
+                    "results" => (
+                        vec![
+                            "v1",
+                            "cloud",
+                            "workspaces",
+                            text("workspaceId")?,
+                            "chats",
+                            text("chatId")?,
+                            "computer-results",
+                        ],
+                        None,
+                        reqwest::Method::GET,
+                    ),
+                    "cancel" => (
+                        vec![
+                            "v1",
+                            "cloud",
+                            "workspaces",
+                            text("workspaceId")?,
+                            "chats",
+                            text("chatId")?,
+                            "computer-results",
+                            text("requestId")?,
+                        ],
+                        None,
+                        reqwest::Method::DELETE,
+                    ),
+                    "pending" => (
+                        vec![
+                            "v1",
+                            "cloud",
+                            "workspaces",
+                            text("workspaceId")?,
+                            "chats",
+                            text("chatId")?,
+                            "device-approvals",
+                        ],
+                        None,
+                        reqwest::Method::GET,
+                    ),
+                    "decide" => (
+                        vec![
+                            "v1",
+                            "cloud",
+                            "workspaces",
+                            text("workspaceId")?,
+                            "chats",
+                            text("chatId")?,
+                            "device-approvals",
+                            text("requestId")?,
+                        ],
+                        Some(json!({"decision":text("decision")?})),
+                        reqwest::Method::POST,
+                    ),
+                    "attach" | "detach" => (
+                        vec![
+                            "v1",
+                            "cloud",
+                            "workspaces",
+                            text("workspaceId")?,
+                            "chats",
+                            text("chatId")?,
+                            "attached-computers",
+                            text("deviceId")?,
+                        ],
+                        None,
+                        if action == "attach" {
+                            reqwest::Method::PUT
+                        } else {
+                            reqwest::Method::DELETE
+                        },
+                    ),
+                    _ => anyhow::bail!("Unknown computer action"),
+                };
+                self.request_scoped_verb(&token, &path, body, None, &[], verb)
+                    .await?
+            }
+
             zuse_protocol::methods::CLOUD_TASK_COMMAND => {
                 ensure!(
                     params["expectedAccountId"].as_str() == Some(account.as_str())

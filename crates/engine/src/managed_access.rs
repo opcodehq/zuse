@@ -1,7 +1,7 @@
 //! Existing account-control API; account, transport and host authority stay separate.
 pub mod host;
 mod identity;
-mod proof;
+pub(crate) mod proof;
 mod routes;
 use crate::account::Account;
 use futures::StreamExt;
