@@ -183,3 +183,14 @@ private struct CompactTabBarHidden: ViewModifier {
 extension View {
   func hidesTabBarWhenCompact() -> some View { modifier(CompactTabBarHidden()) }
 }
+
+extension View {
+  /// Hides the tab bar on pages with their own bottom controls (a composer, Merge).
+  @ViewBuilder func hidesTabBar() -> some View {
+    #if os(iOS)
+      toolbar(.hidden, for: .tabBar)
+    #else
+      self
+    #endif
+  }
+}

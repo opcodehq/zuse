@@ -658,7 +658,11 @@ struct WorkspaceView: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity).background(AppTheme.surface)
   }
   /// One chat's transcript and composer, shown from the home list or inside a Zapper.
-  @ViewBuilder private func chatScreen(_ session: SessionRow) -> some View {
+  /// A chat page owns the bottom edge for its composer, so the tab bar steps aside.
+  private func chatScreen(_ session: SessionRow) -> some View {
+    chatPage(session).hidesTabBar()
+  }
+  @ViewBuilder private func chatPage(_ session: SessionRow) -> some View {
     VStack(spacing: 0) {
       if workspace.transcript.olderSequence != nil {
         Button(workspace.paging ? "Loading…" : "Load earlier messages") {

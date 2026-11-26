@@ -36,7 +36,7 @@ struct PullRequestNavigator: View {
         }
         .navigationDestination(for: PullRequestRoute.self) { route in
           switch route {
-          case .detail(let link): PullRequestDetailView(store: store, link: link)
+          case .detail(let link): PullRequestDetailView(store: store, link: link).hidesTabBar()
           }
         }
     }
