@@ -98,13 +98,36 @@ import ZuseCore
       view.window?.endEditing(true)
     }
     private var previousViewportHeight: CGFloat = 0
+    private var measuredWidth: CGFloat = 0
+    override func viewDidAppear(_ animated: Bool) {
+      super.viewDidAppear(animated)
+      // Rows laid out while the chat was hidden (under another page) may not have re-measured.
+      remeasureVisibleRows()
+    }
+    private func remeasureVisibleRows() {
+      guard dataSource != nil, !applying else { return }
+      let visible = collection.indexPathsForVisibleItems.compactMap {
+        dataSource.itemIdentifier(for: $0)
+      }
+      guard !visible.isEmpty else { return }
+      var snapshot = dataSource.snapshot()
+      snapshot.reconfigureItems(visible)
+      dataSource.apply(snapshot, animatingDifferences: false)
+    }
     override func viewDidLayoutSubviews() {
       super.viewDidLayoutSubviews()
       let height = collection.bounds.height
       defer { previousViewportHeight = height }
-      guard previousViewportHeight > 0, abs(height - previousViewportHeight) > 1,
-        !collection.isDragging, !collection.isDecelerating
-      else { return }
+      // Rows measured while the chat was off screen or mid-transition can carry another width.
+      if abs(collection.bounds.width - measuredWidth) > 1, collection.bounds.width > 0 {
+        measuredWidth = collection.bounds.width
+        remeasureVisibleRows()
+      }
+      guard previousViewportHeight > 0, abs(height - previousViewportHeight) > 1 else { return }
+      // A new viewport (the tab bar hiding, the keyboard) can leave self-sized rows at stale
+      // positions; re-measuring the visible rows puts them back in place.
+      remeasureVisibleRows()
+      guard !collection.isDragging, !collection.isDecelerating else { return }
       let previousDistance =
         collection.contentSize.height - collection.contentOffset.y
         - previousViewportHeight + collection.adjustedContentInset.bottom
@@ -406,18 +429,18 @@ struct MessageCell: View {
     Group {
       if isUserText {
         // Your messages: a compact bubble on the trailing side.
-        HStack(spacing: 0) {
-          Spacer(minLength: 56)
-          VStack(alignment: .leading, spacing: 6) {
-            ChatMarkdown(text: message.text).fixedSize(horizontal: false, vertical: true)
-            attachments
-          }
-          .padding(.horizontal, 14).padding(.vertical, 10)
-          .background(
-            Color.secondary.opacity(0.1),
-            in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        // No spacers or fixed sizes: self-sizing cells measure this in one pass.
+        VStack(alignment: .leading, spacing: 6) {
+          ChatMarkdown(text: message.text)
+          attachments
         }
-        .padding(.vertical, 8)
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(
+          Color.secondary.opacity(0.1),
+          in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+        )
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(.leading, 56).padding(.vertical, 8)
       } else {
         VStack(alignment: .leading, spacing: 5) {
           if message.kind == "assistant" {
