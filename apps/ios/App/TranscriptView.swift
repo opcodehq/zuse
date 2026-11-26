@@ -400,35 +400,50 @@ struct MessageCell: View {
   let message: ChatMessage
   let rpc: RPCClient?
   var respond: ((String) async throws -> Void)?
-  private var isUser: Bool { message.role == "user" }
+  /// Text you sent, shown as a bubble; other user-role records (tool results) render as details.
+  private var isUserText: Bool { ["user", "user_rich"].contains(message.kind) }
   var body: some View {
-    VStack(alignment: .leading, spacing: 5) {
-      if ["assistant", "user", "user_rich"].contains(message.kind) {
-        ChatMarkdown(text: message.text)
-          .frame(maxWidth: .infinity, alignment: .leading)
-        if message.kind == "user_rich", !message.content["attachments"].array.isEmpty {
-          ForEach(Array(message.content["attachments"].array.enumerated()), id: \.offset) {
-            _, reference in
-            AttachmentView(reference: reference, sessionID: message.sessionId, rpc: rpc)
+    Group {
+      if isUserText {
+        // Your messages: a compact bubble on the trailing side.
+        HStack(spacing: 0) {
+          Spacer(minLength: 56)
+          VStack(alignment: .leading, spacing: 6) {
+            ChatMarkdown(text: message.text).fixedSize(horizontal: false, vertical: true)
+            attachments
+          }
+          .padding(.horizontal, 14).padding(.vertical, 10)
+          .background(
+            Color.secondary.opacity(0.1),
+            in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
+        .padding(.vertical, 8)
+      } else {
+        VStack(alignment: .leading, spacing: 5) {
+          if message.kind == "assistant" {
+            ChatMarkdown(text: message.text).frame(maxWidth: .infinity, alignment: .leading)
+          } else {
+            MessageDetails(message: message, respond: respond)
+              .disclosureGroupStyle(TranscriptDisclosureStyle())
           }
         }
-      } else {
-        MessageDetails(message: message, respond: respond)
-          .disclosureGroupStyle(TranscriptDisclosureStyle())
+        .padding(.vertical, message.kind == "assistant" ? 7 : 3)
       }
     }
     .font(.subheadline)
-    .padding(isUser ? 12 : 0)
-    .background(
-      isUser ? Color.secondary.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 16)
-    )
-    .padding(.horizontal, 16).padding(
-      .vertical, isUser ? 10 : (message.kind == "assistant" ? 7 : 3)
-    )
+    .padding(.horizontal, 16)
     .frame(maxWidth: 720, alignment: .leading).frame(maxWidth: .infinity)
     .contextMenu {
       Button("Copy", systemImage: "doc.on.doc") { NativePlatform.copy(message.text) }
       ShareLink(item: message.text)
+    }
+  }
+  @ViewBuilder private var attachments: some View {
+    if message.kind == "user_rich" {
+      ForEach(Array(message.content["attachments"].array.enumerated()), id: \.offset) {
+        _, reference in
+        AttachmentView(reference: reference, sessionID: message.sessionId, rpc: rpc)
+      }
     }
   }
   private var title: String {

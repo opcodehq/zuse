@@ -442,18 +442,66 @@ struct WorkspaceView: View {
     .navigationTitle(session.title.isEmpty ? "Chat" : session.title)
     .compactNavigationTitle()
     .toolbar {
-      ToolbarItem(placement: .principal) {
-        ChatHeaderTitle(
-          title: session.title.isEmpty ? "Chat" : session.title,
-          subtitle: [
-            workspace.projects.first { $0.id == session.projectId }?.name, branchName,
-          ].compactMap { $0 }.joined(separator: " · "))
-      }
-      ToolbarItem(placement: .primaryAction) {
-        Button("Changes", systemImage: "plusminus") { showDiff = true }
-          .tint(.primary).disabled(workspace.connectionState != "Connected")
+      if let zapper = coordinatedBy(session) {
+        // A Zapper's conversation: its mascot and name lead to the overview.
+        ToolbarItem(placement: .principal) {
+          Button {
+            zapperPath.append(.overview)
+          } label: {
+            HStack(spacing: 8) {
+              ZapperAvatarView(zapper: zapper, size: 26)
+              Text(zapper.config.name).font(.headline).foregroundStyle(.primary).lineLimit(1)
+            }
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel("\(zapper.config.name) overview")
+        }
+        ToolbarItem(placement: .primaryAction) { zapperMenu(zapper) }
+      } else {
+        ToolbarItem(placement: .principal) {
+          ChatHeaderTitle(
+            title: session.title.isEmpty ? "Chat" : session.title,
+            subtitle: [
+              workspace.projects.first { $0.id == session.projectId }?.name, branchName,
+            ].compactMap { $0 }.joined(separator: " · "))
+        }
+        ToolbarItem(placement: .primaryAction) {
+          Button("Changes", systemImage: "plusminus") { showDiff = true }
+            .tint(.primary).disabled(workspace.connectionState != "Connected")
+        }
       }
     }
+  }
+  /// The Zapper whose coordinator conversation this is, if any.
+  private func coordinatedBy(_ session: SessionRow) -> Zapper? {
+    guard zapperRoute != nil else { return nil }
+    return workspace.zappers.zappers.first { $0.coordinatorChatId == session.id }
+  }
+  private func zapperMenu(_ zapper: Zapper) -> some View {
+    Menu {
+      Button("Overview", systemImage: "square.grid.2x2") { zapperPath.append(.overview) }
+      if zapper.status == .active || zapper.status == .paused {
+        let pausing = zapper.status == .active
+        Button(pausing ? "Pause" : "Resume", systemImage: pausing ? "pause" : "play") {
+          Task {
+            await workspace.zappers.perform(
+              .setStatus(pausing ? .paused : .active), on: zapper,
+              label: pausing ? "Pause" : "Resume")
+          }
+        }
+      }
+    } label: {
+      Image(systemName: "ellipsis")
+        .overlay(alignment: .topTrailing) {
+          if zapper.needsYouCount > 0 {
+            Circle().fill(Color.orange).frame(width: 8, height: 8).offset(x: 6, y: -6)
+          }
+        }
+    }
+    .tint(.primary)
+    .accessibilityLabel(
+      zapper.needsYouCount > 0
+        ? "More, \(zapper.needsYouCount) waiting for you" : "More")
   }
   private var composerExpanded: Bool {
     composerFocused || !workspace.attachments.isEmpty

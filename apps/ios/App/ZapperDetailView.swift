@@ -23,7 +23,7 @@ enum ZapperSection: String, CaseIterable, Identifiable {
 }
 
 /// A Zapper's own navigation stack in the detail column. It opens on the coordinator's
-/// conversation; the mascot in the header opens the overview, with threads, issues and docs.
+/// conversation; its title in the header opens the overview, with threads, issues and docs.
 struct ZapperNavigator<Chat: View>: View {
   let workspace: WorkspaceModel
   let zapperID: String
@@ -54,24 +54,6 @@ struct ZapperNavigator<Chat: View>: View {
     if let zapper = store.zapper(zapperID) {
       let session = coordinator(zapper)
       chat(session)
-        .toolbar {
-          ToolbarItem(placement: .primaryAction) {
-            Button {
-              path.append(.overview)
-            } label: {
-              ZapperAvatarView(zapper: zapper, size: 24)
-                .overlay(alignment: .topTrailing) {
-                  if zapper.needsYouCount > 0 {
-                    Circle().fill(Color.orange).frame(width: 9, height: 9).offset(x: 3, y: -3)
-                  }
-                }
-            }
-            .accessibilityLabel(
-              zapper.needsYouCount > 0
-                ? "\(zapper.config.name) overview, \(zapper.needsYouCount) waiting for you"
-                : "\(zapper.config.name) overview")
-          }
-        }
         .onAppear { select(session) }
     } else {
       // Still loading, or removed: the overview explains either.
