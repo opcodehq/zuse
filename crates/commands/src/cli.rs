@@ -93,6 +93,7 @@ pub enum Command {
     },
     /// Offer this exact executable and arguments to your attached cloud chats until interrupted.
     BridgeTask {
+        /// The absolute executable path, then its fixed arguments.
         #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
         argv: Vec<String>,
     },
