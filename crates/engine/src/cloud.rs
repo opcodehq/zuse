@@ -958,6 +958,11 @@ impl CloudApi {
                         None,
                         reqwest::Method::GET,
                     ),
+                    "rename" => (
+                        vec!["v1", "cloud", "bridge", "computers", text("deviceId")?],
+                        Some(json!({"name":text("name")?})),
+                        reqwest::Method::PATCH,
+                    ),
                     "forget" => (
                         vec!["v1", "cloud", "bridge", "computers", text("deviceId")?],
                         None,

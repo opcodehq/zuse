@@ -291,7 +291,9 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         )
         .route(
             "/v1/cloud/bridge/computers/{device}",
-            axum::routing::delete(bridge_computers::forget),
+            axum::routing::delete(bridge_computers::forget)
+                .patch(bridge_computers::rename)
+                .layer(DefaultBodyLimit::max(1024)),
         )
         .route(
             "/v1/cloud/workspaces/{workspace}/chats/{chat}/attached-computers",

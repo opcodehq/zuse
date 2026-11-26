@@ -16,14 +16,16 @@ const GRANTED: &str = "(r.decision='once'
     OR (r.decision='always' AND EXISTS(SELECT FROM api_bridge_always_grants g
         WHERE g.owner_id=r.owner_id AND g.enrollment_id=r.enrollment_id)))";
 
-/// An attachment the agent may target: an explicit secondary, or the chat's
-/// current primary. `a` is the attachment row.
-const TARGETABLE: &str = "(a.explicit OR EXISTS(SELECT FROM api_bridge_primaries p
-    WHERE (p.owner_id,p.workspace_id,p.chat_id,p.enrollment_id)=(a.owner_id,a.workspace_id,a.chat_id,a.enrollment_id)))";
-/// The device's role for row `a`.
+/// Whether computer `c` is the one the owner is typing on in chat ($2, $3):
+/// `primary`, or another of their computers: `secondary`. Agent-facing only.
 const ROLE: &str = "CASE WHEN EXISTS(SELECT FROM api_bridge_primaries p
-    WHERE (p.owner_id,p.workspace_id,p.chat_id,p.enrollment_id)=(a.owner_id,a.workspace_id,a.chat_id,a.enrollment_id))
+    WHERE p.owner_id=c.owner_id AND p.workspace_id=$2 AND p.chat_id=$3 AND p.enrollment_id=c.enrollment_id)
     THEN 'primary' ELSE 'secondary' END";
+
+/// The owner's active chat on a usable cloud computer.
+const OWNED_CHAT: &str = "EXISTS(SELECT FROM api_cloud_workspaces w JOIN zuse_rust_task_command_sessions s USING(workspace_id)
+    WHERE w.account_id=$1 AND w.workspace_id=$2 AND s.session_id=$3 AND s.state='active'
+      AND w.desired_state IN ('ready','paused') AND w.state NOT IN ('archived','archiving','deleting','deleted'))";
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "action", rename_all = "camelCase", deny_unknown_fields)]
@@ -256,8 +258,7 @@ pub(super) async fn list_for(
         "SELECT jsonb_build_object('task',t.task_id,'deviceId',t.enrollment_id,'dynamic',t.dynamic,
             'command',t.command,'cwd',t.cwd,'user',t.os_user,'computer',c.label,'role',{ROLE})
          FROM api_bridge_tasks t JOIN api_bridge_computers c USING(owner_id,enrollment_id)
-         JOIN api_bridge_attachments a USING(owner_id,enrollment_id)
-         WHERE a.owner_id=$1 AND a.workspace_id=$2 AND a.chat_id=$3 AND t.expires_at>now() AND {TARGETABLE}
+         WHERE c.owner_id=$1 AND t.expires_at>now() AND {OWNED_CHAT}
          ORDER BY c.label,t.command"
     ))
     .bind(owner)
@@ -267,8 +268,8 @@ pub(super) async fn list_for(
     .await?)
 }
 
-/// The chat's primary (first) and explicit secondaries, online or not, with
-/// their shell connector's details while online.
+/// The owner's enrolled computers, the one they are typing on first, online
+/// or not, with their shell connector's details while online.
 pub(super) async fn computers_for(
     pool: &sqlx::PgPool,
     owner: &str,
@@ -279,11 +280,11 @@ pub(super) async fn computers_for(
         "SELECT jsonb_build_object('deviceId',c.enrollment_id,'name',c.label,'platform',c.platform,
             'role',{ROLE},'online',t.task_id IS NOT NULL,'shell',t.command,'user',t.os_user,'cwd',t.cwd,
             'defaultTimeoutSeconds',$4::int,'maxTimeoutSeconds',$5::int)
-         FROM api_bridge_attachments a JOIN api_bridge_computers c USING(owner_id,enrollment_id)
+         FROM api_bridge_computers c
          LEFT JOIN LATERAL (SELECT task_id,command,os_user,cwd FROM api_bridge_tasks t
              WHERE t.owner_id=c.owner_id AND t.enrollment_id=c.enrollment_id AND t.dynamic AND t.expires_at>now()
              ORDER BY t.expires_at DESC LIMIT 1) t ON true
-         WHERE a.owner_id=$1 AND a.workspace_id=$2 AND a.chat_id=$3 AND {TARGETABLE}
+         WHERE c.owner_id=$1 AND {OWNED_CHAT}
          ORDER BY {ROLE} <> 'primary', lower(c.label), c.enrollment_id"
     ))
     .bind(owner)
@@ -375,6 +376,28 @@ pub(super) async fn request_for(
     if waiting >= MAX_PENDING_PER_CHAT {
         return Err(ApiError::conflict("too_many_pending_computer_requests"));
     }
+    let owned: bool = sqlx::query_scalar(&format!("SELECT {OWNED_CHAT}"))
+        .bind(owner)
+        .bind(workspace)
+        .bind(chat)
+        .fetch_one(&mut *tx)
+        .await?;
+    if !owned {
+        return Err(ApiError::not_found("bridge_chat_unavailable"));
+    }
+    // Any of the owner's computers can serve the chat without attaching it.
+    // The row holds the chat's requests and grants for that computer.
+    sqlx::query(
+        "INSERT INTO api_bridge_attachments(owner_id,workspace_id,chat_id,enrollment_id,explicit)
+         SELECT owner_id,$2,$3,enrollment_id,false FROM api_bridge_tasks
+         WHERE task_id=$4 AND owner_id=$1 AND expires_at>now() ON CONFLICT DO NOTHING",
+    )
+    .bind(owner)
+    .bind(workspace)
+    .bind(chat)
+    .bind(input.task.to_string())
+    .execute(&mut *tx)
+    .await?;
     let added = sqlx::query(&format!(
         "INSERT INTO api_bridge_requests(request_id,owner_id,workspace_id,chat_id,enrollment_id,computer_name,
             os_user,shell,cwd,command,timeout_ms,decision,role)
@@ -384,10 +407,10 @@ pub(super) async fn request_for(
                  WHEN EXISTS(SELECT FROM api_bridge_session_grants g
                      WHERE (g.owner_id,g.workspace_id,g.chat_id,g.enrollment_id)=(a.owner_id,a.workspace_id,a.chat_id,a.enrollment_id)) THEN 'session' END,
             {ROLE}
-         FROM api_bridge_tasks t JOIN api_bridge_computers USING(owner_id,enrollment_id)
+         FROM api_bridge_tasks t JOIN api_bridge_computers c USING(owner_id,enrollment_id)
          JOIN api_bridge_attachments a USING(owner_id,enrollment_id)
          WHERE owner_id=$1 AND workspace_id=$2 AND chat_id=$3 AND task_id=$5 AND expires_at>now()
-           AND (dynamic OR ($6::text IS NULL AND $7::text IS NULL)) AND {TARGETABLE}"
+           AND (dynamic OR ($6::text IS NULL AND $7::text IS NULL))"
     ))
     .bind(owner)
     .bind(workspace)
@@ -591,8 +614,8 @@ pub(super) async fn runtime_request(
             request_id,
             timeout_seconds,
         } => {
-            // No device means the primary: the computer the owner last sent
-            // from. A secondary is only ever an explicit target.
+            // No device means the computer the owner is typing on. Their
+            // other computers are only ever explicit targets.
             let device_id = match device_id {
                 Some(device) => device,
                 None => sqlx::query_scalar(
@@ -606,18 +629,15 @@ pub(super) async fn runtime_request(
                 .await?
                 .ok_or_else(|| ApiError::conflict("no_primary_computer"))?,
             };
-            let attached: bool = sqlx::query_scalar(&format!(
-                "SELECT EXISTS(SELECT FROM api_bridge_attachments a
-                 WHERE a.owner_id=$1 AND a.workspace_id=$2 AND a.chat_id=$3 AND a.enrollment_id=$4 AND {TARGETABLE})"
-            ))
+            let enrolled: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT FROM api_bridge_computers WHERE owner_id=$1 AND enrollment_id=$2)",
+            )
             .bind(owner)
-            .bind(workspace)
-            .bind(chat)
             .bind(&device_id)
             .fetch_one(pool)
             .await?;
-            if !attached {
-                return Err(ApiError::conflict("computer_not_attached"));
+            if !enrolled {
+                return Err(ApiError::conflict("computer_not_found"));
             }
             let task: String = sqlx::query_scalar(
                 "SELECT task_id FROM api_bridge_tasks WHERE owner_id=$1 AND enrollment_id=$2

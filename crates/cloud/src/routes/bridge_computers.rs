@@ -259,6 +259,48 @@ pub(super) async fn clear_primary(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Rename {
+    name: String,
+}
+
+/// The owner renames one of their computers; approvals and the agent use it.
+pub(super) async fn rename(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(input): Json<Rename>,
+) -> Result<StatusCode, ApiError> {
+    let owner = personal_owner(&state, &headers).await?;
+    rename_for(&runtime(&state)?.shared_pool(), &owner, &id, &input.name).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn rename_for(
+    pool: &sqlx::PgPool,
+    owner: &str,
+    device: &str,
+    name: &str,
+) -> Result<(), ApiError> {
+    let name = name.trim();
+    if name.is_empty() || name.len() > 128 || name.chars().any(char::is_control) {
+        return Err(ApiError::bad_request("invalid_bridge_computer"));
+    }
+    let renamed = sqlx::query(
+        "UPDATE api_bridge_computers SET label=$3 WHERE owner_id=$1 AND enrollment_id=$2",
+    )
+    .bind(owner)
+    .bind(device)
+    .bind(name)
+    .execute(pool)
+    .await?;
+    if renamed.rows_affected() != 1 {
+        return Err(ApiError::not_found("bridge_computer_unavailable"));
+    }
+    Ok(())
+}
+
 pub(super) async fn forget(
     State(state): State<AppState>,
     headers: HeaderMap,

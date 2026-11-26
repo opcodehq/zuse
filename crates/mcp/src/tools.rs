@@ -339,13 +339,13 @@ fn catalog() -> Vec<ToolDef> {
     for (name, description, properties, required) in [
         (
             "list_attached_computers",
-            "List this chat's computers. role is primary (the computer the user is typing on; the default target) or secondary (another of the user's computers attached to the chat). Includes deviceId, name, platform, whether it is online, shell, OS user and default working directory.",
+            "List the user's own computers this chat can run commands on. role is primary for the computer the user is typing on (the default target) and secondary for their other computers. Includes deviceId, name (refer to computers by this name), platform, whether it is online, shell, OS user and default working directory.",
             json!({}),
             json!([]),
         ),
         (
             "run_on_computer",
-            "Run a command on the user's computer. Omit device_id to use the primary computer (the one the user is typing on). Pass a secondary's device_id only when the user asked for that computer or the task can only be done there; never as a default or fallback. The owner approves each command unless they already allowed this chat or that computer. Returns a request ID; poll computer_task_results for output and completion. Long builds and tests can ask for up to 3600 seconds (default 600). Never resubmit a request whose outcome is unknown.",
+            "Run a command on the user's computer. Omit device_id to use the primary computer (the one the user is typing on). Pass another computer's device_id only when the user asked for that computer or the task can only be done there; never as a default or fallback. The owner approves each command unless they already allowed this chat or that computer. Returns a request ID; poll computer_task_results for output and completion. Long builds and tests can ask for up to 3600 seconds (default 600). Never resubmit a request whose outcome is unknown.",
             json!({"device_id":{"type":"string"},"command":{"type":"string"},"cwd":{"type":"string"},
                 "timeout_seconds":{"type":"integer","minimum":1,"maximum":zuse_protocol::computer_tasks::MAX_TIMEOUT_SECS}}),
             json!(["command"]),

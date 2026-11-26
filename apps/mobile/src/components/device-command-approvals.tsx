@@ -130,25 +130,6 @@ export function DeviceCommandApprovals(props: { workspaceId: string; chatId: str
 		}
 	}
 
-	async function setAttachment(id: string, attach: boolean) {
-		setBusy(true);
-		setError("");
-		try {
-			const token = await getAccessToken();
-			const response = await fetch(`${attachedPath}/${encodeURIComponent(id)}`, {
-				method: attach ? "PUT" : "DELETE",
-				headers: { authorization: `Bearer ${token}` },
-			});
-			if (!response.ok) throw new Error();
-			setAttached((ids) => attach ? [...new Set([...ids, id])] : ids.filter((value) => value !== id));
-		} catch {
-			setError("Could not update the computers attached to this chat.");
-		} finally {
-			setRevision((value) => value + 1);
-			setBusy(false);
-		}
-	}
-
 	async function revokeAlways(id: string) {
 		setBusy(true);
 		setError("");
@@ -175,10 +156,7 @@ export function DeviceCommandApprovals(props: { workspaceId: string; chatId: str
 			</Button>
 			{open && computers.map((computer) => (
 				<View key={computer.deviceId} className="gap-1">
-				<Button size="sm" disabled={busy}
-					onPress={() => void setAttachment(computer.deviceId, !attached.includes(computer.deviceId))}>
-					{attached.includes(computer.deviceId) ? "Detach" : "Attach"} {computer.name} · {computer.platform} · {computer.connected ? "Online" : "Offline"}
-				</Button>
+				<Text>{computer.name} · {computer.platform} · {computer.connected ? "Online" : "Offline"}</Text>
 				{computer.alwaysAllowed && <Button size="sm" disabled={busy} onPress={() => void revokeAlways(computer.deviceId)}>
 					Revoke always allow for {computer.name}
 				</Button>}
@@ -202,7 +180,7 @@ export function DeviceCommandApprovals(props: { workspaceId: string; chatId: str
 			))}
 			{open && requests?.map((row) => (
 				<View key={row.id} className="gap-2">
-					<Text>{row.computerName}{row.role === "secondary" ? " (secondary)" : ""} · {row.osUser} · {row.shell}</Text>
+					<Text>{row.computerName} · {row.osUser} · {row.shell}</Text>
 					<Text selectable className="font-mono">{row.cwd}{"\n"}{row.command}</Text>
 					<Text>Runs with this OS user's access to files and credentials. Always allows your future chats to use this computer.</Text>
 					<View className="flex-row flex-wrap gap-1">

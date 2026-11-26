@@ -453,13 +453,13 @@ async fn requests_are_bounded_idempotent_and_bound_to_their_chat() {
             .unwrap_err();
         assert_eq!(error.code, "invalid_computer_timeout");
     }
-    // An unattached or offline computer is reported as such.
+    // An offline computer is reported as such, attached or not.
     assert_eq!(
         command(&pool, "w", "chat", "linux", "pwd", None)
             .await
             .unwrap_err()
             .code,
-        "computer_not_attached"
+        "computer_offline"
     );
     attach(&pool, "w", "chat", "linux").await;
     assert_eq!(
@@ -469,13 +469,21 @@ async fn requests_are_bounded_idempotent_and_bound_to_their_chat() {
             .code,
         "computer_offline"
     );
-    // Another owner's enrollment is never reachable from this chat.
+    // Another owner's enrollment is never reachable from this chat, and
+    // the owner's computers never serve another owner's chat.
     assert_eq!(
         command(&pool, "w", "chat", "pc", "pwd", None)
             .await
             .unwrap_err()
             .code,
-        "computer_not_attached"
+        "computer_not_found"
+    );
+    assert_eq!(
+        command(&pool, "other-w", "chat", "mac", "pwd", None)
+            .await
+            .unwrap_err()
+            .code,
+        "bridge_chat_unavailable"
     );
 
     // A retried submission is recognized; the same ID from another chat is not.
@@ -631,16 +639,19 @@ async fn the_primary_follows_the_sender_and_is_the_default_target() {
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0]["deviceId"], "linux");
     assert_eq!(pending[0]["role"], "primary");
-    // The Mac's running work continues, but it is no longer a target: it was
-    // never attached as a secondary.
+    // The Mac's running work continues, and it can still be asked for by
+    // name: it is no longer the default.
     assert_eq!(check(&pool, "mac", mac, id).await, json!(true));
+    let named = command(&pool, "w", "chat", "mac", "ls", None)
+        .await
+        .unwrap();
     assert_eq!(
-        command(&pool, "w", "chat", "mac", "ls", None)
-            .await
-            .unwrap_err()
-            .code,
-        "computer_not_attached"
+        state_of(&pool, "w", "chat", named).await["state"],
+        "approved"
     );
+    let rows = results_for(&pool, "owner", "w", "chat").await.unwrap();
+    let row = rows.iter().find(|r| r["id"] == named.to_string()).unwrap();
+    assert_eq!(row["role"], "secondary");
     assert_eq!(
         attached_for(&pool, "owner", "w", "chat").await.unwrap(),
         vec![json!({"deviceId":"linux","role":"primary"})]
@@ -660,7 +671,7 @@ async fn the_primary_follows_the_sender_and_is_the_default_target() {
 
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL"]
-async fn a_secondary_runs_only_when_named_and_keeps_its_own_approvals() {
+async fn another_computer_runs_only_when_named_and_keeps_its_own_approvals() {
     let Some(pool) = database().await else { return };
     let (mac, linux) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
     offer(&pool, "mac", mac).await;
@@ -668,15 +679,7 @@ async fn a_secondary_runs_only_when_named_and_keeps_its_own_approvals() {
     primary_for(&pool, "owner", "w", "chat", "mac")
         .await
         .unwrap();
-    // Enrolled but not attached: never a target, not even by name.
-    assert_eq!(
-        command(&pool, "w", "chat", "linux", "uname", None)
-            .await
-            .unwrap_err()
-            .code,
-        "computer_not_attached"
-    );
-    attach(&pool, "w", "chat", "linux").await;
+    // The owner's other computers need no attaching; they run when named.
     // The default still goes to the primary...
     let default = on_primary(&pool, "pwd").await.unwrap();
     assert_eq!(default["deviceId"], "mac");
@@ -885,4 +888,33 @@ async fn revoking_always_returns_unstarted_requests_to_waiting() {
         .await
         .unwrap();
     assert_eq!(claim(&pool, "mac", task).await, Value::Null);
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
+async fn renaming_a_computer_changes_only_the_owners_own_and_later_requests() {
+    let Some(pool) = database().await else { return };
+    let task = uuid::Uuid::new_v4();
+    offer(&pool, "mac", task).await;
+    super::bridge_computers::rename_for(&pool, "owner", "mac", "  Swaraj's MacBook Pro ")
+        .await
+        .unwrap();
+    for bad in ["", "   ", "line\nbreak"] {
+        assert!(
+            super::bridge_computers::rename_for(&pool, "owner", "mac", bad)
+                .await
+                .is_err()
+        );
+    }
+    // Another owner's computer can't be renamed.
+    assert!(
+        super::bridge_computers::rename_for(&pool, "owner", "pc", "Mine")
+            .await
+            .is_err()
+    );
+    command(&pool, "w", "chat", "mac", "pwd", None)
+        .await
+        .unwrap();
+    let pending = pending_for(&pool, "owner", "w", "chat").await.unwrap();
+    assert_eq!(pending[0]["computerName"], "Swaraj's MacBook Pro");
 }

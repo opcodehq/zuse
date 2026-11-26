@@ -25,7 +25,6 @@ export function ComputerChat(props: { chatId: string }) {
   const target = readCloudTarget();
   const [open, setOpen] = createSignal(false);
   const [computers, setComputers] = createSignal<Computer[]>([]);
-  const [attached, setAttached] = createSignal<string[]>([]);
   const [pending, setPending] = createSignal<Preview[]>([]);
   const [runs, setRuns] = createSignal<Run[]>([]);
   const [busy, setBusy] = createSignal(false);
@@ -51,22 +50,19 @@ export function ComputerChat(props: { chatId: string }) {
         active && chat === props.chatId && epoch === state.epoch;
       async function load() {
         try {
-          const [devices, ids, rows, results] = await Promise.all([
+          const [devices, rows, results] = await Promise.all([
             call<Computer[]>("list"),
-            call<{ deviceId: string; role: string }[]>("attached"),
             call<Preview[]>("pending"),
             call<Run[]>("results"),
           ]);
           if (current()) {
             setComputers(devices);
-            setAttached(ids.map((row) => row.deviceId));
             setPending(rows);
             setRuns(results);
           }
         } catch (e) {
           if (current()) {
             setComputers([]);
-            setAttached([]);
             setPending([]);
             setRuns([]);
             setError(String(e));
@@ -88,13 +84,11 @@ export function ComputerChat(props: { chatId: string }) {
     setError("");
     try {
       await call(action, extra);
-      const [ids, rows, results] = await Promise.all([
-        call<{ deviceId: string; role: string }[]>("attached"),
+      const [rows, results] = await Promise.all([
         call<Preview[]>("pending"),
         call<Run[]>("results"),
       ]);
       if (chat === props.chatId && epoch === state.epoch) {
-        setAttached(ids.map((row) => row.deviceId));
         setPending(rows);
         setRuns(results);
       }
@@ -113,20 +107,9 @@ export function ComputerChat(props: { chatId: string }) {
         <Show when={open()}>
           <For each={computers()}>
             {(computer) => (
-              <Btn
-                disabled={busy()}
-                onClick={() =>
-                  void act(
-                    attached().includes(computer.deviceId)
-                      ? "detach"
-                      : "attach",
-                    { deviceId: computer.deviceId },
-                  )
-                }
-              >
-                {attached().includes(computer.deviceId) ? "Detach" : "Attach"}{" "}
+              <p>
                 {computer.name} · {computer.platform} · {computer.connected ? "Online" : "Offline"}
-              </Btn>
+              </p>
             )}
           </For>
           {/* One bounded region, so long output never pushes the editor
@@ -136,9 +119,7 @@ export function ComputerChat(props: { chatId: string }) {
             {(request) => (
               <div>
                 <p>
-                  {request.computerName}
-                  {request.role === "secondary" ? " (secondary)" : ""} · {request.osUser} ·{" "}
-                  {request.shell}
+                  {request.computerName} · {request.osUser} · {request.shell}
                 </p>
                 <pre>
                   {request.cwd}
