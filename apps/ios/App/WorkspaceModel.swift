@@ -895,6 +895,38 @@ import ZuseCore
       return false
     }
   }
+  /// Archives a computer chat where it lives; it moves to Archived, ready to restore.
+  @discardableResult func archiveChat(_ session: SessionRow) async -> Bool {
+    #if DEBUG
+      if ProcessInfo.processInfo.arguments.contains("--native-preview") {
+        sessions.removeAll { $0.id == session.id }
+        if !archivedSessions.contains(where: { $0.id == session.id }) {
+          archivedSessions.append(session)
+        }
+        return true
+      }
+    #endif
+    guard let rpc, connectionState == "Connected", await rpc.canonical else {
+      error = "Connect to \(connectedComputer ?? "this computer") to archive this chat."
+      return false
+    }
+    guard restoringChats.insert(session.id).inserted else { return false }
+    let current = selection
+    defer { if current == selection { restoringChats.remove(session.id) } }
+    do {
+      try await CanonicalWorkspace(rpc).setArchived(chatID: session.id, archived: true)
+      guard current == selection else { return false }
+      sessions.removeAll { $0.id == session.id }
+      if !archivedSessions.contains(where: { $0.id == session.id }) {
+        archivedSessions.append(session)
+      }
+      await refreshSessionCatalog()
+      return current == selection
+    } catch {
+      if current == selection { self.error = error.localizedDescription }
+      return false
+    }
+  }
   func selectSession(_ session: SessionRow) {
     #if DEBUG
       if ProcessInfo.processInfo.arguments.contains("--native-preview") {

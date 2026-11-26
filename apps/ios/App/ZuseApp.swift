@@ -43,20 +43,28 @@ struct WorkspaceView: View {
   @State private var connectionMethod: ConnectionMethod?
   @State private var showDiff = false
   @State private var newChat: NewChatRoute?
-  @State private var columnVisibility: NavigationSplitViewVisibility = .all
-  @State private var visibilityBeforeNewChat: NavigationSplitViewVisibility = .all
-  @State private var showSettings = false
   @State private var showProject = false
+  @State private var showComputers = false
   @State private var composerHeight: CGFloat = 80
   @State private var modelCatalog: [ModelProvider] = []
   @State private var branchName: String?
   @FocusState private var composerFocused: Bool
+  @SceneStorage("native.tab") private var tab: AppTab = .zappers
+  /// The Chats tab: its list selection, its columns and the new chat page.
   @State private var selection: SessionRow?
-  @State private var preferredColumn: NavigationSplitViewColumn = .sidebar
-  /// The Zapper open in the detail column, its pushed pages, and the chat it opened.
+  @State private var chatsColumn: NavigationSplitViewColumn = .sidebar
+  @State private var chatsVisibility: NavigationSplitViewVisibility = .all
+  @State private var visibilityBeforeNewChat: NavigationSplitViewVisibility = .all
+  /// The Zappers tab: the Zapper open in its detail column and the pages pushed in it.
   @State private var zapperRoute: String?
   @State private var zapperPath: [ZapperRoute] = []
-  @State private var zapperChat: String?
+  @State private var zappersColumn: NavigationSplitViewColumn = .sidebar
+  @State private var morePath = NavigationPath()
+  @State private var searchPath: [ZapperRoute] = []
+  @State private var searchText = ""
+  @State private var chatActions: ChatActionsTarget?
+  /// Until the user moves on, the chat restored at launch opens in the Chats tab.
+  @State private var opensRestoredChat = true
   @Environment(\.scenePhase) private var scenePhase
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   #if os(iOS)
@@ -72,33 +80,57 @@ struct WorkspaceView: View {
   private struct NewChatRoute: Equatable {
     let id = UUID()
     let cloud: Bool
+    var prompt = ""
   }
-  /// New chat is a page in the detail column: pushed on iPhone, full width elsewhere.
-  private func openNewChat(cloud: Bool) {
-    newChat = NewChatRoute(cloud: cloud)
-    preferredColumn = .detail
-    if !isCompact && columnVisibility != .detailOnly {
-      visibilityBeforeNewChat = columnVisibility
-      columnVisibility = .detailOnly
+  /// New chat is a page in the Chats tab's detail column: pushed on iPhone, full width elsewhere.
+  private func openNewChat(cloud: Bool, prompt: String = "") {
+    newChat = NewChatRoute(cloud: cloud, prompt: prompt)
+    tab = .chats
+    chatsColumn = .detail
+    if !isCompact && chatsVisibility != .detailOnly {
+      visibilityBeforeNewChat = chatsVisibility
+      chatsVisibility = .detailOnly
     }
   }
   private func closeNewChat() {
     newChat = nil
-    if !isCompact { columnVisibility = visibilityBeforeNewChat }
+    if !isCompact { chatsVisibility = visibilityBeforeNewChat }
   }
   private func openZapper(_ id: String) {
-    if newChat != nil { closeNewChat() }
+    tab = .zappers
     if zapperRoute != id { zapperPath = [] }
     zapperRoute = id
-    // A chat tapped next always reads as a new selection and leaves the Zapper.
-    selection = nil
-    preferredColumn = .detail
+    zappersColumn = .detail
   }
   private func closeZapper() {
     zapperRoute = nil
     zapperPath = []
-    zapperChat = nil
-    if isCompact { preferredColumn = .sidebar }
+    if isCompact { zappersColumn = .sidebar }
+  }
+  /// Shows an ordinary chat in the Chats tab.
+  private func openChat(_ session: SessionRow) {
+    if newChat != nil { closeNewChat() }
+    tab = .chats
+    selection = session
+    chatsColumn = .detail
+  }
+  /// Leaves the chat open in the Chats tab, back to its list.
+  private func closeChat() {
+    selection = nil
+    if isCompact { chatsColumn = .sidebar }
+  }
+  /// Pushes a Zapper page onto the stack of the tab on screen.
+  private func push(_ route: ZapperRoute) {
+    switch tab {
+    case .more: morePath.append(route)
+    case .search: searchPath.append(route)
+    default: zapperPath.append(route)
+    }
+  }
+  private var needsYouCount: Int {
+    workspace.zappers.zappers.filter { $0.status != .archived }.reduce(0) {
+      $0 + $1.needsYouCount
+    }
   }
   var body: some View {
     presentedWorkspace
@@ -144,12 +176,28 @@ struct WorkspaceView: View {
     interactiveWorkspace
       .connectionFlow($connectionMethod, workspace: workspace)
       .sheet(isPresented: $showProject) { AddProjectView(workspace: workspace) }
-      .inspector(isPresented: $showDiff) {
-        if let session = workspace.selectedSession, let rpc = workspace.rpc {
-          DiffView(rpc: rpc, session: session).inspectorColumnWidth(min: 320, ideal: 440, max: 680)
-        }
+      .sheet(isPresented: $showComputers) { ComputersSheet(workspace: workspace) }
+      .sheet(item: $chatActions) { target in
+        ChatActionsSheet(
+          workspace: workspace, target: target,
+          openProfile: {
+            if case .zapper(let id) = target { push(.overview(id)) }
+          },
+          showChanges: { showDiff = true },
+          left: {
+            switch target {
+            case .chat: closeChat()
+            case .zapper:
+              if tab == .zappers {
+                closeZapper()
+              } else if tab == .more, !morePath.isEmpty {
+                morePath.removeLast()
+              } else if tab == .search, !searchPath.isEmpty {
+                searchPath.removeLast()
+              }
+            }
+          })
       }
-      .sheet(isPresented: $showSettings) { SettingsView(workspace: workspace) }
       .onChange(of: workspace.operationScope) { if zapperRoute != nil { closeZapper() } }
   }
   #if DEBUG
@@ -167,21 +215,61 @@ struct WorkspaceView: View {
         let first = workspace.zappers.zappers.first
       else { return }
       openZapper(first.id)
+      if arguments.contains("--chat-actions-preview") {
+        try? await Task.sleep(for: .milliseconds(500))
+        chatActions = .zapper(first.id)
+      }
       if arguments.contains("--zapper-chat-preview") { return }
       // Let the Zapper's stack appear on its conversation before pushing the overview.
       try? await Task.sleep(for: .milliseconds(400))
-      zapperPath = [.overview]
+      zapperPath = [.overview(first.id)]
       if arguments.contains("--zapper-issue-preview"),
         let issue = first.issues.first(where: { $0.details.status == .needsYou })
       {
-        zapperPath.append(.issue(issue.id))
+        zapperPath.append(.issue(zapper: first.id, issue: issue.id))
       } else if arguments.contains("--zapper-document-preview") {
-        zapperPath.append(.document("NOTES.md"))
+        zapperPath.append(.document(zapper: first.id, path: "NOTES.md"))
+      }
+    }
+    /// `--more=<issues|archived|computers|appearance|account|help>` opens a More page,
+    /// `--issue-detail-preview` the issue waiting on you and `--search=<text>` a search.
+    private func openMorePreview(_ arguments: [String]) {
+      if let value = arguments.first(where: { $0.hasPrefix("--more=") })?.dropFirst(7) {
+        tab = .more
+        switch value {
+        case "issues": morePath.append(MoreRoute.issues)
+        case "archived": morePath.append(MoreRoute.archived)
+        case "computers": morePath.append(MoreRoute.computers)
+        case "appearance": morePath.append(MoreRoute.appearance)
+        case "account": morePath.append(MoreRoute.account)
+        case "help": morePath.append(MoreRoute.help)
+        default: break
+        }
+      }
+      if arguments.contains("--issue-detail-preview"),
+        let zapper = workspace.zappers.zappers.first(where: { !$0.issues.isEmpty }),
+        let issue = zapper.issues.first(where: { $0.details.status == .needsYou })
+          ?? zapper.issues.first
+      {
+        tab = .more
+        if morePath.isEmpty { morePath.append(MoreRoute.issues) }
+        morePath.append(ZapperRoute.issue(zapper: zapper.id, issue: issue.id))
+      }
+      if let value = arguments.first(where: { $0.hasPrefix("--search=") })?.dropFirst(9) {
+        tab = .search
+        searchText = String(value)
       }
     }
   #endif
   private var interactiveWorkspace: some View {
-    navigation
+    observedWorkspace
+      .fileImporter(
+        isPresented: $showFilePicker, allowedContentTypes: [.item], onCompletion: importFile
+      )
+      .onChange(of: photo) { _, value in importPhoto(value) }
+  }
+  private var routedWorkspace: some View {
+    tabs
       #if os(iOS)
         .onReceive(
           NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)
@@ -196,7 +284,7 @@ struct WorkspaceView: View {
         openNewChat(cloud: true)
       }
       .onReceive(NotificationCenter.default.publisher(for: .nativeSettings)) { _ in
-        showSettings = true
+        tab = .more
       }
       .task(id: workspace.connectionState + (workspace.selectedSession?.id ?? "")) {
         modelCatalog = []
@@ -231,55 +319,88 @@ struct WorkspaceView: View {
           }
         }
       }
-      .onChange(of: workspace.selectedSession) { _, session in
-        selection = session
-        if session != nil {
-          if newChat != nil { closeNewChat() }
-          preferredColumn = .detail
+      .task(id: workspace.account.generation) {
+        // The cloud catalog stays fresh whichever tab is open.
+        var delay = 5.0
+        while !Task.isCancelled && workspace.account.signedIn {
+          do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+          if workspace.shouldPollCloudCatalog {
+            await workspace.refreshCloud(reportErrors: false)
+            delay = workspace.cloudCatalogProblem == nil ? 5 : min(30, delay * 2)
+          }
         }
       }
-      .onChange(of: preferredColumn) { _, column in
-        // Popping the pushed page on iPhone returns to the sidebar.
+  }
+  private var observedWorkspace: some View {
+    routedWorkspace
+      .onChange(of: workspace.selectedSession) { _, session in
+        guard let session else { return }
+        // Zapper conversations stay in the stack that opened them.
+        if workspace.zappers.keepsChat(session.id) {
+          opensRestoredChat = false
+          return
+        }
+        guard tab == .chats || newChat != nil || opensRestoredChat else { return }
+        opensRestoredChat = false
+        if selection?.id != session.id || newChat != nil { openChat(session) }
+      }
+      .onChange(of: chatsColumn) { _, column in
+        // Popping the pushed page on iPhone returns to the list.
+        if column == .sidebar && isCompact { newChat = nil }
+      }
+      .onChange(of: zappersColumn) { _, column in
         if column == .sidebar && isCompact {
-          newChat = nil
           zapperRoute = nil
           zapperPath = []
         }
       }
       .onChange(of: selection) {
-        if let selection, zapperRoute != nil, selection.id != zapperChat { closeZapper() }
+        if selection != nil && newChat != nil { closeNewChat() }
         if let selection, selection.id != workspace.selectedSession?.id {
           workspace.selectSession(selection)
         }
       }
+      .onChange(of: tab) { opensRestoredChat = false }
       .onChange(of: scenePhase) { _, phase in workspace.sceneChanged(active: phase == .active) }
       .onChange(of: workspace.account.generation) {
-        showSettings = false
         if !workspace.account.signedIn && newChat != nil { closeNewChat() }
         connectionMethod = nil
         showProject = false
+        showComputers = false
         showDiff = false
+        chatActions = nil
       }
       .onChange(of: workspace.draft) { workspace.persistDraft() }
       .onChange(of: workspace.connectionState) { _, state in
         if state != "Connected" { showDiff = false }
       }
-      .task {
-        await workspace.refreshCloud()
-        workspace.restoreWorkspace()
-        if workspace.selectedSession != nil { preferredColumn = .detail }
-        #if DEBUG
-          let arguments = ProcessInfo.processInfo.arguments
-          if arguments.contains("--settings-preview") { showSettings = true }
-          if arguments.contains("--new-chat-preview") { openNewChat(cloud: false) }
-          if arguments.contains("--pairing-preview") { connectionMethod = .add }
-          await openZapperPreview(arguments)
-        #endif
+      .task { await launch() }
+  }
+  /// Restores the last place, then applies debug launch arguments.
+  private func launch() async {
+    await workspace.refreshCloud()
+    workspace.restoreWorkspace()
+    let launchTab = AppTab.launchArgument
+    if let session = workspace.selectedSession, !workspace.zappers.keepsChat(session.id) {
+      opensRestoredChat = false
+      selection = session
+      chatsColumn = .detail
+      if launchTab == nil { tab = .chats }
+    }
+    if let launchTab { tab = launchTab }
+    #if DEBUG
+      let arguments = ProcessInfo.processInfo.arguments
+      if launchTab == nil && arguments.contains("--home-preview") { tab = .chats }
+      if arguments.contains("--settings-preview") { tab = .more }
+      if arguments.contains("--new-chat-preview") { openNewChat(cloud: false) }
+      if arguments.contains("--pairing-preview") { connectionMethod = .add }
+      if arguments.contains("--chat-actions-preview"), let session = selection {
+        try? await Task.sleep(for: .milliseconds(500))
+        chatActions = .chat(session)
       }
-      .fileImporter(
-        isPresented: $showFilePicker, allowedContentTypes: [.item], onCompletion: importFile
-      )
-      .onChange(of: photo) { _, value in importPhoto(value) }
+      openMorePreview(arguments)
+      await openZapperPreview(arguments)
+    #endif
   }
   private func importFile(_ result: Result<URL, Error>) {
     Task {
@@ -320,54 +441,145 @@ struct WorkspaceView: View {
     }
   }
 
-  private var navigation: some View {
-    NavigationSplitView(
-      columnVisibility: $columnVisibility, preferredCompactColumn: $preferredColumn
-    ) {
-      HomeView(
-        workspace: workspace, selection: $selection,
-        settings: { showSettings = true }, connect: { connectionMethod = .add },
-        newChat: { openNewChat(cloud: false) }, newCloudChat: { openNewChat(cloud: true) },
-        addProject: { showProject = true }, openZapper: openZapper
+  private var tabs: some View {
+    TabView(selection: $tab) {
+      Tab("Zappers", systemImage: "bolt", value: AppTab.zappers) { zappersTab }
+        .badge(needsYouCount)
+      Tab("Chats", systemImage: "bubble.left.and.bubble.right", value: AppTab.chats) { chatsTab }
+      Tab("Pull requests", systemImage: "arrow.triangle.pull", value: AppTab.prs) {
+        NavigationStack { PullRequestsTab(workspace: workspace) }
+      }
+      Tab(value: AppTab.more) {
+        moreTab
+      } label: {
+        Label {
+          Text("More")
+        } icon: {
+          AccountTabIcon.image(workspace.account)
+        }
+      }
+      Tab(value: AppTab.search, role: .search) { searchTab }
+    }
+    .tabViewStyle(.sidebarAdaptable)
+  }
+
+  private var zappersTab: some View {
+    NavigationSplitView(preferredCompactColumn: $zappersColumn) {
+      ZappersListView(
+        workspace: workspace, open: openZapper, connect: { connectionMethod = .add }
       )
       .disabled(workspace.clearingAccount)
-      .navigationSplitViewColumnWidth(min: 230, ideal: 280, max: 340)
-      .toolbar(removing: newChat == nil ? nil : .sidebarToggle)
+      .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 360)
     } detail: {
-      if let route = newChat {
-        NewChatSetupView(
-          workspace: workspace, initialCloud: route.cloud, showsClose: !isCompact,
-          close: closeNewChat
-        ).id(route.id)
-      } else if let zapperID = zapperRoute {
+      if let zapperID = zapperRoute {
         ZapperNavigator(
           workspace: workspace, zapperID: zapperID, path: $zapperPath,
-          select: { session in
-            zapperChat = session.id
-            workspace.selectSession(session)
-          },
-          close: closeZapper
+          select: { session in workspace.selectSession(session) }, close: closeZapper
         ) { session in
           chatScreen(session)
         }
         .id(zapperID)
-      } else if let session = workspace.selectedSession {
-        chatScreen(session)
       } else {
-        ContentUnavailableView {
-          Label("Your work, wherever you are", systemImage: "bubble.left.and.bubble.right")
-        } description: {
-          Text("Open a cloud chat or connect your computer to continue.")
-        }
-        .overlay {
-          if workspace.loading {
-            ProgressView().padding().background(.regularMaterial, in: Capsule())
-          }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity).background(AppTheme.surface)
+        emptyDetail("Pick a Zapper", symbol: "bolt", detail: "Its conversation opens here.")
       }
     }
     .navigationSplitViewStyle(.balanced)
+  }
+
+  private var chatsTab: some View {
+    NavigationSplitView(
+      columnVisibility: $chatsVisibility, preferredCompactColumn: $chatsColumn
+    ) {
+      ChatsListView(
+        workspace: workspace, selection: $selection, connect: { connectionMethod = .add },
+        newChat: { prompt in openNewChat(cloud: false, prompt: prompt) },
+        newCloudChat: { openNewChat(cloud: true) }, addProject: { showProject = true },
+        openComputers: { showComputers = true }
+      )
+      .disabled(workspace.clearingAccount)
+      .navigationSplitViewColumnWidth(min: 260, ideal: 320, max: 380)
+      .toolbar(removing: newChat == nil ? nil : .sidebarToggle)
+    } detail: {
+      if let route = newChat {
+        NewChatSetupView(
+          workspace: workspace, initialCloud: route.cloud, initialPrompt: route.prompt,
+          showsClose: !isCompact, close: closeNewChat
+        ).id(route.id)
+      } else if let session = selection {
+        chatScreen(session)
+      } else {
+        emptyDetail(
+          "Your work, wherever you are", symbol: "bubble.left.and.bubble.right",
+          detail: "Open a chat, or ask anything to start one.")
+      }
+    }
+    .navigationSplitViewStyle(.balanced)
+    .inspector(isPresented: $showDiff) {
+      if let session = workspace.selectedSession, let rpc = workspace.rpc {
+        DiffView(rpc: rpc, session: session).inspectorColumnWidth(min: 320, ideal: 440, max: 680)
+      }
+    }
+  }
+
+  private var moreTab: some View {
+    NavigationStack(path: $morePath) {
+      MoreView(workspace: workspace)
+        .navigationDestination(for: MoreRoute.self) { route in
+          switch route {
+          case .account: AccountSettingsView(workspace: workspace)
+          case .issues: IssuesListView(workspace: workspace) { morePath.append($0) }
+          case .computers: ComputersView(workspace: workspace)
+          case .appearance: AppearanceSettingsView()
+          case .archived: ArchivedChatsView(workspace: workspace, open: openChat)
+          case .help: HelpSettingsView { morePath.append(MoreRoute.computers) }
+          }
+        }
+        .navigationDestination(for: ZapperRoute.self) { route in
+          ZapperDestination(
+            workspace: workspace, route: route, push: { morePath.append($0) },
+            close: { if !morePath.isEmpty { morePath.removeLast() } }
+          ) { session in
+            chatScreen(session)
+          }
+        }
+    }
+  }
+
+  private var searchTab: some View {
+    NavigationStack(path: $searchPath) {
+      SearchView(
+        workspace: workspace, query: $searchText, openZapper: openZapper, openChat: openChat,
+        openCloud: { chat in
+          tab = .chats
+          workspace.openCloud(chat)
+        },
+        openIssue: { entry in
+          searchPath.append(.issue(zapper: entry.zapperID, issue: entry.issue.id))
+        }
+      )
+      .navigationDestination(for: ZapperRoute.self) { route in
+        ZapperDestination(
+          workspace: workspace, route: route, push: { searchPath.append($0) },
+          close: { if !searchPath.isEmpty { searchPath.removeLast() } }
+        ) { session in
+          chatScreen(session)
+        }
+      }
+    }
+  }
+
+  private func emptyDetail(_ title: String, symbol: String, detail: String) -> some View {
+    ContentUnavailableView {
+      Label(title, systemImage: symbol)
+    } description: {
+      Text(detail)
+    }
+    .overlay {
+      if workspace.loading {
+        ProgressView().padding().background(.regularMaterial, in: Capsule())
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity).background(AppTheme.surface)
   }
   /// One chat's transcript and composer, shown from the home list or inside a Zapper.
   @ViewBuilder private func chatScreen(_ session: SessionRow) -> some View {
@@ -441,22 +653,43 @@ struct WorkspaceView: View {
     .onPreferenceChange(ComposerHeightKey.self) { composerHeight = $0 }
     .navigationTitle(session.title.isEmpty ? "Chat" : session.title)
     .compactNavigationTitle()
+    // Each stack shows its own chat; the one transcript follows whichever is on screen.
+    .onAppear {
+      if workspace.selectedSession?.id != session.id { workspace.selectSession(session) }
+    }
     .toolbar {
       if let zapper = coordinatedBy(session) {
-        // A Zapper's conversation: its mascot and name lead to the overview.
+        // A Zapper's conversation: its face and name lead to the overview.
         ToolbarItem(placement: .principal) {
           Button {
-            zapperPath.append(.overview)
+            push(.overview(zapper.id))
           } label: {
             HStack(spacing: 8) {
-              ZapperAvatarView(zapper: zapper, size: 26)
+              ZapperTile(zapper: zapper, size: 28)
               Text(zapper.config.name).font(.headline).foregroundStyle(.primary).lineLimit(1)
             }
           }
           .buttonStyle(.plain)
           .accessibilityLabel("\(zapper.config.name) overview")
         }
-        ToolbarItem(placement: .primaryAction) { zapperMenu(zapper) }
+        ToolbarItem(placement: .primaryAction) {
+          Button {
+            chatActions = .zapper(zapper.id)
+          } label: {
+            Image(systemName: "ellipsis")
+              .overlay(alignment: .topTrailing) {
+                if zapper.needsYouCount > 0 {
+                  Circle().fill(Color.orange).frame(width: 8, height: 8).offset(x: 6, y: -6)
+                }
+              }
+          }
+          .tint(.primary)
+          .accessibilityLabel(
+            zapper.needsYouCount > 0
+              ? "More, \(zapper.needsYouCount) waiting for you" : "More"
+          )
+          .accessibilityIdentifier("chat-actions")
+        }
       } else {
         ToolbarItem(placement: .principal) {
           ChatHeaderTitle(
@@ -465,43 +698,25 @@ struct WorkspaceView: View {
               workspace.projects.first { $0.id == session.projectId }?.name, branchName,
             ].compactMap { $0 }.joined(separator: " · "))
         }
-        ToolbarItem(placement: .primaryAction) {
-          Button("Changes", systemImage: "plusminus") { showDiff = true }
-            .tint(.primary).disabled(workspace.connectionState != "Connected")
+        if !isCompact && !workspace.zappers.keepsChat(session.id) {
+          ToolbarItem(placement: .primaryAction) {
+            Button("Changes", systemImage: "plusminus") { showDiff.toggle() }
+              .tint(.primary).disabled(workspace.connectionState != "Connected")
+          }
+        }
+        if !workspace.zappers.keepsChat(session.id) {
+          ToolbarItem(placement: .primaryAction) {
+            Button("More", systemImage: "ellipsis") { chatActions = .chat(session) }
+              .tint(.primary)
+              .accessibilityIdentifier("chat-actions")
+          }
         }
       }
     }
   }
   /// The Zapper whose coordinator conversation this is, if any.
   private func coordinatedBy(_ session: SessionRow) -> Zapper? {
-    guard zapperRoute != nil else { return nil }
-    return workspace.zappers.zappers.first { $0.coordinatorChatId == session.id }
-  }
-  private func zapperMenu(_ zapper: Zapper) -> some View {
-    Menu {
-      Button("Overview", systemImage: "square.grid.2x2") { zapperPath.append(.overview) }
-      if zapper.status == .active || zapper.status == .paused {
-        let pausing = zapper.status == .active
-        Button(pausing ? "Pause" : "Resume", systemImage: pausing ? "pause" : "play") {
-          Task {
-            await workspace.zappers.perform(
-              .setStatus(pausing ? .paused : .active), on: zapper,
-              label: pausing ? "Pause" : "Resume")
-          }
-        }
-      }
-    } label: {
-      Image(systemName: "ellipsis")
-        .overlay(alignment: .topTrailing) {
-          if zapper.needsYouCount > 0 {
-            Circle().fill(Color.orange).frame(width: 8, height: 8).offset(x: 6, y: -6)
-          }
-        }
-    }
-    .tint(.primary)
-    .accessibilityLabel(
-      zapper.needsYouCount > 0
-        ? "More, \(zapper.needsYouCount) waiting for you" : "More")
+    workspace.zappers.zappers.first { $0.coordinatorChatId == session.id }
   }
   private var composerExpanded: Bool {
     composerFocused || !workspace.attachments.isEmpty

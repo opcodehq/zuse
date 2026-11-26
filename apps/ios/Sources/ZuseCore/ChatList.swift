@@ -38,9 +38,11 @@ public struct ChatListRow: Hashable, Identifiable, Sendable {
   public let projectName: String?
   public let title: String
   public let archived: Bool
+  /// When the chat last had a message, when the host says.
+  public let lastActivity: Date?
   public init(
     id: String, chatID: String, placeKey: String, placeLabel: String, projectKey: String,
-    projectName: String?, title: String, archived: Bool = false
+    projectName: String?, title: String, archived: Bool = false, lastActivity: Date? = nil
   ) {
     self.id = id
     self.chatID = chatID
@@ -50,6 +52,7 @@ public struct ChatListRow: Hashable, Identifiable, Sendable {
     self.projectName = projectName
     self.title = title
     self.archived = archived
+    self.lastActivity = lastActivity
   }
   public var isCloud: Bool { placeKey == ChatList.cloudPlace }
 }
@@ -72,6 +75,44 @@ public enum ChatList {
   public static let noProject = "No project"
   /// The place key for Zuse Cloud chats.
   public static let cloudPlace = "cloud"
+
+  /// One flat list, most recent first: chats with a known last message by time, then the rest in
+  /// the order given. `project` keeps chats whose project has that name (ignoring case), so a
+  /// cloud chat on the same repository shows with the computer's.
+  public static func recent(
+    _ rows: [ChatListRow], query: String = "", archive: ArchiveFilter = .active,
+    project: String? = nil
+  ) -> [ChatListRow] {
+    let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    let wanted = project?.lowercased()
+    var seen = Set<String>()
+    let visible = rows.enumerated().filter { _, row in
+      archive.shows(archived: row.archived)
+        && (wanted == nil || (row.projectName ?? noProject).lowercased() == wanted)
+        && (needle.isEmpty || row.title.localizedCaseInsensitiveContains(needle)
+          || (row.projectName ?? noProject).localizedCaseInsensitiveContains(needle))
+        && seen.insert(row.id).inserted
+    }
+    return visible.sorted { lhs, rhs in
+      switch (lhs.element.lastActivity, rhs.element.lastActivity) {
+      case (let left?, let right?) where left != right: return left > right
+      case (.some, nil): return true
+      case (nil, .some): return false
+      default: return lhs.offset < rhs.offset
+      }
+    }.map(\.element)
+  }
+
+  /// The project names a list can be narrowed to, in first-seen order, without duplicates.
+  public static func projectNames(_ rows: [ChatListRow]) -> [String] {
+    var seen = Set<String>()
+    return rows.compactMap { row in
+      guard let name = row.projectName?.trimmingCharacters(in: .whitespaces), !name.isEmpty,
+        seen.insert(name.lowercased()).inserted
+      else { return nil }
+      return name
+    }
+  }
 
   /// Groups chats by project in the order they are given, filtered by place, archive state and a
   /// search query. Cloud chats are ordinary chats: they join the group of a computer project with

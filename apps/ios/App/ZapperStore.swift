@@ -233,6 +233,56 @@ struct UnconfirmedZapperCommand: Identifiable, Equatable {
     }
   }
 
+  /// Creates a Zapper on the open computer. Returns its ID once the engine applied it, or
+  /// throws a message to show in the New Zapper sheet. The draft's ID and command are fixed,
+  /// so retrying after an unconfirmed answer resends the same envelope.
+  func create(_ draft: ZapperDraft) async throws -> String {
+    if preview {
+      guard let config = draft.config(homeDeviceID: "preview-mac", repositoryDeviceID: "") else {
+        throw ClientError("Add a name, project and model first.")
+      }
+      let zapper = Zapper(
+        id: draft.zapperID, revision: 0, config: config, status: .active,
+        coordinatorChatId: "zapper-\(draft.zapperID)-0")
+      zappers.insert(zapper, at: 0)
+      members = ZapperMembership.members(zappers)
+      return zapper.id
+    }
+    guard let rpc else { throw ClientError("Connect to your computer to create a Zapper.") }
+    guard available else {
+      throw ClientError("Update Zuse on this computer to use Zappers.")
+    }
+    let home: String
+    let repositoryDevice: String
+    do {
+      home = try await rpc.call("EngineInfo")["deviceId"].string ?? ""
+      let spaces = try await rpc.snapshot("WatchSpaces").array
+      repositoryDevice =
+        spaces.first { $0["id"].string == draft.projectID }?["deviceId"].string ?? home
+    } catch {
+      throw ClientError("Couldn’t reach your computer. Try again in a moment.")
+    }
+    guard let command = draft.command(homeDeviceID: home, repositoryDeviceID: repositoryDevice)
+    else { throw ClientError("Add a name, project and model first.") }
+    busy[draft.zapperID] = "Create"
+    defer { busy.removeValue(forKey: draft.zapperID) }
+    do {
+      let result = try await ZapperCommands.send(command) { [weak self] method, payload in
+        guard let rpc = await self?.rpc else {
+          throw ClientError("The connection is unavailable.")
+        }
+        return try await rpc.call(method, payload)
+      }
+      if let result, !zappers.contains(where: { $0.id == result.id }) {
+        zappers.insert(result, at: 0)
+        members = ZapperMembership.members(zappers)
+      }
+      return draft.zapperID
+    } catch {
+      throw ClientError(error.localizedDescription)
+    }
+  }
+
   private func send(_ command: ZapperCommand, label: String) async -> Bool {
     let id = command.zapperId
     guard busy[id] == nil else { return false }

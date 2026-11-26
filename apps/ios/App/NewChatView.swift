@@ -301,12 +301,13 @@ struct NewChatSetupView: View {
   let showsClose: Bool
   let close: () -> Void
   init(
-    workspace: WorkspaceModel, initialCloud: Bool = false, showsClose: Bool,
-    close: @escaping () -> Void
+    workspace: WorkspaceModel, initialCloud: Bool = false, initialPrompt: String = "",
+    showsClose: Bool, close: @escaping () -> Void
   ) {
     self.workspace = workspace
     self.showsClose = showsClose
     self.close = close
+    _draft = State(initialValue: initialPrompt)
     #if DEBUG
       _cloud = State(initialValue: initialCloud || CloudPreview.enabled)
     #else
