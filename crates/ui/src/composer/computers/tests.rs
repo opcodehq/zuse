@@ -204,7 +204,7 @@ fn replies_for_a_previous_chat_are_ignored(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
-fn sends_claim_this_computer_as_primary_before_the_message(cx: &mut gpui::TestAppContext) {
+fn a_claim_names_its_message_and_a_refusal_holds_nothing(cx: &mut gpui::TestAppContext) {
     let runtime = runtime();
     let _entered = runtime.enter();
     let (composer, _, mut requests, replies) = cloud_composer(cx, true);
@@ -221,7 +221,7 @@ fn sends_claim_this_computer_as_primary_before_the_message(cx: &mut gpui::TestAp
     let done = std::rc::Rc::new(std::cell::Cell::new(false));
     let finished = done.clone();
     cx.spawn(async move |_| {
-        claim_primary(target, chat, executor).await;
+        claim_primary(target, chat, Some("admitted-command".into()), executor).await;
         finished.set(true);
     })
     .detach();
@@ -231,6 +231,7 @@ fn sends_claim_this_computer_as_primary_before_the_message(cx: &mut gpui::TestAp
     assert_eq!(asked[0]["method"], "ClaimComputerPrimary");
     assert_eq!(asked[0]["params"]["chatId"], "session");
     assert_eq!(asked[0]["params"]["expectedAccountId"], "owner");
+    assert_eq!(asked[0]["params"]["commandId"], "admitted-command");
     assert!(done.get(), "a refused claim never holds the send");
     // A send right after opening claims too; it never waits for the first
     // connector status read.
@@ -244,7 +245,9 @@ fn sends_claim_this_computer_as_primary_before_the_message(cx: &mut gpui::TestAp
 }
 
 #[gpui::test]
-fn a_send_claims_the_primary_first_and_still_goes_out_when_refused(cx: &mut gpui::TestAppContext) {
+fn an_admitted_send_claims_its_computer_after_and_a_rejected_one_never_does(
+    cx: &mut gpui::TestAppContext,
+) {
     let runtime = runtime();
     let _entered = runtime.enter();
     let (composer, _, mut requests, replies) = cloud_composer(cx, true);
@@ -271,14 +274,51 @@ fn a_send_claims_the_primary_first_and_still_goes_out_when_refused(cx: &mut gpui
         .collect();
     assert_eq!(
         order,
-        vec!["ClaimComputerPrimary", methods::CLOUD_TASK_COMMAND]
+        vec![methods::CLOUD_TASK_COMMAND, "ClaimComputerPrimary"]
     );
+    let command = asked
+        .iter()
+        .find(|r| r["method"] == methods::CLOUD_TASK_COMMAND)
+        .unwrap();
     let claim = asked
         .iter()
         .find(|r| r["method"] == "ClaimComputerPrimary")
         .unwrap();
     assert_eq!(claim["params"]["workspaceId"], "task");
     assert_eq!(claim["params"]["chatId"], "session");
+    assert_eq!(
+        claim["params"]["commandId"],
+        command["params"]["request"]["commandId"]
+    );
+    composer.read_with(cx, |c, _| {
+        assert!(
+            !c.cloud_send_unconfirmed(),
+            "the refused claim left the send admitted"
+        )
+    });
+
+    // A send the server refuses never moves the default computer.
+    let (rejected, _, mut requests, replies) = cloud_composer(cx, true);
+    serve(cx, &runtime, &mut requests, &replies, account);
+    rejected.update(cx, |c, cx| {
+        assert!(c.send_cloud_task("Fix the build".into(), false, cx));
+    });
+    let asked = serve(
+        cx,
+        &runtime,
+        &mut requests,
+        &replies,
+        |label, params| match label {
+            methods::CLOUD_TASK_COMMAND => Err("cloud_task_rejected"),
+            _ => account(label, params),
+        },
+    );
+    assert!(
+        asked
+            .iter()
+            .any(|r| r["method"] == methods::CLOUD_TASK_COMMAND)
+    );
+    assert!(!asked.iter().any(|r| r["method"] == "ClaimComputerPrimary"));
 }
 
 /// Escape denies and ⌘/Ctrl+Enter allows once, like a local permission prompt.
@@ -293,6 +333,10 @@ fn approval_keys_deny_or_allow_once(cx: &mut gpui::TestAppContext) {
         is_held: false,
         prefer_character_input: false,
     };
+    let held = |text: &str| gpui::KeyDownEvent {
+        is_held: true,
+        ..key(text)
+    };
     composer.update(cx, |c, cx| {
         c.on_computer_approval_key(&key("enter"), cx);
         assert_eq!(
@@ -301,6 +345,14 @@ fn approval_keys_deny_or_allow_once(cx: &mut gpui::TestAppContext) {
             "plain Enter decides nothing"
         );
         c.on_computer_approval_key(&key("escape"), cx);
+        // Still holding the keys from before decides nothing for the next one.
+        c.on_computer_approval_key(&held("ctrl-enter"), cx);
+        c.on_computer_approval_key(&held("escape"), cx);
+        assert_eq!(
+            c.computer_request_waiting().map(|p| p.id.as_str()),
+            Some("r2"),
+            "a held key never approves the next request"
+        );
         c.on_computer_approval_key(&key("ctrl-enter"), cx);
         assert!(c.computer_request_waiting().is_none());
     });

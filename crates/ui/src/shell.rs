@@ -6184,6 +6184,11 @@ impl Shell {
     fn set_route(&mut self, route: Route, cx: &mut Context<Self>) {
         self.activate_sidebar_computer(cx);
         self.record_route(route, cx);
+        // Your computers refreshes only while it is the page on screen.
+        if let Some(page) = self.cloud_computers_page.clone() {
+            let shown = route == Route::Settings(SettingsSection::CloudComputers);
+            page.update(cx, |page, cx| page.set_visible(shown, cx));
+        }
         if matches!(self.route, Route::Settings(SettingsSection::Archived))
             && !matches!(route, Route::Settings(SettingsSection::Archived))
         {
@@ -6807,6 +6812,7 @@ impl Shell {
                         })
                     })
                     .clone();
+                page.update(cx, |page, cx| page.set_visible(true, cx));
                 let theme = Theme::of(cx).for_settings_surface();
                 div()
                     .id("cloud-computers-page")

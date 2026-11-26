@@ -34,7 +34,8 @@ pub struct CloudChatComputers {
     rename: Option<(String, Entity<ComposerInput>, Subscription)>,
     /// The new name the next rename action sends.
     new_name: Option<String>,
-    _poll: Task<()>,
+    /// Background refreshes, only while Settings shows this page.
+    poll: Option<Task<()>>,
     _observe: Subscription,
 }
 
@@ -55,21 +56,36 @@ impl CloudChatComputers {
             rename: None,
             new_name: None,
             _observe: observe,
-            // Refreshed while Settings shows it; the list less often.
-            _poll: cx.spawn(async move |this, cx| {
-                let mut tick = 0u32;
-                loop {
-                    let alive = this
-                        .update(cx, |page, cx| page.poll_bridge(tick.is_multiple_of(5), cx))
-                        .is_ok();
-                    if !alive {
-                        return;
-                    }
-                    tick = tick.wrapping_add(1);
-                    cx.background_executor().timer(Duration::from_secs(3)).await;
-                }
-            }),
+            poll: None,
         }
+    }
+
+    /// Refresh while the page is on screen and stop when it isn't. An action
+    /// the owner already started still finishes.
+    pub fn set_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
+        if visible == self.poll.is_some() {
+            return;
+        }
+        if !visible {
+            self.poll = None;
+            self.refresh = None;
+            self.refreshing = false;
+            return;
+        }
+        // The list less often than this computer's status.
+        self.poll = Some(cx.spawn(async move |this, cx| {
+            let mut tick = 0u32;
+            loop {
+                let alive = this
+                    .update(cx, |page, cx| page.poll_bridge(tick.is_multiple_of(5), cx))
+                    .is_ok();
+                if !alive {
+                    return;
+                }
+                tick = tick.wrapping_add(1);
+                cx.background_executor().timer(Duration::from_secs(3)).await;
+            }
+        }));
     }
 
     /// This computer's connector, and every few rounds the account's computers.
@@ -365,6 +381,7 @@ impl CloudChatComputers {
                                         "Cancel",
                                     )
                                     .id(("bridge-rename-cancel", index))
+                                    .tab_index(0)
                                     .role(gpui::Role::Button)
                                     .on_click(cx.listener(
                                         |page, _, _, cx| {
@@ -380,6 +397,7 @@ impl CloudChatComputers {
                                         "Save",
                                     )
                                     .id(("bridge-rename-save", index))
+                                    .tab_index(0)
                                     .role(gpui::Role::Button)
                                     .when(busy, |el| el.opacity(0.5))
                                     .on_click(cx.listener(|page, _, _, cx| page.submit_rename(cx))),
@@ -393,6 +411,7 @@ impl CloudChatComputers {
                                         "Rename",
                                     )
                                     .id(("bridge-rename", index))
+                                    .tab_index(0)
                                     .role(gpui::Role::Button)
                                     .on_click(cx.listener(
                                         move |page, _, window, cx| {
@@ -414,6 +433,7 @@ impl CloudChatComputers {
                                         "Revoke always",
                                     )
                                     .id(("bridge-revoke", index))
+                                    .tab_index(0)
                                     .when(busy, |el| el.opacity(0.5))
                                     .role(gpui::Role::Button)
                                     .on_click(cx.listener(
@@ -431,6 +451,7 @@ impl CloudChatComputers {
                             .child(
                                 widgets::text_action(theme, widgets::ActionTone::Quiet, "Remove")
                                     .id(("bridge-forget", index))
+                                    .tab_index(0)
                                     .when(busy, |el| el.opacity(0.5))
                                     .role(gpui::Role::Button)
                                     .on_click(cx.listener(move |page, _, _, cx| {
@@ -487,7 +508,11 @@ mod tests {
             state.set_test_engine(handle);
             state
         });
-        let page = cx.new(|cx| CloudChatComputers::new(state, cx));
+        let page = cx.new(|cx| {
+            let mut page = CloudChatComputers::new(state, cx);
+            page.set_visible(true, cx);
+            page
+        });
         let settle = |cx: &mut gpui::TestAppContext| {
             for _ in 0..6 {
                 cx.run_until_parked();
@@ -562,7 +587,11 @@ mod tests {
             state.set_test_engine(handle);
             state
         });
-        let page = cx.new(|cx| CloudChatComputers::new(state, cx));
+        let page = cx.new(|cx| {
+            let mut page = CloudChatComputers::new(state, cx);
+            page.set_visible(true, cx);
+            page
+        });
         let settle = |cx: &mut gpui::TestAppContext| {
             for _ in 0..6 {
                 cx.run_until_parked();
@@ -605,5 +634,43 @@ mod tests {
         assert_eq!(rename["params"]["deviceId"], "mac");
         assert_eq!(rename["params"]["name"], "Studio Mac");
         assert_eq!(rename["params"]["expectedAccountId"], "owner");
+    }
+
+    /// Refreshes stop when the page leaves the screen; an action already
+    /// started still finishes.
+    #[gpui::test]
+    fn refreshes_run_only_while_the_page_is_shown(cx: &mut gpui::TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let (send, mut requests) = tokio::sync::mpsc::channel::<String>(64);
+        let (_replies, receive) = tokio::sync::mpsc::channel::<String>(64);
+        let handle =
+            crate::state::EngineHandle::from_test_client(zuse_rpc::RpcClient::new(send, receive));
+        let state = cx.new(|_| {
+            let mut state = AppState::new();
+            state.set_test_engine(handle);
+            state
+        });
+        let page = cx.new(|cx| CloudChatComputers::new(state, cx));
+        let settle = |cx: &mut gpui::TestAppContext| {
+            for _ in 0..6 {
+                cx.run_until_parked();
+                runtime.block_on(async { tokio::task::yield_now().await });
+            }
+        };
+        settle(cx);
+        assert!(requests.try_recv().is_err(), "nothing reads while hidden");
+        page.update(cx, |page, cx| page.set_visible(true, cx));
+        settle(cx);
+        assert!(requests.try_recv().is_ok(), "shown: it reads");
+        page.update(cx, |page, cx| {
+            page.bridge_action("stop", None, false, cx);
+            page.set_visible(false, cx);
+            assert!(page.poll.is_none() && page.refresh.is_none());
+            assert!(page.task.is_some() && page.busy, "the started action stays");
+        });
     }
 }

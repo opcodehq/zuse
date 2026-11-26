@@ -2456,7 +2456,7 @@ impl ToolActivity {
 /// The name a call goes by when no activity verb fits ("Using Todo…").
 fn tool_display_name(call: &ToolCall) -> String {
     if let Some((command, _)) = computer_command(call) {
-        return command;
+        return single_line(&command);
     }
     match call {
         _ if call.is_subagent_spawn() => "Agent".into(),
@@ -10355,8 +10355,13 @@ impl Transcript {
             let mut calls = tools.iter().filter(|tool| tool.kind == ToolItemKind::Call);
             match (calls.next(), calls.next()) {
                 (Some(only), None) => computer_command(&only.call).map(|(command, device)| {
+                    let command = single_line(&command);
                     let found = computer_label(device.as_deref(), cx);
-                    let verb = if only.resolved { "Ran" } else { "Running" };
+                    let verb = if live && !only.resolved {
+                        "Running"
+                    } else {
+                        "Ran"
+                    };
                     let text = match &found {
                         Some((name, _)) => format!("{verb} {command} · {name}"),
                         None => format!("{verb} {command}"),
@@ -12481,7 +12486,7 @@ fn chip_label(tool: &ToolItem, live: bool) -> (SharedString, String) {
             } else {
                 "Ran"
             };
-            (label.into(), command)
+            (label.into(), single_line(&command))
         }
         // A plugin call names the plugin and what it did: "Linear  List issues".
         ToolItemKind::Call if let Some(call) = plugin_tool(&tool.call) => {

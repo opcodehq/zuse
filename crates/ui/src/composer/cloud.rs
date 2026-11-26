@@ -806,18 +806,28 @@ impl Composer {
                 // Retain the uploaded paths so a retry doesn't upload again.
                 let _=this.update(cx,|this,_|this.cloud.pending_native=Some(request.clone()));
             }
-            // Only a send that is about to be submitted moves the chat's
-            // primary computer; a failed upload above leaves it unchanged.
-            if let Some((target, chat)) = primary {
-                super::computers::claim_primary(target, chat, cx.background_executor().clone())
-                    .await;
-            }
             // A message that has to wait for its computer (runtime update,
             // Update computer) is queued on the server, not refused.
             let result = target.controller.client().call_scoped(methods::CLOUD_TASK_COMMAND,
                 json!({"workspaceId":target.workspace,"expectedAccountId":target.subject,
                     "expectedOrganizationId":target.organization,"request":request,
                     (zuse_protocol::cloud_runtime_updates::QUEUE_WHILE_WAITING):true})).await;
+            // Only an admitted message moves the chat's default computer to
+            // the one it was sent from. The claim names that message, so the
+            // server keeps whichever message was admitted last; it never
+            // holds up or changes the send.
+            let admitted = matches!(&result, Ok(value) if value["accountId"]==target.subject
+                && value["organizationId"].as_str()==target.organization.as_deref()
+                && value["data"]["commandId"]==request["commandId"]
+                && value["data"]["durablyAdmitted"]==true);
+            if admitted && let Some((claim, chat)) = primary {
+                let command = request["commandId"].as_str().map(str::to_owned);
+                let executor = cx.background_executor().clone();
+                cx.spawn(async move |_| {
+                    super::computers::claim_primary(claim, chat, command, executor).await
+                })
+                .detach();
+            }
             let _ = this.update(cx, |this, cx| {
                 this.cloud.task = None;
                 match result {
@@ -1668,6 +1678,7 @@ impl Composer {
                     initial_session: initial.clone(),
                 },
                 initial.clone(),
+                None,
                 cx.background_executor().clone(),
             )
             .await;

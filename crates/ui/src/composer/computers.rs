@@ -394,6 +394,11 @@ impl Composer {
 
     /// Keys on the approval: Escape denies, ⌘/Ctrl+Enter allows once.
     fn on_computer_approval_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        // A held key repeats: holding ⌘/Ctrl+Enter must not approve the
+        // request that appears after the first one is decided.
+        if event.is_held {
+            return;
+        }
         let Some(request) = self.computer_request_waiting().map(|p| p.id.clone()) else {
             return;
         };
@@ -742,13 +747,20 @@ impl Composer {
 pub(super) async fn claim_primary(
     target: crate::state::CloudTarget,
     chat: String,
+    command: Option<String>,
     executor: gpui::BackgroundExecutor,
 ) {
     use futures::future::{Either, select};
-    let call = target.controller.client().call(
-        "ClaimComputerPrimary",
-        json!({"expectedAccountId":target.subject,"workspaceId":target.workspace,"chatId":chat}),
-    );
+    let mut params =
+        json!({"expectedAccountId":target.subject,"workspaceId":target.workspace,"chatId":chat});
+    if let Some(command) = command {
+        // The admitted message this claim belongs to.
+        params["commandId"] = json!(command);
+    }
+    let call = target
+        .controller
+        .client()
+        .call("ClaimComputerPrimary", params);
     let timer = executor.timer(Duration::from_secs(3));
     match select(std::pin::pin!(call), std::pin::pin!(timer)).await {
         Either::Left((Ok(_), _)) => {}
