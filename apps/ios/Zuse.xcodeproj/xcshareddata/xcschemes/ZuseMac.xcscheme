@@ -14,7 +14,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "D11DD11DE0B2EB793702D95A"
+               BlueprintIdentifier = "57E7C17F5A617188933DB605D4823DD2"
                BuildableName = "Zuse Native.app"
                BlueprintName = "ZuseMac"
                ReferencedContainer = "container:Zuse.xcodeproj">
@@ -30,7 +30,7 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "D11DD11DE0B2EB793702D95A"
+            BlueprintIdentifier = "57E7C17F5A617188933DB605D4823DD2"
             BuildableName = "Zuse Native.app"
             BlueprintName = "ZuseMac"
             ReferencedContainer = "container:Zuse.xcodeproj">
@@ -41,7 +41,7 @@
             skipped = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "B959C86F76D01FD843A75384"
+               BlueprintIdentifier = "B136CFC90AE933B003F833A0EFF0F0EE"
                BuildableName = "ZuseMacUITests.xctest"
                BlueprintName = "ZuseMacUITests"
                ReferencedContainer = "container:Zuse.xcodeproj">
@@ -63,7 +63,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "D11DD11DE0B2EB793702D95A"
+            BlueprintIdentifier = "57E7C17F5A617188933DB605D4823DD2"
             BuildableName = "Zuse Native.app"
             BlueprintName = "ZuseMac"
             ReferencedContainer = "container:Zuse.xcodeproj">
@@ -80,7 +80,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "D11DD11DE0B2EB793702D95A"
+            BlueprintIdentifier = "57E7C17F5A617188933DB605D4823DD2"
             BuildableName = "Zuse Native.app"
             BlueprintName = "ZuseMac"
             ReferencedContainer = "container:Zuse.xcodeproj">

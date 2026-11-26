@@ -54,4 +54,4 @@ run_check mac-ui xcodebuild -project apps/ios/Zuse.xcodeproj -scheme ZuseMac \
 run_check iphone-ui bash apps/ios/scripts/test-simulator.sh "$iphone_destination" "$validation_dir/iPhone.xcresult"
 run_check ipad-ui bash apps/ios/scripts/test-simulator.sh "$ipad_destination" "$validation_dir/iPad.xcresult"
 printf 'Automated Apple checks passed. Results: %s\n' "$validation_dir"
-printf '%s\n' 'Live account/device, visual comparison, accessibility, and rendering performance checks remain required; see internal-docs/mobile/native-apple-validation.md.'
+printf '%s\n' 'Live account/device, visual comparison, accessibility, and rendering performance checks remain required; see apps/ios/README.md.'

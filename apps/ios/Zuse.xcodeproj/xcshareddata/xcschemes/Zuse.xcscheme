@@ -14,7 +14,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "07A46862BDAEEFADD97F9DF5"
+               BlueprintIdentifier = "238C7841547B2E88809C576E43DCAF01"
                BuildableName = "Zuse Native.app"
                BlueprintName = "Zuse"
                ReferencedContainer = "container:Zuse.xcodeproj">
@@ -30,7 +30,7 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "07A46862BDAEEFADD97F9DF5"
+            BlueprintIdentifier = "238C7841547B2E88809C576E43DCAF01"
             BuildableName = "Zuse Native.app"
             BlueprintName = "Zuse"
             ReferencedContainer = "container:Zuse.xcodeproj">
@@ -41,7 +41,7 @@
             skipped = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "BF203CF5D8003747E6E2F57C"
+               BlueprintIdentifier = "07F4D881B436C9C374CB5C90E948A477"
                BuildableName = "ZuseUITests.xctest"
                BlueprintName = "ZuseUITests"
                ReferencedContainer = "container:Zuse.xcodeproj">
@@ -63,7 +63,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "07A46862BDAEEFADD97F9DF5"
+            BlueprintIdentifier = "238C7841547B2E88809C576E43DCAF01"
             BuildableName = "Zuse Native.app"
             BlueprintName = "Zuse"
             ReferencedContainer = "container:Zuse.xcodeproj">
@@ -80,7 +80,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "07A46862BDAEEFADD97F9DF5"
+            BlueprintIdentifier = "238C7841547B2E88809C576E43DCAF01"
             BuildableName = "Zuse Native.app"
             BlueprintName = "Zuse"
             ReferencedContainer = "container:Zuse.xcodeproj">
