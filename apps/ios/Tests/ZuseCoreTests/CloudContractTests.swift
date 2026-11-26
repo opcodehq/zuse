@@ -93,73 +93,16 @@ private func context(
     #expect(value.canAllocate == true && value.defaultProvider == nil)
   }
 
-  @Test func agentConnectionListAndStatesDecode() throws {
-    let list = try json(
-      #"{"connections":[\#(connection("conn_a", agent: "claude", state: "reconnect-required", scope: nil)),{"connectionId":"conn_b","agent":"codex","method":"device-code","state":"pending","accountLabel":"me@example.com","expiresAt":1900000000000,"version":4,"errorCode":null,"credentialUpdate":{"operationId":"auth_cfg_1","connectionId":"conn_b","agent":"codex","state":"queued","expiresAt":1900000000000,"errorCode":null}}],"supportsDeviceReconnect":true,"supportsCredentialReconfiguration":true}"#
-    ).decode(CloudAgentConnectionList.self)
-    #expect(list.supportsDeviceReconnect == true)
-    let first = list.connections[0]
-    #expect(first.cloudAgent == .claude && first.needsAttention && !first.isConnected)
-    #expect(first.stateLabel == "Sign in again")
-    let second = list.connections[1]
-    #expect(second.connectionMethod == .deviceCode && second.stateLabel == "Connecting…")
-    #expect(second.credentialUpdate?.isPending == true)
-    #expect(second.credentialUpdate?.verificationUrl == nil)
-  }
-
-  @Test func loginOperationStatesAndVerificationPage() throws {
-    func operation(_ state: String, url: String? = nil, error: String? = nil) throws
-      -> CloudLoginOperation
-    {
-      try JSONValue.object([
-        "operationId": .string("op"), "connectionId": .string("conn"), "agent": .string("grok"),
-        "state": .string(state), "verificationUrl": url.map(JSONValue.string) ?? .null,
-        "verificationCode": .string("WXYZ"), "expiresAt": .number(1_900_000_000_000),
-        "errorCode": error.map(JSONValue.string) ?? .null,
-      ]).decode(CloudLoginOperation.self)
-    }
-    #expect(try operation("queued").isPending)
-    #expect(try operation("authorizing").isPending)
-    #expect(try operation("authorizing").outcomeMessage == nil)
-    #expect(try operation("connected").outcomeMessage == nil)
-    #expect(try operation("expired").outcomeMessage != nil)
-    #expect(try operation("cancelled").outcomeMessage == "Sign-in was cancelled.")
-    #expect(
-      try operation("error", error: "auth_cancelled").outcomeMessage == "Sign-in was cancelled.")
-    #expect(try operation("authorizing", url: "https://x.ai/device").verificationPage != nil)
-    #expect(try operation("authorizing", url: "http://x.ai/device").verificationPage == nil)
-    #expect(try operation("authorizing", url: "javascript:alert(1)").verificationPage == nil)
-    #expect(try operation("connected").cloudAgent == .grok)
-  }
-
-  @Test func agentMethodsMatchTheServer() {
-    #expect(CloudAgent.claude.methods == [.setupToken, .apiKey])
-    #expect(CloudAgent.codex.methods == [.deviceCode, .apiKey])
-    #expect(CloudAgent.grok.methods == [.deviceCode, .apiKey])
+  @Test func agentsMapToTheirHarnesses() throws {
+    let value = try json(connection("conn_a", agent: "claude", state: "connected", scope: nil))
+      .decode(CloudAgentConnection.self)
+    #expect(value.cloudAgent == .claude && value.isConnected)
     #expect(CloudAgent(harness: "claude-code") == .claude)
     #expect(CloudAgent.claude.harness == "claude-code")
     #expect(CloudAgent(harness: "cursor") == nil)
   }
 
-  @Test func connectionRequestsEncodeOnlyAcceptedFields() {
-    let configure = CloudConfigureAgentRequest(
-      agent: .codex, method: .apiKey, secret: "sk-test", idempotencyKey: "k")
-    #expect(
-      configure.body
-        == .object([
-          "agent": .string("codex"), "method": .string("api-key"), "secret": .string("sk-test"),
-          "idempotencyKey": .string("k"),
-        ]))
-    let replace = CloudConfigureAgentRequest(
-      agent: .claude, method: .setupToken, secret: "t", idempotencyKey: "k", connectionId: "c")
-    #expect(replace.body["connectionId"].string == "c")
-    #expect(replace.body["method"].string == "setup-token")
-    let login = CloudStartLoginRequest(agent: .grok, idempotencyKey: "k", connectionId: "c")
-    #expect(
-      login.body
-        == .object([
-          "agent": .string("grok"), "idempotencyKey": .string("k"), "connectionId": .string("c"),
-        ]))
+  @Test func projectConnectRequestsEncodeOnlyAcceptedFields() {
     let project = CloudProjectConnectRequest(
       repositoryUrl: " https://github.com/acme/web ", defaultBranch: "main", isPrivate: false)
     #expect(project.body["repositoryUrl"].string == "https://github.com/acme/web")

@@ -43,7 +43,6 @@ struct CloudLaunchView: View {
   @State private var failure: String?
   @State private var pendingIntent: CloudIntent?
   @State private var showOptions = false
-  @State private var showAgents = false
   @State private var launching = false
   /// The created workspace; the page shows setup progress until its chat opens.
   @State private var launched: String?
@@ -54,6 +53,10 @@ struct CloudLaunchView: View {
     catalog.first { $0.id == agent }?.name ?? selectedAgent?.title ?? "an agent"
   }
   private var connection: CloudAgentConnection? { options?.connection(forHarness: agent) }
+  /// Agent sign-in for cloud chats lives in the desktop app; the phone only points there.
+  private var connectHint: String {
+    "Connect \(agentTitle) for cloud chats in Zuse on your computer, under Settings → Cloud → Agent accounts."
+  }
   private var needsConnection: Bool {
     options?.requiresConnection == true && !agent.isEmpty && connection == nil
   }
@@ -107,12 +110,9 @@ struct CloudLaunchView: View {
         SetupSelectorLabel(icon: "arrow.triangle.branch", title: branchTitle)
       }.buttonStyle(.plain).disabled(locked)
       if needsConnection {
-        Button {
-          showAgents = true
-        } label: {
-          SetupSelectorLabel(icon: "person.badge.key", title: "Connect \(agentTitle) to start")
-        }
-        .buttonStyle(.plain).accessibilityIdentifier("cloud-launch-connect-agent")
+        Label(connectHint, systemImage: "desktopcomputer").font(.caption)
+          .foregroundStyle(.secondary).padding(.vertical, 4).padding(.leading, 6)
+          .accessibilityIdentifier("cloud-launch-connect-agent")
       }
       if let blocker {
         Label(blocker, systemImage: "exclamationmark.triangle").font(.caption)
@@ -137,10 +137,6 @@ struct CloudLaunchView: View {
       ) { Task { await launch() } }
     }
     .sheet(isPresented: $showOptions) { optionsSheet }
-    .sheet(isPresented: $showAgents, onDismiss: { Task { await load() } }) {
-      CloudSettingsView(workspace: workspace, focus: needsConnection ? selectedAgent : nil)
-        .nativeSheetSize()
-    }
     .onChange(of: project) {
       guard pendingIntent == nil else { return }
       branch = selectedProject?.defaultBranch ?? ""
@@ -148,11 +144,6 @@ struct CloudLaunchView: View {
     .onChange(of: busy) { _, value in busyChanged(value) }
     .task {
       await load()
-      #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("--cloud-agents-preview") {
-          showAgents = true
-        }
-      #endif
     }
     .task(id: launched) {
       // Keep the lifecycle label fresh while the workspace boots; stop once it is ready.
@@ -221,13 +212,12 @@ struct CloudLaunchView: View {
     return title
   }
   private var optionsMenu: some View {
-    Menu {
-      Button("Branch and repository", systemImage: "arrow.triangle.branch") { showOptions = true }
-      Button("Cloud agents", systemImage: "person.badge.key") { showAgents = true }
+    Button {
+      showOptions = true
     } label: {
       Image(systemName: "slider.horizontal.3").frame(width: 36, height: 40)
     }
-    .accessibilityLabel("Cloud options")
+    .accessibilityLabel("Branch and repository")
   }
   private var modelMenu: some View {
     ModelPickerButton(
@@ -392,7 +382,7 @@ struct CloudLaunchView: View {
     var connectionID: String?
     if options.requiresConnection {
       guard let connection else {
-        showAgents = true
+        failure = connectHint
         return nil
       }
       connectionID = connection.connectionId
@@ -447,7 +437,6 @@ struct CloudLaunchView: View {
         // can change before trying again.
         try Vault.write(nil, key: key)
         pendingIntent = nil
-        if error.code == "agent_connection_required" { showAgents = true }
         throw error
       }
       guard workspace.account.generation == generation else { return }

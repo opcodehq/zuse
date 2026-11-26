@@ -210,7 +210,6 @@ struct AccountSettingsView: View {
   @State private var signingIn = false
   @State private var refreshing = false
   @State private var confirmSignOut = false
-  @State private var showCloud = false
   var body: some View {
     let account = workspace.account
     List {
@@ -267,13 +266,6 @@ struct AccountSettingsView: View {
         }
         Section {
           Button {
-            showCloud = true
-          } label: {
-            SettingsRow(
-              title: "Cloud agents", subtitle: "Claude, Codex and Grok for cloud chats",
-              icon: "cloud")
-          }
-          Button {
             refresh()
           } label: {
             SettingsRow(
@@ -302,7 +294,6 @@ struct AccountSettingsView: View {
         "Cloud chats and linked computers disappear from this device until you sign in again. Paired computers stay."
       )
     }
-    .sheet(isPresented: $showCloud) { CloudSettingsView(workspace: workspace).nativeSheetSize() }
   }
   private func signIn() {
     guard !signingIn else { return }

@@ -65,6 +65,6 @@ They came from the original TypeScript workspace (see
 `internal-docs/mobile-import.md`).
 
 Cloud chats take their repositories, agents and models from the cloud API's
-`/v1/cloud/context`, so nothing about cloud launch is bundled. Run with
-`--native-preview --new-chat-preview --cloud-preview` (add `--cloud-agents-preview`
-for the agent connections sheet) to see the cloud screens against built-in fixtures.
+`/v1/cloud/context`, so nothing about cloud launch is bundled. Agent sign-in for cloud
+chats happens in the desktop app. Run with `--native-preview --new-chat-preview --cloud-preview`
+to see cloud launch against built-in fixtures.

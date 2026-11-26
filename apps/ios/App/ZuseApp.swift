@@ -154,7 +154,8 @@ struct WorkspaceView: View {
   }
   #if DEBUG
     /// Debug launches: `SIMCTL_CHILD_ZUSE_PAIR_LINK=<invitation> xcrun simctl launch …` pairs
-    /// without the camera or a confirmation, then `--zapper-detail-preview` opens the first Zapper.
+    /// without the camera or a confirmation, then `--zapper-detail-preview` opens the first Zapper's overview
+    /// (`--zapper-chat-preview` stops at its conversation).
     private func openZapperPreview(_ arguments: [String]) async {
       if let link = ProcessInfo.processInfo.environment["ZUSE_PAIR_LINK"], !link.isEmpty {
         do { try await workspace.pair(link) } catch { workspace.error = error.localizedDescription }
@@ -166,12 +167,16 @@ struct WorkspaceView: View {
         let first = workspace.zappers.zappers.first
       else { return }
       openZapper(first.id)
+      if arguments.contains("--zapper-chat-preview") { return }
+      // Let the Zapper's stack appear on its conversation before pushing the overview.
+      try? await Task.sleep(for: .milliseconds(400))
+      zapperPath = [.overview]
       if arguments.contains("--zapper-issue-preview"),
         let issue = first.issues.first(where: { $0.details.status == .needsYou })
       {
-        zapperPath = [.issue(issue.id)]
+        zapperPath.append(.issue(issue.id))
       } else if arguments.contains("--zapper-document-preview") {
-        zapperPath = [.document("NOTES.md")]
+        zapperPath.append(.document("NOTES.md"))
       }
     }
   #endif

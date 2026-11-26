@@ -372,64 +372,6 @@ private func body(_ request: URLRequest) throws -> JSONValue {
   #expect(probe.snapshot().last?.value(forHTTPHeaderField: "x-zuse-workspace") == nil)
 }
 
-@Test func agentConnectionRoutesUseConnectionAndOperationIdentity() async throws {
-  let probe = RequestProbe()
-  let operation: JSONValue = .object([
-    "operationId": .string("auth_op/1"), "connectionId": .string("conn_1"),
-    "agent": .string("codex"), "state": .string("authorizing"),
-    "verificationUrl": .string("https://auth.example/device"),
-    "verificationCode": .string("ABCD-EFGH"), "expiresAt": .number(1_900_000_000_000),
-    "errorCode": .null,
-  ])
-  let (client, session, host) = fixture { request in
-    probe.record(request)
-    switch (request.httpMethod ?? "", request.url?.path ?? "") {
-    case ("POST", "/v1/cloud/agents/configure"):
-      return (
-        200,
-        .object([
-          "connectionId": .string("conn_2"), "agent": .string("claude"),
-          "method": .string("setup-token"), "state": .string("connected"),
-          "accountLabel": .null, "expiresAt": .null, "version": .number(1), "errorCode": .null,
-        ])
-      )
-    case ("DELETE", "/v1/cloud/agents/conn_1"): return (200, .object(["ok": .bool(true)]))
-    default: return (200, operation)
-    }
-  }
-  defer {
-    session.invalidateAndCancel()
-    MockHTTP.configure(host, handler: nil)
-  }
-  let started = try await client.startAgentLogin(
-    CloudStartLoginRequest(agent: .codex, idempotencyKey: "key-1"))
-  #expect(started.isPending && started.verificationCode == "ABCD-EFGH")
-  _ = try await client.agentLogin(operationID: "auth_op/1")
-  _ = try await client.cancelAgentLogin(operationID: "auth_op/1")
-  let configured = try await client.configureAgent(
-    CloudConfigureAgentRequest(
-      agent: .claude, method: .setupToken, secret: "sk-ant-oat-secret", idempotencyKey: "key-2"))
-  #expect(configured.isConnected)
-  try await client.disconnectAgent(connectionID: "conn_1")
-  let requests = probe.snapshot()
-  #expect(requests.map { $0.httpMethod ?? "" } == ["POST", "GET", "DELETE", "POST", "DELETE"])
-  #expect(requests[0].url?.path == "/v1/cloud/agents/login")
-  #expect(
-    try body(requests[0])
-      == .object(["agent": .string("codex"), "idempotencyKey": .string("key-1")]))
-  for request in requests[1...2] {
-    #expect(
-      request.url?.absoluteString.hasSuffix("/v1/cloud/agents/operations/auth_op%2F1") == true)
-  }
-  #expect(
-    try body(requests[3])
-      == .object([
-        "agent": .string("claude"), "method": .string("setup-token"),
-        "secret": .string("sk-ant-oat-secret"), "idempotencyKey": .string("key-2"),
-      ]))
-  #expect(requests[4].url?.path == "/v1/cloud/agents/conn_1")
-}
-
 private final class Counter: @unchecked Sendable {
   private let lock = NSLock()
   private var value = 0

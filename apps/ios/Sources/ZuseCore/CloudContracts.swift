@@ -24,23 +24,6 @@ public enum CloudAgent: String, CaseIterable, Codable, Sendable, Identifiable {
     default: return nil
     }
   }
-  /// Methods the server accepts for this agent (`ConnectionMethod::supported`), preferred first.
-  public var methods: [CloudConnectionMethod] {
-    self == .claude ? [.setupToken, .apiKey] : [.deviceCode, .apiKey]
-  }
-}
-
-public enum CloudConnectionMethod: String, Codable, Sendable {
-  case apiKey = "api-key"
-  case setupToken = "setup-token"
-  case deviceCode = "device-code"
-  public var title: String {
-    switch self {
-    case .apiKey: return "API key"
-    case .setupToken: return "Setup token"
-    case .deviceCode: return "Browser sign-in"
-    }
-  }
 }
 
 /// `AgentConnection` plus the `connectionScope` tag `/cloud/context` adds.
@@ -54,104 +37,9 @@ public struct CloudAgentConnection: Codable, Equatable, Identifiable, Sendable {
   public let version: Int?
   public let errorCode: String?
   public let connectionScope: String?
-  public let credentialUpdate: CloudLoginOperation?
   public var id: String { connectionId }
   public var cloudAgent: CloudAgent? { CloudAgent(rawValue: agent) }
-  public var connectionMethod: CloudConnectionMethod? { CloudConnectionMethod(rawValue: method) }
   public var isConnected: Bool { state == "connected" }
-  public var needsAttention: Bool { ["reconnect-required", "error"].contains(state) }
-  public var stateLabel: String {
-    switch state {
-    case "connected": return "Connected"
-    case "pending": return "Connecting…"
-    case "reconnect-required": return "Sign in again"
-    case "revoked": return "Disconnected"
-    case "error": return "Needs attention"
-    default: return CloudErrorText.humanize(state)
-    }
-  }
-}
-
-public struct CloudAgentConnectionList: Decodable, Sendable {
-  public let connections: [CloudAgentConnection]
-  public let supportsDeviceReconnect: Bool?
-  public let supportsCredentialReconfiguration: Bool?
-}
-
-/// `LoginOperation`: a device-code sign-in the cloud runs on the user's behalf.
-public struct CloudLoginOperation: Codable, Equatable, Sendable {
-  public let operationId: String
-  public let connectionId: String
-  public let agent: String
-  public let state: String
-  public let verificationUrl: String?
-  public let verificationCode: String?
-  public let expiresAt: Int?
-  public let errorCode: String?
-  public var isPending: Bool { state == "queued" || state == "authorizing" }
-  public var cloudAgent: CloudAgent? { CloudAgent(rawValue: agent) }
-  /// The verification page, only when it is a plain HTTPS address.
-  public var verificationPage: URL? {
-    guard let verificationUrl, let url = URL(string: verificationUrl), url.scheme == "https",
-      url.host != nil, url.user == nil, url.password == nil
-    else { return nil }
-    return url
-  }
-  /// Why a finished operation did not connect, or nil when it did (or is still running).
-  public var outcomeMessage: String? {
-    switch state {
-    case "connected", "queued", "authorizing": return nil
-    case "expired": return "The sign-in code expired. Start again."
-    case "cancelled": return "Sign-in was cancelled."
-    default: return errorCode.map(CloudErrorText.message(for:)) ?? "Agent sign-in failed."
-    }
-  }
-}
-
-/// `ConfigureConnection` (`deny_unknown_fields`). The secret travels as plain text over HTTPS.
-public struct CloudConfigureAgentRequest: Sendable {
-  public let agent: CloudAgent
-  public let method: CloudConnectionMethod
-  public let secret: String
-  public let idempotencyKey: String
-  public let connectionId: String?
-  public init(
-    agent: CloudAgent, method: CloudConnectionMethod, secret: String, idempotencyKey: String,
-    connectionId: String? = nil
-  ) {
-    self.agent = agent
-    self.method = method
-    self.secret = secret
-    self.idempotencyKey = idempotencyKey
-    self.connectionId = connectionId
-  }
-  public var body: JSONValue {
-    var fields: [String: JSONValue] = [
-      "agent": .string(agent.rawValue), "method": .string(method.rawValue),
-      "secret": .string(secret), "idempotencyKey": .string(idempotencyKey),
-    ]
-    if let connectionId { fields["connectionId"] = .string(connectionId) }
-    return .object(fields)
-  }
-}
-
-/// `StartConnectionLogin` (`deny_unknown_fields`).
-public struct CloudStartLoginRequest: Sendable {
-  public let agent: CloudAgent
-  public let idempotencyKey: String
-  public let connectionId: String?
-  public init(agent: CloudAgent, idempotencyKey: String, connectionId: String? = nil) {
-    self.agent = agent
-    self.idempotencyKey = idempotencyKey
-    self.connectionId = connectionId
-  }
-  public var body: JSONValue {
-    var fields: [String: JSONValue] = [
-      "agent": .string(agent.rawValue), "idempotencyKey": .string(idempotencyKey),
-    ]
-    if let connectionId { fields["connectionId"] = .string(connectionId) }
-    return .object(fields)
-  }
 }
 
 /// A repository connected to the account (`CloudProject`, as listed in context and projects).
@@ -550,12 +438,6 @@ public enum CloudErrorText {
 }
 
 extension CloudClient {
-  /// One path segment: RFC 3986 unreserved characters stay, everything else is escaped.
-  static func segment(_ value: String) -> String {
-    let unreserved = CharacterSet(
-      charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
-    return value.addingPercentEncoding(withAllowedCharacters: unreserved) ?? ""
-  }
   public func context() async throws -> CloudContext {
     try await request("/v1/cloud/context").decode(CloudContext.self)
   }
@@ -572,32 +454,5 @@ extension CloudClient {
   /// POST `/cloud/workspaces` with a saved intent's body (including its idempotency key).
   public func createWorkspace(body: JSONValue) async throws -> CloudWorkspaceCreated {
     try CloudWorkspaceCreated(await request("/v1/cloud/workspaces", method: "POST", body: body))
-  }
-  public func agentConnections() async throws -> CloudAgentConnectionList {
-    try await request("/v1/cloud/agents").decode(CloudAgentConnectionList.self)
-  }
-  public func configureAgent(_ request: CloudConfigureAgentRequest) async throws
-    -> CloudAgentConnection
-  {
-    try await self.request("/v1/cloud/agents/configure", method: "POST", body: request.body)
-      .decode(CloudAgentConnection.self)
-  }
-  public func startAgentLogin(_ request: CloudStartLoginRequest) async throws
-    -> CloudLoginOperation
-  {
-    try await self.request("/v1/cloud/agents/login", method: "POST", body: request.body)
-      .decode(CloudLoginOperation.self)
-  }
-  public func agentLogin(operationID: String) async throws -> CloudLoginOperation {
-    try await request("/v1/cloud/agents/operations/" + Self.segment(operationID))
-      .decode(CloudLoginOperation.self)
-  }
-  public func cancelAgentLogin(operationID: String) async throws -> CloudLoginOperation {
-    try await request(
-      "/v1/cloud/agents/operations/" + Self.segment(operationID), method: "DELETE"
-    ).decode(CloudLoginOperation.self)
-  }
-  public func disconnectAgent(connectionID: String) async throws {
-    _ = try await request("/v1/cloud/agents/" + Self.segment(connectionID), method: "DELETE")
   }
 }

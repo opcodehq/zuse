@@ -101,8 +101,7 @@ struct HomeView: View {
         HomeNotice(text: problem, icon: "cloud.bolt")
       }
       ZapperHomeSection(
-        workspace: workspace, search: search, filter: archiveFilter, collapsed: $collapsed,
-        open: openZapper)
+        workspace: workspace, search: search, filter: archiveFilter, open: openZapper)
       ForEach(groups) { group in
         let isCollapsed = collapsed.contains(group.id)
         Button {

@@ -3,6 +3,7 @@ import ZuseCore
 
 /// Pages pushed inside a Zapper.
 enum ZapperRoute: Hashable {
+  case overview
   case chat(SessionRow)
   case issue(String)
   case document(String)
@@ -21,35 +22,88 @@ enum ZapperSection: String, CaseIterable, Identifiable {
   }
 }
 
-/// A Zapper's own navigation stack in the detail column: its page, then issues, documents
-/// and the ordinary transcript for its coordinator and threads.
+/// A Zapper's own navigation stack in the detail column. It opens on the coordinator's
+/// conversation; the mascot in the header opens the overview, with threads, issues and docs.
 struct ZapperNavigator<Chat: View>: View {
   let workspace: WorkspaceModel
   let zapperID: String
   @Binding var path: [ZapperRoute]
-  /// Selects a conversation before its transcript is pushed.
+  /// Selects a conversation before its transcript is shown.
   let select: (SessionRow) -> Void
   let close: () -> Void
   @ViewBuilder let chat: (SessionRow) -> Chat
+  private var store: ZapperStore { workspace.zappers }
   var body: some View {
     NavigationStack(path: $path) {
-      ZapperDetailView(
-        workspace: workspace, zapperID: zapperID, push: push, close: close
-      )
-      .navigationDestination(for: ZapperRoute.self) { route in
-        switch route {
-        case .chat(let session): chat(session)
-        case .issue(let id):
-          ZapperIssueView(workspace: workspace, zapperID: zapperID, issueID: id, push: push)
-        case .document(let path):
-          ZapperDocumentView(store: workspace.zappers, zapperID: zapperID, path: path)
+      root
+        .navigationDestination(for: ZapperRoute.self) { route in
+          switch route {
+          case .overview:
+            ZapperDetailView(workspace: workspace, zapperID: zapperID, push: push, close: close)
+          case .chat(let session): chat(session)
+          case .issue(let id):
+            ZapperIssueView(workspace: workspace, zapperID: zapperID, issueID: id, push: push)
+          case .document(let path):
+            ZapperDocumentView(store: store, zapperID: zapperID, path: path)
+          }
         }
-      }
+    }
+    .onChange(of: path) { _, path in selectVisibleChat(path) }
+  }
+  @ViewBuilder private var root: some View {
+    if let zapper = store.zapper(zapperID) {
+      let session = coordinator(zapper)
+      chat(session)
+        .toolbar {
+          ToolbarItem(placement: .primaryAction) {
+            Button {
+              path.append(.overview)
+            } label: {
+              ZapperAvatarView(zapper: zapper, size: 24)
+                .overlay(alignment: .topTrailing) {
+                  if zapper.needsYouCount > 0 {
+                    Circle().fill(Color.orange).frame(width: 9, height: 9).offset(x: 3, y: -3)
+                  }
+                }
+            }
+            .accessibilityLabel(
+              zapper.needsYouCount > 0
+                ? "\(zapper.config.name) overview, \(zapper.needsYouCount) waiting for you"
+                : "\(zapper.config.name) overview")
+          }
+        }
+        .onAppear { select(session) }
+    } else {
+      // Still loading, or removed: the overview explains either.
+      ZapperDetailView(workspace: workspace, zapperID: zapperID, push: push, close: close)
     }
   }
+  /// The coordinator chat, titled with the Zapper's name.
+  private func coordinator(_ zapper: Zapper) -> SessionRow {
+    let row = store.session(
+      for: zapper.coordinatorChatId, fallbackTitle: zapper.config.name,
+      known: workspace.sessions + workspace.archivedSessions)
+    return SessionRow(
+      id: row.id, projectId: row.projectId, title: zapper.config.name,
+      providerId: row.providerId, model: row.model, worktreeId: row.worktreeId)
+  }
   private func push(_ route: ZapperRoute) {
-    if case .chat(let session) = route { select(session) }
+    // The coordinator is the root page: going to it goes back rather than stacking a copy.
+    if case .chat(let session) = route, session.id == store.zapper(zapperID)?.coordinatorChatId {
+      path.removeAll()
+      return
+    }
     path.append(route)
+  }
+  /// One transcript loads at a time: keep it on the topmost chat the stack shows.
+  private func selectVisibleChat(_ path: [ZapperRoute]) {
+    for route in path.reversed() {
+      if case .chat(let session) = route {
+        select(session)
+        return
+      }
+    }
+    if let zapper = store.zapper(zapperID) { select(coordinator(zapper)) }
   }
 }
 
@@ -112,9 +166,6 @@ struct ZapperDetailView: View {
       }
       if let pending = store.unconfirmed[zapper.id] {
         Section { UnconfirmedRow(store: store, pending: pending) }
-      }
-      Section {
-        coordinatorRow(zapper)
       }
       Section {
         Picker("Section", selection: $section) {
@@ -197,41 +248,6 @@ struct ZapperDetailView: View {
     }
   }
 
-  private func coordinatorRow(_ zapper: Zapper) -> some View {
-    let preview = store.chats[zapper.coordinatorChatId]?.lastMessagePreview?
-      .trimmingCharacters(in: .whitespacesAndNewlines)
-    return Button {
-      push(.chat(coordinatorSession(zapper)))
-    } label: {
-      HStack(spacing: 12) {
-        Image(systemName: "bubble.left.and.text.bubble.right.fill")
-          .font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
-          .frame(width: 32, height: 32)
-          .background(AppTheme.accent, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        VStack(alignment: .leading, spacing: 2) {
-          Text("Message \(zapper.config.name)").font(.body.weight(.semibold))
-            .foregroundStyle(.primary).lineLimit(1)
-          Text(
-            preview.flatMap { $0.isEmpty ? nil : $0 }
-              ?? "Plan work, ask questions, or hand off a task."
-          )
-          .font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
-        }
-        Spacer(minLength: 4)
-        Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(.tertiary)
-      }
-      .contentShape(Rectangle())
-    }
-    .buttonStyle(.plain)
-    .accessibilityIdentifier("zapper-coordinator")
-  }
-
-  private func coordinatorSession(_ zapper: Zapper) -> SessionRow {
-    store.session(
-      for: zapper.coordinatorChatId, fallbackTitle: zapper.config.name,
-      known: workspace.sessions + workspace.archivedSessions)
-  }
   private func threadSession(_ chat: String, fallback: String) -> SessionRow {
     store.session(
       for: chat, fallbackTitle: fallback, known: workspace.sessions + workspace.archivedSessions)
