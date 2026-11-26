@@ -47,7 +47,8 @@ pub(super) fn supported(path: &str) -> bool {
 pub(super) struct WebPreview {
     pub browser: gpui::Entity<crate::browser::BrowserSurface>,
     stop: Arc<AtomicBool>,
-    content_hash: Option<String>,
+    /// The remote entry path and content hash this preview was built from.
+    source: Option<(String, Option<String>)>,
     missing_assets: Arc<AtomicBool>,
     /// Answers a remote page's asset reads; dropped with the preview.
     _bridge: Option<gpui::Task<()>>,
@@ -122,7 +123,7 @@ impl WebPreview {
     ) -> Result<Self, String> {
         let (url, stop) = serve_remote(entry, html, fetch)?;
         let mut preview = Self::open(url, stop, Some(bridge), window, cx);
-        preview.content_hash = content_hash;
+        preview.source = Some((entry.to_owned(), content_hash));
         preview.missing_assets = missing_assets;
         Ok(preview)
     }
@@ -143,7 +144,7 @@ impl WebPreview {
         Self {
             browser,
             stop,
-            content_hash: None,
+            source: None,
             missing_assets: Arc::new(AtomicBool::new(false)),
             _bridge: bridge,
         }
@@ -154,9 +155,13 @@ impl WebPreview {
         self.missing_assets.load(Ordering::Relaxed)
     }
 
-    /// The remote document's content hash this preview was rendered from.
-    pub fn content_hash(&self) -> Option<&str> {
-        self.content_hash.as_deref()
+    /// Whether this remote preview serves `entry` at `content_hash`. A page
+    /// that was renamed or changed needs a fresh origin: its relative
+    /// assets resolve against the entry's folder.
+    pub fn serves(&self, entry: &str, content_hash: Option<&str>) -> bool {
+        self.source
+            .as_ref()
+            .is_some_and(|(served, hash)| served == entry && hash.as_deref() == content_hash)
     }
 }
 
@@ -228,6 +233,17 @@ pub(super) fn remote_relative_path(path: &str) -> Option<String> {
         parts.push("index.html");
     }
     Some(parts.join("/"))
+}
+
+/// A remote page's text files arrive as UTF-8 strings from the workspace
+/// file service, so they say so; binary types keep their plain type.
+fn remote_content_type(path: &str) -> String {
+    let mime = mime(Path::new(path));
+    if mime.starts_with("text/") || mime == "application/json" || mime == "image/svg+xml" {
+        format!("{mime}; charset=utf-8")
+    } else {
+        mime.to_owned()
+    }
 }
 
 fn not_found(stream: &mut impl Write) {
@@ -311,7 +327,7 @@ fn serve_source(
                             let _ = write!(
                                 stream,
                                 "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nSet-Cookie: zuse_preview_{token}=1; Path=/; HttpOnly; SameSite=Strict\r\n\r\n",
-                                mime(Path::new(&path)),
+                                remote_content_type(&path),
                                 body.len()
                             );
                             if !request.starts_with("HEAD ") {
@@ -449,10 +465,16 @@ pub(super) fn remote_fetch(
     let task = cx.spawn(async move |this, cx| {
         while let Some((path, reply)) = incoming.next().await {
             let bytes = read_remote_asset(&client, &context, &path).await;
-            if bytes.is_none() && path != "favicon.ico" && !missing.swap(true, Ordering::Relaxed) {
+            let found = bytes.is_some();
+            // A reply nobody waits for any more (the page's request timed
+            // out) is as missing as a file that could not be read.
+            let delivered = reply.send(bytes).is_ok();
+            if (!found || !delivered)
+                && path != "favicon.ico"
+                && !missing.swap(true, Ordering::Relaxed)
+            {
                 let _ = this.update(cx, |_, cx| cx.notify());
             }
-            let _ = reply.send(bytes);
         }
     });
     (fetch, task)
@@ -627,7 +649,7 @@ mod tests {
         let token = url.path().split('/').nth(1).unwrap().to_owned();
         let page = get(&address, url.path(), "");
         assert!(page.starts_with("HTTP/1.1 200"));
-        assert!(page.contains("Content-Type: text/html"));
+        assert!(page.contains("Content-Type: text/html; charset=utf-8"));
         assert!(page.ends_with("<h1>Guide</h1>"));
         let css = get(&address, &format!("/{token}/sandbox-guide/style.css"), "");
         assert!(css.contains("Content-Type: text/css"));

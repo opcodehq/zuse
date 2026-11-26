@@ -1631,9 +1631,19 @@ impl FilesSurface {
                 match result {
                     Ok(WriteWorkspaceFileOutcome::Written { file }) => {
                         let hash = file.content_hash.clone();
+                        // The saved text becomes the loaded snapshot, so a
+                        // remote HTML preview renders what was just written.
+                        let saved_text = document
+                            .pending_save
+                            .as_ref()
+                            .filter(|save| save.revision == revision)
+                            .map(|save| save.text.clone());
                         if document.finish_save(revision, hash.clone())
                             && let Some(loaded) = document.file.as_mut()
                         {
+                            if saved_text.is_some() {
+                                loaded.text = saved_text;
+                            }
                             loaded.content_hash = Some(hash);
                             loaded.size = file.size;
                             loaded.modified_at = file.modified_at;
@@ -2391,7 +2401,8 @@ impl FilesSurface {
     }
 
     /// Serve a remote HTML page from its text, reading its relative assets
-    /// from the same machine. A page whose source changed is rebuilt.
+    /// from the same machine. A page that was renamed or whose source
+    /// changed is rebuilt.
     fn ensure_remote_web(
         &mut self,
         path: &str,
@@ -2400,13 +2411,13 @@ impl FilesSurface {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        let current = self
+        if self
             .preview
             .documents
             .get(path)
             .and_then(|d| d.web.as_ref())
-            .map(|web| web.content_hash().map(str::to_owned));
-        if current.is_some_and(|hash| hash == content_hash) {
+            .is_some_and(|web| web.serves(path, content_hash.as_deref()))
+        {
             return Ok(());
         }
         let context = self
@@ -2933,10 +2944,15 @@ impl FilesSurface {
                         }
                     }
                 }
-            } else if let Some((html, content_hash)) = self.remote_html(path, cx)
-                && let Err(error) = self.ensure_remote_web(path, html, content_hash, window, cx)
-            {
-                tracing::debug!(path, %error, "remote web preview unavailable");
+            } else {
+                // A newer version staged from the chat's machine is
+                // installed first, so the page shows it (as the source does).
+                self.apply_pending_external_reload(path, window, cx);
+                if let Some((html, content_hash)) = self.remote_html(path, cx)
+                    && let Err(error) = self.ensure_remote_web(path, html, content_hash, window, cx)
+                {
+                    tracing::debug!(path, %error, "remote web preview unavailable");
+                }
             }
             if let Some(web) = self
                 .preview
@@ -5324,14 +5340,37 @@ mod markdown_buffer_tests {
             surface.preview.documents.insert(path.into(), document);
             surface
         });
-        cx.update(|window, cx| {
-            surface.update(cx, |surface, cx| {
-                let theme = Theme::dark();
-                let _ = surface.render_document_body(path, &theme, window, cx);
-                let document = surface.preview.documents.get(path).unwrap();
-                assert!(document.show_web);
-                assert!(document.web.is_none());
-            });
+        // Render just the tab body inside a view, as the editor does.
+        struct Body(Entity<FilesSurface>);
+        impl Render for Body {
+            fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                self.0.update(cx, |surface, cx| {
+                    surface.render_document_body(
+                        "sandbox-guide/index.html",
+                        &Theme::dark(),
+                        window,
+                        cx,
+                    )
+                })
+            }
+        }
+        let body = cx.update(|_, cx| cx.new(|_| Body(surface.clone())));
+        cx.draw(
+            gpui::point(px(0.0), px(0.0)),
+            gpui::size(px(600.0), px(400.0)),
+            move |_, _| body.clone().into_any_element(),
+        );
+        // The body is the document's missing-file state with Retry: no web
+        // preview was built from this desktop's disk.
+        assert!(cx.debug_bounds("files-document-retry").is_some());
+        surface.read_with(cx, |surface, _| {
+            let document = surface.preview.documents.get(path).unwrap();
+            assert!(document.show_web);
+            assert!(document.web.is_none());
+            assert_eq!(
+                document.phase,
+                DocumentPhase::Error("File not found.".into())
+            );
         });
     }
 
