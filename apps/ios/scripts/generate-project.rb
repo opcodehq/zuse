@@ -148,6 +148,8 @@ ios_info = {
   'NSCameraUsageDescription' => 'Scan a pairing QR code to connect to your computer.',
   'NSLocalNetworkUsageDescription' => 'Connect to your Zuse computer on the local network.',
   'NSAppTransportSecurity' => { 'NSAllowsLocalNetworking' => true },
+  # zuse://pair?link=… opens an invitation shared from a computer.
+  'CFBundleURLTypes' => [{ 'CFBundleURLName' => 'sh.zuse.native.pairing', 'CFBundleURLSchemes' => ['zuse'] }],
   'UIApplicationSceneManifest' => { 'UIApplicationSupportsMultipleScenes' => false },
   'UISupportedInterfaceOrientations' => %w[
     UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight

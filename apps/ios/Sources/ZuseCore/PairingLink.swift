@@ -89,3 +89,24 @@ public struct PairingLink: Sendable, Equatable {
     return PairingLink(httpURL: http, webSocketURL: ws, code: code)
   }
 }
+
+/// `zuse://pair?link=<invitation>` opens an invitation in the app, for links shared from a
+/// computer or opened by automation. The app always confirms before pairing.
+public enum PairingDeepLink {
+  public static func invitation(from url: URL) -> String? {
+    guard url.scheme?.lowercased() == "zuse", url.host?.lowercased() == "pair",
+      let link = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+        .first(where: { $0.name == "link" })?.value,
+      PairingLink.isNativeInvitation(link)
+    else { return nil }
+    return link
+  }
+
+  /// The address a person checks before trusting the link, such as `192.168.1.4:27657`.
+  public static func destination(_ invitation: String) -> String {
+    guard let url = URLComponents(string: invitation), let host = url.host else {
+      return invitation
+    }
+    return url.port.map { "\(host):\($0)" } ?? host
+  }
+}

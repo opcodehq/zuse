@@ -9,6 +9,18 @@ import Testing
   import Crypto
 #endif
 
+@Test func pairingDeepLinksCarryANativeInvitation() throws {
+  let invitation =
+    "http://192.168.1.4:27657/#pair=eyJ2IjoxLCJpZCI6IjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmIiwic2VjcmV0IjoiYWJjIn0"
+  var components = URLComponents(string: "zuse://pair")!
+  components.queryItems = [URLQueryItem(name: "link", value: invitation)]
+  #expect(PairingDeepLink.invitation(from: try #require(components.url)) == invitation)
+  #expect(PairingDeepLink.destination(invitation) == "192.168.1.4:27657")
+  #expect(
+    PairingDeepLink.invitation(from: try #require(URL(string: "zuse://pair?link=nope"))) == nil)
+  #expect(PairingDeepLink.invitation(from: try #require(URL(string: "zuse://other"))) == nil)
+}
+
 @Test func tailnetAddressesCountAsPrivate() throws {
   #expect(PairingLink.isPrivateHost("100.64.0.1"))
   #expect(PairingLink.isPrivateHost("100.101.102.103"))

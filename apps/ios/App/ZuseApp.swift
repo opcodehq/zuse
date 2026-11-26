@@ -36,6 +36,7 @@ import ZuseCore
 
 struct WorkspaceView: View {
   @Bindable var workspace: WorkspaceModel
+  @State private var linkedInvitation: String?
   @State private var photo: PhotosPickerItem?
   @State private var showFilePicker = false
   @State private var attachmentTarget: UUID?
@@ -90,6 +91,43 @@ struct WorkspaceView: View {
         Button("OK") { workspace.error = nil }
       } message: {
         Text(workspace.error ?? "")
+      }
+      #if DEBUG
+        // Automation: `SIMCTL_CHILD_ZUSE_PAIR_LINK=<invitation> xcrun simctl launch …` pairs
+        // without the camera or a confirmation. Debug builds only.
+        .task {
+          if let link = ProcessInfo.processInfo.environment["ZUSE_PAIR_LINK"], !link.isEmpty {
+            do { try await workspace.pair(link) } catch {
+              workspace.error = error.localizedDescription
+            }
+          }
+        }
+      #endif
+      .onOpenURL { url in
+        if let invitation = PairingDeepLink.invitation(from: url) { linkedInvitation = invitation }
+      }
+      .confirmationDialog(
+        "Add this computer?",
+        isPresented: Binding(
+          get: { linkedInvitation != nil }, set: { if !$0 { linkedInvitation = nil } }),
+        titleVisibility: .visible
+      ) {
+        if let invitation = linkedInvitation {
+          Button("Add computer") {
+            linkedInvitation = nil
+            Task {
+              do { try await workspace.pair(invitation) } catch is CancellationError {} catch {
+                workspace.error = error.localizedDescription
+              }
+            }
+          }
+        }
+        Button("Cancel", role: .cancel) { linkedInvitation = nil }
+      } message: {
+        Text(
+          "Only continue if you opened this link from your own computer at "
+            + PairingDeepLink.destination(linkedInvitation ?? "") + "."
+        )
       }
   }
   private var errorPresented: Binding<Bool> {
