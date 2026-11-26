@@ -174,7 +174,7 @@ export function DeviceCommandApprovals(props: { workspaceId: string; chatId: str
 			{open && results.filter((run) => run.state !== "pending").map((run) => (
 				<View key={run.id}>
 					<Text>{run.computer} · {run.result.status}</Text>
-					{run.state === "running" && <Button disabled={busy} size="sm" onPress={()=>void cancelRun(run.id)}>Stop</Button>}
+					{(run.state === "running" || run.state === "approved") && <Button disabled={busy} size="sm" onPress={()=>void cancelRun(run.id)}>Stop</Button>}
 					<Text selectable className="font-mono">{run.command}{"\n"}{run.result.output}</Text>
 				</View>
 			))}

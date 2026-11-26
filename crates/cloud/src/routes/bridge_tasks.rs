@@ -376,14 +376,32 @@ pub(super) async fn request_for(
     if waiting >= MAX_PENDING_PER_CHAT {
         return Err(ApiError::conflict("too_many_pending_computer_requests"));
     }
-    let owned: bool = sqlx::query_scalar(&format!("SELECT {OWNED_CHAT}"))
-        .bind(owner)
-        .bind(workspace)
-        .bind(chat)
-        .fetch_one(&mut *tx)
-        .await?;
-    if !owned {
-        return Err(ApiError::not_found("bridge_chat_unavailable"));
+    // Lock the owner's chat and computer row so an archive commits either
+    // before this request (and it is refused) or after it (and its cleanup
+    // removes the request).
+    sqlx::query(
+        "SELECT 1 FROM api_cloud_workspaces w JOIN zuse_rust_task_command_sessions s USING(workspace_id)
+         WHERE w.account_id=$1 AND w.workspace_id=$2 AND s.session_id=$3 AND s.state='active'
+           AND w.desired_state IN ('ready','paused') AND w.state NOT IN ('archived','archiving','deleting','deleted')
+         FOR SHARE OF w, s",
+    )
+    .bind(owner)
+    .bind(workspace)
+    .bind(chat)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| ApiError::not_found("bridge_chat_unavailable"))?;
+    // Serialize with revoking this computer's "always" grant, so a request
+    // can't keep an "always" decision its grant no longer backs.
+    let device: Option<String> = sqlx::query_scalar(
+        "SELECT enrollment_id FROM api_bridge_tasks WHERE task_id=$1 AND owner_id=$2",
+    )
+    .bind(input.task.to_string())
+    .bind(owner)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let Some(device) = &device {
+        grant_lock(&mut tx, owner, device).await?;
     }
     // Any of the owner's computers can serve the chat without attaching it.
     // The row holds the chat's requests and grants for that computer.
@@ -485,6 +503,20 @@ async fn existing_request(
                 .ok_or_else(|| ApiError::conflict("computer_request_settled"))
         }
     }
+}
+
+/// Held while a computer's "always" grant is read into a new request or
+/// revoked.
+pub(super) async fn grant_lock(
+    tx: &mut sqlx::PgConnection,
+    owner: &str,
+    device: &str,
+) -> Result<(), ApiError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,2))")
+        .bind(format!("{owner}\n{device}"))
+        .execute(&mut *tx)
+        .await?;
+    Ok(())
 }
 
 pub(super) async fn results(

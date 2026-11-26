@@ -175,8 +175,16 @@ pub(super) async fn claim_primary(
     .fetch_optional(&pool)
     .await?
     .ok_or_else(|| ApiError::forbidden("computer_not_enrolled"))?;
-    primary_for(&pool, &owner, &input.workspace_id, &input.chat_id, &device).await?;
-    Ok(Json(json!({"deviceId":device})))
+    let primary = primary_for(
+        &pool,
+        &owner,
+        &input.workspace_id,
+        &input.chat_id,
+        &device,
+        input.command_id.as_deref(),
+    )
+    .await?;
+    Ok(Json(json!({"deviceId":primary})))
 }
 
 #[derive(Deserialize)]
@@ -184,21 +192,50 @@ pub(super) async fn claim_primary(
 pub(super) struct PrimaryClaim {
     workspace_id: String,
     chat_id: String,
+    /// The admitted message this claim follows; omitted for a new chat.
+    #[serde(default)]
+    command_id: Option<String>,
 }
 
-/// Make the computer the owner is sending from the chat's primary. The
-/// caller has already proven it holds that computer's enrolled key. The
-/// previous primary keeps its running work but is no longer a target unless
-/// it was attached explicitly.
+/// When the owner's message `command` was admitted in the chat (ms).
+async fn admitted_at(
+    tx: &mut sqlx::PgConnection,
+    workspace: &str,
+    chat: &str,
+    command: &str,
+) -> Result<i64, ApiError> {
+    sqlx::query_scalar(
+        "SELECT created_at FROM zuse_rust_task_command_actions
+         WHERE workspace_id=$1 AND session_id=$2 AND command_id=$3",
+    )
+    .bind(workspace)
+    .bind(chat)
+    .bind(command)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| ApiError::not_found("bridge_message_unavailable"))
+}
+
+/// Make the computer the owner sent `command` from the chat's default. The
+/// caller has already proven it holds that computer's enrolled key. Claims
+/// are ordered by their message's admission, so a delayed claim for an
+/// earlier message never replaces a later one; a claim without a message
+/// (a new chat) only sets a default when there is none. The previous
+/// computer keeps its running work. Returns the chat's default after.
 pub(super) async fn primary_for(
     pool: &sqlx::PgPool,
     owner: &str,
     workspace: &str,
     chat: &str,
     device: &str,
-) -> Result<(), ApiError> {
+    command: Option<&str>,
+) -> Result<Option<String>, ApiError> {
     let mut tx = pool.begin().await?;
     usable_chat(&mut tx, owner, workspace, chat, device).await?;
+    let ordered_at = match command {
+        Some(command) => admitted_at(&mut tx, workspace, chat, command).await?,
+        None => 0,
+    };
     sqlx::query(
         "INSERT INTO api_bridge_attachments(owner_id,workspace_id,chat_id,enrollment_id,explicit)
          VALUES($1,$2,$3,$4,false) ON CONFLICT DO NOTHING",
@@ -210,13 +247,52 @@ pub(super) async fn primary_for(
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "INSERT INTO api_bridge_primaries(owner_id,workspace_id,chat_id,enrollment_id) VALUES($1,$2,$3,$4)
-         ON CONFLICT(owner_id,workspace_id,chat_id) DO UPDATE SET enrollment_id=excluded.enrollment_id, updated_at=now()",
+        "INSERT INTO api_bridge_primaries(owner_id,workspace_id,chat_id,enrollment_id,ordered_at)
+         VALUES($1,$2,$3,$4,$5)
+         ON CONFLICT(owner_id,workspace_id,chat_id) DO UPDATE
+         SET enrollment_id=excluded.enrollment_id, ordered_at=excluded.ordered_at, updated_at=now()
+         WHERE api_bridge_primaries.ordered_at < excluded.ordered_at",
     )
     .bind(owner)
     .bind(workspace)
     .bind(chat)
     .bind(device)
+    .bind(ordered_at)
+    .execute(&mut *tx)
+    .await?;
+    let primary: Option<String> = sqlx::query_scalar(
+        "SELECT enrollment_id FROM api_bridge_primaries WHERE owner_id=$1 AND workspace_id=$2 AND chat_id=$3",
+    )
+    .bind(owner)
+    .bind(workspace)
+    .bind(chat)
+    .fetch_optional(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(primary)
+}
+
+/// The owner sent `command` from a computer that isn't enabled (or from
+/// elsewhere): clear the default unless a later message already set one.
+pub(super) async fn clear_primary_for(
+    pool: &sqlx::PgPool,
+    owner: &str,
+    workspace: &str,
+    chat: &str,
+    command: Option<&str>,
+) -> Result<(), ApiError> {
+    let mut tx = pool.begin().await?;
+    let before = match command {
+        Some(command) => admitted_at(&mut tx, workspace, chat, command).await?,
+        None => i64::MAX,
+    };
+    sqlx::query(
+        "DELETE FROM api_bridge_primaries WHERE owner_id=$1 AND workspace_id=$2 AND chat_id=$3 AND ordered_at < $4",
+    )
+    .bind(owner)
+    .bind(workspace)
+    .bind(chat)
+    .bind(before)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -240,21 +316,29 @@ pub(super) async fn primary(
     Ok(Json(json!({"deviceId":device})))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ClearQuery {
+    #[serde(default)]
+    command_id: Option<String>,
+}
+
 /// The owner sent from a computer that isn't enabled (or from elsewhere):
-/// the chat has no primary until they send from one that is.
+/// the chat has no default until they send from one that is.
 pub(super) async fn clear_primary(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((workspace, chat)): Path<(String, String)>,
+    Query(query): Query<ClearQuery>,
 ) -> Result<StatusCode, ApiError> {
     let owner = personal_owner(&state, &headers).await?;
-    sqlx::query(
-        "DELETE FROM api_bridge_primaries WHERE owner_id=$1 AND workspace_id=$2 AND chat_id=$3",
+    clear_primary_for(
+        &runtime(&state)?.shared_pool(),
+        &owner,
+        &workspace,
+        &chat,
+        query.command_id.as_deref(),
     )
-    .bind(owner)
-    .bind(workspace)
-    .bind(chat)
-    .execute(&runtime(&state)?.shared_pool())
     .await?;
     Ok(StatusCode::NO_CONTENT)
 }

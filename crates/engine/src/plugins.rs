@@ -187,12 +187,13 @@ impl Plugins {
         account_id: &str,
         workspace: &str,
         chat: &str,
+        command: Option<&str>,
     ) -> anyhow::Result<Option<String>> {
         let Some(root) = &self.local_root else {
             return Ok(None);
         };
         self.computer_bridge
-            .claim_primary(root, &self.account, account_id, workspace, chat)
+            .claim_primary(root, &self.account, account_id, workspace, chat, command)
             .await
     }
     pub fn computer_bridge_status(&self) -> crate::computer_bridge::BridgeStatus {

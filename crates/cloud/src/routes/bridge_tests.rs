@@ -14,6 +14,10 @@ CREATE TABLE zuse_rust_task_command_sessions(workspace_id text NOT NULL, session
     state text NOT NULL, PRIMARY KEY(workspace_id, session_id));
 INSERT INTO api_cloud_workspaces VALUES ('w','owner','ready','ready'),('w2','owner','ready','ready'),
     ('other-w','intruder','ready','ready');
+CREATE TABLE zuse_rust_task_command_actions(workspace_id text NOT NULL, command_id text NOT NULL,
+    session_id text NOT NULL, created_at bigint NOT NULL, PRIMARY KEY(workspace_id, command_id));
+INSERT INTO zuse_rust_task_command_actions VALUES ('w','cmd-1','chat',1000),('w','cmd-2','chat',2000),
+    ('w','cmd-3','chat',3000);
 INSERT INTO zuse_rust_task_command_sessions VALUES ('w','chat','active'),('w','chat2','active'),
     ('w2','chat','active'),('other-w','chat','active');
 INSERT INTO api_bridge_computers VALUES ('owner','mac','key-mac','Mac','macos'),
@@ -607,7 +611,7 @@ async fn the_primary_follows_the_sender_and_is_the_default_target() {
         "no_primary_computer"
     );
     // Sending from the Mac makes it primary without an explicit attach.
-    primary_for(&pool, "owner", "w", "chat", "mac")
+    primary_for(&pool, "owner", "w", "chat", "mac", Some("cmd-1"))
         .await
         .unwrap();
     let first = on_primary(&pool, "make test").await.unwrap();
@@ -626,7 +630,7 @@ async fn the_primary_follows_the_sender_and_is_the_default_target() {
     assert_eq!(claim(&pool, "mac", mac).await["id"], id.to_string());
 
     // The next message comes from the Linux box: it becomes the default.
-    primary_for(&pool, "owner", "w", "chat", "linux")
+    primary_for(&pool, "owner", "w", "chat", "linux", Some("cmd-2"))
         .await
         .unwrap();
     let next = on_primary(&pool, "uname").await.unwrap();
@@ -658,12 +662,12 @@ async fn the_primary_follows_the_sender_and_is_the_default_target() {
     );
     // A primary claim never reaches another owner's chat or computer.
     assert!(
-        primary_for(&pool, "owner", "other-w", "chat", "mac")
+        primary_for(&pool, "owner", "other-w", "chat", "mac", None)
             .await
             .is_err()
     );
     assert!(
-        primary_for(&pool, "owner", "w", "chat", "pc")
+        primary_for(&pool, "owner", "w", "chat", "pc", None)
             .await
             .is_err()
     );
@@ -676,7 +680,7 @@ async fn another_computer_runs_only_when_named_and_keeps_its_own_approvals() {
     let (mac, linux) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
     offer(&pool, "mac", mac).await;
     offer(&pool, "linux", linux).await;
-    primary_for(&pool, "owner", "w", "chat", "mac")
+    primary_for(&pool, "owner", "w", "chat", "mac", Some("cmd-1"))
         .await
         .unwrap();
     // The owner's other computers need no attaching; they run when named.
@@ -952,4 +956,53 @@ async fn renaming_a_computer_changes_only_the_owners_own_and_later_requests() {
         .unwrap();
     let pending = pending_for(&pool, "owner", "w", "chat").await.unwrap();
     assert_eq!(pending[0]["computerName"], "Swaraj's MacBook Pro");
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
+async fn a_late_claim_for_an_earlier_message_never_replaces_a_newer_default() {
+    let Some(pool) = database().await else { return };
+    use super::bridge_computers::clear_primary_for;
+    let current = |pool: PgPool| async move {
+        sqlx::query_scalar::<_, String>(
+            "SELECT enrollment_id FROM api_bridge_primaries WHERE workspace_id='w' AND chat_id='chat'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap()
+    };
+    // A new chat's first claim sets a default only when there is none.
+    primary_for(&pool, "owner", "w", "chat", "mac", None)
+        .await
+        .unwrap();
+    assert_eq!(current(pool.clone()).await.as_deref(), Some("mac"));
+    // The second message came from the Linux box; the first message's claim
+    // from the Mac arrives late and loses.
+    let after = primary_for(&pool, "owner", "w", "chat", "linux", Some("cmd-2"))
+        .await
+        .unwrap();
+    assert_eq!(after.as_deref(), Some("linux"));
+    let late = primary_for(&pool, "owner", "w", "chat", "mac", Some("cmd-1"))
+        .await
+        .unwrap();
+    assert_eq!(late.as_deref(), Some("linux"));
+    primary_for(&pool, "owner", "w", "chat", "mac", None)
+        .await
+        .unwrap();
+    assert_eq!(current(pool.clone()).await.as_deref(), Some("linux"));
+    // A late clear for an earlier message is ignored too; a newer one clears.
+    clear_primary_for(&pool, "owner", "w", "chat", Some("cmd-1"))
+        .await
+        .unwrap();
+    assert_eq!(current(pool.clone()).await.as_deref(), Some("linux"));
+    clear_primary_for(&pool, "owner", "w", "chat", Some("cmd-3"))
+        .await
+        .unwrap();
+    assert_eq!(current(pool.clone()).await, None);
+    // A message from another chat can't order this one.
+    assert!(
+        primary_for(&pool, "owner", "w2", "chat", "mac", Some("cmd-3"))
+            .await
+            .is_err()
+    );
 }

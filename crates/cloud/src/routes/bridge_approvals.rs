@@ -182,6 +182,7 @@ pub(super) async fn revoke_always_for(
     enrollment: &str,
 ) -> Result<(), ApiError> {
     let mut tx = pool.begin().await?;
+    super::bridge_tasks::grant_lock(&mut tx, owner, enrollment).await?;
     sqlx::query("DELETE FROM api_bridge_always_grants WHERE owner_id=$1 AND enrollment_id=$2")
         .bind(owner)
         .bind(enrollment)

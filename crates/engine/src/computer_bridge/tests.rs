@@ -562,10 +562,14 @@ async fn sending_claims_primary_with_this_computers_key_or_clears_it() {
     async fn clear(
         State(seen): State<Seen>,
         UrlPath((workspace, chat)): UrlPath<(String, String)>,
+        axum::extract::Query(query): axum::extract::Query<
+            std::collections::HashMap<String, String>,
+        >,
     ) -> StatusCode {
-        seen.lock()
-            .unwrap()
-            .push(("clear".into(), json!([workspace, chat])));
+        seen.lock().unwrap().push((
+            "clear".into(),
+            json!([workspace, chat, query.get("commandId")]),
+        ));
         StatusCode::NO_CONTENT
     }
     let seen = Seen::default();
@@ -584,9 +588,15 @@ async fn sending_claims_primary_with_this_computers_key_or_clears_it() {
         crate::account::Account::fixture_signed_in(profile.path(), origin.clone(), "user_a");
 
     // Not enabled here: the user isn't typing on an enabled computer.
-    let none = claim_primary_at(&origin, profile.path(), &account, "user_a", "w1", "s_1")
-        .await
-        .unwrap();
+    let none = claim_primary_at(
+        &origin,
+        profile.path(),
+        &account,
+        "user_a",
+        ("w1", "s_1", Some("cmd-1")),
+    )
+    .await
+    .unwrap();
     assert_eq!(none, None);
     // Enabled by another account: never claimed for this one.
     let enabled = |owner: &str| Enabled {
@@ -595,33 +605,57 @@ async fn sending_claims_primary_with_this_computers_key_or_clears_it() {
         label: "Mac".into(),
     };
     write_enabled(profile.path(), &enabled("user_b")).unwrap();
-    claim_primary_at(&origin, profile.path(), &account, "user_a", "w1", "s_1")
-        .await
-        .unwrap();
+    claim_primary_at(
+        &origin,
+        profile.path(),
+        &account,
+        "user_a",
+        ("w1", "s_1", Some("cmd-1")),
+    )
+    .await
+    .unwrap();
     write_enabled(profile.path(), &enabled("user_a")).unwrap();
-    let claimed = claim_primary_at(&origin, profile.path(), &account, "user_a", "w1", "s_1")
-        .await
-        .unwrap();
+    let claimed = claim_primary_at(
+        &origin,
+        profile.path(),
+        &account,
+        "user_a",
+        ("w1", "s_1", Some("cmd-1")),
+    )
+    .await
+    .unwrap();
     assert_eq!(claimed.as_deref(), Some("this-mac"));
     // A different signed-in account than the chat's owner is refused outright.
     assert!(
-        claim_primary_at(&origin, profile.path(), &account, "user_b", "w1", "s_1")
-            .await
-            .is_err()
+        claim_primary_at(
+            &origin,
+            profile.path(),
+            &account,
+            "user_b",
+            ("w1", "s_1", None)
+        )
+        .await
+        .is_err()
     );
     assert!(
-        claim_primary_at(&origin, profile.path(), &account, "user_a", "../w", "s_1")
-            .await
-            .is_err()
+        claim_primary_at(
+            &origin,
+            profile.path(),
+            &account,
+            "user_a",
+            ("../w", "s_1", None)
+        )
+        .await
+        .is_err()
     );
     assert_eq!(
         *seen.lock().unwrap(),
         vec![
-            ("clear".to_owned(), json!(["w1", "s_1"])),
-            ("clear".to_owned(), json!(["w1", "s_1"])),
+            ("clear".to_owned(), json!(["w1", "s_1", "cmd-1"])),
+            ("clear".to_owned(), json!(["w1", "s_1", "cmd-1"])),
             (
                 "claim".to_owned(),
-                json!({"body":{"workspaceId":"w1","chatId":"s_1"},"htm":"POST",
+                json!({"body":{"workspaceId":"w1","chatId":"s_1","commandId":"cmd-1"},"htm":"POST",
                     "path":"/cloud/bridge/primary","bound":true})
             ),
         ]

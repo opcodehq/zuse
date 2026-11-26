@@ -953,12 +953,15 @@ fn write_enabled(profile: &Path, enabled: &Enabled) -> Result<()> {
 /// The engine-owned connector for this computer's shell.
 pub(crate) struct Connector {
     task: tokio::sync::Mutex<Option<(CancellationToken, tokio::task::JoinHandle<()>)>>,
+    /// Advanced by every Stop, so a start still enrolling can't resurrect it.
+    generation: std::sync::atomic::AtomicU64,
     status: watch::Sender<BridgeStatus>,
 }
 impl Default for Connector {
     fn default() -> Self {
         Self {
             task: Default::default(),
+            generation: Default::default(),
             status: watch::channel(BridgeStatus {
                 state: "off",
                 ..Default::default()
@@ -992,15 +995,24 @@ impl Connector {
             .user
             .map(|u| u.id)
             .context("Sign in to allow cloud chats to use this computer")?;
+        let generation = self.generation.load(std::sync::atomic::Ordering::SeqCst);
         let id = enroll_account(profile, label, &account).await?;
-        write_enabled(
-            profile,
-            &Enabled {
-                owner,
-                device_id: id.clone(),
-                label: label.trim().to_owned(),
-            },
-        )?;
+        {
+            // A Stop that arrived while enrolling wins: nothing is saved or run.
+            let _slot = self.task.lock().await;
+            ensure!(
+                self.generation.load(std::sync::atomic::Ordering::SeqCst) == generation,
+                "Stopped before this computer finished enrolling"
+            );
+            write_enabled(
+                profile,
+                &Enabled {
+                    owner,
+                    device_id: id.clone(),
+                    label: label.trim().to_owned(),
+                },
+            )?;
+        }
         self.launch(profile, account, Timing::default()).await;
         Ok(id)
     }
@@ -1076,6 +1088,8 @@ impl Connector {
     /// connector would come back on the next start).
     pub async fn stop(&self, profile: &Path) -> Result<()> {
         let mut slot = self.task.lock().await;
+        self.generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let forgotten = match std::fs::remove_file(enabled_path(profile)) {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
             _ => Ok(()),
@@ -1112,10 +1126,12 @@ impl Connector {
 }
 
 impl Connector {
-    /// The owner is sending a message from this computer. If it is enabled
-    /// for `account_id`, it becomes the chat's primary, proven with its
-    /// enrolled key. Otherwise the chat's primary is cleared: the user isn't
-    /// typing on any enabled computer. Returns the primary's device ID.
+    /// The owner sent message `command` (none for a new chat's first) from
+    /// this computer. If it is enabled for `account_id`, it becomes the
+    /// chat's default computer, proven with its enrolled key. Otherwise the
+    /// default is cleared: the user isn't typing on an enabled computer. The
+    /// cloud orders claims by their message, so a late one never wins.
+    /// Returns the chat's default afterwards.
     pub async fn claim_primary(
         &self,
         profile: &Path,
@@ -1123,14 +1139,14 @@ impl Connector {
         account_id: &str,
         workspace: &str,
         chat: &str,
+        command: Option<&str>,
     ) -> Result<Option<String>> {
         claim_primary_at(
             &api_origin()?,
             profile,
             account,
             account_id,
-            workspace,
-            chat,
+            (workspace, chat, command),
         )
         .await
     }
@@ -1141,8 +1157,7 @@ async fn claim_primary_at(
     profile: &Path,
     account: &crate::account::Account,
     account_id: &str,
-    workspace: &str,
-    chat: &str,
+    (workspace, chat, command): (&str, &str, Option<&str>),
 ) -> Result<Option<String>> {
     ensure!(
         account.status().user.is_some_and(|u| u.id == account_id),
@@ -1160,16 +1175,20 @@ async fn claim_primary_at(
         Ok(value.to_owned())
     };
     let (workspace, chat) = (segment(workspace)?, segment(chat)?);
+    let command = command.map(segment).transpose()?;
     let credential = account.credential().await?;
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(10))
         .build()?;
     if read_enabled(profile).is_none_or(|e| e.owner != account_id) {
-        client
-            .delete(format!(
-                "{origin}/v1/cloud/workspaces/{workspace}/chats/{chat}/primary-computer"
-            ))
+        let mut clear = client.delete(format!(
+            "{origin}/v1/cloud/workspaces/{workspace}/chats/{chat}/primary-computer"
+        ));
+        if let Some(command) = &command {
+            clear = clear.query(&[("commandId", command)]);
+        }
+        clear
             .bearer_auth(credential.access_token)
             .send()
             .await
@@ -1184,13 +1203,17 @@ async fn claim_primary_at(
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Claimed {
-        device_id: String,
+        device_id: Option<String>,
+    }
+    let mut body = json!({"workspaceId":workspace,"chatId":chat});
+    if let Some(command) = &command {
+        body["commandId"] = json!(command);
     }
     let claimed: Claimed = client
         .post(url)
         .bearer_auth(credential.access_token)
         .header("dpop", signed)
-        .json(&json!({"workspaceId":workspace,"chatId":chat}))
+        .json(&body)
         .send()
         .await
         .map_err(|e| e.without_url())?
@@ -1198,7 +1221,7 @@ async fn claim_primary_at(
         .map_err(|e| e.without_url())?
         .json()
         .await?;
-    Ok(Some(claimed.device_id))
+    Ok(claimed.device_id)
 }
 
 /// Kills a command's whole process group when dropped.

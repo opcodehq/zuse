@@ -33,6 +33,9 @@ CREATE TABLE IF NOT EXISTS api_bridge_primaries (
     FOREIGN KEY (owner_id, workspace_id, chat_id, enrollment_id)
         REFERENCES api_bridge_attachments ON DELETE CASCADE
 );
+-- Admission time (ms) of the message that set it; a late claim for an older
+-- message never replaces a newer one. 0 for a new chat's first claim.
+ALTER TABLE api_bridge_primaries ADD COLUMN IF NOT EXISTS ordered_at bigint NOT NULL DEFAULT 0;
 CREATE TABLE IF NOT EXISTS api_bridge_requests (
     request_id uuid PRIMARY KEY,
     owner_id text NOT NULL,

@@ -3781,6 +3781,8 @@ impl EngineRpc {
                     expected_account_id: String,
                     workspace_id: String,
                     chat_id: String,
+                    #[serde(default)]
+                    command_id: Option<String>,
                 }
                 let p: P = parse_params(params)?;
                 let gateway = self
@@ -3788,7 +3790,12 @@ impl EngineRpc {
                     .as_ref()
                     .ok_or_else(|| RpcError::Failed("Computer connector unavailable".into()))?;
                 let claimed = gateway
-                    .claim_computer_primary(&p.expected_account_id, &p.workspace_id, &p.chat_id)
+                    .claim_computer_primary(
+                        &p.expected_account_id,
+                        &p.workspace_id,
+                        &p.chat_id,
+                        p.command_id.as_deref(),
+                    )
                     .await
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&serde_json::json!({"deviceId": claimed}))

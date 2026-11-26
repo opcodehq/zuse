@@ -39,35 +39,31 @@ export function ComputerRequests(props: { chatId: string }) {
       ...extra,
     });
   }
+  // Requests are watched whether or not the panel is open, so a new one
+  // shows its approval at once.
   createEffect(
-    () => [open(), props.chatId, state.epoch] as const,
+    () => [props.chatId, state.epoch] as const,
     () => {
-      if (!open() || !target) return;
+      if (!target) return;
       const chat = props.chatId,
         epoch = state.epoch;
       let active = true;
       const current = () =>
         active && chat === props.chatId && epoch === state.epoch;
       async function load() {
-        try {
-          const [devices, rows, results] = await Promise.all([
-            call<Computer[]>("list"),
-            call<Preview[]>("pending"),
-            call<Run[]>("results"),
-          ]);
-          if (current()) {
-            setComputers(devices);
-            setPending(rows);
-            setRuns(results);
-          }
-        } catch (e) {
-          if (current()) {
-            setComputers([]);
-            setPending([]);
-            setRuns([]);
-            setError(String(e));
-          }
-        }
+        // Each list refreshes on its own; a failed one keeps what was shown,
+        // so a running command never loses its Stop.
+        const [devices, rows, results] = await Promise.allSettled([
+          call<Computer[]>("list"),
+          call<Preview[]>("pending"),
+          call<Run[]>("results"),
+        ]);
+        if (!current()) return;
+        if (devices.status === "fulfilled") setComputers(devices.value);
+        if (rows.status === "fulfilled") setPending(rows.value);
+        if (results.status === "fulfilled") setRuns(results.value);
+        const failed = [devices, rows, results].find((r) => r.status === "rejected");
+        setError(failed && failed.status === "rejected" ? String(failed.reason) : "");
       }
       void load();
       const timer = setInterval(() => void load(), 5000);
@@ -101,6 +97,43 @@ export function ComputerRequests(props: { chatId: string }) {
   return (
     <Show when={target}>
       <div>
+        {/* Waiting commands always show, like a permission prompt. */}
+        <div style={{ "max-height": "40vh", "overflow-y": "auto" }}>
+          <For each={pending()}>
+            {(request) => (
+              <div>
+                <p>Run this command on your computer?</p>
+                <p>
+                  {request.computerName} · {request.osUser} · {request.shell}
+                </p>
+                <pre style={{ "max-height": "12em", "overflow-y": "auto" }}>
+                  {request.cwd}
+                  {"\n"}$ {request.command}
+                </pre>
+                <For
+                  each={[
+                    ["deny", "Deny"],
+                    ["session", "Allow for this chat"],
+                    ["always", "Allow always"],
+                    ["once", "Allow once"],
+                  ]}
+                >
+                  {([decision, label]) => (
+                    <Btn
+                      disabled={busy()}
+                      primary={decision === "once"}
+                      onClick={() =>
+                        void act("decide", { requestId: request.id, decision })
+                      }
+                    >
+                      {label}
+                    </Btn>
+                  )}
+                </For>
+              </div>
+            )}
+          </For>
+        </div>
         <Btn onClick={() => setOpen(!open())}>
           {open() ? "Hide computers" : "Computers"}
         </Btn>
@@ -115,66 +148,33 @@ export function ComputerRequests(props: { chatId: string }) {
           {/* One bounded region, so long output never pushes the editor
               or a Stop button out of view. */}
           <div style={{ "max-height": "40vh", "overflow-y": "auto" }}>
-          <For each={pending()}>
-            {(request) => (
-              <div>
-                <p>
-                  {request.computerName} · {request.osUser} · {request.shell}
-                </p>
-                <pre>
-                  {request.cwd}
-                  {"\n"}
-                  {request.command}
-                </pre>
-                <p>Runs with this OS user's access to files and credentials.</p>
-                <For
-                  each={[
-                    ["once", "Approve once"],
-                    ["session", "Approve for this session"],
-                    ["always", "Approve always"],
-                    ["deny", "Deny"],
-                  ]}
-                >
-                  {([decision, label]) => (
+            <For each={runs().filter((run) => run.state !== "pending")}>
+              {(run) => (
+                <div>
+                  <p>
+                    {run.computer} · {run.result.status}
+                  </p>
+                  {/* Approved but not yet started can still be withdrawn. */}
+                  <Show when={run.state === "running" || run.state === "approved"}>
                     <Btn
                       disabled={busy()}
-                      onClick={() =>
-                        void act("decide", { requestId: request.id, decision })
-                      }
+                      onClick={() => void act("cancel", { requestId: run.id })}
                     >
-                      {label}
+                      Stop
                     </Btn>
-                  )}
-                </For>
-              </div>
-            )}
-          </For>
-          <For each={runs().filter((run) => run.state !== "pending")}>
-            {(run) => (
-              <div>
-                <p>
-                  {run.computer} · {run.result.status}
-                </p>
-                <Show when={run.state === "running"}>
-                  <Btn
-                    disabled={busy()}
-                    onClick={() => void act("cancel", { requestId: run.id })}
-                  >
-                    Stop
-                  </Btn>
-                </Show>
-                <pre style={{ "max-height": "12em", "overflow-y": "auto" }}>
-                  {run.command}
-                  {"\n"}
-                  {run.result.output}
-                </pre>
-              </div>
-            )}
-          </For>
+                  </Show>
+                  <pre style={{ "max-height": "12em", "overflow-y": "auto" }}>
+                    {run.command}
+                    {"\n"}
+                    {run.result.output}
+                  </pre>
+                </div>
+              )}
+            </For>
           </div>
-          <Show when={error()}>
-            {(message) => <ErrorStrip>{message()}</ErrorStrip>}
-          </Show>
+        </Show>
+        <Show when={error()}>
+          {(message) => <ErrorStrip>{message()}</ErrorStrip>}
         </Show>
       </div>
     </Show>
