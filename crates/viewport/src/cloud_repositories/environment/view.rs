@@ -149,57 +149,56 @@ impl RepositoryPanel {
             body = body.child(form::empty("No services"));
         }
         for (index, service) in self.environment.startup.iter().enumerate() {
-            body = body.child(
-                row()
-                    .items_center()
-                    .gap(px(12.))
-                    .px(px(12.))
-                    .py(px(10.))
-                    .when(index > 0, |v| {
-                        v.border_t_1().border_color(palette::rgb(BORDER))
-                    })
-                    .child(
-                        div()
-                            .flex_none()
-                            .size(px(8.))
-                            .rounded_full()
-                            .bg(palette::accent_or(palette::tone(
+            body =
+                body.child(
+                    row()
+                        .items_center()
+                        .gap(px(12.))
+                        .px(px(12.))
+                        .py(px(10.))
+                        .when(index > 0, |v| {
+                            v.border_t_1().border_color(palette::rgb(BORDER))
+                        })
+                        .child(div().flex_none().size(px(8.)).rounded_full().bg(
+                            palette::accent_or(palette::tone(
                                 hsla(83. / 360., 0.72, 0.46, 1.),
                                 hsla(83. / 360., 0.74, 0.43, 1.),
-                            ))),
-                    )
-                    .child(
-                        column()
-                            .flex_1()
-                            .min_w_0()
-                            .gap(px(2.))
-                            .child(
-                                row()
-                                    .items_center()
-                                    .gap(px(6.))
-                                    .child(s::title_text(service.name.clone()))
-                                    .when_some(service.port, |v, port| {
-                                        v.child(cs::badge(format!(":{port}"), false, true))
-                                    }),
-                            )
-                            .child(form::mono(service.command.clone())),
-                    )
-                    .child(
-                        cs::icon_button(
-                            SharedString::from(format!("remove-startup-{index}")),
-                            "trash-bin-minimalistic",
-                            format!("Remove {}", service.name),
-                            busy,
-                            false,
+                            )),
+                        ))
+                        .child(
+                            column()
+                                .flex_1()
+                                .min_w_0()
+                                .gap(px(2.))
+                                .child(
+                                    row()
+                                        .items_center()
+                                        .gap(px(6.))
+                                        .child(s::title_text(service.name.clone()))
+                                        .when_some(service.port, |v, port| {
+                                            v.child(cs::badge(format!(":{port}"), false, true))
+                                        }),
+                                )
+                                .child(form::mono(service.command.clone())),
                         )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if index < this.environment.startup.len() {
-                                this.environment.startup.remove(index);
-                            }
-                            cx.notify();
-                        })),
-                    ),
-            );
+                        .child(
+                            cs::icon_button(
+                                SharedString::from(format!("remove-startup-{index}")),
+                                "trash-bin-minimalistic",
+                                format!("Remove {}", service.name),
+                                busy,
+                                false,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    if index < this.environment.startup.len() {
+                                        this.environment.startup.remove(index);
+                                    }
+                                    cx.notify();
+                                },
+                            )),
+                        ),
+                );
         }
         if self.environment.adding_service {
             body = body.child(
