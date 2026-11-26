@@ -165,12 +165,12 @@ pub fn sign_in_button(id: impl Into<ElementId>, label: impl Into<SharedString>) 
         .line_height(px(13.3333))
         .bg(lime)
         .border_color(lime)
-        .text_color(hsla(132. / 360., 0.30, 0.07, 1.))
+        .text_color(palette::on_solid(lime))
         .on_key_down(|event: &KeyDownEvent, _, cx| {
             if matches!(event.keystroke.key.as_str(), "enter" | "space") {
                 cx.stop_propagation();
             }
         })
-        .hover(move |button| button.bg(lime.opacity(0.9)))
+        .hover(move |button| button.border_color(palette::on_solid(lime).opacity(0.5)))
         .child(label)
 }

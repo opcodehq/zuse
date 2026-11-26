@@ -3,6 +3,43 @@ use std::cell::Cell;
 thread_local! { static LIGHT: Cell<bool> = const { Cell::new(false) }; }
 thread_local! { static ACCENT: Cell<Option<gpui::Hsla>> = const { Cell::new(None) }; }
 
+/// Semantic settings colors supplied by the native host for a custom theme.
+/// `None` retains the authored Zuse palette (including the browser fallback).
+#[derive(Clone, Copy)]
+pub struct SettingsColors {
+    pub frame: gpui::Hsla,
+    pub card: gpui::Hsla,
+    pub border: gpui::Hsla,
+    pub text: gpui::Hsla,
+    pub muted: gpui::Hsla,
+    pub faint: gpui::Hsla,
+}
+thread_local! { static SETTINGS: Cell<Option<SettingsColors>> = const { Cell::new(None) }; }
+pub fn set_settings(colors: Option<SettingsColors>) {
+    SETTINGS.set(colors);
+}
+pub fn settings() -> Option<SettingsColors> {
+    SETTINGS.get()
+}
+
+/// High-contrast black or white ink for an opaque accent fill.
+pub fn on_solid(background: gpui::Hsla) -> gpui::Hsla {
+    let c: gpui::Rgba = background.into();
+    let linear = |v: f32| {
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let luminance = 0.2126 * linear(c.r) + 0.7152 * linear(c.g) + 0.0722 * linear(c.b);
+    if luminance > 0.179 {
+        gpui::black()
+    } else {
+        gpui::white()
+    }
+}
+
 /// Theme tokens for the sidebar's usage popovers. Stock Zuse keeps its authored styling.
 #[derive(Clone, Copy)]
 pub struct UsageMenuColors {
@@ -43,6 +80,21 @@ pub fn rgb(value: u32) -> gpui::Rgba {
         && let Some(accent) = ACCENT.get()
     {
         return accent.into();
+    }
+    if let Some(colors) = settings() {
+        let mapped = match value {
+            0x151515 | 0x121413 | 0x101010 | 0x141414 | 0x181916 | 0x181a18 => Some(colors.card),
+            0x1e1e1e | 0x191c1a | 0x171717 | 0x181818 | 0x111111 | 0x191919 | 0x1a1a1a
+            | 0x1d1d1d | 0x202020 | 0x222222 | 0x232323 | 0x292929 => Some(colors.frame),
+            0x1f211f | 0x242424 | 0x303030 => Some(colors.border),
+            0xe8e9e7 | 0xebebeb | 0xd0d0d0 | 0xe5e5e5 => Some(colors.text),
+            0xa4a8a3 | 0xa3a3a3 | 0x929292 => Some(colors.muted),
+            0x6b716a | 0x777777 => Some(colors.faint),
+            _ => None,
+        };
+        if let Some(color) = mapped {
+            return color.into();
+        }
     }
     let value = if is_light() {
         match value {
@@ -88,6 +140,58 @@ pub fn composer_border() -> gpui::Hsla {
 #[cfg(test)]
 mod accent_tests {
     use super::*;
+
+    #[test]
+    fn settings_colors_follow_theme_and_restore_stock() {
+        set_light(false);
+        let colors = SettingsColors {
+            frame: gpui::hsla(0.7, 0.3, 0.2, 1.),
+            card: gpui::hsla(0.7, 0.3, 0.1, 1.),
+            border: gpui::hsla(0.7, 0.2, 0.3, 1.),
+            text: gpui::hsla(0.7, 0.1, 0.9, 1.),
+            muted: gpui::hsla(0.7, 0.1, 0.7, 1.),
+            faint: gpui::hsla(0.7, 0.1, 0.5, 1.),
+        };
+        set_settings(Some(colors));
+        assert_eq!(crate::settings_style::frame_bg(), colors.frame);
+        assert_eq!(crate::settings_style::card_bg(), colors.card);
+        assert_eq!(crate::settings_style::card_border(), colors.border);
+        assert_eq!(rgb(0xe8e9e7), gpui::Rgba::from(colors.text));
+        assert_eq!(rgb(0xa4a8a3), gpui::Rgba::from(colors.muted));
+        assert_eq!(rgb(0x123456), gpui::rgb(0x123456));
+        set_settings(None);
+        assert_eq!(
+            crate::settings_style::frame_bg(),
+            crate::settings_style::FRAME_BG
+        );
+        assert_eq!(
+            crate::settings_style::card_bg(),
+            crate::settings_style::CARD_BG
+        );
+    }
+
+    #[test]
+    fn solid_label_has_readable_contrast_across_accent_hues() {
+        fn luminance(color: gpui::Hsla) -> f32 {
+            let rgb: gpui::Rgba = color.into();
+            let linear = |v: f32| {
+                if v <= 0.04045 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * linear(rgb.r) + 0.7152 * linear(rgb.g) + 0.0722 * linear(rgb.b)
+        }
+        for hue in 0..36 {
+            for lightness in [0.4, 0.44, 0.5, 0.6, 0.7] {
+                let background = gpui::hsla(hue as f32 / 36., 0.78, lightness, 1.);
+                let a = luminance(background);
+                let b = luminance(on_solid(background));
+                assert!((a.max(b) + 0.05) / (a.min(b) + 0.05) >= 4.5);
+            }
+        }
+    }
 
     #[test]
     fn theme_accent_replaces_only_the_brand_green() {

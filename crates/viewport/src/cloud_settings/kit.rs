@@ -251,7 +251,9 @@ pub fn menu_surface() -> Div {
         .min_w(px(180.))
         .p(px(4.))
         .rounded(px(9.))
-        .bg(palette::tone(hsla(132. / 360., 0.05, 0.105, 1.), white()))
+        .bg(palette::settings()
+            .map(|c| c.card)
+            .unwrap_or_else(|| palette::tone(hsla(132. / 360., 0.05, 0.105, 1.), white())))
         .border_1()
         .border_color(s::card_border())
         .shadow_lg()
@@ -343,7 +345,9 @@ pub fn unsaved_bar(
                     .rounded(px(12.))
                     .border_1()
                     .border_color(hairline())
-                    .bg(palette::tone(hsla(0., 0., 0.13, 1.), hsla(0., 0., 1., 1.)))
+                    .bg(palette::settings().map(|c| c.frame).unwrap_or_else(|| {
+                        palette::tone(hsla(0., 0., 0.13, 1.), hsla(0., 0., 1., 1.))
+                    }))
                     .shadow_lg()
                     .child(
                         icon("info-circle")
