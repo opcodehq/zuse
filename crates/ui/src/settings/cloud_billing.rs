@@ -60,8 +60,8 @@ impl CloudView {
             CloudPage::Agents => CloudView::Agents,
         }
     }
-    fn heading(self) -> (&'static str, &'static str) {
-        match self {
+    fn heading(self) -> Option<(&'static str, &'static str)> {
+        Some(match self {
             CloudView::Overview => (
                 "Cloud computer",
                 "Agents run on fresh cloud computers that keep working after you close Zuse.",
@@ -82,15 +82,12 @@ impl CloudView {
                 "Agent accounts",
                 "The coding-agent subscriptions cloud tasks sign in with. Agents on this computer are under Providers & accounts.",
             ),
-            CloudView::Compute => (
-                "Usage",
-                "Machine minutes your cloud computers used this cycle.",
-            ),
+            CloudView::Compute => return None,
             CloudView::Billing => (
                 "Billing",
                 "Your Cloud plan, the machine minutes left this cycle, and invoices.",
             ),
-        }
+        })
     }
 }
 /// Asks Settings to show another page (overview rows, billing links).
@@ -954,10 +951,11 @@ impl Render for CloudBillingPage {
         let theme = Theme::of(cx).for_settings_surface();
         zuse_viewport::palette::set_light(theme.appearance.is_light());
         let busy = self.task.is_some();
-        let (title, description) = self.view.heading();
-        let mut body = widgets::settings_page_column(window).child(
-            widgets::section_title_with_action(&theme, title, None, description, None),
-        );
+        let mut body = widgets::settings_page_column(window)
+            .when(self.view == CloudView::Compute, |body| body.pt_0())
+            .when_some(self.view.heading(), |body, (title, description)| {
+                body.child(widgets::section_title(&theme, title, description))
+            });
         if self.owner.is_none() {
             if self.state.read(cx).cloud_account.is_some() {
                 let pending = self.account_task.is_some();
@@ -1087,7 +1085,11 @@ impl Render for CloudBillingPage {
                     )
             }
         };
-        body = body.child(content.mt(px(20.)));
+        body = body.child(content.mt(px(if self.view == CloudView::Compute {
+            4.
+        } else {
+            20.
+        })));
         div()
             .id("cloud-billing-settings")
             .size_full()

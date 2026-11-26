@@ -1,6 +1,5 @@
-//! Settings → Cloud computer and Plan & usage. One Cloud page entity backs
-//! every Cloud section, Usage (Cloud compute) included. Local model usage
-//! lives in the sidebar footer's usage menu and the Usage route.
+//! Settings → Cloud computer and Plan & usage. The Cloud page entity also
+//! backs the Cloud view in Usage, alongside the shared token dashboard.
 use super::*;
 use settings::cloud_billing::{CloudBillingPage, CloudView, Navigate};
 
@@ -19,6 +18,9 @@ impl Shell {
             &page,
             |this, _, event: &Navigate, cx| match event {
                 Navigate::Cloud(view) => {
+                    if *view == CloudView::Compute {
+                        this.usage_settings_tokens = false;
+                    }
                     this.open_settings(SettingsSection::from_cloud_view(*view), cx)
                 }
                 Navigate::StartCloudChat(start) => this.start_first_cloud_chat(start, cx),
@@ -26,6 +28,131 @@ impl Shell {
         ));
         self.cloud_billing_page = Some(page.clone());
         page
+    }
+
+    fn usage_view_switch(
+        &self,
+        title: SharedString,
+        tokens: SharedString,
+        cloud: bool,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut tabs = div()
+            .id("usage-view-switch")
+            .role(gpui::Role::TabList)
+            .aria_label(title)
+            .flex()
+            .items_center()
+            .gap(px(4.));
+        for (is_tokens, label, glyph, selector) in [
+            (
+                false,
+                SharedString::from("Cloud"),
+                icons::CLOUD,
+                "usage-view-cloud",
+            ),
+            (true, tokens, icons::TAG, "usage-view-tokens"),
+        ] {
+            let active = is_tokens != cloud;
+            let color = if active {
+                super::tabs::active_tab_text_color(theme)
+            } else {
+                theme.text_muted
+            };
+            let tab = crate::surface_chrome::workspace_tab(selector, active, theme)
+                .debug_selector(move || selector.into())
+                .role(gpui::Role::Tab)
+                .aria_label(label.clone())
+                .aria_selected(active)
+                .tab_index(0)
+                .focus_visible(|style| style.border_1().border_color(theme.accent))
+                .cursor_pointer()
+                .h(px(28.))
+                .px(px(9.))
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .text_size(crate::typography::text_md())
+                .text_color(color)
+                .when(active, |tab| tab.font_weight(gpui::FontWeight::MEDIUM))
+                .child(icon(glyph).size(px(14.)).text_color(color))
+                .child(label)
+                .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                        this.usage_settings_tokens = is_tokens;
+                        cx.notify();
+                        cx.stop_propagation();
+                    }
+                }))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.usage_settings_tokens = is_tokens;
+                    cx.notify();
+                }));
+            tabs = tabs.child(tab);
+        }
+        tabs.into_any_element()
+    }
+
+    pub(super) fn usage_settings(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = Theme::of(cx).for_settings_surface();
+        zuse_viewport::palette::set_light(theme.appearance.is_light());
+        let subscribed = self.state.read(cx).cloud_access().subscribed();
+        let cloud = subscribed && !self.usage_settings_tokens;
+        let title = tr(cx, msg::usage::usage_dashboard_usage);
+        let tokens = tr(cx, msg::usage::usage_dashboard_tokens);
+        let toggle = subscribed.then(|| {
+            self.usage_view_switch(
+                SharedString::from(title.as_str()),
+                SharedString::from(tokens),
+                cloud,
+                &theme,
+                cx,
+            )
+        });
+        let description = if cloud {
+            "Machine minutes your cloud computers used this cycle."
+        } else {
+            "Model tokens, estimated costs, and provider plan limits."
+        };
+        let header = settings::widgets::settings_page_column(window)
+            .flex_none()
+            .pb_0()
+            .child(
+                settings::widgets::section_title_with_action(
+                    &theme,
+                    &title,
+                    None,
+                    description,
+                    toggle,
+                )
+                .items_start(),
+            );
+        let content = if cloud {
+            self.hide_usage_dashboard(cx);
+            let page = self.ensure_cloud_page(window, cx);
+            page.update(cx, |page, cx| page.set_view(CloudView::Compute, cx));
+            page.into_any_element()
+        } else {
+            settings::widgets::settings_page_column(window)
+                .h_full()
+                .pt_0()
+                .pb_0()
+                .child(self.usage_view(window, cx))
+                .into_any_element()
+        };
+        div()
+            .id("usage-settings")
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(header)
+            .child(div().flex_1().min_h_0().child(content))
+            .into_any_element()
     }
 
     /// The end of onboarding: a new chat on Cloud with the repository picked

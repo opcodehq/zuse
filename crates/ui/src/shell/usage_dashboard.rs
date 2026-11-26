@@ -1,4 +1,4 @@
-//! Recorded usage occupies the main pane without changing the live chat.
+//! Recorded token usage for the main pane and Settings.
 use super::*;
 use zuse_viewport::usage_dashboard::{Event, Project, Properties, UsageDashboard};
 
@@ -32,12 +32,15 @@ impl Shell {
         self.usage_pending = true;
         self.set_route(Route::Usage, cx);
     }
-    fn usage_properties(&self, cx: &App) -> Properties {
+    fn usage_properties(&self, embedded: bool, cx: &App) -> Properties {
         let state = self.state.read(cx);
-        let project = self
-            .usage_project
-            .as_ref()
-            .and_then(|id| state.spaces.iter().find(|s| &s.id == id));
+        let project = if embedded {
+            state.selected_space_row()
+        } else {
+            self.usage_project
+                .as_ref()
+                .and_then(|id| state.spaces.iter().find(|s| &s.id == id))
+        };
         let account = state.cloud_account.as_ref();
         Properties {
             available: state.engine().is_some(),
@@ -55,11 +58,21 @@ impl Shell {
             }),
         }
     }
+    pub(super) fn hide_usage_dashboard(&self, cx: &mut Context<Self>) {
+        if let Some(dashboard) = &self.usage_dashboard
+            && dashboard.read(cx).visible()
+        {
+            dashboard.update(cx, |dashboard, cx| dashboard.hide(cx));
+        }
+    }
     pub(super) fn usage_view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if self.usage_dashboard.is_none() {
             let dashboard = cx.new(|cx| UsageDashboard::new(window, cx));
             cx.subscribe(&dashboard, |this, dashboard, event, cx| match event {
                 Event::ScopeChanged(project_scope) => {
+                    if this.route != Route::Usage {
+                        return;
+                    }
                     this.usage_project_scope = *project_scope;
                     if matches!(this.nav.current(), NavEntry::Usage { .. }) {
                         this.nav.replace(NavEntry::Usage {
@@ -119,15 +132,24 @@ impl Shell {
             self.usage_dashboard = Some(dashboard);
         }
         let dashboard = self.usage_dashboard.clone().unwrap();
-        let properties = self.usage_properties(cx);
-        if self.usage_pending {
-            self.usage_pending = false;
-            dashboard.update(cx, |dashboard, cx| {
-                dashboard.open(properties, self.usage_project_scope, cx)
-            });
+        let embedded = self.route == Route::Settings(SettingsSection::Usage);
+        let properties = self.usage_properties(embedded, cx);
+        let (was_embedded, visible) = dashboard.read_with(cx, |dashboard, _| {
+            (dashboard.embedded(), dashboard.visible())
+        });
+        let reopen = !embedded && std::mem::take(&mut self.usage_pending);
+        let open = !visible || was_embedded != embedded || reopen;
+        let project_scope = !embedded && self.usage_project_scope;
+        dashboard.update(cx, |dashboard, cx| {
+            dashboard.set_embedded(embedded, cx);
+            if open {
+                dashboard.open(properties, project_scope, cx);
+            } else {
+                dashboard.set_properties(properties, cx);
+            }
+        });
+        if open && !embedded {
             window.focus(&self.unfocused, cx);
-        } else {
-            dashboard.update(cx, |dashboard, cx| dashboard.set_properties(properties, cx));
         }
         dashboard.into_any_element()
     }

@@ -195,7 +195,7 @@ impl UsageDashboard {
             .flex_wrap()
             .justify_between()
             .gap(px(12.))
-            .px(px(24.))
+            .when(!self.embedded, |v| v.px(px(24.)))
             .pt(px(20.))
             .child(
                 label(
@@ -226,31 +226,33 @@ impl UsageDashboard {
             .track_focus(&self.root_focus)
             .key_context("UsageDashboard")
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape" {
+                if event.keystroke.key == "escape" && (!this.embedded || this.provider_open) {
                     this.escape(window, cx);
                     cx.stop_propagation();
                 }
             }))
             .w_full()
             .h_full()
-            .bg(rgb(BG))
+            .when(!self.embedded, |v| v.bg(rgb(BG)))
             .min_w_0()
             .min_h_0()
             .text_color(rgb(TEXT))
             .text_size(px(14.))
             .line_height(px(18.9))
-            .child(
-                row()
-                    .flex_none()
-                    .h(px(48.))
-                    .px(px(20.))
-                    .border_b_1()
-                    .border_color(rgb(BORDER))
-                    .child(
-                        label(tr(cx, msg::usage::usage_dashboard_usage), 14.)
-                            .font_weight(FontWeight::MEDIUM),
-                    ),
-            )
+            .when(!self.embedded, |v| {
+                v.child(
+                    row()
+                        .flex_none()
+                        .h(px(48.))
+                        .px(px(20.))
+                        .border_b_1()
+                        .border_color(rgb(BORDER))
+                        .child(
+                            label(tr(cx, msg::usage::usage_dashboard_usage), 14.)
+                                .font_weight(FontWeight::MEDIUM),
+                        ),
+                )
+            })
             .child(controls);
         if self.report_error.is_some() && report.is_some() {
             root = root.child(
@@ -261,7 +263,7 @@ impl UsageDashboard {
                     ),
                     12.,
                 )
-                .mx(px(16.))
+                .when(!self.embedded, |v| v.mx(px(16.)))
                 .mt(px(12.))
                 .px(px(12.))
                 .py(px(8.))
@@ -276,8 +278,8 @@ impl UsageDashboard {
                 .w_full()
                 .min_w_0()
                 .gap(px(24.))
-                .px(px(24.))
-                .pr(px(32.))
+                .when(!self.embedded, |v| v.pl(px(24.)).pr(px(32.)))
+                .when(self.embedded, |v| v.pr(px(8.)))
                 .py(px(24.));
             body = body
                 .child(self.usage_chart(&report, wide, window, cx))
@@ -358,7 +360,7 @@ impl UsageDashboard {
         column()
             .flex_1()
             .min_h_0()
-            .px(px(24.))
+            .when(!self.embedded, |v| v.px(px(24.)))
             .py(px(24.))
             .gap(px(24.))
             .child(
