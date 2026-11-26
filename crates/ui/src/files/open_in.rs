@@ -248,7 +248,7 @@ impl FilesSurface {
             .preview
             .active
             .as_deref()
-            .and_then(|path| self.system_open_path(path))
+            .and_then(|path| self.system_open_path(path, cx))
         {
             self.open_file_picker(path, window, cx);
         }
