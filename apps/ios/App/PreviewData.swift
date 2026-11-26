@@ -44,6 +44,10 @@
             id: "preview-\(index)", projectId: "preview-project", title: title,
             providerId: "Preview", model: "sample-balanced", worktreeId: nil)
         }
+        sessions.append(
+          SessionRow(
+            id: "preview-5", projectId: "preview-website", title: "Refresh the pricing page",
+            providerId: "sample-anthropic", model: "sample-sonnet", worktreeId: nil))
         archivedSessions = [
           SessionRow(
             id: "preview-archived", projectId: "preview-project", title: "Try the old sidebar",
@@ -51,6 +55,9 @@
         ]
       }
       projects = [ProjectRow(id: "preview-project", name: "Zuse · Preview")]
+      if ProcessInfo.processInfo.arguments.contains("--home-preview") {
+        projects.append(ProjectRow(id: "preview-website", name: "Website"))
+      }
       if ProcessInfo.processInfo.arguments.contains("--zapper-preview") { loadZapperPreview() }
       selectedProject = projects.first
       let count = ProcessInfo.processInfo.arguments.contains("--large-transcript") ? 10_000 : 30
@@ -330,6 +337,12 @@
             ? "Main is green again. Two threads are running and one needs your call on the release notes."
             : nil,
           lastMessageAt: id == "zapper-worker-onboarding" ? nil : Date().addingTimeInterval(-600))
+      }
+      // Ordinary chats get ages too, so the Chats list reads like a live one.
+      for (index, minutes) in [4.0, 50, 180, 1_500, 4_400, 13_000].enumerated() {
+        chats["preview-\(index)"] = ZapperChatInfo(
+          spaceId: index == 5 ? "preview-website" : "preview-project", archived: false,
+          lastMessageAt: Date().addingTimeInterval(-minutes * 60))
       }
       let notes = """
         # Release notes in progress

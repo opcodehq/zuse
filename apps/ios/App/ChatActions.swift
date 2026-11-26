@@ -63,7 +63,7 @@ struct ChatActionsSheet: View {
 
   private var height: CGFloat {
     if case .zapper = target { return 430 }
-    return 300
+    return 280
   }
 
   private var title: String {

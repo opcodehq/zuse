@@ -160,3 +160,21 @@ struct SearchView: View {
       .accessibilityAddTraits(.isHeader)
   }
 }
+
+/// Pages with their own composer hide the iPhone tab bar, like a conversation in Messages.
+private struct CompactTabBarHidden: ViewModifier {
+  #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+  #endif
+  func body(content: Content) -> some View {
+    #if os(iOS)
+      content.toolbar(sizeClass == .compact ? .hidden : .automatic, for: .tabBar)
+    #else
+      content
+    #endif
+  }
+}
+
+extension View {
+  func hidesTabBarWhenCompact() -> some View { modifier(CompactTabBarHidden()) }
+}

@@ -332,6 +332,12 @@ struct IssuesListView: View {
 
 /// A rounded pill used for list views and filters.
 struct FilterChip: View {
+  /// A concrete label colour: sidebar glass would make `.primary` vibrant and washed out.
+  #if os(macOS)
+    static let ink = Color(nsColor: .labelColor)
+  #else
+    static let ink = Color(uiColor: .label)
+  #endif
   let title: String
   var systemImage: String? = nil
   var prominent = false
@@ -350,7 +356,7 @@ struct FilterChip: View {
     .foregroundStyle(prominent ? AppTheme.surface : Color.primary)
     .padding(.horizontal, 13).frame(height: 34)
     .background(
-      prominent ? Color.primary : Color.primary.opacity(0.06), in: Capsule()
+      prominent ? FilterChip.ink : Color.primary.opacity(0.06), in: Capsule()
     )
     .contentShape(Capsule())
   }
@@ -609,6 +615,7 @@ struct ZapperIssueView: View {
       .frame(maxWidth: 720, alignment: .leading).frame(maxWidth: .infinity)
     }
     .scrollDismissesKeyboard(.interactively)
+    .hidesTabBarWhenCompact()
     .background(AppTheme.surface)
     .navigationTitle(issue.code)
     .compactNavigationTitle()

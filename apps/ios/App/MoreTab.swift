@@ -100,7 +100,7 @@ struct MoreView: View {
             ? "Session expired · sign in again"
             : account.signedIn
               ? (account.displayName != nil ? account.email ?? "Zuse account" : "Zuse account")
-              : "Zuse Cloud and computers linked to your account"
+              : "Zuse Cloud and linked computers"
         )
         .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
       }

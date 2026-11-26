@@ -85,9 +85,8 @@ struct ChatsListView: View {
       uniquingKeysWith: { first, _ in first })
     let cloudByKey = Dictionary(
       workspace.cloudChats.map { (Self.key($0), $0) }, uniquingKeysWith: { first, _ in first })
+    let projects = ChatList.projectNames(all.filter { !$0.archived })
     List(selection: $selection) {
-      chips(projects: ChatList.projectNames(all.filter { !$0.archived }))
-        .chatsRow(minHeight: 0).padding(.vertical, 4)
       if showsConnectionBanner {
         ConnectionBanner(workspace: workspace).chatsRow(minHeight: 0).padding(.vertical, 4)
       }
@@ -146,6 +145,11 @@ struct ChatsListView: View {
       }
     }
     .tint(.primary)
+    // The view chip stays above the list: a menu inside a selectable list row won't open.
+    .topBar {
+      chips(projects: projects)
+        .padding(.horizontal, 16).padding(.top, 2).padding(.bottom, 6)
+    }
     .safeAreaInset(edge: .bottom) { askField }
     .confirmationDialog(
       cloudConfirmation?.action == .archive ? "Archive cloud workspace?" : "Pause cloud workspace?",
@@ -172,22 +176,25 @@ struct ChatsListView: View {
 
   // MARK: Header
 
+  /// One choice in the view menu, checked when it is the current one.
+  private func choice(_ option: ChatsView, symbol: String) -> some View {
+    Button {
+      view = option
+    } label: {
+      Label(option.title, systemImage: view == option ? "checkmark" : symbol)
+    }
+  }
+
   private func chips(projects: [String]) -> some View {
     HStack(spacing: 8) {
       Menu {
-        Picker("Show", selection: $view) {
-          Label("All chats", systemImage: "bubble.left.and.bubble.right").tag(ChatsView.all)
-        }
+        Section { choice(.all, symbol: "bubble.left.and.bubble.right") }
         if !projects.isEmpty {
-          Picker("Projects", selection: $view) {
-            ForEach(projects, id: \.self) { name in
-              Label(name, systemImage: "folder").tag(ChatsView.project(name))
-            }
+          Section("Projects") {
+            ForEach(projects, id: \.self) { name in choice(.project(name), symbol: "folder") }
           }
         }
-        Picker("Archive", selection: $view) {
-          Label("Archived", systemImage: "archivebox").tag(ChatsView.archived)
-        }
+        Section { choice(.archived, symbol: "archivebox") }
       } label: {
         FilterChip(title: view.title, prominent: true, showsChevron: true)
       }
@@ -629,5 +636,16 @@ extension View {
     frame(minHeight: minHeight)
       .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
       .listRowSeparator(.hidden).listRowBackground(Color.clear)
+  }
+}
+
+extension View {
+  /// Pins controls under the navigation bar, inside its scroll edge effect where available.
+  @ViewBuilder func topBar<Bar: View>(@ViewBuilder _ bar: () -> Bar) -> some View {
+    if #available(iOS 26, macOS 26, *) {
+      safeAreaBar(edge: .top, spacing: 0, content: bar)
+    } else {
+      safeAreaInset(edge: .top, spacing: 0) { bar().background(AppTheme.surface) }
+    }
   }
 }

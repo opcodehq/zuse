@@ -8,9 +8,10 @@ final class NativeMacTests: XCTestCase {
     let composer = app.descendants(matching: .any).matching(identifier: "chat-composer").firstMatch
     XCTAssertTrue(composer.waitForExistence(timeout: 20))
     XCTAssertFalse(app.buttons["Send message"].isEnabled)
+    // Settings live in the More tab.
     app.typeKey(",", modifierFlags: .command)
-    XCTAssertTrue(app.buttons["Sign in to Zuse"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.staticTexts["Appearance"].exists)
+    XCTAssertTrue(app.staticTexts["Appearance"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts["Sign in"].exists)
     let screenshot = XCTAttachment(screenshot: app.screenshot())
     screenshot.name = "Native Mac settings"
     screenshot.lifetime = .keepAlways

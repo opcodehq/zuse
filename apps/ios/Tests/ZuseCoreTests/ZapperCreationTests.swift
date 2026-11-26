@@ -40,6 +40,8 @@ import Testing
   draft.model = "sonnet"
   let command = try #require(draft.command(homeDeviceID: "mac", repositoryDeviceID: "studio"))
   #expect(command.zapperId == "z1" && command.expectedRevision == nil)
+  // Every attempt sends the same envelope.
+  #expect(draft.command(homeDeviceID: "mac", repositoryDeviceID: "studio") == command)
   let payload = try command.payload()
   #expect(payload["expectedRevision"] == nil)
   let action = try #require(payload["action"])

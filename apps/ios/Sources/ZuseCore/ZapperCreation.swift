@@ -4,6 +4,8 @@ import Foundation
 public struct ZapperDraft: Sendable, Hashable {
   /// Client-minted, like the desktop form; also seeds the default look.
   public let zapperID: String
+  /// One envelope for every attempt, so a retry after a lost answer cannot create twice.
+  public let commandID: String
   public var name: String
   public var purpose: String
   public var projectID: String?
@@ -14,11 +16,13 @@ public struct ZapperDraft: Sendable, Hashable {
   public var maxFollowups: Int
 
   public init(
-    zapperID: String = UUID().uuidString.lowercased(), name: String = "", purpose: String = "",
+    zapperID: String = UUID().uuidString.lowercased(),
+    commandID: String = UUID().uuidString.lowercased(), name: String = "", purpose: String = "",
     projectID: String? = nil, harness: String? = nil, model: String? = nil,
     avatar: ZapperAvatar? = nil, maxConcurrentWorkers: Int = 4, maxFollowups: Int = 3
   ) {
     self.zapperID = zapperID
+    self.commandID = commandID
     self.name = name
     self.purpose = purpose
     self.projectID = projectID
@@ -77,7 +81,9 @@ public struct ZapperDraft: Sendable, Hashable {
   /// The `create` command for this draft. `create` carries no expected revision.
   public func command(homeDeviceID: String, repositoryDeviceID: String) -> ZapperCommand? {
     config(homeDeviceID: homeDeviceID, repositoryDeviceID: repositoryDeviceID).map {
-      ZapperCommand(zapperId: zapperID, expectedRevision: nil, action: .create(config: $0))
+      ZapperCommand(
+        zapperId: zapperID, expectedRevision: nil, action: .create(config: $0),
+        commandId: commandID)
     }
   }
 }

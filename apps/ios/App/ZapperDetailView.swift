@@ -635,8 +635,9 @@ struct ZapperDetailView: View {
         }
       }
     } label: {
-      Label("Manage", systemImage: "ellipsis.circle")
+      Label("Manage", systemImage: "ellipsis")
     }
+    .tint(.primary)
     .disabled(store.busy[zapper.id] != nil)
     .accessibilityIdentifier("zapper-manage")
   }
@@ -759,7 +760,7 @@ private struct ZapperHero: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       HStack(spacing: 14) {
-        ZapperAvatarView(zapper: zapper, size: 52)
+        ZapperTile(zapper: zapper, size: 56)
         VStack(alignment: .leading, spacing: 3) {
           Text(zapper.config.name).font(.title3.weight(.bold)).lineLimit(2)
           HStack(spacing: 6) {

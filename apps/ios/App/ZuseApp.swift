@@ -356,6 +356,7 @@ struct WorkspaceView: View {
       }
       .onChange(of: selection) {
         if selection != nil && newChat != nil { closeNewChat() }
+        if selection != nil { chatsColumn = .detail }
         if let selection, selection.id != workspace.selectedSession?.id {
           workspace.selectSession(selection)
         }
@@ -443,11 +444,23 @@ struct WorkspaceView: View {
 
   private var tabs: some View {
     TabView(selection: $tab) {
-      Tab("Zappers", systemImage: "bolt", value: AppTab.zappers) { zappersTab }
-        .badge(needsYouCount)
-      Tab("Chats", systemImage: "bubble.left.and.bubble.right", value: AppTab.chats) { chatsTab }
-      Tab("Pull requests", systemImage: "arrow.triangle.pull", value: AppTab.prs) {
+      Tab(value: AppTab.zappers) {
+        zappersTab
+      } label: {
+        Label("Zappers", systemImage: "bolt").environment(\.symbolVariants, .none)
+      }
+      .badge(needsYouCount)
+      Tab(value: AppTab.chats) {
+        chatsTab
+      } label: {
+        Label("Chats", systemImage: "bubble.left.and.bubble.right")
+          .environment(\.symbolVariants, .none)
+      }
+      Tab(value: AppTab.prs) {
         NavigationStack { PullRequestsTab(workspace: workspace) }
+      } label: {
+        Label("Pull requests", systemImage: "arrow.triangle.pull")
+          .environment(\.symbolVariants, .none)
       }
       Tab(value: AppTab.more) {
         moreTab
@@ -457,6 +470,7 @@ struct WorkspaceView: View {
         } icon: {
           AccountTabIcon.image(workspace.account)
         }
+        .environment(\.symbolVariants, .none)
       }
       Tab(value: AppTab.search, role: .search) { searchTab }
     }
@@ -504,7 +518,9 @@ struct WorkspaceView: View {
         NewChatSetupView(
           workspace: workspace, initialCloud: route.cloud, initialPrompt: route.prompt,
           showsClose: !isCompact, close: closeNewChat
-        ).id(route.id)
+        )
+        .id(route.id)
+        .hidesTabBarWhenCompact()
       } else if let session = selection {
         chatScreen(session)
       } else {
@@ -653,6 +669,7 @@ struct WorkspaceView: View {
     .onPreferenceChange(ComposerHeightKey.self) { composerHeight = $0 }
     .navigationTitle(session.title.isEmpty ? "Chat" : session.title)
     .compactNavigationTitle()
+    .hidesTabBarWhenCompact()
     // Each stack shows its own chat; the one transcript follows whichever is on screen.
     .onAppear {
       if workspace.selectedSession?.id != session.id { workspace.selectSession(session) }

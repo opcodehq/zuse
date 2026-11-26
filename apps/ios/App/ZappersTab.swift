@@ -320,10 +320,11 @@ struct NewZapperSheet: View {
             if draft.projectID == nil { Text("Choose").tag(String?.none) }
             ForEach(projects) { project in Text(project.name).tag(String?.some(project.id)) }
           }
+          .tint(.secondary)
           LabeledContent("Runs on") {
             Text(workspace.connectedComputer ?? "This computer").foregroundStyle(.secondary)
           }
-          modelPicker
+          modelPicker.tint(.secondary)
         } footer: {
           Text("The Zapper and its threads work in this project’s repository.")
         }

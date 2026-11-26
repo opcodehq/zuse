@@ -248,6 +248,8 @@ struct UnconfirmedZapperCommand: Identifiable, Equatable {
       members = ZapperMembership.members(zappers)
       return zapper.id
     }
+    // An earlier attempt whose answer was lost may already have landed.
+    if zappers.contains(where: { $0.id == draft.zapperID }) { return draft.zapperID }
     guard let rpc else { throw ClientError("Connect to your computer to create a Zapper.") }
     guard available else {
       throw ClientError("Update Zuse on this computer to use Zappers.")
