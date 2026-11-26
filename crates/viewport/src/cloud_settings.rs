@@ -141,10 +141,10 @@ pub fn account_gate(action: impl IntoElement, error: Option<&str>, cx: &gpui::Ap
 }
 
 pub fn sign_in_button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
-    let lime = palette::tone(
+    let lime = palette::accent_or(palette::tone(
         hsla(83. / 360., 0.72, 0.46, 1.),
         hsla(83. / 360., 0.74, 0.43, 1.),
-    );
+    ));
     let label = label.into();
     div()
         .id(id)

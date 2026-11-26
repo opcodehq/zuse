@@ -51,10 +51,10 @@ impl Kind {
     }
     fn color(self) -> Hsla {
         match self {
-            Kind::Tasks => palette::tone(
+            Kind::Tasks => palette::accent_or(palette::tone(
                 hsla(83. / 360., 0.72, 0.46, 1.),
                 hsla(83. / 360., 0.74, 0.40, 1.),
-            ),
+            )),
             Kind::Builds => palette::tone(
                 hsla(190. / 360., 0.55, 0.55, 1.),
                 hsla(190. / 360., 0.60, 0.38, 1.),

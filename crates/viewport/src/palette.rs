@@ -28,6 +28,10 @@ const BRAND_GREEN: u32 = 0x89ca21;
 pub fn set_accent(accent: Option<gpui::Hsla>) {
     ACCENT.set(accent);
 }
+/// Return the selected accent, or the authored color for the stock theme.
+pub fn accent_or(default: gpui::Hsla) -> gpui::Hsla {
+    ACCENT.get().unwrap_or(default)
+}
 pub fn set_light(light: bool) {
     LIGHT.set(light);
 }
@@ -90,8 +94,11 @@ mod accent_tests {
         let accent = gpui::hsla(0.6, 0.5, 0.5, 1.0);
         set_accent(Some(accent));
         assert_eq!(rgb(BRAND_GREEN), gpui::Rgba::from(accent));
+        assert_eq!(accent_or(gpui::hsla(0., 0., 0., 1.)), accent);
         assert_eq!(rgb(0x123456), gpui::rgb(0x123456));
         set_accent(None);
         assert_eq!(rgb(BRAND_GREEN), gpui::rgb(BRAND_GREEN));
+        let fallback = gpui::hsla(0.2, 0.4, 0.5, 1.);
+        assert_eq!(accent_or(fallback), fallback);
     }
 }

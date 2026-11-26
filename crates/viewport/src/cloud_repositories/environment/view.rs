@@ -163,10 +163,10 @@ impl RepositoryPanel {
                             .flex_none()
                             .size(px(8.))
                             .rounded_full()
-                            .bg(palette::tone(
+                            .bg(palette::accent_or(palette::tone(
                                 hsla(83. / 360., 0.72, 0.46, 1.),
                                 hsla(83. / 360., 0.74, 0.43, 1.),
-                            )),
+                            ))),
                     )
                     .child(
                         column()

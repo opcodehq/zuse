@@ -1045,8 +1045,6 @@ impl Render for ArchivedPage {
         let search_bar = div()
             .w_full()
             .h(px(32.))
-            .max_w(px(576.))
-            .mb(px(12.))
             .px(px(10.))
             .flex()
             .items_center()
@@ -1115,14 +1113,15 @@ impl Render for ArchivedPage {
                                         widgets::group_with_action(
                                             &theme,
                                             format!("Saved chats · {count}"),
-                                            "Search by title, preview, branch, project or computer.",
+                                            "",
                                             delete_all.map(IntoElement::into_any_element),
                                         )
                                         .child(
                                             widgets::section_card(&theme)
                                                 .mt_0()
+                                                .p(px(12.))
                                                 .child(search_bar)
-                                                .child(body)
+                                                .child(div().mt(px(12.)).child(body))
                                                 .children(pagination),
                                         ),
                                     ),

@@ -20,10 +20,10 @@ pub const INSET: f32 = s::ROW_PAD_X;
 
 /// The Zuse lime, tuned per theme.
 pub fn accent() -> Hsla {
-    palette::tone(
+    palette::accent_or(palette::tone(
         hsla(83. / 360., 0.72, 0.46, 1.),
         hsla(83. / 360., 0.74, 0.40, 1.),
-    )
+    ))
 }
 
 /// The label colour on an [`accent`] fill.
