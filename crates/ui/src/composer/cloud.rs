@@ -1657,6 +1657,20 @@ impl Composer {
                 });
                 return;
             }
+            // The computer a chat is started from is its primary. Only a
+            // created chat claims it; the launch never waits long for it.
+            super::computers::claim_primary(
+                crate::state::CloudTarget {
+                    controller: controller.clone(),
+                    subject: subject.clone(),
+                    organization: organization.clone(),
+                    workspace: id.clone(),
+                    initial_session: initial.clone(),
+                },
+                initial.clone(),
+                cx.background_executor().clone(),
+            )
+            .await;
             if workspace["commandDeliveryMode"] == "server-admitted-v2"
                 && workspace["commandAdmissionVersion"] == 2
             {
@@ -2353,6 +2367,9 @@ mod cached_tests {
             method: &str,
             params: Value,
         ) -> Result<zuse_rpc::RpcReply, zuse_rpc::RpcError> {
+            if method == "ClaimComputerPrimary" {
+                return Ok(zuse_rpc::RpcReply::Value(json!({"deviceId":null})));
+            }
             assert_eq!(method, methods::CLOUD_TASK_COMMAND);
             assert_eq!(params["request"]["commandId"], "sent-once");
             Ok(zuse_rpc::RpcReply::Value(

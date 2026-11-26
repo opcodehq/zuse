@@ -2425,6 +2425,7 @@ impl ToolActivity {
     fn of(call: &ToolCall) -> Self {
         match call {
             ToolCall::Exec { .. } => Self::Command,
+            call if computer_command(call).is_some() => Self::Command,
             ToolCall::ReadFile { .. } => Self::Read,
             ToolCall::Search { .. } | ToolCall::Glob { .. } => Self::Search,
             ToolCall::EditFile { .. } | ToolCall::ApplyPatch { .. } => Self::Edit,
@@ -2454,6 +2455,9 @@ impl ToolActivity {
 
 /// The name a call goes by when no activity verb fits ("Using Todo…").
 fn tool_display_name(call: &ToolCall) -> String {
+    if let Some((command, _)) = computer_command(call) {
+        return command;
+    }
     match call {
         _ if call.is_subagent_spawn() => "Agent".into(),
         ToolCall::Mcp { tool, .. } => match plugin_tool(call) {
@@ -10345,6 +10349,27 @@ impl Transcript {
                 || (compact_shell && tools.iter().any(|t| !t.resolved)));
         let l10n = crate::localization::localizer(cx);
         let label = SharedString::from(summary.label(&l10n, MAX_INLINE_ACTIVITY_CATEGORIES));
+        // A group of one command on the owner's computer says what ran where:
+        // "Ran cargo build · Alex's MacBook Pro", led by that computer's icon.
+        let computer = {
+            let mut calls = tools.iter().filter(|tool| tool.kind == ToolItemKind::Call);
+            match (calls.next(), calls.next()) {
+                (Some(only), None) => computer_command(&only.call).map(|(command, device)| {
+                    let found = computer_label(device.as_deref(), cx);
+                    let verb = if only.resolved { "Ran" } else { "Running" };
+                    let text = match &found {
+                        Some((name, _)) => format!("{verb} {command} · {name}"),
+                        None => format!("{verb} {command}"),
+                    };
+                    (text, found.map_or(crate::icons::LAPTOP, |(_, icon)| icon))
+                }),
+                _ => None,
+            }
+        };
+        let (label, device_icon) = match computer {
+            Some((text, icon)) => (SharedString::from(text), Some(icon)),
+            None => (label, None),
+        };
         let failure: Option<SharedString> = summary.failure_text(&l10n).map(|failure| {
             if label.is_empty() {
                 failure.into()
@@ -10689,6 +10714,14 @@ impl Transcript {
                 .when(agent_group, |header| {
                     header.child(agent_avatar_stack(agent_count, agent_brand, theme))
                 })
+                .when_some(device_icon, |header, icon| {
+                    header.child(
+                        crate::icons::icon(icon)
+                            .size(px(13.0))
+                            .flex_none()
+                            .text_color(theme.text_muted),
+                    )
+                })
                 .when(!agent_group, |header| {
                     header.child(
                         crate::icons::icon(activity_icon)
@@ -10999,9 +11032,12 @@ impl Transcript {
                     .flex_none()
                     .flex()
                     .flex_row()
-                    .when(collapses || tool.kind == ToolItemKind::Thought, |row| {
-                        row.child(activity_row_icon(tool, theme))
-                    })
+                    .when(
+                        collapses
+                            || tool.kind == ToolItemKind::Thought
+                            || computer_command(&tool.call).is_some(),
+                        |row| row.child(activity_row_icon(tool, theme, cx)),
+                    )
                     .child(card)
                     .into_any_element();
                 reveal_tool_row(row, row_height, reveal)
@@ -11837,6 +11873,7 @@ fn tool_icon_path(call: &ToolCall) -> &'static str {
         call if is_agent_call(call) => crate::icons::TOOL_AGENT,
         ToolCall::Unknown { name, .. } if name == "Wait for agents" => crate::icons::TOOL_AGENT,
         call if zuse_protocol::view::is_zapper_call(call) => crate::icons::TOOL_ZAPPER,
+        call if computer_command(call).is_some() => crate::icons::DITHER_TERMINAL,
         ToolCall::Mcp { .. } => crate::icons::DITHER_PLUG,
         ToolCall::Unknown { .. } => crate::icons::TOOL_GENERIC,
     }
@@ -12211,6 +12248,15 @@ fn chip_header_row(
     } else {
         chip_label(tool, live)
     };
+    // "cargo build · Alex's MacBook Pro" for a command on another computer.
+    let detail = match (tool.kind == ToolItemKind::Call)
+        .then(|| computer_command(&tool.call))
+        .flatten()
+        .and_then(|(_, device)| computer_label(device.as_deref(), cx))
+    {
+        Some((name, _)) => format!("{detail} · {name}"),
+        None => detail,
+    };
     let file_path = match &tool.call {
         ToolCall::ReadFile { path }
         | ToolCall::WriteFile { path, .. }
@@ -12429,6 +12475,14 @@ fn chip_label(tool: &ToolItem, live: bool) -> (SharedString, String) {
     match tool.kind {
         ToolItemKind::Thought => ("Thinking".into(), String::new()),
         ToolItemKind::Note => ("Wrote".into(), note_chip_detail(tool)),
+        ToolItemKind::Call if let Some((command, _)) = computer_command(&tool.call) => {
+            let label = if live && !tool.resolved {
+                "Running"
+            } else {
+                "Ran"
+            };
+            (label.into(), command)
+        }
         // A plugin call names the plugin and what it did: "Linear  List issues".
         ToolItemKind::Call if let Some(call) = plugin_tool(&tool.call) => {
             (call.plugin.into(), call.action)
@@ -12747,12 +12801,19 @@ fn reveal_tool_row(row: AnyElement, height: f32, progress: f32) -> AnyElement {
 }
 
 /// A fixed column keeps activity glyphs and labels aligned when details open.
-fn activity_row_icon(tool: &ToolItem, theme: &Theme) -> gpui::Div {
+fn activity_row_icon(tool: &ToolItem, theme: &Theme, cx: &gpui::App) -> gpui::Div {
     let tint = if tool.is_error {
         activity_failure_color(theme)
     } else {
         theme.text_muted
     };
+    // A command on one of the owner's computers leads with that computer.
+    let device = (tool.kind == ToolItemKind::Call)
+        .then(|| computer_command(&tool.call))
+        .flatten()
+        .map(|(_, device)| {
+            computer_label(device.as_deref(), cx).map_or(crate::icons::LAPTOP, |(_, icon)| icon)
+        });
     let logo = (tool.kind == ToolItemKind::Call)
         .then(|| plugin_tool_logo(&tool.call))
         .flatten();
@@ -12770,13 +12831,53 @@ fn activity_row_icon(tool: &ToolItem, theme: &Theme) -> gpui::Div {
         .text_color(tint)
         .into_any_element(),
     };
+    let leading = device.map(|path| {
+        crate::icons::icon(path)
+            .size(px(ACTIVITY_ICON_SIZE))
+            .text_color(tint)
+            .mr(px(4.0))
+    });
+    let width = ACTIVITY_ICON_SIZE
+        + ACTIVITY_TEXT_GAP
+        + if device.is_some() {
+            ACTIVITY_ICON_SIZE + 4.0
+        } else {
+            0.0
+        };
     div()
-        .w(px(ACTIVITY_ICON_SIZE + ACTIVITY_TEXT_GAP))
+        .w(px(width))
         .h(px(CHIP_HEIGHT))
         .flex_none()
         .flex()
         .items_center()
+        .children(leading)
         .child(icon)
+}
+
+/// A command an agent ran on one of the owner's computers: what it ran,
+/// and the computer it named (none means the chat's own computer).
+pub(crate) fn computer_command(call: &ToolCall) -> Option<(String, Option<String>)> {
+    let (name, input) = match call {
+        ToolCall::Mcp { tool, input, .. } => (tool.as_str(), input.as_ref()),
+        ToolCall::Unknown { name, input } => (name.as_str(), input.as_ref()),
+        _ => return None,
+    };
+    let tool = name.rsplit("__").next().unwrap_or(name);
+    if !matches!(tool, "run_on_computer" | "run_computer_task") {
+        return None;
+    }
+    let input = input.cloned().unwrap_or_default();
+    let command = input["command"]
+        .as_str()
+        .map(str::to_owned)
+        .unwrap_or_else(|| "Computer task".to_owned());
+    Some((command, input["device_id"].as_str().map(str::to_owned)))
+}
+
+/// The name and icon of a command's computer, from the account's computers.
+fn computer_label(device: Option<&str>, cx: &gpui::App) -> Option<(String, &'static str)> {
+    cx.try_global::<crate::composer::computers::ComputerDirectory>()?
+        .label(device)
 }
 
 /// A plain activity row, or a card for a subagent without a linked document.
@@ -12795,9 +12896,10 @@ fn tool_chip(
         .flex_none()
         .flex()
         .flex_row()
-        .when(grouped || tool.kind == ToolItemKind::Thought, |row| {
-            row.child(activity_row_icon(tool, theme))
-        })
+        .when(
+            grouped || tool.kind == ToolItemKind::Thought || computer_command(&tool.call).is_some(),
+            |row| row.child(activity_row_icon(tool, theme, cx)),
+        )
         .child(
             div()
                 .h(px(CHIP_CARD_HEIGHT))
@@ -13333,6 +13435,65 @@ impl Render for Transcript {
 
 #[cfg(test)]
 mod tests {
+    /// A command on one of the owner's computers reads "Ran cargo build ·
+    /// <computer>", leading with that computer's icon; without a device ID
+    /// it ran on the chat's own computer.
+    #[gpui::test]
+    fn computer_commands_name_their_computer(cx: &mut gpui::TestAppContext) {
+        use crate::composer::computers::{Computer, ComputerDirectory};
+        let computer = |id: &str, name: &str, platform: &str| Computer {
+            device_id: id.into(),
+            name: name.into(),
+            platform: platform.into(),
+            ..Default::default()
+        };
+        cx.update(|cx| {
+            cx.set_global(ComputerDirectory {
+                computers: vec![
+                    computer("mac", "Alex's MacBook Pro", "macos"),
+                    computer("box", "Build box", "linux"),
+                ],
+                primary: Some("mac".into()),
+            })
+        });
+        let call = |name: &str, input: serde_json::Value| ToolCall::Mcp {
+            server: "zuse".into(),
+            tool: name.into(),
+            input: Some(input),
+        };
+        let own = call(
+            "run_on_computer",
+            serde_json::json!({"command":"cargo build"}),
+        );
+        let other = ToolCall::Unknown {
+            name: "mcp__zuse__run_on_computer".into(),
+            input: Some(serde_json::json!({"command":"make","device_id":"box"})),
+        };
+        assert_eq!(
+            computer_command(&own),
+            Some(("cargo build".to_owned(), None))
+        );
+        assert_eq!(
+            computer_command(&other),
+            Some(("make".to_owned(), Some("box".to_owned())))
+        );
+        assert_eq!(
+            computer_command(&call("list_attached_computers", serde_json::json!({}))),
+            None
+        );
+        assert_eq!(tool_icon_path(&own), crate::icons::DITHER_TERMINAL);
+        cx.update(|cx| {
+            assert_eq!(
+                computer_label(None, cx),
+                Some(("Alex's MacBook Pro".to_owned(), crate::icons::LAPTOP))
+            );
+            assert_eq!(
+                computer_label(Some("box"), cx),
+                Some(("Build box".to_owned(), crate::icons::MONITOR))
+            );
+        });
+    }
+
     #[test]
     fn zapper_tool_calls_get_the_zapper_icon() {
         let mcp = |server: &str, tool: &str| ToolCall::Mcp {

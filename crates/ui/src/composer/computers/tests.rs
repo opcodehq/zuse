@@ -106,9 +106,7 @@ fn account(label: &str, _: &Value) -> Result<Value, &'static str> {
             {"deviceId":"mac","name":"Zed's Mac","platform":"macos","connected":true,"alwaysAllowed":false},
             {"deviceId":"other-mac","name":"Alex's Mac","platform":"macos","connected":true,"alwaysAllowed":false}
         ]),
-        "attached" => {
-            json!([{"deviceId":"mac","role":"primary"},{"deviceId":"box","role":"secondary"}])
-        }
+        "primary" => json!({"deviceId":"mac"}),
         "pending" => json!([
             {"id":"r1","deviceId":"mac","computerName":"Zed's Mac","osUser":"alex","shell":"/bin/sh",
              "cwd":"/Users/alex","command":"cargo test","timeoutMs":600000,"createdAt":1},
@@ -124,108 +122,16 @@ fn account(label: &str, _: &Value) -> Result<Value, &'static str> {
 }
 
 #[gpui::test]
-fn the_chip_belongs_to_cloud_chats_only(cx: &mut gpui::TestAppContext) {
-    let runtime = runtime();
-    let _entered = runtime.enter();
-    let (local, _, mut requests, _) = cloud_composer(cx, false);
-    settle(cx, &runtime);
-    local.update(cx, |c, cx| {
-        let theme = Theme::of(cx).clone();
-        assert!(c.render_computers_chip(&theme, cx).is_none());
-    });
-    assert!(
-        next(&mut requests).is_none(),
-        "a local chat asks for nothing"
-    );
-    let (cloud, _, mut requests, replies) = cloud_composer(cx, true);
-    serve(cx, &runtime, &mut requests, &replies, account);
-    cloud.update(cx, |c, cx| {
-        let theme = Theme::of(cx).clone();
-        assert!(c.render_computers_chip(&theme, cx).is_some());
-    });
-}
-
-#[gpui::test]
-fn this_computer_is_first_by_enrollment_not_by_name(cx: &mut gpui::TestAppContext) {
-    let runtime = runtime();
-    let _entered = runtime.enter();
-    let (composer, _, mut requests, replies) = cloud_composer(cx, true);
-    let asked = serve(cx, &runtime, &mut requests, &replies, account);
-    assert!(asked.iter().all(|r| r["method"] == "ComputerBridgeStatus"
-        || (r["params"]["workspaceId"] == "task"
-            && r["params"]["chatId"] == "session"
-            && r["params"]["expectedAccountId"] == "owner")));
-    composer.read_with(cx, |c, _| {
-        let rows = c.computer_rows();
-        let order: Vec<(&str, bool, bool, bool)> = rows
-            .iter()
-            .map(|r| {
-                (
-                    r.computer.device_id.as_str(),
-                    r.this_computer,
-                    r.primary,
-                    r.secondary,
-                )
-            })
-            .collect();
-        // "Alex's Mac" shares the connector's name but is another enrollment.
-        assert_eq!(
-            order,
-            vec![
-                ("mac", true, true, false),
-                ("box", false, false, true),
-                ("other-mac", false, false, false)
-            ]
-        );
-        assert_eq!(c.computers.pending.len(), 2);
-    });
-}
-
-#[gpui::test]
-fn attach_names_the_chat_and_device_and_undoes_a_refusal(cx: &mut gpui::TestAppContext) {
-    let runtime = runtime();
-    let _entered = runtime.enter();
-    let (composer, _, mut requests, replies) = cloud_composer(cx, true);
-    serve(cx, &runtime, &mut requests, &replies, account);
-    composer.update(cx, |c, cx| c.set_computer_attached("other-mac", true, cx));
-    composer.read_with(cx, |c, _| {
-        assert!(c.computers.secondary("other-mac"), "optimistic");
-    });
-    let asked = serve(cx, &runtime, &mut requests, &replies, |label, params| {
-        if label == "attach" {
-            Err("computer offline")
-        } else {
-            account(label, params)
-        }
-    });
-    let attach = asked
-        .iter()
-        .find(|r| r["params"]["action"] == "attach")
-        .expect("attach sent");
-    assert_eq!(attach["params"]["deviceId"], "other-mac");
-    assert_eq!(attach["params"]["workspaceId"], "task");
-    assert_eq!(attach["params"]["chatId"], "session");
-    composer.read_with(cx, |c, _| {
-        let ids: Vec<&str> = c
-            .computers
-            .attached
-            .iter()
-            .map(|a| a.device_id.as_str())
-            .collect();
-        assert_eq!(ids, vec!["mac", "box"]);
-        assert!(c.computers.error.is_some());
-    });
-}
-
-#[gpui::test]
 fn approval_choices_send_their_decision_and_show_the_next_request(cx: &mut gpui::TestAppContext) {
     let runtime = runtime();
     let _entered = runtime.enter();
     let (composer, _, mut requests, replies) = cloud_composer(cx, true);
     serve(cx, &runtime, &mut requests, &replies, account);
     composer.update(cx, |c, cx| {
-        let theme = Theme::of(cx).clone();
-        assert!(c.render_computer_approval(&theme, cx).is_some());
+        assert_eq!(
+            c.computer_request_waiting().map(|p| p.id.as_str()),
+            Some("r1")
+        );
         c.decide_computer_request("r1", "session", cx);
         let waiting: Vec<_> = c
             .computers
@@ -272,13 +178,13 @@ fn replies_for_a_previous_chat_are_ignored(cx: &mut gpui::TestAppContext) {
     let (composer, state, mut requests, replies) = cloud_composer(cx, true);
     settle(cx, &runtime);
     // The first read is in flight when the owner switches chats.
-    let first = next(&mut requests).expect("status read");
+    let first = next(&mut requests).expect("first read");
     state.update(cx, |s, _| s.selected_chat = Some("elsewhere".into()));
     composer.update(cx, |c, cx| c.sync_computers(cx));
     runtime
         .block_on(replies.send(format!(
             "{}\n",
-            json!({"id":first["id"],"ok":account("ComputerBridgeStatus",&Value::Null).unwrap()})
+            json!({"id":first["id"],"ok":account("list",&Value::Null).unwrap()})
         )))
         .unwrap();
     // Answer the old chat's remaining reads too; none may land.
@@ -291,7 +197,7 @@ fn replies_for_a_previous_chat_are_ignored(cx: &mut gpui::TestAppContext) {
     });
     assert!(asked.iter().any(|r| r["params"]["chatId"] == "elsewhere"));
     composer.read_with(cx, |c, _| {
-        assert!(c.computers.attached.is_empty());
+        assert!(c.computers.computers.is_empty());
         assert!(c.computers.pending.is_empty());
         assert!(c.computers.runs.is_empty());
     });
@@ -326,13 +232,14 @@ fn sends_claim_this_computer_as_primary_before_the_message(cx: &mut gpui::TestAp
     assert_eq!(asked[0]["params"]["chatId"], "session");
     assert_eq!(asked[0]["params"]["expectedAccountId"], "owner");
     assert!(done.get(), "a refused claim never holds the send");
-    // Without a connector answer (older engine) nothing is claimed.
+    // A send right after opening claims too; it never waits for the first
+    // connector status read.
     let (fresh, _, _, _) = cloud_composer(cx, true);
     assert!(
         fresh
             .read_with(cx, |c, cx| c
                 .primary_claim(&json!({"sessionId":"session"}), cx))
-            .is_none()
+            .is_some()
     );
 }
 
@@ -374,8 +281,70 @@ fn a_send_claims_the_primary_first_and_still_goes_out_when_refused(cx: &mut gpui
     assert_eq!(claim["params"]["chatId"], "session");
 }
 
+/// Escape denies and ⌘/Ctrl+Enter allows once, like a local permission prompt.
 #[gpui::test]
-fn a_full_read_clears_requests_after_the_last_computer_is_detached(cx: &mut gpui::TestAppContext) {
+fn approval_keys_deny_or_allow_once(cx: &mut gpui::TestAppContext) {
+    let runtime = runtime();
+    let _entered = runtime.enter();
+    let (composer, _, mut requests, replies) = cloud_composer(cx, true);
+    serve(cx, &runtime, &mut requests, &replies, account);
+    let key = |text: &str| gpui::KeyDownEvent {
+        keystroke: gpui::Keystroke::parse(text).unwrap(),
+        is_held: false,
+        prefer_character_input: false,
+    };
+    composer.update(cx, |c, cx| {
+        c.on_computer_approval_key(&key("enter"), cx);
+        assert_eq!(
+            c.computer_request_waiting().map(|p| p.id.as_str()),
+            Some("r1"),
+            "plain Enter decides nothing"
+        );
+        c.on_computer_approval_key(&key("escape"), cx);
+        c.on_computer_approval_key(&key("ctrl-enter"), cx);
+        assert!(c.computer_request_waiting().is_none());
+    });
+    let asked = serve(cx, &runtime, &mut requests, &replies, account);
+    let decisions: Vec<(String, String)> = asked
+        .iter()
+        .filter(|r| r["params"]["action"] == "decide")
+        .map(|r| {
+            (
+                r["params"]["requestId"].as_str().unwrap().to_owned(),
+                r["params"]["decision"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        decisions,
+        vec![("r1".into(), "deny".into()), ("r2".into(), "once".into())]
+    );
+}
+
+/// Tool rows name a command's computer; one without an ID ran on the chat's own.
+#[gpui::test]
+fn the_directory_names_a_commands_computer(cx: &mut gpui::TestAppContext) {
+    let runtime = runtime();
+    let _entered = runtime.enter();
+    let (_composer, _, mut requests, replies) = cloud_composer(cx, true);
+    serve(cx, &runtime, &mut requests, &replies, account);
+    cx.update(|cx| {
+        let directory = cx.global::<ComputerDirectory>();
+        assert_eq!(
+            directory.label(None),
+            Some(("Zed's Mac".to_owned(), icons::LAPTOP))
+        );
+        assert_eq!(
+            directory.label(Some("box")),
+            Some(("Build box".to_owned(), icons::MONITOR))
+        );
+        assert_eq!(directory.label(Some("gone")), None);
+    });
+}
+
+/// With nothing waiting, a full read still clears requests that went away.
+#[gpui::test]
+fn a_full_read_clears_requests_that_went_away(cx: &mut gpui::TestAppContext) {
     let runtime = runtime();
     let _entered = runtime.enter();
     let (composer, _, mut requests, replies) = cloud_composer(cx, true);
@@ -388,13 +357,12 @@ fn a_full_read_clears_requests_after_the_last_computer_is_detached(cx: &mut gpui
         &mut requests,
         &replies,
         |label, params| match label {
-            "attached" | "pending" | "results" => Ok(json!([])),
+            "pending" | "results" => Ok(json!([])),
             _ => account(label, params),
         },
     );
     composer.read_with(cx, |c, _| {
-        assert!(c.computers.attached.is_empty());
-        assert!(c.computers.pending.is_empty(), "stale approvals stayed");
+        assert!(c.computer_request_waiting().is_none());
         assert!(c.computers.runs.is_empty());
     });
 }
