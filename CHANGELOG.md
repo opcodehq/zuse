@@ -19,6 +19,23 @@
 - A steered Devin turn no longer leaves the running command's chip stuck before the steer.
 - Devin retries reopening a conversation another process still holds for about five seconds before starting a fresh session; if it stays locked, the new session starts without the earlier context.
 
+## 0.27.10 - 2026-11-26
+
+### Added
+
+- Expandable agent activity in the transcript: "Working for…" during a turn and "Worked for…" afterwards, with the work behind the response one click away.
+- Steer an agent's sidekicks mid-turn and see them as subagents; open subagents from the web app.
+
+### Changed
+
+- Easier-to-read chats: softer text contrast, clearer typography and spacing.
+- Sidebar threads are two-line cards with project or branch, PR state, diff size and where the thread runs, plus a Settled section and cleaner project headings.
+- Newly opened files appear first among file tabs, and cloud chat tabs show your first message until the generated title arrives.
+
+### Fixed
+
+- The new chat page keeps your unsent draft (text, files, project, Local or Cloud and model choices) when you switch to another chat and come back.
+
 ## 0.27.9 - 2026-11-25
 
 ### Added
