@@ -308,6 +308,21 @@ impl Authority {
         })))
     }
 
+    pub(crate) async fn verify_bridge_proof(
+        &self,
+        path: &str,
+        token: &str,
+        proof: &str,
+    ) -> Result<String, ApiError> {
+        let now = chrono::Utc::now().timestamp_millis();
+        let target = format!("{}{path}", self.signer.issuer());
+        let proof = device_proof::verify(proof, "POST", &target, Some(token), now)?;
+        self.store
+            .consume_device_proof(&proof.thumbprint, &proof.jti, proof.issued_at, now)
+            .await?;
+        Ok(proof.thumbprint)
+    }
+
     pub async fn mint(&self, account: &str, proof: &str) -> Result<Value, ApiError> {
         let now = chrono::Utc::now().timestamp_millis();
         let target = format!("{}/v1/client/dpop-token", self.signer.issuer());

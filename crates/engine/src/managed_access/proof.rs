@@ -5,13 +5,16 @@ use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use p256::{ecdsa::SigningKey, pkcs8::EncodePrivateKey};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-pub(super) struct ProofKey {
+pub(crate) struct ProofKey {
     key: EncodingKey,
     pub jwk: Value,
 }
 impl ProofKey {
     pub fn new() -> Result<Self> {
         let secret = SigningKey::random(&mut rand_core::OsRng);
+        Self::from_signing_key(secret)
+    }
+    pub(crate) fn from_signing_key(secret: SigningKey) -> Result<Self> {
         let point = secret.verifying_key().to_encoded_point(false);
         let jwk = json!({"kty":"EC","crv":"P-256","x":URL_SAFE_NO_PAD.encode(point.x().ok_or(Error::Identity)?),"y":URL_SAFE_NO_PAD.encode(point.y().ok_or(Error::Identity)?)});
         let der = secret.to_pkcs8_der().map_err(|_| Error::Identity)?;

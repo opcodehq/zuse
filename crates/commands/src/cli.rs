@@ -83,6 +83,17 @@ pub enum Command {
         name: Option<String>,
     },
     Unlink,
+    /// Enroll this computer for attachment to your private cloud chats.
+    Bridge,
+    BridgeEnroll {
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Offer this exact executable and arguments to your attached cloud chats until interrupted.
+    BridgeTask {
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        argv: Vec<String>,
+    },
     Status,
     Login {
         /// For SSH sessions and machines without a browser.

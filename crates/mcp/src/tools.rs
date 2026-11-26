@@ -303,6 +303,40 @@ fn catalog() -> Vec<ToolDef> {
     }
     for (name, description, properties, required) in [
         (
+            "list_attached_computers",
+            "List online computers attached to this chat, including deviceId, shell, user and default working directory.",
+            json!({}),
+            json!([]),
+        ),
+        (
+            "run_on_computer",
+            "Run a command on an explicitly attached computer. Owner approval follows that computer's once, chat, or always grant. Returns a request ID. Read computer_task_results for completion.",
+            json!({"device_id":{"type":"string"},"command":{"type":"string"},"cwd":{"type":"string"}}),
+            json!(["device_id", "command"]),
+        ),
+        (
+            "list_computer_tasks",
+            "List online tasks offered by computers attached to this cloud chat. Each task has fixed executable arguments and a working directory selected on its host.",
+            json!({}),
+            json!([]),
+        ),
+        (
+            "run_computer_task",
+            "Request an offered task by UUID. The owner approves it in Computers. Returns the request ID. Never automatically retry a submission after disconnect.",
+            json!({"task":{"type":"string","format":"uuid"}}),
+            json!(["task"]),
+        ),
+        (
+            "computer_task_results",
+            "Read recent computer task results for this chat, including running and unknown outcomes.",
+            json!({}),
+            json!([]),
+        ),
+    ] {
+        tools.push(ToolDef{name,description,input_schema:json!({"type":"object","properties":properties,"required":required,"additionalProperties":false})});
+    }
+    for (name, description, properties, required) in [
+        (
             "plugins_list",
             "List connected plugins for this agent's session, including hosted plugins and local MCP servers on this computer.",
             json!({}),
@@ -945,6 +979,34 @@ impl Tools {
                     .await
             }
             PLUGINS_CONNECT => self.plugins_connect(parse(args)?).await,
+            "list_computer_tasks"
+            | "run_computer_task"
+            | "computer_task_results"
+            | "list_attached_computers"
+            | "run_on_computer" => {
+                let chat = self
+                    .zuse
+                    .origin()
+                    .chat_id
+                    .as_deref()
+                    .ok_or_else(|| "Computer tasks require an originating chat".to_owned())?;
+                let request = match name {
+                    "list_computer_tasks" | "list_attached_computers" => json!({"action":"list"}),
+                    "run_on_computer" => {
+                        json!({"action":"command","device_id":args["device_id"],"command":args["command"],"cwd":args["cwd"],"request_id":uuid::Uuid::new_v4().to_string()})
+                    }
+                    "computer_task_results" => json!({"action":"results"}),
+                    _ => {
+                        json!({"action":"run","request_id":uuid::Uuid::new_v4().to_string(),"task":args["task"].as_str().ok_or_else(||"Specify the task UUID".to_owned())?})
+                    }
+                };
+                self.zuse
+                    .call_once(
+                        zuse_protocol::computer_tasks::METHOD,
+                        json!({"chatId":chat,"request":request}),
+                    )
+                    .await
+            }
             "plugins_list" | "plugins_search" | "plugins_schema" | "plugins_call" => {
                 self.plugin_tool(name, args).await
             }

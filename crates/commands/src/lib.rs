@@ -49,6 +49,20 @@ pub fn run(global: Global, command: Command, l10n: &Localizer) -> anyhow::Result
             l10n,
         )),
         Command::Link { name } => block_on(remote::run(remote::Action::Link { name }, port, l10n)),
+        Command::Bridge => block_on(zuse_engine::computer_bridge::serve_computer(
+            &paths::data_dir(),
+        )),
+        Command::BridgeTask { argv } => block_on(zuse_engine::computer_bridge::serve_task(
+            &paths::data_dir(),
+            argv,
+        )),
+        Command::BridgeEnroll { name } => block_on(async {
+            let label =
+                name.unwrap_or_else(|| gethostname::gethostname().to_string_lossy().into_owned());
+            let id = zuse_engine::computer_bridge::enroll(&paths::data_dir(), &label).await?;
+            println!("Enrolled {label} ({id}).");
+            Ok(())
+        }),
         Command::Unlink => block_on(remote::run(remote::Action::Unlink, port, l10n)),
         Command::Status => {
             let healthy = block_on(async {
