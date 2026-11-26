@@ -997,6 +997,7 @@ pub struct AppState {
     pub chats: Vec<Chat>,
     /// Created conversations awaiting their first registry watch frame.
     pub(crate) pending_thread_conversations: HashMap<String, Chat>,
+    pub(crate) runtime_generation: u64,
     pending_chat_archives: HashMap<String, PendingChatArchive>,
     next_archive_request_id: u64,
     pub(crate) chat_configuration: crate::chat_configuration::ChatConfiguration,
@@ -1241,6 +1242,7 @@ impl AppState {
             spaces: Vec::new(),
             chats: Vec::new(),
             pending_thread_conversations: HashMap::new(),
+            runtime_generation: 0,
             pending_chat_archives: HashMap::new(),
             next_archive_request_id: 0,
             chat_configuration: Default::default(),
@@ -1656,6 +1658,31 @@ impl AppState {
         }
         self.pending_chat_archives.remove(chat_id);
         None
+    }
+
+    /// Reconcile a pending row only with a direct read from its owning host.
+    /// An omitted watch row alone may predate creation.
+    pub(crate) fn reconcile_pending_thread_conversation(
+        &mut self,
+        id: &str,
+        current: Option<Chat>,
+    ) -> bool {
+        let Some(pending) = self.pending_thread_conversations.get(id) else {
+            return false;
+        };
+        if current
+            .as_ref()
+            .is_some_and(|chat| chat.thread_id == pending.thread_id && !chat.archived)
+        {
+            return false;
+        }
+        self.pending_thread_conversations.remove(id);
+        let mut chats = self.chats.clone();
+        chats.retain(|chat| chat.id != id);
+        if let Some(chat) = current {
+            chats.push(chat);
+        }
+        self.apply_chats(chats)
     }
 
     /// Returns whether anything observable changed. The engine re-publishes
@@ -3625,6 +3652,7 @@ impl AppState {
     /// stopped. The next bootstrap must never render rows from the previous
     /// account while the local profile is opening.
     pub fn prepare_runtime_replacement(&mut self, cx: &mut Context<Self>) {
+        self.runtime_generation = self.runtime_generation.wrapping_add(1);
         self.zappers.clear();
         self.zapper_watches.clear();
         self.zappers_loaded.clear();

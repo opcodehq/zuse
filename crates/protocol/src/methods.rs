@@ -21,6 +21,8 @@ pub const CANCEL_INSTALL: &str = "CancelInstall";
 pub const INSTALL_HARNESS: &str = "InstallHarness";
 /// Read the owning host's saved checkpoint and checkout cleanup phase.
 pub const GET_CHAT_ARCHIVE_STATUS: &str = "GetChatArchiveStatus";
+/// Read a conversation directly from its owning host's registry.
+pub const GET_THREAD_CONVERSATION: &str = "GetThreadConversation";
 pub const GET_CUSTOM_ACP_AGENTS: &str = "GetCustomAcpAgents";
 pub const SET_CUSTOM_ACP_AGENT: &str = "SetCustomAcpAgent";
 pub const DELETE_CUSTOM_ACP_AGENT: &str = "DeleteCustomAcpAgent";
@@ -412,6 +414,7 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | crate::custom_acp::catalog::GET
         | crate::custom_acp::catalog::ICON
         | GET_CHAT_ARCHIVE_STATUS
+        | GET_THREAD_CONVERSATION
         | LIST_REFS
         | LIST_FOLDERS
         | crate::project_creation::LIST

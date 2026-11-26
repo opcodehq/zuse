@@ -1852,6 +1852,7 @@ fn forwardable(method: &str) -> bool {
             | methods::DELETE_CUSTOM_ACP_AGENT
             | methods::GET_TITLE_SETTINGS
             | methods::GET_CHAT_ARCHIVE_STATUS
+            | methods::GET_THREAD_CONVERSATION
             | methods::SET_TITLE_SETTINGS
             | methods::SET_HARNESS_ENABLED
             | methods::LIST_MODELS
@@ -3868,6 +3869,19 @@ impl EngineRpc {
                 "checkpoint":record.as_ref().map(|record|&record.checkpoint),
                 "changedPaths":record.as_ref().map(|record|&record.changed_paths).cloned().unwrap_or_default()}),
                 )
+            }
+            methods::GET_THREAD_CONVERSATION => {
+                let request: ChatParams = parse_params(params)?;
+                let chat = self.workspace.chat(&request.chat_id).map_err(failed)?;
+                if chat
+                    .as_ref()
+                    .is_some_and(|chat| chat.device_id != self.doc_host.device_id())
+                {
+                    return Err(RpcError::Failed(
+                        "Conversation belongs to another computer.".into(),
+                    ));
+                }
+                RpcReply::value(&serde_json::json!({ "chat": chat }))
             }
             zuse_protocol::custom_acp::catalog::GET => {
                 #[derive(Deserialize)]
