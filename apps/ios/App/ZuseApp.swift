@@ -507,7 +507,7 @@ struct WorkspaceView: View {
       Tab(value: AppTab.zappers) {
         zappersTab
       } label: {
-        Label("Zappers", systemImage: "bolt").environment(\.symbolVariants, .none)
+        Label("Zappers", image: AppIcon.zapper)
       }
       .badge(needsYouCount)
       Tab(value: AppTab.chats) {
@@ -519,7 +519,7 @@ struct WorkspaceView: View {
       Tab(value: AppTab.prs) {
         PullRequestsTab(workspace: workspace, path: $pullRequestPath)
       } label: {
-        Label("Pull requests", systemImage: "arrow.triangle.pull")
+        Label("Pull requests", image: AppIcon.pullRequest)
           .environment(\.symbolVariants, .none)
       }
       Tab(value: AppTab.more) {
@@ -554,7 +554,7 @@ struct WorkspaceView: View {
         }
         .id(zapperID)
       } else {
-        emptyDetail("Pick a Zapper", symbol: "bolt", detail: "Its conversation opens here.")
+        emptyDetail("Pick a Zapper", symbol: AppIcon.zapper, detail: "Its conversation opens here.")
       }
     }
     .navigationSplitViewStyle(.balanced)
@@ -646,7 +646,11 @@ struct WorkspaceView: View {
 
   private func emptyDetail(_ title: String, symbol: String, detail: String) -> some View {
     ContentUnavailableView {
-      Label(title, systemImage: symbol)
+      Label {
+        Text(title)
+      } icon: {
+        AppIcon(name: symbol, size: 40, weight: .light)
+      }
     } description: {
       Text(detail)
     }

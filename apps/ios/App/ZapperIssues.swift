@@ -152,7 +152,7 @@ struct IssueListRow: View {
         .accessibilityLabel(comments == 1 ? "1 comment" : "\(comments) comments")
       }
       if !issue.pullRequests.isEmpty {
-        Image(systemName: "arrow.triangle.pull").font(.system(size: 12, weight: .medium))
+        AppIcon(name: AppIcon.pullRequest, size: 12, weight: .medium)
           .foregroundStyle(.green).accessibilityLabel("Has a pull request")
       }
       IssuePriorityIcon(priority: issue.details.priority, size: 13)
@@ -489,7 +489,7 @@ struct IssueFilterSheet: View {
               }, selection: $filter.zappers)
           } label: {
             filterRow(
-              "Zapper", icon: "bolt",
+              "Zapper", icon: AppIcon.zapper,
               values: zappers.filter { filter.zappers.contains($0.id) }.map(\.config.name))
           }
         }
@@ -510,7 +510,7 @@ struct IssueFilterSheet: View {
   }
   private func filterRow(_ title: String, icon: String, values: [String]) -> some View {
     HStack(spacing: 12) {
-      Image(systemName: icon).font(.system(size: 15)).foregroundStyle(.secondary).frame(width: 22)
+      AppIcon(name: icon, size: 15).foregroundStyle(.secondary).frame(width: 22)
       Text(title)
       Spacer(minLength: 8)
       if !values.isEmpty {
@@ -622,7 +622,11 @@ struct ZapperIssueView: View {
     .toolbar {
       ToolbarItem(placement: .primaryAction) {
         Menu {
-          Button("Open \(zapper.config.name)", systemImage: "bolt") { push(.overview(zapper.id)) }
+          Button {
+            push(.overview(zapper.id))
+          } label: {
+            Label("Open \(zapper.config.name)", image: AppIcon.zapper)
+          }
           Button("Copy title", systemImage: "doc.on.doc") {
             NativePlatform.copy(issue.code + " " + issue.details.title)
           }
@@ -903,7 +907,7 @@ struct ZapperIssueView: View {
               openPullRequest(url)
             } label: {
               HStack(spacing: 10) {
-                Image(systemName: "arrow.triangle.pull").font(.system(size: 14, weight: .medium))
+                AppIcon(name: AppIcon.pullRequest, size: 14, weight: .medium)
                   .foregroundStyle(.green).frame(width: 18)
                 Text(pull.title.isEmpty ? pullLabel(pull.url) : pull.title)
                   .font(.system(size: 16)).foregroundStyle(.primary).lineLimit(1)
@@ -1200,7 +1204,7 @@ private struct ActivityRow: View {
       .padding(.vertical, 2)
     } else {
       HStack(alignment: .firstTextBaseline, spacing: 10) {
-        Image(systemName: symbol).font(.system(size: 12, weight: .medium))
+        AppIcon(name: symbol, size: 12, weight: .medium)
           .foregroundStyle(.secondary).frame(width: 18)
         (Text(actor).foregroundStyle(.primary) + Text(" " + summary).foregroundStyle(.secondary))
           .font(.system(size: 14)).lineLimit(2)
@@ -1224,7 +1228,7 @@ private struct ActivityRow: View {
     switch entry.kind {
     case "workerReport": return "bubble.left.and.text.bubble.right"
     case "thread": return "bubble.left.and.bubble.right"
-    case "pullRequest": return "arrow.triangle.pull"
+    case "pullRequest": return AppIcon.pullRequest
     case "closed": return "checkmark.seal"
     case "created": return "plus"
     default: return "pencil"

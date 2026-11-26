@@ -58,7 +58,7 @@ struct ZappersListView: View {
           .accessibilityIdentifier("new-zapper")
         Menu {
           Picker("Show", selection: $filter) {
-            Label("Active", systemImage: "bolt").tag(ArchiveFilter.active)
+            Label("Active", image: AppIcon.zapper).tag(ArchiveFilter.active)
             Label("Archived", systemImage: "archivebox").tag(ArchiveFilter.archived)
             Label("All Zappers", systemImage: "tray.full").tag(ArchiveFilter.all)
           }
@@ -120,7 +120,7 @@ struct ZappersListView: View {
       )
     } else if store.available || store.preview {
       ZappersEmptyState(
-        symbol: "bolt", title: "No Zappers yet",
+        symbol: AppIcon.zapper, title: "No Zappers yet",
         detail:
           "A Zapper looks after one goal for you. It plans the work, starts threads and asks when it needs you."
       ) {
@@ -159,7 +159,7 @@ struct ZappersEmptyState<Action: View>: View {
   @ViewBuilder var action: Action
   var body: some View {
     VStack(spacing: 10) {
-      Image(systemName: symbol).font(.system(size: 34, weight: .light)).foregroundStyle(.tertiary)
+      AppIcon(name: symbol, size: 34, weight: .light).foregroundStyle(.tertiary)
         .padding(.bottom, 4)
       Text(title).font(.title3.weight(.semibold)).multilineTextAlignment(.center)
       Text(detail).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)

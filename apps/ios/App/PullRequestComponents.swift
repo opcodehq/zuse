@@ -285,11 +285,15 @@ struct PullRequestCard<Content: View>: View {
 struct PullRequestUnavailable: View {
   let title: String
   let message: String
-  var symbol = "arrow.triangle.pull"
+  var symbol = AppIcon.pullRequest
   var retry: (() -> Void)?
   var body: some View {
     ContentUnavailableView {
-      Label(title, systemImage: symbol)
+      Label {
+        Text(title)
+      } icon: {
+        AppIcon(name: symbol, size: 40, weight: .light)
+      }
     } description: {
       Text(message)
     } actions: {

@@ -32,7 +32,7 @@ struct PullRequestsTab: View {
 private struct PullRequestsPlaceholder: View {
   var body: some View {
     ZappersEmptyState(
-      symbol: "arrow.triangle.pull", title: "Pull requests",
+      symbol: AppIcon.pullRequest, title: "Pull requests",
       detail: "Connect a computer to see pull requests for its repositories."
     )
     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -41,13 +41,13 @@ private struct PullRequestsPlaceholder: View {
   }
 }
 
-/// The More tab's icon: your initials once signed in, otherwise a person.
+/// The More tab's icon: your initials once signed in, otherwise a circle of dots.
 enum AccountTabIcon {
   @MainActor static func image(_ account: Account) -> Image {
     if account.signedIn, let image = render(account) {
       return Image(nativeImage: image).renderingMode(.original)
     }
-    return Image(systemName: "person.crop.circle")
+    return Image(systemName: "ellipsis.circle")
   }
   @MainActor private static func render(_ account: Account) -> NativeImage? {
     let renderer = ImageRenderer(content: AccountAvatar(account: account, size: 26))
