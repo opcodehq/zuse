@@ -131,6 +131,41 @@ fn device_schema() -> Value {
     json!({ "type": "string", "description": "Host device id or exact name. Omit for the local engine." })
 }
 
+/// The engine request for a computer tool call. Each call gets a new request
+/// ID, so a retried delivery is recognized instead of running twice.
+fn computer_request(name: &str, args: &Value, request_id: uuid::Uuid) -> Result<Value, String> {
+    use zuse_protocol::computer_tasks::MAX_TIMEOUT_SECS;
+    let timeout = match &args["timeout_seconds"] {
+        Value::Null => Value::Null,
+        value => json!(
+            value
+                .as_u64()
+                .filter(|seconds| (1..=u64::from(MAX_TIMEOUT_SECS)).contains(seconds))
+                .ok_or_else(|| format!(
+                    "timeout_seconds must be between 1 and {MAX_TIMEOUT_SECS}"
+                ))?
+        ),
+    };
+    let text = |key: &str| {
+        args[key]
+            .as_str()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| format!("Specify {key}"))
+    };
+    Ok(match name {
+        "list_computer_tasks" => json!({"action":"list"}),
+        "list_attached_computers" => json!({"action":"computers"}),
+        "computer_task_results" => json!({"action":"results"}),
+        "run_on_computer" => {
+            json!({"action":"command","device_id":args["device_id"].as_str().filter(|id| !id.trim().is_empty()),
+            "command":text("command")?,"cwd":args["cwd"].as_str(),"request_id":request_id,
+            "timeout_seconds":timeout})
+        }
+        _ => json!({"action":"run","task":text("task")?,"request_id":request_id,
+            "timeout_seconds":timeout}),
+    })
+}
+
 fn catalog() -> Vec<ToolDef> {
     let mut tools = vec![
         ToolDef {
@@ -304,15 +339,16 @@ fn catalog() -> Vec<ToolDef> {
     for (name, description, properties, required) in [
         (
             "list_attached_computers",
-            "List online computers attached to this chat, including deviceId, shell, user and default working directory.",
+            "List this chat's computers. role is primary (the computer the user is typing on; the default target) or secondary (another of the user's computers attached to the chat). Includes deviceId, name, platform, whether it is online, shell, OS user and default working directory.",
             json!({}),
             json!([]),
         ),
         (
             "run_on_computer",
-            "Run a command on an explicitly attached computer. Owner approval follows that computer's once, chat, or always grant. Returns a request ID. Read computer_task_results for completion.",
-            json!({"device_id":{"type":"string"},"command":{"type":"string"},"cwd":{"type":"string"}}),
-            json!(["device_id", "command"]),
+            "Run a command on the user's computer. Omit device_id to use the primary computer (the one the user is typing on). Pass a secondary's device_id only when the user asked for that computer or the task can only be done there; never as a default or fallback. The owner approves each command unless they already allowed this chat or that computer. Returns a request ID; poll computer_task_results for output and completion. Long builds and tests can ask for up to 3600 seconds (default 600). Never resubmit a request whose outcome is unknown.",
+            json!({"device_id":{"type":"string"},"command":{"type":"string"},"cwd":{"type":"string"},
+                "timeout_seconds":{"type":"integer","minimum":1,"maximum":zuse_protocol::computer_tasks::MAX_TIMEOUT_SECS}}),
+            json!(["command"]),
         ),
         (
             "list_computer_tasks",
@@ -323,12 +359,13 @@ fn catalog() -> Vec<ToolDef> {
         (
             "run_computer_task",
             "Request an offered task by UUID. The owner approves it in Computers. Returns the request ID. Never automatically retry a submission after disconnect.",
-            json!({"task":{"type":"string","format":"uuid"}}),
+            json!({"task":{"type":"string","format":"uuid"},
+                "timeout_seconds":{"type":"integer","minimum":1,"maximum":zuse_protocol::computer_tasks::MAX_TIMEOUT_SECS}}),
             json!(["task"]),
         ),
         (
             "computer_task_results",
-            "Read recent computer task results for this chat, including running and unknown outcomes.",
+            "Read this chat's recent computer requests, newest first. state is pending (waiting for the owner), approved, running (output so far), finished, denied, cancelled or unknown (it may have run; never resubmit it).",
             json!({}),
             json!([]),
         ),
@@ -990,16 +1027,7 @@ impl Tools {
                     .chat_id
                     .as_deref()
                     .ok_or_else(|| "Computer tasks require an originating chat".to_owned())?;
-                let request = match name {
-                    "list_computer_tasks" | "list_attached_computers" => json!({"action":"list"}),
-                    "run_on_computer" => {
-                        json!({"action":"command","device_id":args["device_id"],"command":args["command"],"cwd":args["cwd"],"request_id":uuid::Uuid::new_v4().to_string()})
-                    }
-                    "computer_task_results" => json!({"action":"results"}),
-                    _ => {
-                        json!({"action":"run","request_id":uuid::Uuid::new_v4().to_string(),"task":args["task"].as_str().ok_or_else(||"Specify the task UUID".to_owned())?})
-                    }
-                };
+                let request = computer_request(name, &args, uuid::Uuid::new_v4())?;
                 self.zuse
                     .call_once(
                         zuse_protocol::computer_tasks::METHOD,
@@ -1961,6 +1989,77 @@ fn default_harness(harnesses: &[HarnessInfo]) -> anyhow::Result<HarnessId> {
 
 #[cfg(test)]
 mod tests {
+    /// The engine parses these with the shared protocol type.
+    #[test]
+    fn computer_tool_calls_become_protocol_requests_with_bounded_deadlines() {
+        use serde_json::json;
+        use zuse_protocol::computer_tasks::Request;
+        let id = uuid::Uuid::new_v4();
+        let run = super::computer_request(
+            "run_on_computer",
+            &json!({"device_id":"mac","command":"cargo test","timeout_seconds":1800}),
+            id,
+        )
+        .unwrap();
+        match serde_json::from_value::<Request>(run).unwrap() {
+            Request::Command {
+                device_id,
+                command,
+                cwd,
+                request_id,
+                timeout_seconds,
+            } => {
+                assert_eq!(
+                    (
+                        device_id.as_deref(),
+                        command.as_str(),
+                        cwd,
+                        request_id,
+                        timeout_seconds
+                    ),
+                    (Some("mac"), "cargo test", None, id, Some(1800))
+                );
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        // Without a device the request goes to the chat's primary computer.
+        let default =
+            super::computer_request("run_on_computer", &json!({"command":"ls","cwd":"/tmp"}), id)
+                .unwrap();
+        assert!(matches!(
+            serde_json::from_value::<Request>(default).unwrap(),
+            Request::Command {
+                device_id: None,
+                timeout_seconds: None,
+                cwd: Some(_),
+                ..
+            }
+        ));
+        for bad in [json!(0), json!(3601), json!("600"), json!(-5)] {
+            assert!(
+                super::computer_request(
+                    "run_on_computer",
+                    &json!({"device_id":"mac","command":"ls","timeout_seconds":bad}),
+                    id
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            super::computer_request(
+                "run_on_computer",
+                &json!({"device_id":"mac","command":"  "}),
+                id
+            )
+            .is_err()
+        );
+        let computers = super::computer_request("list_attached_computers", &json!({}), id).unwrap();
+        assert!(matches!(
+            serde_json::from_value::<Request>(computers).unwrap(),
+            Request::Computers
+        ));
+    }
+
     #[test]
     fn workers_get_issue_reporting_without_coordinator_management_tools() {
         let zuse = crate::Zuse::new(

@@ -77,7 +77,7 @@ class DatabaseBootstrapTest(unittest.TestCase):
                 ('b','mac','key3','Mac','macos');
             INSERT INTO api_bridge_attachments VALUES
                 ('a','w','chat','mac'), ('a','w','chat','linux'), ('b','w2','chat','mac');
-            INSERT INTO api_bridge_session_grants SELECT * FROM api_bridge_attachments;
+            INSERT INTO api_bridge_session_grants SELECT owner_id,workspace_id,chat_id,enrollment_id FROM api_bridge_attachments;
             INSERT INTO api_bridge_always_grants VALUES ('a','mac');
             INSERT INTO api_bridge_requests
                 (request_id,owner_id,workspace_id,chat_id,enrollment_id,computer_name,

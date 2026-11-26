@@ -1,12 +1,35 @@
 //! Cloud-chat enrollment uses a dedicated profile key. A Remote Access
 //! invitation and its host key never participate in this protocol.
+//!
+//! A connector offers this computer's shell (or one fixed executable) to the
+//! owner's attached cloud chats over outbound HTTPS. Each command the owner
+//! approves is admitted with a durable receipt before it starts, rechecks its
+//! approval every heartbeat while it runs, and stops its whole process group
+//! on Stop, revocation, detachment, deadline, sign-out or shutdown. A command
+//! whose outcome was never confirmed is never run again.
 use anyhow::{Context, Result, ensure};
 use p256::ecdsa::SigningKey;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use std::{
     io::{Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
+use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
+use zuse_protocol::computer_tasks::{DEFAULT_TIMEOUT_SECS, HEARTBEAT_SECS, MAX_TIMEOUT_SECS};
+
+/// Commands one computer runs at once; later approvals wait their turn.
+const MAX_CONCURRENT: usize = 4;
+/// Bytes kept from the start and the end of each output stream.
+const HEAD_BYTES: usize = 4096;
+const TAIL_BYTES: usize = 8192;
+/// Finished receipts are removed once the server has them; unconfirmed ones
+/// stay this long so their outcome can still be inspected.
+const RECEIPT_RETENTION: Duration = Duration::from_secs(7 * 24 * 3600);
 
 fn signing_key(profile: &Path) -> Result<SigningKey> {
     let dir = profile.join("computer-bridge");
@@ -36,12 +59,45 @@ fn signing_key(profile: &Path) -> Result<SigningKey> {
     SigningKey::from_slice(&data).context("Invalid computer bridge key")
 }
 
-pub async fn enroll(profile: &Path, label: &str) -> Result<String> {
+/// The cloud API origin: HTTPS, or HTTP only on loopback for development.
+fn api_origin() -> Result<String> {
+    origin(&crate::cloud::configured_api_origin())
+}
+
+fn origin(configured: &str) -> Result<String> {
+    let url = reqwest::Url::parse(configured).context("Invalid cloud API address")?;
+    let loopback = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+    ensure!(
+        (url.scheme() == "https" || (url.scheme() == "http" && loopback))
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.path() == "/"
+            && url.query().is_none()
+            && url.fragment().is_none(),
+        "Invalid cloud API address"
+    );
+    Ok(url.origin().ascii_serialization())
+}
+
+/// Enroll this computer's bridge key (standalone CLI). A signed-out profile
+/// first signs in with a code approved on another device.
+pub async fn enroll(
+    profile: &Path,
+    label: &str,
+    show_code: impl Fn(&crate::account::SignInCode),
+) -> Result<String> {
     std::fs::create_dir_all(profile)?;
     let _profile_lock = crate::InstanceLock::acquire(profile)?;
     let account = crate::account::Account::open(profile)?;
+    if account.status().user.is_none() {
+        let (code, signed_in) = account.sign_in_with_code().await?;
+        show_code(&code);
+        signed_in.await?;
+    }
     enroll_account(profile, label, &account).await
 }
+
 async fn enroll_account(
     profile: &Path,
     label: &str,
@@ -52,27 +108,25 @@ async fn enroll_account(
         !label.is_empty() && label.len() <= 128 && !label.chars().any(char::is_control),
         "Invalid computer name"
     );
-    let origin = zuse_remote::normalized_origin(&crate::cloud::configured_api_origin())?;
-    let url = format!("{}/v1/cloud/bridge/computers", origin.trim_end_matches('/'));
-
+    let url = format!("{}/v1/cloud/bridge/computers", api_origin()?);
     let credential = account
         .credential()
         .await
         .context("Sign in to your Zuse account to enroll a computer")?;
-    let key = crate::managed_access::proof::ProofKey::from_signing_key(signing_key(profile)?)?;
-    let proof = key.sign("POST", &url, Some(&credential.access_token))?;
+    let key = proof::ProofKey::new(&signing_key(profile)?)?;
+    let proof = key.sign("POST", &url, &credential.access_token)?;
     let response = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(20))
+        .timeout(Duration::from_secs(20))
         .build()?
         .post(url)
         .bearer_auth(credential.access_token)
         .header("dpop", proof)
-        .json(&serde_json::json!({"label":label,"platform":std::env::consts::OS}))
+        .json(&json!({"label":label,"platform":std::env::consts::OS}))
         .send()
         .await?
         .error_for_status()?;
-    #[derive(serde::Deserialize)]
+    #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Enrolled {
         device_id: String,
@@ -80,38 +134,567 @@ async fn enroll_account(
     Ok(response.json::<Enrolled>().await?.device_id)
 }
 
-/// Only the foreground operator supplies argv and cwd. Network replies carry a request UUID.
-pub async fn serve_task(profile: &Path, argv: Vec<String>) -> Result<()> {
-    serve(profile, argv, false, None).await
+/// Why a host request failed: the server answered no, or it was unreachable.
+#[derive(Debug)]
+pub(crate) enum SendError {
+    Rejected(u16),
+    Unavailable(String),
 }
-pub async fn serve_computer(profile: &Path) -> Result<()> {
-    serve_computer_account(profile, None).await
+impl std::fmt::Display for SendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Rejected(status) => write!(f, "The cloud refused this computer ({status})"),
+            Self::Unavailable(reason) => write!(f, "Couldn't reach the cloud: {reason}"),
+        }
+    }
 }
-async fn serve_computer_account(
-    profile: &Path,
-    account: Option<crate::account::Account>,
+impl std::error::Error for SendError {}
+
+#[async_trait::async_trait]
+pub(crate) trait Transport: Send + Sync {
+    async fn send(&self, body: Value) -> Result<Value, SendError>;
+}
+
+/// The host-task endpoint, authenticated by the account and this computer's key.
+struct Http {
+    account: crate::account::Account,
+    key: proof::ProofKey,
+    url: String,
+    client: reqwest::Client,
+}
+#[async_trait::async_trait]
+impl Transport for Http {
+    async fn send(&self, body: Value) -> Result<Value, SendError> {
+        let credential = self
+            .account
+            .credential()
+            .await
+            .map_err(|e| SendError::Unavailable(e.to_string()))?;
+        let proof = self
+            .key
+            .sign("POST", &self.url, &credential.access_token)
+            .map_err(|e| SendError::Unavailable(e.to_string()))?;
+        let response = self
+            .client
+            .post(&self.url)
+            .bearer_auth(credential.access_token)
+            .header("dpop", proof)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| SendError::Unavailable(e.without_url().to_string()))?;
+        let status = response.status();
+        if status.is_client_error() {
+            return Err(SendError::Rejected(status.as_u16()));
+        }
+        if !status.is_success() {
+            return Err(SendError::Unavailable(status.to_string()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| SendError::Unavailable(e.without_url().to_string()))
+    }
+}
+
+/// Intervals the connector uses; tests shorten them.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Timing {
+    /// Between offers, and between a running command's checks.
+    pub heartbeat: Duration,
+    /// A running command stops after this long without reaching the cloud.
+    pub offline_limit: Duration,
+    pub backoff_min: Duration,
+    pub backoff_max: Duration,
+    /// A session online this long resets the reconnect backoff.
+    pub stable_after: Duration,
+}
+impl Default for Timing {
+    fn default() -> Self {
+        Self {
+            heartbeat: Duration::from_secs(HEARTBEAT_SECS),
+            offline_limit: Duration::from_secs(60),
+            backoff_min: Duration::from_secs(1),
+            backoff_max: Duration::from_secs(30),
+            stable_after: Duration::from_secs(60),
+        }
+    }
+}
+
+/// What the connector is doing, as Settings and the composer show it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BridgeStatus {
+    /// `off`, `starting`, `online`, `reconnecting` or `paused`.
+    pub state: &'static str,
+    pub device_id: Option<String>,
+    pub name: Option<String>,
+    pub error: Option<String>,
+    /// Commands running right now.
+    pub running: usize,
+}
+
+/// Admits approved commands for one enrolled host.
+pub(crate) struct Host {
+    argv: Vec<String>,
+    dynamic: bool,
+    cwd: PathBuf,
+    user: String,
+    journal: PathBuf,
+    task: uuid::Uuid,
+    transport: Arc<dyn Transport>,
+    timing: Timing,
+    /// False once the account that enabled the host is no longer signed in.
+    still_owner: Arc<dyn Fn() -> bool + Send + Sync>,
+    status: watch::Sender<BridgeStatus>,
+}
+
+/// Why a host session ended without an error.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Exit {
+    Shutdown,
+    AccountChanged,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Claimed {
+    id: uuid::Uuid,
+    command: String,
+    cwd: PathBuf,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+}
+
+impl Host {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        argv: Vec<String>,
+        dynamic: bool,
+        cwd: PathBuf,
+        user: String,
+        journal: PathBuf,
+        transport: Arc<dyn Transport>,
+        timing: Timing,
+        still_owner: Arc<dyn Fn() -> bool + Send + Sync>,
+        status: watch::Sender<BridgeStatus>,
+    ) -> Result<Self> {
+        ensure!(
+            !argv.is_empty(),
+            "Specify an absolute executable path and its arguments"
+        );
+        std::fs::create_dir_all(&journal)?;
+        Ok(Self {
+            argv,
+            dynamic,
+            cwd,
+            user,
+            journal,
+            task: uuid::Uuid::new_v4(),
+            transport,
+            timing,
+            still_owner,
+            status,
+        })
+    }
+
+    fn set_running(&self, running: usize) {
+        self.status.send_if_modified(|status| {
+            let changed = status.running != running;
+            status.running = running;
+            changed
+        });
+    }
+
+    /// Offer, claim and run until shutdown or an account change. Returns an
+    /// error when the cloud can't be reached and nothing is running, so the
+    /// supervisor reconnects with backoff. Running commands ride out short
+    /// outages on their own.
+    pub(crate) async fn run(self: Arc<Self>, stop: CancellationToken) -> Result<Exit> {
+        self.republish().await?;
+        let preview = if self.dynamic {
+            self.argv[0].clone()
+        } else {
+            serde_json::to_string(&self.argv)?
+        };
+        let offer = json!({"action":"offer","task":self.task,"command":preview,
+            "cwd":self.cwd,"user":self.user,"dynamic":self.dynamic});
+        let mut runs = tokio::task::JoinSet::new();
+        let finish = |runs: &mut tokio::task::JoinSet<()>| {
+            let mut runs = std::mem::take(runs);
+            async move { while runs.join_next().await.is_some() {} }
+        };
+        let mut online = false;
+        loop {
+            while runs.try_join_next().is_some() {}
+            self.set_running(runs.len());
+            if !(self.still_owner)() {
+                // Each running command notices on its next check and stops
+                // with "signed out".
+                finish(&mut runs).await;
+                return Ok(Exit::AccountChanged);
+            }
+            match self.transport.send(offer.clone()).await {
+                Ok(_) => {
+                    if !online {
+                        online = true;
+                        self.status.send_modify(|status| {
+                            status.state = "online";
+                            status.error = None;
+                        });
+                    }
+                    if runs.len() < MAX_CONCURRENT {
+                        match self
+                            .transport
+                            .send(json!({"action":"claim","task":self.task}))
+                            .await
+                        {
+                            Ok(Value::Null) => {}
+                            Ok(value) => match serde_json::from_value::<Claimed>(value) {
+                                Ok(claimed) => {
+                                    let host = self.clone();
+                                    let cancel = stop.child_token();
+                                    runs.spawn(async move { host.run_one(claimed, cancel).await });
+                                    self.set_running(runs.len());
+                                    // Take any further approved work right away.
+                                    continue;
+                                }
+                                Err(error) => {
+                                    tracing::warn!(%error, "computer bridge: unreadable claim");
+                                }
+                            },
+                            Err(error) if runs.is_empty() => return Err(error.into()),
+                            Err(_) => {}
+                        }
+                    }
+                }
+                Err(error) if runs.is_empty() => return Err(error.into()),
+                // Keep heartbeating; each running command decides for itself
+                // when the cloud has been unreachable for too long.
+                Err(error) => {
+                    online = false;
+                    self.status.send_modify(|status| {
+                        status.state = "reconnecting";
+                        status.error = Some(error.to_string());
+                    });
+                }
+            }
+            tokio::select! {
+                _ = stop.cancelled() => {
+                    finish(&mut runs).await;
+                    return Ok(Exit::Shutdown);
+                }
+                _ = tokio::time::sleep(self.timing.heartbeat) => {}
+                Some(_) = runs.join_next(), if !runs.is_empty() => {}
+            }
+        }
+    }
+
+    /// Republish results finished before a restart; drop old unconfirmed receipts.
+    async fn republish(&self) -> Result<()> {
+        for entry in std::fs::read_dir(&self.journal)? {
+            let entry = entry?;
+            let Some(request) = entry
+                .file_name()
+                .to_str()
+                .and_then(|name| uuid::Uuid::parse_str(name).ok())
+            else {
+                continue;
+            };
+            let metadata = entry.metadata()?;
+            if !metadata.is_file() || metadata.len() > 262_144 {
+                continue;
+            }
+            let bytes = Zeroizing::new(std::fs::read(entry.path())?);
+            let Ok(saved) = serde_json::from_slice::<Value>(&bytes) else {
+                continue;
+            };
+            if saved["state"] != "finished" {
+                // Admitted without a recorded result: its outcome stays
+                // unknown, and it is never started again.
+                let old = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|at| at.elapsed().ok())
+                    .is_some_and(|age| age > RECEIPT_RETENTION);
+                if old {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+                continue;
+            }
+            let body = json!({"action":"finish","task":saved["task"],"request":request,
+                "status":saved["status"],"output":saved["output"]});
+            match self.transport.send(body).await {
+                Ok(_) | Err(SendError::Rejected(_)) => {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
+    }
+
+    async fn run_one(self: Arc<Self>, claimed: Claimed, cancel: CancellationToken) {
+        let request = claimed.id;
+        let mut argv = self.argv.clone();
+        let cwd = if self.dynamic {
+            claimed.cwd
+        } else {
+            self.cwd.clone()
+        };
+        if self.dynamic {
+            #[cfg(windows)]
+            argv.extend([
+                "-NoProfile".into(),
+                "-NonInteractive".into(),
+                "-Command".into(),
+                claimed.command,
+            ]);
+            #[cfg(not(windows))]
+            argv.extend(["-c".into(), claimed.command]);
+        }
+        let deadline = Duration::from_millis(
+            claimed
+                .timeout_ms
+                .unwrap_or(u64::from(DEFAULT_TIMEOUT_SECS) * 1000)
+                .clamp(1000, u64::from(MAX_TIMEOUT_SECS) * 1000),
+        );
+        // A durable receipt is required before starting a process.
+        let receipt = self.journal.join(request.to_string());
+        if let Err(error) = write_receipt(&receipt, &self.journal, self.task, &argv, &cwd) {
+            tracing::warn!(%error, "computer bridge: command not admitted");
+            return;
+        }
+        let progress: Progress = Arc::default();
+        let authorization = async {
+            let mut reached = Instant::now();
+            loop {
+                tokio::time::sleep(self.timing.heartbeat).await;
+                if !(self.still_owner)() {
+                    return "stopped: signed out".to_owned();
+                }
+                let output = render(&progress);
+                let check =
+                    json!({"action":"check","task":self.task,"request":request,"output":output});
+                match self.transport.send(check).await {
+                    Ok(Value::Bool(true)) => reached = Instant::now(),
+                    Ok(_) | Err(SendError::Rejected(_)) => {
+                        return "stopped: approval ended".to_owned();
+                    }
+                    Err(SendError::Unavailable(_)) => {
+                        if reached.elapsed() >= self.timing.offline_limit {
+                            return "stopped: connection lost".to_owned();
+                        }
+                    }
+                }
+            }
+        };
+        let (status, output) = tokio::select! {
+            done = run_process(&argv, &cwd, progress.clone(), deadline) => done,
+            reason = authorization => (reason, render(&progress)),
+            _ = cancel.cancelled() => ("stopped: connector shut down".to_owned(), render(&progress)),
+        };
+        if let Err(error) = write_result(&receipt, &self.journal, self.task, &status, &output) {
+            tracing::warn!(%error, "computer bridge: result not saved");
+        }
+        let body = json!({"action":"finish","task":self.task,"request":request,
+            "status":status,"output":output});
+        // Deliver the result once the cloud is reachable again. On shutdown
+        // the saved receipt is republished by the next start.
+        let mut delay = self.timing.heartbeat;
+        loop {
+            match self.transport.send(body.clone()).await {
+                Ok(_) | Err(SendError::Rejected(_)) => {
+                    let _ = std::fs::remove_file(&receipt);
+                    return;
+                }
+                Err(SendError::Unavailable(_)) => {
+                    tokio::select! {
+                        _ = cancel.cancelled() => return,
+                        _ = tokio::time::sleep(delay) => {}
+                    }
+                    delay = (delay * 2).min(self.timing.backoff_max);
+                }
+            }
+        }
+    }
+}
+
+fn write_receipt(
+    receipt: &Path,
+    journal: &Path,
+    task: uuid::Uuid,
+    argv: &[String],
+    cwd: &Path,
 ) -> Result<()> {
+    let mut record = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(receipt)
+        .context(
+            "This command was already admitted. Check its outcome before requesting another run",
+        )?;
+    record.write_all(
+        serde_json::to_string(&json!({"task":task,"argv":argv,"cwd":cwd,"state":"admitted"}))?
+            .as_bytes(),
+    )?;
+    record.sync_all()?;
+    #[cfg(unix)]
+    std::fs::File::open(journal)?.sync_all()?;
+    Ok(())
+}
+
+fn write_result(
+    receipt: &Path,
+    journal: &Path,
+    task: uuid::Uuid,
+    status: &str,
+    output: &str,
+) -> Result<()> {
+    let mut saved = tempfile::NamedTempFile::new_in(journal)?;
+    saved.write_all(
+        serde_json::to_string(
+            &json!({"task":task,"state":"finished","status":status,"output":output}),
+        )?
+        .as_bytes(),
+    )?;
+    saved.as_file().sync_all()?;
+    saved.persist(receipt)?;
+    Ok(())
+}
+
+/// The start and end of a stream, with the size of what was left out.
+#[derive(Default)]
+pub(crate) struct Capture {
+    head: Vec<u8>,
+    tail: std::collections::VecDeque<u8>,
+    omitted: u64,
+}
+impl Capture {
+    fn push(&mut self, mut bytes: &[u8]) {
+        let room = HEAD_BYTES.saturating_sub(self.head.len()).min(bytes.len());
+        self.head.extend_from_slice(&bytes[..room]);
+        bytes = &bytes[room..];
+        self.tail.extend(bytes);
+        let over = self.tail.len().saturating_sub(TAIL_BYTES);
+        if over > 0 {
+            self.tail.drain(..over);
+            self.omitted += over as u64;
+        }
+    }
+    fn render(&self) -> String {
+        let mut text = String::from_utf8_lossy(&self.head).into_owned();
+        if self.omitted > 0 {
+            text.push_str(&format!("\n[… {} bytes omitted …]\n", self.omitted));
+        }
+        let (a, b) = self.tail.as_slices();
+        text.push_str(&String::from_utf8_lossy(&[a, b].concat()));
+        text
+    }
+}
+
+type Progress = Arc<Mutex<(Capture, Capture)>>;
+
+fn render(progress: &Progress) -> String {
+    let streams = progress.lock().unwrap_or_else(|e| e.into_inner());
+    format!("{}{}", streams.0.render(), streams.1.render())
+}
+
+/// Run one command in its own process group. Dropping the future (Stop,
+/// revocation, shutdown) kills the group; so does the deadline.
+async fn run_process(
+    argv: &[String],
+    cwd: &Path,
+    progress: Progress,
+    deadline: Duration,
+) -> (String, String) {
+    use std::process::Stdio;
+    use tokio::io::AsyncReadExt;
+    async fn drain(mut pipe: impl tokio::io::AsyncRead + Unpin, progress: Progress, stderr: bool) {
+        let mut buffer = [0; 8192];
+        while let Ok(n) = pipe.read(&mut buffer).await {
+            if n == 0 {
+                break;
+            }
+            let mut streams = progress.lock().unwrap_or_else(|e| e.into_inner());
+            if stderr {
+                streams.1.push(&buffer[..n]);
+            } else {
+                streams.0.push(&buffer[..n]);
+            }
+        }
+    }
+    struct Abort(tokio::task::JoinHandle<()>);
+    impl Drop for Abort {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+    let mut cmd = tokio::process::Command::new(&argv[0]);
+    cmd.args(&argv[1..])
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    #[cfg(unix)]
+    cmd.process_group(0);
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return ("start failed".into(), e.to_string()),
+    };
+    let _group = ProcessGroup(child.id());
+    let mut stdout = Abort(tokio::spawn(drain(
+        child.stdout.take().unwrap(),
+        progress.clone(),
+        false,
+    )));
+    let mut stderr = Abort(tokio::spawn(drain(
+        child.stderr.take().unwrap(),
+        progress.clone(),
+        true,
+    )));
+    match tokio::time::timeout(deadline, child.wait()).await {
+        Ok(Ok(status)) => {
+            // Background children may hold the pipes open; don't wait on them.
+            let _ = tokio::time::timeout(Duration::from_secs(2), async {
+                let _ = (&mut stdout.0).await;
+                let _ = (&mut stderr.0).await;
+            })
+            .await;
+            (status.to_string(), render(&progress))
+        }
+        Ok(Err(e)) => ("output unavailable".into(), e.to_string()),
+        Err(_) => {
+            let _ = child.kill().await;
+            (
+                format!("timed out after {}s", deadline.as_secs()),
+                render(&progress),
+            )
+        }
+    }
+}
+
+fn shell() -> Result<String> {
     #[cfg(windows)]
     let shell =
         std::path::PathBuf::from(std::env::var_os("SystemRoot").context("Missing SystemRoot")?)
             .join("System32/WindowsPowerShell/v1.0/powershell.exe");
     #[cfg(not(windows))]
     let shell = std::path::PathBuf::from("/bin/sh");
-    serve(
-        profile,
-        vec![shell.to_str().context("Unsupported shell path")?.to_owned()],
-        true,
-        account,
-    )
-    .await
+    Ok(shell.to_str().context("Unsupported shell path")?.to_owned())
 }
-async fn serve(
+
+/// A host for this computer's shell or one fixed executable.
+fn local_host(
     profile: &Path,
-    mut argv: Vec<String>,
+    account: &crate::account::Account,
+    argv: Vec<String>,
     dynamic: bool,
-    account: Option<crate::account::Account>,
-) -> Result<()> {
-    use serde_json::{Value, json};
+    timing: Timing,
+    status: watch::Sender<BridgeStatus>,
+) -> Result<Host> {
+    let mut argv = argv;
     ensure!(
         !argv.is_empty(),
         "Specify an absolute executable path and its arguments"
@@ -127,7 +710,7 @@ async fn serve(
         .context("Unsupported executable path")?
         .to_owned();
     let cwd = if dynamic {
-        std::path::PathBuf::from(
+        PathBuf::from(
             std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
                 .context("Missing home directory")?,
         )
@@ -137,338 +720,442 @@ async fn serve(
     };
     let user = std::env::var(if cfg!(windows) { "USERNAME" } else { "USER" })
         .context("Missing OS user")?;
-    let _lock = if account.is_none() {
-        Some(crate::InstanceLock::acquire(profile)?)
-    } else {
-        None
-    };
-    let account = match account {
-        Some(a) => a,
-        None => crate::account::Account::open(profile)?,
-    };
     let owner = account
         .status()
         .user
         .map(|u| u.id)
         .context("Sign in to use the computer bridge")?;
-    let key = crate::managed_access::proof::ProofKey::from_signing_key(signing_key(profile)?)?;
-    let url = format!(
-        "{}/v1/cloud/bridge/host-task",
-        zuse_remote::normalized_origin(&crate::cloud::configured_api_origin())?
-    );
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(15))
-        .build()?;
-    let send = async |body: Value| -> Result<Value> {
-        let credential = account.credential().await?;
-        let proof = key.sign("POST", &url, Some(&credential.access_token))?;
-        Ok(client
-            .post(&url)
-            .bearer_auth(credential.access_token)
-            .header("dpop", proof)
-            .json(&body)
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?)
-    };
-    let task = uuid::Uuid::new_v4();
-    let preview = if dynamic {
-        argv[0].clone()
-    } else {
-        serde_json::to_string(&argv)?
-    };
-    let journal = profile.join("computer-bridge").join("runs");
-    std::fs::create_dir_all(&journal)?;
-    for entry in std::fs::read_dir(&journal)? {
-        let entry = entry?;
-        let Some(request) = entry
-            .file_name()
-            .to_str()
-            .and_then(|name| uuid::Uuid::parse_str(name).ok())
-        else {
-            continue;
-        };
-        if !entry.file_type()?.is_file() || entry.metadata()?.len() > 131072 {
-            continue;
-        }
-        let bytes = Zeroizing::new(std::fs::read(entry.path())?);
-        let Ok(saved) = serde_json::from_slice::<Value>(&bytes) else {
-            continue;
-        };
-        if saved["state"] != "finished" {
-            continue;
-        }
-        let result=send(json!({"action":"finish","task":saved["task"],"request":request,"status":saved["status"],"output":saved["output"]})).await;
-        if let Err(error) = result {
-            if error
-                .downcast_ref::<reqwest::Error>()
-                .and_then(|e| e.status())
-                .map(|s| s.as_u16())
-                != Some(409)
-            {
-                return Err(error);
+    let key = proof::ProofKey::new(&signing_key(profile)?)?;
+    let transport = Arc::new(Http {
+        account: account.clone(),
+        key,
+        url: format!("{}/v1/cloud/bridge/host-task", api_origin()?),
+        client: reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(15))
+            .build()?,
+    });
+    let watched = account.clone();
+    Host::new(
+        argv,
+        dynamic,
+        cwd,
+        user,
+        profile.join("computer-bridge").join("runs"),
+        transport,
+        timing,
+        Arc::new(move || watched.status().user.is_some_and(|u| u.id == owner)),
+        status,
+    )
+}
+
+/// Only the foreground operator supplies argv and cwd. Network replies carry a request UUID.
+pub async fn serve_task(profile: &Path, argv: Vec<String>) -> Result<()> {
+    serve_standalone(profile, argv, false).await
+}
+pub async fn serve_computer(profile: &Path) -> Result<()> {
+    serve_standalone(profile, vec![shell()?], true).await
+}
+
+/// The standalone CLI connector: holds the profile lock, reconnects with
+/// backoff, and stops running commands on Ctrl-C.
+async fn serve_standalone(profile: &Path, argv: Vec<String>, dynamic: bool) -> Result<()> {
+    std::fs::create_dir_all(profile)?;
+    let _lock = crate::InstanceLock::acquire(profile)?;
+    let account = crate::account::Account::open(profile)?;
+    let owner = account
+        .status()
+        .user
+        .map(|u| u.id)
+        .context("Sign in to use the computer bridge")?;
+    let (status, mut updates) = watch::channel(BridgeStatus {
+        state: "starting",
+        ..Default::default()
+    });
+    let stop = CancellationToken::new();
+    let interrupt = stop.clone();
+    tokio::spawn(async move {
+        let _ = tokio::signal::ctrl_c().await;
+        interrupt.cancel();
+    });
+    tokio::spawn(async move {
+        let mut last = String::new();
+        while updates.changed().await.is_ok() {
+            let now = updates.borrow().clone();
+            let line = match (now.state, now.error.as_deref()) {
+                ("online", _) => "Connected. Waiting for approved commands.".to_owned(),
+                ("reconnecting", Some(error)) => format!("Reconnecting: {error}"),
+                ("paused", Some(error)) => error.to_owned(),
+                _ => continue,
+            };
+            if line != last {
+                eprintln!("{line}");
+                last = line;
             }
         }
-    }
+    });
+    let timing = Timing::default();
+    let still = account.clone();
+    supervise(
+        move |status| local_host(profile, &account, argv.clone(), dynamic, timing, status),
+        Arc::new(move || still.status().user.is_some_and(|u| u.id == owner)),
+        None,
+        timing,
+        status,
+        stop,
+    )
+    .await;
+    Ok(())
+}
+
+/// Keep a host session running: reconnect with capped exponential backoff,
+/// pause while another account (or none) is signed in, stop on `stop`.
+async fn supervise(
+    mut host: impl FnMut(watch::Sender<BridgeStatus>) -> Result<Host>,
+    still_owner: Arc<dyn Fn() -> bool + Send + Sync>,
+    mut account_changes: Option<watch::Receiver<crate::account::AccountStatus>>,
+    timing: Timing,
+    status: watch::Sender<BridgeStatus>,
+    stop: CancellationToken,
+) {
+    let mut backoff = timing.backoff_min;
     loop {
-        ensure!(
-            account
-                .status()
-                .user
-                .as_ref()
-                .is_some_and(|u| u.id == owner),
-            "The signed-in account changed"
-        );
-        send(json!({"action":"offer","task":task,"command":preview,"cwd":cwd,"user":user,"dynamic":dynamic})).await?;
-        #[derive(serde::Deserialize)]
-        struct Claimed {
-            id: uuid::Uuid,
-            command: String,
-            cwd: std::path::PathBuf,
+        if stop.is_cancelled() {
+            break;
         }
-        let claimed: Option<Claimed> =
-            serde_json::from_value(send(json!({"action":"claim","task":task})).await?)?;
-        if let Some(claimed) = claimed {
-            let request = claimed.id;
-            let mut run_argv = argv.clone();
-            let run_cwd = if dynamic { claimed.cwd } else { cwd.clone() };
-            if dynamic {
-                #[cfg(windows)]
-                run_argv.extend([
-                    "-NoProfile".into(),
-                    "-NonInteractive".into(),
-                    "-Command".into(),
-                    claimed.command,
-                ]);
-                #[cfg(not(windows))]
-                run_argv.extend(["-c".into(), claimed.command]);
-            }
-            // A durable receipt is required before starting a process.
-            let receipt = journal.join(request.to_string());
-            let mut record=std::fs::OpenOptions::new().write(true).create_new(true).open(&receipt)
-                .context("This command was already admitted. Check its outcome before requesting another run")?;
-            record.write_all(
-                serde_json::to_string(
-                    &serde_json::json!({"task":task,"argv":run_argv,"cwd":run_cwd,"state":"admitted"}),
-                )?
-                .as_bytes(),
-            )?;
-            record.sync_all()?;
-            #[cfg(unix)]
-            std::fs::File::open(&journal)?.sync_all()?;
-            let progress =
-                std::sync::Arc::new(std::sync::Mutex::new((String::new(), String::new())));
-            let revoked = async {
-                loop {
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                    let output = {
-                        let current = progress.lock().unwrap_or_else(|e| e.into_inner());
-                        format!("{}{}", current.0, current.1)
-                    };
-                    let allowed = send(
-                        json!({"action":"check","task":task,"request":request,"output":output}),
-                    )
-                    .await;
-                    if !matches!(allowed, Ok(Value::Bool(true))) {
-                        return;
+        if !still_owner() {
+            status.send_modify(|s| {
+                s.state = "paused";
+                s.running = 0;
+                s.error = Some("Sign in with the account that allowed this computer.".into());
+            });
+            let changed = async {
+                match account_changes.as_mut() {
+                    Some(changes) => {
+                        let _ = changes.changed().await;
                     }
+                    None => std::future::pending::<()>().await,
                 }
             };
-            let (status, output) = tokio::select! {
-                done = run_task_progress(&run_argv,&run_cwd,Some(progress.clone())) => done,
-                _ = revoked => ("authorization ended".to_owned(),String::new()),
-                _ = tokio::signal::ctrl_c() => return Ok(()),
-            };
-            let mut saved = tempfile::NamedTempFile::new_in(&journal)?;
-            saved.write_all(
-                serde_json::to_string(
-                    &json!({"task":task,"state":"finished","status":status,"output":output}),
-                )?
-                .as_bytes(),
-            )?;
-            saved.as_file().sync_all()?;
-            saved.persist(&receipt)?;
-            send(json!({"action":"finish","task":task,"request":request,"status":status,"output":output})).await?;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    }
-}
-
-#[cfg(test)]
-async fn run_task(argv: &[String], cwd: &Path) -> (String, String) {
-    run_task_progress(argv, cwd, None).await
-}
-type Progress = std::sync::Arc<std::sync::Mutex<(String, String)>>;
-async fn run_task_progress(
-    argv: &[String],
-    cwd: &Path,
-    progress: Option<Progress>,
-) -> (String, String) {
-    use std::process::Stdio;
-    use tokio::io::AsyncReadExt;
-    async fn drain(
-        mut pipe: impl tokio::io::AsyncRead + Unpin,
-        progress: Option<Progress>,
-        stderr: bool,
-    ) -> std::io::Result<String> {
-        let mut kept = Vec::new();
-        let mut buffer = [0; 4096];
-        let mut truncated = false;
-        loop {
-            let n = pipe.read(&mut buffer).await?;
-            if n == 0 {
-                break;
+            tokio::select! {
+                _ = stop.cancelled() => break,
+                _ = changed => {}
+                _ = tokio::time::sleep(timing.backoff_max) => {}
             }
-            let keep = n.min(12288 - kept.len());
-            kept.extend_from_slice(&buffer[..keep]);
-            truncated |= keep < n;
-            if let Some(progress) = &progress {
-                let mut current = progress.lock().unwrap_or_else(|e| e.into_inner());
-                let text = String::from_utf8_lossy(&kept).into_owned();
-                if stderr {
-                    current.1 = text;
-                } else {
-                    current.0 = text;
+            continue;
+        }
+        let started = Instant::now();
+        let result = match host(status.clone()) {
+            Ok(host) => Arc::new(host).run(stop.child_token()).await,
+            Err(error) => Err(error),
+        };
+        match result {
+            Ok(Exit::Shutdown) => break,
+            Ok(Exit::AccountChanged) => continue,
+            Err(error) => {
+                if started.elapsed() >= timing.stable_after {
+                    backoff = timing.backoff_min;
                 }
-            }
-        }
-        let mut out = String::from_utf8_lossy(&kept).into_owned();
-        if truncated {
-            out.push_str("\n[output truncated]");
-        }
-        Ok(out)
-    }
-    let mut cmd = tokio::process::Command::new(&argv[0]);
-    cmd.args(&argv[1..])
-        .current_dir(cwd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    #[cfg(unix)]
-    cmd.process_group(0);
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => return ("start failed".into(), e.to_string()),
-    };
-    let _group = crate::project_creation::ProcessGroup(child.id());
-    let stdout = child.stdout.take().unwrap();
-    let stderr = child.stderr.take().unwrap();
-    match tokio::time::timeout(std::time::Duration::from_secs(60), async {
-        tokio::try_join!(
-            child.wait(),
-            drain(stdout, progress.clone(), false),
-            drain(stderr, progress, true)
-        )
-    })
-    .await
-    {
-        Ok(Ok((status, out, err))) => (status.to_string(), format!("{out}{err}")),
-        Ok(Err(e)) => ("output unavailable".into(), e.to_string()),
-        Err(_) => {
-            let _ = child.kill().await;
-            ("timed out".into(), String::new())
-        }
-    }
-}
-
-#[cfg(all(test, unix))]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn task_argv_is_literal_and_preserves_nonzero_exit() {
-        let argv = [
-            "/bin/sh",
-            "-c",
-            "printf '%s' \"$1\"; exit 7",
-            "check",
-            "Unicode ✓ and $(literal)",
-        ]
-        .map(String::from);
-        let (status, output) = run_task(&argv, Path::new("/tmp")).await;
-        assert_eq!(output, "Unicode ✓ and $(literal)");
-        assert_eq!(status, "exit status: 7");
-    }
-
-    #[tokio::test]
-    async fn output_is_visible_before_process_exit() {
-        let progress: Progress =
-            std::sync::Arc::new(std::sync::Mutex::new((String::new(), String::new())));
-        let reader = progress.clone();
-        let job = tokio::spawn(async move {
-            let argv = ["/bin/sh", "-c", "printf ready; sleep 30"].map(String::from);
-            run_task_progress(&argv, Path::new("/tmp"), Some(progress)).await
-        });
-        let visible = tokio::time::timeout(std::time::Duration::from_secs(2), async {
-            loop {
-                if reader.lock().unwrap().0 == "ready" {
-                    break;
+                status.send_modify(|s| {
+                    s.state = "reconnecting";
+                    s.running = 0;
+                    s.error = Some(error.to_string());
+                });
+                tokio::select! {
+                    _ = stop.cancelled() => break,
+                    _ = tokio::time::sleep(backoff) => {}
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                backoff = (backoff * 2).min(timing.backoff_max);
             }
-        })
-        .await;
-        assert!(!job.is_finished());
-        job.abort();
-        let _ = job.await;
-        assert!(visible.is_ok());
+        }
     }
-
-    #[tokio::test]
-    async fn full_pipe_is_drained_after_output_limit() {
-        let argv = ["/bin/sh", "-c", "head -c 65536 /dev/zero"].map(String::from);
-        let (status, output) = run_task(&argv, Path::new("/tmp")).await;
-        assert_eq!(status, "exit status: 0");
-        assert_eq!(output.trim_end_matches("\n[output truncated]").len(), 12288);
-        assert!(output.ends_with("[output truncated]"));
-    }
+    status.send_modify(|s| {
+        s.state = "off";
+        s.running = 0;
+        s.error = None;
+    });
 }
 
-#[derive(Default)]
+/// What the engine remembers about the connector it owns, so it resumes after
+/// a restart for the same account.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct Enabled {
+    owner: String,
+    device_id: String,
+    label: String,
+}
+
+fn enabled_path(profile: &Path) -> PathBuf {
+    profile.join("computer-bridge").join("connector.json")
+}
+
+fn read_enabled(profile: &Path) -> Option<Enabled> {
+    serde_json::from_slice(&std::fs::read(enabled_path(profile)).ok()?).ok()
+}
+
+fn write_enabled(profile: &Path, enabled: &Enabled) -> Result<()> {
+    let path = enabled_path(profile);
+    let dir = path.parent().context("Invalid profile")?;
+    std::fs::create_dir_all(dir)?;
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(&serde_json::to_vec(enabled)?)?;
+    tmp.as_file().sync_all()?;
+    tmp.persist(&path)?;
+    Ok(())
+}
+
+/// The engine-owned connector for this computer's shell.
 pub(crate) struct Connector {
-    task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    task: tokio::sync::Mutex<Option<(CancellationToken, tokio::task::JoinHandle<()>)>>,
+    status: watch::Sender<BridgeStatus>,
+}
+impl Default for Connector {
+    fn default() -> Self {
+        Self {
+            task: Default::default(),
+            status: watch::channel(BridgeStatus {
+                state: "off",
+                ..Default::default()
+            })
+            .0,
+        }
+    }
 }
 impl Drop for Connector {
     fn drop(&mut self) {
-        if let Some(task) = self.task.get_mut().take() {
+        if let Some((stop, task)) = self.task.get_mut().take() {
+            stop.cancel();
             task.abort();
         }
     }
 }
 impl Connector {
+    pub fn status(&self) -> BridgeStatus {
+        self.status.borrow().clone()
+    }
+
+    /// Enroll (or re-confirm) this computer and run its connector until stopped.
     pub async fn start(
         &self,
         profile: &Path,
         account: crate::account::Account,
         label: &str,
     ) -> Result<String> {
-        let mut task = self.task.lock().await;
+        let owner = account
+            .status()
+            .user
+            .map(|u| u.id)
+            .context("Sign in to allow cloud chats to use this computer")?;
         let id = enroll_account(profile, label, &account).await?;
-        if let Some(old) = task.take() {
-            old.abort();
-            let _ = old.await;
-        }
-        let profile = profile.to_owned();
-        *task = Some(tokio::spawn(async move {
-            let owner = account.status().user.map(|u| u.id);
-            loop {
-                if account.status().user.map(|u| u.id) != owner {
-                    return;
-                }
-                let _ = serve_computer_account(&profile, Some(account.clone())).await;
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-            }
-        }));
+        write_enabled(
+            profile,
+            &Enabled {
+                owner,
+                device_id: id.clone(),
+                label: label.trim().to_owned(),
+            },
+        )?;
+        self.launch(profile, account, Timing::default()).await;
         Ok(id)
     }
-    pub async fn stop(&self) {
-        if let Some(task) = self.task.lock().await.take() {
-            task.abort();
+
+    /// Resume the connector this profile enabled earlier, if any. It waits,
+    /// paused, while a different account is signed in.
+    pub async fn resume(&self, profile: &Path, account: crate::account::Account) {
+        if read_enabled(profile).is_some() {
+            self.launch(profile, account, Timing::default()).await;
+        }
+    }
+
+    async fn launch(&self, profile: &Path, account: crate::account::Account, timing: Timing) {
+        let Some(enabled) = read_enabled(profile) else {
+            return;
+        };
+        let mut slot = self.task.lock().await;
+        if let Some((stop, task)) = slot.take() {
+            stop.cancel();
             let _ = task.await;
+        }
+        self.status.send_replace(BridgeStatus {
+            state: "starting",
+            device_id: Some(enabled.device_id.clone()),
+            name: Some(enabled.label.clone()),
+            error: None,
+            running: 0,
+        });
+        let stop = CancellationToken::new();
+        let profile = profile.to_owned();
+        let status = self.status.clone();
+        let owner = enabled.owner.clone();
+        let watched = account.clone();
+        let changes = account.watch();
+        let session_stop = stop.clone();
+        let task = tokio::spawn(async move {
+            let shell = match shell() {
+                Ok(shell) => shell,
+                Err(error) => {
+                    status.send_modify(|s| {
+                        s.state = "off";
+                        s.error = Some(error.to_string());
+                    });
+                    return;
+                }
+            };
+            supervise(
+                move |status| {
+                    local_host(
+                        &profile,
+                        &account,
+                        vec![shell.clone()],
+                        true,
+                        timing,
+                        status,
+                    )
+                },
+                Arc::new(move || watched.status().user.is_some_and(|u| u.id == owner)),
+                Some(changes),
+                timing,
+                status,
+                session_stop,
+            )
+            .await;
+        });
+        *slot = Some((stop, task));
+    }
+
+    /// Stop admitting work, stop running commands, and forget the choice.
+    pub async fn stop(&self, profile: &Path) {
+        let _ = std::fs::remove_file(enabled_path(profile));
+        if let Some((stop, mut task)) = self.task.lock().await.take() {
+            stop.cancel();
+            // Running commands record their stop and report it briefly.
+            if tokio::time::timeout(Duration::from_secs(8), &mut task)
+                .await
+                .is_err()
+            {
+                tracing::warn!("computer bridge: connector stop timed out");
+                task.abort();
+            }
+        }
+        self.status.send_replace(BridgeStatus {
+            state: "off",
+            ..Default::default()
+        });
+    }
+}
+
+impl Connector {
+    /// The owner is sending a message from this computer. If it is enabled
+    /// for `account_id`, it becomes the chat's primary, proven with its
+    /// enrolled key. Otherwise the chat's primary is cleared: the user isn't
+    /// typing on any enabled computer. Returns the primary's device ID.
+    pub async fn claim_primary(
+        &self,
+        profile: &Path,
+        account: &crate::account::Account,
+        account_id: &str,
+        workspace: &str,
+        chat: &str,
+    ) -> Result<Option<String>> {
+        claim_primary_at(
+            &api_origin()?,
+            profile,
+            account,
+            account_id,
+            workspace,
+            chat,
+        )
+        .await
+    }
+}
+
+async fn claim_primary_at(
+    origin: &str,
+    profile: &Path,
+    account: &crate::account::Account,
+    account_id: &str,
+    workspace: &str,
+    chat: &str,
+) -> Result<Option<String>> {
+    ensure!(
+        account.status().user.is_some_and(|u| u.id == account_id),
+        "Your account changed. Reopen this chat."
+    );
+    let segment = |value: &str| -> Result<String> {
+        ensure!(
+            !value.is_empty()
+                && value.len() <= 512
+                && value
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.')),
+            "Invalid chat"
+        );
+        Ok(value.to_owned())
+    };
+    let (workspace, chat) = (segment(workspace)?, segment(chat)?);
+    let credential = account.credential().await?;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(10))
+        .build()?;
+    if read_enabled(profile).is_none_or(|e| e.owner != account_id) {
+        client
+            .delete(format!(
+                "{origin}/v1/cloud/workspaces/{workspace}/chats/{chat}/primary-computer"
+            ))
+            .bearer_auth(credential.access_token)
+            .send()
+            .await
+            .map_err(|e| e.without_url())?
+            .error_for_status()
+            .map_err(|e| e.without_url())?;
+        return Ok(None);
+    }
+    let url = format!("{origin}/v1/cloud/bridge/primary");
+    let key = proof::ProofKey::new(&signing_key(profile)?)?;
+    let signed = key.sign("POST", &url, &credential.access_token)?;
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Claimed {
+        device_id: String,
+    }
+    let claimed: Claimed = client
+        .post(url)
+        .bearer_auth(credential.access_token)
+        .header("dpop", signed)
+        .json(&json!({"workspaceId":workspace,"chatId":chat}))
+        .send()
+        .await
+        .map_err(|e| e.without_url())?
+        .error_for_status()
+        .map_err(|e| e.without_url())?
+        .json()
+        .await?;
+    Ok(Some(claimed.device_id))
+}
+
+/// Kills a command's whole process group when dropped.
+struct ProcessGroup(Option<u32>);
+impl Drop for ProcessGroup {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(pid) = self.0 {
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGKILL);
+            }
+        }
+        #[cfg(windows)]
+        if let Some(pid) = self.0 {
+            use std::os::windows::process::CommandExt;
+            let _ = std::process::Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/T", "/F"])
+                .creation_flags(0x08000000)
+                .status();
         }
     }
 }
+
+mod proof;
+#[cfg(all(test, unix))]
+mod tests;

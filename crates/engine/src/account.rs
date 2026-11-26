@@ -94,6 +94,13 @@ pub struct LoginProgress {
     pub url: String,
     pub expires_at: i64,
 }
+/// A code another device approves to sign in this one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignInCode {
+    pub user_code: String,
+    pub verification_uri: String,
+    pub expires_at: i64,
+}
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountStatus {
@@ -582,6 +589,157 @@ impl Account {
                 .await
         });
         Ok(progress)
+    }
+
+    /// Sign in a computer without a browser: another device opens the
+    /// returned address and approves the code. The future completes the
+    /// sign-in (OAuth device authorization) and saves the session.
+    pub async fn sign_in_with_code(
+        &self,
+    ) -> Result<
+        (
+            SignInCode,
+            impl std::future::Future<Output = Result<(), AccountError>> + Send + 'static,
+        ),
+        AccountError,
+    > {
+        if self.0.store.is_none() {
+            return Err(AccountError::BrowserRequired);
+        }
+        let (generation, cancel) = self.begin_login()?;
+        let response = self
+            .0
+            .http
+            .post(format!(
+                "{}/user_management/authorize/device",
+                self.0.identity_url
+            ))
+            .form(&[("client_id", self.0.client_id.as_str())])
+            .send()
+            .await
+            .map_err(|_| AccountError::Unavailable)?;
+        let success = response.status().is_success();
+        let body = read_json(response).await?;
+        if !success {
+            return Err(AccountError::Unavailable);
+        }
+        #[derive(Deserialize)]
+        struct Grant {
+            device_code: String,
+            user_code: String,
+            verification_uri: Option<String>,
+            verification_uri_complete: Option<String>,
+            expires_in: i64,
+            interval: Option<u64>,
+        }
+        let grant: Grant =
+            serde_json::from_value(body).map_err(|_| AccountError::InvalidResponse)?;
+        let address = grant
+            .verification_uri_complete
+            .or(grant.verification_uri)
+            .filter(|uri| {
+                uri.len() <= 4096
+                    && reqwest::Url::parse(uri).is_ok_and(|url| {
+                        url.scheme() == "https"
+                            && url.host_str().is_some()
+                            && url.username().is_empty()
+                            && url.password().is_none()
+                    })
+            })
+            .ok_or(AccountError::InvalidResponse)?;
+        if grant.device_code.is_empty()
+            || grant.user_code.is_empty()
+            || grant.user_code.len() > 64
+            || !(1..=3600).contains(&grant.expires_in)
+        {
+            return Err(AccountError::InvalidResponse);
+        }
+        let code = SignInCode {
+            user_code: grant.user_code,
+            verification_uri: address.clone(),
+            expires_at: now() + grant.expires_in,
+        };
+        self.show_login(
+            generation,
+            &LoginProgress {
+                url: address,
+                expires_at: code.expires_at,
+            },
+        )?;
+        let account = self.clone();
+        let interval = Duration::from_secs(grant.interval.unwrap_or(5).clamp(1, 60));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(grant.expires_in as u64);
+        let device_code = grant.device_code;
+        let completion = async move {
+            let result = account
+                .poll_device_code(&device_code, interval, deadline, generation, cancel)
+                .await;
+            if let Err(error) = &result {
+                let mut state = lock(&account.0.state);
+                if state.generation == generation {
+                    state.login = None;
+                    if !matches!(error, AccountError::Cancelled) {
+                        state.error = Some(error.to_string());
+                    }
+                    account.publish(&state);
+                }
+            }
+            result
+        };
+        Ok((code, completion))
+    }
+
+    async fn poll_device_code(
+        &self,
+        device_code: &str,
+        mut interval: Duration,
+        deadline: tokio::time::Instant,
+        generation: u64,
+        cancel: CancellationToken,
+    ) -> Result<(), AccountError> {
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => return Err(AccountError::Cancelled),
+                _ = tokio::time::sleep(interval) => {}
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(AccountError::Expired);
+            }
+            let response = self
+                .0
+                .http
+                .post(format!(
+                    "{}/user_management/authenticate",
+                    self.0.identity_url
+                ))
+                .form(&[
+                    ("client_id", self.0.client_id.as_str()),
+                    ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+                    ("device_code", device_code),
+                ])
+                .send()
+                .await;
+            // A dropped poll is retried at the next interval.
+            let Ok(response) = response else { continue };
+            let success = response.status().is_success();
+            let Ok(body) = read_json(response).await else {
+                continue;
+            };
+            if success {
+                let tokens: TokenResponse =
+                    serde_json::from_value(body).map_err(|_| AccountError::InvalidResponse)?;
+                return self.install(tokens, generation, None);
+            }
+            match body["error"].as_str() {
+                Some("authorization_pending") => {}
+                Some("slow_down") => {
+                    interval = (interval + Duration::from_secs(5)).min(Duration::from_secs(60))
+                }
+                Some("access_denied") => return Err(AccountError::Denied),
+                Some("expired_token") => return Err(AccountError::Expired),
+                _ => return Err(AccountError::Unavailable),
+            }
+        }
     }
 
     async fn await_callback(
@@ -1156,6 +1314,93 @@ mod tests {
             );
         }
     }
+    /// A headless computer signs in with a code approved elsewhere, waiting
+    /// out "pending" replies; a denial ends the attempt.
+    #[tokio::test]
+    async fn sign_in_code_waits_for_approval_and_saves_the_session() {
+        use axum::{Form, Json, Router, extract::State, http::StatusCode, routing::post};
+        use std::collections::HashMap;
+        type Polls = Arc<Mutex<Vec<String>>>;
+        async fn grant(Form(form): Form<HashMap<String, String>>) -> Json<Value> {
+            assert_eq!(form["client_id"], "test-client");
+            Json(
+                json!({"device_code":"device-secret","user_code":"WDJB-MJHT",
+                "verification_uri":"https://auth.example.test/device",
+                "verification_uri_complete":"https://auth.example.test/device?user_code=WDJB-MJHT",
+                "expires_in":300,"interval":1}),
+            )
+        }
+        async fn authenticate(
+            State(polls): State<Polls>,
+            Form(form): Form<HashMap<String, String>>,
+        ) -> (StatusCode, Json<Value>) {
+            assert_eq!(form["device_code"], "device-secret");
+            assert_eq!(
+                form["grant_type"],
+                "urn:ietf:params:oauth:grant-type:device_code"
+            );
+            let mut polls = polls.lock().unwrap();
+            polls.push(form["device_code"].clone());
+            match polls.len() {
+                1 => (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error":"authorization_pending"})),
+                ),
+                2 => {
+                    let fresh = token("headless", now() + 3600);
+                    (
+                        StatusCode::OK,
+                        Json(
+                            json!({"access_token":fresh.access_token,"refresh_token":"device-refresh",
+                            "user":{"id":"headless","email":"headless@example.test"}}),
+                        ),
+                    )
+                }
+                _ => (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error":"access_denied"})),
+                ),
+            }
+        }
+        let polls = Polls::default();
+        let router = Router::new()
+            .route("/user_management/authorize/device", post(grant))
+            .route("/user_management/authenticate", post(authenticate))
+            .with_state(polls.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let dir = tempfile::tempdir().unwrap();
+        let account = Account::configured(
+            dir.path(),
+            API_URL.into(),
+            "test-client".into(),
+            format!("http://{address}"),
+        )
+        .unwrap();
+        let (code, completion) = account.sign_in_with_code().await.unwrap();
+        assert_eq!(code.user_code, "WDJB-MJHT");
+        assert_eq!(
+            code.verification_uri,
+            "https://auth.example.test/device?user_code=WDJB-MJHT"
+        );
+        assert!(account.status().login.is_some());
+        completion.await.unwrap();
+        assert_eq!(polls.lock().unwrap().len(), 2);
+        assert_eq!(account.status().user.unwrap().id, "headless");
+        assert!(account.status().login.is_none());
+        let saved = std::fs::read_to_string(dir.path().join("account/session.json")).unwrap();
+        assert!(saved.contains("device-refresh") && !saved.contains("device-secret"));
+
+        let (_, denied) = account.sign_in_with_code().await.unwrap();
+        assert!(matches!(denied.await, Err(AccountError::Denied)));
+        assert_eq!(
+            account.status().error.as_deref(),
+            Some("Sign-in was denied.")
+        );
+        server.abort();
+    }
+
     #[tokio::test]
     async fn concurrent_agents_share_one_refresh_and_rotation() {
         use tokio::{

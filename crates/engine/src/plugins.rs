@@ -163,7 +163,35 @@ impl Plugins {
             .await
     }
     pub async fn stop_computer_bridge(&self) {
-        self.computer_bridge.stop().await;
+        if let Some(root) = &self.local_root {
+            self.computer_bridge.stop(root).await;
+        }
+    }
+    /// Resume the connector this computer enabled before the engine restarted.
+    pub async fn resume_computer_bridge(&self) {
+        if let Some(root) = &self.local_root {
+            self.computer_bridge
+                .resume(root, self.account.clone())
+                .await;
+        }
+    }
+    /// Make this computer the chat's primary when it is enabled for the
+    /// account; `None` otherwise.
+    pub async fn claim_computer_primary(
+        &self,
+        account_id: &str,
+        workspace: &str,
+        chat: &str,
+    ) -> anyhow::Result<Option<String>> {
+        let Some(root) = &self.local_root else {
+            return Ok(None);
+        };
+        self.computer_bridge
+            .claim_primary(root, &self.account, account_id, workspace, chat)
+            .await
+    }
+    pub fn computer_bridge_status(&self) -> crate::computer_bridge::BridgeStatus {
+        self.computer_bridge.status()
     }
     pub async fn computer_tasks(
         &self,

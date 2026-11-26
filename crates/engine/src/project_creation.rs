@@ -712,7 +712,7 @@ impl CreationRunner for SystemCreationRunner {
     }
 }
 
-pub(crate) struct ProcessGroup(pub(crate) Option<u32>);
+struct ProcessGroup(Option<u32>);
 impl Drop for ProcessGroup {
     fn drop(&mut self) {
         #[cfg(unix)]

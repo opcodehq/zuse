@@ -59,8 +59,15 @@ pub fn run(global: Global, command: Command, l10n: &Localizer) -> anyhow::Result
         Command::BridgeEnroll { name } => block_on(async {
             let label =
                 name.unwrap_or_else(|| gethostname::gethostname().to_string_lossy().into_owned());
-            let id = zuse_engine::computer_bridge::enroll(&paths::data_dir(), &label).await?;
-            println!("Enrolled {label} ({id}).");
+            let id = zuse_engine::computer_bridge::enroll(&paths::data_dir(), &label, |code| {
+                println!(
+                    "To sign in this computer, open {} on any device and confirm the code {}.",
+                    code.verification_uri, code.user_code
+                );
+                println!("Waiting for approval…");
+            })
+            .await?;
+            println!("Enrolled {label} ({id}). Run `zuse bridge` to accept approved commands.");
             Ok(())
         }),
         Command::Unlink => block_on(remote::run(remote::Action::Unlink, port, l10n)),

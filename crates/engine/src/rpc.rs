@@ -3774,22 +3774,64 @@ impl EngineRpc {
                 })?;
                 RpcReply::value(&response)
             }
-            "StartComputerBridge" | "StopComputerBridge" => {
-                let gateway=self.plugins.as_ref().ok_or_else(||RpcError::Failed("Computer connector unavailable".into()))?;
-                if method=="StopComputerBridge"{gateway.stop_computer_bridge().await;RpcReply::value(&serde_json::Value::Null)}
-                else{
-                    let label=params["label"].as_str().ok_or_else(||RpcError::BadParams("Specify a computer name".into()))?;
-                    let id=gateway.start_computer_bridge(label).await.map_err(|e|RpcError::Failed(e.to_string()))?;
-                    RpcReply::value(&serde_json::json!({"deviceId":id}))
+            "ClaimComputerPrimary" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct P {
+                    expected_account_id: String,
+                    workspace_id: String,
+                    chat_id: String,
+                }
+                let p: P = parse_params(params)?;
+                let gateway = self
+                    .plugins
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("Computer connector unavailable".into()))?;
+                let claimed = gateway
+                    .claim_computer_primary(&p.expected_account_id, &p.workspace_id, &p.chat_id)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({"deviceId": claimed}))
+            }
+            "StartComputerBridge" | "StopComputerBridge" | "ComputerBridgeStatus" => {
+                let gateway = self
+                    .plugins
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("Computer connector unavailable".into()))?;
+                match method {
+                    "StopComputerBridge" => {
+                        gateway.stop_computer_bridge().await;
+                        RpcReply::value(&gateway.computer_bridge_status())
+                    }
+                    "ComputerBridgeStatus" => RpcReply::value(&gateway.computer_bridge_status()),
+                    _ => {
+                        let label = params["label"]
+                            .as_str()
+                            .ok_or_else(|| RpcError::BadParams("Specify a computer name".into()))?;
+                        let id = gateway
+                            .start_computer_bridge(label)
+                            .await
+                            .map_err(|e| RpcError::Failed(e.to_string()))?;
+                        RpcReply::value(&serde_json::json!({"deviceId": id}))
+                    }
                 }
             }
             zuse_protocol::computer_tasks::METHOD => {
                 #[derive(Deserialize)]
-                #[serde(rename_all="camelCase",deny_unknown_fields)]
-                struct P {chat_id:String,request:zuse_protocol::computer_tasks::Request}
-                let p:P=parse_params(params)?;
-                let gateway=self.plugins.as_ref().ok_or_else(||RpcError::Failed("Computer tasks unavailable".into()))?;
-                let value=gateway.computer_tasks(&p.chat_id,&p.request).await.map_err(|e|RpcError::Failed(e.to_string()))?;
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct P {
+                    chat_id: String,
+                    request: zuse_protocol::computer_tasks::Request,
+                }
+                let p: P = parse_params(params)?;
+                let gateway = self
+                    .plugins
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("Computer tasks unavailable".into()))?;
+                let value = gateway
+                    .computer_tasks(&p.chat_id, &p.request)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&value)
             }
             methods::PLUGIN_TOOLS => {

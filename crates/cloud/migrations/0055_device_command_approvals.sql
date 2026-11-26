@@ -15,9 +15,23 @@ CREATE TABLE IF NOT EXISTS api_bridge_attachments (
     workspace_id text NOT NULL,
     chat_id text NOT NULL,
     enrollment_id text NOT NULL,
+    -- False for the row a primary claim adds: it holds the device's requests
+    -- but doesn't make it a secondary the agent may target.
+    explicit boolean NOT NULL DEFAULT true,
     PRIMARY KEY (owner_id, workspace_id, chat_id, enrollment_id),
     FOREIGN KEY (owner_id, enrollment_id) REFERENCES api_bridge_computers ON DELETE CASCADE,
     FOREIGN KEY (workspace_id, chat_id) REFERENCES zuse_rust_task_command_sessions ON DELETE CASCADE
+);
+-- The computer the owner last sent a message from, proven by its own key.
+CREATE TABLE IF NOT EXISTS api_bridge_primaries (
+    owner_id text NOT NULL,
+    workspace_id text NOT NULL,
+    chat_id text NOT NULL,
+    enrollment_id text NOT NULL,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (owner_id, workspace_id, chat_id),
+    FOREIGN KEY (owner_id, workspace_id, chat_id, enrollment_id)
+        REFERENCES api_bridge_attachments ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS api_bridge_requests (
     request_id uuid PRIMARY KEY,
@@ -30,13 +44,17 @@ CREATE TABLE IF NOT EXISTS api_bridge_requests (
     shell text NOT NULL,
     cwd text NOT NULL,
     command text NOT NULL,
-    timeout_ms integer NOT NULL CHECK (timeout_ms > 0),
+    -- Per-request deadline, bounded to one hour.
+    timeout_ms integer NOT NULL CHECK (timeout_ms BETWEEN 1000 AND 3600000),
     decision text CHECK (decision IN ('once', 'session', 'always', 'deny')),
+    -- The device's role in the chat when the request was made.
+    role text NOT NULL DEFAULT 'secondary' CHECK (role IN ('primary', 'secondary')),
+    created_at timestamptz NOT NULL DEFAULT now(),
     FOREIGN KEY (owner_id, workspace_id, chat_id, enrollment_id)
         REFERENCES api_bridge_attachments ON DELETE CASCADE
 );
-CREATE INDEX IF NOT EXISTS api_bridge_requests_pending
-    ON api_bridge_requests(owner_id, workspace_id, chat_id) WHERE decision IS NULL;
+CREATE INDEX IF NOT EXISTS api_bridge_requests_chat
+    ON api_bridge_requests(owner_id, workspace_id, chat_id, created_at DESC);
 CREATE TABLE IF NOT EXISTS api_bridge_session_grants (
     owner_id text NOT NULL,
     workspace_id text NOT NULL,
@@ -82,8 +100,21 @@ CREATE TABLE IF NOT EXISTS api_bridge_tasks (
 CREATE TABLE IF NOT EXISTS api_bridge_runs (
     request_id uuid PRIMARY KEY REFERENCES api_bridge_requests ON DELETE CASCADE,
     created_at timestamptz NOT NULL DEFAULT now(),
-    task_id text NOT NULL, claimed boolean NOT NULL DEFAULT false, claimed_at timestamptz, progress text, result jsonb
+    task_id text NOT NULL, claimed boolean NOT NULL DEFAULT false, claimed_at timestamptz,
+    -- The host's last report while running; silence past the unknown-outcome
+    -- window shows "Outcome unknown" and the request is never re-run.
+    heartbeat_at timestamptz,
+    progress text, result jsonb
 );
+
+-- Single-use connector proofs (replay protection), kept five minutes.
+CREATE TABLE IF NOT EXISTS api_bridge_proofs (
+    thumbprint text NOT NULL,
+    jti text NOT NULL,
+    expires_at timestamptz NOT NULL,
+    PRIMARY KEY (thumbprint, jti)
+);
+CREATE INDEX IF NOT EXISTS api_bridge_proofs_expiry ON api_bridge_proofs(expires_at);
 
 DO $grants$
 DECLARE app_role text := CASE current_schema()
@@ -92,7 +123,9 @@ DECLARE app_role text := CASE current_schema()
 BEGIN
     IF app_role IS NOT NULL AND EXISTS (SELECT FROM pg_roles WHERE rolname = app_role) THEN
         EXECUTE format('GRANT SELECT, INSERT, DELETE ON api_bridge_attachments, api_bridge_session_grants, api_bridge_always_grants, api_bridge_requests TO %I', app_role);
-        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON api_bridge_computers, api_bridge_tasks, api_bridge_runs TO %I', app_role);
+        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON api_bridge_computers, api_bridge_tasks, api_bridge_runs, api_bridge_primaries TO %I', app_role);
+        EXECUTE format('GRANT SELECT, INSERT, DELETE ON api_bridge_proofs TO %I', app_role);
         EXECUTE format('GRANT UPDATE(decision) ON api_bridge_requests TO %I', app_role);
+        EXECUTE format('GRANT UPDATE(explicit) ON api_bridge_attachments TO %I', app_role);
     END IF;
 END $grants$;

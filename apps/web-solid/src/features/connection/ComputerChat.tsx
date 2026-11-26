@@ -9,11 +9,13 @@ type Run = {
   id: string;
   computer: string;
   command: string;
+  state: string;
   result: { status: string; output: string };
 };
 type Preview = {
   id: string;
   computerName: string;
+  role?: string;
   command: string;
   cwd: string;
   shell: string;
@@ -51,13 +53,13 @@ export function ComputerChat(props: { chatId: string }) {
         try {
           const [devices, ids, rows, results] = await Promise.all([
             call<Computer[]>("list"),
-            call<string[]>("attached"),
+            call<{ deviceId: string; role: string }[]>("attached"),
             call<Preview[]>("pending"),
             call<Run[]>("results"),
           ]);
           if (current()) {
             setComputers(devices);
-            setAttached(ids);
+            setAttached(ids.map((row) => row.deviceId));
             setPending(rows);
             setRuns(results);
           }
@@ -87,12 +89,12 @@ export function ComputerChat(props: { chatId: string }) {
     try {
       await call(action, extra);
       const [ids, rows, results] = await Promise.all([
-        call<string[]>("attached"),
+        call<{ deviceId: string; role: string }[]>("attached"),
         call<Preview[]>("pending"),
         call<Run[]>("results"),
       ]);
       if (chat === props.chatId && epoch === state.epoch) {
-        setAttached(ids);
+        setAttached(ids.map((row) => row.deviceId));
         setPending(rows);
         setRuns(results);
       }
@@ -131,7 +133,9 @@ export function ComputerChat(props: { chatId: string }) {
             {(request) => (
               <div>
                 <p>
-                  {request.computerName} · {request.osUser} · {request.shell}
+                  {request.computerName}
+                  {request.role === "secondary" ? " (secondary)" : ""} · {request.osUser} ·{" "}
+                  {request.shell}
                 </p>
                 <pre>
                   {request.cwd}
@@ -161,7 +165,7 @@ export function ComputerChat(props: { chatId: string }) {
               </div>
             )}
           </For>
-          <For each={runs()}>
+          <For each={runs().filter((run) => run.state !== "pending")}>
             {(run) => (
               <div>
                 <p>
@@ -172,7 +176,7 @@ export function ComputerChat(props: { chatId: string }) {
                   {"\n"}
                   {run.result.output}
                 </pre>
-                <Show when={run.result.status === "Running"}>
+                <Show when={run.state === "running"}>
                   <Btn
                     disabled={busy()}
                     onClick={() => void act("cancel", { requestId: run.id })}

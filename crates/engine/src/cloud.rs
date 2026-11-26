@@ -1055,6 +1055,23 @@ impl CloudApi {
                         Some(json!({"decision":text("decision")?})),
                         reqwest::Method::POST,
                     ),
+                    "primary" | "clearPrimary" => (
+                        vec![
+                            "v1",
+                            "cloud",
+                            "workspaces",
+                            text("workspaceId")?,
+                            "chats",
+                            text("chatId")?,
+                            "primary-computer",
+                        ],
+                        None,
+                        if action == "primary" {
+                            reqwest::Method::GET
+                        } else {
+                            reqwest::Method::DELETE
+                        },
+                    ),
                     "attach" | "detach" => (
                         vec![
                             "v1",

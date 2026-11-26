@@ -8,6 +8,7 @@ type Preview = {
 	id: string;
 	deviceId: string;
 	computerName: string;
+	role?: string;
 	osUser: string;
 	shell: string;
 	cwd: string;
@@ -29,7 +30,7 @@ export function DeviceCommandApprovals(props: { workspaceId: string; chatId: str
 	const attachedPath = `${path.slice(0, path.lastIndexOf("/"))}/attached-computers`;
 	const taskPath = `${path.slice(0, path.lastIndexOf("/"))}/computer-tasks`;
 	const [tasks, setTasks] = useState<{ task: string; computer: string; command: string; cwd: string; dynamic: boolean }[]>([]);
-	const [results, setResults] = useState<{ id: string; computer: string; command: string; result: { status: string; output: string } }[]>([]);
+	const [results, setResults] = useState<{ id: string; computer: string; command: string; state: string; result: { status: string; output: string } }[]>([]);
 	const [computers, setComputers] = useState<Computer[]>([]);
 	const [attached, setAttached] = useState<string[]>([]);
 	const [open, setOpen] = useState(false);
@@ -56,7 +57,7 @@ export function DeviceCommandApprovals(props: { workspaceId: string; chatId: str
 					setResults(finished);
 					setRequests(rows);
 					setComputers(devices);
-					setAttached(ids);
+					setAttached((ids as { deviceId: string }[]).map((row) => row.deviceId));
 					setError((previous) => previous === "Could not load command approvals." ? "" : previous);
 				}
 			} catch {
@@ -192,16 +193,16 @@ export function DeviceCommandApprovals(props: { workspaceId: string; chatId: str
 					<Button size="sm" disabled={busy} onPress={() => void requestTask(task.task)}>Run on {task.computer}</Button>
 				</View>
 			))}
-			{open && results.map((run) => (
+			{open && results.filter((run) => run.state !== "pending").map((run) => (
 				<View key={run.id}>
 					<Text>{run.computer} · {run.result.status}</Text>
-					{run.result.status === "Running" && <Button disabled={busy} size="sm" onPress={()=>void cancelRun(run.id)}>Stop</Button>}
+					{run.state === "running" && <Button disabled={busy} size="sm" onPress={()=>void cancelRun(run.id)}>Stop</Button>}
 					<Text selectable className="font-mono">{run.command}{"\n"}{run.result.output}</Text>
 				</View>
 			))}
 			{open && requests?.map((row) => (
 				<View key={row.id} className="gap-2">
-					<Text>{row.computerName} · {row.osUser} · {row.shell}</Text>
+					<Text>{row.computerName}{row.role === "secondary" ? " (secondary)" : ""} · {row.osUser} · {row.shell}</Text>
 					<Text selectable className="font-mono">{row.cwd}{"\n"}{row.command}</Text>
 					<Text>Runs with this OS user's access to files and credentials. Always allows your future chats to use this computer.</Text>
 					<View className="flex-row flex-wrap gap-1">

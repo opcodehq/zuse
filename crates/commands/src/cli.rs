@@ -83,8 +83,10 @@ pub enum Command {
         name: Option<String>,
     },
     Unlink,
-    /// Enroll this computer for attachment to your private cloud chats.
+    /// Accept approved commands from your attached cloud chats until interrupted.
     Bridge,
+    /// Enroll this computer for attachment to your private cloud chats. Without
+    /// a saved sign-in, prints a code to approve on another device.
     BridgeEnroll {
         #[arg(long)]
         name: Option<String>,

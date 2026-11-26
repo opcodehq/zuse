@@ -1,5 +1,6 @@
-//! Owner catalog. Enrolling a public key does not create a remote-access grant.
-use super::{bridge_approvals::personal_owner, *};
+//! Owner catalog, chat attachments and the chat's primary computer. Enrolling
+//! a key grants nothing by itself: every command still needs approval.
+use super::{bridge_approvals::personal_owner, bridge_proof::host_key, *};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -22,7 +23,8 @@ pub(super) async fn enroll(
     {
         return Err(ApiError::bad_request("invalid_bridge_computer"));
     }
-    let key = host_key(&state, &headers, "/v1/cloud/bridge/computers").await?;
+    let pool = runtime(&state)?.shared_pool();
+    let key = host_key(&pool, &headers, "/v1/cloud/bridge/computers").await?;
     let id: String = sqlx::query_scalar(
         "INSERT INTO api_bridge_computers(owner_id,enrollment_id,key_thumbprint,label,platform)
         VALUES ($1,$2,$3,$4,$5) ON CONFLICT(owner_id,key_thumbprint)
@@ -33,7 +35,7 @@ pub(super) async fn enroll(
     .bind(key)
     .bind(label)
     .bind(input.platform)
-    .fetch_one(&runtime(&state)?.shared_pool())
+    .fetch_one(&pool)
     .await?;
     Ok(Json(json!({"deviceId":id})))
 }
@@ -59,18 +61,60 @@ pub(super) async fn attached(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((workspace, chat)): Path<(String, String)>,
-) -> Result<Json<Vec<String>>, ApiError> {
+) -> Result<Json<Vec<Value>>, ApiError> {
     let owner = personal_owner(&state, &headers).await?;
-    let ids = sqlx::query_scalar(
-        "SELECT enrollment_id FROM api_bridge_attachments
-        WHERE owner_id=$1 AND workspace_id=$2 AND chat_id=$3 ORDER BY enrollment_id",
+    Ok(Json(
+        attached_for(&runtime(&state)?.shared_pool(), &owner, &workspace, &chat).await?,
+    ))
+}
+
+/// The chat's primary (first, when there is one) and its explicitly attached
+/// secondaries.
+pub(super) async fn attached_for(
+    pool: &sqlx::PgPool,
+    owner: &str,
+    workspace: &str,
+    chat: &str,
+) -> Result<Vec<Value>, ApiError> {
+    Ok(sqlx::query_scalar(
+        "SELECT jsonb_build_object('deviceId',a.enrollment_id,
+            'role',CASE WHEN p.enrollment_id IS NULL THEN 'secondary' ELSE 'primary' END)
+         FROM api_bridge_attachments a
+         LEFT JOIN api_bridge_primaries p USING(owner_id,workspace_id,chat_id,enrollment_id)
+         WHERE a.owner_id=$1 AND a.workspace_id=$2 AND a.chat_id=$3 AND (a.explicit OR p.enrollment_id IS NOT NULL)
+         ORDER BY p.enrollment_id IS NULL, a.enrollment_id",
     )
     .bind(owner)
     .bind(workspace)
     .bind(chat)
-    .fetch_all(&runtime(&state)?.shared_pool())
-    .await?;
-    Ok(Json(ids))
+    .fetch_all(pool)
+    .await?)
+}
+
+/// The owner's active chat on a usable computer, and their enrollment, locked
+/// against a concurrent archive or removal.
+async fn usable_chat(
+    tx: &mut sqlx::PgConnection,
+    owner: &str,
+    workspace: &str,
+    chat: &str,
+    device: &str,
+) -> Result<(), ApiError> {
+    sqlx::query(
+        "SELECT 1 FROM api_cloud_workspaces w JOIN zuse_rust_task_command_sessions s USING(workspace_id)
+         JOIN api_bridge_computers c ON c.owner_id=w.account_id
+         WHERE w.account_id=$1 AND workspace_id=$2 AND s.session_id=$3 AND c.enrollment_id=$4
+           AND s.state='active' AND w.desired_state IN ('ready','paused')
+           AND w.state NOT IN ('archived','archiving','deleting','deleted') FOR SHARE OF w,s,c",
+    )
+    .bind(owner)
+    .bind(workspace)
+    .bind(chat)
+    .bind(device)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| ApiError::not_found("bridge_computer_or_chat_unavailable"))?;
+    Ok(())
 }
 
 pub(super) async fn attach(
@@ -79,26 +123,139 @@ pub(super) async fn attach(
     Path((workspace, chat, id)): Path<(String, String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let owner = personal_owner(&state, &headers).await?;
-    let pool = runtime(&state)?.shared_pool();
+    attach_for(
+        &runtime(&state)?.shared_pool(),
+        &owner,
+        &workspace,
+        &chat,
+        &id,
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Attach a computer as a secondary the agent may target when asked.
+pub(super) async fn attach_for(
+    pool: &sqlx::PgPool,
+    owner: &str,
+    workspace: &str,
+    chat: &str,
+    device: &str,
+) -> Result<(), ApiError> {
     let mut tx = pool.begin().await?;
-    sqlx::query("SELECT 1 FROM api_cloud_workspaces w JOIN zuse_rust_task_command_sessions s USING(workspace_id)
-        JOIN api_bridge_computers c ON c.owner_id=w.account_id
-        WHERE w.account_id=$1 AND workspace_id=$2 AND s.session_id=$3 AND c.enrollment_id=$4
-        AND s.state='active' AND w.desired_state IN ('ready','paused')
-        AND w.state NOT IN ('archived','archiving','deleting','deleted') FOR SHARE OF w,s,c")
-        .bind(&owner).bind(&workspace).bind(&chat).bind(&id).fetch_optional(&mut *tx).await?
-        .ok_or_else(||ApiError::not_found("bridge_computer_or_chat_unavailable"))?;
+    usable_chat(&mut tx, owner, workspace, chat, device).await?;
     sqlx::query(
-        "INSERT INTO api_bridge_attachments(owner_id,workspace_id,chat_id,enrollment_id)
-        VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING",
+        "INSERT INTO api_bridge_attachments(owner_id,workspace_id,chat_id,enrollment_id,explicit)
+         VALUES($1,$2,$3,$4,true) ON CONFLICT(owner_id,workspace_id,chat_id,enrollment_id)
+         DO UPDATE SET explicit=true WHERE NOT api_bridge_attachments.explicit",
     )
     .bind(owner)
     .bind(workspace)
     .bind(chat)
-    .bind(id)
+    .bind(device)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
+    Ok(())
+}
+
+pub(super) async fn claim_primary(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<PrimaryClaim>,
+) -> Result<Json<Value>, ApiError> {
+    let owner = personal_owner(&state, &headers).await?;
+    let pool = runtime(&state)?.shared_pool();
+    let key = host_key(&pool, &headers, "/v1/cloud/bridge/primary").await?;
+    let device: String = sqlx::query_scalar(
+        "SELECT enrollment_id FROM api_bridge_computers WHERE owner_id=$1 AND key_thumbprint=$2",
+    )
+    .bind(&owner)
+    .bind(key)
+    .fetch_optional(&pool)
+    .await?
+    .ok_or_else(|| ApiError::forbidden("computer_not_enrolled"))?;
+    primary_for(&pool, &owner, &input.workspace_id, &input.chat_id, &device).await?;
+    Ok(Json(json!({"deviceId":device})))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PrimaryClaim {
+    workspace_id: String,
+    chat_id: String,
+}
+
+/// Make the computer the owner is sending from the chat's primary. The
+/// caller has already proven it holds that computer's enrolled key. The
+/// previous primary keeps its running work but is no longer a target unless
+/// it was attached explicitly.
+pub(super) async fn primary_for(
+    pool: &sqlx::PgPool,
+    owner: &str,
+    workspace: &str,
+    chat: &str,
+    device: &str,
+) -> Result<(), ApiError> {
+    let mut tx = pool.begin().await?;
+    usable_chat(&mut tx, owner, workspace, chat, device).await?;
+    sqlx::query(
+        "INSERT INTO api_bridge_attachments(owner_id,workspace_id,chat_id,enrollment_id,explicit)
+         VALUES($1,$2,$3,$4,false) ON CONFLICT DO NOTHING",
+    )
+    .bind(owner)
+    .bind(workspace)
+    .bind(chat)
+    .bind(device)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO api_bridge_primaries(owner_id,workspace_id,chat_id,enrollment_id) VALUES($1,$2,$3,$4)
+         ON CONFLICT(owner_id,workspace_id,chat_id) DO UPDATE SET enrollment_id=excluded.enrollment_id, updated_at=now()",
+    )
+    .bind(owner)
+    .bind(workspace)
+    .bind(chat)
+    .bind(device)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+pub(super) async fn primary(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((workspace, chat)): Path<(String, String)>,
+) -> Result<Json<Value>, ApiError> {
+    let owner = personal_owner(&state, &headers).await?;
+    let device: Option<String> = sqlx::query_scalar(
+        "SELECT enrollment_id FROM api_bridge_primaries WHERE owner_id=$1 AND workspace_id=$2 AND chat_id=$3",
+    )
+    .bind(owner)
+    .bind(workspace)
+    .bind(chat)
+    .fetch_optional(&runtime(&state)?.shared_pool())
+    .await?;
+    Ok(Json(json!({"deviceId":device})))
+}
+
+/// The owner sent from a computer that isn't enabled (or from elsewhere):
+/// the chat has no primary until they send from one that is.
+pub(super) async fn clear_primary(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((workspace, chat)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    let owner = personal_owner(&state, &headers).await?;
+    sqlx::query(
+        "DELETE FROM api_bridge_primaries WHERE owner_id=$1 AND workspace_id=$2 AND chat_id=$3",
+    )
+    .bind(owner)
+    .bind(workspace)
+    .bind(chat)
+    .execute(&runtime(&state)?.shared_pool())
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -114,27 +271,4 @@ pub(super) async fn forget(
         .execute(&runtime(&state)?.shared_pool())
         .await?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-pub(super) async fn host_key(
-    state: &AppState,
-    headers: &HeaderMap,
-    path: &str,
-) -> Result<String, ApiError> {
-    let authority = state
-        .store
-        .devices
-        .as_ref()
-        .ok_or_else(|| ApiError::unavailable("device_authority_disabled"))?;
-    let token = headers[header::AUTHORIZATION]
-        .to_str()
-        .ok()
-        .and_then(|v| v.split_once(' '))
-        .map(|(_, t)| t)
-        .ok_or_else(|| ApiError::unauthorized("missing_bearer"))?;
-    let proof = headers
-        .get("dpop")
-        .and_then(|h| h.to_str().ok())
-        .ok_or_else(|| ApiError::unauthorized("missing_dpop"))?;
-    authority.verify_bridge_proof(path, token, proof).await
 }

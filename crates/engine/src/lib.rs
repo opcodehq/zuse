@@ -503,6 +503,12 @@ impl EngineCore {
             !profile.durable_command_commits(),
         )
         .map_err(|e| EngineError::Other(e.to_string()))?;
+        {
+            // A connector this computer enabled earlier comes back with the
+            // engine, still bound to the account that enabled it.
+            let plugins = plugins.clone();
+            tokio::spawn(async move { plugins.resume_computer_bridge().await });
+        }
         let browser_access =
             browser_access::Owner::new(profile.store_root(), device_id.clone(), pairings.clone())
                 .with_managed_authority(Arc::new(managed_host.control()));
