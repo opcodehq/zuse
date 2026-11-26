@@ -9,6 +9,7 @@ struct HomeView: View {
   let newChat: () -> Void
   let newCloudChat: () -> Void
   var addProject: () -> Void = {}
+  var openZapper: (String) -> Void = { _ in }
   private var isTablet: Bool {
     #if os(iOS)
       UIDevice.current.userInterfaceIdiom == .pad
@@ -43,7 +44,9 @@ struct HomeView: View {
         for (sessions, archived) in [
           (workspace.sessions, false), (workspace.archivedSessions, true),
         ] {
-          for session in sessions where session.projectId == project.id {
+          // Zapper conversations are listed under their Zapper instead.
+          for session in sessions
+          where session.projectId == project.id && !workspace.zappers.keepsChat(session.id) {
             rows.append(
               ChatListRow(
                 id: Self.key(session), chatID: session.id, placeKey: Self.computerPlace,
@@ -97,6 +100,9 @@ struct HomeView: View {
       if let problem = workspace.cloudCatalogProblem {
         HomeNotice(text: problem, icon: "cloud.bolt")
       }
+      ZapperHomeSection(
+        workspace: workspace, search: search, filter: archiveFilter, collapsed: $collapsed,
+        open: openZapper)
       ForEach(groups) { group in
         let isCollapsed = collapsed.contains(group.id)
         Button {

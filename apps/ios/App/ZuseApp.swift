@@ -53,6 +53,10 @@ struct WorkspaceView: View {
   @FocusState private var composerFocused: Bool
   @State private var selection: SessionRow?
   @State private var preferredColumn: NavigationSplitViewColumn = .sidebar
+  /// The Zapper open in the detail column, its pushed pages, and the chat it opened.
+  @State private var zapperRoute: String?
+  @State private var zapperPath: [ZapperRoute] = []
+  @State private var zapperChat: String?
   @Environment(\.scenePhase) private var scenePhase
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   #if os(iOS)
@@ -82,6 +86,20 @@ struct WorkspaceView: View {
     newChat = nil
     if !isCompact { columnVisibility = visibilityBeforeNewChat }
   }
+  private func openZapper(_ id: String) {
+    if newChat != nil { closeNewChat() }
+    if zapperRoute != id { zapperPath = [] }
+    zapperRoute = id
+    // A chat tapped next always reads as a new selection and leaves the Zapper.
+    selection = nil
+    preferredColumn = .detail
+  }
+  private func closeZapper() {
+    zapperRoute = nil
+    zapperPath = []
+    zapperChat = nil
+    if isCompact { preferredColumn = .sidebar }
+  }
   var body: some View {
     presentedWorkspace
       .alert(
@@ -92,17 +110,6 @@ struct WorkspaceView: View {
       } message: {
         Text(workspace.error ?? "")
       }
-      #if DEBUG
-        // Automation: `SIMCTL_CHILD_ZUSE_PAIR_LINK=<invitation> xcrun simctl launch …` pairs
-        // without the camera or a confirmation. Debug builds only.
-        .task {
-          if let link = ProcessInfo.processInfo.environment["ZUSE_PAIR_LINK"], !link.isEmpty {
-            do { try await workspace.pair(link) } catch {
-              workspace.error = error.localizedDescription
-            }
-          }
-        }
-      #endif
       .onOpenURL { url in
         if let invitation = PairingDeepLink.invitation(from: url) { linkedInvitation = invitation }
       }
@@ -143,7 +150,31 @@ struct WorkspaceView: View {
         }
       }
       .sheet(isPresented: $showSettings) { SettingsView(workspace: workspace) }
+      .onChange(of: workspace.operationScope) { if zapperRoute != nil { closeZapper() } }
   }
+  #if DEBUG
+    /// Debug launches: `SIMCTL_CHILD_ZUSE_PAIR_LINK=<invitation> xcrun simctl launch …` pairs
+    /// without the camera or a confirmation, then `--zapper-detail-preview` opens the first Zapper.
+    private func openZapperPreview(_ arguments: [String]) async {
+      if let link = ProcessInfo.processInfo.environment["ZUSE_PAIR_LINK"], !link.isEmpty {
+        do { try await workspace.pair(link) } catch { workspace.error = error.localizedDescription }
+        for _ in 0..<80 where workspace.zappers.zappers.isEmpty {
+          try? await Task.sleep(for: .milliseconds(250))
+        }
+      }
+      guard arguments.contains("--zapper-detail-preview"),
+        let first = workspace.zappers.zappers.first
+      else { return }
+      openZapper(first.id)
+      if arguments.contains("--zapper-issue-preview"),
+        let issue = first.issues.first(where: { $0.details.status == .needsYou })
+      {
+        zapperPath = [.issue(issue.id)]
+      } else if arguments.contains("--zapper-document-preview") {
+        zapperPath = [.document("NOTES.md")]
+      }
+    }
+  #endif
   private var interactiveWorkspace: some View {
     navigation
       #if os(iOS)
@@ -204,9 +235,14 @@ struct WorkspaceView: View {
       }
       .onChange(of: preferredColumn) { _, column in
         // Popping the pushed page on iPhone returns to the sidebar.
-        if column == .sidebar && isCompact { newChat = nil }
+        if column == .sidebar && isCompact {
+          newChat = nil
+          zapperRoute = nil
+          zapperPath = []
+        }
       }
       .onChange(of: selection) {
+        if let selection, zapperRoute != nil, selection.id != zapperChat { closeZapper() }
         if let selection, selection.id != workspace.selectedSession?.id {
           workspace.selectSession(selection)
         }
@@ -232,6 +268,7 @@ struct WorkspaceView: View {
           if arguments.contains("--settings-preview") { showSettings = true }
           if arguments.contains("--new-chat-preview") { openNewChat(cloud: false) }
           if arguments.contains("--pairing-preview") { connectionMethod = .add }
+          await openZapperPreview(arguments)
         #endif
       }
       .fileImporter(
@@ -286,7 +323,7 @@ struct WorkspaceView: View {
         workspace: workspace, selection: $selection,
         settings: { showSettings = true }, connect: { connectionMethod = .add },
         newChat: { openNewChat(cloud: false) }, newCloudChat: { openNewChat(cloud: true) },
-        addProject: { showProject = true }
+        addProject: { showProject = true }, openZapper: openZapper
       )
       .disabled(workspace.clearingAccount)
       .navigationSplitViewColumnWidth(min: 230, ideal: 280, max: 340)
@@ -297,90 +334,20 @@ struct WorkspaceView: View {
           workspace: workspace, initialCloud: route.cloud, showsClose: !isCompact,
           close: closeNewChat
         ).id(route.id)
+      } else if let zapperID = zapperRoute {
+        ZapperNavigator(
+          workspace: workspace, zapperID: zapperID, path: $zapperPath,
+          select: { session in
+            zapperChat = session.id
+            workspace.selectSession(session)
+          },
+          close: closeZapper
+        ) { session in
+          chatScreen(session)
+        }
+        .id(zapperID)
       } else if let session = workspace.selectedSession {
-        VStack(spacing: 0) {
-          if workspace.transcript.olderSequence != nil {
-            Button(workspace.paging ? "Loading…" : "Load earlier messages") {
-              Task { await workspace.loadOlder() }
-            }
-            .font(.caption).disabled(workspace.paging || !workspace.sessionReady).padding(6)
-          }
-          TranscriptView(
-            messages: workspace.transcript.messages, sessionID: session.id, rpc: workspace.rpc,
-            bottomInset: composerHeight,
-            respond: { message, text in try await workspace.respondToUI(message, text: text) })
-          if !workspace.outbox.isEmpty {
-            ScrollView(.horizontal) {
-              HStack {
-                ForEach(workspace.outbox) { message in
-                  VStack(alignment: .leading, spacing: 5) {
-                    Text(message.text).lineLimit(2)
-                    HStack {
-                      Text(message.delivery == .queued ? "Queued" : "Delivery unconfirmed")
-                        .foregroundStyle(.secondary)
-                      if message.delivery == .uncertain {
-                        Button("Retry") {
-                          Task { await workspace.flushOutbox(retryID: message.id) }
-                        }
-                      }
-                      Button("Remove", role: .destructive) {
-                        Task { await workspace.removePending(message) }
-                      }
-                    }
-                  }.font(.caption).padding(10).frame(maxWidth: 280).background(
-                    .quaternary, in: RoundedRectangle(cornerRadius: 12))
-                }
-              }.padding(.horizontal)
-            }.frame(maxHeight: 100)
-          }
-          if !workspace.transcript.interactions.isEmpty {
-            ForEach(workspace.transcript.interactions, id: \.interactionIdentity) { interaction in
-              if interaction["_tag"].string == "Permission", let id = interaction["id"].string {
-                PermissionView(
-                  request: interaction["request"], enabled: workspace.connectionState == "Connected"
-                ) { allow in
-                  await workspace.decidePermission(id, allow: allow)
-                }
-              } else {
-                InteractionView(interaction: interaction, workspace: workspace)
-              }
-            }
-          }
-        }
-        .background(AppTheme.surface)
-        .overlay(alignment: .bottom) {
-          composer.background {
-            GeometryReader { geometry in
-              LinearGradient(
-                stops: [
-                  .init(color: AppTheme.surface.opacity(0), location: 0),
-                  .init(color: AppTheme.surface.opacity(0.18), location: 0.35),
-                  .init(color: AppTheme.surface.opacity(0.55), location: 1),
-                ], startPoint: .top, endPoint: .bottom
-              )
-              .frame(height: geometry.size.height + 64)
-              .offset(y: -64)
-              .allowsHitTesting(false)
-              .preference(key: ComposerHeightKey.self, value: geometry.size.height)
-            }
-          }
-        }
-        .onPreferenceChange(ComposerHeightKey.self) { composerHeight = $0 }
-        .navigationTitle(session.title.isEmpty ? "Chat" : session.title)
-        .compactNavigationTitle()
-        .toolbar {
-          ToolbarItem(placement: .principal) {
-            ChatHeaderTitle(
-              title: session.title.isEmpty ? "Chat" : session.title,
-              subtitle: [
-                workspace.projects.first { $0.id == session.projectId }?.name, branchName,
-              ].compactMap { $0 }.joined(separator: " · "))
-          }
-          ToolbarItem(placement: .primaryAction) {
-            Button("Changes", systemImage: "plusminus") { showDiff = true }
-              .tint(.primary).disabled(workspace.connectionState != "Connected")
-          }
-        }
+        chatScreen(session)
       } else {
         ContentUnavailableView {
           Label("Your work, wherever you are", systemImage: "bubble.left.and.bubble.right")
@@ -396,6 +363,92 @@ struct WorkspaceView: View {
       }
     }
     .navigationSplitViewStyle(.balanced)
+  }
+  /// One chat's transcript and composer, shown from the home list or inside a Zapper.
+  @ViewBuilder private func chatScreen(_ session: SessionRow) -> some View {
+    VStack(spacing: 0) {
+      if workspace.transcript.olderSequence != nil {
+        Button(workspace.paging ? "Loading…" : "Load earlier messages") {
+          Task { await workspace.loadOlder() }
+        }
+        .font(.caption).disabled(workspace.paging || !workspace.sessionReady).padding(6)
+      }
+      TranscriptView(
+        messages: workspace.transcript.messages, sessionID: session.id, rpc: workspace.rpc,
+        bottomInset: composerHeight,
+        respond: { message, text in try await workspace.respondToUI(message, text: text) })
+      if !workspace.outbox.isEmpty {
+        ScrollView(.horizontal) {
+          HStack {
+            ForEach(workspace.outbox) { message in
+              VStack(alignment: .leading, spacing: 5) {
+                Text(message.text).lineLimit(2)
+                HStack {
+                  Text(message.delivery == .queued ? "Queued" : "Delivery unconfirmed")
+                    .foregroundStyle(.secondary)
+                  if message.delivery == .uncertain {
+                    Button("Retry") {
+                      Task { await workspace.flushOutbox(retryID: message.id) }
+                    }
+                  }
+                  Button("Remove", role: .destructive) {
+                    Task { await workspace.removePending(message) }
+                  }
+                }
+              }.font(.caption).padding(10).frame(maxWidth: 280).background(
+                .quaternary, in: RoundedRectangle(cornerRadius: 12))
+            }
+          }.padding(.horizontal)
+        }.frame(maxHeight: 100)
+      }
+      if !workspace.transcript.interactions.isEmpty {
+        ForEach(workspace.transcript.interactions, id: \.interactionIdentity) { interaction in
+          if interaction["_tag"].string == "Permission", let id = interaction["id"].string {
+            PermissionView(
+              request: interaction["request"], enabled: workspace.connectionState == "Connected"
+            ) { allow in
+              await workspace.decidePermission(id, allow: allow)
+            }
+          } else {
+            InteractionView(interaction: interaction, workspace: workspace)
+          }
+        }
+      }
+    }
+    .background(AppTheme.surface)
+    .overlay(alignment: .bottom) {
+      composer.background {
+        GeometryReader { geometry in
+          LinearGradient(
+            stops: [
+              .init(color: AppTheme.surface.opacity(0), location: 0),
+              .init(color: AppTheme.surface.opacity(0.18), location: 0.35),
+              .init(color: AppTheme.surface.opacity(0.55), location: 1),
+            ], startPoint: .top, endPoint: .bottom
+          )
+          .frame(height: geometry.size.height + 64)
+          .offset(y: -64)
+          .allowsHitTesting(false)
+          .preference(key: ComposerHeightKey.self, value: geometry.size.height)
+        }
+      }
+    }
+    .onPreferenceChange(ComposerHeightKey.self) { composerHeight = $0 }
+    .navigationTitle(session.title.isEmpty ? "Chat" : session.title)
+    .compactNavigationTitle()
+    .toolbar {
+      ToolbarItem(placement: .principal) {
+        ChatHeaderTitle(
+          title: session.title.isEmpty ? "Chat" : session.title,
+          subtitle: [
+            workspace.projects.first { $0.id == session.projectId }?.name, branchName,
+          ].compactMap { $0 }.joined(separator: " · "))
+      }
+      ToolbarItem(placement: .primaryAction) {
+        Button("Changes", systemImage: "plusminus") { showDiff = true }
+          .tint(.primary).disabled(workspace.connectionState != "Connected")
+      }
+    }
   }
   private var composerExpanded: Bool {
     composerFocused || !workspace.attachments.isEmpty
