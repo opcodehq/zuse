@@ -273,69 +273,6 @@ struct PullRequestSnippet: View {
   }
 }
 
-/// The Commits tab: every commit, newest day first.
-struct PullRequestCommitsList: View {
-  let detail: PullRequestDetail
-  var body: some View {
-    let commits = (detail.commits ?? []).sorted {
-      ($0.date ?? .distantPast) > ($1.date ?? .distantPast)
-    }
-    VStack(alignment: .leading, spacing: 12) {
-      if detail.commits == nil {
-        Text("Commit history is unavailable. Pull to refresh.").font(.system(size: 15))
-          .foregroundStyle(.secondary).padding(.top, 20)
-      } else if commits.isEmpty {
-        Text("No commits to show.").font(.system(size: 15)).foregroundStyle(.secondary)
-          .padding(.top, 20)
-      }
-      let days = Dictionary(grouping: commits) { commit in
-        Calendar.current.startOfDay(for: commit.date ?? .distantPast)
-      }
-      ForEach(days.keys.sorted(by: >), id: \.self) { day in
-        VStack(alignment: .leading, spacing: 8) {
-          Text(day == Calendar.current.startOfDay(for: .distantPast) ? "Undated" : dayLabel(day))
-            .font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
-            .padding(.horizontal, 4)
-          PullRequestCard(padding: 0) {
-            VStack(spacing: 0) {
-              ForEach(Array((days[day] ?? []).enumerated()), id: \.element.id) { index, commit in
-                if index > 0 { Divider().padding(.leading, 14) }
-                commitRow(commit)
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-  private func commitRow(_ commit: PullRequestCommit) -> some View {
-    VStack(alignment: .leading, spacing: 4) {
-      Text(commit.messageHeadline.isEmpty ? "No message" : commit.messageHeadline)
-        .font(.system(size: 15, weight: .medium)).lineLimit(2)
-      HStack(spacing: 6) {
-        Text(commit.shortOid).font(.system(size: 12, design: .monospaced))
-          .padding(.horizontal, 5).padding(.vertical, 1)
-          .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 5))
-        Text(commit.authorName + " · " + PullRequestAge.short(commit.date))
-          .font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
-        Spacer(minLength: 4)
-        if let additions = commit.additions, let deletions = commit.deletions {
-          PullRequestLineCounts(additions: additions, deletions: deletions, size: 12)
-        }
-      }
-    }
-    .padding(.horizontal, 14).padding(.vertical, 11)
-    .contextMenu {
-      Button("Copy commit ID", systemImage: "doc.on.doc") { NativePlatform.copy(commit.oid) }
-    }
-  }
-  private func dayLabel(_ day: Date) -> String {
-    if Calendar.current.isDateInToday(day) { return "Today" }
-    if Calendar.current.isDateInYesterday(day) { return "Yesterday" }
-    return day.formatted(.dateTime.month(.wide).day())
-  }
-}
-
 /// Code that scrolls sideways as one block. Rows stretch to the widest line or the visible
 /// width, whichever is larger, so their tints run edge to edge.
 struct PullRequestCodeScroller<Content: View>: View {

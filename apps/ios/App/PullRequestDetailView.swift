@@ -1,21 +1,19 @@
 import SwiftUI
 import ZuseCore
 
-/// The three views of one pull request, switched from the floating bar.
+/// The two views of one pull request, switched from the floating bar.
 enum PullRequestTab: String, CaseIterable, Identifiable {
-  case conversation, commits, files
+  case conversation, files
   var id: String { rawValue }
   var title: String {
     switch self {
     case .conversation: return "Conversation"
-    case .commits: return "Commits"
     case .files: return "Files"
     }
   }
   var symbol: String {
     switch self {
     case .conversation: return "text.bubble"
-    case .commits: return "circle.and.line.horizontal"
     case .files: return "plus.forwardslash.minus"
     }
   }
@@ -98,8 +96,6 @@ struct PullRequestDetailView: View {
           switch tab {
           case .conversation:
             conversation(detail)
-          case .commits:
-            PullRequestCommitsList(detail: detail).padding(.horizontal, 16).padding(.top, 8)
           case .files:
             PullRequestFilesView(model: model)
           }
@@ -438,7 +434,6 @@ struct PullRequestDetailView: View {
     #if DEBUG
       let arguments = ProcessInfo.processInfo.arguments
       if arguments.contains("--pr-files-preview") { tab = .files }
-      if arguments.contains("--pr-commits-preview") { tab = .commits }
       if arguments.contains("--pr-expanded-preview") { expandedSummary = true }
       let merge = ["--pr-merge-preview", "--pr-blocked-preview", "--pr-confirm-preview"]
         .contains(where: arguments.contains)

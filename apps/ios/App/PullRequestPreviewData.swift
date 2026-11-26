@@ -3,7 +3,7 @@
   import ZuseCore
 
   /// Offline samples for `--pr-preview`, `--pr-detail-preview`, `--pr-files-preview`,
-  /// `--pr-merge-preview`, `--pr-blocked-preview`, `--pr-checks-preview`, `--pr-commits-preview`
+  /// `--pr-merge-preview`, `--pr-blocked-preview`, `--pr-checks-preview`
   /// and `--pr-activity-preview`. Shaped like the engine's serde output and decoded with the
   /// same models as live data.
   enum PullRequestPreview {
@@ -19,7 +19,7 @@
       if arguments.contains("--pr-draft-preview") { return draftURL }
       let detail = [
         "--pr-detail-preview", "--pr-files-preview", "--pr-merge-preview", "--pr-checks-preview",
-        "--pr-commits-preview", "--pr-activity-preview", "--pr-expanded-preview",
+        "--pr-activity-preview", "--pr-expanded-preview",
         "--pr-confirm-preview",
       ]
       return arguments.contains(where: detail.contains) ? readyURL : nil
