@@ -2,7 +2,7 @@
 //! Marks represent turns, highlight the visible range, and preview each turn
 //! on hover. Clicking a mark smoothly scrolls to its prompt.
 
-use gpui::{div, prelude::*, px, AnimationExt, AnyElement, Context, ListOffset, SharedString};
+use gpui::{AnimationExt, AnyElement, Context, ListOffset, SharedString, div, prelude::*, px};
 use std::{
     collections::HashMap,
     time::{Duration, Instant},
@@ -843,10 +843,11 @@ mod tests {
         // n <= capacity: one tick per prompt — the old per-prompt rail.
         let b = tick_buckets(5, 64);
         assert_eq!(b.len(), 5);
-        assert!(b
-            .iter()
-            .enumerate()
-            .all(|(k, &(s, e))| s == k && e == k + 1));
+        assert!(
+            b.iter()
+                .enumerate()
+                .all(|(k, &(s, e))| s == k && e == k + 1)
+        );
     }
 
     #[test]
