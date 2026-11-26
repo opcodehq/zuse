@@ -965,7 +965,7 @@ async fn a_late_claim_for_an_earlier_message_never_replaces_a_newer_default() {
     use super::bridge_computers::clear_primary_for;
     let current = |pool: PgPool| async move {
         sqlx::query_scalar::<_, String>(
-            "SELECT enrollment_id FROM api_bridge_primaries WHERE workspace_id='w' AND chat_id='chat'",
+            "SELECT enrollment_id FROM api_bridge_primaries WHERE workspace_id='w' AND chat_id='chat' AND enrollment_id IS NOT NULL",
         )
         .fetch_optional(&pool)
         .await
@@ -996,6 +996,11 @@ async fn a_late_claim_for_an_earlier_message_never_replaces_a_newer_default() {
         .unwrap();
     assert_eq!(current(pool.clone()).await.as_deref(), Some("linux"));
     clear_primary_for(&pool, "owner", "w", "chat", Some("cmd-3"))
+        .await
+        .unwrap();
+    assert_eq!(current(pool.clone()).await, None);
+    // The clear keeps its place: an earlier message's late claim still loses.
+    primary_for(&pool, "owner", "w", "chat", "mac", Some("cmd-1"))
         .await
         .unwrap();
     assert_eq!(current(pool.clone()).await, None);

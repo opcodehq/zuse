@@ -44,6 +44,11 @@ export function ComputerRequests(props: { chatId: string }) {
   createEffect(
     () => [props.chatId, state.epoch] as const,
     () => {
+      // Another chat (or session): never show the previous one's requests.
+      setComputers([]);
+      setPending([]);
+      setRuns([]);
+      setError("");
       if (!target) return;
       const chat = props.chatId,
         epoch = state.epoch;

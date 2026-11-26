@@ -261,7 +261,8 @@ pub(super) async fn primary_for(
     .execute(&mut *tx)
     .await?;
     let primary: Option<String> = sqlx::query_scalar(
-        "SELECT enrollment_id FROM api_bridge_primaries WHERE owner_id=$1 AND workspace_id=$2 AND chat_id=$3",
+        "SELECT enrollment_id FROM api_bridge_primaries
+         WHERE owner_id=$1 AND workspace_id=$2 AND chat_id=$3 AND enrollment_id IS NOT NULL",
     )
     .bind(owner)
     .bind(workspace)
@@ -286,15 +287,34 @@ pub(super) async fn clear_primary_for(
         Some(command) => admitted_at(&mut tx, workspace, chat, command).await?,
         None => i64::MAX,
     };
-    sqlx::query(
-        "DELETE FROM api_bridge_primaries WHERE owner_id=$1 AND workspace_id=$2 AND chat_id=$3 AND ordered_at < $4",
-    )
-    .bind(owner)
-    .bind(workspace)
-    .bind(chat)
-    .bind(before)
-    .execute(&mut *tx)
-    .await?;
+    if before == i64::MAX {
+        // Unordered (a new chat): nothing later can exist yet.
+        sqlx::query(
+            "DELETE FROM api_bridge_primaries WHERE owner_id=$1 AND workspace_id=$2 AND chat_id=$3",
+        )
+        .bind(owner)
+        .bind(workspace)
+        .bind(chat)
+        .execute(&mut *tx)
+        .await?;
+    } else {
+        // Keep the row, without a computer, so a delayed claim for an
+        // earlier message still loses to this clear.
+        sqlx::query(
+            "INSERT INTO api_bridge_primaries(owner_id,workspace_id,chat_id,enrollment_id,ordered_at)
+             SELECT $1,$2,$3,NULL,$4 WHERE EXISTS(SELECT FROM api_cloud_workspaces
+                 WHERE workspace_id=$2 AND account_id=$1)
+             ON CONFLICT(owner_id,workspace_id,chat_id) DO UPDATE
+             SET enrollment_id=NULL, ordered_at=excluded.ordered_at, updated_at=now()
+             WHERE api_bridge_primaries.ordered_at < excluded.ordered_at",
+        )
+        .bind(owner)
+        .bind(workspace)
+        .bind(chat)
+        .bind(before)
+        .execute(&mut *tx)
+        .await?;
+    }
     tx.commit().await?;
     Ok(())
 }
@@ -306,7 +326,8 @@ pub(super) async fn primary(
 ) -> Result<Json<Value>, ApiError> {
     let owner = personal_owner(&state, &headers).await?;
     let device: Option<String> = sqlx::query_scalar(
-        "SELECT enrollment_id FROM api_bridge_primaries WHERE owner_id=$1 AND workspace_id=$2 AND chat_id=$3",
+        "SELECT enrollment_id FROM api_bridge_primaries
+         WHERE owner_id=$1 AND workspace_id=$2 AND chat_id=$3 AND enrollment_id IS NOT NULL",
     )
     .bind(owner)
     .bind(workspace)

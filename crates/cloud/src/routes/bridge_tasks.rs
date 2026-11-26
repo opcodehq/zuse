@@ -652,7 +652,7 @@ pub(super) async fn runtime_request(
                 Some(device) => device,
                 None => sqlx::query_scalar(
                     "SELECT enrollment_id FROM api_bridge_primaries
-                     WHERE owner_id=$1 AND workspace_id=$2 AND chat_id=$3",
+                     WHERE owner_id=$1 AND workspace_id=$2 AND chat_id=$3 AND enrollment_id IS NOT NULL",
                 )
                 .bind(owner)
                 .bind(workspace)

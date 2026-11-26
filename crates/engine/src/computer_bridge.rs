@@ -1106,7 +1106,13 @@ impl Connector {
     /// Engine shutdown: stop running commands and wait for their outcome to
     /// be saved, keeping the choice so the connector resumes next start.
     pub async fn shutdown(&self) {
-        let task = self.task.lock().await.take();
+        let task = {
+            let mut slot = self.task.lock().await;
+            // A start still enrolling must not launch during shutdown.
+            self.generation
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            slot.take()
+        };
         Self::finish(task).await;
     }
 
