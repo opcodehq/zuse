@@ -674,6 +674,9 @@ impl Shell {
                 let id = chat.id.clone();
                 self.state.update(cx, |state, cx| {
                     if !state.chats.iter().any(|row| row.id == id) {
+                        state
+                            .pending_thread_conversations
+                            .insert(id.clone(), chat.clone());
                         state.chats.push(chat);
                         cx.notify();
                     }

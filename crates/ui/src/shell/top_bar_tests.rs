@@ -166,6 +166,33 @@ fn delayed_new_chat_does_not_interrupt_other_navigation(cx: &mut TestAppContext)
     });
 }
 
+#[gpui::test]
+fn new_conversation_remains_open_across_stale_registry_updates(cx: &mut TestAppContext) {
+    let (shell, cx) = setup(cx);
+    shell.update(cx, |shell, cx| {
+        let root = shell.state.read(cx).chats[0].clone();
+        let mut created = root.clone();
+        created.id = "created-chat".into();
+        created.thread_id = Some(root.id.clone());
+        shell.finish_thread_conversation(&root.id, Ok(created.clone()), cx);
+
+        // A registry frame sent before creation can arrive after the RPC reply.
+        shell.state.update(cx, |state, _| {
+            state.apply_chats(vec![root.clone()]);
+        });
+        shell.open_chat(root.id.clone(), cx);
+        let (_, tabs, _) = shell.thread_conversation_tabs(cx).unwrap();
+        assert!(tabs.iter().any(|chat| chat.id == created.id));
+
+        shell.state.update(cx, |state, _| {
+            state.apply_chats(vec![root.clone(), created.clone()]);
+            assert!(state.pending_thread_conversations.is_empty());
+            state.apply_chats(vec![root]);
+            assert!(!state.chats.iter().any(|chat| chat.id == created.id));
+        });
+    });
+}
+
 fn setup(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext) {
     let directory = tempfile::tempdir().unwrap();
     cx.update(|cx| {

@@ -995,6 +995,8 @@ pub struct AppState {
     pub spaces: Vec<Space>,
     /// Sorted (see [`sort_chats`]); includes archived rows — views filter.
     pub chats: Vec<Chat>,
+    /// Created conversations awaiting their first registry watch frame.
+    pub(crate) pending_thread_conversations: HashMap<String, Chat>,
     pending_chat_archives: HashMap<String, PendingChatArchive>,
     next_archive_request_id: u64,
     pub(crate) chat_configuration: crate::chat_configuration::ChatConfiguration,
@@ -1238,6 +1240,7 @@ impl AppState {
             connectivity_observed: false,
             spaces: Vec::new(),
             chats: Vec::new(),
+            pending_thread_conversations: HashMap::new(),
             pending_chat_archives: HashMap::new(),
             next_archive_request_id: 0,
             chat_configuration: Default::default(),
@@ -1660,6 +1663,14 @@ impl AppState {
     /// each notify re-renders the whole shell.
     pub fn apply_chats(&mut self, mut chats: Vec<Chat>) -> bool {
         let mut changed = false;
+        self.pending_thread_conversations.retain(|id, pending| {
+            if chats.iter().any(|chat| &chat.id == id) {
+                false
+            } else {
+                chats.push(pending.clone());
+                true
+            }
+        });
         if let Some(pending) = &self.pending_side_chat {
             if chats.iter().any(|chat| chat.id == pending.id) {
                 self.pending_side_chat = None;
@@ -3638,6 +3649,7 @@ impl AppState {
         self.session_presence_presentation.clear();
         self.spaces.clear();
         self.chats.clear();
+        self.pending_thread_conversations.clear();
         self.pending_chat_archives.clear();
         self.pending_side_chat = None;
         self.unsaved_side_chat = false;
