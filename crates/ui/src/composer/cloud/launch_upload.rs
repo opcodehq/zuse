@@ -567,6 +567,8 @@ mod tests {
         open: tokio::sync::Notify,
         opened: std::sync::atomic::AtomicBool,
         failing: bool,
+        /// The server refuses the create.
+        refuse_create: bool,
     }
     impl Controller {
         fn methods(&self) -> Vec<String> {
@@ -597,6 +599,9 @@ mod tests {
                 .unwrap()
                 .push((method.into(), params.clone()));
             match method {
+                methods::CLOUD_CREATE if self.refuse_create => Err(zuse_rpc::RpcError::Failed(
+                    "Cloud service is unavailable.".into(),
+                )),
                 methods::CLOUD_CREATE => zuse_rpc::RpcReply::value(&json!({"workspace":{
                     "workspaceId":"ws","initialSessionId":"session",
                     "commandDeliveryMode":"server-admitted-v2","commandAdmissionVersion":2}})),
@@ -812,5 +817,55 @@ mod tests {
             .map(|(_, params)| params.clone())
             .unwrap();
         assert_eq!(archive["workspaceId"], "ws");
+    }
+
+    /// A created chat claims this computer as its primary right after the
+    /// create returns; a refused create never touches the primary.
+    #[gpui::test]
+    fn a_created_chat_claims_its_primary_and_a_refused_one_does_not(cx: &mut gpui::TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let controller = Arc::new(Controller::default());
+        let composer = launching(cx, &runtime, controller.clone());
+        composer.update(cx, |c, cx| assert!(c.send_cloud("Look at this".into(), cx)));
+        drive(cx, &runtime, |_| {
+            controller
+                .methods()
+                .iter()
+                .any(|m| m == "ClaimComputerPrimary")
+        });
+        let calls = controller.calls.lock().unwrap().clone();
+        let create = calls
+            .iter()
+            .position(|(m, _)| m == methods::CLOUD_CREATE)
+            .unwrap();
+        let claim = calls
+            .iter()
+            .position(|(m, _)| m == "ClaimComputerPrimary")
+            .unwrap();
+        assert!(create < claim, "claimed only after the create");
+        assert_eq!(
+            calls[claim].1,
+            json!({"expectedAccountId":"fixture-user","workspaceId":"ws","chatId":"session"})
+        );
+
+        let refused = Arc::new(Controller {
+            refuse_create: true,
+            ..Default::default()
+        });
+        let composer = launching(cx, &runtime, refused.clone());
+        composer.update(cx, |c, cx| assert!(c.send_cloud("Look at this".into(), cx)));
+        drive(cx, &runtime, |cx| {
+            composer.read_with(cx, |c, _| c.cloud.task.is_none())
+        });
+        let methods = refused.methods();
+        assert!(methods.iter().any(|m| m == methods::CLOUD_CREATE));
+        assert!(
+            !methods.iter().any(|m| m == "ClaimComputerPrimary"),
+            "{methods:?}"
+        );
     }
 }

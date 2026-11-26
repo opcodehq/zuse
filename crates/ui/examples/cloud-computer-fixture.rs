@@ -31,6 +31,9 @@ struct Controller {
 impl RpcService for Controller {
     async fn handle(&self, method: &str, _params: Value) -> Result<RpcReply, RpcError> {
         self.calls.lock().unwrap().push(method.into());
+        if let Some(reply) = computers_reply(method, &_params) {
+            return reply;
+        }
         // Review captures (`FIXTURE_REVIEW=1`): an opened cloud chat's
         // computer is awake, and nothing is asserted about the call order.
         if review() && method == methods::CLOUD_BILLING_ENTITLEMENTS {
@@ -525,6 +528,23 @@ fn computer_seed() -> Value {
     } else {
         (messages, json!([]))
     };
+    // `FIXTURE_COMPUTERS=running|all`: the agent ran tests on this Mac and is
+    // building on the Linux box.
+    let messages = if matches!(
+        std::env::var("FIXTURE_COMPUTERS").as_deref(),
+        Ok("running" | "all")
+    ) {
+        let mut messages = messages.as_array().unwrap().clone();
+        messages.push(json!({"id":"fixture-computer-user","role":"user","parts":[{"id":"fixture-computer-ask","kind":"text","text":"Run the tests on my Mac, then build a release on the build box."}],"createdAt":1793361640000_i64,"deviceId":"cloud:fixture-computer"}));
+        messages.push(json!({"id":"fixture-computer-run","role":"assistant","parts":[
+            {"id":"fixture-tool-tests","kind":"tool","resolved":true,"call":{"kind":"mcp","server":"zuse","tool":"run_on_computer","input":{"command":"cargo test --workspace"}}},
+            {"id":"fixture-tool-tests-text","kind":"text","text":"All 214 tests pass on your Mac. Starting the release build on the build box."},
+            {"id":"fixture-tool-build","kind":"tool","resolved":false,"call":{"kind":"mcp","server":"zuse","tool":"run_on_computer","input":{"command":"cargo build --release","device_id":"fixture-linux"}}}
+        ],"createdAt":1793361641000_i64,"deviceId":"cloud:fixture-computer","status":"streaming"}));
+        json!(messages)
+    } else {
+        messages
+    };
     let queue = if queued() { queue_rows() } else { json!([]) };
     json!({"apiOrigin":"https://fixture-api.example.test","accountId":"fixture-owner","workspace":workspace,"commandDeliveryMode":"server-admitted-v2","commandAdmissionVersion":2,"taskCommandCanEdit":true,"commandAdmissions":admissions,"head":{"schemaVersion":1,"payloadFormat":"zuse-transcript-v1","workspaceId":"fixture-computer","sessionId":"fixture-session","runtimeGeneration":1,"cursor":{"epoch":"fixture-checkpoint","version":4},"chat":chat,"conversations":[chat],"transcript":{"reset":messages},"queue":queue,"queuePaused":false,"olderMessageSequence":null}})
 }
@@ -804,4 +824,39 @@ fn shared_mixed_window(client: zuse_rpc::RpcClient, cx: &mut gpui::App) -> gpui:
 /// the flow assertions the other modes check.
 fn review() -> bool {
     std::env::var("FIXTURE_REVIEW").is_ok()
+}
+
+/// `FIXTURE_COMPUTERS=idle|pending|running|all`: the chat runs on this Mac
+/// by default; a Linux box is online too; a PC is offline. `running` also
+/// shows the agent's commands in the transcript. `pending` adds an approval, `running`
+/// a command with output.
+fn computers_reply(method: &str, params: &Value) -> Option<Result<RpcReply, RpcError>> {
+    let mode = std::env::var("FIXTURE_COMPUTERS").ok()?;
+    let pending = matches!(mode.as_str(), "pending" | "all");
+    let running = matches!(mode.as_str(), "running" | "all");
+    let value = match (method, params["action"].as_str()) {
+        ("ComputerBridgeStatus", _) => json!({"state":"online","deviceId":"fixture-mac",
+            "name":"Alex’s MacBook Pro","error":null,"running":usize::from(running)}),
+        ("CloudComputerControl", Some("list")) => json!([
+            {"deviceId":"fixture-linux","name":"Build box","platform":"linux","connected":true,"alwaysAllowed":false},
+            {"deviceId":"fixture-pc","name":"Studio PC","platform":"windows","connected":false,"alwaysAllowed":false},
+            {"deviceId":"fixture-mac","name":"Alex’s MacBook Pro","platform":"macos","connected":true,"alwaysAllowed":false}
+        ]),
+        ("CloudComputerControl", Some("pending")) if pending => json!([
+            {"id":"fixture-request","deviceId":"fixture-mac","computerName":"Alex’s MacBook Pro","osUser":"alex",
+             "shell":"/bin/zsh","cwd":"/Users/alex/code/fieldnotes","command":"cargo test --workspace",
+             "timeoutMs":600000,"createdAt":1793361700000_i64}
+        ]),
+        ("CloudComputerControl", Some("results")) if running => json!([
+            {"id":"fixture-run","deviceId":"fixture-linux","computer":"Build box","command":"cargo build --release",
+             "cwd":"/home/alex/code/fieldnotes","timeoutMs":1800000,"createdAt":1793361650000_i64,"state":"running",
+             "result":{"status":"Running","output":"   Compiling serde v1.0.228\n   Compiling tokio v1.48.0\n   Compiling fieldnotes-core v0.4.0 (/home/alex/code/fieldnotes/core)\n   Compiling fieldnotes v0.4.0 (/home/alex/code/fieldnotes)"}}
+        ]),
+        ("CloudComputerControl", Some("pending" | "results")) => json!([]),
+        ("CloudComputerControl", Some("primary")) => json!({"deviceId":"fixture-mac"}),
+        ("ClaimComputerPrimary", _) => json!({"deviceId":"fixture-mac"}),
+        ("CloudComputerControl", _) => Value::Null,
+        _ => return None,
+    };
+    Some(RpcReply::value(&value))
 }

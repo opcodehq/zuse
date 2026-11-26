@@ -57,6 +57,7 @@ use crate::theme::Theme;
 
 mod chip;
 pub(crate) mod cloud;
+pub(crate) mod computers;
 mod editing;
 mod message_recall;
 pub use editing::StashedPrompt;
@@ -6658,6 +6659,11 @@ struct AttachmentDestination {
 }
 pub struct Composer {
     cloud: cloud::Launch,
+    /// Commands the cloud chat in front asks to run on the owner's computers.
+    computers: computers::State,
+    /// The computer-command approval while it replaces the composer.
+    computer_focus: FocusHandle,
+    focus_computer_approval: bool,
     /// New cloud chats still being created in tabs that are not in front,
     /// by their draft key. Each tab owns its launch; the composer serves
     /// the tab in front.
@@ -7575,6 +7581,9 @@ impl Composer {
             advance_task: None,
             send_task: None,
             cloud: Default::default(),
+            computers: Default::default(),
+            computer_focus: cx.focus_handle(),
+            focus_computer_approval: false,
             parked_launches: HashMap::new(),
             parked_launch_run: false,
             unarchive_task: None,
@@ -13515,6 +13524,7 @@ impl Render for Composer {
             .selected_chat_row()
             .filter(|chat| chat.archived)
             .cloned();
+        self.sync_computers(cx);
         if let Some(chat) = archived {
             // This early return skips the mounted call below; with the
             // setting off a game in play must still release here, or it
@@ -13681,6 +13691,14 @@ impl Render for Composer {
         if wizard_active {
             let wizard = self.render_wizard(window, cx);
             return container.child(motion::fade_quick("composer-wizard", div().child(wizard)));
+        }
+        // A cloud chat's computer command waits for approval in the
+        // composer's place, as a local permission prompt does.
+        if let Some(approval) = self.render_computer_approval(window, cx) {
+            return container.child(motion::fade_quick(
+                "composer-computer-approval",
+                div().child(approval),
+            ));
         }
 
         // What is waiting to be sent, stacked directly above the box it was

@@ -384,6 +384,42 @@ impl RuntimeControl {
     pub fn credential_authority(&self) -> Option<Arc<crate::connections::ConnectionControl>> {
         self.authority.clone()
     }
+    pub(crate) async fn computer_task_owner(
+        &self,
+        id: &str,
+        chat: &str,
+        credential: &str,
+    ) -> Result<String, ApiError> {
+        self.scope_access(id, None, true).await?;
+        let mut tx = self.pool.begin().await?;
+        let (row, _, _) = locked_workspace(&mut tx, id).await?;
+        let now = chrono::Utc::now().timestamp_millis();
+        if blocked(&row)
+            || row["desired_state"] != "ready"
+            || row["runtime_credential_hash"]
+                .as_str()
+                .is_none_or(|h| !equal(h, &hash(credential)))
+            || row["request_config"]["runtimeCredentialExpiresAtMs"]
+                .as_i64()
+                .unwrap_or(0)
+                <= now
+            || !enrollment_matches(&row)
+        {
+            return Err(ApiError::unauthorized("workspace_runtime_fenced"));
+        }
+        let owner = row["account_id"]
+            .as_str()
+            .filter(|o| !o.starts_with("organization:"))
+            .ok_or_else(|| ApiError::forbidden("bridge_personal_account_required"))?
+            .to_owned();
+        let active:bool=sqlx::query_scalar("SELECT EXISTS(SELECT FROM zuse_rust_task_command_sessions WHERE workspace_id=$1 AND session_id=$2 AND state='active')")
+            .bind(id).bind(chat).fetch_one(&mut *tx).await?;
+        if !active {
+            return Err(ApiError::forbidden("bridge_chat_unavailable"));
+        }
+        Ok(owner)
+    }
+
     pub fn shared_pool(&self) -> PgPool {
         self.pool.clone()
     }

@@ -636,6 +636,7 @@ pub(super) mod tests {
     ) {
         let (send, receive) = tokio::sync::mpsc::channel(16);
         let (replies_tx, replies) = tokio::sync::mpsc::channel(16);
+        let send = crate::composer::computers::answering_primary_claims(send, replies_tx.clone());
         let controller =
             crate::state::EngineHandle::from_test_client(zuse_rpc::RpcClient::new(send, replies));
         let state = cx.new(|_| {
