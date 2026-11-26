@@ -647,25 +647,58 @@ impl Shell {
         let root = selected.thread_id().to_owned();
         let device = selected.device_id.clone();
         let origin = selected.id.clone();
+        let runtime_generation = state.runtime_generation;
         self.thread_conversation_creating = true;
         cx.spawn(async move |this, cx| {
             let result = engine.client().call_as::<zuse_protocol::Chat>(methods::CREATE_THREAD_SESSION,
                 serde_json::json!({"chatId": uuid::Uuid::new_v4().to_string(), "threadId": root, "targetDeviceId": device})).await;
+            let created = result.as_ref().ok().map(|chat| (chat.id.clone(), chat.device_id.clone()));
             let _ = this.update(cx, |this, cx| {
                 this.thread_conversation_creating = false;
-                this.finish_thread_conversation(&origin, result.map_err(|error| error.to_string()), cx);
+                this.finish_thread_conversation(runtime_generation, &origin, result.map_err(|error| error.to_string()), cx);
                 cx.notify();
             });
+            if let Some((id, device)) = created {
+                loop {
+                    let pending = this.update(cx, |this, cx| {
+                        let state = this.state.read(cx);
+                        state.runtime_generation == runtime_generation
+                            && state.pending_thread_conversations.contains_key(&id)
+                    }).unwrap_or(false);
+                    if !pending { break; }
+                    let result = engine.client().call_as::<serde_json::Value>(
+                        methods::GET_THREAD_CONVERSATION,
+                        serde_json::json!({"chatId": id, "targetDeviceId": device}),
+                    ).await;
+                    if let Ok(value) = result
+                        && let Some(chat) = value.get("chat")
+                        && let Ok(chat) = serde_json::from_value::<Option<zuse_protocol::Chat>>(chat.clone()) {
+                        let _ = this.update(cx, |this, cx| {
+                            this.state.update(cx, |state, cx| {
+                                if state.runtime_generation != runtime_generation { return; }
+                                if state.reconcile_pending_thread_conversation(&id, chat) {
+                                    cx.notify();
+                                }
+                            });
+                        });
+                    }
+                    cx.background_executor().timer(std::time::Duration::from_secs(1)).await;
+                }
+            }
         }).detach();
         cx.notify();
     }
 
     pub(super) fn finish_thread_conversation(
         &mut self,
+        runtime_generation: u64,
         origin: &str,
         result: Result<zuse_protocol::Chat, String>,
         cx: &mut Context<Self>,
     ) {
+        if self.state.read(cx).runtime_generation != runtime_generation {
+            return;
+        }
         let still_selected = matches!(self.route, Route::Chat)
             && self.cloud_conversation.is_none()
             && self.state.read(cx).selected_chat.as_deref() == Some(origin);
@@ -674,6 +707,9 @@ impl Shell {
                 let id = chat.id.clone();
                 self.state.update(cx, |state, cx| {
                     if !state.chats.iter().any(|row| row.id == id) {
+                        state
+                            .pending_thread_conversations
+                            .insert(id.clone(), chat.clone());
                         state.chats.push(chat);
                         cx.notify();
                     }

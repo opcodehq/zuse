@@ -143,7 +143,12 @@ fn delayed_new_chat_does_not_interrupt_other_navigation(cx: &mut TestAppContext)
         created.id = "created-chat".into();
         created.thread_id = Some("chat".into());
         shell.open_plugins_page(cx);
-        shell.finish_thread_conversation("chat", Ok(created), cx);
+        shell.finish_thread_conversation(
+            shell.state.read(cx).runtime_generation,
+            "chat",
+            Ok(created),
+            cx,
+        );
         assert!(matches!(shell.route, Route::Plugins));
         assert_eq!(shell.state.read(cx).selected_chat.as_deref(), Some("chat"));
         assert!(
@@ -158,11 +163,107 @@ fn delayed_new_chat_does_not_interrupt_other_navigation(cx: &mut TestAppContext)
         let mut next = shell.state.read(cx).chats[0].clone();
         next.id = "next-chat".into();
         next.thread_id = Some("chat".into());
-        shell.finish_thread_conversation("chat", Ok(next), cx);
+        shell.finish_thread_conversation(
+            shell.state.read(cx).runtime_generation,
+            "chat",
+            Ok(next),
+            cx,
+        );
         assert_eq!(
             shell.state.read(cx).selected_chat.as_deref(),
             Some("next-chat")
         );
+    });
+}
+
+#[gpui::test]
+fn new_conversation_remains_open_across_stale_registry_updates(cx: &mut TestAppContext) {
+    let (shell, cx) = setup(cx);
+    shell.update(cx, |shell, cx| {
+        let root = shell.state.read(cx).chats[0].clone();
+        let mut created = root.clone();
+        created.id = "created-chat".into();
+        created.thread_id = Some(root.id.clone());
+        shell.finish_thread_conversation(
+            shell.state.read(cx).runtime_generation,
+            &root.id,
+            Ok(created.clone()),
+            cx,
+        );
+
+        // A registry frame sent before creation can arrive after the RPC reply.
+        shell.state.update(cx, |state, _| {
+            state.apply_chats(vec![root.clone()]);
+        });
+        shell.open_chat(root.id.clone(), cx);
+        let (_, tabs, _) = shell.thread_conversation_tabs(cx).unwrap();
+        assert!(tabs.iter().any(|chat| chat.id == created.id));
+
+        shell.state.update(cx, |state, _| {
+            state.apply_chats(vec![root.clone(), created.clone()]);
+            assert!(state.pending_thread_conversations.is_empty());
+            state.apply_chats(vec![root]);
+            assert!(!state.chats.iter().any(|chat| chat.id == created.id));
+        });
+    });
+}
+
+#[gpui::test]
+fn new_conversation_completion_from_replaced_runtime_is_ignored(cx: &mut TestAppContext) {
+    let (shell, cx) = setup(cx);
+    shell.update(cx, |shell, cx| {
+        let root = shell.state.read(cx).chats[0].clone();
+        let generation = shell.state.read(cx).runtime_generation;
+        let mut created = root.clone();
+        created.id = "created-chat".into();
+        created.thread_id = Some(root.id.clone());
+        shell
+            .state
+            .update(cx, |state, cx| state.prepare_runtime_replacement(cx));
+        shell.finish_thread_conversation(generation, &root.id, Ok(created), cx);
+        assert!(shell.state.read(cx).chats.is_empty());
+        assert!(shell.state.read(cx).pending_thread_conversations.is_empty());
+    });
+}
+
+#[gpui::test]
+fn pending_conversation_uses_owner_read_to_confirm_deletion(cx: &mut TestAppContext) {
+    let (shell, cx) = setup(cx);
+    shell.update(cx, |shell, cx| {
+        let root = shell.state.read(cx).chats[0].clone();
+        let mut created = root.clone();
+        created.id = "created-chat".into();
+        created.thread_id = Some(root.id.clone());
+        shell.finish_thread_conversation(
+            shell.state.read(cx).runtime_generation,
+            &root.id,
+            Ok(created.clone()),
+            cx,
+        );
+        shell.state.update(cx, |state, _| {
+            state.apply_chats(vec![root.clone()]);
+            state.reconcile_pending_thread_conversation(&created.id, Some(created.clone()));
+            assert!(state.chats.iter().any(|chat| chat.id == created.id));
+            let mut promoted = created.clone();
+            promoted.thread_id = None;
+            state.reconcile_pending_thread_conversation(&created.id, Some(promoted));
+            assert!(state.pending_thread_conversations.is_empty());
+            assert!(
+                state
+                    .chats
+                    .iter()
+                    .any(|chat| chat.id == created.id && chat.thread_id.is_none())
+            );
+            // Recreate a pending row to exercise confirmed deletion too.
+            state
+                .pending_thread_conversations
+                .insert(created.id.clone(), created.clone());
+            state.reconcile_pending_thread_conversation(&created.id, None);
+            assert!(!state.chats.iter().any(|chat| chat.id == created.id));
+            assert!(state.selected_chat.is_none());
+            state.apply_chats(vec![root]);
+            assert!(!state.chats.iter().any(|chat| chat.id == created.id));
+        });
     });
 }
 
