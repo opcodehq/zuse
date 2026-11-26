@@ -45,7 +45,7 @@ Requests appear inline above the composer, like local permission prompts, showin
 
 Running commands show their latest output with **Stop**. A chat can hold at most 10 undecided requests.
 
-Detach clears the chat's requests and session grant. Persistent grants have a separate revoke action. Archiving a chat clears attachments. Removing an enrollment clears its grants and attachments. Re-enrollment after removal receives a new enrollment ID.
+Detach clears the chat's requests and session grant. Persistent grants have a separate revoke action; revoking returns requests it approved that haven't started to waiting for a decision, and running ones stop at their next check. Archiving a chat clears attachments. Removing an enrollment clears its grants and attachments. Re-enrollment after removal receives a new enrollment ID.
 
 ## Agent tools
 
@@ -62,7 +62,7 @@ The runtime derives the account and workspace from its enrolled credential and v
 
 Each command has its own deadline: 10 minutes by default, up to 60 minutes when requested (`timeout_seconds`, 1–3600). The server stores it with the request and the host enforces it; the server also stops authorizing a run once its deadline (plus the unknown window) has passed. A computer runs up to four approved commands at once.
 
-The host saves an admission receipt before spawning, then writes completed output to its private profile journal. A database claim is consumed once. Submissions use stable request IDs and recognize duplicate submissions.
+The host saves an admission receipt before spawning, then writes completed output to its private profile journal. A database claim is consumed once. Submissions use stable request IDs: a retry is recognized even if the computer went offline or restarted meanwhile, and an ID is remembered for the life of the chat, so it can never run again after a detach and reattach. A reconnecting connector gets a new offer ID but still reaches requests approved for the same computer and shell. A result is deleted from the host's journal only once the cloud has it; a refused proof (for example after clock skew) or sign-out keeps it for the next session.
 
 While a command runs, the host rechecks its authorization and publishes output every two seconds. Output keeps the first 4 KiB and the last 8 KiB of each stream, noting how much was omitted. Stop, detachment, revocation, sign-out, the deadline and connector shutdown terminate the process group and record why. A host that can't reach the cloud for 60 seconds stops its commands, since it can no longer confirm their approval.
 

@@ -53,6 +53,16 @@ CREATE TABLE IF NOT EXISTS api_bridge_requests (
     FOREIGN KEY (owner_id, workspace_id, chat_id, enrollment_id)
         REFERENCES api_bridge_attachments ON DELETE CASCADE
 );
+-- Every request ID ever submitted in a chat. Detaching deletes a request's
+-- rows, but never this record, so a resubmitted ID can't run again.
+CREATE TABLE IF NOT EXISTS api_bridge_request_ids (
+    request_id uuid PRIMARY KEY,
+    owner_id text NOT NULL,
+    workspace_id text NOT NULL,
+    chat_id text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY (workspace_id, chat_id) REFERENCES zuse_rust_task_command_sessions ON DELETE CASCADE
+);
 CREATE INDEX IF NOT EXISTS api_bridge_requests_chat
     ON api_bridge_requests(owner_id, workspace_id, chat_id, created_at DESC);
 CREATE TABLE IF NOT EXISTS api_bridge_session_grants (
@@ -125,6 +135,7 @@ BEGIN
         EXECUTE format('GRANT SELECT, INSERT, DELETE ON api_bridge_attachments, api_bridge_session_grants, api_bridge_always_grants, api_bridge_requests TO %I', app_role);
         EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON api_bridge_computers, api_bridge_tasks, api_bridge_runs, api_bridge_primaries TO %I', app_role);
         EXECUTE format('GRANT SELECT, INSERT, DELETE ON api_bridge_proofs TO %I', app_role);
+        EXECUTE format('GRANT SELECT, INSERT ON api_bridge_request_ids TO %I', app_role);
         EXECUTE format('GRANT UPDATE(decision) ON api_bridge_requests TO %I', app_role);
         EXECUTE format('GRANT UPDATE(explicit) ON api_bridge_attachments TO %I', app_role);
     END IF;

@@ -162,10 +162,15 @@ impl Plugins {
             .start(root, self.account.clone(), label)
             .await
     }
-    pub async fn stop_computer_bridge(&self) {
-        if let Some(root) = &self.local_root {
-            self.computer_bridge.stop(root).await;
+    pub async fn stop_computer_bridge(&self) -> anyhow::Result<()> {
+        match &self.local_root {
+            Some(root) => self.computer_bridge.stop(root).await,
+            None => Ok(()),
         }
+    }
+    /// Engine shutdown: stop running commands; the connector resumes next start.
+    pub async fn shutdown_computer_bridge(&self) {
+        self.computer_bridge.shutdown().await;
     }
     /// Resume the connector this computer enabled before the engine restarted.
     pub async fn resume_computer_bridge(&self) {

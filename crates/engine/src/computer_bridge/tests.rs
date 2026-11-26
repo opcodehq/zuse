@@ -16,6 +16,10 @@ struct Cloud {
     offers: Vec<Instant>,
     /// Requests are dropped as if the network were down.
     offline: bool,
+    /// Finish reports are refused with this status (a rejected proof, say).
+    refuse_finish: Option<u16>,
+    /// Authorization checks never answer.
+    hang_checks: bool,
 }
 
 #[derive(Default, Clone)]
@@ -51,9 +55,17 @@ impl Fake {
 #[async_trait::async_trait]
 impl Transport for Fake {
     async fn send(&self, body: Value) -> Result<Value, SendError> {
+        if body["action"] == "check" && self.0.lock().unwrap().hang_checks {
+            std::future::pending::<()>().await;
+        }
         let mut cloud = self.0.lock().unwrap();
         if cloud.offline {
             return Err(SendError::Unavailable("offline".into()));
+        }
+        if body["action"] == "finish" {
+            if let Some(status) = cloud.refuse_finish {
+                return Err(SendError::Rejected(status));
+            }
         }
         let request = || uuid::Uuid::parse_str(body["request"].as_str().unwrap()).unwrap();
         Ok(match body["action"].as_str().unwrap() {
@@ -230,13 +242,23 @@ async fn stop_kills_the_whole_process_group_and_keeps_partial_output() {
 #[tokio::test]
 async fn each_command_uses_its_own_deadline() {
     let fake = Fake::default();
-    let short = fake.approve("printf begun; sleep 30", 1_000);
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("pid");
+    let short = fake.approve(
+        &format!(
+            "sleep 300 & echo $! > '{}'; printf begun; wait",
+            pid_file.display()
+        ),
+        1_000,
+    );
     let long = fake.approve("sleep 1.5; printf finished", 30_000);
     let _host = start(&fake);
     let started = Instant::now();
+    let descendant = read_pid(&pid_file).await;
     let (status, output) = fake.wait_finished(short, Duration::from_secs(4)).await;
     assert_eq!(status, "timed out after 1s");
     assert_eq!(output, "begun");
+    assert!(gone(descendant).await, "the deadline left a child running");
     assert!(started.elapsed() < Duration::from_secs(3));
     // The second ran alongside it and outlived the first one's deadline.
     let (status, output) = fake.wait_finished(long, Duration::from_secs(4)).await;
@@ -625,4 +647,114 @@ fn the_cloud_address_must_be_https_or_local() {
     ] {
         assert!(origin(bad).is_err(), "{bad}");
     }
+}
+
+#[tokio::test]
+async fn a_result_the_cloud_refuses_to_authenticate_is_kept_for_later() {
+    let fake = Fake::default();
+    fake.0.lock().unwrap().refuse_finish = Some(401);
+    let id = fake.approve("printf done", 10_000);
+    let host = start(&fake);
+    let receipt = host.journal.path().join(id.to_string());
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert!(fake.finished(id).is_none());
+    let saved: Value = serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
+    assert_eq!(saved["state"], "finished");
+    // Accepted once the cloud takes it again; only then is the receipt gone.
+    fake.0.lock().unwrap().refuse_finish = None;
+    let (status, _) = fake.wait_finished(id, Duration::from_secs(3)).await;
+    assert_eq!(status, "exit status: 0");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!receipt.exists());
+}
+
+#[tokio::test]
+async fn a_check_that_never_answers_stops_the_command_at_the_offline_limit() {
+    let fake = Fake::default();
+    let id = fake.approve("sleep 30", 60_000);
+    let _host = start(&fake);
+    while !fake.0.lock().unwrap().progress.contains_key(&id) {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    fake.0.lock().unwrap().hang_checks = true;
+    let (status, _) = fake.wait_finished(id, Duration::from_secs(3)).await;
+    assert_eq!(status, "stopped: connection lost");
+}
+
+#[tokio::test]
+async fn work_claimed_as_the_connector_stops_never_starts() {
+    let fake = Fake::default();
+    let journal = tempfile::tempdir().unwrap();
+    let marker = journal
+        .path()
+        .join("..")
+        .join(format!("ran-{}", uuid::Uuid::new_v4()));
+    let (status, _) = watch::channel(BridgeStatus::default());
+    let host = Arc::new(
+        Host::new(
+            vec!["/bin/sh".into()],
+            true,
+            std::env::temp_dir(),
+            "me".into(),
+            journal.path().to_owned(),
+            Arc::new(fake.clone()),
+            timing(),
+            Arc::new(|| true),
+            status,
+        )
+        .unwrap(),
+    );
+    let id = uuid::Uuid::new_v4();
+    let stopped = CancellationToken::new();
+    stopped.cancel();
+    host.clone()
+        .run_one(
+            Claimed {
+                id,
+                command: format!("touch '{}'", marker.display()),
+                cwd: std::env::temp_dir(),
+                timeout_ms: Some(5000),
+            },
+            stopped,
+        )
+        .await;
+    assert!(!marker.exists());
+    assert_eq!(
+        fake.finished(id).map(|done| done.0).as_deref(),
+        Some("stopped before start")
+    );
+}
+
+#[tokio::test]
+async fn signing_out_while_offline_keeps_the_result_and_pauses() {
+    let fake = Fake::default();
+    let owner = Arc::new(AtomicBool::new(true));
+    let id = fake.approve("sleep 30", 600_000);
+    let host = start_in(&fake, tempfile::tempdir().unwrap(), owner.clone());
+    while !fake.0.lock().unwrap().progress.contains_key(&id) {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    fake.set_offline(true);
+    owner.store(false, Ordering::SeqCst);
+    let exit = tokio::time::timeout(Duration::from_secs(3), host.handle)
+        .await
+        .expect("the host let go after sign-out")
+        .unwrap()
+        .unwrap();
+    assert_eq!(exit, Exit::AccountChanged);
+    let saved: Value =
+        serde_json::from_slice(&std::fs::read(host.journal.path().join(id.to_string())).unwrap())
+            .unwrap();
+    assert_eq!(saved["status"], "stopped: signed out");
+}
+
+#[tokio::test]
+async fn stop_reports_when_the_saved_choice_cannot_be_forgotten() {
+    let profile = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(enabled_path(profile.path())).unwrap();
+    let connector = Connector::default();
+    assert!(connector.stop(profile.path()).await.is_err());
+    assert_eq!(connector.status().state, "off");
+    std::fs::remove_dir(enabled_path(profile.path())).unwrap();
+    assert!(connector.stop(profile.path()).await.is_ok());
 }

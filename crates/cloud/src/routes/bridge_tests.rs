@@ -773,3 +773,116 @@ fn the_bridge_does_not_depend_on_remote_access() {
         }
     }
 }
+
+async fn submit_as(
+    pool: &PgPool,
+    id: uuid::Uuid,
+    device: &str,
+) -> Result<Value, crate::error::ApiError> {
+    runtime_request(
+        pool,
+        "owner",
+        "w",
+        "chat",
+        Request::Command {
+            device_id: Some(device.into()),
+            command: "make".into(),
+            cwd: None,
+            request_id: id,
+            timeout_seconds: None,
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
+async fn a_request_id_never_runs_again_after_detach_and_retries_survive_going_offline() {
+    let Some(pool) = database().await else { return };
+    let task = uuid::Uuid::new_v4();
+    attach(&pool, "w", "chat", "mac").await;
+    offer(&pool, "mac", task).await;
+    let id = uuid::Uuid::new_v4();
+    submit_as(&pool, id, "mac").await.unwrap();
+    // The computer drops off; a retry of the same submission is still
+    // recognized instead of failing as offline.
+    sqlx::query("UPDATE api_bridge_tasks SET expires_at=now()-interval '1 second'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        submit_as(&pool, id, "mac").await.unwrap()["id"],
+        id.to_string()
+    );
+    // Detach deletes its rows; the same ID is refused after reattaching.
+    sqlx::query("DELETE FROM api_bridge_attachments")
+        .execute(&pool)
+        .await
+        .unwrap();
+    attach(&pool, "w", "chat", "mac").await;
+    offer(&pool, "mac", task).await;
+    assert_eq!(
+        submit_as(&pool, id, "mac").await.unwrap_err().code,
+        "computer_request_settled"
+    );
+    assert!(
+        pending_for(&pool, "owner", "w", "chat")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
+async fn approvals_reach_the_same_computer_after_its_connector_reconnects() {
+    let Some(pool) = database().await else { return };
+    let before = uuid::Uuid::new_v4();
+    attach(&pool, "w", "chat", "mac").await;
+    offer(&pool, "mac", before).await;
+    let id = command(&pool, "w", "chat", "mac", "make", None)
+        .await
+        .unwrap();
+    decide_for(&pool, "owner", "w", "chat", id, Decision::Once)
+        .await
+        .unwrap();
+    // The connector restarts with a new task ID for the same shell.
+    let after = uuid::Uuid::new_v4();
+    offer(&pool, "mac", after).await;
+    assert_eq!(claim(&pool, "mac", after).await["id"], id.to_string());
+    assert_eq!(check(&pool, "mac", after, id).await, json!(true));
+    // A different computer's connector never adopts it.
+    let other = uuid::Uuid::new_v4();
+    offer(&pool, "linux", other).await;
+    assert_eq!(claim(&pool, "linux", other).await, Value::Null);
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
+async fn revoking_always_returns_unstarted_requests_to_waiting() {
+    let Some(pool) = database().await else { return };
+    attach(&pool, "w", "chat", "mac").await;
+    sqlx::query("INSERT INTO api_bridge_always_grants VALUES ('owner','mac')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let id = command(&pool, "w", "chat", "mac", "make", None).await;
+    // Offline at first: queue it while the computer reconnects.
+    assert_eq!(id.unwrap_err().code, "computer_offline");
+    let task = uuid::Uuid::new_v4();
+    offer(&pool, "mac", task).await;
+    let id = command(&pool, "w", "chat", "mac", "make", None)
+        .await
+        .unwrap();
+    assert_eq!(state_of(&pool, "w", "chat", id).await["state"], "approved");
+    super::bridge_approvals::revoke_always_for(&pool, "owner", "mac")
+        .await
+        .unwrap();
+    assert_eq!(state_of(&pool, "w", "chat", id).await["state"], "pending");
+    // Granting "always" again later doesn't revive the old approval.
+    sqlx::query("INSERT INTO api_bridge_always_grants VALUES ('owner','mac')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(claim(&pool, "mac", task).await, Value::Null);
+}

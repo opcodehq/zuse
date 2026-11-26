@@ -3800,7 +3800,10 @@ impl EngineRpc {
                     .ok_or_else(|| RpcError::Failed("Computer connector unavailable".into()))?;
                 match method {
                     "StopComputerBridge" => {
-                        gateway.stop_computer_bridge().await;
+                        gateway
+                            .stop_computer_bridge()
+                            .await
+                            .map_err(|e| RpcError::Failed(e.to_string()))?;
                         RpcReply::value(&gateway.computer_bridge_status())
                     }
                     "ComputerBridgeStatus" => RpcReply::value(&gateway.computer_bridge_status()),

@@ -831,6 +831,9 @@ impl EngineCore {
         // not release another queued command while credentials are draining.
         self.doc_host.pause_all_queues();
         self.simulators.shutdown();
+        // Stop cloud-chat commands while the account can still report how
+        // they ended; the connector resumes on the next start.
+        self.plugins.shutdown_computer_bridge().await;
         self.account.retire();
         self.slack_links.shutdown().await;
         self.project_creation.shutdown().await;

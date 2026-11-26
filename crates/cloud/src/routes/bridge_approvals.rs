@@ -170,10 +170,32 @@ pub(super) async fn revoke_always(
     Path(enrollment): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let owner = personal_owner(&state, &headers).await?;
+    revoke_always_for(&runtime(&state)?.shared_pool(), &owner, &enrollment).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// End an "always" grant. Requests it approved that haven't started go back
+/// to waiting for a decision; running ones stop at their next check.
+pub(super) async fn revoke_always_for(
+    pool: &sqlx::PgPool,
+    owner: &str,
+    enrollment: &str,
+) -> Result<(), ApiError> {
+    let mut tx = pool.begin().await?;
     sqlx::query("DELETE FROM api_bridge_always_grants WHERE owner_id=$1 AND enrollment_id=$2")
         .bind(owner)
         .bind(enrollment)
-        .execute(&runtime(&state)?.shared_pool())
+        .execute(&mut *tx)
         .await?;
-    Ok(StatusCode::NO_CONTENT)
+    sqlx::query(
+        "UPDATE api_bridge_requests r SET decision=NULL
+         WHERE r.owner_id=$1 AND r.enrollment_id=$2 AND r.decision='always'
+           AND EXISTS (SELECT FROM api_bridge_runs b WHERE b.request_id=r.request_id AND NOT b.claimed AND b.result IS NULL)",
+    )
+    .bind(owner)
+    .bind(enrollment)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
 }

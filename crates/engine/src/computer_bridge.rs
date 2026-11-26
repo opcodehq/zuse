@@ -343,7 +343,7 @@ impl Host {
                             status.error = None;
                         });
                     }
-                    if runs.len() < MAX_CONCURRENT {
+                    if runs.len() < MAX_CONCURRENT && !stop.is_cancelled() {
                         match self
                             .transport
                             .send(json!({"action":"claim","task":self.task}))
@@ -425,10 +425,15 @@ impl Host {
             let body = json!({"action":"finish","task":saved["task"],"request":request,
                 "status":saved["status"],"output":saved["output"]});
             match self.transport.send(body).await {
-                Ok(_) | Err(SendError::Rejected(_)) => {
+                Ok(_) | Err(SendError::Rejected(409)) => {
                     let _ = std::fs::remove_file(entry.path());
                 }
-                Err(error) => return Err(error.into()),
+                // Not accepted (for example a rejected proof after clock
+                // skew): keep the result and try again on the next session.
+                Err(error @ (SendError::Unavailable(_) | SendError::Rejected(401 | 403))) => {
+                    return Err(error.into());
+                }
+                Err(SendError::Rejected(_)) => {}
             }
         }
         Ok(())
@@ -459,8 +464,24 @@ impl Host {
                 .unwrap_or(u64::from(DEFAULT_TIMEOUT_SECS) * 1000)
                 .clamp(1000, u64::from(MAX_TIMEOUT_SECS) * 1000),
         );
-        // A durable receipt is required before starting a process.
         let receipt = self.journal.join(request.to_string());
+        if cancel.is_cancelled() {
+            // Claimed as the connector stopped: it never starts, and says so.
+            if write_result(
+                &receipt,
+                &self.journal,
+                self.task,
+                "stopped before start",
+                "",
+            )
+            .is_ok()
+            {
+                self.deliver(request, &receipt, "stopped before start", "", &cancel)
+                    .await;
+            }
+            return;
+        }
+        // A durable receipt is required before starting a process.
         if let Err(error) = write_receipt(&receipt, &self.journal, self.task, &argv, &cwd) {
             tracing::warn!(%error, "computer bridge: command not admitted");
             return;
@@ -476,12 +497,16 @@ impl Host {
                 let output = render(&progress);
                 let check =
                     json!({"action":"check","task":self.task,"request":request,"output":output});
-                match self.transport.send(check).await {
-                    Ok(Value::Bool(true)) => reached = Instant::now(),
-                    Ok(_) | Err(SendError::Rejected(_)) => {
+                // A check still waiting when the approval can no longer be
+                // confirmed counts as lost too.
+                let remaining = self.timing.offline_limit.saturating_sub(reached.elapsed());
+                match tokio::time::timeout(remaining, self.transport.send(check)).await {
+                    Err(_) => return "stopped: connection lost".to_owned(),
+                    Ok(Ok(Value::Bool(true))) => reached = Instant::now(),
+                    Ok(Ok(_) | Err(SendError::Rejected(_))) => {
                         return "stopped: approval ended".to_owned();
                     }
-                    Err(SendError::Unavailable(_)) => {
+                    Ok(Err(SendError::Unavailable(_))) => {
                         if reached.elapsed() >= self.timing.offline_limit {
                             return "stopped: connection lost".to_owned();
                         }
@@ -497,24 +522,42 @@ impl Host {
         if let Err(error) = write_result(&receipt, &self.journal, self.task, &status, &output) {
             tracing::warn!(%error, "computer bridge: result not saved");
         }
+        self.deliver(request, &receipt, &status, &output, &cancel)
+            .await;
+    }
+
+    /// Deliver a saved result once the cloud accepts it. The receipt is
+    /// removed only when the cloud has the outcome; on shutdown or sign-out
+    /// it stays for the next session to republish.
+    async fn deliver(
+        &self,
+        request: uuid::Uuid,
+        receipt: &Path,
+        status: &str,
+        output: &str,
+        cancel: &CancellationToken,
+    ) {
         let body = json!({"action":"finish","task":self.task,"request":request,
             "status":status,"output":output});
-        // Deliver the result once the cloud is reachable again. On shutdown
-        // the saved receipt is republished by the next start.
         let mut delay = self.timing.heartbeat;
         loop {
             match self.transport.send(body.clone()).await {
-                Ok(_) | Err(SendError::Rejected(_)) => {
-                    let _ = std::fs::remove_file(&receipt);
+                Ok(_) | Err(SendError::Rejected(409)) => {
+                    let _ = std::fs::remove_file(receipt);
                     return;
                 }
-                Err(SendError::Unavailable(_)) => {
+                Err(SendError::Unavailable(_) | SendError::Rejected(401 | 403)) => {
+                    if cancel.is_cancelled() || !(self.still_owner)() {
+                        return;
+                    }
                     tokio::select! {
                         _ = cancel.cancelled() => return,
                         _ = tokio::time::sleep(delay) => {}
                     }
                     delay = (delay * 2).min(self.timing.backoff_max);
                 }
+                // A malformed result won't be accepted by retrying; keep it.
+                Err(SendError::Rejected(_)) => return,
             }
         }
     }
@@ -643,7 +686,7 @@ async fn run_process(
         Ok(c) => c,
         Err(e) => return ("start failed".into(), e.to_string()),
     };
-    let _group = ProcessGroup(child.id());
+    let group = ProcessGroup(child.id());
     let mut stdout = Abort(tokio::spawn(drain(
         child.stdout.take().unwrap(),
         progress.clone(),
@@ -666,6 +709,8 @@ async fn run_process(
         }
         Ok(Err(e)) => ("output unavailable".into(), e.to_string()),
         Err(_) => {
+            // Kill the whole tree while its root still exists.
+            drop(group);
             let _ = child.kill().await;
             (
                 format!("timed out after {}s", deadline.as_secs()),
@@ -969,10 +1014,12 @@ impl Connector {
     }
 
     async fn launch(&self, profile: &Path, account: crate::account::Account, timing: Timing) {
+        let mut slot = self.task.lock().await;
+        // Read under the lock: a concurrent Stop either removed the choice
+        // first, or takes and cancels the task installed here.
         let Some(enabled) = read_enabled(profile) else {
             return;
         };
-        let mut slot = self.task.lock().await;
         if let Some((stop, task)) = slot.take() {
             stop.cancel();
             let _ = task.await;
@@ -1025,9 +1072,32 @@ impl Connector {
     }
 
     /// Stop admitting work, stop running commands, and forget the choice.
-    pub async fn stop(&self, profile: &Path) {
-        let _ = std::fs::remove_file(enabled_path(profile));
-        if let Some((stop, mut task)) = self.task.lock().await.take() {
+    /// Fails, after stopping, when the saved choice couldn't be removed (the
+    /// connector would come back on the next start).
+    pub async fn stop(&self, profile: &Path) -> Result<()> {
+        let mut slot = self.task.lock().await;
+        let forgotten = match std::fs::remove_file(enabled_path(profile)) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        };
+        Self::finish(slot.take()).await;
+        self.status.send_replace(BridgeStatus {
+            state: "off",
+            ..Default::default()
+        });
+        forgotten
+            .context("Stopped, but couldn't forget this choice; it will start again with the app")
+    }
+
+    /// Engine shutdown: stop running commands and wait for their outcome to
+    /// be saved, keeping the choice so the connector resumes next start.
+    pub async fn shutdown(&self) {
+        let task = self.task.lock().await.take();
+        Self::finish(task).await;
+    }
+
+    async fn finish(task: Option<(CancellationToken, tokio::task::JoinHandle<()>)>) {
+        if let Some((stop, mut task)) = task {
             stop.cancel();
             // Running commands record their stop and report it briefly.
             if tokio::time::timeout(Duration::from_secs(8), &mut task)
@@ -1038,10 +1108,6 @@ impl Connector {
                 task.abort();
             }
         }
-        self.status.send_replace(BridgeStatus {
-            state: "off",
-            ..Default::default()
-        });
     }
 }
 

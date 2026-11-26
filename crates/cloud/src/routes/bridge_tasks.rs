@@ -113,6 +113,15 @@ pub(super) async fn host_action(
             if changed.rows_affected() != 1 {
                 return Err(ApiError::conflict("task_id_in_use"));
             }
+            sqlx::query(
+                "DELETE FROM api_bridge_tasks t WHERE t.owner_id=$1 AND t.enrollment_id=$2
+                   AND t.expires_at < now()-interval '1 day'
+                   AND NOT EXISTS (SELECT FROM api_bridge_runs b WHERE b.task_id=t.task_id AND b.result IS NULL)",
+            )
+            .bind(owner)
+            .bind(device)
+            .execute(pool)
+            .await?;
             Value::Null
         }
         Action::Claim { task } => {
@@ -120,10 +129,16 @@ pub(super) async fn host_action(
                 "WITH next AS (
                     SELECT b.request_id FROM api_bridge_requests r JOIN api_bridge_runs b USING(request_id)
                     JOIN api_bridge_tasks t ON t.task_id=b.task_id
-                    WHERE r.owner_id=$1 AND r.enrollment_id=$2 AND b.task_id=$3 AND NOT b.claimed
-                      AND b.result IS NULL AND t.expires_at>now() AND {GRANTED}
+                    JOIN api_bridge_tasks cur ON cur.task_id=$3
+                    WHERE r.owner_id=$1 AND r.enrollment_id=$2 AND NOT b.claimed AND b.result IS NULL
+                      AND cur.owner_id=$1 AND cur.enrollment_id=$2 AND cur.expires_at>now()
+                      -- The same offer from an earlier connector session (a reconnect or
+                      -- restart gets a new task ID) still reaches its approved requests.
+                      AND (b.task_id=$3 OR (t.owner_id,t.enrollment_id,t.dynamic,t.command,t.cwd,t.os_user)
+                          =(cur.owner_id,cur.enrollment_id,cur.dynamic,cur.command,cur.cwd,cur.os_user))
+                      AND {GRANTED}
                     ORDER BY b.created_at,r.request_id LIMIT 1 FOR UPDATE OF b SKIP LOCKED)
-                 UPDATE api_bridge_runs b SET claimed=true,claimed_at=now(),heartbeat_at=now()
+                 UPDATE api_bridge_runs b SET claimed=true,claimed_at=now(),heartbeat_at=now(),task_id=$3
                  FROM next, api_bridge_requests r
                  WHERE b.request_id=next.request_id AND r.request_id=b.request_id AND NOT b.claimed
                  RETURNING jsonb_build_object('id',r.request_id,'command',r.command,'cwd',r.cwd,'timeoutMs',r.timeout_ms)"
@@ -339,28 +354,7 @@ pub(super) async fn request_for(
         .bind(&id)
         .execute(&mut *tx)
         .await?;
-    let previous: Option<bool> = sqlx::query_scalar(
-        "SELECT r.owner_id=$2 AND r.workspace_id=$3 AND r.chat_id=$4 AND b.task_id=$5
-         FROM api_bridge_requests r JOIN api_bridge_runs b USING(request_id) WHERE r.request_id=$1::text::uuid",
-    )
-    .bind(&id)
-    .bind(owner)
-    .bind(workspace)
-    .bind(chat)
-    .bind(input.task.to_string())
-    .fetch_optional(&mut *tx)
-    .await?;
-    if let Some(same) = previous {
-        if !same {
-            return Err(ApiError::conflict("computer_request_id_reused"));
-        }
-        let existing: Value = sqlx::query_scalar(
-            "SELECT jsonb_build_object('id',request_id,'deviceId',enrollment_id,'computer',computer_name,'role',role)
-             FROM api_bridge_requests WHERE request_id=$1::text::uuid",
-        )
-        .bind(&id)
-        .fetch_one(&mut *tx)
-        .await?;
+    if let Some(existing) = existing_request(&mut tx, &id, owner, workspace, chat).await? {
         return Ok(existing);
     }
     // Serialize new requests per chat so the pending cap holds under races.
@@ -408,6 +402,15 @@ pub(super) async fn request_for(
     if added.rows_affected() != 1 {
         return Err(ApiError::conflict("task_offline_or_detached"));
     }
+    sqlx::query(
+        "INSERT INTO api_bridge_request_ids(request_id,owner_id,workspace_id,chat_id) VALUES($1::text::uuid,$2,$3,$4)",
+    )
+    .bind(&id)
+    .bind(owner)
+    .bind(workspace)
+    .bind(chat)
+    .execute(&mut *tx)
+    .await?;
     sqlx::query("INSERT INTO api_bridge_runs(request_id,task_id) VALUES($1::text::uuid,$2)")
         .bind(&id)
         .bind(input.task.to_string())
@@ -422,6 +425,43 @@ pub(super) async fn request_for(
     .await?;
     tx.commit().await?;
     Ok(created)
+}
+
+/// A request ID seen before: the same request again (its summary), a settled
+/// one whose rows were removed (refused), or another chat's (refused).
+async fn existing_request(
+    tx: &mut sqlx::PgConnection,
+    id: &str,
+    owner: &str,
+    workspace: &str,
+    chat: &str,
+) -> Result<Option<Value>, ApiError> {
+    let scope: Option<bool> = sqlx::query_scalar(
+        "SELECT owner_id=$2 AND workspace_id=$3 AND chat_id=$4 FROM api_bridge_request_ids
+         WHERE request_id=$1::text::uuid",
+    )
+    .bind(id)
+    .bind(owner)
+    .bind(workspace)
+    .bind(chat)
+    .fetch_optional(&mut *tx)
+    .await?;
+    match scope {
+        None => Ok(None),
+        Some(false) => Err(ApiError::conflict("computer_request_id_reused")),
+        Some(true) => {
+            let summary: Option<Value> = sqlx::query_scalar(
+                "SELECT jsonb_build_object('id',request_id,'deviceId',enrollment_id,'computer',computer_name,'role',role)
+                 FROM api_bridge_requests WHERE request_id=$1::text::uuid",
+            )
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            summary
+                .map(Some)
+                .ok_or_else(|| ApiError::conflict("computer_request_settled"))
+        }
+    }
 }
 
 pub(super) async fn results(
@@ -510,6 +550,17 @@ pub(super) async fn runtime_request(
     request: protocol::Request,
 ) -> Result<Value, ApiError> {
     use protocol::Request as Task;
+    // A retried submission is recognized before the computer's current
+    // offer is resolved: the computer may have gone offline or restarted.
+    if let Task::Run { request_id, .. } | Task::Command { request_id, .. } = &request {
+        let mut tx = pool.begin().await?;
+        let existing =
+            existing_request(&mut tx, &request_id.to_string(), owner, workspace, chat).await?;
+        tx.commit().await?;
+        if let Some(existing) = existing {
+            return Ok(existing);
+        }
+    }
     Ok(match request {
         Task::List => json!(list_for(pool, owner, workspace, chat).await?),
         Task::Computers => json!(computers_for(pool, owner, workspace, chat).await?),
