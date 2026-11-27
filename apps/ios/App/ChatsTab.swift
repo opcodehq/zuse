@@ -26,6 +26,10 @@ struct ChatsListView: View {
   let newCloudChat: () -> Void
   let addProject: () -> Void
   let openComputers: () -> Void
+  /// The ask field under the list; the wide layout starts chats from the detail column.
+  var showsAsk = true
+  /// Highlights the open chat, for layouts that show it beside the list.
+  var highlightsSelection = false
   @State private var view: ChatsView = .all
   @State private var ask = ""
   @State private var cloudConfirmation: CloudActionSelection?
@@ -108,13 +112,16 @@ struct ChatsListView: View {
         } else if row.isCloud, let chat = cloudByKey[row.id] {
           cloudRow(chat)
         } else if let session = sessionsByKey[row.id] {
-          SessionListRow(workspace: workspace, session: session, project: row.projectName)
-            .swipeActions {
-              Button("Archive", systemImage: "archivebox") {
-                Task { await workspace.archiveChat(session) }
-              }
-              .tint(.gray)
+          SessionListRow(
+            workspace: workspace, session: session, project: row.projectName,
+            selected: highlightsSelection && selection?.id == session.id
+          )
+          .swipeActions {
+            Button("Archive", systemImage: "archivebox") {
+              Task { await workspace.archiveChat(session) }
             }
+            .tint(.gray)
+          }
         }
       }
       if rows.isEmpty { emptyState.chatsRow(minHeight: 0).padding(.top, 64) }
@@ -150,7 +157,7 @@ struct ChatsListView: View {
       chips(projects: projects)
         .padding(.horizontal, 16).padding(.top, 2).padding(.bottom, 6)
     }
-    .safeAreaInset(edge: .bottom) { askField }
+    .safeAreaInset(edge: .bottom) { if showsAsk { askField } }
     .confirmationDialog(
       cloudConfirmation?.action == .archive ? "Archive cloud workspace?" : "Pause cloud workspace?",
       isPresented: Binding(
@@ -436,6 +443,7 @@ private struct SessionListRow: View {
   let workspace: WorkspaceModel
   let session: SessionRow
   let project: String?
+  var selected = false
   private var context: String {
     (workspace.operationScope ?? "") + workspace.connectionState
       + workspace.account.generation.uuidString
@@ -461,7 +469,7 @@ private struct SessionListRow: View {
         }
       }
     }
-    .chatsRow()
+    .chatsRow(selected: selected)
     .task(id: context) {
       workspace.requestGitState(session)
       while !Task.isCancelled && workspace.connectionState == "Connected" {
@@ -632,10 +640,10 @@ private struct ChatsNotice: View {
 
 extension View {
   /// Row metrics for the Chats list.
-  func chatsRow(minHeight: CGFloat = 44) -> some View {
+  func chatsRow(minHeight: CGFloat = 44, selected: Bool = false) -> some View {
     frame(minHeight: minHeight)
       .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-      .listRowSeparator(.hidden).listRowBackground(Color.clear)
+      .listRowSeparator(.hidden).listRowBackground(SelectedRowBackground(selected: selected))
   }
 }
 

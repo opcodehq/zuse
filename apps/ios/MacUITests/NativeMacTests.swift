@@ -8,7 +8,7 @@ final class NativeMacTests: XCTestCase {
     let composer = app.descendants(matching: .any).matching(identifier: "chat-composer").firstMatch
     XCTAssertTrue(composer.waitForExistence(timeout: 20))
     XCTAssertFalse(app.buttons["Send message"].isEnabled)
-    // Settings live in the More tab.
+    // Command-comma opens Settings.
     app.typeKey(",", modifierFlags: .command)
     XCTAssertTrue(app.staticTexts["Appearance"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.staticTexts["Sign in"].exists)

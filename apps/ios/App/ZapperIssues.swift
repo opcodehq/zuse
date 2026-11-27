@@ -194,6 +194,8 @@ struct IssueBoardRows: View {
   let workspace: WorkspaceModel
   let sections: [IssueSection]
   @Binding var collapsed: Set<ZapperIssueStatus>
+  /// The issue open beside the list, highlighted in it.
+  var selected: String?
   let open: (IssueEntry) -> Void
   var body: some View {
     ForEach(sections) { section in
@@ -215,7 +217,7 @@ struct IssueBoardRows: View {
               issue: entry.issue, zapper: workspace.zappers.zapper(entry.zapperID),
               account: workspace.account)
           }
-          .buttonStyle(.plain).issueListRow()
+          .buttonStyle(.plain).issueListRow(selected: entry.issue.id == selected)
         }
       }
     }
@@ -224,9 +226,9 @@ struct IssueBoardRows: View {
 
 extension View {
   /// Row metrics for the issue lists.
-  func issueListRow() -> some View {
+  func issueListRow(selected: Bool = false) -> some View {
     listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-      .listRowSeparator(.hidden).listRowBackground(Color.clear)
+      .listRowSeparator(.hidden).listRowBackground(SelectedRowBackground(selected: selected))
   }
 }
 
@@ -235,6 +237,8 @@ extension View {
 /// Every Zapper's issues in one list: what is yours first, grouped by status.
 struct IssuesListView: View {
   let workspace: WorkspaceModel
+  /// The issue open beside the list, highlighted in it.
+  var selectedIssue: String?
   let push: (ZapperRoute) -> Void
   @State private var scope: IssueScope = .forYou
   @State private var filter = IssueFilter()
@@ -251,7 +255,9 @@ struct IssuesListView: View {
       if sections.isEmpty {
         empty(hasIssues: !entries.isEmpty).issueListRow().padding(.top, 56)
       } else {
-        IssueBoardRows(workspace: workspace, sections: sections, collapsed: $collapsed) { entry in
+        IssueBoardRows(
+          workspace: workspace, sections: sections, collapsed: $collapsed, selected: selectedIssue
+        ) { entry in
           push(.issue(zapper: entry.zapperID, issue: entry.issue.id))
         }
       }

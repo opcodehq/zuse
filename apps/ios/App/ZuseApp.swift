@@ -72,6 +72,12 @@ struct WorkspaceView: View {
   @State private var chatActions: ChatActionsTarget?
   /// Until the user moves on, the chat restored at launch opens in the Chats tab.
   @State private var opensRestoredChat = true
+  /// The wide layout: the sidebar's place, the Zapper overview inspector, the open issue
+  /// stack and the open settings page.
+  @State private var section: ShellSection?
+  @State private var zapperInspector = false
+  @State private var issuePath: [ZapperRoute] = []
+  @State private var settingsPage: MoreRoute?
   @Environment(\.scenePhase) private var scenePhase
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   #if os(iOS)
@@ -84,6 +90,14 @@ struct WorkspaceView: View {
       false
     #endif
   }
+  /// iPad at full or wide split widths, and Mac, use the sidebar shell; compact widths use tabs.
+  private var usesRegularShell: Bool {
+    #if os(iOS)
+      sizeClass == .regular
+    #else
+      true
+    #endif
+  }
   private struct NewChatRoute: Equatable {
     let id = UUID()
     let cloud: Bool
@@ -93,6 +107,7 @@ struct WorkspaceView: View {
   private func openNewChat(cloud: Bool, prompt: String = "") {
     newChat = NewChatRoute(cloud: cloud, prompt: prompt)
     tab = .chats
+    section = .chats
     chatsColumn = .detail
     if !isCompact && chatsVisibility != .detailOnly {
       visibilityBeforeNewChat = chatsVisibility
@@ -107,6 +122,7 @@ struct WorkspaceView: View {
     tab = .zappers
     if zapperRoute != id { zapperPath = [] }
     zapperRoute = id
+    section = .zapper(id)
     zappersColumn = .detail
   }
   private func closeZapper() {
@@ -118,6 +134,7 @@ struct WorkspaceView: View {
   private func openChat(_ session: SessionRow) {
     if newChat != nil { closeNewChat() }
     tab = .chats
+    section = .chats
     selection = session
     chatsColumn = .detail
   }
@@ -128,6 +145,16 @@ struct WorkspaceView: View {
   }
   /// Pushes a Zapper page onto the stack of the tab on screen.
   private func push(_ route: ZapperRoute) {
+    if usesRegularShell {
+      // The wide layout shows a Zapper's overview beside its conversation.
+      if case .overview(let id) = route {
+        if zapperRoute != id { openZapper(id) }
+        withAnimation(.snappy) { zapperInspector = true }
+      } else {
+        zapperPath.append(route)
+      }
+      return
+    }
     switch tab {
     case .more: morePath.append(route)
     case .search: searchPath.append(route)
@@ -241,6 +268,7 @@ struct WorkspaceView: View {
       if sample { workspace.pullRequests.loadSamplePreview() }
       guard !arguments.contains("--pr-home-preview") else { return }
       tab = .prs
+      section = .pullRequests
       let live = arguments.firstIndex(of: "--pr-url").flatMap {
         arguments.indices.contains($0 + 1) ? arguments[$0 + 1] : nil
       }
@@ -271,7 +299,13 @@ struct WorkspaceView: View {
       if arguments.contains("--zapper-chat-preview") { return }
       // Let the Zapper's stack appear on its conversation before pushing the overview.
       try? await Task.sleep(for: .milliseconds(400))
-      zapperPath = [.overview(first.id)]
+      if usesRegularShell {
+        zapperInspector = true
+        // Pages open from the overview once it is on screen, as they would by hand.
+        try? await Task.sleep(for: .milliseconds(600))
+      } else {
+        zapperPath = [.overview(first.id)]
+      }
       if arguments.contains("--zapper-issue-preview"),
         let issue = first.issues.first(where: { $0.details.status == .needsYou })
       {
@@ -294,6 +328,16 @@ struct WorkspaceView: View {
         case "help": morePath.append(MoreRoute.help)
         default: break
         }
+        switch value {
+        case "issues": section = .issues
+        case "computers": section = .computers
+        case "account": settingsPage = .account
+        case "appearance": settingsPage = .appearance
+        case "archived": settingsPage = .archived
+        case "help": settingsPage = .help
+        default: section = .settings
+        }
+        if settingsPage != nil { section = .settings }
       }
       if arguments.contains("--issue-detail-preview"),
         let zapper = workspace.zappers.zappers.first(where: { !$0.issues.isEmpty }),
@@ -303,6 +347,8 @@ struct WorkspaceView: View {
         tab = .more
         if morePath.isEmpty { morePath.append(MoreRoute.issues) }
         morePath.append(ZapperRoute.issue(zapper: zapper.id, issue: issue.id))
+        section = .issues
+        issuePath = [.issue(zapper: zapper.id, issue: issue.id)]
       }
       if let value = arguments.first(where: { $0.hasPrefix("--search=") })?.dropFirst(9) {
         tab = .search
@@ -318,7 +364,7 @@ struct WorkspaceView: View {
       .onChange(of: photo) { _, value in importPhoto(value) }
   }
   private var routedWorkspace: some View {
-    tabs
+    layout
       .pullRequestLinks()
       #if os(iOS)
         .onReceive(
@@ -335,6 +381,7 @@ struct WorkspaceView: View {
       }
       .onReceive(NotificationCenter.default.publisher(for: .nativeSettings)) { _ in
         tab = .more
+        section = .settings
       }
       .onReceive(NotificationCenter.default.publisher(for: .nativeOpenPullRequest)) { note in
         if let url = note.object as? String { openPullRequestLink(url) }
@@ -421,6 +468,10 @@ struct WorkspaceView: View {
         }
       }
       .onChange(of: tab) { opensRestoredChat = false }
+      .onChange(of: section) { _, section in followSection(section) }
+      .onChange(of: zapperRoute) { _, route in
+        if route == nil, case .zapper = section { section = .chats }
+      }
       .onChange(of: scenePhase) { _, phase in workspace.sceneChanged(active: phase == .active) }
       .onChange(of: workspace.account.generation) {
         if !workspace.account.signedIn && newChat != nil { closeNewChat() }
@@ -438,6 +489,9 @@ struct WorkspaceView: View {
   }
   /// Restores the last place, then applies debug launch arguments.
   private func launch() async {
+    #if DEBUG && os(iOS)
+      LaunchOrientation.apply()
+    #endif
     await workspace.refreshCloud()
     workspace.restoreWorkspace()
     let launchTab = AppTab.launchArgument
@@ -451,7 +505,10 @@ struct WorkspaceView: View {
     #if DEBUG
       let arguments = ProcessInfo.processInfo.arguments
       if launchTab == nil && arguments.contains("--home-preview") { tab = .chats }
-      if arguments.contains("--settings-preview") { tab = .more }
+      if arguments.contains("--settings-preview") {
+        tab = .more
+        section = .settings
+      }
       if arguments.contains("--new-chat-preview") { openNewChat(cloud: false) }
       if arguments.contains("--pairing-preview") { connectionMethod = .add }
       if arguments.contains("--chat-actions-preview"), let session = selection {
@@ -462,6 +519,34 @@ struct WorkspaceView: View {
       await openZapperPreview(arguments)
       openPullRequestPreview(arguments)
     #endif
+    if section == nil { section = initialSection }
+  }
+  /// The wide layout starts where the tabs would: the tab's place, or the first Zapper.
+  private var initialSection: ShellSection {
+    switch tab {
+    case .zappers:
+      let id = zapperRoute ?? workspace.zappers.zappers.first { $0.status != .archived }?.id
+      return id.map { .zapper($0) } ?? .chats
+    case .chats, .search: return .chats
+    case .prs: return .pullRequests
+    case .more: return .settings
+    }
+  }
+  /// Keeps the tabs in step with the sidebar, so a narrower window keeps your place.
+  private func followSection(_ section: ShellSection?) {
+    guard usesRegularShell, let section else { return }
+    switch section {
+    case .zapper(let id):
+      tab = .zappers
+      if zapperRoute != id {
+        zapperPath = []
+        zapperRoute = id
+      }
+    case .chats: tab = .chats
+    case .pullRequests: tab = .prs
+    case .issues, .computers, .settings: tab = .more
+    case .search: break
+    }
   }
   private func importFile(_ result: Result<URL, Error>) {
     Task {
@@ -499,6 +584,57 @@ struct WorkspaceView: View {
         }
       } catch { workspace.error = error.localizedDescription }
       photo = nil
+    }
+  }
+
+  @ViewBuilder private var layout: some View {
+    if usesRegularShell { regularShell } else { tabs }
+  }
+
+  private var regularShell: some View {
+    RegularShell(
+      workspace: workspace, section: $section, chatSelection: $selection, zapperID: zapperRoute,
+      zapperPath: $zapperPath, inspector: $zapperInspector, pullRequestPath: $pullRequestPath,
+      issuePath: $issuePath, settingsPage: $settingsPage, searchText: $searchText,
+      actions: ShellActions(
+        openZapper: openZapper, closeZapper: closeZapper, openChat: openChat,
+        openCloud: { chat in
+          tab = .chats
+          section = .chats
+          workspace.openCloud(chat)
+        },
+        selectSession: { session in workspace.selectSession(session) },
+        newChat: { prompt in openNewChat(cloud: false, prompt: prompt) },
+        newCloudChat: { openNewChat(cloud: true) },
+        connect: { connectionMethod = .add }, addProject: { showProject = true })
+    ) { session in
+      chatScreen(session)
+    } chatsDetail: {
+      regularChatsDetail
+    }
+  }
+
+  /// The wide layout's Chats detail. With nothing open it is the new chat composer, so the
+  /// next chat is one message away.
+  private var regularChatsDetail: some View {
+    Group {
+      if let route = newChat {
+        NewChatSetupView(
+          workspace: workspace, initialCloud: route.cloud, initialPrompt: route.prompt,
+          showsClose: selection != nil, close: closeNewChat
+        )
+        .id(route.id)
+      } else if let session = selection {
+        chatScreen(session)
+      } else {
+        NewChatSetupView(workspace: workspace, showsClose: false, close: {})
+          .id(workspace.operationScope ?? "new-chat")
+      }
+    }
+    .inspector(isPresented: $showDiff) {
+      if let session = workspace.selectedSession, let rpc = workspace.rpc {
+        DiffView(rpc: rpc, session: session).inspectorColumnWidth(min: 320, ideal: 440, max: 680)
+      }
     }
   }
 

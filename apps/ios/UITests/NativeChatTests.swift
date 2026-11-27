@@ -145,11 +145,15 @@ final class NativeChatTests: XCTestCase {
     XCTAssertFalse(app.staticTexts["Polish the mobile navigation"].exists)
     app.buttons["Show all chats"].tap()
     XCTAssertTrue(app.staticTexts["Polish the mobile navigation"].waitForExistence(timeout: 5))
-    app.buttons["More"].firstMatch.tap()
+    // iPad lists Settings and Computers in its sidebar; iPhone keeps them under More.
+    let sidebar = UIDevice.current.userInterfaceIdiom == .pad
+    if sidebar { openSidebar(app) }
+    app.buttons[sidebar ? "sidebar-settings" : "More"].firstMatch.tap()
     XCTAssertTrue(app.buttons["more-account"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.staticTexts["Sign in"].exists)
     XCTAssertTrue(app.staticTexts["Archived chats"].exists)
-    app.buttons["settings-computers"].tap()
+    if sidebar { openSidebar(app) }
+    app.buttons[sidebar ? "sidebar-computers" : "settings-computers"].firstMatch.tap()
     XCTAssertTrue(app.staticTexts["Connect your computer"].waitForExistence(timeout: 5))
     let computers = XCTAttachment(screenshot: app.screenshot())
     computers.name = "Computer connections"
@@ -308,4 +312,11 @@ final class NativeChatTests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Received: A fresh native chat"].waitForExistence(timeout: 10))
   }
 
+  /// In portrait the iPad sidebar is tucked away; its toolbar button brings it back.
+  @MainActor private func openSidebar(_ app: XCUIApplication) {
+    let settings = app.buttons["sidebar-settings"].firstMatch
+    if settings.waitForExistence(timeout: 2) && settings.isHittable { return }
+    app.buttons["Show Sidebar"].firstMatch.tap()
+    XCTAssertTrue(settings.waitForExistence(timeout: 5))
+  }
 }
