@@ -178,11 +178,12 @@ export function referenceClick(event: MouseEvent, catalog: ReferenceCatalog, cha
   if (target) openReference(kind, target, chatId);
 }
 
-export function ReferenceMarkdown(props: { text: string; live: boolean; chatId: string; references: ReferenceCatalog }) {
+export function ReferenceMarkdown(props: { text: string; live: boolean; chatId: string; references: ReferenceCatalog; htmlPreview?: boolean }) {
   return (
     <Markdown
       text={props.text}
       live={props.live}
+      htmlPreview={props.htmlPreview}
       decorate={(html) => decorateReferences(html, props.references)}
       onClick={(event) => referenceClick(event, props.references, props.chatId)}
     />
