@@ -812,7 +812,7 @@ struct WorkspaceView: View {
       }
       TranscriptView(
         messages: workspace.transcript.messages, sessionID: session.id, rpc: workspace.rpc,
-        bottomInset: composerHeight,
+        running: workspace.transcript.activeTurnID != nil, bottomInset: composerHeight,
         respond: { message, text in try await workspace.respondToUI(message, text: text) })
       if !workspace.outbox.isEmpty {
         ScrollView(.horizontal) {
@@ -858,9 +858,10 @@ struct WorkspaceView: View {
         GeometryReader { geometry in
           LinearGradient(
             stops: [
+              // Text fades out before it reaches the composer instead of showing through it.
               .init(color: AppTheme.surface.opacity(0), location: 0),
-              .init(color: AppTheme.surface.opacity(0.18), location: 0.35),
-              .init(color: AppTheme.surface.opacity(0.55), location: 1),
+              .init(color: AppTheme.surface.opacity(0.75), location: 0.4),
+              .init(color: AppTheme.surface.opacity(0.95), location: 1),
             ], startPoint: .top, endPoint: .bottom
           )
           .frame(height: geometry.size.height + 64)
@@ -941,9 +942,9 @@ struct WorkspaceView: View {
   private func coordinatedBy(_ session: SessionRow) -> Zapper? {
     workspace.zappers.zappers.first { $0.coordinatorChatId == session.id }
   }
+  /// The composer rests on one line and opens while you write.
   private var composerExpanded: Bool {
     composerFocused || !workspace.attachments.isEmpty
-      || workspace.transcript.activeTurnID != nil
   }
   /// Where a message from the composer will run.
   private var composerContext: String? {

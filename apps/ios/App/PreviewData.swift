@@ -60,7 +60,9 @@
       }
       if ProcessInfo.processInfo.arguments.contains("--zapper-preview") { loadZapperPreview() }
       selectedProject = projects.first
-      let count = ProcessInfo.processInfo.arguments.contains("--large-transcript") ? 10_000 : 30
+      let arguments = ProcessInfo.processInfo.arguments
+      // Long transcripts use the legacy record shape, which older hosts still send.
+      let count = arguments.contains("--large-transcript") ? 10_000 : 0
       var messages: [JSONValue] = (0..<count).map { index in
         let user = index % 3 == 0
         let text =
@@ -86,70 +88,6 @@
           "content": .object(["_tag": .string(user ? "user" : "assistant"), "text": .string(text)]),
           "createdAt": .string("2026-10-18T00:00:00Z"),
         ])
-      }
-      if ProcessInfo.processInfo.arguments.contains("--conversation-preview")
-        || (ProcessInfo.processInfo.arguments.contains("--home-preview") && selected != nil)
-      {
-        let contents: [JSONValue] = [
-          .object([
-            "_tag": .string("user"),
-            "text": .string("Make the chat composer more compact and check the changes."),
-          ]),
-          .object([
-            "_tag": .string("assistant"),
-            "text": .string("I’ll tighten the spacing and keep the actions on one row."),
-          ]),
-          .object([
-            "_tag": .string("thinking"),
-            "text": .string(
-              "Keep the input flexible while preserving accessible touch targets for attachments and send."
-            ),
-          ]),
-          .object([
-            "_tag": .string("tool_use"), "tool": .string("Read"), "itemId": .string("read-preview"),
-            "input": .object(["file_path": .string("App/Composer.swift")]),
-          ]),
-          .object([
-            "_tag": .string("tool_result"), "itemId": .string("read-preview"),
-            "output": .string(
-              "Composer.swift · 84 lines\nInput, attachment menu, model label, and send control."),
-            "isError": .bool(false),
-          ]),
-          .object([
-            "_tag": .string("tool_use"), "tool": .string("Edit"), "itemId": .string("edit-preview"),
-            "input": .object([
-              "file_path": .string("App/Composer.swift"), "old_string": .string("spacing: 16"),
-              "new_string": .string("spacing: 8"),
-            ]),
-          ]),
-          .object([
-            "_tag": .string("tool_result"), "itemId": .string("edit-preview"),
-            "output": .string("Updated spacing in Composer.swift."), "isError": .bool(false),
-          ]),
-          .object([
-            "_tag": .string("tool_use"), "tool": .string("Run"), "itemId": .string("run-preview"),
-            "input": .object(["command": .string("swift test")]),
-          ]),
-          .object([
-            "_tag": .string("tool_result"), "itemId": .string("run-preview"),
-            "output": .string(
-              "Sample test output\n✓ Composer layout\n✓ Attachment actions\n✓ Send and stop states"),
-            "isError": .bool(false),
-          ]),
-          .object([
-            "_tag": .string("assistant"),
-            "text": .string(
-              "Updated the composer with a growing text area and a fixed action row.\n\n- Smaller send button, with a full touch target\n- Compact attachment and model controls\n- Less spacing between tool calls\n\n*This is a sample conversation for previewing the interface.*"
-            ),
-          ]),
-        ]
-        messages = contents.enumerated().map { index, content in
-          .object([
-            "id": .string("conversation-\(index)"), "sessionId": .string(session.id),
-            "role": .string(index == 0 ? "user" : "assistant"), "content": content,
-            "createdAt": .string("2026-10-18T00:00:00Z"),
-          ])
-        }
       }
       if ProcessInfo.processInfo.arguments.contains("--visual-preview") {
         messages = [
@@ -186,12 +124,33 @@
           ])
         ]
       }
-      try transcript.apply(
-        .object([
-          "kind": .string("snapshot"), "sessionId": .string(session.id),
-          "throughVersion": .number(0),
-          "projection": .object(["messages": .array(messages), "status": .string("idle")]),
-        ]), sessionID: session.id)
+      let legacy =
+        arguments.contains("--large-transcript") || arguments.contains("--visual-preview")
+        || arguments.contains("--diagram-preview")
+      if legacy {
+        try transcript.apply(
+          .object([
+            "kind": .string("snapshot"), "sessionId": .string(session.id),
+            "throughVersion": .number(0),
+            "projection": .object(["messages": .array(messages), "status": .string("idle")]),
+          ]), sessionID: session.id)
+      } else {
+        // Every other chat preview goes through the same path as a connected computer.
+        let running = arguments.contains("--running-preview")
+        var fold = CanonicalTranscript()
+        try fold.apply(
+          .object(["reset": .array(PreviewConversation.entries(running: running))]))
+        transcript = Transcript()
+        transcript.replaceCanonical(
+          fold.messages(sessionID: session.id), interactions: fold.interactions)
+        if running {
+          transcript.applyCanonicalRuntime(
+            .object([
+              "chatId": .string(session.id), "status": .string("working"),
+              "updatedAt": .string(Date().formatted(.iso8601)),
+            ]), sessionID: session.id)
+        }
+      }
       connectionState = "Preview · offline"
       if ProcessInfo.processInfo.arguments.contains("--model-picker-preview") {
         draft = "Review the changes"

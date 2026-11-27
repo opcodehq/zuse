@@ -190,6 +190,18 @@ public struct TimelineDiff: Equatable, Sendable {
   public let path: String
   public let old: String?
   public let new: String
+  /// The full diff the host keeps beside the transcript: one file or a list of them.
+  public static func decode(_ text: String) -> [TimelineDiff] {
+    guard let value = try? JSONDecoder().decode(JSONValue.self, from: Data(text.utf8)) else {
+      return []
+    }
+    let items = value.array.isEmpty ? [value] : value.array
+    return items.compactMap { item in
+      item["newText"].string.map {
+        TimelineDiff(path: item["path"].string ?? "", old: item["oldText"].string, new: $0)
+      }
+    }
+  }
   /// Changed lines with a little context, for a compact preview.
   public func lines(context: Int = 2) -> [DiffLine] {
     TextDiff.lines(old: old ?? "", new: new, context: context)
@@ -226,6 +238,14 @@ public struct TimelineActivity: Equatable, Sendable {
   public var worked: String? {
     guard !live, let durationMs, durationMs > 0 else { return nil }
     return "Worked for " + ToolPresentation.duration(milliseconds: durationMs)
+  }
+  /// The settled line as a phone shows it: timing, the first two kinds of work, no failures
+  /// (the view adds those so they never truncate).
+  public var headline: String {
+    if live { return liveTitle }
+    let work = steps.isEmpty ? nil : ToolPresentation.summary(steps, limit: 2, failures: false)
+    let parts = [worked, work].compactMap { $0 }
+    return parts.isEmpty ? "Worked" : parts.joined(separator: " · ")
   }
   /// The settled line: timing first, then what was done.
   public var title: String {
@@ -624,7 +644,8 @@ public enum TextDiff {
     var previous: Int?
     for index in rows.indices where keep.contains(index) {
       if let previous, index > previous + 1 {
-        result.append(DiffLine(id: result.count, text: "…", kind: .header, oldLine: nil, newLine: nil))
+        result.append(
+          DiffLine(id: result.count, text: "…", kind: .header, oldLine: nil, newLine: nil))
       }
       result.append(
         DiffLine(

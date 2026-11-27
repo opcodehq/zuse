@@ -99,4 +99,33 @@ public enum Attachments {
       result["originalName"].string ?? "Attachment"
     )
   }
+
+  /// One page of a tool's full output (or `.diff` JSON) that the host keeps beside the transcript.
+  public static func toolOutput(_ reference: String, offset: Int = 0, rpc: RPCClient)
+    async throws -> ToolOutputPage
+  {
+    let page = try await rpc.call(
+      "FetchToolBlob",
+      [
+        "blobRef": .string(reference), "offset": .number(Double(offset)),
+        "limit": .number(65_536),
+      ])
+    guard let text = page["text"].string, let next = page["nextOffset"].int,
+      let total = page["totalBytes"].int, next >= offset, next <= total
+    else { throw ClientError("The host sent an unreadable tool output.") }
+    return ToolOutputPage(text: text, next: next, total: total, done: page["done"].bool)
+  }
+}
+
+public struct ToolOutputPage: Equatable, Sendable {
+  public let text: String
+  public let next: Int
+  public let total: Int
+  public let done: Bool
+  public init(text: String, next: Int, total: Int, done: Bool) {
+    self.text = text
+    self.next = next
+    self.total = total
+    self.done = done
+  }
 }

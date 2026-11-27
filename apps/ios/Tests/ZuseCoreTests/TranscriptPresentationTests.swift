@@ -300,7 +300,8 @@ private func project(_ entries: [JSONValue], running: Bool = false) throws -> [T
   #expect(notices[0].detail == "Old chat")
   #expect(notices[1].title == "Switched from Sonnet 4.5 to GPT-5 Codex")
   let step = try #require(activity(items)?.steps.first)
-  #expect(step.subagent == TimelineSubagent(status: .running, tail: "Reading files", reference: "doc-1"))
+  #expect(
+    step.subagent == TimelineSubagent(status: .running, tail: "Reading files", reference: "doc-1"))
   #expect(step.running)
   #expect(step.tool.detail == "scan repo")
 }

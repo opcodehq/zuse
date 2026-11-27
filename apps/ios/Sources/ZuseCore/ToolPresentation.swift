@@ -70,7 +70,8 @@ public enum ToolPresentation {
       if name.hasPrefix("Agent: ") {
         return step("Agent", String(name.dropFirst(7)), agent, .agent)
       }
-      return name == "Agent" ? step("Agent", "", agent, .agent) : step("Tool", name, "wrench", .tool)
+      return name == "Agent"
+        ? step("Agent", "", agent, .agent) : step("Tool", name, "wrench", .tool)
     }
   }
 
@@ -78,7 +79,8 @@ public enum ToolPresentation {
     func text(_ key: String) -> String { input[key].string ?? "" }
     let path = input["file_path"].string ?? text("path")
     switch name {
-    case "Bash", "Run": return step(running ? "Running" : "Ran", text("command"), terminal, .command)
+    case "Bash", "Run":
+      return step(running ? "Running" : "Ran", text("command"), terminal, .command)
     case "Read": return step(running ? "Reading" : "Read", path, read, .read)
     case "Write": return step(running ? "Writing" : "Wrote", path, edit, .write)
     case "Edit", "MultiEdit": return step(running ? "Editing" : "Edited", path, edit, .edit)
@@ -98,7 +100,9 @@ public enum ToolPresentation {
   }
 
   /// "Ran 3 commands · edited 2 files · 1 failed": categories in order of first use.
-  public static func summary(_ steps: [TimelineStep], limit: Int = 4) -> String {
+  public static func summary(_ steps: [TimelineStep], limit: Int = 4, failures: Bool = true)
+    -> String
+  {
     let tools = steps.filter { $0.kind == .tool }
     if tools.isEmpty {
       return steps.contains { $0.kind == .thinking } ? "Thought" : "Worked"
@@ -144,7 +148,7 @@ public enum ToolPresentation {
       segments = Array(segments.prefix(limit)) + ["+\(hidden)"]
     }
     let failed = tools.filter(\.failed).count
-    if failed > 0 { segments.append("\(failed) failed") }
+    if failures, failed > 0 { segments.append("\(failed) failed") }
     let line = segments.joined(separator: " · ")
     return line.prefix(1).uppercased() + line.dropFirst()
   }

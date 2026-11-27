@@ -1,5 +1,4 @@
 import Foundation
-
 import Testing
 
 @testable import ZuseCore
@@ -13,7 +12,8 @@ private func tool(
     "resolved": .bool(resolved), "isError": .bool(error),
   ]
   content.merge(extra) { $1 }
-  return ChatMessage(id: id, sessionId: "s", role: "assistant", content: .object(content), createdAt: "")
+  return ChatMessage(
+    id: id, sessionId: "s", role: "assistant", content: .object(content), createdAt: "")
 }
 private func steps(_ messages: [ChatMessage], live: Bool = false) -> [TimelineStep] {
   messages.map { TimelineStep(kind: .tool, message: $0, result: nil, live: live) }

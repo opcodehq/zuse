@@ -68,6 +68,29 @@ import ZuseCore
           : UIColor(red: 0.28, green: 0.41, blue: 0, alpha: 1)
       })
   #endif
+  #if os(macOS)
+    static func adaptive(light: NSColor, dark: NSColor) -> Color {
+      Color(
+        nsColor: NSColor(name: nil) {
+          $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+        })
+    }
+    private static func rgb(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat) -> NSColor {
+      NSColor(red: red / 255, green: green / 255, blue: blue / 255, alpha: 1)
+    }
+  #else
+    static func adaptive(light: UIColor, dark: UIColor) -> Color {
+      Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? dark : light })
+    }
+    private static func rgb(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat) -> UIColor {
+      UIColor(red: red / 255, green: green / 255, blue: blue / 255, alpha: 1)
+    }
+  #endif
+  /// Your messages in a chat.
+  static let bubble = adaptive(light: rgb(234, 234, 230), dark: rgb(38, 38, 40))
+  /// Code cards and expanded tool output.
+  static let codeBackground = adaptive(light: rgb(241, 241, 238), dark: rgb(26, 26, 28))
+  static let link = adaptive(light: rgb(0, 102, 214), dark: rgb(116, 172, 255))
 }
 
 extension View {
@@ -236,9 +259,10 @@ private struct ComposerGlass: ViewModifier {
   @ViewBuilder func body(content: Content) -> some View {
     let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
     if #available(iOS 26, macOS 26, *) {
-      content.glassEffect(.clear.interactive(), in: shape)
+      // Regular glass keeps the transcript scrolling underneath from showing through the text.
+      content.glassEffect(.regular.interactive(), in: shape)
     } else {
-      content.background(.ultraThinMaterial, in: shape)
+      content.background(.regularMaterial, in: shape)
     }
   }
 }
@@ -256,14 +280,13 @@ struct ComposerSendGlyph: View {
       if busy {
         ProgressView().tint(.white)
       } else {
-        Image(systemName: symbol).font(.system(size: 15, weight: .semibold))
+        Image(systemName: symbol)
+          .font(.system(size: symbol == "stop.fill" ? 12 : 15, weight: .bold))
       }
     }
-    .foregroundStyle(.white).frame(width: 32, height: 32)
-    .background(
-      enabled ? AppTheme.accent : Color.secondary.opacity(0.22),
-      in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-    )
+    .foregroundStyle(enabled ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
+    .frame(width: 32, height: 32)
+    .background(enabled ? AppTheme.accent : Color.secondary.opacity(0.16), in: Circle())
     .frame(width: 44, height: 44).contentShape(Rectangle())
   }
 }
