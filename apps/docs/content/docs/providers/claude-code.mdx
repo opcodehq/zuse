@@ -3,50 +3,48 @@ title: Claude Code
 icon: logo:claude
 description: Install, authenticate, and run Claude Code sessions through Zuse.
 section: providers
-order: 32
+order: 33
 platforms: [desktop, browser, mobile]
 providers: [claude]
 prerequisites: [/start/install, /providers/setup]
 related: [/composer/modes-permissions, /composer/skills-mcp, /composer/subagents, /reference/diagnostics]
 next: /providers/codex
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
-Claude Code is a CLI-backed provider with structured session events, native resume support, discovered skills, provider commands, and subagent presentation in Zuse.
+Zuse runs your installed `claude` CLI directly over its stream-json protocol, with no adapter in between. Permissions, questions, subagents, and steering all travel over that connection.
 
 ## Install and sign in
 
-Install the CLI if Zuse does not detect it:
+Choose **Install** in **Settings → Providers & accounts**, or install it yourself:
 
 ```bash
-npm i -g @anthropic-ai/claude-code
+curl -fsSL https://claude.ai/install.sh | bash
 ```
 
-Open **Settings → Providers → Claude Code** and choose **Sign in**, or authenticate from a terminal with `claude /login`. Zuse's sign-in action launches Claude's subscription OAuth flow in your normal browser. A Claude plan with agent access is required.
-
-Zuse reads the provider's local authentication state; it does not copy Claude OAuth tokens into `settings.json`.
+Then sign in from the Claude Code row. You can complete Claude's browser sign-in, paste a Claude setup token, or save an API key. From a terminal, run `claude /login`. Claude Code runs on your Claude plan; add several subscriptions under **Accounts** and switch whenever one runs low.
 
 ## Workflows in Zuse
 
 - Stream assistant text, thinking, tool activity, file edits, questions, and errors into the durable timeline.
-- Resume the provider session after its live process stops when its stored session identifier remains valid.
-- Use Plan mode and Zuse's four runtime permission postures.
-- Discover global and project skills and surface applicable Claude slash commands.
-- Use MCP tools from your connected [plugins](/how-to/local-configure-mcp/). Claude Code's own MCP configuration and claude.ai connectors are not loaded in Zuse sessions.
-- Present delegated agent work as nested subagent activity with reported usage.
-- Use model-specific controls such as reasoning or fast mode only when the selected model advertises them.
+- Steer a running turn: queued messages are folded in at Claude Code's next step, and a model or reasoning change applies to the live process without a restart.
+- Use Plan mode and all three permission modes, including **Approve for me**, which uses Claude Code's native `auto` permission mode.
+- Discover skills and commands from `.claude/skills`, `.claude/commands`, and `.agents/skills`, plus skills from installed Claude Code plugins.
+- Show subagents as their own nested activity instead of mixing them into the parent's stream. Background subagents keep running when you stop the parent turn.
+- Show Claude Code workflow runs as a compact summary in the transcript, with their agents in the right pane.
+- MCP: Zuse's own server is added next to the MCP servers you've configured for Claude Code, so both are available. Type `/mcp` to see them alongside your Zuse plugins.
 
-Provider commands including `/compact`, `/init`, `/cost`, `/agents`, `/mcp`, `/review`, and `/doctor` are forwarded to Claude Code. Their exact behavior follows the installed CLI.
+Claude Code's own `/` commands appear in the composer and are sent to the CLI as written, so their behavior follows the installed version.
 
 ## Limits and recovery
 
-Model availability, context size, rate limits, tool behavior, and subscription entitlement come from Claude Code. Zuse reports provider errors but cannot override those account limits.
+Model availability, context size, rate limits, and subscription entitlement come from Claude Code. Zuse reports provider errors but cannot override those account limits.
 
 If the provider is unavailable:
 
-1. Refresh **Settings → Providers** and confirm the `claude` command is detected.
-2. Run `claude --version` and `claude /login` in Terminal.
-3. If the installation came from Claude's native installer, use `claude update`; otherwise update it with the package manager that installed it.
-4. Create or restart the Zuse session after changing the CLI or authentication.
+1. Refresh **Settings → Providers & accounts** and confirm Claude Code is detected.
+2. Run `claude --version` and `claude /login` in a terminal.
+3. Update with `claude update`, or with the package manager that installed it.
+4. Start or restart the Zuse session after changing the CLI or sign-in.
 
-If resume is rejected, the durable Zuse timeline remains available and the next send can start a fresh provider process in the same chat.
+If resume is rejected, the durable Zuse timeline stays available and the next send can start a fresh provider process in the same chat.

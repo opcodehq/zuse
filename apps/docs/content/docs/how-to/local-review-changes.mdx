@@ -2,7 +2,7 @@
 title: Review and commit local changes
 icon: FileDiff
 navTitle: "Review changes"
-description: Inspect a task's diff, run checks, select the intended files, and create a clean commit.
+description: Inspect a task's diff, run checks, stage the intended files, and create a clean commit.
 section: how-to
 order: 3
 platforms: [desktop]
@@ -10,7 +10,7 @@ providers: []
 prerequisites: [/workspace/changes-pull-requests]
 related: [/workspace/files-editor, /workspace/terminal-browser, /how-to/local-complete-pull-request]
 next: /how-to/local-complete-pull-request
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
 ## Goal
@@ -19,23 +19,24 @@ Turn an agent's working tree into a reviewed, tested commit without including un
 
 ## Applicability
 
-Use this workflow in the **desktop app** for a Git-backed project in either the main checkout or a worktree. The checks you run depend on the repository.
+Use this workflow in the **desktop app** for a Git-backed project in either the main checkout or a worktree. The checks you run depend on the repository. Archived chats show their saved review read-only; unarchive the chat to use Git actions.
 
 ## Prerequisites
 
-- Let the current agent turn finish, or interrupt it intentionally before reviewing an intermediate state.
+- Let the current agent turn finish, or stop it intentionally before reviewing an intermediate state.
 - Know the repository's required formatter, type checks, and tests.
 - Confirm the branch shown in the top bar is the one you intend to commit.
 
 ## Steps
 
-1. Open **Changes** for the current chat.
-2. Review every changed and untracked file. Select a file to inspect its diff rather than relying on the filename alone.
-3. Check generated files, lockfiles, migrations, and configuration changes especially carefully. Remove accidental edits before committing.
-4. Open the terminal in the same chat and run the repository's focused checks. Start with the smallest command that exercises the changed behavior, then run the required broader checks.
-5. Return to **Changes** and select only the files that belong in this commit. The footer shows how many files are selected.
-6. Enter a **Commit message** that describes the user-visible result, then choose **Commit** (or press ⌘↵).
-7. If the branch should be available remotely, choose **Push** in **Changes**. The branch row in **Changes** shows `↑N` while N commits are not pushed.
+1. Open the **Diff** panel for the current chat: choose **Diff** from the right pane's **+** menu, or choose **Branch changes** in the environment summary.
+2. Pick the scope to review: **Working tree** for uncommitted changes, **Branch changes** for everything on the branch, or **Latest turn** for what the last agent turn changed.
+3. Review every changed and untracked file. Open a file's diff rather than relying on the filename alone, and use **Mark _file_ as reviewed** to track your progress.
+4. Check generated files, lockfiles, migrations, and configuration changes especially carefully. Ask the agent to revert accidental edits, or fix them yourself, before committing.
+5. Open a terminal in the same chat and run the repository's focused checks. Start with the smallest command that exercises the changed behavior, then run the required broader checks.
+6. In the Git panel above the diff, check the files that belong in this commit. A checked row is staged. **Stage all changes** stages every listed file.
+7. Enter a **Commit message** that describes the user-visible result, then choose **Commit**. Only staged files are committed.
+8. If the branch should be available remotely, use the Git panel's next-step button: **Publish** for a branch with no upstream yet, or **Push _N_** when N commits are not pushed. **Publish branch** and **Push** are also in the **More Git actions** menu.
 
 For a broad or risky change, ask the agent to explain unexpected diff sections before you accept them. The diff remains the source of truth.
 
@@ -53,16 +54,16 @@ Confirm that:
 - the commit subject is correct;
 - the intended files are in the commit;
 - unrelated changes remain uncommitted or were removed;
-- required checks passed in this worktree;
+- required checks passed in this checkout;
 - the branch has an upstream after pushing.
 
 ## Troubleshooting and recovery
 
 - **A check fails:** keep the failure output in the chat and ask the agent for a focused repair, or fix it manually. Rerun the failing command before committing.
-- **An unrelated file is selected:** deselect it before committing. Do not use a broad commit to hide an unclear diff.
-- **A file should be discarded:** open the file's actions and choose **Discard uncommitted changes** only after reviewing its diff. **Discard all** removes every uncommitted change. Discarding removes local work.
-- **Push fails:** verify network access, repository permissions, remote configuration, and branch protection. The local commit remains intact; retry after correcting the cause.
+- **An unrelated file is staged:** uncheck it before committing. Do not use a broad commit to hide an unclear diff.
+- **The Git panel reports that the state changed:** choose **Refresh** in **More Git actions** and review the current state before repeating an action. Zuse rejects a mutation when the checkout changed since it was displayed, and does not repeat an action whose result was lost.
+- **Push fails:** verify network access, repository permissions, remote configuration, and branch protection. Zuse never force-pushes, and a rejected push leaves your local commits intact.
+- **Pull is offered:** the remote branch has commits you do not have. **Pull _N_** only fast-forwards; integrate diverged history yourself in the terminal.
 - **Changes appear in the wrong chat:** check whether both chats use the main checkout. Move parallel work into separate worktrees before continuing.
-- **The working tree is clean but the branch shows `↑N`:** the changes are already committed locally and only need to be pushed.
 
 When the branch is ready for collaboration, [create and complete its pull request](/how-to/local-complete-pull-request/). See [Changes and pull requests](/workspace/changes-pull-requests/) for the full surface reference.

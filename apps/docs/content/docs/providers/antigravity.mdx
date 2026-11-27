@@ -1,0 +1,30 @@
+---
+title: Antigravity
+icon: Orbit
+description: Run Google's Antigravity agent through its ACP server, installed and verified by Zuse.
+section: providers
+order: 44
+platforms: [desktop, browser, mobile]
+providers: [antigravity]
+prerequisites: [/start/install, /providers/setup]
+related: [/providers/acp, /composer/modes-permissions, /reference/diagnostics]
+next: /providers/acp
+lastVerified: "2026-11-27"
+---
+
+Antigravity runs through Google's ACP server (`agy_acp_server`). Zuse installs it for you: there's no shell command to run.
+
+## Install and sign in
+
+1. Open **Settings → Providers & accounts**. Until it's installed, the row reads **Install Antigravity to enable**.
+2. Choose **Install**. Zuse downloads Google's release archive for your OS and CPU and verifies it against a pinned digest, the ACP registry's digest, or Google's code signature.
+3. Sign in from the row with your Google account. To use a different Google account, remove the connected account, then connect again.
+
+Builds are available for macOS, Linux, and Windows on x86_64 and ARM64. Zuse checks the ACP registry for newer releases.
+
+## Workflows in Zuse
+
+- Choose from Antigravity's models. Reasoning effort is part of each model rather than a separate control.
+- Messages you send during a turn are delivered when the turn ends.
+- Discover skills from `.gemini/skills`, `.agents/skills`, and Antigravity's own skills folders.
+- Use Plan mode, **Ask for approval**, and **Full access**.

@@ -10,31 +10,31 @@ providers: []
 prerequisites: [/workspace]
 related: [/projects/scripts, /workspace/browser, /reference/diagnostics]
 next: /workspace/browser
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
 
-The integrated terminal opens in the active chat's checkout. Terminal sessions are scoped to the chat, so switching between tasks does not silently move one shell into another worktree. Shells keep running while you switch chats.
+The integrated terminal opens your login shell in the active chat's checkout. Terminal tabs belong to the chat that opened them, so switching tasks does not move a shell into another worktree. Shells keep running while you switch chats or hide the terminal.
 
 ## Open a terminal
 
-- Press `⌘J` or choose **Terminal** from **Add panel** (**+**) to open a terminal tab in the workspace pane. `⌘J` switches to an existing terminal tab instead of opening another.
-- Click **Toggle bottom terminal** in the top bar for a terminal dock below the conversation. Use **+** (**New bottom terminal**) to add a tab and the chevron to hide the dock.
+- Press `⌘J` (`Ctrl+J` on Windows and Linux), or click **Toggle bottom terminal** in the chat's title bar, to show or hide the terminal below the conversation. Opening it puts keyboard focus in the shell.
+- Choose **Terminal** from the **+** menu in the workspace pane, or type `/terminal` in the composer, to open a terminal tab beside the conversation.
 
-The workspace pane and the bottom dock keep separate shells. Each holds up to four running terminals per chat; when the limit is reached, the add button shows **Limit 4** until you close one.
+In the terminal below the conversation, click **New terminal** (**+**) to add a tab and **Hide terminal** (the chevron) to collapse it. Drag tabs to reorder them, and close one with its **Close terminal** button or a middle-click. A tab takes its title from the shell when the shell sets one, and otherwise shows **Terminal** with a number.
 
-In a cloud workspace, **Add panel** offers **Cloud terminal**, which runs in the cloud environment, and **Local terminal**, which opens in the synced local checkout. Typing in a cloud terminal whose workspace is paused resumes it.
+In a cloud chat, the **+** menu offers **Cloud terminal**, which runs on the cloud computer, and `⌘J` opens or focuses that tab instead of a local terminal.
 
-## Manage a terminal
+## Run commands
 
-Click the status dot on a terminal tab to open its controls: rename it under **Terminal name**, or choose **Clear screen** or **Restart process**. The dot is green while the process runs, red after a failure, and grey after it exits.
+Use the terminal for development servers, focused tests, builds, migrations, and repository tools. A project's saved actions, such as a dev server or test command, run from the chat's session card instead; see [Project actions](/projects/scripts).
 
-Use the terminal to run development servers, focused tests, builds, migrations, and repository tools. When **Auto-run after setup** (`auto_run_after_setup`) is enabled for the repository, Zuse starts its run script in a terminal named **Run** after a new worktree's setup finishes. See [Repository scripts](/projects/scripts).
+When a shell exits, its tab shows the exit code and stays visible until you close it.
 
-Closing a terminal ends that shell process, and archiving or deleting a chat closes its terminals. Stop long-running commands cleanly before archiving a chat.
+## Lifetime
+
+Hiding the terminal or switching chats leaves its processes running. Closing a tab ends that shell. Archiving a chat whose worktree Zuse manages stops the terminals in that worktree, so stop long-running commands cleanly before you archive.
 
 ## Continue in the browser
 
-The browser has a dedicated guide. Start with [In-app browser](/workspace/browser), then use the focused pages for [debugging](/workspace/browser-debugging), [visual evidence](/workspace/browser-evidence), [sessions and privacy](/workspace/browser-sessions-privacy), and [recovery](/workspace/browser-troubleshooting).
-
-The in-app browser is a desktop workspace surface. It is different from opening the Zuse interface itself in a normal browser through [remote access](/remote/local-browser).
+To preview what your dev server serves, open the [in-app browser](/workspace/browser). The in-app browser is a desktop workspace surface; it is different from opening the Zuse interface itself in a normal browser through [remote access](/remote/local-browser).

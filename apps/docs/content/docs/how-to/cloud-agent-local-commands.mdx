@@ -2,81 +2,42 @@
 title: "Let cloud agents run commands on your computer"
 icon: SquareTerminal
 navTitle: "Local commands from cloud"
-description: "Connect your desktop, approve a cloud command, and revoke saved permissions."
+description: "Let cloud chats run commands on your own computers, approve each request, and revoke saved permissions."
 section: how-to
-order: 24
-platforms: [desktop, browser]
+order: 29
+platforms: [desktop]
 providers: []
-prerequisites: [/how-to/remote-hosted-access]
-related: [/how-to/remote-hosted-access, /how-to/remote-recover-connection]
-next: /how-to/remote-hosted-access
-lastVerified: latest
+prerequisites: [/how-to/cloud-start-chat]
+related: [/how-to/cloud-share-chat, /how-to/remote-hosted-access]
+lastVerified: "2026-11-27"
 ---
 
-Cloud chats can ask to run shell commands on your desktop while Zuse is open
-and signed in. Shell access includes reading and changing files as your desktop
-user. It is separate from the agent's cloud workspace permissions.
+Cloud chats can ask to run shell commands on your own computers while Zuse is open there and signed in to the same account. A command runs as your user on that computer, so it can read and change your files. This is separate from what the agent can do on its cloud computer.
 
-## Connect your desktop
+## Turn it on for a computer
 
-1. Sign in to the same Zuse account on your desktop and other clients.
-2. In **Settings → Remote access**, under **Connections**, choose **Set up** beside **Zuse Serve**.
-3. Start a cloud chat from that desktop, or open an existing cloud chat and send
-   a message. This also attaches chats originally created through Slack or the
-   public API. Command access is available by default; each command requires
-   approval unless you have saved a permission.
-4. Local commands appear in the conversation with a laptop icon.
+1. On the computer you want to use, open **Settings → Cloud computer → Your computers**.
+2. Turn on **Use this computer from cloud chats**. Your cloud chats can run commands there, and each one asks you first.
 
-The chat keeps its target when you only open it on your phone or another
-computer. Sending a message from another linked desktop moves the command target
-to that desktop; clients that cannot run local commands do not replace it.
+The same page lists your account's other enrolled computers with their status, such as **Online**, **Offline**, or **Paused**. Use **Rename** to change how a computer is named in requests, or **Remove** to take it off the list.
 
-Both the API and the cloud runtime must support device commands. Older retained
-cloud runtimes show local access as unavailable; they are not replaced or
-recreated automatically. Update your account image for new chats.
+The computer you're typing on is used automatically. Your other enrolled computers that are online are available too, without attaching anything to the chat.
 
 ## Approve a request
 
-The request asks **Run command on _computer_?** and shows the chat, command, and
-absolute local working directory. Approve it in the cloud chat on the target
-desktop or in another signed-in Zuse desktop or browser client:
+When the agent wants to run a command, the composer shows **Run this command on your computer?** with the command, the user and shell it runs as, and its time limit. Choose:
 
-- **Allow once** approves only that command request.
-- **Allow for session** grants command access to this computer for this
-  chat. It survives reconnects and app restarts. Archiving or deleting the chat
-  ends that session grant.
-- **Always allow** grants your account's cloud chats command access to this
-  computer until revoked.
-- **Deny** rejects this request without running it.
-
-Full-access mode in the cloud does not bypass device approval. Local execution is blocked
-in plan mode.
+- **Allow once** to run only this command.
+- **Allow for this chat** so later commands from this chat on this computer run without asking.
+- **Allow always** so commands from any of your chats on this computer run without asking.
+- **Deny**, or press Escape, to reject it without running it.
 
 ## Watch or stop commands
 
-Expand a local command in the conversation to inspect requests, output, and exit status. The agent can
-cancel a running command; cancellation terminates the command and its process group. To stop all
-saved access, revoke the permission as described below.
+Running commands sit in the composer tray with **Running on _computer_** and a **Stop** button. A computer runs up to four cloud commands at a time, and each command can run for up to an hour.
 
-The bridge supports four active commands at a time and captures up to 1 MiB of
-combined output per command. The UI shows an output preview; the agent's command
-status tool returns the captured output. Excess output is marked truncated.
-Commands are noninteractive; interactive terminals and dedicated file-transfer
-or desktop-automation tools are not part of this feature.
+If Zuse can't tell whether a command finished, for example after a lost connection, it shows **Outcome unknown**: the command may have run, and it won't run again. Check its effects before you ask the agent to retry with a new command.
 
-## Revoke access and recover
+## Revoke access
 
-In **Settings → Remote access → Saved command permissions**, choose **Revoke** next to
-a saved permission to remove it and stop commands using that permission. This
-section appears only when permissions have been saved. Signing out or changing
-the linked account stops commands and clears grants. Command access is available
-automatically when the desktop is linked again, with fresh approval required.
-
-Cloud commands hold a short lease. If the bridge connection disappears, pending
-requests and running commands are interrupted within 15 seconds of their last
-successful lease renewal. A server crash also closes a supervisor pipe that
-terminates its command process group. Session grants survive an ordinary
-restart, but an unfinished command is recorded with an unknown outcome.
-
-Zuse never automatically runs an interrupted or unknown command again. Inspect
-any effects already made before asking the agent to retry with a new command.
+In **Settings → Cloud computer → Your computers**, choose **Revoke always** next to a computer marked **Always allowed**. To stop all commands on a computer, turn off **Use this computer from cloud chats**.

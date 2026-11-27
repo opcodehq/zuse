@@ -1,50 +1,61 @@
 ---
 title: Providers
 icon: Bot
-description: Run Claude Code, Codex, Cursor, Grok, Kiro, OpenCode, Pi, and any ACP agent in one workspace.
+description: Run Claude Code, Codex, Cursor, Devin, Grok, Hermes, Kiro, Muse Code, OpenCode, Pi, Oh My Pi, Antigravity, the Zuse agent, and any ACP agent in one workspace.
 section: providers
 order: 30
 platforms: [desktop, browser, mobile]
-providers: [claude, codex, grok, cursor, opencode, opencode2, kiro, pi]
+providers: [zuse, claude, codex, cursor, devin, grok, hermes, kiro, muse, opencode, pi, omp, antigravity]
 prerequisites: [/start/install]
 related: [/providers/setup, /providers/acp, /composer/modes-permissions, /reference/diagnostics]
 next: /providers/setup
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
-import { Plug } from "lucide-react";
+import { Plug, Sparkles, Bird, Feather, Infinity as InfinityIcon, Orbit, Zap } from "lucide-react";
 
-A provider is the coding agent behind a chat. Zuse ships eight built-in providers and can run any agent that speaks the Agent Client Protocol (ACP). Every provider gets the same durable timeline, tool and edit rendering, model picker, worktrees, and review flow; models, slash commands, sign-in, and limits stay provider-specific.
+A provider is the coding agent behind a chat. Zuse ships twelve built-in agent integrations plus its own Zuse agent, and it can run any other agent that speaks the Agent Client Protocol (ACP). Every provider gets the same durable timeline, tool and edit rendering, model picker, worktrees, and review flow; models, slash commands, sign-in, and limits stay provider-specific.
 
 ## Built-in providers
 
 <Cards>
-	<Card icon={<ProviderLogo name="claude" />} title="Claude Code" description="Local claude CLI with native session integration" href="/providers/claude-code" />
+	<Card icon={<Zap />} title="Zuse agent" description="Built into Zuse. Runs ChatGPT and SuperGrok models with your subscription" href="/providers/zuse-agent" />
+	<Card icon={<ProviderLogo name="claude" />} title="Claude Code" description="Local claude CLI over its stream-json protocol" href="/providers/claude-code" />
 	<Card icon={<ProviderLogo name="openai" />} title="Codex" description="Local codex CLI through its app server" href="/providers/codex" />
-	<Card icon={<ProviderLogo name="cursor" />} title="Cursor" description="Bundled SDK, signed in with a Cursor API key" href="/providers/cursor" />
+	<Card icon={<ProviderLogo name="cursor" />} title="Cursor" description="Cursor's agent runtime through the pinned Cursor SDK" href="/providers/cursor" />
+	<Card icon={<Bird />} title="Devin" description="Local devin CLI over ACP" href="/providers/devin" />
 	<Card icon={<ProviderLogo name="grok" />} title="Grok" description="Local grok CLI over ACP" href="/providers/grok" />
-	<Card icon={<ProviderLogo name="kiro" />} title="Kiro" description="Local kiro-cli over ACP" href="/providers/kiro" />
-	<Card icon={<ProviderLogo name="opencode" />} title="OpenCode and OpenCode 2" description="Local servers with their own provider and model management" href="/providers/opencode" />
+	<Card icon={<Feather />} title="Hermes" description="Local hermes agent over ACP" href="/providers/hermes" />
+	<Card icon={<ProviderLogo name="kiro" />} title="Kiro CLI" description="Local kiro-cli over ACP" href="/providers/kiro" />
+	<Card icon={<Sparkles />} title="Muse Code" description="Local muse CLI over its session protocol" href="/providers/muse" />
+	<Card icon={<ProviderLogo name="opencode" />} title="OpenCode" description="Local opencode server with its own provider and model management" href="/providers/opencode" />
 	<Card icon={<ProviderLogo name="pi" />} title="Pi" description="Local pi agent in RPC mode" href="/providers/pi" />
-	<Card icon={<Plug />} title="ACP agents" description="Gemini CLI, GitHub Copilot, goose, and more from the ACP catalog" href="/providers/acp" />
+	<Card icon={<InfinityIcon />} title="Oh My Pi" description="Local omp CLI over ACP" href="/providers/oh-my-pi" />
+	<Card icon={<Orbit />} title="Antigravity" description="Google's ACP server, installed by Zuse" href="/providers/antigravity" />
+	<Card icon={<Plug />} title="ACP agents" description="Gemini CLI, GitHub Copilot, goose, and more from the ACP registry, or your own command" href="/providers/acp" />
 </Cards>
 
-| Provider | Runtime | Sign-in |
+| Provider | How Zuse runs it | Sign-in |
 | --- | --- | --- |
-| Claude Code | Local `claude` CLI | `claude /login` or an API key; multiple accounts |
-| Codex | Local `codex` CLI (0.128.0 or newer) | `codex login` or an API key; multiple accounts |
-| Cursor | Bundled Cursor SDK, no CLI | Cursor API key (required) |
-| Grok | Local `grok` CLI (0.2.101 or newer) | Grok CLI sign-in |
-| Kiro | Local `kiro-cli` | Kiro CLI sign-in |
-| OpenCode | Local `opencode` (1.3.15 or newer) | `opencode auth login` |
-| OpenCode 2 | Local `opencode2` | `opencode2 auth login` |
-| Pi | Local `pi` | `/login` inside Pi |
+| Zuse agent | Built into Zuse on macOS and Linux, no CLI | A connected ChatGPT or SuperGrok subscription |
+| Claude Code | `claude` CLI | `claude /login`, a Claude setup token, or an API key; multiple accounts |
+| Codex | `codex app-server` | `codex login` or an API key; multiple accounts |
+| Cursor | Pinned `@cursor/sdk` runtime; needs `cursor-agent` installed | Sign in from settings, which mints a Cursor API key |
+| Devin | `devin acp` | `devin auth login` |
+| Grok | `grok agent stdio` | `grok login` |
+| Hermes | `hermes acp` | `hermes auth add`, or ChatGPT or Nous Portal from settings |
+| Kiro CLI | `kiro-cli acp` | `kiro-cli login` |
+| Muse Code | `muse serve` (1.4.6 or newer) | `muse login` or `muse auth set` |
+| OpenCode | `opencode serve` | `opencode auth login`, or ChatGPT or GitHub Copilot from settings |
+| Pi | `pi` in RPC mode (0.85.1 or newer) | `/login` inside Pi, or ChatGPT from settings |
+| Oh My Pi | `omp acp` | `omp login` |
+| Antigravity | Google's `agy_acp_server`, installed by Zuse | Your Google account, from settings |
 
-Zuse detects each provider and reports installation, sign-in, compatibility, and update state in **Settings → Providers**. It does not bundle a paid provider subscription.
+Zuse detects each provider and reports installation, sign-in, and update state in **Settings → Providers & accounts**. Agents you install later turn themselves on the next time you open settings or the model picker. Zuse does not bundle a paid provider subscription.
 
 ## Gemini
 
-Gemini CLI is no longer a built-in provider. Add it from the ACP catalog instead: open **Settings → Providers**, choose **Add** under **ACP agents**, and search for **Gemini CLI**. Chats you started with the earlier built-in Gemini integration stay readable. See [ACP agents](/providers/acp#gemini-cli).
+Gemini CLI is not a built-in provider. Add it from the ACP registry instead: open **Settings → Providers & accounts**, add an ACP agent, and search for **Gemini CLI**. See [ACP agents](/providers/acp#gemini-cli).
 
 ## Next
 

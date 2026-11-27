@@ -2,56 +2,40 @@
 title: "Secure a Serve host"
 icon: ShieldCheck
 navTitle: "Security"
-description: "Operate Zuse Serve with protected local binding, least privilege, controlled account access, and safe updates."
+description: "Run zuse serve with a dedicated user, the narrowest network exposure, private credentials, and regular device reviews."
 section: "Serve CLI"
-order: 5
+order: 4
 platforms: [serve]
 providers: []
 prerequisites: [/serve]
-related: [/remote/security, /serve/operations, /serve/status-json, /serve/troubleshooting]
+related: [/remote/security, /serve/operations, /serve/troubleshooting]
 next: /serve/troubleshooting
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
+A Serve host is a real developer environment. Anyone you pair with it can ask agents to read files, run commands, and use the credentials available to that operating-system user. A pairing grants full control; there is no read-only device.
 
-Serve is a remote control plane for a real developer environment. Anyone who can operate it through an authorized client may be able to ask agents to read files, run commands, or use credentials available to that operating-system account.
+## Use a dedicated user
 
-## Use a dedicated user account
+Run `zuse serve` as an unprivileged user that can read only the repositories and tools it needs. Do not run it as root. Keep production secrets and unrelated personal files out of that user's reach. `zuse daemon` installs a user service, not a system service.
 
-Run Serve as an unprivileged user with access only to the repositories and tools it needs. Do not run it as root. Keep production secrets and unrelated personal data out of that account's readable paths.
+## Expose as little as possible
 
-The durable service is user-scoped: a LaunchAgent on macOS or a systemd user service on Linux. Its definition and managed files are created with restricted permissions where supported. The Linux unit also sets `NoNewPrivileges=true`, `PrivateTmp=true`, and `ProtectSystem=strict`, with write access granted to the data directory.
+- Plain `zuse serve` listens on `127.0.0.1` only.
+- `--lan` accepts paired devices on private networks and your tailnet. Its connections are end-to-end encrypted, and peers outside private address space are refused.
+- Browsers on the local network open a separate HTTPS listener with a certificate generated for this computer. The first visit shows a certificate warning. Chats stay encrypted, but on a network you do not trust someone could serve a modified page. Use Tailscale HTTPS (`--tailscale-serve`) or account access there instead.
+- A non-loopback `--listen` address requires your own certificate (`--tls-cert`, `--tls-key`) or an HTTPS reverse proxy (`--public-origin`). Do not put an unauthenticated proxy in front of Serve.
 
-## Keep the server protected
+## Keep credentials private
 
-By default, Serve binds the application server to loopback and starts it with protected authentication. Hosted connectivity is established through Zuse's account-linked access path, and `--tailscale` adds a private tailnet route. Do not expose the local port directly to the public internet or replace the supported path with an unauthenticated reverse proxy.
+The `Open …/#token=…` link and every pairing link are credentials. Do not paste them into shared chats, tickets, or screenshots. Pairing links expire after ten minutes if unused, and each one works for one device. Relay credential files and the data directory (`~/.zuse-native` by default) must stay readable only by the Serve user.
 
-`--lan` and `--host` listen beyond loopback. Authentication remains required, but local-network traffic uses plaintext HTTP, so use them only on networks you trust. `--ssh-managed` stays on loopback without protected authentication and relies on the SSH tunnel for access control.
+## Review devices
 
-## Protect the data directory
+Up to 32 devices can be paired with one profile. Review them in the desktop app's **Settings → Remote access → Devices**, or in the web client's **Settings → Remote access**, and choose **Revoke** for any you no longer use. Revoking ends that device's active connections at once. Run `zuse unlink` before you retire or hand over an account-linked computer.
 
-The data directory contains the environment database, logs, managed runtime metadata, and account-link state. Back it up according to your recovery policy, restrict access to the Serve user, and do not publish diagnostic files without reviewing them for workspace information.
+## Treat agents separately
 
-Default locations are documented in the [command reference](/serve/command-reference/#data-directory).
-
-## Control account and device access
-
-- Use an account you control to authorize the computer.
-- Give the environment a recognizable hostname or label.
-- Review linked computers and paired clients regularly.
-- Run `zuse serve logout` before transferring or retiring the computer.
-- Revoke unknown mobile or browser clients from the environment's device controls.
-
-## Treat providers separately
-
-Serve detects supported CLIs; it does not secure or rotate their credentials. Follow each provider's authentication and organization policy. Permission modes remain important on a remote environment—do not grant broader command access merely because the client is your phone.
-
-## Update deliberately
-
-Run `zuse serve update --force` only after active agents and terminals are safe to interrupt. Serve performs a readiness check and restores a previous runtime when possible, but rollback cannot recover uncommitted work lost by an interrupted external process.
-
-<SecurityNote title="Hosted access is not a backup">
-The account link makes a computer discoverable and reachable. It does not copy repositories or environment state into durable cloud storage.
-</SecurityNote>
+Serve does not manage agent credentials. Follow each agent's own sign-in and organization policy, and keep using permission modes: a phone or browser connection does not make broad command access safer.
 
 <NextStep href="/serve/troubleshooting/" label="Troubleshoot Serve" />

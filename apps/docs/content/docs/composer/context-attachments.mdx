@@ -2,55 +2,45 @@
 title: Context and attachments
 icon: Paperclip
 navTitle: "Context and attachments"
-description: Mention files, attach visual references, and queue precise follow-ups.
+description: Mention files, attach images and files, annotate pages and code, and queue precise follow-ups.
 section: composer
 order: 52
 platforms: [desktop, browser, mobile]
-providers: [claude, codex, grok, cursor, opencode, kiro, pi]
+providers: [zuse, claude, codex, cursor, devin, grok, hermes, kiro, muse, opencode, pi, omp, antigravity]
 prerequisites: [/composer]
 related: [/workspace/files-editor, /composer/modes-permissions, /projects/worktrees]
-next: /composer/subagents
-lastVerified: latest
+next: /composer/skills-mcp
+lastVerified: "2026-11-27"
 ---
-
 
 Good context is specific, current, and scoped to the active environment.
 
 ## Mention a file
 
-Type `@` and search for a project file. Selecting it inserts a file chip whose path is rooted in the active checkout. In a worktree chat, search and resolution use that worktree rather than the main checkout.
+Type `@` and search for a project file. Selecting it inserts a file chip rooted in the active checkout. In a worktree chat, search and resolution use that worktree rather than the main checkout. You can also drop a file from the file tree onto the composer to mention it.
 
-Mention the smallest set of files that establishes the problem. The agent can discover related code using its tools; attaching an entire repository as prose usually makes the request less precise.
+Mention the smallest set of files that establishes the problem. The agent can discover related code with its tools.
 
-## Images, PDFs, and other files
+## Images and files
 
-Add files with **Attach files** in the composer's **+** menu, by drag-and-drop, or by paste. Images show a preview; other files, such as PDFs, are attached as file references. A single message can carry up to 20 attachments. Attachments are saved under `.context/files/` in the active checkout and displayed in the timeline. Zuse adds `.context` to the repository's `.gitignore` when you add a project, so attachments stay out of commits. Provider support for consuming a particular attachment type can vary by model.
+Add files with **Attach images or files** in the composer's **+** menu, by drag-and-drop, or by paste. Each file can be up to 24 MB. Staged documents preview inline, sent images show as thumbnails, and other files show as compact tiles. Whether an agent can read a particular file type depends on the agent and model.
 
 For a visual bug, include the screenshot and describe the expected state. For a specification, identify the exact pages or requirements that govern the task.
 
-## Pull context from another session
+## Start from an issue, pull request, or branch
 
-When you open a new session tab in a chat that already has other sessions, an **Add context** tray appears above the empty composer. Choose **Transcript** to attach another session's conversation, or **Plan** to attach its latest proposed plan. Zuse writes the text to `.context/files/` and adds it to the composer as a file chip. The tray disappears once the new session has a message.
+On a new chat, **Create from…** starts from an existing pull request, branch, or issue. Search pull requests by title, number, or author.
 
-## Start from an issue
+## Annotations
 
-On a new chat, **Create from…** can start from a GitHub issue as well as a pull request or branch. Zuse attaches the issue as a Markdown file and prefills the prompt.
-
-## Browser and editor annotations
-
-Annotations add precise references to the composer:
-
-- In the editor or a diff, select code and choose **Annotate**, or press `⌘⇧A` (`Ctrl+Shift+A` on Linux), to pin a comment on those lines.
-- In the integrated browser, use **Annotate page** to mark an element on the page.
-
-Pending annotations appear in an **Annotations** tray above the composer, where you can open, edit, or remove them before sending. Review them before sending so the target is unambiguous.
+In the integrated browser, use **Annotate page** to mark an element on the page; the annotation is staged in the composer with your next message. Review pending annotations before sending so the target is unambiguous.
 
 ## Queue a follow-up
 
-If a turn is already running, the next message waits in the per-session queue. Queued messages preserve their submission mode. From a queued message you can:
+If a turn is already running, the next message joins the queue. From a queued message you can:
 
-- **Steer** the agent to it next;
+- **Steer** the agent to it next, for agents that take messages mid-turn;
 - **Send now**;
-- edit it, move it up or down, or remove it.
+- **Edit** or **Remove** it.
 
-If the last turn fails, the queue is held until you choose **Resume**. Use the queue for a genuine next instruction; interrupt the current turn when the new information invalidates work already underway.
+If the last turn fails or you stop it, the queue shows **Queue paused**. Choose **Resume**, or send a new message, to continue. Use the queue for a genuine next instruction; stop the current turn when the new information invalidates work already underway.

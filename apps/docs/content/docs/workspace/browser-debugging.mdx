@@ -2,64 +2,46 @@
 title: Browser debugging
 icon: Bug
 navTitle: "Browser debugging"
-description: Diagnose a page with console messages, network activity, page inspection, and responsive viewports.
+description: Inspect a page with developer tools and hand what you find to the agent.
 section: workspace
 order: 65
 platforms: [desktop]
-providers: [claude, codex, grok, kiro]
+providers: []
 prerequisites: [/workspace/browser]
 related: [/workspace/browser-evidence, /workspace/browser-troubleshooting, /reference/diagnostics]
 next: /workspace/browser-evidence
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
 
-The in-app browser can give an agent evidence from the rendered page, recent console output, and requests made since the current page load. Use these signals together: a screenshot may show the symptom, while the console or a failed request explains it.
+The in-app browser includes the platform's page inspector, so you can read console output, network requests, and the rendered page without opening another browser. What you find goes back to the agent as ordinary chat context.
 
-## Inspect the rendered page
+## Open developer tools
 
-Ask the agent to read the page before it interacts. It can identify visible controls and text, inspect one unambiguous element, and report accessibility state, layout, and selected styles without dumping the entire page.
+Open the page, then click **Developer tools** in the browser toolbar. The inspector opens inside the Browser panel; click the button again to close it.
 
-After navigation or a major rerender, ask it to inspect again. Page references are intentionally refreshed so an old target does not become a click on a different element.
+The inspector needs room inside the panel (on macOS, at least about 500 by 334 points). If the panel is too small, Zuse shows **Make the browser panel wider or taller to open developer tools inside it.** Widen the workspace pane or hide the terminal, then try again.
 
-Useful requests include:
+Use the inspector's own console, network, and elements views to reproduce the problem. Reload with **Reload page** so the network view captures the full page load.
 
-> Check whether the submit button is disabled and explain the visible reason.
+## Give the agent what you found
 
-> Inspect the card that overflows on mobile and report its size and positioning.
+The agent does not read the inspector directly, so pass on the evidence that matters:
 
-## Read console failures
+- Copy the relevant console error or failed request into your message.
+- Use **Annotate page** to point at the element that misbehaves; see [Browser screenshots and annotations](/workspace/browser-evidence).
+- Use **Copy URL** from **Browser options** so the agent can reproduce the exact page and query string.
 
-Ask the agent to check the browser console after reproducing the problem. The result can include recent messages, uncaught page errors, load failures, and an open JavaScript dialog. Console history is bounded and resets for a new page load, so reproduce the issue on the page you want diagnosed.
+> The save button stays disabled after I fill the form. The console shows `TypeError: cannot read properties of undefined` from `form.tsx`. Find the cause and fix it.
 
-If a dialog is blocking the page, tell the agent whether to accept or dismiss it. A prompt can be answered only after you approve the corresponding page-changing action.
+Console and network output can contain account details or application data. Review it before copying it into a message, an issue, or a public report.
 
-## Inspect network activity
+## Check light and dark pages
 
-Network inspection shows requests captured since the latest page load, including the method, URL, response status, content type, and failures when available. Ask for a filtered summary first, then inspect one failed request for headers or a limited response preview.
+Use **Browser options → Appearance** to view pages in **Light** or **Dark**, or let them follow **System**. This changes the appearance the page sees, so you can check both themes of your app without changing your computer's settings.
 
-For example:
+## Responsive checks
 
-> Reload the page, reproduce the save failure, and inspect only requests containing `/api/`.
+The in-app browser has no device-size presets. To check a narrow layout, resize the workspace pane, or open the page with **Open in default browser** and use that browser's responsive tools.
 
-Some responses cannot be read after streaming, eviction, or use of a non-buffered response type. A missing body does not mean the request did not happen; use its status, headers, and console output as the remaining evidence.
-
-Network and console output can contain account details or application data. Review the result before copying it into an issue, message, or public report.
-
-## Test responsive layouts
-
-Choose **Fill**, **Phone**, **Tablet**, **Laptop**, **Desktop**, or **Custom** from the browser toolbar. Non-fill viewports can be rotated. A custom viewport supports direct width and height entry, aspect-ratio locking, and drag resizing within the supported range.
-
-The preview may scale down to fit the workspace while preserving the selected page dimensions. The size shown in the toolbar is the viewport being tested, not necessarily its physical size on screen.
-
-For a useful responsive pass:
-
-1. Start with **Phone** in portrait orientation.
-2. Check navigation, forms, fixed controls, and horizontal overflow.
-3. Rotate to landscape and repeat the critical path.
-4. Check **Tablet**, then a wide viewport.
-5. Use a custom size at the exact breakpoint where the layout changes.
-
-Viewport choice is remembered locally. Screenshots and browser annotations record the active viewport so later feedback has the right visual context.
-
-See [Browser evidence and annotations](/workspace/browser-evidence) to capture the result, and [Troubleshoot the in-app browser](/workspace/browser-troubleshooting) when diagnostics are empty or unavailable.
+See [Troubleshoot the in-app browser](/workspace/browser-troubleshooting) when a page does not load or developer tools will not open.

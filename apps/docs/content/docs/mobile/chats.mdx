@@ -2,66 +2,44 @@
 title: "Chats and agent control"
 icon: MessagesSquare
 navTitle: "Chats"
-description: "Create chats, choose a work mode and provider, follow live output, and answer agent requests on iPhone."
+description: "Start chats, choose an agent and access level, follow live output, and answer agent requests from your phone."
 section: "Mobile"
 order: 3
 platforms: [mobile]
 providers: []
 prerequisites: [/mobile/connect]
-related: [/mobile/review, /mobile/offline-notifications, /remote/recovery]
+related: [/mobile/review, /remote/recovery]
 next: /mobile/review
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
+The home screen lists chats from every connected computer and Zuse Cloud. Use **Search chats** to filter them. Archived chats move to **Archived**, where **Restore** brings them back.
 
-The inbox combines chats from every reachable connection, grouped by project and computer. Search filters the feed; swipe a chat to **Pin** it or **Archive** it. Archiving removes completed work from the active list without deleting its environment state. Open **Settings → Archived chats** to **Unarchive** or **Delete** an archived chat.
+## Start a chat
 
-## Create a chat
+Tap **New chat**, then choose:
 
-Tap the compose button at the bottom of the inbox to open **New Chat**, then make four decisions:
+1. **Run on**: a connected computer, or **Cloud** when you are signed in.
+2. **Project**: a project on that computer, or **Add a project**.
+3. **Where** the agent works: **New worktree**, **Main checkout**, **Existing branch**, or **Existing worktree**.
+4. The agent and its access: **Ask before changes**, **Allow edits**, **Allow edits & commands**, or **Full access**.
 
-1. **Machine** — the computer that will execute the work, or **Cloud** when you are signed in and have cloud workspaces.
-2. **Project** — the repository or folder on that computer.
-3. **Work mode** — **Work locally**, **New worktree**, **Existing branch**, or **Pull request**. For a branch or pull request, choose which one from the next row.
-4. **Provider and model** — open the model sheet to choose a **Provider**, **Model**, **Intelligence**, and **Approval** mode from the agents installed on the selected computer.
+Write the first message, attach photos or files if you need them, and send. **Plan mode** in the chat options asks the agent to plan before it changes anything.
 
-Write the first message, optionally attach photos or files, and send. Zuse creates the chat and session on the environment. The plus menu also offers **Plan mode** and, when the provider supports it, **Add goal**.
+## Follow and steer
 
-## Continue a running session
+Agent output streams into the chat as it arrives. While the agent works, the send button becomes **Stop response**. A message you send while the phone is reconnecting shows as queued until the computer confirms it.
 
-Open a chat to see its structured timeline. New agent events stream into the view. The status in the inbox and thread list shows whether work is running; a chat may contain multiple threads, including more than one running thread. Starting a new thread while another is running asks you to confirm, because both threads share the workspace and may edit the same files.
+## Answer requests
 
-The chat actions menu (**•••**) offers:
+When an agent needs you, the request appears in the chat:
 
-- **Threads** to switch between or start threads in the chat.
-- **Changes** and **Files** to [review the workspace](/mobile/review/).
-- **Checkpoints** to restore files and conversation to a saved turn.
-- **Attempt history** to review retries and recovery within each turn.
-- **Open on desktop** to open the session in the desktop app on the connected computer, when it supports this.
-- **Merge back to parent** for a session forked from another session.
-- **Pin**, rename actions, and **Archive**.
+- For a permission request, read the command or tool, then choose **Allow once** or **Deny**.
+- For a question, pick the answers and choose **Send answers**.
+- For a plan, read it and choose **Approve plan** to let the agent continue.
 
-## Permission requests, questions, and plans
-
-Requests that need you appear in the conversation's action area rather than disappearing into terminal output.
-
-- Read the requested tool or command before deciding.
-- Approve only the action you intend to allow.
-- Answer agent questions directly in the provided prompt.
-- Review a proposed plan before allowing execution to continue.
-
-When notifications are enabled, Zuse can alert you when an agent needs your attention. Opening the notification takes you to the inbox.
-
-## Attachments
-
-The plus menu offers **Take photo**, **Choose photos**, and **Choose files**. Zuse uploads them to the selected environment before including them in the message. If upload fails, the composer keeps the error visible so you can retry instead of silently sending an incomplete prompt. Attachments are not yet supported when starting a cloud chat.
-
-## When the connection drops
-
-Known messages remain visible from the local cache. A message composed while the session is offline is saved on the phone, and Zuse submits it to the server in order after the transport reconnects. If delivery fails, the message is marked **Not delivered** with **Resend** and **Remove** actions.
-
-<Callout title="Provider choices belong to the machine">
-The mobile picker shows providers reported by the connected environment. Install and authenticate a provider CLI on that computer before expecting it to appear on iPhone.
+<Callout title="Agents belong to the computer">
+The phone lists the agents installed and signed in on the selected computer. Install an agent CLI there before expecting it on your phone.
 </Callout>
 
-<NextStep href="/mobile/review/" label="Review files and changes" />
+<NextStep href="/mobile/review/" label="Review changes" />

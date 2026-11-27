@@ -1,53 +1,61 @@
 ---
-title: "Zuse Serve"
+title: "zuse serve"
 icon: Server
-description: "Turn a Mac or Linux computer into a durable, account-linked Zuse environment with one command."
+description: "Run the Zuse engine and browser client on a Mac, Linux, or Windows computer, with or without a display, and reach it from other devices."
 section: "Serve CLI"
 order: 1
 platforms: [serve, web, mobile]
-providers: [claude, codex, grok, opencode]
+providers: []
 prerequisites: []
-related: [/serve/operations, /serve/command-reference, /serve/status-json, /remote/hosted-access]
+related: [/serve/operations, /serve/command-reference, /remote, /remote/web-client]
 next: /serve/operations
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
+`zuse serve` runs the Zuse engine and the browser client in one process. Use it on a computer without a display, such as a home server or a cloud VM, or when you want to open your own computer's workspace from a browser. The computer that runs `zuse serve` owns its projects, agent CLIs, credentials, terminals, and chats. Other devices only connect to it.
 
-Zuse Serve turns a Mac or Linux computer into an environment you can open from the hosted web app or Zuse for iPhone. The computer owns its repositories, provider CLIs, credentials, terminals, and session state. Your account supplies identity and environment discovery.
+## Get the command
 
-## Requirements
+The desktop app's `zuse` command already includes `serve`. On a machine without a display, install the standalone command line instead. Each release of [opcodehq/zuse](https://github.com/opcodehq/zuse/releases) has a `zuse-cli` archive per platform that contains the `zuse` command and the browser app it serves, without the window and its system libraries.
 
-- macOS, or Linux with a systemd user session for durable background operation.
-- Node.js 22.13.0 or newer and npm. Serve installs its managed runtime with npm.
-- At least one supported agent CLI installed and authenticated.
-- A browser on any device to complete account authorization.
+On Linux or macOS, the release's `install.sh` installs it for the current user:
 
-## Quickstart
+```sh
+sh install.sh --cli --version 0.27.9
+```
 
-Run the installless command on the computer that will host the work:
+The installer needs Python 3.11 or newer. It verifies the download against the release checksums and puts a `zuse` launcher in `~/.local/bin`. You can also extract the archive anywhere and run `bin/zuse` from it. Windows archives are portable: extract them and run `bin\zuse.exe`.
 
-<Command>npx @zusehq/serve</Command>
+Install and sign in to at least one agent CLI as the same operating-system user that runs `zuse serve`. Serve does not install agents or clone repositories.
 
-Zuse prints an authorization code and opens the verification page when possible. Complete sign-in, then wait for **Zuse Serve is ready**. The final summary includes the computer name, online state, account, detected agents, tunnel address, and hosted app URL. When browser pairing is available, it also prints a **Browser** link and a short pairing **Code**; the first visit from a new browser asks for that code.
+## Start it
 
-Open the hosted app with the same account and select the computer. On iPhone, sign in under **Settings → Remote access**; online Serve environments appear alongside other linked computers.
+```sh
+zuse serve
+```
 
-## Installed command
+By default the browser server listens on `127.0.0.1:27656`, so only this computer can open it. Serve prints `Open http://127.0.0.1:27656/#token=…`; open that private link in a browser on the same computer. Treat it like a password.
 
-The package publishes the `zuse` executable. If you install it globally, the canonical command is:
+To connect from other devices, add a way to reach the computer:
 
-<Command>zuse serve</Command>
+| Command | Who can connect |
+| --- | --- |
+| `zuse serve --lan` | Paired phones, browsers, and computers on the same network and on your tailnet. |
+| `zuse serve --lan --tailscale-serve` | The same, plus a Tailscale HTTPS address that browsers trust without a warning. |
+| `zuse serve --account` | Devices signed in to your Zuse account, from any network. Serve signs in with a device code and links this computer. |
 
-Running `zuse serve` with no action is equivalent to `zuse serve start`. The `zusehq` package (`npx zusehq`) runs the same CLI.
+When the computer can be reached, Serve prints a pairing link and QR code for a new device. Create more links later with [`zuse pair`](/serve/command-reference/#zuse-pair). See [Remote access](/remote/) for how each route works.
 
-## Durable background service
+If Zuse is already running for the same data directory, for example the desktop app, `zuse serve` turns on browser access in that running engine instead of starting a second one, and prints its link.
 
-On macOS, Serve installs a user LaunchAgent. On Linux, it installs a systemd user service. By default, the service starts the protected server on loopback (`127.0.0.1:4859`), links it to your account and its managed HTTPS tunnel, and keeps its runtime and logs under the Zuse data directory. To add Tailscale or local-network access, see [access options](/serve/operations/#choose-how-clients-connect).
+## Keep it running
 
-If the current platform does not provide a supported service manager, such as a Linux session without systemd user services, `start` fails and explains why. Run `zuse serve start --foreground` for a temporary session in the current terminal, and keep that terminal open.
+`zuse serve` runs in the foreground. To keep it running after you log out or restart, install it as a user service:
 
-## What Serve does not do
+```sh
+zuse daemon install --serve --lan
+```
 
-Serve does not install provider CLIs, clone repositories, or provision a cloud computer. Prepare the machine and its workspaces first. Direct SSH launching and automatic machine provisioning are not part of this public workflow.
+See [Operate zuse serve](/serve/operations/) for service management, updates, and status checks.
 
-<NextStep href="/serve/operations/" label="Operate the Serve service" />
+<NextStep href="/serve/operations/" label="Operate zuse serve" />

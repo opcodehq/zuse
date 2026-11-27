@@ -1,8 +1,8 @@
 ---
-title: Projects, chats, and sessions
+title: Projects, threads, and conversations
 icon: Boxes
-navTitle: "Projects, chats, sessions"
-description: Learn the ownership and lifecycle rules behind Zuse conversations.
+navTitle: "Projects, threads, conversations"
+description: Learn the ownership and lifecycle rules behind Zuse threads and their conversations.
 section: concepts
 order: 11
 platforms: [desktop, browser, mobile]
@@ -10,41 +10,43 @@ providers: [claude, codex, grok, cursor, opencode, kiro, pi]
 prerequisites: [/concepts]
 related: [/projects/worktrees, /composer/subagents, /desktop/navigation]
 next: /projects/worktrees
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
 
 ## Project
 
-A project is a folder you explicitly added to Zuse. Its path is the anchor for file browsing, terminals, repository settings, Git operations, and all chats beneath it. You can collect projects into named groups in the sidebar. Removing a project from Zuse removes it from the app's workspace; it does not delete the repository.
+A project is a folder you added to Zuse on a specific computer. Its path anchors file browsing, terminals, Git operations, and every thread in it. Removing a project from Zuse does not delete the repository.
 
-## Chat
+## Thread
 
-A chat is one durable unit of work. It owns the environment used by all of its session tabs. If the chat uses a worktree, every session in that chat works against that same worktree.
+A thread, also called a chat, is one durable unit of work. It owns the checkout used by all of its conversations. If the thread uses a worktree, every conversation in it works against that same worktree.
 
-Choose a chat boundary that matches a branch-sized outcome: one fix, one feature, one investigation, or one review. This keeps its messages, changes, and pull-request state coherent.
+Choose a thread boundary that matches a branch-sized outcome: one fix, one feature, one investigation, or one review. This keeps its messages, changes, and pull request state coherent.
 
-The environment becomes fixed after work begins. Choose the main checkout, a new worktree, or an existing branch, pull request, or issue from **Create from…** before the first message.
+Pick the checkout before the first message: **Worktree** for a fresh isolated branch, **Local** for the project's main folder, or **Cloud** to run the thread on a cloud computer.
 
-## Session tab
+You can group threads into your own sections in the sidebar and pin the ones you return to often.
 
-A session tab is a conversation with one provider and model. A chat can contain multiple tabs, letting you ask another agent for a review or continue with a different approach while keeping the same files and branch. Use **+** in the tab strip or `⌘T` to open another tab in the current chat.
+## Conversation
 
-You can change a session's model, or move it to another provider, from the model picker. The change applies once current work finishes, and the timeline records it. When the provider changes, Zuse hands the earlier conversation to the new provider as a transcript. Open another tab instead when you want a clean context alongside the existing one.
+A conversation is one agent session inside a thread, shown as a tab. Use the **+** beside the conversation tabs to start another conversation in the same checkout, with its own history and agent session. That lets you ask another agent for a review or try a different approach on the same files and branch.
+
+You can change a conversation's agent or model from the model picker.
 
 ## Fork a conversation
 
-Use the fork button on an agent message to branch the conversation from that point:
+Use the fork button on an agent reply to branch the conversation from that point:
 
-- **Fork in this chat** opens a new session tab that shares the chat and its current worktree.
-- **Fork into a new worktree** creates a separate chat in an isolated Git worktree for parallel work.
+- **Fork in new tab** continues from there in a new tab of this thread, in the same checkout.
+- **Fork into new thread** continues from there in a new thread with its own worktree.
 
-A forked session offers **Merge context into parent**, which gives the parent conversation the new context on its next turn. Files are unchanged.
+## Import a chat
 
-## Import a provider chat
-
-On a new chat, **Import chat** lists recent Claude Code and Codex conversations found on the computer. Importing one continues it as a Zuse chat in the project for its folder, adding that project if needed.
+On a new thread, **Import chat** lists recent conversations from supported agent apps on the computer. Importing one continues it as a Zuse chat with the same agent. First-run setup offers the same import.
 
 ## Archive and delete
 
-Archive a finished chat to remove it from the active workspace while keeping its record. Open **Archived chats** from a project's menu in the sidebar to read an archived transcript or **Unarchive** it. Worktree cleanup follows repository and archive controls and can run a configured archive script. Read confirmation text carefully before discarding uncommitted files or removing a checkout.
+Archive a finished thread to remove it from the sidebar while keeping its record. Archiving stops its agents, subagents, and background commands, and includes all of its conversations. If the agents cannot shut down safely, Zuse keeps the worktree.
+
+Open **Settings → Archived chats** to read an archived conversation or restore it. Read confirmation text carefully before you discard uncommitted files or delete a thread permanently.

@@ -1,8 +1,0 @@
-{
-	"pages": [
-		"create-webhook",
-		"list-webhooks",
-		"delete-webhook",
-		"workspace-turn-completed"
-	]
-}

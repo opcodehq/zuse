@@ -165,7 +165,7 @@ export const documentationTree: Root = {
 		),
 		standaloneTab("api-reference", {
 			name: "API reference",
-			description: "Endpoints and webhooks",
+			description: "Control API, CLI, and SDK",
 			icon: "Code",
 		}),
 	],

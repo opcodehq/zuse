@@ -1,0 +1,100 @@
+---
+title: "Choose a Cloud plan and manage billing"
+icon: CreditCard
+navTitle: "Cloud plans and billing"
+description: "Compare the Cloud plans, understand machine minutes, set a pay-as-you-go cap, and manage invoices."
+section: how-to
+order: 25
+platforms: [desktop, browser]
+providers: []
+prerequisites: [/start/first-chat]
+related: [/how-to/cloud-start-chat, /how-to/choose-cloud-provider]
+next: /how-to/cloud-start-chat
+lastVerified: "2026-11-27"
+---
+
+## Goal
+
+Pick the Cloud plan that fits how much your cloud computers run, and keep spending under a limit you choose.
+
+## Applicability
+
+Cloud plans pay for cloud computers only. Coding agents in cloud chats run on the Codex, Claude, or Grok account you connect, so their usage stays on that subscription and Zuse never charges for their tokens. Local chats on your own computer don't need a Cloud plan.
+
+## How machine minutes work
+
+Every plan includes **machine minutes** each month. A machine minute is one minute of a 1 vCPU / 4 GB machine. A computer uses one machine minute per awake minute for each 4 GB of memory, rounded up:
+
+| Computer | Machine minutes per awake minute |
+| --- | --- |
+| Standard · 4 vCPU · 16 GB | 4 |
+| Large · 8 vCPU · 32 GB | 8 |
+
+Only awake time counts. A computer sleeps after about 10 quiet minutes and wakes when you send a message. Asleep computers use no machine minutes, and storage for asleep computers and saved machine images is included.
+
+## Plans
+
+| | Cloud trial | Cloud | Cloud Max |
+| --- | --- | --- | --- |
+| Price | $1 for the first 7 days | $20 per month | $50 per month |
+| Machine minutes | 8,400 (about 35 hours on a Standard computer) | 33,600 (about 140 hours) | 84,000 (about 350 hours) |
+| Computer sizes | Standard | Standard | Standard and Large |
+| Pay as you go | No | Yes, up to your cap | Yes, up to your cap |
+
+The trial is the first week of Cloud. When it ends, the subscription continues as Cloud at $20 per month. Each account and each card can use the trial once; if yours already has, the trial is unavailable and you start Cloud directly. If the trial's minutes run out before the week ends, cloud computers pause until you choose **Start Cloud now**.
+
+For more machine minutes, larger computers, invoicing, and support for a team, choose **Contact us** on the **Enterprise** card.
+
+## Steps
+
+### Subscribe
+
+1. Open **Settings → Plan & usage → Billing**. You can also subscribe from the **Welcome** step when you first set up Cloud.
+2. Choose **Start for $1** to begin with the trial, or **Get Cloud** or **Get Cloud Max**.
+3. Finish checkout in your browser. Settings shows your plan without restarting Zuse.
+
+To change plans later, choose **Switch plan** or **Upgrade to Cloud Max** on the Billing page.
+
+### Set a pay-as-you-go cap
+
+After your plan's machine minutes run out, cloud computers keep running at the same rate, and the extra minutes cost the same as included ones. The **Pay-as-you-go cap** limits that extra spending each month, before tax.
+
+1. In **Settings → Plan & usage → Billing**, enter an amount under **Pay-as-you-go cap**.
+2. Choose **Save**.
+
+The cap starts at $25 and can't be set lower than what you've already been charged this month. When pay-as-you-go usage reaches the cap, cloud computers pause until your plan renews. To keep going sooner, choose **Raise cap**, or **Upgrade to Cloud Max** on Cloud. The trial has no pay as you go.
+
+### Buy more minutes
+
+Under **Buy more minutes**, pick a pack and choose **Buy minutes**:
+
+| Pack | Machine minutes |
+| --- | --- |
+| $10 | 16,800 |
+| $25 | 42,000 |
+| $50 | 84,000 |
+| $100 | 168,000 |
+
+Credit rolls over and applies to future Zuse invoices.
+
+### Manage invoices and payment
+
+Under **Invoices and payment method**, choose **Open billing portal** to update your card, download invoices, or cancel your subscription.
+
+## Verify
+
+- The Billing page shows your plan, its renewal date, and how many machine minutes are left.
+- **Settings → Plan & usage → Usage** shows machine minutes by day and by chat once a cloud computer has run.
+
+## Troubleshooting and recovery
+
+The Billing page shows a status next to your plan:
+
+- **Trial** or **Active:** cloud computers can start.
+- **Paused:** the trial's minutes are used up, or pay-as-you-go usage reached your cap. Choose **Start Cloud now**, or raise your cap.
+- **Payment due:** update your payment method in the billing portal.
+- **Ended** or **Not subscribed:** choose a plan to start cloud computers again.
+- **Large · 8 vCPU · 32 GB · Cloud Max** in the computer picker: your plan doesn't include Large computers. Choosing it opens Billing so you can upgrade.
+- **Could not load billing:** choose **Retry**. Existing cloud chats are not affected.
+
+If you subscribed to the original $40 Cloud plan, you keep Cloud's machine-minute allowance until your subscription moves to a current plan.

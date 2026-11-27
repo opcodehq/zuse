@@ -2,7 +2,7 @@
 title: Install and connect Zuse
 icon: Download
 navTitle: "Install"
-description: Install Zuse on macOS or x64 Linux and make a supported coding-agent CLI available.
+description: Install Zuse on macOS, Windows, or Linux and make a supported coding agent available.
 section: start
 order: 2
 platforms: [desktop]
@@ -10,80 +10,104 @@ providers: [claude, codex, grok, cursor, opencode, kiro, pi]
 prerequisites: []
 related: [/start/first-chat, /providers, /reference/diagnostics]
 next: /start/first-chat
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
 
-Zuse ships for macOS and x64 Linux. It uses coding-agent installations already available on your computer, so the first launch checks which supported CLIs are installed and authenticated.
+Zuse ships for macOS (Apple silicon and Intel), Windows x64, and Linux (x64 and ARM64). It runs the coding agents already installed on your computer, so first-run setup checks which agents it can find.
+
+Every release is published on [GitHub Releases](https://github.com/opcodehq/zuse/releases/latest). Each release includes a `SHA256SUMS` file that covers every download.
 
 ## Install the app
 
 ### macOS
 
-1. Download the current macOS build from [zuse.sh/download](https://zuse.sh/download).
-2. Open the downloaded disk image and move Zuse to **Applications**.
-3. Launch Zuse. The onboarding flow opens automatically on a fresh installation.
+1. Download the DMG for your Mac: `macos-aarch64` for Apple silicon or `macos-x86_64` for Intel.
+2. Open the disk image and drag **Zuse** into **Applications**.
+3. Launch Zuse. First-run setup opens on a fresh installation.
 
-Zuse ships as a signed, notarized universal app for Apple silicon and Intel Macs. Updates are offered in the app when a newer release is available.
+The app and the disk image are signed and notarized.
 
-### Debian and Ubuntu
+### Windows
 
-Install the latest x64 `.deb` release from a terminal:
+Download the Setup EXE and run it. It installs Zuse for the current user in `%LOCALAPPDATA%\Programs\Zuse` without administrator rights and adds a Start menu shortcut. Uninstall it from Windows Settings.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/swarajbachu/zuse/main/scripts/install-linux.sh | sh
-```
+You can also extract the portable ZIP anywhere you can write to and run `zuse.exe`. A ZIP install does not update itself.
 
-The installer verifies the GitHub-published SHA-256 digest before invoking `apt`. The package installs the Secret Service and Avahi runtime dependencies.
+Windows downloads are not code-signed yet, so SmartScreen warns on first launch: choose **More info**, then **Run anyway**. The built-in browser needs the WebView2 Evergreen Runtime, which Windows 10 and 11 usually already include. If Windows reports a missing `MSVCP140.dll` or `VCRUNTIME140.dll`, install the Microsoft Visual C++ v14 Redistributable (x64).
 
-### Other Linux distributions
+### Linux
 
-Download the x64 `.AppImage` from [GitHub Releases](https://github.com/swarajbachu/zuse/releases/latest), make it executable, and launch it:
+Install the DEB or RPM for your architecture (`x86_64` or `aarch64`) with your package manager. On Debian and Ubuntu:
 
 ```bash
-chmod +x Zuse-*-linux-x86_64.AppImage
-./Zuse-*-linux-x86_64.AppImage
+sudo apt install ./zuse-VERSION-linux-ARCH.deb
 ```
 
-AppImage users must provide a Secret Service implementation such as GNOME Keyring or KWallet. Install `avahi-publish-service` if you want nearby-device discovery.
+On Fedora and other RPM-based distributions:
 
-## Add Zuse to Slack
+```bash
+sudo dnf install ./zuse-VERSION-linux-ARCH.rpm
+```
 
-[Add Zuse to Slack](https://api.zuse.sh/slack/install) to work on your cloud projects through mentions and direct messages.
+The packages install under `/opt/zuse`, add the `zuse` command, and register the desktop entry. Remove them with `sudo apt remove zuse` or `sudo dnf remove zuse`; your profile stays in place.
 
-1. Open the installation link and authorize your Slack workspace.
-2. In Slack, open **Zuse → Home**, click **Connect Zuse account**, and sign in. If WorkOS skips organization selection and you have available Zuse organizations, Zuse will ask you to choose **Personal** or an organization. Otherwise, it uses the organization selected during sign-in, or Personal if none is available.
-3. Invite Zuse to a channel and mention it with a task, or send the app a direct message.
-4. Choose a repository and, if prompted, an agent and model. The repository must already be a ready cloud project in Zuse, and the selected agent needs cloud credentials configured in Zuse.
+To install for the current user without `sudo`, use the terminal installer from the release:
 
-Mention Zuse again in the same thread to continue working in that workspace. Start a new thread for a separate task.
+```bash
+(
+  set -e
+  installer=$(mktemp)
+  trap 'rm -f "$installer"' EXIT
+  curl -fsSL https://github.com/opcodehq/zuse/releases/latest/download/install.sh -o "$installer"
+  sh "$installer"
+)
+```
 
-## Connect a provider
+The installer needs Python 3.11 or newer. It picks your architecture, verifies the download checksums, installs into `~/.local/share/zuse`, and adds launchers to `~/.local/bin`. Without `--version`, it selects the latest stable release. Run the same command with `--uninstall` to remove its launchers.
 
-Zuse has built-in support for Claude Code, Codex, Grok, Cursor, OpenCode, Kiro, and Pi. Other agents, including Gemini CLI, run through [ACP](/providers/acp). You need at least one agent installed and signed in.
+Linux builds use Ubuntu 24.04 (glibc 2.39) as their baseline and need WebKitGTK 4.1 and a working Vulkan GPU driver. The DEB and RPM packages pull in their runtime dependencies.
 
-On a fresh installation, onboarding walks you through picking your default agent, adding your first project, choosing an appearance, and setting defaults for the model, permission mode, and whether each new chat gets its own worktree. It ends with an optional Zuse account sign-in; local agents work without one. You can replay onboarding from **Settings → General**.
+### Open Zuse from a terminal
 
-The agent step shows each provider's current state, such as **CLI logged in**, **API key set**, **Not installed**, **Update required**, **Sign in required**, or **Subscription required**. Use **Recheck** after you fix something outside Zuse.
+Open the app from your dock, Start menu, or app launcher. In a terminal, run `zuse app`. A bare `zuse` prints help instead of opening a window.
 
-Open **Settings → Providers** at any time to install, sign in, update, enable, or disable providers, and to choose which models appear in the picker. Authentication is performed through each provider's supported flow. App-managed API keys are encrypted with a key held by the macOS Keychain or Linux Secret Service, not stored in Zuse's settings JSON.
+For a computer without a display, download the `zuse-cli` archive instead. See [Serve](/serve).
+
+## Connect an agent
+
+Zuse runs the agent apps installed on the computer, including Claude Code, Codex, Cursor, Grok, OpenCode, Kiro, and Pi. See [Providers](/providers) for the full list. You need at least one agent installed and signed in.
+
+On a fresh installation, setup walks you through these steps:
+
+1. **Welcome**, where you can also choose the interface language.
+2. **Your agents**, which lists the agents Zuse found on this computer.
+3. **Sign in to Zuse**. An account is optional; local agents work without one.
+4. **Bring your MCP servers**, shown when you sign in. It offers the MCP servers already configured in your agent apps.
+5. **Bring your chats**, which imports recent chats from the previous version of Zuse and from supported agent apps.
+6. **Make it yours**, where you choose the appearance and the access new chats start with.
+7. **You're all set**, where you can add a project or start a chat right away.
+
+Choose **Skip setup** on the first step to go straight to the app.
+
+Open **Settings → Providers & accounts** at any time to check what is installed and signed in, sign in to an agent, add accounts, or apply updates.
 
 ## Add a project
 
-Choose **New project** in the sidebar, the **+** next to **Projects**, or **File → Open Project…** (`⌘O`, or `Ctrl+O` on Linux). The **Add project** dialog offers three starting points:
+Choose **New project** in the sidebar (`⌘O`, or `Ctrl+O` on Windows and Linux). From there you can:
 
-- **Existing folder** opens a project already on disk.
-- **Clone repository** clones from a Git URL or one of your recent GitHub repositories.
-- **Quick start** creates a new project from a template, optionally with a private GitHub repository.
+- open a folder that is already on disk;
+- clone a repository, either by searching your GitHub repositories or by pasting a Git URL;
+- create an **Empty**, **Next.js**, or **Turborepo** project, optionally published as a private GitHub repository.
 
-Git repositories get the full worktree, Changes, branch, and pull-request workflow. A plain folder can still be used for agent sessions, files, and terminal work, and Zuse offers **Initialize Git repository** when you need version control.
+GitHub browsing and private repository creation use `gh auth login` on the computer. The Next.js and Turborepo starters need Bun. Cloning and scaffolding run in the background, so you can write your first prompt while progress appears above the composer.
 
-## If a provider is not ready
+## If an agent is not ready
 
-1. Open **Settings → Providers** and inspect its status.
-2. Confirm its CLI runs from your normal shell.
-3. Complete the provider's sign-in flow.
-4. Apply an offered update if Zuse reports an incompatible version.
-5. Return to the project and create a new session.
+1. Open **Settings → Providers & accounts** and check the agent's status.
+2. Confirm that its CLI runs from your normal shell.
+3. Complete the agent's sign-in flow.
+4. Apply an offered update if Zuse reports one.
+5. Return to the project and start a new chat.
 
-Provider authentication and model availability can change outside Zuse. Refresh provider status after changing an installation or account.
+Agent sign-in and model availability can change outside Zuse. Use the refresh control on the providers page after you change an installation or an account.

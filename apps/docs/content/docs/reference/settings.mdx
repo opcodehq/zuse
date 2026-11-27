@@ -2,64 +2,63 @@
 title: User settings
 icon: Settings
 navTitle: "User settings"
-description: Configure global Zuse defaults and understand persisted preferences.
+description: Find each Settings section and understand where Zuse keeps your preferences.
 section: reference
 order: 91
 platforms: [desktop]
 providers: [claude, codex, grok, cursor, opencode, kiro, pi]
 prerequisites: []
-related: [/projects/repository-settings, /reference/keybindings, /reference/schemas]
+related: [/reference/keybindings, /reference/schemas, /concepts/local-first]
 next: /reference/keybindings
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
 
-Zuse stores global preferences in:
+Open Settings with `⌘,` (`Ctrl+,` on Windows and Linux) or **Settings** in the application menu. Settings remembers the last section you opened.
 
-```text
-~/.zuse/settings.json
-```
+## Settings sections
 
-The settings UI is the safest way to edit this file. Changes are validated and synchronized through the running desktop service.
+The sidebar groups sections under four headings. Some sections appear only when your build, account, or plan supports them.
 
-## Main preference groups
+### App
 
-| Group | Persisted behavior |
+| Section | What it covers |
 | --- | --- |
-| Defaults | Provider, model by provider, runtime permission mode, worktree creation |
-| Appearance | System, light, or dark mode |
-| Notifications | Provider update notifications, completion sound, and sound preset |
-| Providers | Enabled providers, visible models, custom model IDs, and CLI binary paths |
-| OpenCode | Connected provider visibility, model visibility, and custom provider metadata |
-| Skills | Claude and Zuse skills you switched off globally |
-| Subagents | Default enablement and preset overrides |
-| Git | Branch naming style/prefix and merge preferences |
-| Desktop | Notch tray enablement and pinning |
+| **General** | Language, composer and conversation behavior (such as **Direct steer**), thread naming, links, worktree location, the Stable or Preview update channel, and **Import from Electron** |
+| **Appearance** | Themes, light or dark scheme, accent color, wallpapers, and motion |
+| **Notifications** | When Zuse alerts you about agent activity, and session sounds |
+| **Voice** | Dictation and microphone |
+| **Keyboard shortcuts** | Every rebindable shortcut. See [Keybindings](/reference/keybindings) |
+| **Files** | How the file editor saves, wraps, and lists files, including autosave |
+| **Remote access** | Use this computer from your phone, a browser, or another computer. See [Remote access](/remote) |
+| **Appshots** | Capture an app window and attach it to a chat. Shown on macOS and Linux |
+| **Archived chats** | Read archived conversations or restore them |
 
-New installs start in dark mode, with approval-required permissions, automatic worktree creation, and the `username-slug` branch style. Completion sounds and provider update notifications start off.
+### Plan & usage
 
-Repository values such as provider, model, runtime mode, and worktree default can override global choices for one project. Put shared project behavior in `.zuse/settings.toml`, not this user file.
+| Section | What it covers |
+| --- | --- |
+| **Usage** | Model and compute usage |
+| **Billing** | Your Cloud plan, minutes, and payment. Shown when you are signed in |
 
-## Direct editing
+### Local agents
 
-Keep `schemaVersion` at `1`. Zuse watches the file and applies saved edits while it is running. Zuse reads only the properties it knows: it drops unknown properties and resets invalid values to their defaults the next time it writes the file.
+| Section | What it covers |
+| --- | --- |
+| **Providers & accounts** | Which agents are installed and signed in, accounts, versions, and updates. See [Provider setup](/providers/setup) |
+| **Default models** | The default agent and model for new chats |
+| **Plugins & MCP** | Plugins and MCP servers your agents can use. See [Skills and MCP](/composer/skills-mcp) |
 
-<Callout type="warn">
-If `settings.json` is not valid JSON when Zuse starts, Zuse replaces it with default settings. Check the syntax before you relaunch.
-</Callout>
+### Cloud computer
 
-For editor validation and completion, use:
+Shown to Cloud subscribers: **Overview**, **Repositories**, **Environments**, **Machine**, **Agent accounts**, and **Your computers**.
 
-```text
-https://zuse.sh/schemas/settings.schema.json
-```
+## Where preferences are stored
 
-The file does not contain provider API keys. Zuse encrypts the secrets it manages and keeps the encryption key in your system credential store, which is the Keychain on macOS. OpenCode stores provider API keys in its own `auth.json`.
+Zuse saves app preferences, including your keyboard shortcuts, in `ui-settings.json` inside its data directory: `~/.zuse-native` on macOS and Linux, or `%LOCALAPPDATA%\Zuse` on Windows. `ZUSE_DATA_DIR` selects another data directory.
 
-## Settings surfaces
+Change preferences in the Settings UI. The file is written only by the running app and is not a public configuration format. If it cannot be read, Zuse starts with default settings, and out-of-range values are reset when the file loads.
 
-The settings sidebar lists **General**, **Providers**, **Default models**, **Plugins**, **Remote access**, **Cloud workspaces · Public beta**, **Browser**, **Keyboard shortcuts**, **Experimental**, and **Diagnostics**. **Cloud workspaces** appears only in the desktop app. **Plugins** has separate **Plugins** and **Skills** tabs.
+Some choices are stored elsewhere: the worktree location is kept per computer, and account-synced workspaces keep sidebar sections with your account.
 
-Your projects are listed under **Repositories** below the global entries. Select one to open its committed repository settings.
-
-When you switch to an organization workspace, the sidebar shows that organization's settings: **General**, **Members**, **Repositories & scripts**, **Cloud image**, **Providers**, **Default models**, **Billing**, **Browser**, **Keyboard shortcuts**, and **Diagnostics**. Members with the billing role see only **Billing**.
+The access you pick in the composer also becomes the default for new chats, and new chats use a worktree unless you choose **Local**.

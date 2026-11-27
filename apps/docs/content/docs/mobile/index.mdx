@@ -1,52 +1,39 @@
 ---
-title: "Zuse for iPhone"
+title: "Zuse on iPhone and Android"
+navTitle: "Overview"
 icon: Smartphone
-description: "Monitor agents, send messages, handle approvals, and review workspace changes from your iPhone."
+description: "Follow agents, answer approvals, start chats, and review changes on your phone while the work runs on your computer or in Zuse Cloud."
 section: "Mobile"
 order: 1
 platforms: [mobile]
 providers: []
 prerequisites: [/remote]
-related: [/mobile/connect, /mobile/chats, /mobile/review, /mobile/offline-notifications]
+related: [/mobile/connect, /mobile/chats, /mobile/review, /remote/nearby-pairing]
 next: /mobile/connect
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
+The Zuse mobile apps for iPhone and Android are clients for your computers and for Zuse Cloud. Projects, agents, and chats stay on the computer you connect to; the phone shows them and sends your messages and decisions.
 
-Zuse for iPhone is a native client for environments running on your Mac or a Serve computer. It gives you the shared inbox, live conversation timeline, composer, approvals, files, and change review while all execution remains on the connected computer.
+<Callout title="Availability">
+Zuse's desktop releases on GitHub do not include the mobile apps. The steps in this section describe the apps as they exist in the Zuse source.
+</Callout>
 
 ## What you can do
 
-- See chats grouped by project and computer.
-- Search, pin, archive, and reopen chats.
-- Create a chat that works locally, in a new worktree, on an existing branch, or on a pull request.
-- Choose an installed provider, model, intelligence level, and approval mode.
-- Send text, photos, and files, and start plan or goal work.
-- Follow streaming agent output and queued work.
-- Answer questions, review plans, and decide permission requests.
-- Browse project files, review changes, and commit, push, or merge from the phone.
-- Restore a checkpoint or review a turn's attempt history.
-- Receive notifications when an agent needs your attention.
-
-When you sign in, the inbox can also include your cloud chats.
+- See chats from all your computers in one list, search them, and archive or restore them.
+- Start a chat on a computer or in Zuse Cloud, in a new worktree, the main checkout, an existing branch, or an existing worktree.
+- Choose the agent and how much it may do without asking, and turn on plan mode.
+- Send text, photos, and files, and stop a running response.
+- Approve or deny agent requests, answer questions, and approve plans.
+- Review working-tree, staged, and branch changes.
 
 ## What runs where
 
-The phone does not clone repositories or run provider CLIs. It asks the connected environment to do the work and presents the resulting state. Provider availability and model choices come from that environment, so two connected computers can offer different agents.
+The phone does not clone repositories or run agent CLIs. The agents you can pick come from the connected computer, so two computers can offer different agents.
 
-## Start with a connection
+## Connect a computer
 
-Choose the connection path that matches where you are:
+On the phone, tap **Add computer**. You can scan a QR code from the computer, paste a link, or sign in to the computer over SSH and let Zuse set it up. See [Connect your phone](/mobile/connect/).
 
-- [Pair a nearby Mac](/remote/nearby-pairing/) directly over the local network, without an account.
-- Scan the QR code from a connect link created in the computer's **Settings → Remote access**.
-- [Sign in for hosted access](/remote/hosted-access/) to reach an account-linked computer away from home or the office.
-- Use **Settings → Computers → Add manually** only when you know the server address and port.
-
-After a successful connection, Zuse opens the inbox and refreshes the environment's projects, chats, and sessions over WebSocket.
-
-<Callout title="Mobile is a control surface">
-Keep the environment awake and online while an agent is working. Cached history remains readable during a disconnect, but new execution waits for the environment to return.
-</Callout>
-
-<NextStep href="/mobile/connect/" label="Connect your iPhone" />
+<NextStep href="/mobile/connect/" label="Connect your phone" />

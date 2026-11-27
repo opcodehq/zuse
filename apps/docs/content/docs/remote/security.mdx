@@ -2,62 +2,49 @@
 title: "Remote access security"
 icon: Shield
 navTitle: "Security"
-description: "Understand environment authority, one-time pairing, device credentials, account linking, and revocation."
+description: "How pairing, encryption, account linking, and revocation protect a computer you reach remotely."
 section: "Remote access"
-order: 7
+order: 8
 platforms: [desktop, web, mobile, serve]
 providers: []
 prerequisites: [/remote]
-related: [/remote/local-browser, /remote/nearby-pairing, /remote/hosted-access, /remote/tailscale, /serve/security]
+related: [/remote/nearby-pairing, /remote/local-browser, /remote/hosted-access, /serve/security]
 next: /remote/recovery
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
+Remote devices control a computer; they do not become it. Repositories, agent processes, terminals, agent CLIs, and their credentials stay on the computer that runs Zuse.
 
-Zuse's remote clients control an environment; they do not become the environment. Repositories, agent processes, terminals, provider CLIs, and their credentials remain on the computer running the desktop app or Zuse Serve.
+## Pairing
 
-## Connections and pairing
+- Every way to connect is off until you turn it on.
+- A pairing link or QR code contains a random identifier and secret. It works for one device and expires after ten minutes if unused. Treat a live link like a password.
+- A paired device has full control of the computer's workspace. There is no read-only pairing.
+- One computer can have up to 32 paired devices.
+- Revoking a device in **Settings → Remote access** ends its active connections immediately.
 
-- Every connection in **Settings → Remote access → Connections** is off until you turn it on.
-- Turning the **Local network** connection on or off restarts the desktop app. Running agents stop during that restart.
-- **Tailscale** uses Tailscale Serve to reach only devices on your tailnet. It does not expose Zuse to the public internet.
-- Connect links and pairing codes are single-use and expire after five minutes.
-- A redeemed browser or phone receives its own revocable credential.
-- Nearby phone pairing checks the advertised encrypted transport identity and asks you to match a safety phrase on both devices.
+## Encryption
 
-Do not paste a pairing link into an untrusted chat or open it on a shared browser. Treat a live link like a temporary password.
+Every paired connection is end-to-end encrypted between the device and the computer, whichever route it takes: Wi-Fi, Tailscale, your account, or a relay. A route is only a pipe. If an old address now leads to a different machine, the connection fails instead of talking to it. There is no unencrypted fallback.
 
-## Hosted access
+Direct connections on the local network accept only peers in private address space.
 
-- Hosted access through **Zuse Serve** is optional and account-scoped.
-- The environment registers to an account over an encrypted outbound connection; no router ports are opened. It remains the execution and data authority.
-- A browser or phone must authenticate to the same account before it can list or connect to linked computers.
-- Environment and client versions must be compatible.
-- Turning off **Zuse Serve**, removing the computer from your account, or running `zuse serve logout` revokes the environment's account registration.
+## Browsers on the local network
 
-## Computers added over SSH
+Browsers need HTTPS, so on the local network Zuse serves the web client with a certificate generated for the computer. Chat traffic stays end-to-end encrypted, but because of the certificate warning the browser cannot prove the page came from your computer, and someone who can intercept that network could serve a modified page. On networks you do not trust, use [Tailscale HTTPS](/remote/tailscale/#tailscale-https) or [account access](/remote/hosted-access/).
 
-When you [add a computer over SSH](/remote/other-computers/), Zuse runs a loopback-only runtime on that computer without account linking and reaches it through your SSH connection. Your SSH keys and configuration control who can open it. If the remote environment's identity changes, the desktop app refuses to connect until you remove and add the computer again.
+## Account access
 
-## Provider credentials
+Account access is optional. A device must be signed in to the same account to find and open a linked computer. `zuse unlink` removes the computer from your account.
 
-Remote clients do not receive copies of provider credentials. Agent commands execute where the provider CLI is installed and authenticated. The model provider and any tools invoked by the agent still have their own network and data policies.
+## Agent credentials
 
-## Device lifecycle
-
-Review **Connected devices** in **Settings → Remote access** periodically. Each identified browser or mobile device shows a label and last-connected time. Revoke devices you no longer use or recognize. Use **Revoke all** under **Older device access** for credentials from earlier versions that cannot be identified individually.
-
-On iPhone, **Settings → Storage → Clear downloaded data** removes cached projects, chats, and messages but keeps connections and unsent messages. **Reset app** additionally removes account state, connections, device keys, cache, and unsent messages from that phone. Neither action revokes the phone at the environment; do that from the Mac as well.
-
-<SecurityNote title="Permission prompts still matter">
-Approval prompts are security decisions. Read the requested operation and choose the narrowest option that permits the intended task. A remote connection does not weaken the agent's normal permission model.
-</SecurityNote>
+Remote devices never receive copies of agent credentials. Agents run where their CLI is installed and signed in. Permission prompts still apply: approve only what you intend, from any device.
 
 ## If a device may be compromised
 
-1. Revoke it from **Settings → Remote access** on every environment it could access.
-2. Turn off the connections it could use while you review connected devices.
-3. Sign out the affected mobile or browser session.
-4. Rotate provider, repository, and service credentials if the device may have observed them through an active session.
+1. Revoke it under **Devices** in **Settings → Remote access** on every computer it could reach.
+2. Turn off the connections it could use while you review the list.
+3. Rotate agent, repository, and service credentials it could have seen during a session.
 
 <NextStep href="/remote/recovery/" label="Recover a failed connection" />

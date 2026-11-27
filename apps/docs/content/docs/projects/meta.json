@@ -4,7 +4,6 @@
 		"index",
 		"worktrees",
 		"scripts",
-		"repository-settings",
-		"file-includes"
+		"repository-settings"
 	]
 }

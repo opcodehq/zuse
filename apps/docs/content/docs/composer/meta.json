@@ -8,6 +8,7 @@
 		"subagents",
 		"orchestration",
 		"parallel-agents",
-		"monitor-delegated-work"
+		"monitor-delegated-work",
+		"zappers"
 	]
 }

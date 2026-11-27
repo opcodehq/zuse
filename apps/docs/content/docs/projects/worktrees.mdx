@@ -1,112 +1,81 @@
 ---
 title: Worktrees
 icon: GitBranch
-description: Understand isolated checkouts, storage, setup, archiving, and recovery.
+description: Understand isolated checkouts, where they live, how they start, and what happens when you archive them.
 section: projects
 order: 41
-platforms: [desktop, browser, mobile]
+platforms: [desktop, browser]
 providers: []
 prerequisites: [/projects]
-related: [/projects/file-includes, /projects/scripts, /how-to/local-parallel-worktrees, /workspace/changes-pull-requests]
-next: /projects/repository-settings
-lastVerified: latest
+related: [/projects/scripts, /projects/repository-settings, /how-to/local-parallel-worktrees, /workspace/changes-pull-requests]
+next: /projects/scripts
+lastVerified: "2026-11-27"
 ---
 
-A Zuse worktree is a separate checkout of a Git repository attached to a branch. It gives a task its own files, terminal, and Git state without cloning the entire repository or disturbing your main checkout.
+A Zuse worktree is a separate checkout of a Git repository on its own branch. It gives a chat its own files, terminal, and Git state without cloning the repository again or disturbing your project folder.
 
-Use a worktree when an agent will edit files, install dependencies, run a development server, or prepare a pull request while another task continues in parallel.
+Use a worktree when an agent will edit files, install dependencies, run a development server, or prepare a pull request while other work continues in parallel.
+
+## Choose Worktree or Local
+
+When you start a chat in a project on your computer, the composer's workspace chip offers two modes:
+
+- **Worktree** creates a fresh, isolated worktree when you send the first message. The branch you pick is the base for the new branch.
+- **Local** runs in the project folder itself. Picking another branch in Local mode checks out that branch in the project folder. If the branch is already checked out in a worktree, Zuse reuses that worktree instead.
+
+Zuse remembers the mode you last picked for each project. A chat's checkout is fixed once the chat exists.
 
 ## What is isolated
 
-The worktree belongs to the chat. Every session in that chat uses the same checkout and branch, including sessions that use different providers. The following tools are scoped to that checkout:
+Every session in a chat uses the same checkout and branch, including sessions that use different agents. These tools are scoped to that checkout:
 
 - `@` file search and file attachments
-- the file tree and editor
-- terminal commands and development servers
+- the files panel and editor
+- terminals and development servers
 - Changes, commits, pushes, and pull-request actions
-- repository setup and run commands
+- [project actions](/projects/scripts) you run from the chat
 
-The main checkout remains on its existing branch with its existing uncommitted changes. A command run in the worktree does not change the main checkout's current branch or working files.
+The project folder stays on its existing branch with its existing uncommitted changes. A command run in the worktree does not change the project folder's branch or working files.
 
-## What uses disk space
+## Where worktrees live
 
-Zuse creates the checkout with `git worktree`, not another `git clone`. All worktrees for a repository share its Git object database, so commit history, packfiles, and fetched objects are not copied for every task.
+Zuse creates each checkout with `git worktree add`, not another `git clone`. All worktrees for a repository share its Git object database, so history and fetched objects are not copied per task. Tracked files, untracked files, dependencies, and build output are separate in every worktree.
 
-| Data | Storage behavior |
-| --- | --- |
-| Git history and objects | Shared with the registered repository |
-| Tracked working files | Checked out separately in each worktree |
-| Untracked files and build output | Separate unless you explicitly link or clean them |
-| `node_modules` | Linked from the main checkout when it exists and the detected lockfile matches exactly |
-| Included local files | Symlinked from the main checkout at the same relative path |
-| Chat attachments in `.context` | Kept with the task and preserved across archive and restore |
+By default, new worktrees are created under:
 
-This is usually much smaller than making a full clone per task, but it is not free. Large generated directories such as `.next`, `dist`, `target`, caches, virtual environments, and build artifacts still occupy space in each active worktree.
+```text
+~/.zuse/worktrees/<repository-folder>/<worktree-name>/
+```
 
-### Reuse dependencies safely
+The worktree name is a generated two-word name such as `calm-otter`, and the branch starts as `zuse/<worktree-name>`. After the chat gets its generated title, Zuse renames that branch to `zuse/<title-slug>`, as long as the worktree is still on its original branch.
 
-When the main checkout contains `node_modules` and its lockfile is byte-for-byte identical to the new checkout's lockfile, Zuse links that dependency directory into the worktree. If the lockfiles differ, or the worktree already has a non-empty `node_modules`, Zuse leaves it alone so setup can install the correct dependency graph.
+To change the location on a computer, open **Settings → General → Worktrees**, turn on **Custom worktree location**, and choose a folder. The folder must be an absolute path you can write to, outside any `.git` directory, and must not place worktrees inside the repository itself. The setting affects only new worktrees; existing chats keep their current folders. Use the reset button to return to the default location.
 
-The recognized JavaScript lockfiles are `bun.lock`, `bun.lockb`, `package-lock.json`, `pnpm-lock.yaml`, and `yarn.lock`. Zuse uses the first detected lockfile consistently; keep one package-manager lockfile authoritative in the repository.
-
-For other large dependencies, use a package manager with a shared cache and keep generated project output out of `file_include_globs`. File includes are best for small machine-local inputs such as environment files, not mutable build directories.
+If the `ZUSE_WORKTREES_DIR` environment variable is set for the Zuse host, it takes precedence. The setting then shows **Set by ZUSE_WORKTREES_DIR** and cannot be changed from the app.
 
 ## Creation lifecycle
 
-When you create a chat in a new worktree, Zuse performs these steps:
+When you send the first message of a chat in **Worktree** mode, Zuse:
 
-1. Resolves the starting revision. For a repository with `origin`, Zuse fetches the remote default branch so a new task does not silently start from a stale local branch. A local-only repository starts from its current `HEAD`.
-2. Creates a branch and checkout under `~/.zuse/<project-name>-<short-project-id>/<worktree-name>/`, unless `worktreeBaseDir` overrides the parent directory.
-3. Links reusable local files and a compatible `node_modules` directory.
-4. Runs the configured setup script from the new checkout.
-5. Makes the configured run command available, and starts it after successful setup when `auto_run_after_setup` is enabled.
+1. Resolves the base. With the default base, Zuse uses the remote's default branch (preferring `origin`), falling back to the current branch. The composer shows **Fetching latest …** while it fetches that branch from its remote.
+2. Picks the starting commit. If your local branch is behind the remote, the new worktree starts from the remote commit. A local branch that is only ahead of the remote keeps your local commits. If they have diverged, the remote wins for the remote's default branch and your local commits win for any other branch.
+3. Creates the worktree and its branch (**Creating worktree from …**).
+4. Runs the project's setup action, if one is set to run on worktree creation. Its output opens in a terminal tab named `<action name> (setup)`.
 
-Creation returns as soon as the branch and checkout exist. Setup continues in the background, and its live output and terminal state remain attached to the worktree.
+Fetching is best effort. If the remote cannot be reached within about 15 seconds, or authentication fails, the composer shows **Couldn't reach the remote · using local …** and Zuse creates the worktree from your local branch. A repository with no remote starts from the selected local ref.
 
-## Configure setup once
+If setup fails, Zuse shows an error notice and keeps the worktree. Fix the command, then run the action again from the chat's **Actions** list; you do not need to recreate the chat. See [Project actions](/projects/scripts).
 
-Put repeatable project preparation in `.zuse/settings.toml` instead of describing it in every prompt:
+## Start from a branch, pull request, or issue
 
-```toml
-file_include_globs = [
-  ".env",
-  ".env.local",
-]
+Use **Create from…** on a new chat to pick a starting point. The picker has **PRs**, **Branches**, and **Issues** tabs:
 
-[scripts]
-setup = "bun install"
-run = "bun run dev"
-archive = "rm -rf .next .cache"
-auto_run_after_setup = false
-```
-
-The setup command runs after local files are linked and uses the worktree as its current directory. Make it safe to rerun: check for prerequisites, use the repository lockfile, and avoid overwriting developer-owned files.
-
-If setup fails, Zuse keeps the checkout and its output. Fix the command or local environment, then rerun setup; you do not need to recreate the chat. See [Repository scripts](/projects/scripts/) for lifecycle variables and more examples.
-
-## Link machine-local files
-
-Ignored files in the main checkout are not normally present in a Git worktree. `file_include_globs` lets Zuse symlink selected files into each new checkout:
-
-```toml
-file_include_globs = [
-  ".env",
-  ".env.*.local",
-  "apps/*/.dev.vars",
-]
-```
-
-The source file remains in the main checkout, and the worktree receives a link at the same relative path. Existing destinations are never overwritten. Use narrow patterns because editing a linked file from any worktree edits the same source file. See [Worktree file includes](/projects/file-includes/) for matching and security guidance.
-
-## Branch and base behavior
-
-A normal new worktree gets its own branch. You can also use **Create from…** on a new chat to start from an existing branch or a pull request. Branches already checked out in a Zuse worktree are marked **In use**, and Zuse reuses that worktree instead of creating a second checkout. Choosing a GitHub issue instead attaches the issue as a Markdown file and prefills the prompt.
-
-You can rename a branch that has not been published yet from the branch menu in the top bar with **Rename current branch…**.
+- A branch or pull request prepares a checkout of that branch. Branches already checked out in a worktree are marked **In use**, and Zuse reuses that worktree instead of creating a second checkout.
+- An issue attaches the issue to the new chat as a Markdown file.
 
 The selected base determines only the starting files and history. Zuse does not keep the worktree synchronized with that base afterward. Fetch, merge, or rebase as you normally would before review, especially for a long-running task.
 
-Before asking an agent to make changes, verify the checkout when the base matters:
+When the base matters, verify the checkout before asking an agent to make changes:
 
 ```bash
 git branch --show-current
@@ -116,43 +85,40 @@ git log -1 --oneline
 
 ## Archive lifecycle
 
-Archiving a chat hides the conversation immediately, then cleans up its worktree safely in the background.
+Archiving a chat keeps its conversation and its branch. For a worktree that Zuse created and that no other active chat uses, Zuse also reclaims the checkout:
 
-1. Zuse closes terminal processes rooted in the checkout.
-2. The repository archive script runs, if configured. Use it for reproducible caches and generated output that do not need to survive.
-3. If tracked or untracked changes remain, Zuse creates an internal checkpoint commit before removing the checkout.
-4. Chat attachment data under `.context` is moved outside the checkout and retained.
-5. Zuse removes the working directory and prunes the Git worktree record.
+1. Zuse stops the chat's agents and closes terminals running in the checkout, then waits for them to exit. If a terminal does not exit within about five seconds, the checkout is kept.
+2. Zuse saves a checkpoint of the working files: tracked changes and deletions, plus untracked files that are not ignored. The checkpoint uses a private Git reference; it does not move your branch or change your index.
+3. Chat attachments in `.context` and ignored files such as `.env` are copied into private archive storage. Dependency and build directories (`node_modules`, `target`, `dist`, `build`, `.next`, `.nuxt`, `.cache`, `.turbo`, `.venv`, `venv`, `__pycache__`, `coverage`, `.gradle`) are not saved.
+4. Zuse removes the checkout with `git worktree remove`. The branch stays.
 
-If another live chat still references the same worktree, Zuse retains the checkout until every referencing chat is archived. This prevents one chat from removing files another chat is still using.
+Project folders, worktrees you created outside Zuse, and checkouts another active chat still uses stay on disk. You can still read an archived chat's saved changes, files, and history; Git actions are disabled until you unarchive it.
 
-Archiving is not the same as publishing work. Push any branch or commits you want collaborators or automation to access before archive. The checkpoint protects local recovery, but it is an internal safety mechanism rather than a replacement for a reviewed commit or pull request.
+Archiving is not the same as publishing work. Push any branch or commits you want collaborators or automation to see. The checkpoint protects local recovery; it does not replace a reviewed commit or pull request.
 
 ### What happens on restore
 
-Unarchiving recreates the checkout at its previous path and branch. If archive created a checkpoint for dirty files, Zuse removes the checkpoint commit after recreating the checkout so those files return as ordinary uncommitted changes. Preserved `.context` files and attachment paths move back into the restored checkout, and all sessions in the chat are rebound to it.
+Unarchiving recreates the checkout at its saved path and returns the saved files as unstaged changes, together with the saved `.context` and ignored files. Reinstall dependencies or run your setup action again afterward, because dependency and build directories were not saved.
 
-Setup is evaluated again after restore. A repository without a setup script is marked as skipped; otherwise follow its output just as you would for a newly created worktree.
+If the saved branch has moved on or is checked out elsewhere, Zuse restores your files in a detached checkout at the saved commit and tells you so; it does not rewind the branch. If another folder now occupies the saved path, the restore is refused.
 
 ## Keep storage predictable
 
-- Archive completed chats instead of keeping every checkout active indefinitely.
-- Put disposable build output in the archive cleanup script, but never delete source or artifacts that cannot be regenerated.
-- Keep setup deterministic so an archived checkout can be recreated from its branch and repository settings.
-- Use file includes for small local inputs, not dependency trees or build caches.
-- Commit `.zuse/settings.toml` when the setup should be shared by the team; keep secrets in ignored linked files.
+- Archive finished chats instead of keeping every checkout active indefinitely.
+- Large generated directories such as `node_modules`, `.next`, `dist`, and `target` take space in every active worktree. Use a package manager with a shared cache where you can.
+- Keep your setup action safe to rerun, so a restored worktree can be prepared the same way.
 - Push important branches before removing the original repository or changing remotes.
 
 ## Troubleshooting
 
 | Problem | What to check |
 | --- | --- |
-| Setup failed | Read setup output, run the command manually in the worktree terminal, fix the cause, then rerun setup |
-| Dependencies were installed again | Confirm the main checkout has `node_modules` and both checkouts have the same recognized lockfile |
-| A local file is missing | Add a narrow `file_include_globs` entry and rerun setup; existing destinations are intentionally not replaced |
-| A task started from unexpected code | Check the selected source, current branch, and latest commit before editing |
-| Disk usage keeps growing | Inspect per-worktree build output, configure archive cleanup, and archive finished chats |
-| Checkout remains after one chat is archived | Check whether another live chat shares the same worktree |
-| Restored files appear as uncommitted | This is expected when archive protected dirty state with a checkpoint |
+| Setup failed | Read the setup terminal output, run the command yourself in the worktree terminal, fix the cause, then run the action again |
+| A task started from unexpected code | Check the selected base, the current branch, and the latest commit. An unreachable remote makes Zuse fall back to your local branch |
+| Worktree creation says the location is inside the repository | Choose a different folder under **Settings → General → Worktrees** |
+| Disk usage keeps growing | Inspect per-worktree build output and archive finished chats |
+| The checkout remains after archiving | Another active chat may share it, a terminal may not have exited, or it is not a Zuse-created worktree |
+| Restored files appear as uncommitted | Expected: archive saved them in a checkpoint and restore returns them as unstaged changes |
+| A restored checkout is detached | The saved branch moved or is in use; your files are restored at the saved commit |
 
-For the end-to-end task flow, continue with [Run tasks in parallel with worktrees](/how-to/local-parallel-worktrees/) and [Review and commit local changes](/how-to/local-review-changes/).
+For the end-to-end task flow, continue with [Run tasks in parallel with worktrees](/how-to/local-parallel-worktrees) and [Review and commit local changes](/how-to/local-review-changes).

@@ -1,50 +1,45 @@
 ---
-title: Grok CLI
+title: Grok
 icon: logo:grok
 navTitle: "Grok"
-description: Install Grok, complete device authentication, and use ACP sessions and goals in Zuse.
+description: Install Grok, sign in, and run Grok Build sessions over ACP in Zuse.
 section: providers
-order: 34
+order: 37
 platforms: [desktop, browser, mobile]
 providers: [grok]
 prerequisites: [/start/install, /providers/setup]
 related: [/composer/modes-permissions, /composer/subagents, /reference/diagnostics]
-next: /providers/cursor
-lastVerified: latest
+next: /providers/hermes
+lastVerified: "2026-11-27"
 ---
 
-Grok runs through its local CLI and ACP transport. Zuse translates the provider's session updates into the same durable messages, tools, edits, questions, permissions, and subagent activity used by the rest of the app.
+Zuse runs xAI's Grok Build agent through your installed `grok` CLI over ACP (`grok agent stdio`). Zuse launches it without the CLI's automatic updates and without a shared leader process, so a stale background process can't wedge new sessions.
 
 ## Install and sign in
+
+Choose **Install** in **Settings → Providers & accounts**, or install it yourself:
 
 ```bash
 curl -fsSL https://x.ai/cli/install.sh | bash
 grok login
 ```
 
-Zuse requires Grok CLI `0.2.101` or newer. The provider card can launch Grok's device-auth flow; the CLI opens its supported browser authorization and Zuse waits for completion.
-
-Agent access requires an eligible Grok subscription. Zuse checks login status through `grok models`. It does not infer subscription eligibility from cached token tier numbers; the CLI enforces access when a session starts.
+`npm install -g @xai-official/grok` also works. Grok runs on your SuperGrok or X account; you can add several under **Accounts**. Set `GROK_EXECUTABLE` to use an installation Zuse doesn't find on its own.
 
 ## Workflows in Zuse
 
-- Start and resume ACP-backed sessions in the active checkout.
-- Render streaming responses, thinking, filesystem and shell tools, diffs, approvals, and errors.
-- Apply Zuse's runtime permission policy to ACP file, shell, network, and delegated actions.
-- Use Plan mode and switch back to normal execution without changing the runtime permission preset.
-- Send and manage goals through the composer.
-- Display Grok collaboration and child-agent activity in the parent timeline.
-- Use Zuse's browser and orchestration tools when the session exposes the applicable MCP transport.
+- Stream responses, thinking, file and shell tools, diffs, approvals, and errors.
+- Choose Low, Medium, or High reasoning.
+- Steer a running turn; your message is delivered at the agent's next step.
+- Discover skills from `.grok/skills`, `.claude/skills`, and `.agents/skills`.
+- Use Plan mode, **Ask for approval**, and **Full access**.
 
-## Requirements and recovery
+## Updates and recovery
 
-Grok sessions require both the `grok` CLI and Bun on the desktop service path. Bun hosts the MCP compatibility transport used by the integration.
+Update with `grok update`, or let Zuse update it from the Grok row. If startup fails:
 
-If startup fails:
+1. Run `grok version` to confirm the CLI works.
+2. Run `grok login` again if your account or plan changed.
+3. Refresh **Settings → Providers & accounts** and start a new session.
 
-1. Run `grok --version` and confirm it meets the required minimum.
-2. Run `grok login` again if the account or plan changed.
-3. Confirm `bun --version` succeeds from the same user environment.
-4. Refresh **Settings → Providers** and create a new session.
-
-Zuse attempts to resume a stored Grok session. If that provider cursor is no longer available, the driver adopts a replacement session while retaining the existing Zuse timeline. Provider-specific slash commands beyond Zuse's goal control are not added to the shared command catalog.
+If a stored Grok session can't be resumed, Zuse starts a replacement session and keeps the existing timeline.

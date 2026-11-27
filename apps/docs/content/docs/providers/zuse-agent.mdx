@@ -1,0 +1,35 @@
+---
+title: Zuse agent
+icon: Zap
+description: Run ChatGPT and SuperGrok models with your subscription in Zuse's own agent, with no CLI to install.
+section: providers
+order: 32
+platforms: [desktop, browser, mobile]
+providers: [zuse]
+prerequisites: [/providers/setup]
+related: [/composer/modes-permissions, /composer/skills-mcp, /reference/diagnostics]
+next: /providers/claude-code
+lastVerified: "2026-11-27"
+---
+
+The Zuse agent is the coding agent built into Zuse. It talks to the model provider directly, uses Zuse's native coding tools, and needs no agent CLI. It appears as **Zuse** in the model picker on macOS and Linux computers.
+
+## Connect a subscription
+
+The Zuse agent runs models from a ChatGPT or SuperGrok subscription that you connect to Zuse:
+
+- **ChatGPT** signs in through OpenAI in your browser. Eligible requests then use your ChatGPT plan, separately from any Zuse subscription.
+- **SuperGrok** uses xAI's device login: copy the code, open the verification page, and approve the login. Only approve a login you started in Zuse.
+
+A SuperGrok connection can be saved to this computer or to your Zuse account, so it can be reused locally and in cloud runtimes. ChatGPT execution stays on the computer you connected it from.
+
+When an account reaches its usage limit, the Zuse agent can switch to another connected account. Project context may then pass through a different connected ChatGPT workspace.
+
+## What it supports
+
+- Native coding tools, supervised commands, and recovery review for tools whose outcome is uncertain after an interruption.
+- Bounded child agents for delegated work.
+- Steering: messages you send during a turn are delivered at the agent's next step.
+- Skills from `.agents/skills` and `.zuse/skills` in your home folder and project.
+- MCP tools from your connected [plugins](/how-to/local-configure-mcp/).
+- Plan mode, **Ask for approval**, and **Full access**. **Approve for me** is not available for the Zuse agent.

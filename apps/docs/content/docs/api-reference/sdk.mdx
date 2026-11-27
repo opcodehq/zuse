@@ -1,0 +1,139 @@
+---
+title: "@zuse/sdk"
+icon: Package
+navTitle: "TypeScript SDK"
+description: Reference for @zuse/sdk, the typed TypeScript client for the control API.
+section: api
+order: 4
+platforms: [desktop, serve]
+providers: []
+prerequisites: [/api-reference]
+related: [/api-reference/quickstart, /api-reference/operations, /api-reference/cli]
+next: /api-reference/operations
+lastVerified: "2026-11-27"
+---
+
+`@zuse/sdk` is a typed client for the control API. It opens one authenticated WebSocket and multiplexes calls and subscriptions over it. It needs Node.js 22 or newer, or any runtime with a compatible `WebSocket`.
+
+Packaged Zuse apps ship the SDK as a tarball beside the `zuse-control` binary, under `~/.zuse/control/<version>/sdk.tgz`. If you install it globally with npm, the app keeps that global install up to date.
+
+## createZuseClient
+
+```ts
+import { createZuseClient } from '@zuse/sdk';
+
+const zuse = createZuseClient({
+  endpoint: 'wss://workspace.example/api/control',
+  token: process.env.ZUSE_CONTROL_TOKEN!,
+});
+```
+
+| Option | Type | Meaning |
+| --- | --- | --- |
+| `endpoint` | `string` | `wss://` URL, or `ws://` on `localhost`, `127.0.0.1`, or `[::1]`. No credentials, query, or fragment. |
+| `token` | `string` | Control token, for example from the [discovery file](/api-reference#discovery-file). Required. |
+| `webSocket` | `typeof WebSocket` | Optional constructor for tests or runtimes without a global `WebSocket`. |
+
+The client starts connecting right away. Invalid endpoints and a missing token throw a `ZuseError` immediately.
+
+## Client methods
+
+### info
+
+```ts
+const info = await zuse.info();
+```
+
+Calls `ControlInfo` and returns it. Throws `ZuseError` with code `unsupported` if `info.apiVersion` isn't the SDK's `API_VERSION` (`1`).
+
+### call
+
+```ts
+const result = await zuse.call(method, params, { signal, targetDeviceId });
+```
+
+Runs one operation and resolves with its result. `method` is typed as `ControlMethod`, the operation catalog. `params` defaults to `{}`.
+
+### watch
+
+```ts
+for await (const value of zuse.watch('WatchChats', {})) {
+  console.log(value);
+}
+```
+
+Returns an async iterator for a subscription. Breaking out of the loop, or aborting its `signal`, cancels the subscription on the engine. Calling `watch` on an operation that isn't a subscription throws `unsupported`.
+
+The client buffers up to 256 unread values. If you fall further behind, the iterator throws `overflow`; subscribe again to get a fresh snapshot.
+
+### close
+
+```ts
+zuse.close();
+```
+
+Closes the connection. Pending requests fail with `transport`.
+
+## Request options
+
+Every method accepts an optional last argument:
+
+| Option | Meaning |
+| --- | --- |
+| `signal` | `AbortSignal` that cancels the request. The SDK tells the engine to stop and rejects with `cancelled`. |
+| `targetDeviceId` | Runs the operation on another of your devices. The engine forwards it to that device. |
+
+## Zapper helpers
+
+`zuse.zappers` wraps the Zapper operations with types:
+
+| Helper | Operation | Returns |
+| --- | --- | --- |
+| `watch(options?)` | `WatchZappers` | Async iterator of `Zapper[]` |
+| `command(command, options?)` | `ZapperCommand` | `Zapper \| null` |
+| `files(zapperId, history = false, options?)` | `ZapperFiles` | `ZapperFile[]` |
+| `events(zapperId, options?)` | `ZapperEvents` | `ZapperEvent[]` |
+| `issue(zapperId, issueId, options?)` | `ZapperIssue` | `ZapperIssue` |
+| `acknowledge(zapperId, eventIds, options?)` | `AckZapperEvents` | Operation result |
+
+```ts
+await zuse.zappers.command({
+  commandId: crypto.randomUUID(),
+  zapperId: 'release',
+  expectedRevision: null,
+  action: { type: 'setStatus', status: 'paused' },
+});
+```
+
+See [Zapper commands](/api-reference/operations#zapper-commands) for every action.
+
+## Types
+
+The SDK exports TypeScript types generated from the engine's Rust definitions, including `ControlInfo`, `ControlMethod`, `Zapper`, `ZapperConfig`, `ZapperCommand`, `ZapperAction`, `ZapperFile`, `ZapperEvent`, `ZapperIssue`, and `Json`. It also exports the constants `API_VERSION` and `METHODS`.
+
+## Errors
+
+Every failure is a `ZuseError` with a stable `code`:
+
+| Code | When |
+| --- | --- |
+| `unauthorized` | The token is missing or the engine rejected it. |
+| `unsupported` | The engine doesn't support the operation or capability, the API version doesn't match, or you called `watch` on a non-subscription. |
+| `transport` | Invalid endpoint, connection failure, or the connection closed. |
+| `cancelled` | You aborted the request. |
+| `overflow` | A subscription fell more than 256 values behind. |
+| `operation` | The operation itself failed. `message` has the engine's error. |
+
+```ts
+import { ZuseError } from '@zuse/sdk';
+
+try {
+  await zuse.call('ZapperFiles', { zapperId: 'release' });
+} catch (error) {
+  if (error instanceof ZuseError && error.code === 'transport') {
+    // Reconnect, check the current state, then decide whether to retry.
+  }
+}
+```
+
+The SDK never resends a request after a disconnect. For `ZapperCommand`, retry with the same `commandId` and identical input; the engine returns the original result instead of applying it twice.

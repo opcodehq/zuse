@@ -1,79 +1,67 @@
 ---
-title: "Open Zuse in a local browser"
+title: "Open Zuse in a browser on another device"
 icon: Laptop
-navTitle: "Open in a local browser"
-description: "Turn on local network access, redeem a one-time link, verify the session, and revoke it safely."
+navTitle: "Open in a browser"
+description: "Turn on network access, open a one-time browser link, verify the session, and revoke it."
 section: how-to
 order: 20
-platforms: [desktop, browser]
+platforms: [desktop, browser, serve]
 providers: []
 prerequisites: [/remote/local-browser]
-related: [/remote/security, /how-to/remote-connect-device, /how-to/remote-recover-connection]
-next: /remote/local-browser
-lastVerified: latest
+related: [/remote/web-client, /remote/security, /how-to/remote-recover-connection]
+next: /remote/web-client
+lastVerified: "2026-11-27"
 ---
 
-Authorize one browser on the Mac's local network without exposing an unauthenticated server or signing in to hosted access.
+Open a computer's Zuse workspace in a browser on another device, without a Zuse account.
 
 ## Applicability
 
-Use this guide when the browser can reach the Mac over the current network. Use [hosted remote access](/how-to/remote-hosted-access/) when the browser is away from that network.
+Use this guide when the browser's device can reach the computer over the same network or your tailnet. To reach it from anywhere, see [Reach a computer away from its network](/how-to/remote-hosted-access/).
 
 ## Prerequisites
 
-- Zuse is open on the Mac that owns the environment.
-- The target browser is on a network that permits device-to-device traffic.
-- You can restart Zuse if local network access is currently off.
+- Zuse is open on the computer, or `zuse serve` is running there.
+- You can open a terminal on the computer.
+- Both devices are on a network that allows device-to-device traffic, or on the same tailnet.
 
 ## Steps
 
-1. In the desktop app, open **Settings → Remote access**.
+1. On the computer, open **Settings → Remote access** and turn on **Wi-Fi** or **Tailscale**. On a headless computer, start `zuse serve --lan` instead.
+2. Optional: for an address browsers trust without a warning, open **Advanced settings** and turn on **Tailscale HTTPS** (or start `zuse serve --lan --tailscale-serve`).
+3. In a terminal on the computer, run:
 
-2. Under **Connections**, find **Local network**. If it is not already available, choose **Turn on**.
+   ```sh
+   zuse pair --label "Work laptop"
+   ```
 
-3. Confirm **Restart and turn on**.
-
-   Enabling the listener restarts Zuse and stops running agents. Reopen **Settings → Remote access** after the app returns. **Local network** then shows **Available on this network** with its address.
-
-4. Under **Connect another device**, choose **Create link**. In **Connect through**, choose **Local network**.
-
-   Zuse displays a one-time link and a short pairing code. The link expires after five minutes.
-
-5. Choose **Copy link** and open it in the target browser, or choose **Show QR** and scan the code. If the browser asks for a code, choose **Copy code** or read the **Pairing code**.
-
-6. Let the browser finish authorization and load the environment.
-
-   Do not send the link through an untrusted service or open it in a shared browser. Treat the unredeemed link like a temporary password.
+4. Copy the **Browser** link and open it on the other device. Send it only through a channel you trust; it works once and expires after ten minutes.
+5. If the browser warns about the certificate, continue only if you trust the network.
 
 ## Verification
 
-Confirm that the browser shows the same projects and chats as the Mac. Then return to **Settings → Remote access** on the Mac and verify the browser appears under **Connected devices**, with its label and last-connected time.
-
-The one-time link may now expire without ending the authorized browser session. The browser's device credential remains valid until you revoke it or disable local access.
+- The browser shows the same projects and chats as the computer.
+- On the computer, the browser appears under **Devices** in **Settings → Remote access** with the label you chose.
+- Reloading the browser reopens the computer without a new link.
 
 ## Revoke the browser
 
-1. Open **Settings → Remote access** on the Mac.
-2. Find the browser under **Connected devices**.
-3. Choose **Revoke**.
-4. Reload the browser and confirm it shows **Pair this browser**.
-
-Use **Revoke all** for the grouped **Older device access** credentials created by versions that cannot identify clients individually.
+1. On the computer, open **Settings → Remote access**.
+2. Find the browser under **Devices** and choose **Revoke**.
+3. The browser can no longer connect, even though it still has the computer saved.
 
 ## Troubleshooting and recovery
 
-### The link expired
+### zuse pair says the link only works on this computer
 
-Choose **New link**, or **Create link** again. Old links are not renewable.
+No route is on. Turn on **Wi-Fi** or **Tailscale**, or restart `zuse serve` with `--lan`, then run `zuse pair` again.
 
-### The browser says the versions do not match
+### No Zuse server is running
 
-Update the environment, then reload the page. Incompatible clients are blocked instead of connecting with a partial protocol.
+`zuse pair` needs a running engine. Open the desktop app or start `zuse serve`. If it uses another port, pass `--ipc-port`.
 
-### The browser cannot reach Zuse
+### The browser cannot reach the computer
 
-Confirm the Mac is awake, Zuse is open, and **Local network** shows **Available on this network**. Guest and corporate Wi-Fi often isolate clients; move both devices to a trusted network if necessary.
+Confirm the computer is awake and both devices are on a network that allows device-to-device traffic. Guest and office Wi-Fi often do not; use Tailscale instead.
 
-### Authorization expired after a working session
-
-Revoke any stale entry, create a new link, and authorize the browser again. See [connection recovery](/how-to/remote-recover-connection/) for the error-state decision tree.
+See [connection recovery](/how-to/remote-recover-connection/) for later disconnects.

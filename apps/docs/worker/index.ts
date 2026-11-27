@@ -10,7 +10,23 @@ const llmUserAgent =
 const redirects: Record<string, string> = {
 	"/": "/start",
 	"/providers/gemini": "/providers/acp#gemini-cli",
+	"/remote-access-redesign": "/remote",
+	"/reference/bundled-skill": "/composer/skills-mcp",
+	"/projects/file-includes": "/projects/worktrees",
+	"/serve/status-json": "/serve/command-reference",
+	"/mobile/offline-notifications": "/mobile",
+	"/how-to/custom-boxd-snapshot": "/how-to/choose-cloud-provider",
+	"/api-reference/webhook-signatures": "/api-reference",
 };
+
+const retiredPrefixes = [
+	"/api-reference/workspaces/",
+	"/api-reference/messages/",
+	"/api-reference/webhooks/",
+	"/api-reference/attachments/",
+	"/api-reference/projects/",
+	"/api-reference/providers/",
+];
 
 /** The exported Markdown file behind a request, or undefined to serve the page itself. */
 function markdownAsset(request: Request, pathname: string) {
@@ -27,7 +43,11 @@ function markdownAsset(request: Request, pathname: string) {
 export default {
 	async fetch(request: Request, env: Env): Promise<Response> {
 		const url = new URL(request.url);
-		const redirect = redirects[url.pathname];
+		const redirect =
+			redirects[url.pathname] ??
+			(retiredPrefixes.some((prefix) => url.pathname.startsWith(prefix))
+				? "/api-reference"
+				: undefined);
 		if (redirect) return Response.redirect(new URL(redirect, url).toString(), 308);
 
 		const asset = markdownAsset(request, url.pathname);

@@ -9,13 +9,15 @@ providers: []
 prerequisites: [/start/first-chat]
 related: [/workspace/files-editor, /workspace/terminal-browser, /workspace/browser, /workspace/changes-pull-requests]
 next: /workspace/files-editor
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
 
-Every workspace surface follows the active chat environment. If the chat owns a worktree, its file tree, editor, terminal, changes, and pull-request state all point to that checkout.
+Every workspace surface follows the active chat. If the chat owns a worktree, its file tree, editor, terminals, change review, and pull request all point to that checkout.
 
-- [Files and editor](/workspace/files-editor) — browse, preview, edit, and save.
-- [Terminal](/workspace/terminal-browser) — run project commands in the active checkout.
-- [In-app browser](/workspace/browser) — inspect, debug, annotate, and verify the running app with an agent.
-- [Changes and pull requests](/workspace/changes-pull-requests) — review and ship the branch.
+The workspace pane sits beside the conversation. Open a surface from its **+** menu, or from the launcher an empty pane shows: **Browser**, **Terminal**, **Files**, **Diff**, and **PR** when the branch has a pull request. The **+** menu also offers **History** for the commit graph. Each chat keeps its own tabs, and `⌘⌥B` (`Ctrl+Alt+B` on Windows and Linux) shows or hides the pane.
+
+- [Files and editor](/workspace/files-editor): browse, preview, edit, and save.
+- [Terminal](/workspace/terminal-browser): run project commands in the active checkout.
+- [In-app browser](/workspace/browser): preview your app, inspect it, and mark it up for the agent.
+- [Changes and pull requests](/workspace/changes-pull-requests): review, commit, and ship the branch.

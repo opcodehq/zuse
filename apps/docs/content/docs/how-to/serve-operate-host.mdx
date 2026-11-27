@@ -1,136 +1,103 @@
 ---
-title: "Operate a Zuse Serve host"
+title: "Set up a headless Zuse host"
 icon: Server
-navTitle: "Operate a Serve host"
-description: "Install, verify, update, stop, sign out, and uninstall a durable Serve environment safely."
+navTitle: "Set up a headless host"
+description: "Install the zuse command on a server, keep zuse serve running as a service, pair devices, update it, and remove it."
 section: how-to
 order: 40
 platforms: [serve, browser, mobile]
-providers: [claude, codex, grok, opencode, kiro, pi]
+providers: []
 prerequisites: [/serve]
-related: [/serve/operations, /serve/status-json, /serve/security, /how-to/remote-hosted-access]
+related: [/serve/operations, /serve/command-reference, /serve/security, /how-to/remote-hosted-access]
 next: /serve/operations
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
-Set up and operate a Mac or Linux computer as a durable Zuse environment while preserving its workspaces through lifecycle changes.
+Turn a Linux or macOS machine without a display into a Zuse computer you reach from your phone, browser, or desktop app.
 
 ## Applicability
 
-Use this guide on macOS or Linux. Durable Linux operation requires a systemd user session. Without a supported user service manager, Serve stops with an error instead of installing; you can still run it explicitly with `--foreground` for a temporary session that ends when its terminal closes.
+Use this guide for a home server, a spare Mac, or a VM. `zuse daemon` supports macOS (launchd) and Linux (systemd user services). On Windows, run `zuse serve` from the portable archive without a service.
 
 ## Prerequisites
 
-- Node.js 22.13.0 or newer and npm.
-- A browser for account authorization.
-- At least one supported provider CLI installed and authenticated for the same operating-system user.
-- Repositories already present and readable by that user.
+- Python 3.11 or newer, for the installer and updates.
+- At least one agent CLI installed and signed in for the user that will run Zuse.
+- Repositories cloned and readable by that user.
+- On Linux, a working systemd user session (`systemctl --user show-environment` succeeds).
 
 ## Steps
 
-### Install and start
-
-1. Run the installless entry point:
+1. Download `install.sh` from the latest [release](https://github.com/opcodehq/zuse/releases) and install the standalone command:
 
    ```sh
-   npx @zusehq/serve
+   sh install.sh --cli --version 0.27.9
    ```
 
-2. Open the printed authorization URL and enter the device code if requested.
+   This installs `zuse` and the browser app in your home directory, with a launcher in `~/.local/bin`.
 
-3. Wait for **Zuse Serve is ready**.
-
-   On macOS, Serve installs a user LaunchAgent. On Linux with a systemd user session, it installs a user service. If neither service path is available, it stops and tells you to run with `--foreground` explicitly.
-
-4. Install the operator command if you want to use the shorter `zuse serve` form in later steps:
+2. Try it in the foreground:
 
    ```sh
-   npm install --global @zusehq/serve
+   zuse serve --lan
    ```
 
-   You can stay installless instead by replacing each `zuse serve` command below with `npx @zusehq/serve`.
+   Serve prints the routes it offers and a pairing link with a QR code. Stop it with Ctrl+C.
 
-5. Open [code.zuse.sh](https://code.zuse.sh) with the same account and choose the computer.
+3. Install it as a service with the options you want:
+
+   ```sh
+   zuse daemon install --serve --lan
+   ```
+
+   Add `--tailscale-serve` for a trusted browser address on your tailnet, or `--account` to link the computer to your Zuse account.
+
+4. Pair a device:
+
+   ```sh
+   zuse pair --app
+   ```
+
+   Scan the QR code with the Zuse app, or run `zuse pair` and open the **Browser** link on another device.
 
 ## Verification
 
-Run:
-
 ```sh
-zuse serve status
-zuse serve status --json
+zuse daemon status
+zuse status
 ```
 
-A ready hosted environment reports:
+The service is running, `zuse status` reports a running engine, and its **Remote access** section lists your network routes (and the linked computer, if you used `--account`). The paired device shows the server's projects.
 
-- `service: "running"`;
-- `reachable: true`;
-- `tunnel: "configured"`; and
-- a non-null `environmentId`.
-
-The `agents` array lists supported CLIs that completed a short `--version` probe. An empty array does not mean Serve itself is down.
-
-## Stop and start
-
-Stop the service without revoking its account link:
+## Update
 
 ```sh
-zuse serve stop
+zuse update
+zuse daemon restart
 ```
 
-Start it again:
+`update` installs the new command and browser app; the service uses them after it restarts. Finish or stop active agent work first. Previous versions and the data directory are kept.
+
+## Remove it
 
 ```sh
-zuse serve start
+zuse unlink
+zuse daemon uninstall
+sh install.sh --cli --uninstall
 ```
 
-Use `zuse serve start --foreground` only when you intentionally want the environment tied to the current terminal.
-
-## Update safely
-
-1. Finish or stop active agents and terminals.
-2. Run:
-
-   ```sh
-   zuse serve update --force
-   ```
-
-3. Run `zuse serve status --json` and verify `reachable` is `true`.
-
-Serve installs the new runtime, switches the service, and checks readiness. If readiness fails and a previous runtime exists, it restores that runtime and reports the rollback. The `--force` flag confirms you selected a safe interruption window; it is not an automatic active-work check.
-
-## Sign out or uninstall
-
-Use logout to revoke the computer and clear its Serve account session:
-
-```sh
-zuse serve logout
-```
-
-Use uninstall to remove the user service definition and managed runtime:
-
-```sh
-zuse serve uninstall
-```
-
-Uninstall preserves repositories and workspaces. Run logout before uninstall when you also need to revoke the hosted registration.
+Run `zuse unlink` first only if you linked the computer to your account. Uninstalling removes the service and launchers; repositories and the data directory (`~/.zuse-native`) stay.
 
 ## Troubleshooting and recovery
 
-### The service is running but not reachable
+### No agents appear on the paired device
 
-Wait briefly, check status again, then inspect the `logs` directory under the effective data directory. Confirm no other process occupies the local port.
+The service only sees the `PATH` captured when you ran `zuse daemon install`. Make sure the agent CLI works for that user, then reinstall the service.
 
-### No agents are detected
+### The service does not start
 
-Run each provider's `--version` command as the Serve user. Ensure the CLI is on the background service's path, not only configured in an interactive shell profile.
+On Linux, read `journalctl --user -u zuse.service`. On macOS, read `daemon.log` in the data directory. See [Serve troubleshooting](/serve/troubleshooting/) for specific errors.
 
-### Linux reports that systemd user services are unavailable
+### The pairing link only works on this computer
 
-Confirm `systemctl --user show-environment` succeeds for the Serve user. Without a systemd user session, durable background installation is unavailable; use `zuse serve start --foreground` only for a temporary session.
-
-### A custom data directory appears empty
-
-Pass the same `--data-dir <path>` to every lifecycle command. A status check against the default directory cannot inspect a service installed elsewhere.
-
-See the [Serve command reference](/serve/command-reference/) for valid flag combinations and [Serve troubleshooting](/serve/troubleshooting/) for field-level diagnosis.
+You started Serve without a route. Reinstall the service with `--lan` or `--account`.

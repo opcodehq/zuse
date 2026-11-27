@@ -11,122 +11,63 @@ providers: [claude, codex, grok, cursor, opencode, kiro, pi]
 prerequisites: []
 related: []
 next: /start/install
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
 import {
 	BookBookmark,
 	Boxes,
+	GitBranch,
+	GitPullRequest,
 	Globe,
 	ListChecks,
 	MessageSquarePlus,
 	Monitor,
 	Network,
+	PanelsTopLeft,
+	Plug,
 	Server,
 	ShieldHalf,
 	Smartphone,
+	SlidersHorizontal,
 } from "lucide-react";
-
-<Screenshot
-	src="/screenshots/workspace.webp"
-	width={2400}
-	height={1500}
-	alt="The Zuse desktop app with projects in the sidebar, an agent's finished task, and its changes ready to commit"
-	art="observatory"
-	priority
-/>
 
 ## Use Zuse from anywhere
 
 <Cards className="cards-4">
-	<Card icon={<Monitor />} title="Desktop" description="The full app for macOS and Linux" href="/desktop" />
-	<Card icon={<Globe />} title="Browser" description="Reach your environment from any browser" href="/remote/local-browser" />
-	<Card icon={<Smartphone />} title="iPhone" description="Follow and steer agents on the go" href="/mobile" />
+	<Card icon={<Monitor />} title="Desktop" description="The full app for macOS, Windows, and Linux" href="/desktop" />
+	<Card icon={<Globe />} title="Browser" description="Reach your computer from any browser" href="/remote/local-browser" />
+	<Card icon={<Smartphone />} title="Phone" description="Follow and steer agents on the go" href="/mobile" />
 	<Card icon={<Server />} title="Serve" description="Turn a Mac or Linux box into a host" href="/serve" />
 </Cards>
 
 ## What Zuse handles
 
-<FeatureGrid>
-	<Feature
-		href="/projects/worktrees"
-		src="/screenshots/worktrees.webp"
-		width={1600}
-		height={1000}
-		alt="The composer's Workspace menu offering a fresh worktree or the main checkout"
-		art="pegasus"
-		title="Parallel worktrees"
-		caption="Give each task its own Git checkout so agents never edit over each other."
-	/>
-	<Feature
-		href="/composer"
-		src="/screenshots/composer.webp"
-		width={1600}
-		height={1000}
-		alt="The model picker open over the composer, listing Claude Code models"
-		art="handoff"
-		title="Composer"
-		caption="Choose the agent, model, reasoning, and permissions for every turn."
-	/>
-	<Feature
-		href="/workspace/changes-pull-requests"
-		src="/screenshots/changes.webp"
-		width={1600}
-		height={1000}
-		alt="A side-by-side diff of an agent's edit in the Review tab"
-		art="observatory"
-		title="Changes and pull requests"
-		caption="Review the diff, commit, push, and follow checks without leaving the task."
-	/>
-	<Feature
-		href="/workspace"
-		src="/screenshots/terminal.webp"
-		width={1600}
-		height={1000}
-		alt="The editor, file tree, and terminal open on the same checkout"
-		art="handoff"
-		title="Files and terminal"
-		caption="Browse, edit, and run the checkout the agent is working in."
-	/>
-	<Feature
-		href="/providers/setup"
-		src="/screenshots/providers.webp"
-		width={1600}
-		height={1000}
-		alt="Provider settings listing Claude Code, Codex, Grok, Cursor, OpenCode, Kiro, and Pi"
-		art="pegasus"
-		title="Every major agent"
-		caption="See which agents are installed and signed in, and switch any of them on."
-	/>
-	<Feature
-		href="/projects/scripts"
-		src="/screenshots/scripts.webp"
-		width={1600}
-		height={1000}
-		alt="Repository settings with setup and run scripts"
-		art="observatory"
-		title="Repository scripts"
-		caption="Set up, run, and clean up every new worktree the same way."
-	/>
-</FeatureGrid>
+<Cards>
+	<Card icon={<GitBranch />} title="Parallel worktrees" description="Give each task its own Git checkout so agents never edit over each other" href="/projects/worktrees" />
+	<Card icon={<SlidersHorizontal />} title="Composer" description="Choose the agent, model, reasoning, and access for every chat" href="/composer" />
+	<Card icon={<GitPullRequest />} title="Changes and pull requests" description="Review the diff, commit, push, and follow checks without leaving the chat" href="/workspace/changes-pull-requests" />
+	<Card icon={<PanelsTopLeft />} title="Files, terminal, and browser" description="Browse, edit, and run the checkout the agent is working in" href="/workspace" />
+	<Card icon={<Plug />} title="Every major agent" description="See which agents are installed and signed in, and switch between them" href="/providers/setup" />
+	<Card icon={<Network />} title="Subagents" description="Split bounded work across agents" href="/composer/subagents" />
+</Cards>
 
 ## The shortest path
 
 1. [Install Zuse](/start/install) and open it.
-2. Connect at least one supported provider.
+2. Connect at least one supported agent.
 3. Open a Git repository as a project.
-4. Start a chat, choose its environment and permission mode, then describe the outcome you want.
-5. Review the agent's edits in **Changes**, run the project, and commit or open a pull request when the work is ready.
+4. Start a chat, choose its workspace and access, then describe the outcome you want.
+5. Review the agent's edits in the **Diff** panel, run the project, and commit or open a pull request when the work is ready.
 
-Zuse keeps the project, chat, message, and tool timeline on your computer. Closing the window does not turn a finished conversation into disposable terminal output.
+Zuse keeps your projects, chats, and their full history on your computer. Closing the window does not turn a finished conversation into disposable terminal output.
 
 ## Keep going
 
 <Cards>
 	<Card icon={<MessageSquarePlus />} title="Create your first chat" description="Start a task and follow the agent's work" href="/start/first-chat" />
-	<Card icon={<Boxes />} title="Core concepts" description="Projects, chats, sessions, and worktrees" href="/concepts/project-chat-session" />
+	<Card icon={<Boxes />} title="Core concepts" description="Projects, threads, conversations, and worktrees" href="/concepts/project-chat-session" />
 	<Card icon={<ShieldHalf />} title="Modes and permissions" description="Choose how much an agent can do on its own" href="/composer/modes-permissions" />
-	<Card icon={<Network />} title="Subagents" description="Split bounded work across agents" href="/composer/subagents" />
 	<Card icon={<ListChecks />} title="How-to guides" description="Step-by-step recipes for common tasks" href="/how-to" />
-	<Card icon={<BookBookmark />} title="Reference" description="Settings, keybindings, and schemas" href="/reference" />
+	<Card icon={<BookBookmark />} title="Reference" description="Settings, keyboard shortcuts, and troubleshooting" href="/reference" />
 </Cards>

@@ -4,21 +4,21 @@ icon: Activity
 navTitle: "Monitor and recover"
 description: Check delegated progress, steer work without thrashing it, and preserve partial results after failure.
 section: composer
-order: 56
+order: 57
 platforms: [desktop, browser, mobile]
-providers: [claude, codex, grok]
+providers: [zuse, claude, codex, cursor, devin, grok, hermes, kiro, muse, opencode, pi, omp, antigravity]
 prerequisites: [/composer/orchestration]
 related: [/how-to/local-recover-task, /workspace/changes-pull-requests, /reference/diagnostics]
-next: /workspace/changes-pull-requests
-lastVerified: latest
+next: /composer/zappers
+lastVerified: "2026-11-27"
 ---
 
 
-Delegated work stays useful when you can see its state and change direction without replacing its context. Zuse keeps each delegated task or session navigable, and the parent can request recent progress or send an attributed follow-up.
+Delegated work stays useful when you can see its state and change direction without replacing its context. Zuse keeps each delegated chat navigable, and the coordinating agent can read recent progress or send an attributed follow-up.
 
 ## Read the right signal
 
-Use the parent timeline's **Open chat** action to inspect a created task or session tab. In the target, check the current messages, environment indicator, **Changes**, and terminal output. For provider subagents, open the agent row or **Subagents** panel to see active and completed work when those details are available.
+Open a delegated chat from the sidebar to inspect it directly. In the target, check the current messages, environment, **Changes**, and terminal output. For provider subagents, open the subagent's chip in the side pane, or use **Open agent** in the background work row.
 
 Status alone is not proof. A task can be idle after a successful result, after a question, or after stopping at an error. Read its most recent conclusion and verify the repository state it refers to.
 
@@ -55,7 +55,7 @@ Preserve the task while you classify the stop:
 - Retry or continue the existing chat after a provider or connection failure.
 - Fix and rerun environment setup if the worktree exists but setup failed.
 - Use a focused follow-up when implementation or a test failed.
-- Add a new session tab when another provider should take over the same files.
+- Open another conversation in the same chat when another agent should take over the same files.
 - Move remaining work to an isolated task when the checkout or ownership is wrong.
 
 Give a replacement session a state-aware handoff:

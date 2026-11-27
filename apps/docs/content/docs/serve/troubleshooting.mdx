@@ -2,84 +2,59 @@
 title: "Serve troubleshooting"
 icon: LifeBuoy
 navTitle: "Troubleshooting"
-description: "Recover failed installation, authorization, service startup, tunnel, provider detection, and update rollback."
+description: "Fix zuse serve startup errors, missing browser files, unreachable links, account linking, and background service problems."
 section: "Serve CLI"
-order: 6
+order: 5
 platforms: [serve, web, mobile]
 providers: []
 prerequisites: [/serve]
-related: [/serve/status-json, /serve/operations, /remote/recovery, /serve/security]
-next: /remote/recovery
-lastVerified: latest
+related: [/serve/operations, /remote/recovery, /serve/security]
+next: /serve/agent-cli
+lastVerified: "2026-11-27"
 ---
 
-
-Start with a fresh status report against the same data directory used at installation:
-
-```sh
-zuse serve status
-zuse serve status --json
-```
-
-The JSON form is useful when asking for help because it separates service state from local reachability and account-link state. Review paths and environment identifiers before sharing it publicly.
-
-## The service is missing
-
-`service: "missing"` means no Serve service definition is installed for this operating-system user. Run:
+Start with a status report:
 
 ```sh
-zuse serve start
+zuse status
 ```
 
-If you originally used `--data-dir`, include the exact same path. A status check against another directory reads that directory's saved port and account link, so its `reachable`, `tunnel`, and `environmentId` values can be misleading.
+It shows whether an engine is running for the data directory, which account and linked computer it uses, and which network routes it offers.
 
-## The service is stopped
+## "No Zuse server is running on agent port …"
 
-Run `zuse serve start` to refresh and start the durable service. Repeat any access options, such as `--tailscale` or `--port`, that you used before. On Linux, confirm the user has a working systemd user session (`systemctl --user show-environment` succeeds). Without one, `start` fails; use `zuse serve start --foreground` for a temporary session and keep that terminal open.
+`zuse pair`, `link`, and `unlink` talk to a running engine on the loopback port. Start `zuse serve` (or the desktop app) first. If the engine uses another port, pass the same `--ipc-port` to both commands.
 
-## Running but not reachable
+## "Browser files were not found"
 
-When `service` is `running` and `reachable` is false:
+Serve could not find the browser app next to its executable. Browsers cannot open the server until you pass `--assets <dir>` or set `ZUSE_WEB_ASSETS`. The `zuse-cli` archive and the desktop packages include these files; a bare binary copied on its own does not.
 
-1. Wait briefly and run status again after startup.
-2. Inspect the service logs. On macOS, they are `serve.log` and `serve.error.log` in the data directory's `logs` folder. On Linux, the service writes to the systemd journal: `journalctl --user -u zuse-serve.service`.
-3. Check whether another process is using the configured local port.
-4. Stop and start the service during a safe work window.
-5. Confirm the runtime uses Node.js 22.13.0 or newer.
+## "This profile is already running"
 
-Serve probes `127.0.0.1` on the port saved by `start --port`, or `4859` by default. If you rely on `ZUSE_PORT` instead, use the same environment when checking status.
+Another Zuse process, such as the desktop app or a service, owns the same data directory. Plain `zuse serve` reuses that engine and prints its browser link. Remote-access flags like `--lan`, `--account`, `--relay-origin`, or `--token` cannot be applied to a running engine: turn those options on in its **Settings → Remote access**, stop it, or use a separate `--data-dir`.
 
-## Authorization does not finish
+## "Non-loopback listening requires …"
 
-- Open the printed verification URL manually if no browser launched.
-- Enter the displayed device code before it expires.
-- Confirm the computer can reach the identity and api services.
-- Run the start command again to request a fresh grant.
-- If start reports that the background host did not become reachable, run `zuse serve status --json` and follow [Running but not reachable](#running-but-not-reachable).
+`--listen` on an address other than loopback needs HTTPS: pass `--tls-cert` and `--tls-key`, or `--public-origin` for an HTTPS reverse proxy. To reach the computer on your network without your own certificate, use `--lan` instead.
 
-Set `ZUSE_NO_OPEN=1` only when you intentionally do not want Serve to launch a browser; the URL and code are still printed.
+## "Could not bind the agent RPC port"
 
-## The computer is not in the hosted app
+Another process uses the engine port. Choose another `--ipc-port`, or `0` to let Serve pick one.
 
-Check `environmentId`, `tunnel`, and `reachable` together. The environment should have a non-null ID, a configured tunnel, and local reachability. A computer started with `--no-account` or `--ssh-managed` is never linked to your account. Then confirm the hosted browser or phone uses the same account. If the registration was removed, run `zuse serve logout` to clear stale local state, then start and authorize again.
+## The pairing link only works on this computer
 
-If logout reports that the account authorization is missing, the local registration still exists but the saved sign-in does not. Run `zuse serve start` to sign in again, then retry `zuse serve logout`.
+`zuse pair` prints "This link only works on this computer" when no other device can reach the engine. Start `zuse serve` with `--lan` or `--account`, or turn on **Wi-Fi** or **Tailscale** in the desktop app's **Settings → Remote access**, then create a new link.
 
-## No agents detected
+## The browser warns about the certificate
 
-Serve probes supported executables using their `--version` command with a 2-second timeout. An empty list means none completed successfully in the environment of the user running the command.
+Links on the local network use a certificate generated for this computer, so the browser warns the first time. Continue only on a network you trust. Addresses from earlier networks stay on the certificate, so returning to a known network does not repeat the warning. Use `--tailscale-serve` for an address browsers trust.
 
-- Install the provider CLI for the same operating-system user that runs Serve.
-- Authenticate it as that user.
-- Ensure its executable directory is available to the background service, not only an interactive shell profile.
-- Run the provider's `--version` command as that user, then check Serve status again.
+## Account sign-in does not finish
 
-## An update failed
+Open the printed address on any device and confirm the code before it expires. Run `zuse link` (or `zuse serve --account`) again for a new code.
 
-If the new runtime fails readiness and a previous runtime exists, Serve restores the previous runtime and reports that rollback. Run status to confirm reachability. If no previous runtime was available, start a known working package version, for example `npx @zusehq/serve@<version> start`; `start` installs the runtime version of the package that runs it.
+## The service does not start or cannot find an agent
 
-Do not repeatedly force updates while agents are active. Preserve logs from the failed attempt before another install changes them.
+Run `zuse daemon status`, then read the log: `daemon.log` in the data directory on macOS, or `journalctl --user -u zuse.service` on Linux. On Linux, the user needs a working systemd user session. The service only sees the `PATH` captured when you ran `zuse daemon install`; reinstall it after you install an agent CLI in a new location.
 
-## Uninstall did not delete a workspace
-
-That is intentional. `zuse serve uninstall` removes the service definition and managed runtime, not repositories or workspaces. Delete project data only through your normal repository and backup workflow after you have verified the exact target.
+<NextStep href="/serve/agent-cli/" label="Script Zuse from the command line" />
