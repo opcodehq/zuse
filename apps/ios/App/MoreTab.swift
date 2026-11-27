@@ -12,7 +12,10 @@ struct MoreView: View {
   /// The wide layout's settings list: its pages open beside it, and Issues and Computers
   /// have their own places in the sidebar.
   var selection: Binding<MoreRoute?>?
+  /// iPad floats "Ask anything" over the bottom of the page, ready to start a chat.
+  var ask: (() -> Void)?
   @Environment(\.openURL) private var openURL
+  @Environment(\.tabletLists) private var tablet
   @AppStorage("native.appearance") private var appearance = "system"
   private var version: String {
     let info = Bundle.main.infoDictionary
@@ -38,7 +41,12 @@ struct MoreView: View {
         List { rows }
       }
     }
+    // iPad's full-width sections take taller rows.
+    .environment(\.defaultMinListRowHeight, tablet ? 52 : 44)
     .settingsList()
+    .safeAreaInset(edge: .bottom) {
+      if let ask { TabletAskPill(ask: ask) }
+    }
     .navigationTitle(selection == nil ? "More" : "Settings").compactNavigationTitle()
     .disabled(workspace.clearingAccount)
   }

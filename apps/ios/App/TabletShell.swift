@@ -1,50 +1,12 @@
 import SwiftUI
 import ZuseCore
 
-/// How the iPad layout sits in its window: the tab bar's edge, and whether pages open beside
-/// their list or are pushed over it.
-struct TabletLayout: Equatable {
-  /// Wider than tall: the tab bar runs down the leading edge instead of along the bottom.
-  var landscape = false
-  /// Room for a list and its page side by side.
-  var split = false
-
-  init(landscape: Bool = false, split: Bool = false) {
-    self.landscape = landscape
-    self.split = split
-  }
-
-  init(size: CGSize) {
-    landscape = size.width > size.height
-    // A landscape window too narrow for a 380-point list beside a readable page pushes
-    // pages instead, as portrait does.
-    split = landscape && size.width >= 900
-  }
-
-  /// The list column beside an open page.
-  static let listWidth: CGFloat = 380
-}
-
-/// A split view's list column: a fixed width that always shows on iPad, the given range
-/// elsewhere.
-struct TabletListColumn: ViewModifier {
-  let enabled: Bool
-  let min: CGFloat
-  let ideal: CGFloat
-  let max: CGFloat
-  func body(content: Content) -> some View {
-    if enabled {
-      content.navigationSplitViewColumnWidth(TabletLayout.listWidth)
-        .toolbar(removing: .sidebarToggle)
-    } else {
-      content.navigationSplitViewColumnWidth(min: min, ideal: ideal, max: max)
-    }
-  }
-}
-
 extension EnvironmentValues {
   /// Room the iPad's floating tab bar takes at the bottom of a list.
   @Entry var tabletBarClearance: CGFloat = 0
+  /// The iPad's full-width lists: rows take roomier type and keep long lines to a readable
+  /// measure.
+  @Entry var tabletLists = false
 }
 
 /// Lets a tab's list scroll its last rows, and anything pinned under it, clear of the iPad's
@@ -61,60 +23,56 @@ extension View {
   func clearsTabletBar() -> some View { modifier(TabletBarClearance()) }
 }
 
+/// The longest a line of text runs in an iPad list before it truncates, so a preview on a
+/// 13-inch screen in landscape still reads as one glance.
+enum TabletMeasure {
+  static let line: CGFloat = 920
+}
+
 #if os(iOS)
-  /// The iPad layout: the tab's content filling the window, with a compact floating tab bar
-  /// along the bottom in portrait and down the leading edge in landscape. Pages pushed in
-  /// portrait cover the bar, as they cover the iPhone tab bar.
+  /// The iPad layout: every tab is one full-width list, with a compact floating tab bar centred
+  /// along the bottom in either orientation. Opening a row pushes its page over the whole
+  /// window, and the page covers the bar, as pages cover the iPhone tab bar.
   struct TabletShell<Content: View>: View {
     @Binding var tab: AppTab
-    @Binding var layout: TabletLayout
     let needsYou: Int
     let account: Account
     /// A page is pushed over the tab's list.
     let showsPage: Bool
     @ViewBuilder let content: Content
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// The window has been measured once.
-    @State private var measured = false
+    /// The on-screen keyboard is up: the bar steps aside rather than riding above it.
+    @State private var typing = false
 
-    private var barShown: Bool { layout.landscape || !showsPage }
+    private var barShown: Bool { !showsPage && !typing }
 
     var body: some View {
-      ZStack {
-        // The tabs wait for the window's first measurement, so they open in the right layout
-        // rather than switching from portrait's on the first frame.
-        if measured { shell }
-      }
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .background(AppTheme.surface.ignoresSafeArea())
-      .onGeometryChange(for: TabletLayout.self) { proxy in
-        TabletLayout(size: proxy.size)
-      } action: { value in
-        layout = value
-        measured = true
-      }
-    }
-
-    private var shell: some View {
       content
-        // Lists scroll under the floating bar in portrait (see `clearsTabletBar`) and stop short
-        // of it in landscape.
-        .environment(\.tabletBarClearance, layout.landscape ? 0 : TabletTabBar.clearance)
-        .padding(.leading, layout.landscape ? TabletTabBar.railClearance : 0)
-        .overlay(alignment: layout.landscape ? .leading : .bottom) {
+        .environment(\.tabletBarClearance, typing ? 0 : TabletTabBar.clearance)
+        .environment(\.tabletLists, true)
+        .overlay(alignment: .bottom) {
           if barShown {
-            TabletTabBar(
-              selection: $tab, vertical: layout.landscape, needsYou: needsYou, account: account
-            )
-            .padding(layout.landscape ? .leading : .bottom, layout.landscape ? 14 : 10)
-            .transition(
-              reduceMotion
-                ? .opacity
-                : .opacity.combined(with: .move(edge: layout.landscape ? .leading : .bottom))
-            )
+            TabletTabBar(selection: $tab, needsYou: needsYou, account: account)
+              .padding(.bottom, 10)
+              .transition(
+                reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .bottom)))
           }
         }
         .animation(reduceMotion ? nil : .snappy(duration: 0.28), value: barShown)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(AppTheme.surface.ignoresSafeArea())
+        .onReceive(
+          NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)
+        ) { note in
+          // A hardware keyboard shows only its slim shortcut bar; that leaves the bar in place.
+          let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+          typing = (frame?.height ?? 0) > 120
+        }
+        .onReceive(
+          NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)
+        ) { _ in
+          typing = false
+        }
     }
   }
 
@@ -122,26 +80,19 @@ extension View {
   /// colour on a soft pill; More is your account picture once signed in.
   struct TabletTabBar: View {
     @Binding var selection: AppTab
-    let vertical: Bool
     let needsYou: Int
     let account: Account
     @Namespace private var pill
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// Room a portrait list leaves under its last row so it can scroll clear of the bar.
-    static let clearance: CGFloat = 76
-    /// Room landscape content leaves on the leading edge for the bar.
-    static let railClearance: CGFloat = 84
-    private static let item: CGFloat = 50
+    /// Room a list leaves under its last row so it can scroll clear of the bar.
+    static let clearance: CGFloat = 72
 
     var body: some View {
-      let stack =
-        vertical
-        ? AnyLayout(VStackLayout(spacing: 2)) : AnyLayout(HStackLayout(spacing: 2))
-      stack {
+      HStack(spacing: 2) {
         ForEach(AppTab.allCases, id: \.self) { tab in item(tab) }
       }
-      .padding(5)
+      .padding(4)
       .modifier(TabletBarGlass())
       .accessibilityElement(children: .contain)
       .accessibilityLabel("Tabs")
@@ -155,7 +106,7 @@ extension View {
       } label: {
         icon(tab, selected: selected)
           .foregroundStyle(selected ? AnyShapeStyle(AppTheme.accent) : AnyShapeStyle(.primary))
-          .frame(width: Self.item + (vertical ? 0 : 8), height: Self.item - (vertical ? 0 : 6))
+          .frame(width: 52, height: 42)
           .background {
             if selected {
               Capsule().fill(Color.primary.opacity(0.09))
@@ -169,7 +120,7 @@ extension View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 5).frame(minWidth: 18, minHeight: 18)
                 .background(Color.orange, in: Capsule())
-                .offset(x: vertical ? -4 : 0, y: 2)
+                .offset(x: -2, y: -1)
                 .accessibilityHidden(true)
             }
           }
@@ -188,20 +139,20 @@ extension View {
       switch tab {
       case .zappers: AppIcon(name: AppIcon.zapper, size: 19)
       case .chats:
-        Image(systemName: "bubble.left.and.bubble.right").font(.system(size: 18))
+        Image(systemName: "bubble.left.and.bubble.right").font(.system(size: 17))
       case .prs: AppIcon(name: AppIcon.pullRequest, size: 18)
       case .more:
         if account.signedIn {
-          AccountAvatar(account: account, size: 28)
+          AccountAvatar(account: account, size: 26)
             .overlay {
               if selected {
                 Circle().strokeBorder(AppTheme.accent, lineWidth: 2).padding(-3)
               }
             }
         } else {
-          Image(systemName: "ellipsis.circle").font(.system(size: 20))
+          Image(systemName: "ellipsis.circle").font(.system(size: 19))
         }
-      case .search: Image(systemName: "magnifyingglass").font(.system(size: 19, weight: .medium))
+      case .search: Image(systemName: "magnifyingglass").font(.system(size: 18, weight: .medium))
       }
     }
 
@@ -242,3 +193,68 @@ extension View {
     }
   }
 #endif
+
+/// A list's two top-trailing buttons. On iPad each stands on its own round of glass; elsewhere
+/// they share one capsule, as the system groups them.
+struct PrimaryActions<Leading: View, Trailing: View>: ViewModifier {
+  let separate: Bool
+  let leading: Leading
+  let trailing: Trailing
+
+  init(
+    separate: Bool, @ViewBuilder leading: () -> Leading, @ViewBuilder trailing: () -> Trailing
+  ) {
+    self.separate = separate
+    self.leading = leading()
+    self.trailing = trailing()
+  }
+
+  func body(content: Content) -> some View {
+    #if os(iOS)
+      if #available(iOS 26, *), separate {
+        content.toolbar {
+          ToolbarItem(placement: .primaryAction) { leading }
+          ToolbarSpacer(.fixed, placement: .primaryAction)
+          ToolbarItem(placement: .primaryAction) { trailing }
+        }
+      } else {
+        grouped(content)
+      }
+    #else
+      grouped(content)
+    #endif
+  }
+
+  private func grouped(_ content: Content) -> some View {
+    content.toolbar {
+      ToolbarItemGroup(placement: .primaryAction) {
+        leading
+        trailing
+      }
+    }
+  }
+}
+
+/// "Ask anything" floating at the bottom of an iPad page that has no composer of its own:
+/// opens a new chat ready to write.
+struct TabletAskPill: View {
+  let ask: () -> Void
+  var body: some View {
+    Button(action: ask) {
+      HStack(spacing: 10) {
+        Image(systemName: "plus").font(.system(size: 17, weight: .medium))
+          .foregroundStyle(.primary).frame(width: 34, height: 34)
+          .background(Color.primary.opacity(0.07), in: Circle())
+        Text("Ask anything").font(.system(size: 17)).foregroundStyle(.secondary)
+        Spacer(minLength: 0)
+      }
+      .padding(.leading, 7).padding(.trailing, 14)
+      .frame(minHeight: 48).contentShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .composerGlass(radius: 24)
+    .padding(.horizontal, 24).padding(.bottom, 6).padding(.top, 4)
+    .accessibilityLabel("New chat")
+    .accessibilityIdentifier("ask-anything")
+  }
+}

@@ -126,6 +126,31 @@ final class NativeChatTests: XCTestCase {
     XCTAssertFalse(app.buttons["Send message"].isEnabled)
   }
 
+  /// iPad lists fill the window in landscape too, under a tab bar centred along the bottom, and
+  /// a chat opens over the whole window with the bar out of the way.
+  @MainActor func testTabletListFillsWindowAndPushesChatInLandscape() throws {
+    guard UIDevice.current.userInterfaceIdiom == .pad else {
+      throw XCTSkip("Checks the iPad layout.")
+    }
+    let app = XCUIApplication()
+    app.launchArguments = ["--native-preview", "--home-preview", "--tab=chats"]
+    app.launch()
+    addTeardownBlock { @MainActor in XCUIDevice.shared.orientation = .portrait }
+    XCUIDevice.shared.orientation = .landscapeLeft
+    let row = app.staticTexts["Polish the mobile navigation"]
+    XCTAssertTrue(row.waitForExistence(timeout: 15))
+    Thread.sleep(forTimeInterval: 1)
+    let window = app.windows.firstMatch.frame
+    let middleTab = app.buttons["tab-prs"]
+    XCTAssertTrue(middleTab.exists)
+    XCTAssertGreaterThan(middleTab.frame.minY, window.midY, "Tab bar sits along the bottom")
+    XCTAssertLessThan(abs(middleTab.frame.midX - window.midX), 4, "Tab bar is centred")
+    XCTAssertFalse(app.staticTexts["Your work, wherever you are"].exists, "No page beside the list")
+    row.tap()
+    XCTAssertTrue(app.collectionViews["chat-transcript"].waitForExistence(timeout: 10))
+    XCTAssertFalse(app.buttons["tab-prs"].exists, "The chat covers the tab bar")
+  }
+
   @MainActor func testTabsFilterChatsAndReachComputers() throws {
     let app = XCUIApplication()
     app.launchArguments = ["--native-preview", "--home-preview", "--tab=chats"]
@@ -168,10 +193,12 @@ final class NativeChatTests: XCTestCase {
     app.launch()
     XCTAssertTrue(app.staticTexts["Review authentication changes"].waitForExistence(timeout: 15))
     XCTAssertFalse(app.staticTexts["Polish the mobile navigation"].exists)
-    let search = app.searchFields.firstMatch
+    // iPad searches from its own full-width field; iPhone from the system one.
+    let tablet = UIDevice.current.userInterfaceIdiom == .pad
+    let search = tablet ? app.textFields["search-field"] : app.searchFields.firstMatch
     XCTAssertTrue(search.waitForExistence(timeout: 5))
     search.tap()
-    search.buttons["Clear text"].tap()
+    (tablet ? app.buttons["Clear text"] : search.buttons["Clear text"]).tap()
     search.typeText("Release")
     let zapper = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Release lead'"))
     XCTAssertTrue(zapper.firstMatch.waitForExistence(timeout: 5))

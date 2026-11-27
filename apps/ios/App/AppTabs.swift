@@ -1,8 +1,8 @@
 import SwiftUI
 import ZuseCore
 
-/// The app's top-level tabs: the system tab bar on iPhone, a compact floating bar on iPad
-/// (`TabletShell`) and a sidebar on Mac.
+/// The app's top-level tabs: the system tab bar on iPhone, a compact floating bar under
+/// full-width lists on iPad (`TabletShell`) and a sidebar on Mac.
 enum AppTab: String, Hashable, CaseIterable {
   case zappers, chats, prs, more, search
   /// `--tab=<zappers|chats|prs|more>` picks the first tab for screenshots.
@@ -52,25 +52,16 @@ struct SearchView: View {
   let openIssue: (IssueEntry) -> Void
   /// Off when the field lives elsewhere, like the wide layout's sidebar.
   var searchable = true
-  private var needle: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
 
   var body: some View {
     let store = workspace.zappers
-    let zappers = store.zappers.filter { matches($0.config.name) || matches($0.config.purpose) }
-    let names = Dictionary(
-      workspace.projects.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
-    let sessions =
-      workspace.isCloudActive
-      ? []
-      : workspace.sessions.filter {
-        !store.keepsChat($0.id) && (matches($0.title) || matches(names[$0.projectId] ?? ""))
-      }
-    let clouds = workspace.cloudChats.filter {
-      !$0.isArchived && (matches($0.title) || matches($0.repositoryDisplayName))
-    }
-    let issues = IssueBoard.entries(store.zappers).filter {
-      matches($0.issue.details.title) || matches($0.issue.code)
-    }
+    let results = SearchResults(workspace: workspace, query: query)
+    let needle = results.needle
+    let zappers = results.zappers
+    let names = results.projectNames
+    let sessions = results.sessions
+    let clouds = results.clouds
+    let issues = results.issues
     List {
       if needle.isEmpty {
         ZappersEmptyState(
@@ -136,10 +127,6 @@ struct SearchView: View {
     .scrollContentBackground(.hidden).background(AppTheme.surface)
     .navigationTitle("Search").compactNavigationTitle()
     .modifier(SearchField(enabled: searchable, query: $query))
-  }
-
-  private func matches(_ text: String) -> Bool {
-    !needle.isEmpty && text.localizedCaseInsensitiveContains(needle)
   }
 
   private func header(_ title: String) -> some View {
