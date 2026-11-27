@@ -260,7 +260,9 @@ import ZuseCore
       if CloudPreview.enabled { return CloudPreview.client() }
     #endif
     let generation = account.generation
-    return CloudClient(baseURL: account.apiURL, organizationID: account.organizationID) {
+    // Personal workspace, as on desktop and the server's default: a token's org_id claim is
+    // not a choice to work in that organization, and organization workspaces are opt-in.
+    return CloudClient(baseURL: account.apiURL, organizationID: nil) {
       [account] in
       try await account.token(expectedGeneration: generation)
     }

@@ -664,7 +664,7 @@ struct WorkspaceView: View {
         Label {
           Text("More")
         } icon: {
-          AccountTabIcon.image(workspace.account)
+          Image(systemName: "ellipsis.circle")
         }
         .environment(\.symbolVariants, .none)
       }

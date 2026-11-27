@@ -41,25 +41,6 @@ private struct PullRequestsPlaceholder: View {
   }
 }
 
-/// The More tab's icon: your initials once signed in, otherwise a circle of dots.
-enum AccountTabIcon {
-  @MainActor static func image(_ account: Account) -> Image {
-    if account.signedIn, let image = render(account) {
-      return Image(nativeImage: image).renderingMode(.original)
-    }
-    return Image(systemName: "ellipsis.circle")
-  }
-  @MainActor private static func render(_ account: Account) -> NativeImage? {
-    let renderer = ImageRenderer(content: AccountAvatar(account: account, size: 26))
-    renderer.scale = 3
-    #if os(macOS)
-      return renderer.nsImage
-    #else
-      return renderer.uiImage
-    #endif
-  }
-}
-
 /// Search across Zappers, chats and issues. Picking a result opens it in its own tab.
 struct SearchView: View {
   let workspace: WorkspaceModel
