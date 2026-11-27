@@ -24,6 +24,7 @@ impl Shell {
                     this.open_settings(SettingsSection::from_cloud_view(*view), cx)
                 }
                 Navigate::StartCloudChat(start) => this.start_first_cloud_chat(start, cx),
+                Navigate::StartSetupChat(start) => this.start_machine_setup_chat(start, cx),
             },
         ));
         self.cloud_billing_page = Some(page.clone());
@@ -193,6 +194,23 @@ impl Shell {
         }
     }
 
+    /// "Configure with an agent": a new cloud chat on `start`'s repository
+    /// marked as a setup chat, so its computer and agent configure the
+    /// account's machine image (see `zuse_protocol::machine_setup`).
+    pub(super) fn start_machine_setup_chat(
+        &mut self,
+        start: &zuse_viewport::cloud_repositories::StartSetupChat,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(mut project) = first_chat_project(&self.state.read(cx), Some(&start.repository))
+        else {
+            return;
+        };
+        project[SETUP_PROJECT_FLAG] = serde_json::json!(true);
+        self.cloud_first_chat = None;
+        self.start_cloud_canvas(project, None, cx);
+    }
+
     /// The empty first cloud chat's guide: what happens when you send, a
     /// line about the image while it builds, and prompts to start from.
     /// Shown for the chat onboarding opened, and for any new chat on Cloud
@@ -204,6 +222,9 @@ impl Shell {
     ) -> Option<AnyElement> {
         let state = self.state.read(cx);
         let project = state.cloud_project.as_ref()?;
+        if project[SETUP_PROJECT_FLAG] == true {
+            return Some(self.machine_setup_guide(theme, cx));
+        }
         let opened = self
             .cloud_first_chat
             .as_ref()
@@ -310,6 +331,73 @@ impl Shell {
         {
             self.open_settings(section, cx);
         }
+    }
+}
+
+/// Marks the new-chat project of a setup chat; the composer sends it as
+/// the chat's purpose.
+pub(crate) const SETUP_PROJECT_FLAG: &str = "machineSetup";
+
+/// One-click starts for a setup chat.
+const SETUP_CHAT_PROMPTS: [&str; 3] = [
+    "Install Rust and cargo",
+    "Add bun and pnpm",
+    "Add a repository to my image",
+];
+
+impl Shell {
+    /// Above a setup chat's composer: what this chat is for.
+    fn machine_setup_guide(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let line = |text: &'static str| {
+            div()
+                .max_w(px(460.))
+                .text_center()
+                .text_size(crate::typography::text_sm())
+                .text_color(theme.text_muted)
+                .child(text)
+        };
+        let mut prompts = div()
+            .mt(px(6.))
+            .flex()
+            .flex_wrap()
+            .justify_center()
+            .gap(px(6.));
+        for (i, prompt) in SETUP_CHAT_PROMPTS.iter().enumerate() {
+            prompts = prompts.child(
+                div()
+                    .id(("machine-setup-prompt", i))
+                    .role(gpui::Role::Button)
+                    .aria_label(*prompt)
+                    .tab_index(0)
+                    .h(px(28.))
+                    .px(px(12.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(theme.border)
+                    .cursor_pointer()
+                    .text_size(crate::typography::text_xs())
+                    .text_color(theme.text)
+                    .hover(|v| v.bg(theme.element_hover))
+                    .child(*prompt)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.composer
+                            .update(cx, |composer, cx| composer.suggest_prompt(prompt, cx));
+                    })),
+            );
+        }
+        div()
+            .id("machine-setup-guide")
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(4.))
+            .child(line(
+                "This chat configures your machine image. The agent tests a setup script here and proposes the change; you apply it and the image rebuilds.",
+            ))
+            .child(prompts)
+            .into_any_element()
     }
 }
 

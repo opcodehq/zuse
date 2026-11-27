@@ -397,4 +397,8 @@ pub struct CloudWorkspaceCreateRequest {
     pub initial_message_delivery: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fork_source: Option<serde_json::Value>,
+    /// What the chat is for. [`crate::machine_setup::PURPOSE`] starts a setup
+    /// chat that configures the account's machine image; absent is a task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<String>,
 }

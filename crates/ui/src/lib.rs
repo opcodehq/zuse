@@ -53,6 +53,7 @@ pub(crate) mod image_viewer;
 pub mod links;
 pub mod loaders;
 pub mod localization;
+pub mod machine_setup_cards;
 pub mod markdown;
 pub mod motion;
 mod new_thread_background_effects;

@@ -97,6 +97,9 @@ pub enum Navigate {
     /// The last onboarding step: leave Settings for a new cloud chat on the
     /// chosen repository.
     StartCloudChat(zuse_viewport::cloud_repositories::StartChat),
+    /// "Configure with an agent": a setup chat on this repository whose
+    /// agent configures the account's machine image.
+    StartSetupChat(zuse_viewport::cloud_repositories::StartSetupChat),
 }
 /// The most usage pages fetched for one period (100 entries each).
 const USAGE_PAGES: usize = 10;
@@ -251,6 +254,13 @@ impl CloudBillingPage {
             &repository_panel,
             |_, _, event: &zuse_viewport::cloud_repositories::StartChat, cx| {
                 cx.emit(Navigate::StartCloudChat(event.clone()));
+            },
+        )
+        .detach();
+        cx.subscribe(
+            &repository_panel,
+            |_, _, event: &zuse_viewport::cloud_repositories::StartSetupChat, cx| {
+                cx.emit(Navigate::StartSetupChat(event.clone()));
             },
         )
         .detach();
