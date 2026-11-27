@@ -1,0 +1,45 @@
+---
+title: Kiro CLI
+icon: logo:kiro
+navTitle: "Kiro"
+description: Connect Kiro CLI over ACP and use its models and plan mode in Zuse.
+section: providers
+order: 39
+platforms: [desktop, browser, mobile]
+providers: [kiro]
+prerequisites: [/start/install, /providers/setup]
+related: [/composer/modes-permissions, /reference/diagnostics]
+next: /providers/muse
+lastVerified: "2026-11-27"
+---
+
+Zuse runs your installed `kiro-cli` in ACP mode (`kiro-cli acp`) and uses your existing Kiro login.
+
+## Install and sign in
+
+Install Kiro CLI from [kiro.dev](https://kiro.dev), then sign in:
+
+```bash
+kiro-cli login
+```
+
+Zuse reads Kiro's local login and does not store a separate Kiro API key. Set `KIRO_EXECUTABLE` to use an installation Zuse doesn't find on PATH. Update with `kiro-cli update`.
+
+## Workflows in Zuse
+
+- Start and resume ACP sessions in the active checkout or a per-chat worktree.
+- Choose from the models Kiro reports for your account.
+- Stream assistant text, tools, file edits, and errors into the durable timeline.
+- Use Plan mode, **Ask for approval**, and **Full access**.
+- Discover skills from `.kiro/skills` and `.agents/skills`.
+- Messages you send during a turn are delivered when the turn ends.
+
+## Recovery
+
+If startup fails:
+
+1. Run `kiro-cli --version`, and `kiro-cli update` if the CLI is old.
+2. Run `kiro-cli login` if your sign-in expired.
+3. Refresh **Settings → Providers & accounts** and start a new session.
+
+If a stored Kiro session can't be resumed, Zuse starts a replacement session and keeps the existing timeline.

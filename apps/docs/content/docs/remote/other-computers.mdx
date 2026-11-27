@@ -1,0 +1,36 @@
+---
+title: "Use other computers from the desktop app"
+icon: MonitorSmartphone
+navTitle: "Other computers"
+description: "Open another computer's Zuse workspace in your desktop app with a pairing link or your account."
+section: "Remote access"
+order: 7
+platforms: [desktop, serve]
+providers: []
+prerequisites: [/remote]
+related: [/remote/hosted-access, /remote/tailscale, /serve, /remote/security]
+next: /remote/security
+lastVerified: "2026-11-27"
+---
+
+The desktop app can open the workspace of another computer that runs Zuse, such as a home server running `zuse serve` or a second Mac. Work still runs on that computer. Removing it from this app does not delete anything there.
+
+## Add a computer with a link
+
+1. On the other computer, open **Settings → Remote access**, choose **Connect device**, switch to the **Computer** tab, and choose **Copy link**. On a headless computer, run `zuse pair` and copy the **Zuse app** link.
+2. On this computer, open **Settings → Remote access** and choose **+** next to **Devices**.
+3. In **Add computer**, paste the link and choose **Connect**.
+
+The other computer needs a route this computer can reach, such as **Wi-Fi** or **Tailscale**. A link whose address only works on that computer cannot be used from here.
+
+You can also start the desktop app straight into a paired computer with `zuse --paired-link-file <file>`, where the file contains only the pairing link. Keep that file private.
+
+## Computers on your account
+
+When you are signed in, computers [linked to your account](/remote/hosted-access/) appear under **Devices** in **Settings → Remote access**. Choose **Connect** to open one or **Remove** to take it off your account.
+
+## Reconnection
+
+A connected window reconnects on its own after a network change or sleep, and checks that it reached the same computer before it sends anything. If the other computer's identity changed, Zuse does not connect; reopen it with a new link once you have confirmed it is the computer you expect. **This window is connected through** under **This computer** shows the route and its latency.
+
+<NextStep href="/remote/security/" label="Review the security model" />

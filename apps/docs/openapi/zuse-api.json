@@ -1,0 +1,10 @@
+{
+	"openapi": "3.1.0",
+	"info": {
+		"title": "Zuse API",
+		"version": "1",
+		"description": "The Zuse REST API has been retired. To control a running Zuse engine from your own tools, use the control API: see [Control API](/api-reference)."
+	},
+	"tags": [],
+	"paths": {}
+}

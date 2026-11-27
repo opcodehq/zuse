@@ -1,0 +1,50 @@
+---
+title: OpenCode
+icon: logo:opencode
+navTitle: "OpenCode"
+description: Connect OpenCode providers and models and run them through Zuse's native OpenCode integration.
+section: providers
+order: 41
+platforms: [desktop, browser, mobile]
+providers: [opencode]
+prerequisites: [/start/install, /providers/setup]
+related: [/reference/settings, /composer/modes-permissions, /reference/diagnostics]
+next: /providers/pi
+lastVerified: "2026-11-27"
+---
+
+OpenCode is a local multi-provider agent. Zuse launches a private `opencode serve` process on this computer and drives it over OpenCode's own HTTP and event protocol, the same one the OpenCode desktop app uses. Both the 1.x and 2.x server generations are supported; Zuse detects which one you have.
+
+## Install and connect a provider
+
+Choose **Install** in **Settings → Providers & accounts**, or install it yourself:
+
+```bash
+curl -fsSL https://opencode.ai/install | bash
+opencode auth login
+```
+
+`npm install -g @opencode/cli` also works. From the OpenCode row you can also sign in with **ChatGPT** or **GitHub Copilot**. Update with `opencode upgrade`, or from the row.
+
+OpenCode's settings include a provider manager: search providers, add an API key, remove a credential, and choose which models are shown in the picker. **Custom endpoint** adds any endpoint that speaks a known API shape (OpenAI-compatible, OpenRouter-compatible, Anthropic-compatible, Google-compatible, or another npm package), such as vLLM, LM Studio, or a gateway.
+
+## Workflows in Zuse
+
+- Choose from the live provider and model inventory OpenCode reports, with reasoning levels mapped to each model's variants.
+- Stream responses, thinking, tool calls, edits, subagent sessions, usage, and errors into the durable timeline.
+- Answer OpenCode's questions in Zuse.
+- Use OpenCode's own `/` commands, such as `/goal` on 2.x. On 2.x, Zuse waits for OpenCode to finish loading its config and plugins before showing the command list.
+- Use Plan mode, **Ask for approval**, and **Full access**. Zuse applies permission rules to each OpenCode session without editing your server-wide configuration.
+- Discover skills from `.opencode/skills`, `.claude/skills`, `.agents/skills`, and `~/.config/opencode/skills`.
+
+Messages you send during a turn are delivered when the turn ends.
+
+## Recovery
+
+If inventory or startup fails:
+
+1. Run `opencode --version` and update with `opencode upgrade`.
+2. Run `opencode auth login` and check that the provider you want is connected.
+3. Refresh the OpenCode providers in **Settings → Providers & accounts**.
+4. Show any provider or model you hid from the picker.
+5. Start a fresh session after changing configuration.

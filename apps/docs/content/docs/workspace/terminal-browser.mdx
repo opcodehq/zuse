@@ -1,0 +1,40 @@
+---
+title: Terminal
+icon: SquareTerminal
+navTitle: "Terminal"
+description: Run project commands in the active checkout and manage long-running development processes.
+section: workspace
+order: 62
+platforms: [desktop]
+providers: []
+prerequisites: [/workspace]
+related: [/projects/scripts, /workspace/browser, /reference/diagnostics]
+next: /workspace/browser
+lastVerified: "2026-11-27"
+---
+
+
+The integrated terminal opens your login shell in the active chat's checkout. Terminal tabs belong to the chat that opened them, so switching tasks does not move a shell into another worktree. Shells keep running while you switch chats or hide the terminal.
+
+## Open a terminal
+
+- Press `⌘J` (`Ctrl+J` on Windows and Linux), or click **Toggle bottom terminal** in the chat's title bar, to show or hide the terminal below the conversation. Opening it puts keyboard focus in the shell.
+- Choose **Terminal** from the **+** menu in the workspace pane, or type `/terminal` in the composer, to open a terminal tab beside the conversation.
+
+In the terminal below the conversation, click **New terminal** (**+**) to add a tab and **Hide terminal** (the chevron) to collapse it. Drag tabs to reorder them, and close one with its **Close terminal** button or a middle-click. A tab takes its title from the shell when the shell sets one, and otherwise shows **Terminal** with a number.
+
+In a cloud chat, the **+** menu offers **Cloud terminal**, which runs on the cloud computer, and `⌘J` opens or focuses that tab instead of a local terminal.
+
+## Run commands
+
+Use the terminal for development servers, focused tests, builds, migrations, and repository tools. A project's saved actions, such as a dev server or test command, run from the chat's session card instead; see [Project actions](/projects/scripts).
+
+When a shell exits, its tab shows the exit code and stays visible until you close it.
+
+## Lifetime
+
+Hiding the terminal or switching chats leaves its processes running. Closing a tab ends that shell. Archiving a chat whose worktree Zuse manages stops the terminals in that worktree, so stop long-running commands cleanly before you archive.
+
+## Continue in the browser
+
+To preview what your dev server serves, open the [in-app browser](/workspace/browser). The in-app browser is a desktop workspace surface; it is different from opening the Zuse interface itself in a normal browser through [remote access](/remote/local-browser).

@@ -1,0 +1,36 @@
+---
+title: Muse Code
+icon: Sparkles
+description: Run Meta's Muse Code agent in Zuse with live models, approvals, and resume.
+section: providers
+order: 40
+platforms: [desktop, browser, mobile]
+providers: [muse]
+prerequisites: [/start/install, /providers/setup]
+related: [/composer/modes-permissions, /reference/diagnostics]
+next: /providers/opencode
+lastVerified: "2026-11-27"
+---
+
+Zuse runs Meta's Muse Code through your installed `muse` CLI as `muse serve`, over Muse's own session protocol. Zuse requires Muse Code 1.4.6 or newer.
+
+## Install and sign in
+
+Install with Meta's script:
+
+```bash
+curl -fsSL https://dev.meta.ai/install.sh | bash
+```
+
+On Windows, run `irm https://dev.meta.ai/install.ps1 | iex`. Muse Code manages sign-in itself: run `muse login` in a terminal, or save a Meta API key with `muse auth set`. Zuse doesn't pass `META_API_KEY` through to Muse.
+
+To update, choose **Update** in the Muse Code row; Zuse reruns the installer into the folder that holds your current `muse` binary.
+
+## Workflows in Zuse
+
+- Choose from Muse Code's live model list. Reasoning levels are set per model.
+- Approve or deny the actions Muse's own rules don't already allow. Zuse offers only the choices Muse gives.
+- Resume, interrupt, and steer a running turn.
+- Use `/compact` and attach images.
+
+Plan mode is not available for Muse Code, and Muse Code resolves its own skills, so Zuse doesn't list them in the skills picker.

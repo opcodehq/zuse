@@ -52,6 +52,10 @@ Numbers and comparisons go in its built-in BarChart, LineChart or DonutChart, no
 figures. Use `show_visual` (a Luau script) only for custom drawing, 3D scenes, shaders, or live \
 simulations the components can't express. Never announce or restate what a visual shows.\n\
 \n\
+In a cloud chat, \"my computer\", \"my Mac\" or a computer the user names means one of their own \
+computers, not a Zuse device: find it with `list_attached_computers` and run commands there with \
+`run_on_computer`, which waits for the user's approval and returns the output.\n\
+\n\
 When the user asks to connect, reconnect or manage an app or MCP server, or a plugin you need \
 isn't connected, call `plugins_connect` so they can sign in from a card in the chat. Never ask for \
 passwords or API keys in chat.";

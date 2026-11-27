@@ -1,0 +1,53 @@
+---
+title: "Account access"
+icon: Globe
+navTitle: "Account access"
+description: "Link a computer to your Zuse account so your other signed-in devices can reach it from any network."
+section: "Remote access"
+order: 6
+platforms: [desktop, mobile, serve]
+providers: []
+prerequisites: [/remote]
+related: [/serve, /remote/other-computers, /remote/security, /remote/recovery]
+next: /remote/other-computers
+lastVerified: "2026-11-27"
+---
+
+Linking a computer to your Zuse account makes it available to your other devices wherever you are signed in, without Tailscale or open router ports. The computer stays the owner of its code, credentials, and chats; your account supplies sign-in and discovery.
+
+## Link a computer
+
+Run this in a terminal on the computer while the desktop app or `zuse serve` is running:
+
+```sh
+zuse link --name studio-mac
+```
+
+If you are not signed in, Zuse prints an address and a code. Open the address on any device and confirm the code. When it finishes, Zuse prints `Available through your account as … at …`. `--name` is the computer name shown on your other devices; it defaults to the hostname.
+
+On a headless computer you can link at startup instead:
+
+```sh
+zuse serve --account
+```
+
+Run `zuse status` to see the signed-in account and the linked computer.
+
+## Open it from another device
+
+- **Desktop app:** sign in, then open **Settings → Remote access**. Linked computers appear under **Devices**. Choose **Connect** to open one, or **Remove** to remove it from your account. A computer that runs an older version shows **Update Zuse on this computer to connect.**
+- **Mobile app:** open **Settings**, choose **Sign in to Zuse**, and sign in with the same account. Computers linked to your account appear with your other computers.
+
+## Unlink
+
+```sh
+zuse unlink
+```
+
+The computer is no longer available through your account. Local chats stay on the computer, and devices paired over Wi-Fi or Tailscale keep working.
+
+<Warning title="Account access is not a backup">
+Linking makes a computer reachable. It does not copy repositories or chats to the cloud.
+</Warning>
+
+<NextStep href="/remote/other-computers/" label="Open other computers in the desktop app" />

@@ -1,0 +1,51 @@
+---
+title: Share actions with zuse.json
+icon: Settings2
+navTitle: "zuse.json"
+description: Offer project actions to everyone who opens a repository by committing a zuse.json file.
+section: projects
+order: 43
+platforms: [desktop, browser]
+providers: []
+prerequisites: [/projects/scripts]
+related: [/projects/scripts, /projects/worktrees]
+next: /composer
+lastVerified: "2026-11-27"
+---
+
+[Project actions](/projects/scripts) are saved on each Zuse host, not in the repository. To give everyone who works in a repository the same starting commands, commit a `zuse.json` file at the root of the project folder. Zuse reads it and offers its entries for import; nothing in the file runs until someone reviews and saves it as an action.
+
+```json
+{
+  "actions": [
+    { "name": "Setup", "command": "bun install --frozen-lockfile", "icon": "configure", "runOnWorktreeCreate": true },
+    { "name": "Dev", "command": "bun run dev", "icon": "play" },
+    { "name": "Test", "command": "bun test", "icon": "test" }
+  ]
+}
+```
+
+## Fields
+
+The file has one top-level field, `actions`, an array of up to 50 entries. Each entry has:
+
+| Field | Required | Value |
+| --- | --- | --- |
+| `name` | Yes | Action name, up to 80 characters |
+| `command` | Yes | Command to run, up to 16 KiB |
+| `icon` | Yes | One of `play`, `test`, `lint`, `configure`, `build`, `debug` |
+| `runOnWorktreeCreate` | No | `true` to offer the action as the project's worktree setup command. Defaults to `false` |
+
+Unknown fields are rejected, and the whole file must be valid JSON no larger than 256 KiB. Zuse reads `zuse.json` from the project folder, not from individual worktrees.
+
+## Import actions
+
+Open the environment summary in a chat and expand **Actions**. Entries from `zuse.json` appear below your saved actions with **Import**. Importing opens the action editor filled in from the file, so you can review the command before choosing **Save action**. In the browser app the entries are listed under **Available in project files** with **Review and import**.
+
+An entry is hidden once you have a saved action with the same command or the same name (ignoring case). Editing `zuse.json` later does not change actions you already saved.
+
+If the file is invalid, the **Actions** section shows a message starting with **Invalid zuse.json:** and the reason, such as invalid JSON, an unknown field, a missing name or command, or too many actions.
+
+## Keep secrets out
+
+`zuse.json` is committed with your code. Do not put tokens, passwords, or private machine paths in commands. Read secrets from ignored local files or your shell environment instead.

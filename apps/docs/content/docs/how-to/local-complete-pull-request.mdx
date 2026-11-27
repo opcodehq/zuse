@@ -1,0 +1,75 @@
+---
+title: Create and complete a pull request
+icon: GitPullRequest
+navTitle: "Complete a pull request"
+description: Publish a branch, create its pull request, act on checks, conflicts, and feedback, merge, and archive the chat.
+section: how-to
+order: 4
+platforms: [desktop]
+providers: []
+prerequisites: [/how-to/local-review-changes]
+related: [/workspace/changes-pull-requests, /projects/worktrees, /how-to/local-recover-task]
+next: /how-to/local-recover-task
+lastVerified: "2026-11-27"
+---
+
+## Goal
+
+Move a local branch through publishing, pull-request review, required checks, merge, and cleanup using the next step Zuse shows for the pull request.
+
+## Applicability
+
+Use this workflow in the **desktop app** with a GitHub-hosted repository, a branch you can push, and an authenticated GitHub CLI on the computer that runs the chat. Agent-driven actions also require a working provider session.
+
+## Prerequisites
+
+- [Review and commit the local changes](/how-to/local-review-changes/).
+- Run the repository's required tests and checks.
+- Confirm the branch is based on the intended target branch.
+- Authenticate the GitHub CLI for the repository host.
+
+## Steps
+
+1. Publish the branch from the Git panel in the **Diff** view: choose **Publish** (or **Push _N_** if it already has an upstream). Creating a pull request requires a published branch with no unpushed commits.
+2. Create the pull request in one of two ways:
+   - Open **More Git actions → Create pull request…**, fill in **Title**, the description, an optional **Base branch (optional)**, and **Draft** if needed, then choose **Create**. A blank base uses the repository's default branch.
+   - Or ask the agent to open one. When it runs `gh pr create`, the chat shows a live pull request card that follows the new pull request.
+3. Open the environment summary from the top bar (**Toggle environment summary**). Once the branch has a pull request, it shows a pull-request row with the pull request's state and one next step.
+4. Choose **View pull request** in the row's menu, or **Open on GitHub**, and verify the title, description, base branch, changed files, and checks.
+5. Act on the next step the row offers. Zuse picks the one that unblocks the merge first:
+   - **Resolve** when the branch conflicts with its base.
+   - **Fix** when a check fails.
+   - **Mark ready** when the pull request is still a draft.
+   - **Merge** when the branch merges cleanly, reviews are not blocking, and no check is running.
+6. Use the row's menu for everything else:
+   - **Repair** offers **Address feedback**, **Fix failing checks**, **Resolve conflicts**, and **Review the changes**. Each places a repair request in the composer with the pull request attached as context. Review the draft, then send it.
+   - **Merge** offers **Squash and merge**, **Create a merge commit**, and **Rebase and merge**, plus **Merge when ready** to arm auto-merge while checks are pending, or **Turn off auto-merge**.
+   - **Add to chat** attaches the pull request's details as context without a repair request.
+   - **Status** converts the pull request to a draft, marks it **Ready for review**, or closes and reopens it.
+7. To let the agent follow up on its own, turn on **Auto-fix** (in the row's menu, or the button above the composer while the pull request is open). When checks fail, a conflict appears, or reviewers leave feedback, Zuse sends the chat's agent one follow-up while the chat is idle. Auto-fix stops after five follow-ups per pull request; choose **Restart auto-fix** to grant a fresh budget after reviewing the previous repairs. A pull request the chat opened itself has Auto-fix on by default.
+8. After the pull request is merged, archive the chat from its sidebar row with **Archive**. For a managed worktree, Zuse saves the working files, removes the checkout, and keeps the branch.
+
+On the chat's pull request card, **Resolve conflicts** and **Fix checks** send the repair request as your next message, or append it after a draft you are writing without sending.
+
+## Verify completion
+
+Confirm all of the following:
+
+- the pull request points from the intended branch to the intended base;
+- its changed files match the local review;
+- required checks are passing, or auto-merge is explicitly armed;
+- the merge commit or configured merge result exists on the base branch;
+- the pull request card shows **Merged into _base_**;
+- important work is committed and pushed before archiving.
+
+## Troubleshooting and recovery
+
+- **Create pull request… fails:** publish the branch and push every local commit first. If the result could not be confirmed, check the repository's pull requests before submitting again; Zuse keeps the form and never retries creation automatically.
+- **Merge is not offered:** checks are still running or failing, the pull request is a draft, reviews are blocking it, or the branch conflicts with its base. Follow the step the row offers instead.
+- **An agent-driven action does nothing:** select a live session in the chat and resolve provider sign-in or connection errors, then retry.
+- **Auto-fix does not start:** it waits until the chat is idle, the queue is empty, and the checkout is clean on the pull request's exact commit. It pauses while the pull request is a draft.
+- **Auto-merge or merge fails:** GitHub's refusal appears under the row. The repository may not permit the merge method or automatic merge, or the head changed since Zuse displayed it.
+- **Resolving conflicts produces a large diff:** review every resolution and rerun tests before pushing. Do not merge only because the conflict markers disappeared.
+- **Archiving keeps the worktree:** Zuse keeps the checkout when it cannot confirm that the chat's agents and terminals stopped, or when the folder is the main checkout or used by another chat.
+
+If the provider, setup, connection, or chat is interrupted along the way, use [Recover or continue a local task](/how-to/local-recover-task/).

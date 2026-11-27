@@ -1,0 +1,74 @@
+---
+title: ACP agents
+icon: Plug
+navTitle: "ACP agents"
+description: Add Gemini CLI, GitHub Copilot, goose, and other agents from the ACP registry, or connect your own command.
+section: providers
+order: 45
+platforms: [desktop, browser, mobile]
+providers: []
+prerequisites: [/providers/setup]
+related: [/providers, /composer/modes-permissions, /reference/diagnostics]
+next: /composer
+lastVerified: "2026-11-27"
+---
+
+The Agent Client Protocol (ACP) is an open standard for talking to coding agents over standard input and output. Any agent that speaks ACP can run in Zuse with the same timeline, tool rendering, permissions, worktrees, and review flow as the built-in providers.
+
+Zuse reads the public [ACP registry](https://agentclientprotocol.com/registry) on the selected computer to offer a list of agents. If the registry is unavailable, the list falls back to the agents Zuse already ships as built-in providers.
+
+## Agents in the registry
+
+The registry is updated independently of Zuse, so its list can change. It includes, among others:
+
+<Cards>
+	<Card icon={<AgentLogo id="gemini" />} title="Gemini CLI" description="Google's CLI for Gemini." />
+	<Card icon={<AgentLogo id="github-copilot-cli" />} title="GitHub Copilot" description="GitHub's coding agent CLI." />
+	<Card icon={<AgentLogo id="goose" />} title="goose" description="Open-source, extensible local agent." />
+	<Card icon={<AgentLogo id="cline" />} title="Cline" description="Autonomous coding agent CLI." />
+	<Card icon={<AgentLogo id="qwen-code" />} title="Qwen Code" description="Alibaba's Qwen coding assistant." />
+	<Card icon={<AgentLogo id="kimi" />} title="Kimi CLI" description="Moonshot AI's coding assistant." />
+	<Card icon={<AgentLogo id="junie" />} title="Junie" description="JetBrains' coding agent." />
+	<Card icon={<AgentLogo id="mistral-vibe" />} title="Mistral Vibe" description="Mistral's open-source coding assistant." />
+	<Card icon={<AgentLogo id="auggie" />} title="Auggie CLI" description="Augment Code's agent and context engine." />
+	<Card icon={<AgentLogo id="kilo" />} title="Kilo" description="Open-source coding agent." />
+</Cards>
+
+Registry entries for Claude Code, Codex, Cursor, Devin, Grok, OpenCode, Pi, and Antigravity are marked **Built in**; Zuse runs those with its own [integrations](/providers) instead.
+
+## Add an agent
+
+1. Open **Settings → Providers & accounts** and add an ACP agent.
+2. Search the registry.
+3. Pick an agent:
+   - An entry published as an npm or Python package shows **Runs with npx** or **Runs with uvx**. Choosing it adds the agent in one step, and Zuse checks the connection. The computer needs Node.js and npm, or uv.
+   - A binary-only entry needs a manual install. Use **Open install instructions**, install the agent so its command runs from a terminal on this computer, then save the prefilled form.
+   - An entry with no build for this computer shows **Not for this OS**.
+4. If the agent needs sign-in, sign in from its row. Some agents open a terminal inside Zuse; others open a sign-in page in your browser.
+
+The new agent appears in the model picker. Each computer keeps its own agents, installations, and credentials.
+
+## Gemini CLI
+
+Gemini is available only as an ACP agent. Search the registry for **Gemini CLI** and add it, then sign in with one of the methods Gemini CLI offers.
+
+## Use your own command
+
+Choose **Your own command** (or **Set up your own agent**) and tell Zuse how to start the agent. It talks ACP over stdin and stdout.
+
+- **Name**: shown in the agent list and the composer.
+- **Command**: a program on your PATH, or a full path.
+- **Arguments**: separated by spaces, with shell-style quoting, for example `--acp --model "my model"`.
+- **Environment**: `KEY=value` pairs separated by spaces.
+
+Zuse launches the command directly, without shell expansion. Environment values are stored encrypted, and afterward Zuse shows only the saved variable names. Choose **Save and check** to save the agent and test its connection.
+
+## Manage agents
+
+From an agent's row you can check its connection again, edit it, or remove it with **Remove agent**. Setting changes apply the next time the agent process starts; running conversations keep their launch configuration.
+
+## What works
+
+Zuse uses ACP's structured tool information to render file reads, diffs, searches, terminal output, and permission requests. Unrecognized tools keep a generic card. Models, modes, and commands come from the agent, and controls it doesn't support are hidden. Skills come from `.agents/skills`. Image attachments need the agent to advertise image support.
+
+Zuse supports ACP over stdio. It doesn't connect to network ACP endpoints.

@@ -1,0 +1,50 @@
+---
+title: Modes and permissions
+icon: ShieldHalf
+navTitle: "Modes and permissions"
+description: Control whether an agent plans, edits, runs commands, or asks first.
+section: composer
+order: 51
+platforms: [desktop, browser, mobile]
+providers: [zuse, claude, codex, cursor, devin, grok, hermes, kiro, muse, opencode, pi, omp, antigravity]
+prerequisites: [/composer]
+related: [/composer/subagents, /reference/settings, /concepts/local-first]
+next: /composer/context-attachments
+lastVerified: "2026-11-27"
+---
+
+Zuse has two separate controls: **Plan mode** decides whether the agent may change files, and the **access level** decides which actions can proceed without asking.
+
+## Plan mode
+
+In Plan mode the agent inspects the project and proposes without changing files. Turn it on from **Plan mode** in the composer's **+** menu. While it's on, a **Plan** chip sits beside the access control; click it to turn Plan mode off. Turning Plan mode on or off doesn't change the access level.
+
+Plan mode isn't available for Pi, Muse Code, Zapper coordinator chats, or cloud launches; the menu item shows **Not available for this agent**.
+
+Use Plan mode when the implementation shape, scope, or tradeoff is not yet settled. Use normal execution when the desired result is already decided.
+
+## Access levels
+
+The access control is a single icon with three levels:
+
+| Level | What it does |
+| --- | --- |
+| **Ask for approval** | Asks before restricted actions. |
+| **Approve for me** | The agent's own automatic reviewer decides, and asks you when needed. |
+| **Full access** | Runs actions without approval. Plan mode and sensitive paths (`.env`, `.ssh`, credentials, keys) still prompt. |
+
+**Approve for me** is available only for Claude Code, which uses its native `auto` permission mode, and Codex, which uses its automatic reviewer. Other agents show it as **Not available for this agent**.
+
+Choosing a level in the composer also saves it as the default for future chats. An existing chat keeps its own level when the default changes. Changing a chat's access restarts its agent process with the new level; Zuse never reuses a process launched with different permissions.
+
+Full access uses the agent's unrestricted mode. It is not a sandbox. Questions the agent asks you stay interactive even in Full access.
+
+## Permission prompts and saved rules
+
+When an action needs approval, Zuse shows the request at the composer with its operation and target. Choose to allow it once, **Allow for this chat**, **Always allow in this project**, or **Deny this action**. Denying returns control to the agent so it can explain or choose another approach.
+
+Saved rules match the exact tool and resource in the same checkout, and never go beyond the chat's access level. Sensitive paths, sign-in operations, and leaving Plan mode always ask and can't be saved as rules. Type `/permissions` to review saved rules: change a rule to Allow, Ask, or Deny, move its scope, or remove it.
+
+## Defaults
+
+Set the model and permission mode new chats start with in **Settings → Default models**.

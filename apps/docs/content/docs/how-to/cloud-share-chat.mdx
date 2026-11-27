@@ -1,0 +1,56 @@
+---
+title: "Reach a cloud computer from your desktop"
+icon: MonitorSmartphone
+navTitle: "Reach a cloud computer"
+description: "Open a cloud chat's computer over SSH, watch its desktop live, sync its files to a local folder, and open its files from the chat."
+section: how-to
+order: 28
+platforms: [desktop]
+providers: []
+prerequisites: [/how-to/cloud-start-chat]
+related: [/how-to/choose-cloud-provider, /how-to/cloud-agent-local-commands]
+lastVerified: "2026-11-27"
+---
+
+## Goal
+
+Inspect or edit what a cloud agent is doing with your own editor, terminal, or file browser, without moving the chat off its cloud computer.
+
+## Applicability
+
+Use this guide in the **desktop app**, for a cloud chat whose computer is running. A sleeping computer wakes when you send a message or open one of its files from the chat.
+
+## Steps
+
+### Open the computer over SSH
+
+1. In the cloud chat, open the cloud computer card. It shows the computer's status and resources.
+2. Choose **Open via SSH**. Zuse lists the editors and terminals installed on your computer; pick one to open the computer's checkout there.
+3. To connect from somewhere else, choose **Copy SSH command** and run it in a terminal.
+
+### Watch the computer's desktop
+
+Open the **Desktop** panel in the cloud chat to watch the computer's screen live, for example while the agent tests a browser app. The view runs over the same SSH connection, so it needs SSH access to the computer.
+
+### Sync files to a local folder
+
+Open the cloud workspace details from the chat's top bar and turn on sync. Choose a folder in the **Choose Cloud Sync Folder** dialog. The details show the sync state, such as **Syncing…**, **Up to date**, or **Sync off**.
+
+### Open files from the chat
+
+File and image links in a cloud chat open from the cloud computer: images in the image viewer and other files in the file preview, as a tab beside the chat. If the computer is asleep, the tab opens right away, wakes the computer, and shows the file.
+
+## Verify
+
+- Your editor or terminal opens the cloud computer's files.
+- The **Desktop** panel shows the computer's screen.
+- The cloud workspace details show **Up to date** for sync.
+
+## Troubleshooting and recovery
+
+- **Couldn't open _editor_ over SSH:** confirm the computer is running, then try again or use **Copy SSH command**.
+- **Monitor could not start. Check SSH access and update the guest image to a version with Desktop:** the computer's image predates the live desktop. Start a new chat after your machine image rebuilds; see [Choose a cloud computer](/how-to/choose-cloud-provider/).
+- **Monitor timed out while connecting** or **Monitor connection failed:** close and reopen the **Desktop** panel.
+- **Sync failed** or **Could not update cloud sync. Retry to check its state:** retry from the cloud workspace details.
+- **Waiting for cloud connection:** keep the chat open; sync resumes when the connection returns.
+- **A file link shows a short notice instead of the file:** the file is missing on the computer, or the computer is offline.

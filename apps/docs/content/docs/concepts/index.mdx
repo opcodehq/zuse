@@ -1,0 +1,35 @@
+---
+title: Core concepts
+icon: BookOpen
+description: Understand how Zuse organizes repositories, threads, conversations, and isolated checkouts.
+section: concepts
+order: 10
+platforms: [desktop, browser, mobile]
+providers: []
+prerequisites: [/start/first-chat]
+related: [/concepts/project-chat-session, /concepts/local-first, /projects/worktrees]
+next: /concepts/project-chat-session
+lastVerified: "2026-11-27"
+---
+
+
+Zuse separates the durable unit of work from the agent process doing the work. That distinction makes it possible to change agents, keep parallel tasks isolated, and reconnect without losing the useful history.
+
+## The model
+
+```text
+Computer (this one, a paired computer, or a cloud computer)
+└── Project (repository or folder)
+    └── Thread (one task and one checkout)
+        ├── Conversation tab (one agent session)
+        ├── Conversation tab
+        └── Files, terminal, diff, and pull request state
+```
+
+- A **computer** runs the Zuse engine and owns its projects, chats, and checkouts.
+- A **project** points to a repository or folder on that computer.
+- A **thread** is one task shown in the sidebar. The app also calls it a chat.
+- A **conversation** is one agent session inside a thread, shown as a tab, with its own agent, model, and history.
+- A **checkout** is either the project's main folder (**Local**) or the thread's own Git worktree (**Worktree**).
+
+See [Projects, threads, and conversations](/concepts/project-chat-session) for lifecycle details and [Local-first data](/concepts/local-first) for where Zuse keeps your work.

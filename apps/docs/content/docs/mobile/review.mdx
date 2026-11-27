@@ -1,0 +1,39 @@
+---
+title: "Review changes on mobile"
+icon: FileDiff
+navTitle: "Review changes"
+description: "Inspect working-tree, staged, and branch changes from a chat on your phone."
+section: "Mobile"
+order: 4
+platforms: [mobile]
+providers: []
+prerequisites: [/mobile/chats]
+related: [/mobile/chats, /remote/recovery]
+next: /remote/recovery
+lastVerified: "2026-11-27"
+---
+
+An agent's last message is a summary. Before you continue, look at what actually changed on the computer.
+
+## Open changes
+
+In a chat, choose **Changes**. Pick the scope at the top:
+
+- **Working tree**: changes not yet staged.
+- **Staged**: changes staged for the next commit.
+- **Branch**: everything on the current branch compared with its base.
+
+Each file shows how many lines were added and removed. Binary files are marked **Binary file changed** instead of being shown as text. Very large patches may be cut short by the computer, marked **Patch truncated by server**; choose **View working-copy file** to read the whole file.
+
+## A practical review loop
+
+1. Read the agent's explanation.
+2. Open **Changes** and check the scope you care about.
+3. Read every file that affects behavior or security.
+4. Reply in the chat with a specific correction, or continue on the computer to commit and ship.
+
+<Warning title="A clean explanation is not verification">
+The phone shows the changes the computer reports. It does not prove a build or test ran unless that evidence is in the chat.
+</Warning>
+
+<NextStep href="/remote/recovery/" label="Recover a failed connection" />

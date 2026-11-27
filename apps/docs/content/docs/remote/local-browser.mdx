@@ -1,0 +1,50 @@
+---
+title: "Browser access"
+icon: Laptop
+navTitle: "Browser access"
+description: "Open a computer's Zuse workspace in a browser on another device with a private pairing link."
+section: "Remote access"
+order: 3
+platforms: [desktop, web, serve]
+providers: []
+prerequisites: [/remote]
+related: [/remote/web-client, /remote/tailscale, /remote/security, /remote/recovery]
+next: /remote/web-client
+lastVerified: "2026-11-27"
+---
+
+Any modern browser can open a computer's workspace once you give it a pairing link. The browser becomes one of the computer's devices and can be revoked on its own.
+
+## On the same computer
+
+`zuse serve` prints an `Open http://127.0.0.1:27656/#token=…` link when it starts. Open it in a browser on that computer. No pairing is needed.
+
+## From another device
+
+<Workflow>
+  <Step title="Turn on a connection">
+    In the desktop app, open **Settings → Remote access** and turn on **Wi-Fi** or **Tailscale**. On a headless computer, run `zuse serve --lan`.
+  </Step>
+  <Step title="Create a browser link">
+    In a terminal on that computer, run `zuse pair` and copy the **Browser** link it prints. This works with the desktop app or `zuse serve` running. The **Copy link** button in the desktop app's **Connect device** dialog makes a link for the Zuse apps, not for browsers.
+  </Step>
+  <Step title="Open it in the browser">
+    Send the link privately to the other device and open it. The link works once and expires after ten minutes if unused.
+  </Step>
+</Workflow>
+
+Browsers need a secure page, so on your local network the link opens a separate HTTPS address (port `27659` by default) with a certificate generated for this computer. The browser warns about it the first time. Continue only on a network you trust. For an address browsers trust without a warning, turn on [Tailscale HTTPS](/remote/tailscale/#tailscale-https).
+
+After it connects, the browser saves the computer and reopens it without a new link. See [Web client](/remote/web-client/) for saved computers.
+
+## Use your own address and certificate
+
+To serve the web client at an address you control, open **Settings → Remote access → Advanced settings**, find **Browser access**, and choose **Set up**. Enter the **Listen address**, an optional **Public URL**, and the **HTTPS certificate and key** file paths, then choose **Turn on**. A LAN address needs trusted HTTPS; leave the fields blank for a local connection. On a headless computer, use `zuse serve --listen` with `--tls-cert` and `--tls-key`, or `--public-origin` behind an HTTPS reverse proxy.
+
+Choose **Turn off** to stop browser access. Saved device pairings stay.
+
+## Revoke a browser
+
+Find the browser under **Devices** in **Settings → Remote access** and choose **Revoke**. Its next connection is refused, whatever the browser has saved.
+
+<NextStep href="/remote/web-client/" label="Use the web client" />

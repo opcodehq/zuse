@@ -1825,6 +1825,7 @@ impl Pickers {
             self.effort_dragging = false;
             self.compact_keyboard = false;
             self.compact_motion = compact::CompactMotion::default();
+            self.model_menu.reset_card_side();
         }
         if matches!(kind, PickerKind::Device | PickerKind::Space) {
             self.cloud.refresh();

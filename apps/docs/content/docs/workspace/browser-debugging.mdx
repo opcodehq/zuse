@@ -1,0 +1,47 @@
+---
+title: Browser debugging
+icon: Bug
+navTitle: "Browser debugging"
+description: Inspect a page with developer tools and hand what you find to the agent.
+section: workspace
+order: 65
+platforms: [desktop]
+providers: []
+prerequisites: [/workspace/browser]
+related: [/workspace/browser-evidence, /workspace/browser-troubleshooting, /reference/diagnostics]
+next: /workspace/browser-evidence
+lastVerified: "2026-11-27"
+---
+
+
+The in-app browser includes the platform's page inspector, so you can read console output, network requests, and the rendered page without opening another browser. What you find goes back to the agent as ordinary chat context.
+
+## Open developer tools
+
+Open the page, then click **Developer tools** in the browser toolbar. The inspector opens inside the Browser panel; click the button again to close it.
+
+The inspector needs room inside the panel (on macOS, at least about 500 by 334 points). If the panel is too small, Zuse shows **Make the browser panel wider or taller to open developer tools inside it.** Widen the workspace pane or hide the terminal, then try again.
+
+Use the inspector's own console, network, and elements views to reproduce the problem. Reload with **Reload page** so the network view captures the full page load.
+
+## Give the agent what you found
+
+The agent does not read the inspector directly, so pass on the evidence that matters:
+
+- Copy the relevant console error or failed request into your message.
+- Use **Annotate page** to point at the element that misbehaves; see [Browser screenshots and annotations](/workspace/browser-evidence).
+- Use **Copy URL** from **Browser options** so the agent can reproduce the exact page and query string.
+
+> The save button stays disabled after I fill the form. The console shows `TypeError: cannot read properties of undefined` from `form.tsx`. Find the cause and fix it.
+
+Console and network output can contain account details or application data. Review it before copying it into a message, an issue, or a public report.
+
+## Check light and dark pages
+
+Use **Browser options → Appearance** to view pages in **Light** or **Dark**, or let them follow **System**. This changes the appearance the page sees, so you can check both themes of your app without changing your computer's settings.
+
+## Responsive checks
+
+The in-app browser has no device-size presets. To check a narrow layout, resize the workspace pane, or open the page with **Open in default browser** and use that browser's responsive tools.
+
+See [Troubleshoot the in-app browser](/workspace/browser-troubleshooting) when a page does not load or developer tools will not open.

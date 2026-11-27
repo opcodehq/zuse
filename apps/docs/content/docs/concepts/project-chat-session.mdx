@@ -1,0 +1,52 @@
+---
+title: Projects, threads, and conversations
+icon: Boxes
+navTitle: "Projects, threads, conversations"
+description: Learn the ownership and lifecycle rules behind Zuse threads and their conversations.
+section: concepts
+order: 11
+platforms: [desktop, browser, mobile]
+providers: [claude, codex, grok, cursor, opencode, kiro, pi]
+prerequisites: [/concepts]
+related: [/projects/worktrees, /composer/subagents, /desktop/navigation]
+next: /projects/worktrees
+lastVerified: "2026-11-27"
+---
+
+
+## Project
+
+A project is a folder you added to Zuse on a specific computer. Its path anchors file browsing, terminals, Git operations, and every thread in it. Removing a project from Zuse does not delete the repository.
+
+## Thread
+
+A thread, also called a chat, is one durable unit of work. It owns the checkout used by all of its conversations. If the thread uses a worktree, every conversation in it works against that same worktree.
+
+Choose a thread boundary that matches a branch-sized outcome: one fix, one feature, one investigation, or one review. This keeps its messages, changes, and pull request state coherent.
+
+Pick the checkout before the first message: **Worktree** for a fresh isolated branch, **Local** for the project's main folder, or **Cloud** to run the thread on a cloud computer.
+
+You can group threads into your own sections in the sidebar and pin the ones you return to often.
+
+## Conversation
+
+A conversation is one agent session inside a thread, shown as a tab. Use the **+** beside the conversation tabs to start another conversation in the same checkout, with its own history and agent session. That lets you ask another agent for a review or try a different approach on the same files and branch.
+
+You can change a conversation's agent or model from the model picker.
+
+## Fork a conversation
+
+Use the fork button on an agent reply to branch the conversation from that point:
+
+- **Fork in new tab** continues from there in a new tab of this thread, in the same checkout.
+- **Fork into new thread** continues from there in a new thread with its own worktree.
+
+## Import a chat
+
+On a new thread, **Import chat** lists recent conversations from supported agent apps on the computer. Importing one continues it as a Zuse chat with the same agent. First-run setup offers the same import.
+
+## Archive and delete
+
+Archive a finished thread to remove it from the sidebar while keeping its record. Archiving stops its agents, subagents, and background commands, and includes all of its conversations. If the agents cannot shut down safely, Zuse keeps the worktree.
+
+Open **Settings → Archived chats** to read an archived conversation or restore it. Read confirmation text carefully before you discard uncommitted files or delete a thread permanently.

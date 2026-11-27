@@ -1,0 +1,60 @@
+---
+title: In-app browser
+icon: Globe
+navTitle: "In-app browser"
+description: Preview a local app or keep a website beside your conversation in the desktop workspace.
+section: workspace
+order: 64
+platforms: [desktop]
+providers: []
+prerequisites: [/workspace/terminal-browser]
+related: [/workspace/browser-debugging, /workspace/browser-evidence, /workspace/browser-sessions-privacy, /workspace/browser-troubleshooting]
+next: /workspace/browser-debugging
+lastVerified: "2026-11-27"
+---
+
+
+The in-app browser opens web pages in the workspace pane beside the conversation. Use it to preview a local development server, check a website, or mark up a page for the agent without leaving the task. Embedded browsing is available in the desktop app on macOS, Linux, and Windows.
+
+This is not the same as the **browser client**. The in-app browser shows a page beside a task. The browser client opens the Zuse interface from another device; see [Local browser access](/remote/local-browser).
+
+## Open the browser
+
+- Choose **Browser** from the **+** menu in the workspace pane, or from the launcher an empty pane shows.
+- Click a web link in the chat. Links open in the in-app browser while **Open links in Zuse** is checked; right-click a link to change it, or choose **Open in external browser** for one link.
+- Press `⌘T` (`Ctrl+T` on Windows and Linux) while the browser has focus to open another browser tab, and `⌘W` to close the current one.
+
+Browser tabs belong to the chat that opened them, so each task keeps its own pages while you switch between tasks.
+
+## Start from the home page
+
+A new browser tab shows **Search the web or open a local project.** Under **Running locally**, Zuse lists the development servers it detects for the chat's project, ready to open. Start a dev server in the [terminal](/workspace/terminal-browser) and it appears there automatically.
+
+**Recently visited** lists pages you opened recently. Remove one entry, or use **Clear recently visited pages** to empty the list.
+
+## Enter an address
+
+Type in **Search or enter a website** and press `Enter`. Press `⌘L` to focus the field and `Esc` to restore the current address.
+
+- `localhost` and IP addresses open over HTTP, for example `localhost:3000`.
+- Other addresses without a scheme open over HTTPS.
+- Text that is not an address searches the web.
+
+Only `http` and `https` addresses are supported, and addresses with an embedded username or password are refused. When several servers are running, confirm the port before reviewing or annotating a page.
+
+## Use the toolbar
+
+- **Back** (`⌘[`) and **Forward** (`⌘]`) move through the tab's history.
+- **Reload page** reloads it (`⌘⇧R` by default; change it in [keyboard shortcuts](/reference/keybindings)).
+- **Open in default browser** opens the current page in your everyday browser.
+- **Annotate page** marks up the page for the agent; see [Browser screenshots and annotations](/workspace/browser-evidence).
+- **Developer tools** opens the page inspector inside the panel; see [Browser debugging](/workspace/browser-debugging).
+- **Browser options** holds **Copy URL**, **Take screenshot**, **Appearance** (**System**, **Light**, or **Dark** for the pages you view), **Clear cookies**, and **Clear cache**. On Linux it also has **Zoom**, with `⌘=` and `⌘-` to zoom and `⌘0` to reset.
+
+## Chats on another device
+
+When a chat runs on another of your devices, the home page lists that device's servers under **Running on your device**, and opening one reaches the server through Zuse. A `localhost` address you type always opens on this computer, so open the detected preview instead to reach the other device.
+
+Sign-in data, cookies, and cache have their own lifecycle; read [Browser data and privacy](/workspace/browser-sessions-privacy) before using an authenticated account.
+
+For a complete development loop, follow [Test a local app in the browser](/how-to/local-test-in-browser/).
