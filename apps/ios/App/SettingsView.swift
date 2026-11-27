@@ -47,7 +47,7 @@ struct AccountSettingsView: View {
             Text(signingIn ? "Signing In…" : "Sign in").font(.body.weight(.semibold))
               .frame(maxWidth: .infinity).frame(height: 30)
           }
-          .buttonStyle(.borderedProminent).tint(AppTheme.accent).foregroundStyle(.white)
+          .brandProminentButton()
           .controlSize(.large).buttonBorderShape(.capsule).disabled(signingIn)
         }
         .listRowBackground(Color.clear)

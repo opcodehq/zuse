@@ -64,6 +64,30 @@ These files in `App/` are committed snapshots that nothing in this repository re
 They came from the original TypeScript workspace (see
 `internal-docs/mobile-import.md`).
 
+## Debug launch arguments
+
+Debug builds read these to open a screen in a given state, for screenshots and manual checks
+(`xcrun simctl launch <udid> com.zuse.sh <arguments>`):
+
+| Argument | Shows |
+| --- | --- |
+| `--native-preview` | Sample chat, projects and models, offline |
+| `--home-preview`, `--zapper-preview` | Sample chat list, sample Zappers |
+| `--tab=<zappers\|chats\|prs\|more\|search>`, `--more=<page>` | A tab, a More page |
+| `--focus-composer`, `--draft=<text>` | The open chat (or `--new-chat-preview`) with the keyboard up and a draft |
+| `--model-sheet-preview` | Model and reasoning settings |
+| `--new-chat-preview`, `--setup-progress-preview`, `--cloud-preview` | New chat, its setup progress, cloud launch with a signed-in account |
+| `--pairing-preview`, `--connection-preview=<connecting\|reconnecting\|attention>` | Add computer, a computer connecting, dropping out or unreachable |
+| `--empty-preview` | A computer with no chats, Zappers or pull requests |
+| `--loading-preview` | The same computer while its lists are still arriving |
+| `--new-zapper-preview`, `--new-zapper-starter=<0-2>` | New Zapper, blank or from a first-run idea |
+| `--new-zapper-submit=<model>` | Picks that model and presses Create (checks creating against a paired computer) |
+| `--show-sidebar` | The iPad sidebar over a narrow layout |
+| `--expand-activity`, `--expand-steps`, `--running-preview` | Open activity, open steps, a turn in progress |
+
+`SIMCTL_CHILD_ZUSE_PAIR_LINK=<invitation>` pairs with a computer at launch, and
+`--open-chat=<id>` then opens one of its chats.
+
 Cloud chats take their repositories, agents and models from the cloud API's
 `/v1/cloud/context`, so nothing about cloud launch is bundled. Agent sign-in for cloud
 chats happens in the desktop app. Run with `--native-preview --new-chat-preview --cloud-preview`

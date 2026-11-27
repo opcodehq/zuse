@@ -130,7 +130,8 @@ struct AccountAvatar: View {
           .overlay { Circle().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5) }
       } else if account.signedIn, let initials {
         Circle().fill(AppTheme.accent)
-        Text(initials).font(.system(size: size * 0.38, weight: .semibold)).foregroundStyle(.white)
+        Text(initials).font(.system(size: size * 0.38, weight: .semibold)).foregroundStyle(
+          AppTheme.onAccent)
       } else {
         Circle().fill(Color.primary.opacity(0.09))
         Image(systemName: "person.fill").font(.system(size: size * 0.42))

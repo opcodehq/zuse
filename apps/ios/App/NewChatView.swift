@@ -570,8 +570,8 @@ private struct NewChatProgressView: View {
         VStack(alignment: .leading, spacing: 10) {
           Text(failure).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
           if let retry = progress.retry {
-            Button("Try Again", action: retry).buttonStyle(.borderedProminent)
-              .tint(AppTheme.accent).buttonBorderShape(.capsule)
+            Button("Try Again", action: retry).brandProminentButton()
+              .buttonBorderShape(.capsule)
           }
         }
       }

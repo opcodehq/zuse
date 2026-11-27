@@ -319,7 +319,7 @@ struct ChatsListView: View {
             } label: {
               Text(signingIn ? "Signing In…" : "Sign In").frame(maxWidth: 260)
             }
-            .buttonStyle(.borderedProminent).tint(AppTheme.accent).disabled(signingIn)
+            .brandProminentButton().disabled(signingIn)
           }
           if workspace.savedConnections.isEmpty && workspace.environments.isEmpty {
             Button(action: connect) {

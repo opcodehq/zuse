@@ -94,6 +94,19 @@ struct RegularShell<Chat: View, ChatsDetail: View>: View {
         actions.openZapper(id)
       }
     }
+    #if DEBUG
+      .onAppear {
+        if ProcessInfo.processInfo.arguments.contains("--new-zapper-preview") {
+          creatingZapper = true
+        }
+      }
+      // `--show-sidebar` opens the sidebar over a narrow layout, for screenshots of it.
+      .task {
+        guard ProcessInfo.processInfo.arguments.contains("--show-sidebar") else { return }
+        try? await Task.sleep(for: .milliseconds(1500))
+        withAnimation { visibility = .all }
+      }
+    #endif
   }
 
   /// The split view reopens its inspector on its own when it is rebuilt; only the toolbar

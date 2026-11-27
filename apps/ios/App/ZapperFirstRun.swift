@@ -80,7 +80,7 @@ struct ZapperFirstRun: View {
         Label("Create a Zapper", systemImage: "plus").font(.body.weight(.semibold))
           .frame(maxWidth: 280).frame(minHeight: 30)
       }
-      .buttonStyle(.borderedProminent).tint(AppTheme.accent).controlSize(.large)
+      .brandProminentButton().controlSize(.large)
       .buttonBorderShape(.capsule)
       .padding(.top, 22)
       .accessibilityIdentifier("create-first-zapper")
@@ -149,7 +149,7 @@ struct ZapperSidebarInvite: View {
         Label("New Zapper", systemImage: "plus").font(.subheadline.weight(.semibold))
           .frame(maxWidth: .infinity)
       }
-      .buttonStyle(.borderedProminent).tint(AppTheme.accent).controlSize(.regular)
+      .brandProminentButton().controlSize(.regular)
       .buttonBorderShape(.capsule)
       .accessibilityIdentifier("sidebar-create-first-zapper")
     }

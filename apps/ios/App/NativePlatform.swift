@@ -94,6 +94,9 @@ import ZuseCore
   static let lime = Color(red: 140 / 255, green: 201 / 255, blue: 33 / 255)
   /// Text on your messages: 13:1 on the light bubble, 13:1 on the dark one.
   static let userBubbleText = adaptive(light: rgb(26, 41, 5), dark: rgb(234, 247, 211))
+  /// Labels on the accent: white on the deep light-mode green (6.6:1), near-black on the
+  /// bright dark-mode lime (9:1).
+  static let onAccent = adaptive(light: rgb(255, 255, 255), dark: rgb(22, 34, 4))
   /// Hairlines and quiet rules in the transcript.
   static let hairline = adaptive(
     light: rgb(23, 23, 22).withAlphaComponent(0.09),
@@ -160,7 +163,7 @@ struct SettingsIcon: View {
   var brand = false
   var body: some View {
     Image(systemName: symbol).font(.system(size: 14, weight: .semibold))
-      .foregroundStyle(brand ? Color.white : Color.primary)
+      .foregroundStyle(brand ? AppTheme.onAccent : Color.primary)
       .frame(width: 28, height: 28)
       .background(
         brand ? AppTheme.accent : Color.primary.opacity(0.09),
@@ -254,6 +257,28 @@ extension Notification.Name {
   static let nativeNewChat = Notification.Name("sh.zuse.native.new-chat")
   static let nativeNewCloudChat = Notification.Name("sh.zuse.native.new-cloud-chat")
   static let nativeSettings = Notification.Name("sh.zuse.native.settings")
+}
+
+extension View {
+  /// The one prominent action on a page: a capsule of the brand accent with a label that stays
+  /// readable on it in both appearances.
+  func brandProminentButton() -> some View { buttonStyle(BrandProminentButtonStyle()) }
+}
+
+private struct BrandProminentButtonStyle: ButtonStyle {
+  @Environment(\.isEnabled) private var enabled
+  @Environment(\.controlSize) private var controlSize
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .font(.body.weight(.semibold))
+      .foregroundStyle(AppTheme.onAccent)
+      .padding(.horizontal, 20)
+      .frame(minHeight: controlSize == .large ? 50 : controlSize == .regular ? 40 : 34)
+      .background(AppTheme.accent, in: Capsule())
+      .opacity(enabled ? (configuration.isPressed ? 0.82 : 1) : 0.45)
+      .contentShape(Capsule())
+      .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+  }
 }
 
 extension View {

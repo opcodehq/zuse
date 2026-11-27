@@ -158,7 +158,7 @@ struct ZappersListView: View {
         Button(action: connect) {
           Label("Add computer", systemImage: "plus").frame(maxWidth: 260)
         }
-        .buttonStyle(.borderedProminent).tint(AppTheme.accent).controlSize(.large)
+        .brandProminentButton().controlSize(.large)
         .buttonBorderShape(.capsule)
       }
     }
