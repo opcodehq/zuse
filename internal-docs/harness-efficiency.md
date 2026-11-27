@@ -100,6 +100,13 @@ Explicit Bearer routes and internal environment handoff are covered in the
 Models appear as `api/<connection-id>/<model-id>`. API-key identity participates
 in continuation/cache scoping, so rotating a key cannot reuse account-bound metadata.
 
+Built-in Messages connections `kimi`, `kimi-code` and `glm`
+(`crates/engine/src/harness_vendors.rs`) are added unless `providers.json` already
+uses that id. Their keys come from Settings → Providers → Zuse
+(`<profile>/harness/api-keys.json`, owner-only) or from `MOONSHOT_API_KEY`,
+`KIMI_CODE_API_KEY` and `ZAI_API_KEY`. Per-token rates for their models live
+in `crates/usage/data/provider-prices.json`.
+
 Protocols/endpoints:
 
 | Protocol | Endpoint shape | Authentication |

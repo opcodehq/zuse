@@ -77,6 +77,7 @@ mod acp_catalog;
 mod harness_api;
 mod harness_local;
 pub mod harness_models;
+pub(crate) mod harness_vendors;
 mod model_catalogs;
 pub mod model_connections;
 #[cfg(unix)]
@@ -802,6 +803,7 @@ impl EngineCore {
         .with_direct_access(self.direct_access.control())
         .with_zappers(self.zappers.clone())
         .with_model_connections(self.model_connections.clone())
+        .with_model_api_keys(self.harness_models.api_keys())
         .with_account(self.account.clone(), self.plugins.clone())
         .with_managed_access(self.managed_access.clone())
         .with_managed_host(self.managed_host.control())

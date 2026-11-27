@@ -45,6 +45,10 @@ pub const GET_CLAUDE_CONNECTION: &str = "GetClaudeConnection";
 /// `{mode, baseUrl?, apiKey?, fallback?}` → `ClaudeConnection`. Choosing the
 /// proxy without an address looks for a local one first.
 pub const SET_CLAUDE_CONNECTION: &str = "SetClaudeConnection";
+/// `{}` → `[ModelApiKey]`: the Zuse agent's built-in API-key connections.
+pub const GET_MODEL_API_KEYS: &str = "GetModelApiKeys";
+/// `{id, apiKey}` → `[ModelApiKey]`. An empty `apiKey` removes the saved key.
+pub const SET_MODEL_API_KEY: &str = "SetModelApiKey";
 pub const LIST_SKILLS: &str = "ListSkills";
 pub const LIST_COMMANDS: &str = "ListCommands";
 /// Transient secret submission; never enqueue or persist its parameters.
@@ -405,6 +409,7 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | LIST_MODELS
         | LIST_PROVIDER_MODELS
         | GET_CLAUDE_CONNECTION
+        | GET_MODEL_API_KEYS
         | LIST_AGENT_ACCOUNTS
         | WATCH_DOC_MESSAGES
         | WATCH_QUEUE
