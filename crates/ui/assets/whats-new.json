@@ -1,4 +1,31 @@
 {
+	"0.27.10": {
+		"summary": "Cloud chats can run commands on your own computers",
+		"scene": "computer-approval",
+		"tint": "slate",
+		"highlights": [
+			{
+				"icon": "laptop",
+				"title": "Commands on your computers",
+				"body": "A cloud chat asks before every command on your computer, then keeps going with the output. Allow once, for the chat, or always."
+			},
+			{
+				"icon": "folder",
+				"title": "Sync into your checkout",
+				"body": "Bring a cloud chat's files into your local folder. Your branch and changes are saved first and come back when you turn it off."
+			},
+			{
+				"icon": "activity",
+				"title": "Agent activity at a glance",
+				"body": "Expand what the agent worked on, and see issues, pull requests and subagents as status chips."
+			},
+			{
+				"icon": "history",
+				"title": "New chats remember your project",
+				"body": "New chats open on the project you pick in the sidebar, and New thread keeps your last Local, Worktree or Cloud choice."
+			}
+		]
+	},
 	"0.26.1": {
 		"summary": "Pick your update track, and a guided first run",
 		"scene": "update-channel",
