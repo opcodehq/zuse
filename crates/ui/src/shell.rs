@@ -4887,6 +4887,30 @@ impl Shell {
         self.add_file_surface_at(owner, path, None, window, cx);
     }
 
+    /// Point a cloud chat's open file tabs at its current state. Reopening
+    /// a cloud chat whose conversation was closed builds a new state; tabs
+    /// left on the old one would wait on a connection that never attaches.
+    pub(super) fn rebind_cloud_file_tabs(
+        &mut self,
+        chat: &str,
+        state: &Entity<AppState>,
+        cx: &mut Context<Self>,
+    ) {
+        let stale = self
+            .file_surface_keys
+            .iter()
+            .filter(|((panel, _, _), _)| panel == chat)
+            .filter_map(|(_, id)| self.file_surfaces.get(id).cloned())
+            .filter(|file| {
+                let current = file.read(cx).state();
+                current != state && current.read(cx).hosted_on_cloud_computer
+            })
+            .collect::<Vec<_>>();
+        for file in stale {
+            file.update(cx, |file, cx| file.rebind_state(state.clone(), cx));
+        }
+    }
+
     /// The chat and state a transcript link resolves in: the main chat's, or
     /// an open side chat's own (its chat row may not reach the main list yet).
     fn link_owner(&self, chat_id: &str, cx: &App) -> Option<(String, Entity<AppState>)> {
@@ -4918,6 +4942,12 @@ impl Shell {
         let panel_key = self.panel_key(cx);
         let lookup = (panel_key.clone(), owner_chat.clone(), path.clone());
         if let Some(id) = self.file_surface_keys.get(&lookup).copied() {
+            // A cloud chat reopened since this tab opened has a new state.
+            if owner_state.read(cx).hosted_on_cloud_computer
+                && let Some(file) = self.file_surfaces.get(&id).cloned()
+            {
+                file.update(cx, |file, cx| file.rebind_state(owner_state.clone(), cx));
+            }
             self.push_main_file_tab(&panel_key, id, cx);
             if let Some((line, column)) = location
                 && let Some(file) = self.file_surfaces.get(&id).cloned()
@@ -4990,7 +5020,10 @@ impl Shell {
                     }
                     // Navigation from an editor stays in its own chat.
                     FilesEvent::OpenFile(path) => {
-                        let owner = (source.read(cx).chat_id().to_owned(), owner_state.clone());
+                        let owner = (
+                            source.read(cx).chat_id().to_owned(),
+                            source.read(cx).state().clone(),
+                        );
                         this.add_file_surface_at(owner, path.clone(), None, window, cx)
                     }
                     FilesEvent::RevealFile(path) => {
