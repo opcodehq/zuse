@@ -745,7 +745,7 @@ impl RepositoryPanel {
             self.agents.operation = None;
             self.call("agent-login",methods::CLOUD_AGENT_LOGIN,json!({"agent":agent,"connectionId":connection,"idempotencyKey":binding.idempotency_key}),cx);
         } else {
-            let secret = self.agents.secret.read(cx).value(cx);
+            let secret = method.normalize_secret(agent, &self.agents.secret.read(cx).value(cx));
             if secret.trim().is_empty() {
                 return;
             }
