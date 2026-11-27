@@ -1,23 +1,29 @@
 /* The shared issue conversation: cards for discussion, quiet rows for events. */
-.zp-conversation { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
-.zp-card { border: 1px solid var(--hairline); border-radius: 10px; background: var(--card); overflow-wrap: anywhere; }
-.zp-card > .zp-card-head, .zp-card > .markdown, .zp-card > div:not(.zp-card-reply):not(.zp-composer), .zp-card > .zp-delivery { padding-left: 14px; padding-right: 14px; }
-.zp-card > .zp-card-head { padding-top: 10px; }
-.zp-card > :last-child:not(.zp-card-reply):not(.zp-composer) { padding-bottom: 12px; }
-.zp-card-head { display: flex; align-items: center; gap: 8px; font-size: 12px; min-width: 0; }
-.zp-card-head strong { font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.zp-card-head time { color: var(--text-faint); flex: none; }
-.zp-card-head .zp-icon-button { margin-left: auto; }
-.zp-card-tag { flex: none; padding: 0 5px; border-radius: 4px; font-size: 11px; color: var(--warning); background: color-mix(in srgb, var(--warning) 14%, transparent); }
-.zp-card-reply { border-top: 1px solid var(--hairline); padding: 10px 14px; }
-.zp-card-reply > :not(.zp-card-head) { padding-left: 24px; }
-.zp-card .zp-composer { margin: 4px 10px 10px; }
+.zp-discussion { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
+.zp-issue-card { border: 1px solid var(--hairline); border-radius: 10px; background: var(--card); overflow-wrap: anywhere; }
+.zp-issue-card .md { margin-top: 4px; }
+.zp-issue-card .md { font-size: 12.5px; line-height: 1.55; }
+.zp-issue-card .md-block > :first-child { margin-top: 0; }
+.zp-issue-card .md-block > :last-child { margin-bottom: 0; }
+.zp-issue-card .md-block + .md-block { margin-top: 8px; }
+.zp-issue-card > .zp-issue-card-head, .zp-issue-card > .md, .zp-issue-card > div:not(.zp-issue-card-reply):not(.zp-composer), .zp-issue-card > .zp-delivery { padding-left: 14px; padding-right: 14px; }
+.zp-issue-card > .zp-issue-card-head { padding-top: 10px; }
+.zp-issue-card > :last-child:not(.zp-issue-card-reply):not(.zp-composer) { padding-bottom: 12px; }
+.zp-issue-card-head { display: flex; align-items: center; gap: 8px; font-size: 12px; min-width: 0; }
+.zp-issue-card-head strong { font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.zp-issue-card-head time { color: var(--text-faint); flex: none; }
+.zp-issue-card-head .zp-icon-button { margin-left: auto; }
+.zp-issue-card-tag { flex: none; padding: 0 5px; border-radius: 4px; font-size: 11px; color: var(--warning); background: color-mix(in srgb, var(--warning) 14%, transparent); }
+.zp-issue-card-reply { border-top: 1px solid var(--hairline); padding: 10px 14px; }
+.zp-issue-card-reply > :not(.zp-issue-card-head) { padding-left: 24px; }
+.zp-issue-card .zp-composer { margin: 4px 10px 10px; }
 .zp-icon-button { border: 0; background: none; color: var(--text-faint); padding: 4px; border-radius: 6px; cursor: pointer; display: inline-flex; }
 .zp-icon-button:hover, .zp-icon-button:focus-visible { color: var(--text); background: var(--hover); }
 .zp-author-link { border: 0; background: none; padding: 0; font: inherit; color: var(--accent, #8fb4ff); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px; }
 .zp-author-link:hover, .zp-author-link:focus-visible { text-decoration: underline; }
 .zp-person { flex: none; width: 18px; height: 18px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 10px; font-weight: 600; color: var(--bg); background: var(--text-muted); }
-.zp-delivery { margin: 2px 0 0; font-size: 11.5px; color: var(--text-faint); }
+.zp-delivery { margin: 4px 0 0; font-size: 11.5px; color: var(--text-faint); }
+.zp-issue-card > .zp-delivery { padding-bottom: 10px; }
 .zp-delivery[data-attention] { color: var(--danger, #e16d76); }
 .zp-event { display: flex; align-items: center; gap: 8px; min-height: 26px; font-size: 12px; color: var(--text-muted); min-width: 0; }
 .zp-event > strong { font-weight: 400; color: var(--text); flex: none; }

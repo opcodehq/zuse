@@ -37,7 +37,7 @@ export function Conversation(props: Props) {
   const toggle = (key: string) => setOpen(s => { const next = new Set(s); if (!next.delete(key)) next.add(key); return next; });
   const status = () => indicator(props.zapper, props.issue, chat => runState(state.sessions[chat] as never), name);
   return (
-    <section class="zp-conversation" aria-label="Issue conversation">
+    <section class="zp-discussion" aria-label="Issue conversation">
       <For each={timeline(props.issue.activity)}>
         {(item: Item) => (
           <Show when={item.kind === "card"} fallback={
@@ -103,10 +103,10 @@ function Card(props: { event: IssueActivity; replies: IssueActivity[]; name: (id
   // Replying in a card continues with the thread that spoke last in it.
   const target = () => [...props.replies].reverse().find(r => r.actor && props.isThread(r.actor) && !props.coordinators.includes(r.actor))?.id ?? props.event.id;
   return (
-    <article class="zp-card" data-kind={props.event.kind}>
-      <header class="zp-card-head">
+    <article class="zp-issue-card" data-kind={props.event.kind}>
+      <header class="zp-issue-card-head">
         <Who actor={props.event.actor} name={props.name} isThread={props.isThread} coordinators={props.coordinators} zapper={props.zapper} />
-        <Show when={tag()}><span class="zp-card-tag">{tag()}</span></Show>
+        <Show when={tag()}><span class="zp-issue-card-tag">{tag()}</span></Show>
         <time title={exact(props.event.createdAt)}>{relative(props.event.createdAt)}</time>
         <button type="button" class="zp-icon-button" aria-label="Reply" onClick={() => setReplying(true)}><Icon name="return" size={12} /></button>
       </header>
@@ -114,8 +114,8 @@ function Card(props: { event: IssueActivity; replies: IssueActivity[]; name: (id
       <Delivery event={props.event} name={props.name} />
       <For each={props.replies}>
         {reply => (
-          <div class="zp-card-reply">
-            <header class="zp-card-head">
+          <div class="zp-issue-card-reply">
+            <header class="zp-issue-card-head">
               <Who actor={reply.actor} name={props.name} isThread={props.isThread} coordinators={props.coordinators} zapper={props.zapper} size={16} />
               <time title={exact(reply.createdAt)}>{relative(reply.createdAt)}</time>
             </header>

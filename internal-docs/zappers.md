@@ -203,8 +203,62 @@ Coordinator activity uses its stable chat identity so renames and fresh
 conversations retain readable authorship. Linked PR pages provide issue/thread
 backlinks and keep their navigation inside the Zapper inspector.
 
+### Conversation and routed answers
+
+The issue detail is one conversation shared by the Zapper and its linked
+threads. A **Threads N** control lists the coordinator and every linked thread,
+marks the owner (the one accountable routing target), and opens each
+conversation. Comments, worker reports and questions render as attributed cards
+with replies nested one level deep; quiet events (status, owner, priority and
+link changes) render as rows, and runs of three or more fold into one summary
+line that never hides questions, blocked or needs-you changes. New updates store
+typed `changes` (`field`, `before`, `after`, wire values); older entries keep
+their text. Clients treat stored values as plain text. CI and merge events are
+not persisted in Zapper issue data, so the timeline does not show them.
+
+A person's comment (owner-authenticated scope only; coordinator and worker
+credentials always carry an actor) goes straight to one thread only when it
+answers that thread explicitly:
+
+- a reply to an entry the thread wrote (a report or a comment), or
+- an answer to the open question on a `needsYou` issue when `askUser` recorded
+  the live thread that held the issue (`thread`), the question is still the
+  newest one, and the comment's `expectedRevision` is not older than the
+  issue's details revision.
+
+Anything else (ordinary comments, untied or stale answers, replies to the
+Zapper) wakes the coordinator as before; untied and stale answers record why in
+`delivery.detail`. A routed comment enqueues one `messageWorker` outbox row
+with id `<commentId>:answer` in the comment's transaction, so receipts and the
+destination ledger make retries, double submits and restarts deliver it at most
+once. It waits while the thread is busy (it never steers a running turn), while
+the Zapper is paused or a remote worker is offline, or for a free slot. Closed
+issues, stopped or archived Zappers, threads that left the Zapper or the issue,
+and threads the person stopped are never revived: the comment is kept with
+`delivery.state = held` and a reason, and the same checks run again just
+before dispatch (`cancelled`). The coordinator's event says the comment was
+delivered and must not be relayed.
+
+`delivery.state` is `queued`, `retrying` (with the error), `sent` (the
+thread's queue accepted it, which is not proof it was handled), `answered`,
+`cancelled` or `held`. A report becomes the answer only by turn identity: the
+transcript entry that started the settled turn ending at `lastCompletedTurn`
+must be that `:answer` message. The link is stored on the comment
+(`delivery.reply`) before the report is recorded, is retried while the
+transcript hasn't caught up, and is never replaced. Interrupted, failed and
+input-request turns are not linked; their comment stays `sent`.
+
+The line above the comment box shows the owner's (else the coordinator's)
+confirmed run state: working only from a fresh session report, "can't confirm"
+for a busy-looking chat without one, queued with its slot, needs input, or a
+queued or retrying reply. Comment drafts stay until the engine confirms them.
+
 Checks cover persistence/retry, stale revisions, atomic delegation/rollback,
 link validation, scoped worker writes, legacy records and report deduplication.
+`scripts/acceptance/zapper-issue-conversation.mjs` drives a deterministic
+coordinator and worker through a tied question, a top-level answer, an explicit
+reply, a retried command and an engine restart, and checks the worker received
+each answer once and its replies nested under them.
 The real-engine acceptance scenario uses a deterministic ACP coordinator and
 worker, exercises isolated checkout and scoped writes, and verifies clean visible
 kickoff text, hidden issue context, activity notices and explicit acceptance.
