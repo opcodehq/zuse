@@ -20,6 +20,10 @@ struct Cloud {
     refuse_finish: Option<u16>,
     /// Authorization checks never answer.
     hang_checks: bool,
+    /// Waits for approved work are refused with this status (an older cloud).
+    refuse_wait: Option<u16>,
+    /// Waits for approved work received.
+    waits: usize,
 }
 
 #[derive(Default, Clone)]
@@ -57,6 +61,25 @@ impl Transport for Fake {
     async fn send(&self, body: Value) -> Result<Value, SendError> {
         if body["action"] == "check" && self.0.lock().unwrap().hang_checks {
             std::future::pending::<()>().await;
+        }
+        if body["action"] == "wait" {
+            let deadline = Instant::now() + Duration::from_millis(body["waitMs"].as_u64().unwrap());
+            loop {
+                {
+                    let mut cloud = self.0.lock().unwrap();
+                    if let Some(status) = cloud.refuse_wait {
+                        return Err(SendError::Rejected(status));
+                    }
+                    cloud.waits += 1;
+                    if !cloud.approved.is_empty() {
+                        return Ok(json!(true));
+                    }
+                }
+                if Instant::now() >= deadline {
+                    return Ok(json!(false));
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
         }
         let mut cloud = self.0.lock().unwrap();
         if cloud.offline {
@@ -113,6 +136,7 @@ fn timing() -> Timing {
         backoff_min: Duration::from_millis(40),
         backoff_max: Duration::from_millis(320),
         stable_after: Duration::from_secs(60),
+        claim_wait: Duration::ZERO,
     }
 }
 
@@ -125,6 +149,15 @@ struct Running {
 }
 
 fn start_in(fake: &Fake, journal: tempfile::TempDir, owner: Arc<AtomicBool>) -> Running {
+    start_with(fake, journal, owner, timing())
+}
+
+fn start_with(
+    fake: &Fake,
+    journal: tempfile::TempDir,
+    owner: Arc<AtomicBool>,
+    timing: Timing,
+) -> Running {
     let (status, receiver) = watch::channel(BridgeStatus::default());
     let host = Host::new(
         vec!["/bin/sh".into()],
@@ -133,7 +166,7 @@ fn start_in(fake: &Fake, journal: tempfile::TempDir, owner: Arc<AtomicBool>) -> 
         "me".into(),
         journal.path().to_owned(),
         Arc::new(fake.clone()),
-        timing(),
+        timing,
         Arc::new(move || owner.load(Ordering::SeqCst)),
         status,
     )
@@ -190,6 +223,57 @@ async fn read_pid(path: &Path) -> i32 {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     panic!("background process never started");
+}
+
+/// Polling every few seconds would miss this; waiting picks it up at once.
+#[tokio::test]
+async fn approved_work_is_claimed_as_soon_as_the_wait_hears_of_it() {
+    let fake = Fake::default();
+    let timing = Timing {
+        heartbeat: Duration::from_secs(30),
+        claim_wait: Duration::from_secs(20),
+        ..timing()
+    };
+    let host = start_with(
+        &fake,
+        tempfile::tempdir().unwrap(),
+        Arc::new(AtomicBool::new(true)),
+        timing,
+    );
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(fake.0.lock().unwrap().waits > 0, "the connector is waiting");
+    let id = fake.approve("printf ok", 10_000);
+    let (status, output) = fake.wait_finished(id, Duration::from_secs(2)).await;
+    assert_eq!((status.as_str(), output.as_str()), ("exit status: 0", "ok"));
+    host.stop.cancel();
+    // A wait in flight never delays shutdown.
+    let stopped = tokio::time::timeout(Duration::from_secs(1), host.handle).await;
+    assert_eq!(stopped.unwrap().unwrap().unwrap(), Exit::Shutdown);
+}
+
+/// A cloud from before waits refuses them; the connector polls as before.
+#[tokio::test]
+async fn an_older_cloud_without_waits_is_polled() {
+    let fake = Fake::default();
+    fake.0.lock().unwrap().refuse_wait = Some(422);
+    let timing = Timing {
+        claim_wait: Duration::from_secs(20),
+        ..timing()
+    };
+    let host = start_with(
+        &fake,
+        tempfile::tempdir().unwrap(),
+        Arc::new(AtomicBool::new(true)),
+        timing,
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let id = fake.approve("printf ok", 10_000);
+    let (status, _) = fake.wait_finished(id, Duration::from_secs(2)).await;
+    assert_eq!(status, "exit status: 0");
+    assert_eq!(host.status.borrow().state, "online");
+    assert!(fake.0.lock().unwrap().offers.len() > 3, "kept polling");
+    host.stop.cancel();
+    assert_eq!(host.handle.await.unwrap().unwrap(), Exit::Shutdown);
 }
 
 #[tokio::test]

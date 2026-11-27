@@ -22,7 +22,7 @@ const KINDS: [&str; 8] = [
 ];
 /// Newer kinds the server only sends when the ticket asks for them, so older
 /// clients (which reject unknown kinds) never receive them.
-pub(crate) const HINT_KINDS: [&str; 2] = ["machine-image", "billing"];
+pub(crate) const HINT_KINDS: [&str; 3] = ["machine-image", "billing", "computer-request"];
 #[derive(Clone, PartialEq, Eq)]
 struct Scope {
     actor: String,
@@ -640,7 +640,7 @@ mod tests {
         let device = uuid::Uuid::nil();
         assert_eq!(
             ticket_body(device, Some("c"), true),
-            json!({"deviceId":device,"cursor":"c","hintKinds":["machine-image","billing"]})
+            json!({"deviceId":device,"cursor":"c","hintKinds":["machine-image","billing","computer-request"]})
         );
         assert_eq!(
             ticket_body(device, None, false),

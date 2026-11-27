@@ -73,8 +73,9 @@ pub(super) async fn decide(
     Json(choice): Json<Choice>,
 ) -> Result<StatusCode, ApiError> {
     let owner = personal_owner(&state, &headers).await?;
+    let control = runtime(&state)?;
     decide_for(
-        &runtime(&state)?.shared_pool(),
+        &control.shared_pool(),
         &owner,
         &workspace,
         &chat,
@@ -82,6 +83,8 @@ pub(super) async fn decide(
         choice.decision,
     )
     .await?;
+    // A waiting connector claims it now; a waiting tool call hears a denial.
+    super::bridge_tasks::changed(&control, request).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -170,7 +173,9 @@ pub(super) async fn revoke_always(
     Path(enrollment): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let owner = personal_owner(&state, &headers).await?;
-    revoke_always_for(&runtime(&state)?.shared_pool(), &owner, &enrollment).await?;
+    let control = runtime(&state)?;
+    revoke_always_for(&control.shared_pool(), &owner, &enrollment).await?;
+    control.bridge_changed();
     Ok(StatusCode::NO_CONTENT)
 }
 
