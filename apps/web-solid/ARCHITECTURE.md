@@ -93,6 +93,10 @@ Run `node e2e/zappers.mjs` for browser checks against a disposable engine and a 
 
 Zapper inspector tabs follow the desktop icon/label strip. Resource reads coalesce bursts of watch updates into one active request and a trailing refresh; late responses from another Zapper are ignored. Reconnect epochs refresh the inspector even when revisions do not change. Server snapshots reconcile into existing rows, and document drafts retain their DOM identity through updates. Composer and Zapper surfaces use spacing and background tones instead of decorative borders; the composer editor overrides the global focus ring while controls retain keyboard focus indicators.
 
+## Cloudflare
+
+`bun run build:cloudflare` builds with `/` asset URLs and copies `cloudflare/_headers` into the output; `wrangler.jsonc` serves it as Workers static assets with SPA fallback. The headers match the engine's (nosniff, no referrer, cross-origin isolation); `assets/` is cached immutably and everything else revalidates. No engine runs behind this host: `cloudflare/worker.js` answers `/api/*` with 404, which the app reads as a listener without owner sessions. `bun run preview:cloudflare` runs it locally; `.github/workflows/web-solid-cloudflare.yml` deploys from main when `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are set.
+
 ## Hosted browser
 
 `bash scripts/build-web.sh --solid` builds this client with `/app/` asset URLs.
