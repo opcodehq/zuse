@@ -27,6 +27,10 @@ const aliases: Record<string, string> = {
 const iconName = (name: string) => aliases[name] ?? name;
 export type IconName = string;
 
+export function iconSvg(name: string) {
+  return icons.get(iconName(name)) ?? "";
+}
+
 export function hasIcon(name: string) {
   return icons.has(iconName(name));
 }

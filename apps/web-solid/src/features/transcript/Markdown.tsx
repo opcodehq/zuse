@@ -54,7 +54,7 @@ function paced(source: Accessor<string>, live: Accessor<boolean>): Accessor<stri
   return value;
 }
 
-export function Markdown(props: { text: string; live: boolean; class?: string }) {
+export function Markdown(props: { text: string; live: boolean; class?: string; decorate?: (html: string) => string; onClick?: (event: MouseEvent) => void }) {
   const doc = new IncrementalMarkdown();
   // eslint-disable-next-line solid/reactivity -- paced reads both accessors inside an effect
   const text = paced(() => props.text, () => props.live);
@@ -63,19 +63,20 @@ export function Markdown(props: { text: string; live: boolean; class?: string })
   // Only the tail block's `settled` flips, so a token never re-runs every code block.
   const tailIndex = createMemo(() => (props.live ? blocks().length - 1 : -1));
   const isTail = (index: number) => tailIndex() === index;
+  const decorate = (html: string) => props.decorate?.(html) ?? html;
   return (
-    <div class={`md ${props.live ? "md-live " : ""}${props.class ?? ""}`}>
+    <div class={`md ${props.live ? "md-live " : ""}${props.class ?? ""}`} onClick={(event) => props.onClick?.(event)}>
       <For keyed={false} each={blocks()}>
         {(block, ix) => {
           const settled = () => !isTail(ix);
           return (
             // eslint-disable-next-line solid/no-innerhtml -- blockHtml output is DOMPurify-sanitized
-            <Switch fallback={<div class="md-block" innerHTML={blockHtml(block().token)} />}>
+            <Switch fallback={<div class="md-block" innerHTML={decorate(blockHtml(block().token))} />}>
               <Match when={block().token.type === "code" && (block().token as Tokens.Code)}>
                 {(code) => <CodeBlock code={code().text} lang={code().lang} settled={settled()} />}
               </Match>
-              <Match when={block().token.type === "list" && (block().token as Tokens.List)}>{(list) => <MdList list={list()} />}</Match>
-              <Match when={block().token.type === "table" && (block().token as Tokens.Table)}>{(table) => <MdTable table={table()} />}</Match>
+              <Match when={block().token.type === "list" && (block().token as Tokens.List)}>{(list) => <MdList list={list()} decorate={decorate} />}</Match>
+              <Match when={block().token.type === "table" && (block().token as Tokens.Table)}>{(table) => <MdTable table={table()} decorate={decorate} />}</Match>
             </Switch>
           );
         }}
@@ -85,7 +86,7 @@ export function Markdown(props: { text: string; live: boolean; class?: string })
 }
 
 /** Same markup as marked's list renderer. */
-function MdList(props: { list: Tokens.List }) {
+function MdList(props: { list: Tokens.List; decorate: (html: string) => string }) {
   const ListTag = dynamic(() => props.list.ordered ? "ol" : "ul");
   const start = () => (props.list.ordered && props.list.start !== 1 && props.list.start !== "" ? props.list.start : undefined);
   return (
@@ -97,7 +98,7 @@ function MdList(props: { list: Tokens.List }) {
             const key = createMemo(() => `${props.list.loose ? "L" : "T"}${item().raw}`);
             const html = createMemo(() => { key(); return untrack(() => listItemHtml(untrack(item))); });
             // eslint-disable-next-line solid/no-innerhtml -- listItemHtml output is DOMPurify-sanitized
-            return <li innerHTML={html()} />;
+            return <li innerHTML={props.decorate(html())} />;
           }}
         </For>
       </ListTag>
@@ -106,14 +107,14 @@ function MdList(props: { list: Tokens.List }) {
 }
 
 /** Same markup as marked's table renderer, wrapped like `blockHtml` wraps tables. */
-function MdTable(props: { table: Tokens.Table }) {
+function MdTable(props: { table: Tokens.Table; decorate: (html: string) => string }) {
   return (
     <div class="md-block">
       <div class="md-table">
         <table>
           <thead>
             <tr>
-              <For keyed={false} each={props.table.header}>{(cell) => <Cell cell={cell()} header />}</For>
+              <For keyed={false} each={props.table.header}>{(cell) => <Cell cell={cell()} header decorate={props.decorate} />}</For>
             </tr>
           </thead>
           <Show when={props.table.rows.length}>
@@ -121,7 +122,7 @@ function MdTable(props: { table: Tokens.Table }) {
               <For keyed={false} each={props.table.rows}>
                 {(row) => (
                   <tr>
-                    <For keyed={false} each={row()}>{(cell) => <Cell cell={cell()} header={false} />}</For>
+                    <For keyed={false} each={row()}>{(cell) => <Cell cell={cell()} header={false} decorate={props.decorate} />}</For>
                   </tr>
                 )}
               </For>
@@ -133,7 +134,7 @@ function MdTable(props: { table: Tokens.Table }) {
   );
 }
 
-function Cell(props: { cell: Tokens.TableCell; header: boolean }) {
+function Cell(props: { cell: Tokens.TableCell; header: boolean; decorate: (html: string) => string }) {
   const key = createMemo(() => props.cell.text);
   const html = createMemo(() => { key(); return untrack(() => tableCellHtml(untrack(() => props.cell))); });
   const align = () => props.cell.align ?? undefined;
@@ -141,10 +142,10 @@ function Cell(props: { cell: Tokens.TableCell; header: boolean }) {
     <Show
       when={props.header}
       // eslint-disable-next-line solid/no-innerhtml -- tableCellHtml output is DOMPurify-sanitized
-      fallback={<td align={align()} innerHTML={html()} />}
+      fallback={<td align={align()} innerHTML={props.decorate(html())} />}
     >
       {/* eslint-disable-next-line solid/no-innerhtml -- tableCellHtml output is DOMPurify-sanitized */}
-      <th align={align()} innerHTML={html()} />
+      <th align={align()} innerHTML={props.decorate(html())} />
     </Show>
   );
 }

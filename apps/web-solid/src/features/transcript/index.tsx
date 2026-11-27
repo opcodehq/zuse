@@ -14,6 +14,7 @@ import { FindBar, type FindHost } from "./Find";
 import { InputDock } from "./Input";
 import { TurnStatus, WorkingTrailer } from "./parts";
 import { Rail, RAIL_MIN_WIDTH, railTicks } from "./Rail";
+import { chatReferences, WaitingBar } from "./ReferenceMarkdown";
 import { ConversationTabs } from "./Tabs";
 import "./transcript.css";
 
@@ -244,11 +245,13 @@ function ChatTranscript(props: { chatId: string }) {
   const offsetTop = () => items()[0]?.start ?? 0;
 
   const chat = () => state.chats[props.chatId];
+  const references = chatReferences(props);
   const ctxFor = (index: () => number): EntryContext => ({
     chatId: props.chatId,
     device: () => chat()?.deviceId ?? null,
     harness: () => chat()?.config?.harness,
     last: () => index() === messages().length - 1,
+    references,
   });
 
   // Prompts only arrive or leave with the list's length, so the outline rebuilds from plain rows then.
@@ -298,6 +301,9 @@ function ChatTranscript(props: { chatId: string }) {
                         <Show when={entry()}>{(e) => <Entry entry={e()} ctx={ctxFor(index)} />}</Show>
                         <Show when={index() === messages().length - 1}>
                           <WorkingTrailer chatId={props.chatId} />
+                          <Show when={entry()?.role === "assistant" && entry()?.status !== "streaming" && state.sessions[props.chatId]?.status !== "working"}>
+                            <WaitingBar chatId={props.chatId} references={references()} />
+                          </Show>
                         </Show>
                       </div>
                     </div>
