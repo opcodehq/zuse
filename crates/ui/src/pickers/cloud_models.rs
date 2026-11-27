@@ -122,6 +122,80 @@ mod tests {
             .unwrap();
     }
 
+    /// A new chat canvas that starts on Cloud by itself (a local project
+    /// backed by a connected repository) holds the sidebar's project row,
+    /// which has no `supportsModelConfiguration`. The launch context's row
+    /// for the same project does, so Claude Code models still offer their
+    /// reasoning ladder and 1M context switch, and the launch sends them.
+    #[gpui::test]
+    fn sidebar_project_canvas_offers_claude_reasoning_and_context(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            cx.set_global(Theme::dark());
+            crate::settings::init(crate::settings::UiSettings::default(), dir.path(), cx);
+        });
+        let handle = cx.add_window(|_, cx| {
+            let state = cx.new(|_| {
+                let mut state = AppState::new();
+                state.apply_cloud_account(json!({"user":{"id":"fixture-user"},"orgId":null}));
+                state
+            });
+            Pickers::new(state, cx)
+        });
+        handle
+            .update(cx, |picker, window, cx| {
+                let catalog = serde_json::to_value(CloudAgentCatalog {
+                    providers: vec![zuse_protocol::cloud_catalog::CloudAgentModels {
+                        id: HarnessId::ClaudeCode,
+                        name: "Claude Code".into(),
+                        default_model: "claude-sonnet-5".into(),
+                        models: zuse_providers::claude::catalog::static_models(),
+                    }],
+                })
+                .unwrap();
+                let mut context = configurable_cloud_context_for_test();
+                context["providerAgentCatalogs"]["boxd"] = catalog;
+                context["agentConnections"] =
+                    json!([{"agent":"claude","state":"connected","connectionId":"claude"}]);
+                // Context row: what the picker's own destination list holds.
+                let context_row = json!({"projectId":"repository","accountId":"fixture-user","providerId":"boxd","defaultBranch":"main","supportsModelConfiguration":true});
+                picker.seed_cloud_creation_for_test(context, context_row, cx);
+                // Sidebar row: what the shell puts on an auto-started canvas.
+                picker.state.update(cx, |state, _| {
+                    state.cloud_project = Some(json!({"projectId":"repository","accountId":"fixture-user","providerId":"boxd","defaultBranch":"main","canCreate":true}));
+                });
+                assert!(picker.cloud_models_active(cx));
+                assert!(picker.model_configuration_available(cx));
+
+                picker.open_model_menu(window, cx);
+                let detail = picker.model_detail(cx).expect("card for the cloud model");
+                assert_eq!(detail.row.model.id, "claude-sonnet-5");
+                let effort = detail.effort.expect("reasoning slider");
+                assert!(effort.labels.len() >= 4, "{:?}", effort.labels);
+                let long = detail.long_context.expect("1M context switch");
+
+                picker.set_detail_effort(HarnessId::ClaudeCode, "claude-sonnet-5", 2, cx);
+                picker.set_detail_option(
+                    HarnessId::ClaudeCode,
+                    "claude-sonnet-5",
+                    long.option.clone(),
+                    long.on_value.clone(),
+                    !long.off_default,
+                    cx,
+                );
+                let resolved = picker.resolved(cx);
+                assert_eq!(resolved.reasoning, Some(ReasoningLevel::High));
+                assert_eq!(resolved.model_options[&long.option], long.on_value.as_str());
+
+                // A row for another project never lends its flag.
+                picker.state.update(cx, |state, _| {
+                    state.cloud_project = Some(json!({"projectId":"other","accountId":"fixture-user","providerId":"boxd"}));
+                });
+                assert!(!picker.model_configuration_available(cx));
+            })
+            .unwrap();
+    }
+
     #[test]
     fn only_transport_and_exact_busy_catalog_failures_are_preparation() {
         assert!(preparation_catalog_error(&zuse_rpc::RpcError::Closed));
@@ -256,15 +330,24 @@ impl Pickers {
         self.cloud_models_active(cx) && self.selected_model(cx).is_some()
     }
 
+    /// Whether a new cloud chat can pick reasoning and model options. Only
+    /// the launch context's project rows carry `supportsModelConfiguration`;
+    /// a canvas started from the sidebar's project list holds a row without
+    /// it, so the flag is read from the matching context row too.
     pub(super) fn model_configuration_available(&self, cx: &App) -> bool {
-        !self.cloud_models_active(cx)
-            || self.cloud.task_binding.is_some()
-            || self
-                .state
-                .read(cx)
-                .cloud_project
-                .as_ref()
-                .is_some_and(|project| project["supportsModelConfiguration"] == true)
+        if !self.cloud_models_active(cx) || self.cloud.task_binding.is_some() {
+            return true;
+        }
+        let state = self.state.read(cx);
+        let Some(project) = state.cloud_project.as_ref() else {
+            return false;
+        };
+        project["supportsModelConfiguration"] == true
+            || self.cloud.rows.iter().any(|row| {
+                row["projectId"] == project["projectId"]
+                    && row["accountId"] == project["accountId"]
+                    && row["supportsModelConfiguration"] == true
+            })
     }
 
     pub(crate) fn cloud_model_notice(&self, cx: &App) -> Option<(String, bool)> {
