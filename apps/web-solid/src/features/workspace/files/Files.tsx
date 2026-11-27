@@ -182,12 +182,22 @@ export function Files(props: { target: Target }) {
       })(),
     );
 
-  // Other surfaces (Changes, History) ask for a file through the pending slot.
+  let wantLine: { path: string; line: number } | null = null;
+  const revealWantedLine = () => {
+    const current = open();
+    if (!editor || !wantLine || current?.path !== wantLine.path || typeof current.file?.text !== "string") return;
+    editor.revealLine(wantLine.line);
+    wantLine = null;
+  };
+
+  // Other surfaces (Changes, History, transcript file chips) ask for a file through the pending slot.
   createEffect(() => pending.seq, () => {
-    const path = takePending();
+    const { path, line } = takePending();
     if (!path) return;
+    wantLine = line ? { path, line } : null;
     reveal(chatId, path);
     openPath(path);
+    revealWantedLine();
   });
 
   const open = () => tree()?.open ?? null;
@@ -213,6 +223,7 @@ export function Files(props: { target: Target }) {
     }
     lastBaseline = text;
     syncDirty();
+    revealWantedLine();
   });
   const [editorReady, setEditorReady] = createSignal(0);
   createEffect(() => [editable(), open()?.conflict, editorReady()], () => {
@@ -401,6 +412,7 @@ export function Files(props: { target: Target }) {
                   }
                   editor.setReadOnly(!editable());
                   setEditorReady((n) => n + 1);
+                  revealWantedLine();
                   cleanups.push(() => {
                     editor?.destroy();
                     editor = undefined;

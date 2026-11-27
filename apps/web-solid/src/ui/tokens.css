@@ -38,6 +38,9 @@
   --danger: #f87171;
   --warning: #facc15;
   --success: #34d399;
+  --status-progress: #facc15;
+  --status-waiting: #60a5fa;
+  --status-done: #a78bfa;
   --terminal: #121212;
   --code-bg: #1a1a1a;
   --syntax-comment: #a3a3a3; --syntax-keyword: #c084fc; --syntax-string: #86efac; --syntax-number: #fbbf24;
@@ -84,6 +87,9 @@
   --danger: #dc2626;
   --warning: #a16207;
   --success: #15803d;
+  --status-progress: #ca8a04;
+  --status-waiting: #2563eb;
+  --status-done: #7c3aed;
   --terminal: #fafafa;
   --code-bg: #f6f6f6;
   --syntax-comment: #7f7f7f; --syntax-keyword: #7924b2; --syntax-string: #297537; --syntax-number: #90600e;

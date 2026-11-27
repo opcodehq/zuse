@@ -1,3 +1,4 @@
+import { type JSX } from "@solidjs/web";
 import { createMemo } from "solid-js";
 import { harnessList, modelList, offeredHarnesses } from "@/features/composer/catalog";
 import type { ZapperModel } from "@/core/zapper-types";
@@ -5,9 +6,9 @@ import { ModelSelect, type ModelChoice } from "@/ui/ModelSelect";
 import { Menu } from "@/ui/primitives";
 import { Icon } from "@/ui/Icon";
 
-export function ZapperSelect(props: { label: string; value: string; options: { value: string; label: string; icon?: string }[]; onChange: (value: string) => void; disabled?: boolean }) {
+export function ZapperSelect(props: { label: string; value: string; options: { value: string; label: string; icon?: string; glyph?: () => JSX.Element }[]; onChange: (value: string) => void; disabled?: boolean }) {
   const selected = () => props.options.find(row => row.value === props.value);
-  return <Menu placement="bottom-start" trigger={attrs => <button {...attrs} type="button" class="zp-select" aria-label={props.label} disabled={props.disabled}><Icon name={selected()?.icon ?? "list"} size={13} /><span>{selected()?.label ?? props.value}</span><Icon name="alt-arrow-down" size={12} /></button>} items={props.options.map(row => ({ label: row.label, icon: row.icon, onSelect: () => props.onChange(row.value) }))} />;
+  return <Menu placement="bottom-start" trigger={attrs => <button {...attrs} type="button" class="zp-select" aria-label={props.label} disabled={props.disabled}>{selected()?.glyph?.() ?? <Icon name={selected()?.icon ?? "list"} size={13} />}<span>{selected()?.label ?? props.value}</span><Icon name="alt-arrow-down" size={12} /></button>} items={props.options.map(row => ({ label: row.label, icon: row.icon, glyph: row.glyph, onSelect: () => props.onChange(row.value) }))} />;
 }
 
 /** Catalogs come from the selected execution device, never the browser/controller. */

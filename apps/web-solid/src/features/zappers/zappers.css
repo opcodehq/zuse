@@ -682,10 +682,8 @@
 .zp-issue-title { display: flex; gap: 7px; align-items: baseline; }
 .zp-issue-number { font-size: 10px; color: var(--text-faint); flex: none; font-variant-numeric: tabular-nums; }
 .zp-issue-title strong { font-size: 12px; line-height: 17px; }
-.zp-issue-status { color: var(--text-faint); padding-top: 2px; flex: none; }
-.zp-issue-status[data-status="inProgress"], .zp-issue-status[data-status="inReview"] { color: var(--accent); }
-.zp-issue-status[data-status="needsYou"], .zp-issue-status[data-status="blocked"] { color: var(--warning); }
-.zp-issue-status[data-status="done"] { color: var(--success); }
+.zp-issue-status { display: flex; padding-top: 2px; flex: none; }
+.zp-issue-detail-status { display: inline-flex; align-items: center; gap: 6px; }
 .zp-issue-meta { display: flex; flex-wrap: wrap; gap: 5px 8px; align-items: center; margin-top: 4px; font-size: 10px; line-height: 15px; color: var(--text-muted); }
 .zp-issue-meta > [data-priority="urgent"] { color: var(--danger); }
 .zp-issue-meta > [data-priority="high"] { color: var(--warning); }

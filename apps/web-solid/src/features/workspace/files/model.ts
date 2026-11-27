@@ -51,17 +51,17 @@ const [files, setFiles] = createStore<Record<string, ChatFiles>>({});
 export { files };
 
 /** A file another surface asked the Files panel to open. */
-const [pending, setPending] = createStore<{ path: string | null; seq: number }>({ path: null, seq: 0 });
+const [pending, setPending] = createStore<{ path: string | null; line: number | null; seq: number }>({ path: null, line: null, seq: 0 });
 export { pending };
 
-export function openFileInPanel(path: string) {
-  setPending(draft => { Object.assign(draft, { path, seq: pending.seq + 1 }); });
+export function openFileInPanel(path: string, line?: number) {
+  setPending(draft => { Object.assign(draft, { path, line: line ?? null, seq: pending.seq + 1 }); });
   openPanel("files");
 }
 export function takePending() {
-  const path = pending.path;
-  setPending(draft => { draft["path"] = null; });
-  return path;
+  const request = { path: pending.path, line: pending.line };
+  setPending(draft => { draft["path"] = null; draft["line"] = null; });
+  return request;
 }
 
 function chatFiles(chatId: string): ChatFiles {

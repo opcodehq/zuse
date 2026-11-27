@@ -36,6 +36,8 @@ export function purify(html: string) {
     });
   }
   return DOMPurify.sanitize(html, {
+    // The default list plus zuse-file:, so file mention links reach the hook above and keep their path as the title.
+    ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|matrix|zuse-file):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i,
     FORBID_TAGS: ["style", "img", "form", "iframe", "svg", "math", "button", "textarea", "select"],
     FORBID_ATTR: ["style"],
   });
