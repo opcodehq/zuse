@@ -4,6 +4,7 @@ use crate::localization::message as tr;
 use serde_json::{Value, json};
 use zuse_i18n::messages as msg;
 mod launch_upload;
+mod outbox;
 mod reupload;
 mod runtime_update;
 mod unknown;
@@ -41,6 +42,9 @@ pub(super) struct Launch {
     pub(super) unknown: unknown::State,
     /// Messages waiting while their computer updates its runtime.
     pub(super) runtime: runtime_update::State,
+    /// Messages the server hasn't taken yet: retried while it can't be
+    /// reached, then shown as not sent (see [`outbox`]).
+    pub(super) outbox: outbox::State,
     /// Admitted messages' files, kept until their computer takes them.
     pub(super) reupload: reupload::State,
     /// The cloud computer's stage, set by the conversation that owns this
@@ -204,6 +208,7 @@ impl Composer {
         self.cloud.unknown = Default::default();
         self.cloud.runtime = Default::default();
         self.cloud.reupload = Default::default();
+        self.cloud.outbox = Default::default();
         self.cloud.native = None;
         self.cloud.pending_native = None;
         self.cloud.pending_native_text = None;
@@ -262,7 +267,12 @@ impl Composer {
         if self.cloud.native.is_none() {
             return false;
         }
-        if self.cloud.task.is_some() {
+        // A new message written while an earlier one is still on its way
+        // waits behind it, in order (see [`outbox`]); the earlier one's
+        // retry, which carries its own text, goes on as before.
+        let earlier = self.cloud.pending_native.is_some() || self.cloud.task.is_some();
+        let retry = self.cloud.pending_native_text.as_deref() == Some(text.as_str());
+        if self.cloud.task.is_some() && retry {
             return true;
         }
         if self.cloud.registering {
@@ -292,16 +302,6 @@ impl Composer {
             cx.notify();
             return true;
         }
-        if self
-            .cloud
-            .pending_native_text
-            .as_deref()
-            .is_some_and(|previous| previous != text)
-        {
-            self.failure = Some("The previous message has an uncertain delivery. Retry its original text before sending different work.".into());
-            cx.notify();
-            return true;
-        }
         if self.staged().len() > zuse_protocol::cloud_assets::MAX_ASSETS {
             self.failure = Some(
                 "Attach at most eight files to one cloud message. Your draft is preserved.".into(),
@@ -309,64 +309,28 @@ impl Composer {
             cx.notify();
             return true;
         }
+        if earlier && !retry {
+            if let Some(request) = self.new_cloud_request(&text, queue, steer, cx) {
+                let staged = self.staged().to_vec();
+                self.show_new_cloud_request(&request, &text, &staged, cx);
+                self.cloud.outbox.later.push_back(runtime_update::Held {
+                    request,
+                    text: Some(text),
+                    staged,
+                });
+                cx.notify();
+            }
+            return true;
+        }
         if self.cloud.pending_native.is_none() {
-            let command = uuid::Uuid::new_v4().to_string();
-            let message = uuid::Uuid::new_v4().to_string();
-            let Some(resolved) = self.pickers.read(cx).cloud_task_choice() else {
-                self.failure=Some("This task's saved agent settings are not available yet. Your draft is preserved.".into());
-                cx.notify();
+            let Some(request) = self.new_cloud_request(&text, queue, steer, cx) else {
                 return true;
             };
-            let harness = resolved.harness;
-            let model = resolved.model.clone();
-            if harness.is_none() || model.is_none() {
-                self.failure = Some(
-                    "Choose an available agent and model for this task. Your draft is preserved."
-                        .into(),
-                );
-                cx.notify();
-                return true;
-            }
-            let sandbox = resolved.sandbox;
-            let kind = cloud_send_kind(
-                queue,
-                steer,
-                !self.staged().is_empty(),
-                self.pickers.read(cx).steers_mid_turn(cx),
-            );
-            let steer = kind == CloudSendKind::Steer;
-            let queue = kind == CloudSendKind::Queue;
-            let action = if steer {
-                json!({"type":"submit","messageId":message,"payload":{"kind":"steer","prompt":text,"messageId":message}})
-            } else if queue {
-                json!({"type":"queue","queueId":command,"messageId":message,"input":{"text":text,"runSelection":{"harness":harness,"model":model,"reasoning":resolved.reasoning,"modelOptions":resolved.model_options,"sandbox":sandbox}},"holdForTurnEnd":true})
-            } else {
-                json!({"type":"submit","messageId":message,"payload":{"kind":"run","messageId":message,"request":{
-                    "prompt":text,"harness":harness,"model":model,"reasoning":resolved.reasoning,
-                    "modelOptions":resolved.model_options,"cwd":".","sandbox":sandbox,
-                    "autoApprove":sandbox==SandboxLevel::DangerFullAccess,"resume":null,"attachments":[]
-                }}})
-            };
-            self.cloud.pending_native = Some(
-                json!({"commandId":command,"sessionId":task.target.initial_session,"action":action,
-                "wake":wake::intent(queue || steer, task.wake)}),
-            );
+            let staged = self.staged().to_vec();
+            self.cloud.pending_native = Some(request.clone());
             self.cloud.pending_native_text = Some(text.clone());
-            self.cloud.native_staged = self.staged().to_vec();
-            if queue {
-                // A queued message leaves the draft and joins the queue at
-                // once; the server's row replaces it (same queue id).
-                let session = task.target.initial_session.clone();
-                let files = self
-                    .staged()
-                    .iter()
-                    .map(|file| format!("pending/{}/{}", file.id, file.name))
-                    .collect();
-                self.show_optimistic_queued(&session, &command, &message, &text, files, cx);
-                self.clear_sent_draft(cx);
-            } else {
-                self.show_native_send(&task.target.initial_session.clone(), &message, &text, cx);
-            }
+            self.cloud.native_staged = staged.clone();
+            self.show_new_cloud_request(&request, &text, &staged, cx);
         } else if let Some(request) = self.cloud.pending_native.clone()
             && request["action"]["type"] == "submit"
             && let (Some(message), Some(text)) = (
@@ -397,6 +361,8 @@ impl Composer {
             }
             self.clear_sent_draft(cx);
         }
+        // Sent or retried by the user: delivery starts afresh.
+        self.cloud.outbox.settle();
         if self.cloud_runtime_update_holds() {
             // The computer is updating: the message is in the chat and goes
             // out with the others once it's done.
@@ -405,6 +371,92 @@ impl Composer {
         }
         self.dispatch_cloud_task(cx);
         true
+    }
+    /// A new message's request under fresh identities, with the task's saved
+    /// agent settings; `None` (and the reason shown, the draft kept) when it
+    /// can't be built yet.
+    fn new_cloud_request(
+        &mut self,
+        text: &str,
+        queue: bool,
+        steer: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<Value> {
+        let task = self.cloud.native.as_ref()?;
+        let session = task.target.initial_session.clone();
+        let sleeping = task.wake;
+        let command = uuid::Uuid::new_v4().to_string();
+        let message = uuid::Uuid::new_v4().to_string();
+        let Some(resolved) = self.pickers.read(cx).cloud_task_choice() else {
+            self.failure = Some(
+                "This task's saved agent settings are not available yet. Your draft is preserved."
+                    .into(),
+            );
+            cx.notify();
+            return None;
+        };
+        let harness = resolved.harness;
+        let model = resolved.model.clone();
+        if harness.is_none() || model.is_none() {
+            self.failure = Some(
+                "Choose an available agent and model for this task. Your draft is preserved."
+                    .into(),
+            );
+            cx.notify();
+            return None;
+        }
+        let sandbox = resolved.sandbox;
+        let kind = cloud_send_kind(
+            queue,
+            steer,
+            !self.staged().is_empty(),
+            self.pickers.read(cx).steers_mid_turn(cx),
+        );
+        let steer = kind == CloudSendKind::Steer;
+        let queue = kind == CloudSendKind::Queue;
+        let action = if steer {
+            json!({"type":"submit","messageId":message,"payload":{"kind":"steer","prompt":text,"messageId":message}})
+        } else if queue {
+            json!({"type":"queue","queueId":command,"messageId":message,"input":{"text":text,"runSelection":{"harness":harness,"model":model,"reasoning":resolved.reasoning,"modelOptions":resolved.model_options,"sandbox":sandbox}},"holdForTurnEnd":true})
+        } else {
+            json!({"type":"submit","messageId":message,"payload":{"kind":"run","messageId":message,"request":{
+                "prompt":text,"harness":harness,"model":model,"reasoning":resolved.reasoning,
+                "modelOptions":resolved.model_options,"cwd":".","sandbox":sandbox,
+                "autoApprove":sandbox==SandboxLevel::DangerFullAccess,"resume":null,"attachments":[]
+            }}})
+        };
+        Some(
+            json!({"commandId":command,"sessionId":session,"action":action,
+            "wake":wake::intent(queue || steer, sleeping)}),
+        )
+    }
+    /// Show a new message where it belongs at once: a sent or steered one in
+    /// the chat, a queued one in the queue (the server's row replaces it,
+    /// same queue id). Its text and files leave the draft.
+    fn show_new_cloud_request(
+        &mut self,
+        request: &Value,
+        text: &str,
+        staged: &[StagedAttachment],
+        cx: &mut Context<Self>,
+    ) {
+        let (Some(session), Some(command), Some(message)) = (
+            request["sessionId"].as_str().map(str::to_owned),
+            request["commandId"].as_str().map(str::to_owned),
+            request["action"]["messageId"].as_str().map(str::to_owned),
+        ) else {
+            return;
+        };
+        if request["action"]["type"] == "queue" {
+            let files = staged
+                .iter()
+                .map(|file| format!("pending/{}/{}", file.id, file.name))
+                .collect();
+            self.show_optimistic_queued(&session, &command, &message, text, files, cx);
+        } else {
+            self.push_cloud_echo(&session, &message, text, cx);
+        }
+        self.clear_draft_of(staged, cx);
     }
     /// The message joins the conversation the moment it is sent; uploading
     /// its files and server admission continue behind it. A failure puts it
@@ -542,6 +594,11 @@ impl Composer {
             state.drop_optimistic_queued(&session, id);
             cx.notify();
         });
+        if self.cloud.pending_native.is_none() {
+            // Messages written after it no longer wait for it.
+            self.cloud.outbox.settle();
+            self.send_next_waiting_cloud_message(cx);
+        }
         cx.notify();
     }
 
@@ -621,9 +678,13 @@ impl Composer {
     }
     /// The sent text and files leave the draft; delivery continues behind it.
     fn clear_sent_draft(&mut self, cx: &mut Context<Self>) {
+        let sent = self.cloud.native_staged.clone();
+        self.clear_draft_of(&sent, cx);
+    }
+    /// The draft's text and the given files leave the composer.
+    fn clear_draft_of(&mut self, sent: &[StagedAttachment], cx: &mut Context<Self>) {
         self.input.update(cx, |input, cx| input.set_text("", cx));
         if let Some(files) = self.attachments.get_mut(&self.current_key) {
-            let sent = &self.cloud.native_staged;
             files.retain(|file| !sent.iter().any(|sent| sent.id == file.id));
         }
         self.sync_attachment_chips(cx);
@@ -707,8 +768,11 @@ impl Composer {
         self.cloud.pending_native = None;
         self.cloud.pending_native_text = None;
         self.cloud.native_staged.clear();
+        self.cloud.outbox.settle();
         self.failure = None;
         self.failure_key = None;
+        // Messages written after it no longer wait for it.
+        self.send_next_waiting_cloud_message(cx);
         cx.notify();
     }
 
@@ -813,10 +877,20 @@ impl Composer {
             }
             // A message that has to wait for its computer (runtime update,
             // Update computer) is queued on the server, not refused.
-            let result = target.controller.client().call_scoped(methods::CLOUD_TASK_COMMAND,
+            let client = target.controller.client();
+            let call = client.call_scoped(methods::CLOUD_TASK_COMMAND,
                 json!({"workspaceId":target.workspace,"expectedAccountId":target.subject,
                     "expectedOrganizationId":target.organization,"request":request,
-                    (zuse_protocol::cloud_runtime_updates::QUEUE_WHILE_WAITING):true})).await;
+                    (zuse_protocol::cloud_runtime_updates::QUEUE_WHILE_WAITING):true}));
+            // An attempt nobody answers counts as not reaching the server; the
+            // retry carries the same ids, so the server takes it at most once.
+            let deadline = cx.background_executor().timer(outbox::ATTEMPT_LIMIT);
+            let result = match futures::future::select(Box::pin(call), deadline).await {
+                futures::future::Either::Left((result, _)) => result,
+                futures::future::Either::Right(_) => Err(zuse_rpc::RpcError::Transport(
+                    "The cloud service didn't answer in time.".into(),
+                )),
+            };
             // Only an admitted message moves the chat's default computer to
             // the one it was sent from. The claim names that message, so the
             // server keeps whichever message was admitted last; it never
@@ -835,6 +909,10 @@ impl Composer {
             }
             let _ = this.update(cx, |this, cx| {
                 this.cloud.task = None;
+                if !matches!(&result, Err(error) if outbox::unreachable(error)) {
+                    // The server answered: this message's delivery is settled.
+                    this.cloud.outbox.settle();
+                }
                 match result {
                     Ok(value) if value["accountId"]==target.subject && value["organizationId"].as_str()==target.organization.as_deref()
                         && value["data"]["commandId"]==request["commandId"] && value["data"]["durablyAdmitted"]==true => {
@@ -890,8 +968,10 @@ impl Composer {
                         }
                         if foreground {cx.emit(ComposerEvent::CloudForegroundAdmitted);}
                         cx.emit(ComposerEvent::CloudLaunchChanged);
-                        // Messages held for a computer update go out one by one.
+                        // Messages held for a computer update go out one by one,
+                        // then those written while this one was on its way.
                         this.send_next_ready_cloud_message(cx);
+                        this.send_next_waiting_cloud_message(cx);
                     }
                     Err(zuse_rpc::RpcError::Capability(code)) if runtime_update::refusal(&code).is_some() => {
                         // The computer's runtime must update first. The message
@@ -925,6 +1005,11 @@ impl Composer {
                         this.failure = Some("Your earlier message didn't go through. Retry or discard it first. Your draft is kept.".into());
                         this.release_ready_cloud_messages(cx);
                         cx.emit(ComposerEvent::CloudLaunchChanged);
+                    }
+                    Err(error) if outbox::unreachable(&error) => {
+                        // Never reached the server: wait for the connection
+                        // and send the same message again.
+                        this.cloud_send_unreachable(cx);
                     }
                     Err(error) => {
                         this.keep_unsent_native_send(cx);
@@ -1118,6 +1203,10 @@ impl Composer {
         ))
     }
     pub(crate) fn cloud_activity(&self) -> Option<(&str, bool)> {
+        if self.cloud_waiting_for_connection() {
+            // Not with the server yet, whether or not an attempt is running.
+            return Some((outbox::WAITING, true));
+        }
         if self.cloud_reupload_in_flight() {
             // Its files are going to the computer again: still just waiting.
             return Some(("Waiting for agent…", true));

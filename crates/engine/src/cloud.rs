@@ -37,6 +37,28 @@ use zuse_model::cloud::{Head, Workspace};
 /// server gave no reason.
 #[derive(Debug)]
 struct CloudHttpFailure(reqwest::StatusCode, Option<String>);
+/// The cloud service could not be reached at all (no connection, a dropped
+/// or timed-out request): the request may never have arrived. Its text is the
+/// one every caller already shows.
+#[derive(Debug)]
+struct CloudUnreachable(&'static str);
+impl std::fmt::Display for CloudUnreachable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+impl std::error::Error for CloudUnreachable {}
+/// A message the cloud service could not be reached for travels to the app
+/// with its own code, so it waits for the connection and is sent again under
+/// its same command id instead of reading as refused.
+fn task_command_unreachable(error: anyhow::Error) -> anyhow::Error {
+    if error.downcast_ref::<CloudUnreachable>().is_some() {
+        zuse_rpc::RpcError::Capability(zuse_protocol::cloud_task_commands::TASK_UNREACHABLE.into())
+            .into()
+    } else {
+        error
+    }
+}
 /// Prefix of a conflict the app can't explain; the server's code follows.
 pub(crate) const CLOUD_CONFLICT_PREFIX: &str = "Cloud couldn't do this right now";
 impl CloudHttpFailure {
@@ -518,13 +540,13 @@ impl CloudApi {
             .bearer_auth(token)
             .send()
             .await
-            .map_err(|_| anyhow::anyhow!("Cloud service is unavailable. Try again."))?;
+            .map_err(|_| CloudUnreachable("Cloud service is unavailable. Try again."))?;
         let status = response.status();
         let mut bytes = Vec::new();
         while let Some(chunk) = response
             .chunk()
             .await
-            .map_err(|_| anyhow::anyhow!("Cloud service is unavailable."))?
+            .map_err(|_| CloudUnreachable("Cloud service is unavailable."))?
         {
             ensure!(
                 bytes.len() + chunk.len() <= 8 * 1024 * 1024,
@@ -1135,16 +1157,16 @@ impl CloudApi {
                     .await;
                 let response = match response {
                     Ok(value) => value,
-                    Err(_) => {
-                        self.request_scoped(
+                    Err(_) => self
+                        .request_scoped(
                             &token,
                             &["v1", "cloud", "workspaces", workspace, "task-commands"],
                             body,
                             organization.as_deref(),
                             &query,
                         )
-                        .await?
-                    }
+                        .await
+                        .map_err(task_command_unreachable)?,
                 };
                 ensure!(
                     response["durablyAdmitted"] == true
@@ -2289,6 +2311,35 @@ mod beta_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn an_unreachable_cloud_reaches_the_app_as_a_transport_failure() {
+        // Nothing listens on this port: the request never arrives.
+        let api = CloudApi::new("http://127.0.0.1:9").unwrap();
+        let error = api
+            .request_scoped(
+                "token",
+                &["v1", "cloud", "workspaces", "w", "task-commands"],
+                Some(json!({})),
+                None,
+                &[],
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Cloud service is unavailable. Try again."
+        );
+        assert!(matches!(
+            rpc_error(task_command_unreachable(error)),
+            zuse_rpc::RpcError::Capability(code)
+                if code == zuse_protocol::cloud_task_commands::TASK_UNREACHABLE
+        ));
+        // Any other failure keeps its meaning.
+        assert!(matches!(
+            rpc_error(task_command_unreachable(anyhow::anyhow!("refused"))),
+            zuse_rpc::RpcError::Failed(message) if message == "refused"
+        ));
+    }
     #[test]
     fn cloud_defaults_to_the_rust_cloud_origin() {
         assert_eq!(DEFAULT_API_URL, "https://api-rust.zuse.sh");

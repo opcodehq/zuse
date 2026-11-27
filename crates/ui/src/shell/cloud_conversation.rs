@@ -268,6 +268,13 @@ impl CloudConversation {
                 }),
                 _ => {}
             }),
+            cx.subscribe(&transcript, |this: &mut Self, _, event, cx| {
+                if matches!(event, crate::transcript::TranscriptEvent::RetryNotSent) {
+                    this.composer.update(cx, |composer, cx| {
+                        composer.retry_cloud_messages_not_sent(cx)
+                    });
+                }
+            }),
             cx.observe(&composer, |_: &mut Self, _, cx| cx.notify()),
             cx.observe(&state, |this: &mut Self, state, cx| {
                 if !this.access_revoked
@@ -475,6 +482,12 @@ impl CloudConversation {
         if self.access_revoked {
             return None;
         }
+        if self.composer.read(cx).cloud_messages_not_sent() {
+            // The server never took the newest messages: no turn starts for
+            // them, whatever an older read of its records still says. Only
+            // the computer's live session can still say its agent works.
+            return self.session_turn(cx);
+        }
         let composer = self
             .composer
             .read(cx)
@@ -500,9 +513,13 @@ impl CloudConversation {
     /// The agent's turn is running: its working line shows and the composer
     /// offers Stop (or queues a message) instead of sending a new turn.
     fn turn_running(&self, cx: &App) -> bool {
+        // Messages the server never took start no turn: as for the working
+        // line, an older read of its command rows doesn't count then.
+        let records = !self.composer.read(cx).cloud_messages_not_sent();
         !self.access_revoked
-            && (activity::command(&self.admissions, &self.state.read(cx).transcript)
-                .is_some_and(|activity| activity.busy)
+            && (records
+                && activity::command(&self.admissions, &self.state.read(cx).transcript)
+                    .is_some_and(|activity| activity.busy)
                 || self.session_turn(cx).is_some_and(|activity| activity.busy))
     }
     /// Id of the stand-in for the launch prompt until history delivers it.
@@ -599,13 +616,23 @@ impl CloudConversation {
         // Once the agent answered the latest message, the computer is clearly
         // up: no waiting line.
         let answered = latest_message_answered(&self.state.read(cx).transcript);
-        let line = if !answered && computer.as_ref().is_some_and(|stage| stage.busy) {
+        // A message still on its way to the server says so first: what the
+        // computer was last read doing is not news about it.
+        // Nothing runs before a held message is reviewed, however the
+        // computer is doing.
+        let waiting = self.composer.read(cx).cloud_waiting_for_connection()
+            || agent
+                .as_ref()
+                .is_some_and(|activity| activity.label == activity::REVIEW_FIRST);
+        let line = if !waiting && !answered && computer.as_ref().is_some_and(|stage| stage.busy) {
             Some(SharedString::from("Waiting for computer…"))
         } else {
             agent
-                .filter(|activity| activity.busy)
+                .filter(|activity| activity.busy || activity.label == activity::REVIEW_FIRST)
                 .map(|activity| SharedString::from(activity.label))
         };
+        let not_sent = self.composer.read(cx).cloud_messages_not_sent();
+        let line = line.filter(|_| !not_sent);
         let turn_running = self.turn_running(cx);
         self.composer.update(cx, |composer, cx| {
             composer.set_cloud_status(status, cx);
@@ -613,7 +640,8 @@ impl CloudConversation {
             composer.set_cloud_turn_running(turn_running, cx);
         });
         self.transcript.update(cx, |transcript, cx| {
-            transcript.set_external_activity(line, cx)
+            transcript.set_external_activity(line, cx);
+            transcript.set_external_not_sent(not_sent, cx);
         });
     }
 
@@ -1114,7 +1142,9 @@ impl CloudConversation {
         }
         self.admissions = value["commandAdmissions"].clone();
         self.composer.update(cx, |composer, cx| {
-            composer.apply_cloud_admission_activity(&self.admissions, cx)
+            composer.apply_cloud_admission_activity(&self.admissions, cx);
+            // The server answered: a message waiting for the connection goes now.
+            composer.cloud_connection_restored(cx);
         });
         self.apply_computer_metadata(&value["workspace"], cx);
         let Ok(head) = decoded else {
@@ -2631,6 +2661,75 @@ mod tests {
             view.admissions = json!([{"commandId":"launch:task","messageId":"admitted",
                 "text":"compare features","executionState":"completed","createdAt":1}]);
             assert_eq!(running(view, cx), (false, false, false), "turn over");
+        });
+    }
+    /// The owner's "you are stuck?" report: messages the server never took
+    /// read as waiting for the connection, then as not sent with Retry,
+    /// never as "Starting agent turn…" from an older read of a command row.
+    #[gpui::test]
+    fn an_undelivered_cloud_message_never_reads_as_a_starting_turn(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(initialize);
+        let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
+            std::sync::Arc::new(PendingController),
+        ));
+        let view = cx.new(|cx| {
+            CloudConversation::new(
+                CloudTarget {
+                    controller,
+                    subject: "owner".into(),
+                    organization: None,
+                    workspace: "task".into(),
+                    initial_session: "session".into(),
+                },
+                json!({"workspaceId":"task","state":"ready"}),
+                json!({}),
+                boot(dir.path()),
+                cx,
+            )
+        });
+        view.update(cx, |view, cx| {
+            view.authorized = true;
+            view.computer.metadata = json!({"state":"ready"});
+            view.state.update(cx, |state, _| {
+                state.selected_chat = Some("session".into());
+            });
+            // The last read before the connection dropped: a turn starting.
+            view.admissions = json!([{"commandId":"earlier","messageId":"earlier-message",
+                "text":"what was the issue?","executionState":"starting","createdAt":1}]);
+            let shown = |view: &mut CloudConversation, cx: &mut Context<CloudConversation>| {
+                view.sync_progress(cx);
+                let transcript = view.transcript.read(cx);
+                (
+                    transcript
+                        .external_activity_for_test()
+                        .map(|line| line.to_string()),
+                    transcript.external_not_sent_for_test(),
+                )
+            };
+            assert_eq!(
+                shown(view, cx),
+                (Some("Starting agent turn…".into()), false),
+                "the server's record alone still reads as starting"
+            );
+            // A message on its way while the server can't be reached.
+            view.composer.update(cx, |composer, _| {
+                composer.hold_cloud_send_offline_for_test(false)
+            });
+            assert_eq!(
+                shown(view, cx),
+                (Some("Waiting for connection".into()), false)
+            );
+            // Retried until the limit: not sent, with Retry; no working line,
+            // nothing running, and the composer offers Send.
+            view.composer.update(cx, |composer, _| {
+                composer.hold_cloud_send_offline_for_test(true)
+            });
+            assert_eq!(shown(view, cx), (None, true));
+            assert!(!view.live_activity(cx).working);
+            assert!(!view.composer.read(cx).run_live(cx), "Send, not Stop");
         });
     }
     /// The owner's "yoo" sequence: the first message shows at once as the

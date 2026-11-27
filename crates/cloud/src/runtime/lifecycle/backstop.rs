@@ -27,6 +27,21 @@ use std::sync::{Mutex, OnceLock};
 /// at most about an hour of machine time instead of days.
 pub const BACKSTOP_GRACE_MS: i64 = 3_600_000;
 
+/// How long after its runtime was last known alive (its credential's end) a
+/// computer still recording a turn sleeps. The runtime renews two minutes
+/// before that end, so by then it has missed its renewal for five minutes: the
+/// turn can't be running, and the computer would otherwise stay up, billed,
+/// for a full quiet bound with a turn that never finishes.
+pub const LOST_RUNTIME_GRACE_MS: i64 = 180_000;
+
+/// When the backstop may act on a computer (`$2` the max quiet bound): the
+/// quiet bound, or soon after a lost runtime (see awake.sql's `lost_at`).
+fn due() -> String {
+    format!(
+        "CASE WHEN lost_at IS NULL THEN quiet_since+$2 ELSE LEAST(quiet_since+$2,lost_at+{LOST_RUNTIME_GRACE_MS}) END"
+    )
+}
+
 /// Status a superseded or force-slept computer shows until it is resumed.
 pub const BACKSTOP_REASON: &str = "idle-backstop";
 
@@ -88,7 +103,7 @@ impl RuntimeControl {
     /// The earliest backstop deadline among computers it may act on.
     pub(super) async fn backstop_due(&self, now: i64) -> Result<Option<i64>, ApiError> {
         let due: Option<i64> =
-            sqlx::query_scalar(&awake("min(quiet_since+$2)::bigint", "hold IS NULL"))
+            sqlx::query_scalar(&awake(&format!("min({})::bigint", due()), "hold IS NULL"))
                 .bind(self.creation_accounts.filter())
                 .bind(self.max_quiet_awake_ms())
                 .bind(now)
@@ -103,16 +118,19 @@ impl RuntimeControl {
         let cutoff = now.saturating_sub(self.max_quiet_awake_ms());
         let candidate: Option<String> = sqlx::query_scalar(&awake(
             "workspace_id",
-            "hold IS NULL AND quiet_since<=$2 ORDER BY quiet_since,workspace_id LIMIT 1",
+            &format!(
+                "hold IS NULL AND {}<=$3 ORDER BY quiet_since,workspace_id LIMIT 1",
+                due()
+            ),
         ))
         .bind(self.creation_accounts.filter())
-        .bind(cutoff)
+        .bind(self.max_quiet_awake_ms())
         .bind(now)
         .bind(None::<String>)
         .fetch_optional(&self.pool)
         .await?;
         if let Some(id) = candidate
-            && self.backstop_admit(&id, cutoff, now).await?
+            && self.backstop_admit(&id, now).await?
         {
             return Ok(true);
         }
@@ -133,17 +151,17 @@ impl RuntimeControl {
         held_transitions(&mut held, rows, now);
         Ok(false)
     }
-    async fn backstop_admit(&self, id: &str, cutoff: i64, now: i64) -> Result<bool, ApiError> {
+    async fn backstop_admit(&self, id: &str, now: i64) -> Result<bool, ApiError> {
         let mut tx = self.pool.begin().await?;
         let (row, generation, _) = locking::workspace(&mut tx, id, true).await?;
         // Recheck under the workspace lock: activity, a new operation or a
         // live turn that won the race keeps the computer awake.
         let due: bool = sqlx::query_scalar(&format!(
             "SELECT EXISTS({})",
-            awake("1", "hold IS NULL AND quiet_since<=$2")
+            awake("1", &format!("hold IS NULL AND {}<=$3", due()))
         ))
         .bind(self.creation_accounts.filter())
-        .bind(cutoff)
+        .bind(self.max_quiet_awake_ms())
         .bind(now)
         .bind(id)
         .fetch_one(&mut *tx)
@@ -165,6 +183,12 @@ impl RuntimeControl {
         // A live runtime gets the ordinary quiescence directive (bounded by
         // the worker); with no runtime to answer, quiescence is already true.
         let alive = runtime_alive(&row, now);
+        if !alive {
+            // No runtime is left to run or finish a turn it recorded: the
+            // turn is lost. Its message waits for the user's review (never
+            // re-run on its own) instead of reading as running forever.
+            settle_lost_turns_tx(&mut tx, &row, now).await?;
+        }
         let phase = if alive { "quiescing" } else { "quiesced" };
         let superseded = config["rustLifecycleOperation"].clone();
         let operation = uuid::Uuid::new_v4().to_string();
@@ -216,6 +240,32 @@ impl RuntimeControl {
         wakeup::send();
         Ok(true)
     }
+}
+
+/// Mark every turn still recorded as starting, running or waiting for input
+/// on this computer as lost (`outcome-unknown`, `runtime-process-lost`), as
+/// the next runtime would on its cold start, and tell open apps so each shows
+/// the message for review.
+async fn settle_lost_turns_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    row: &Value,
+    now: i64,
+) -> Result<(), ApiError> {
+    let id = row["workspace_id"].as_str().unwrap_or_default();
+    let mut sessions: Vec<String> = sqlx::query_scalar("UPDATE zuse_rust_task_command_execution SET state='outcome-unknown',error_code='runtime-process-lost',unknown_reviewed=false,updated_at=$2 WHERE workspace_id=$1 AND state IN('starting','running','waiting-input') RETURNING session_id")
+        .bind(id).bind(now).fetch_all(&mut **tx).await?;
+    sessions.sort();
+    sessions.dedup();
+    if let Some(owner) = row["account_id"].as_str() {
+        for session in &sessions {
+            sqlx::query("INSERT INTO zuse_rust_account_event_outbox(owner_id,kind,resource_id,workspace_id,payload,created_at) VALUES($1,'task-command-progress',$2,$3,'{\"commandAdmissionVersion\":2}'::jsonb,$4)")
+                .bind(owner).bind(session).bind(id).bind(now).execute(&mut **tx).await?;
+        }
+    }
+    if !sessions.is_empty() {
+        tracing::warn!(workspace = %id, conversations = sessions.len(), "Cloud turn lost with its runtime; waiting for review");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
