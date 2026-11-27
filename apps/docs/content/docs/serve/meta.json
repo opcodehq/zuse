@@ -1,0 +1,11 @@
+{
+	"title": "Serve",
+	"pages": [
+		"index",
+		"operations",
+		"command-reference",
+		"security",
+		"troubleshooting",
+		"agent-cli"
+	]
+}

@@ -1,0 +1,81 @@
+---
+title: Configure local and project settings
+icon: Settings2
+navTitle: "Configure settings"
+description: Set personal defaults in Zuse, choose where worktrees go, and save project actions for a repository.
+section: how-to
+order: 6
+platforms: [desktop]
+providers: []
+prerequisites: [/start/install, /projects]
+related: [/reference/settings, /projects/scripts, /projects/repository-settings, /projects/worktrees]
+next: /how-to/local-configure-mcp
+lastVerified: "2026-11-27"
+---
+
+## Goal
+
+Configure defaults for your computer and give a project the commands its checkouts need.
+
+## Applicability
+
+Use this guide in the **desktop app**. Personal preferences apply to your Zuse installation. Project actions are saved on the computer that hosts the project. A repository can also offer actions for import through an optional `zuse.json` file.
+
+Settings provide defaults for new chats and worktrees. A running agent, an existing worktree, or a command that is already running does not change when you edit a default.
+
+## Prerequisites
+
+- Install and open Zuse.
+- Add the repository as a project before configuring its actions.
+- Keep credentials and other secrets out of action commands and committed files.
+
+## 1. Set personal defaults
+
+1. Open **Settings**.
+2. Under **General**, review the **Composer** options (**Send messages with**, **Stop agent with Escape**, **Direct steer**, and others), **Links** (**Open pull requests in**), thread naming, and app updates.
+3. Under **Providers & accounts**, choose which agents the composer offers and sign in to each one.
+4. Under **Default models**, choose the model for new chats and the **Default permission mode**. Choosing **Ask for approval**, **Approve for me**, or **Full access** in the composer also saves that choice as the default for future chats.
+5. Review the other pages when needed: **Appearance**, **Notifications**, **Voice**, **Keyboard shortcuts**, **Files**, **Remote access**, **Archived chats**, **Usage**, and **Plugins & MCP**. Some pages, such as **Billing** and the **Cloud computer** group, appear only for signed-in or subscribed accounts.
+6. Close Settings, start a new chat, and confirm that its agent, model, and access level match the intended defaults.
+
+Zuse saves these preferences in `ui-settings.json` in its data directory: `~/.zuse-native` on macOS and Linux, or `%LOCALAPPDATA%\Zuse` on Windows. `ZUSE_DATA_DIR` overrides that location. Use the Settings screens rather than editing the file by hand. Provider credentials are not stored in this file.
+
+## 2. Choose where worktrees go
+
+By default, Zuse creates worktrees under `~/.zuse/worktrees/<repository>/<name>`.
+
+1. Open **Settings → General** and find the worktree location card.
+2. Turn on **Custom worktree location**, choose **Browse**, and pick a folder. **Reset to default** returns to the default location.
+3. If the card shows **Set by ZUSE_WORKTREES_DIR**, the environment variable on that computer controls the location; change it there instead.
+
+Existing worktrees stay where they are. The new location applies to worktrees created afterwards.
+
+## 3. Save project actions
+
+Project actions are named commands for a project, such as installing dependencies, starting a dev server, or running tests.
+
+1. Open a chat in the project and open the environment summary from the top bar (**Toggle environment summary**).
+2. In the **Actions** section, choose **Add action**.
+3. Enter a **Name** and a **Command**, then pick an **Icon** (**Play**, **Test**, **Lint**, **Configure**, **Build**, or **Debug**).
+4. Turn on **Run automatically on worktree creation** for setup commands that every new worktree needs, such as installing dependencies.
+5. Save the action. Choose it in the **Actions** section to run it in the selected chat's checkout, or use its **Edit action** button to change it.
+
+If the repository contains a `zuse.json` file with actions, they appear in the **Actions** section for you to import; Zuse does not run them until you do. See [Project actions](/projects/scripts/) and [Repository file](/projects/repository-settings/) for the complete reference.
+
+## Verify the result
+
+1. Start a new chat in the project.
+2. Confirm that the composer shows the expected agent, model, access level, and **Worktree** or **Local** choice.
+3. Send a small task with **Worktree** selected and confirm that the checkout appears in the expected location.
+4. If an action runs on worktree creation, confirm that its terminal tab (**_action_ (setup)**) finished without errors.
+5. Run another action from the **Actions** section and verify it ran in the chat's checkout.
+
+## Troubleshooting and recovery
+
+- **A new chat ignores a default:** defaults apply when Zuse creates a chat. Start a new chat after changing them. The composer remembers **Worktree** or **Local** per project, so check that chip too.
+- **An existing chat did not change:** start a new chat, or change the model or access level in that chat's composer.
+- **A setup action fails in a new worktree:** read the output in its terminal tab, fix the command or dependency, then run the action again from **Actions**. The checkout remains available after failure.
+- **The worktree location cannot be changed:** the device may need an update (**Update Zuse on the selected device to configure worktree locations.**), or `ZUSE_WORKTREES_DIR` is set on it.
+- **A secret was committed:** remove it from the repository, rotate the credential, and keep the value in an ignored local file or the provider's credential store. Removing it only from the latest file does not erase it from Git history.
+
+Next, [add an MCP server](/how-to/local-configure-mcp/). For every setting, see [Settings reference](/reference/settings/).

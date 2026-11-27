@@ -1,0 +1,62 @@
+---
+title: "Connect a phone to your computer"
+icon: Smartphone
+navTitle: "Connect a phone"
+description: "Pair the Zuse mobile app with your computer over Wi-Fi or Tailscale and confirm the connection."
+section: how-to
+order: 10
+platforms: [desktop, mobile]
+providers: []
+prerequisites: [/remote/nearby-pairing]
+related: [/mobile/connect, /remote/security, /how-to/remote-recover-connection]
+next: /mobile/chats
+lastVerified: "2026-11-27"
+---
+
+Pair the Zuse app on your phone with the computer that owns your projects. This does not need a Zuse account.
+
+## Applicability
+
+Use this guide when the phone can reach the computer over the same Wi-Fi or your tailnet. To reach it from anywhere with your account, see [Reach a computer away from its network](/how-to/remote-hosted-access/). The computer runs the agents in both cases.
+
+## Prerequisites
+
+- Zuse is open on the computer, or `zuse serve` is running there.
+- The Zuse app is on your phone.
+- Both devices are on the same network, or both are on your tailnet.
+
+## Steps
+
+1. On the computer, open **Settings → Remote access**.
+2. Under **This computer**, turn on **Wi-Fi**, **Tailscale**, or both. The status changes to **Reachable on your Wi-Fi** or **Reachable at home and away**.
+3. Choose **Connect device**. The **Pair a device** dialog shows a QR code on the **Phone** tab.
+4. On the phone, tap **Add computer** and scan the code. If the camera is not available, choose **Copy link** on the computer and paste it under **Or paste a link**.
+5. Wait for the dialog to say the device is connected, then close it.
+
+On a headless computer, run `zuse serve --lan`, then `zuse pair --app` to show the QR code in the terminal.
+
+## Verification
+
+- The computer's projects and chats appear on the phone.
+- The phone is listed under **Devices** in **Settings → Remote access**, with the date it paired.
+- An existing chat opens and shows its latest messages.
+
+## Troubleshooting and recovery
+
+### Connect device is unavailable
+
+No connection is on. Turn on **Wi-Fi** or **Tailscale** first.
+
+### The code expired
+
+Codes last ten minutes and work once. Choose **New code**.
+
+### The phone cannot reach the computer
+
+Guest and office Wi-Fi networks often block devices from talking to each other. Use Tailscale, or pair over SSH with **Add computer → Connect with SSH** ([details](/remote/nearby-pairing/#pair-over-ssh)).
+
+### The phone was revoked
+
+Retrying cannot restore a revoked pairing. Forget the computer on the phone and pair again with a new code.
+
+See [connection recovery](/how-to/remote-recover-connection/) for later disconnects.

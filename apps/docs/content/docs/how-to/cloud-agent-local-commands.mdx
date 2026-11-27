@@ -1,0 +1,43 @@
+---
+title: "Let cloud agents run commands on your computer"
+icon: SquareTerminal
+navTitle: "Local commands from cloud"
+description: "Let cloud chats run commands on your own computers, approve each request, and revoke saved permissions."
+section: how-to
+order: 29
+platforms: [desktop]
+providers: []
+prerequisites: [/how-to/cloud-start-chat]
+related: [/how-to/cloud-share-chat, /how-to/remote-hosted-access]
+lastVerified: "2026-11-27"
+---
+
+Cloud chats can ask to run shell commands on your own computers while Zuse is open there and signed in to the same account. A command runs as your user on that computer, so it can read and change your files. This is separate from what the agent can do on its cloud computer.
+
+## Turn it on for a computer
+
+1. On the computer you want to use, open **Settings → Cloud computer → Your computers**.
+2. Turn on **Use this computer from cloud chats**. Your cloud chats can run commands there, and each one asks you first.
+
+The same page lists your account's other enrolled computers with their status, such as **Online**, **Offline**, or **Paused**. Use **Rename** to change how a computer is named in requests, or **Remove** to take it off the list.
+
+The computer you're typing on is used automatically. Your other enrolled computers that are online are available too, without attaching anything to the chat.
+
+## Approve a request
+
+When the agent wants to run a command, the composer shows **Run this command on your computer?** with the command, the user and shell it runs as, and its time limit. Choose:
+
+- **Allow once** to run only this command.
+- **Allow for this chat** so later commands from this chat on this computer run without asking.
+- **Allow always** so commands from any of your chats on this computer run without asking.
+- **Deny**, or press Escape, to reject it without running it.
+
+## Watch or stop commands
+
+Running commands sit in the composer tray with **Running on _computer_** and a **Stop** button. A computer runs up to four cloud commands at a time, and each command can run for up to an hour.
+
+If Zuse can't tell whether a command finished, for example after a lost connection, it shows **Outcome unknown**: the command may have run, and it won't run again. Check its effects before you ask the agent to retry with a new command.
+
+## Revoke access
+
+In **Settings → Cloud computer → Your computers**, choose **Revoke always** next to a computer marked **Always allowed**. To stop all commands on a computer, turn off **Use this computer from cloud chats**.

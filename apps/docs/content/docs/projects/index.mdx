@@ -1,0 +1,19 @@
+---
+title: Projects and worktrees
+icon: FolderGit2
+description: Keep repository tasks organized and isolated without cloning repeatedly.
+section: projects
+order: 40
+platforms: [desktop, browser]
+providers: []
+prerequisites: [/start/first-chat]
+related: [/projects/worktrees, /projects/scripts, /projects/repository-settings]
+next: /projects/worktrees
+lastVerified: "2026-11-27"
+---
+
+A project is a folder on a Zuse computer. To add one, choose **Add new project…** in the composer's project picker. You can **Open folder** to add an existing folder, **Clone repository** from GitHub or any Git URL, or **Create project** to start a new folder.
+
+For a Git repository, each chat runs either in the project folder (**Local**) or in its own isolated worktree (**Worktree**). Worktrees are the default tool for parallel agent work: every worktree has its own checked-out files and branch while sharing the repository's object database. This avoids repeated full clones and keeps unrelated changes out of the same working directory.
+
+Project actions save the commands you run in a project, such as a dev server or test suite, and one of them can prepare every new worktree. A committed `zuse.json` file lets a team offer the same actions for import. Continue with [Worktrees](/projects/worktrees), then [Project actions](/projects/scripts).

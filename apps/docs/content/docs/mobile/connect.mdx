@@ -1,0 +1,43 @@
+---
+title: "Connect your phone"
+icon: Link
+navTitle: "Connect"
+description: "Add a computer to the Zuse mobile app with a QR code, a link, SSH, or your Zuse account, and manage saved computers."
+section: "Mobile"
+order: 2
+platforms: [mobile, desktop, serve]
+providers: []
+prerequisites: [/mobile]
+related: [/remote/nearby-pairing, /remote/hosted-access, /remote/recovery]
+next: /mobile/chats
+lastVerified: "2026-11-27"
+---
+
+The mobile app can keep several computers. Each one stays paired until you forget it on the phone or revoke it on the computer.
+
+## Scan a QR code
+
+1. On the computer, open **Settings → Remote access**, turn on **Wi-Fi** or **Tailscale**, and choose **Connect device**. On a headless computer, run `zuse serve --lan`, then `zuse pair --app`.
+2. On the phone, tap **Add computer** and point the camera at the code.
+
+If the phone cannot use the camera, copy the link on the computer and paste it under **Or paste a link**. Codes work once and expire after ten minutes. See [Pair a phone](/remote/nearby-pairing/) for details.
+
+## Connect with SSH
+
+Choose **Add computer → Connect with SSH** and enter the computer's SSH address, such as `user@host`. The phone makes its own SSH key; add it to the computer, or sign in with your password once so Zuse adds it for you. The password is not saved. Zuse then pairs with the computer, and can start `zuse serve` there if it is not running. The computer needs the `zuse` command installed.
+
+## Use your Zuse account
+
+Computers [linked to your account](/remote/hosted-access/) appear after you sign in. Open **Settings**, choose **Sign in to Zuse**, and use the same account. Signing in also gives you Zuse Cloud.
+
+## Manage computers
+
+Open **Settings → Computers** and choose a computer to see its route, how it was paired, and its SSH host key. From there you can:
+
+- **Check connection** to test the route step by step from the phone.
+- **Rename** the computer.
+- **Forget computer** to remove it from this phone. You need a new link or SSH sign-in to connect again.
+
+Forgetting only affects the phone. To end the phone's access, revoke it on the computer under **Settings → Remote access → Devices**.
+
+<NextStep href="/mobile/chats/" label="Work with chats on mobile" />

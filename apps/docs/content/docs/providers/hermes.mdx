@@ -1,0 +1,41 @@
+---
+title: Hermes
+icon: Feather
+description: Run Nous Research's Hermes Agent over ACP in Zuse.
+section: providers
+order: 38
+platforms: [desktop, browser, mobile]
+providers: [hermes]
+prerequisites: [/start/install, /providers/setup]
+related: [/composer/modes-permissions, /reference/diagnostics]
+next: /providers/kiro
+lastVerified: "2026-11-27"
+---
+
+Zuse runs Nous Research's Hermes Agent through your installed `hermes` CLI over ACP (`hermes acp`).
+
+## Install and sign in
+
+Choose **Install** in **Settings → Providers & accounts**, or install it yourself:
+
+```bash
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+```
+
+Hermes also needs its ACP extra for agent sessions; the Install action only checks that the CLI is detected:
+
+```bash
+cd ~/.hermes/hermes-agent && uv pip install -e '.[acp]'
+```
+
+Sign in from the Hermes row with **ChatGPT** or **Nous Portal**, or run `hermes auth add`. Hermes keeps its own pool of logins and rotates through them. Zuse looks for `hermes` on your PATH, in `~/.local/bin`, `~/.hermes/bin`, `/opt/homebrew/bin`, and `/usr/local/bin`; set `HERMES_EXECUTABLE` to override.
+
+## Workflows in Zuse
+
+- Models come from the providers you've connected to Hermes (`hermes model`). Hermes 4 405B and Hermes 4 70B are listed when your account offers them.
+- Hermes has no separate reasoning control.
+- Messages you send during a turn are delivered when the turn ends.
+- Skills come from `.agents/skills` and Hermes's own skills folder (`~/.hermes/skills`, or `$HERMES_HOME/skills`).
+- Use Plan mode, **Ask for approval**, and **Full access**.
+
+Update with `hermes update`, or from the Hermes row.

@@ -1,0 +1,45 @@
+---
+title: "Pair a phone"
+icon: Smartphone
+navTitle: "Pair a phone"
+description: "Pair the Zuse mobile app with a computer by scanning a QR code, pasting a link, or signing in over SSH."
+section: "Remote access"
+order: 2
+platforms: [desktop, mobile, serve]
+providers: []
+prerequisites: [/remote]
+related: [/mobile/connect, /remote/security, /remote/recovery]
+next: /remote/local-browser
+lastVerified: "2026-11-27"
+---
+
+Pairing gives the Zuse app on your phone its own access to one computer. It does not need a Zuse account. The phone keeps the pairing and reconnects on its own until you revoke it.
+
+<Workflow>
+  <Step title="Let the phone reach the computer">
+    In the desktop app, open **Settings → Remote access** and turn on **Wi-Fi**, **Tailscale**, or both. The status under **This computer** changes from **Only this computer can use Zuse** to **Reachable on your Wi-Fi** or **Reachable at home and away**. On a headless computer, run `zuse serve --lan`.
+  </Step>
+  <Step title="Show a code">
+    Choose **Connect device**. The **Pair a device** dialog opens on the **Phone** tab with a QR code and a countdown. On a headless computer, run `zuse pair --app` to print the QR code in the terminal.
+  </Step>
+  <Step title="Scan it">
+    In the Zuse app, tap **Add computer** and point the camera at the code. If the phone cannot scan, choose **Copy link** in the dialog and paste it under **Or paste a link** on the phone.
+  </Step>
+  <Step title="Confirm">
+    The dialog shows that the device is connected, and the phone appears under **Devices**.
+  </Step>
+</Workflow>
+
+A code works once and expires after ten minutes. Choose **New code** for another one; an unused code is discarded when you replace it.
+
+## Pair over SSH
+
+If the computer is not set up yet, or only listens on loopback, the phone can do it over SSH. In the app, choose **Add computer → Connect with SSH** and enter `user@host` (`user@host:2222` and `ssh://user@host` also work). The phone creates its own SSH key. Add that key to the computer, or enter your password once so Zuse can add it to `~/.ssh/authorized_keys`; the password is not saved.
+
+The phone then runs `zuse pair` on the computer. If Zuse is not running there, it offers to start `zuse serve`, and **Keep running after restart** installs it with `zuse daemon install --serve`. The computer must already have the `zuse` command. The SSH host key is trusted the first time, and a changed key is refused. When the computer only accepts local connections, the phone reaches it through the SSH session.
+
+## Revoke a phone
+
+On the computer, open **Settings → Remote access**, find the phone under **Devices**, and choose **Revoke**. This ends its access at once. Removing the computer on the phone (**Forget computer**) only deletes the phone's copy.
+
+<NextStep href="/remote/local-browser/" label="Open the computer in a browser" />

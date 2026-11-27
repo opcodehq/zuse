@@ -1,0 +1,42 @@
+---
+title: Devin
+icon: Bird
+description: Run Cognition's Devin CLI over ACP in Zuse.
+section: providers
+order: 36
+platforms: [desktop, browser, mobile]
+providers: [devin]
+prerequisites: [/start/install, /providers/setup]
+related: [/composer/modes-permissions, /composer/subagents, /reference/diagnostics]
+next: /providers/grok
+lastVerified: "2026-11-27"
+---
+
+Zuse runs your installed `devin` CLI as an ACP agent (`devin acp`).
+
+## Install and sign in
+
+Choose **Install** in **Settings → Providers & accounts**, or install it yourself:
+
+```bash
+brew install --cask devin-cli
+```
+
+Or:
+
+```bash
+curl -fsSL https://cli.devin.ai/install.sh | bash
+```
+
+Then sign in from the Devin row or run `devin auth login`. Devin runs on your Devin account. Zuse looks for `devin` on your PATH, in `~/.local/bin`, `/opt/homebrew/bin`, and `/usr/local/bin`; set `DEVIN_EXECUTABLE` to use another installation. Zuse can't update Devin for you; update it the way you installed it.
+
+## Workflows in Zuse
+
+- Pick from Devin's models, such as SWE-1.7 Medium or Adaptive, which lets Devin choose per request. Reasoning effort is part of each model rather than a separate control.
+- Steer a running turn: your message goes straight into it instead of cancelling and re-prompting.
+- See Devin Fusion's sidekick as a subagent: each handoff gets a **Sidekick** chip you can open to watch its commands and edits.
+- An idle Devin chat stays warm for 30 minutes, so the next message skips a full conversation reload.
+- Discover skills from `.agents/skills`.
+- Use Plan mode, **Ask for approval**, and **Full access**.
+
+If another process still holds the conversation, Devin retries for about five seconds before starting a fresh session. In that case the new session starts without the earlier context, while the Zuse timeline keeps it.

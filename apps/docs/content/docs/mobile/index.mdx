@@ -1,0 +1,39 @@
+---
+title: "Zuse on iPhone and Android"
+navTitle: "Overview"
+icon: Smartphone
+description: "Follow agents, answer approvals, start chats, and review changes on your phone while the work runs on your computer or in Zuse Cloud."
+section: "Mobile"
+order: 1
+platforms: [mobile]
+providers: []
+prerequisites: [/remote]
+related: [/mobile/connect, /mobile/chats, /mobile/review, /remote/nearby-pairing]
+next: /mobile/connect
+lastVerified: "2026-11-27"
+---
+
+The Zuse mobile apps for iPhone and Android are clients for your computers and for Zuse Cloud. Projects, agents, and chats stay on the computer you connect to; the phone shows them and sends your messages and decisions.
+
+<Callout title="Availability">
+Zuse's desktop releases on GitHub do not include the mobile apps. The steps in this section describe the apps as they exist in the Zuse source.
+</Callout>
+
+## What you can do
+
+- See chats from all your computers in one list, search them, and archive or restore them.
+- Start a chat on a computer or in Zuse Cloud, in a new worktree, the main checkout, an existing branch, or an existing worktree.
+- Choose the agent and how much it may do without asking, and turn on plan mode.
+- Send text, photos, and files, and stop a running response.
+- Approve or deny agent requests, answer questions, and approve plans.
+- Review working-tree, staged, and branch changes.
+
+## What runs where
+
+The phone does not clone repositories or run agent CLIs. The agents you can pick come from the connected computer, so two computers can offer different agents.
+
+## Connect a computer
+
+On the phone, tap **Add computer**. You can scan a QR code from the computer, paste a link, or sign in to the computer over SSH and let Zuse set it up. See [Connect your phone](/mobile/connect/).
+
+<NextStep href="/mobile/connect/" label="Connect your phone" />

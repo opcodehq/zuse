@@ -1,0 +1,40 @@
+---
+title: Local-first data and security
+icon: ShieldCheck
+navTitle: "Local-first data"
+description: Understand where Zuse stores your work, its preferences, and its history.
+section: concepts
+order: 12
+platforms: [desktop, browser, mobile]
+providers: []
+prerequisites: [/concepts]
+related: [/reference/settings, /reference/diagnostics, /projects/worktrees]
+next: /desktop
+lastVerified: "2026-11-27"
+---
+
+
+The Zuse engine on each computer is the source of truth for that computer's projects, chats, conversations, tool results, and checkouts. Repository contents stay in their existing folder or in a worktree Zuse created.
+
+## Where Zuse keeps data
+
+| What | Location |
+| --- | --- |
+| App data: chats, history, preferences | `~/.zuse-native` on macOS and Linux, `%LOCALAPPDATA%\Zuse` on Windows |
+| New worktrees | `~/.zuse/worktrees/<repository>/<worktree>` by default |
+
+Set `ZUSE_DATA_DIR` to use another data directory. Two running engines cannot share one data directory. Choose another worktree location in **Settings → General**.
+
+## Credentials
+
+Agent sign-in stays with each agent's own CLI and its own credential files. Zuse does not move them into its data directory. Model account keys that Zuse stores itself are encrypted.
+
+When an agent asks for a secret through a private secret request, you type it into a masked input. Zuse uses it for the one approved request, and the value does not enter the model context or the chat history.
+
+## Remote clients
+
+Browsers, phones, and other computers connect to a running Zuse computer; they do not become a second copy of its database. Revoke a paired device to remove its access. See [Remote access](/remote) for connection and security details.
+
+## Backups
+
+Keep protecting repository files with Git and your normal backup strategy. If you back up Zuse's data directory, quit the app first so the state is captured consistently.

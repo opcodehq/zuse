@@ -12,10 +12,9 @@ import Foundation
 
 /// Owns a loaded bridge for the lifetime of its function pointers. Rust serializes session state.
 public final class NativePairing: @unchecked Sendable {
-  private typealias Request = @convention(c) (UnsafePointer<UInt8>?, Int) -> UnsafeMutablePointer<
-    CChar
-  >?
-  private typealias Release = @convention(c) (UnsafeMutablePointer<CChar>?) -> Void
+  private typealias Reply = UnsafeMutablePointer<CChar>
+  private typealias Request = @convention(c) (UnsafePointer<UInt8>?, Int) -> Reply?
+  private typealias Release = @convention(c) (Reply?) -> Void
   private let library: UnsafeMutableRawPointer?
   private let call: Request
   private let release: Release

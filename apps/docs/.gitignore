@@ -1,0 +1,11 @@
+/.astro/
+.source/
+.next/
+*.tsbuildinfo
+dist/
+out/
+.wrangler/
+.dev.vars*
+playwright-report/
+test-results/
+.env*

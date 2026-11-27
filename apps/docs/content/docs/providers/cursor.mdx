@@ -1,0 +1,47 @@
+---
+title: Cursor
+icon: logo:cursor
+description: Run Cursor's agent through the pinned Cursor SDK with a Cursor API key.
+section: providers
+order: 35
+platforms: [desktop, browser, mobile]
+providers: [cursor]
+prerequisites: [/start/install, /providers/setup]
+related: [/composer/modes-permissions, /composer/subagents, /reference/diagnostics]
+next: /providers/devin
+lastVerified: "2026-11-27"
+---
+
+Zuse runs Cursor's agent through a pinned version of the Cursor SDK (`@cursor/sdk`), launched with Node.js through a small Zuse shim. It does not use Cursor's ACP mode or the `cursor-agent` print mode.
+
+## Install and sign in
+
+Zuse detects Cursor through its CLI, `cursor-agent`. Choose **Install** in **Settings → Providers & accounts**, or install it yourself:
+
+```bash
+curl https://cursor.com/install -fsS | bash
+```
+
+Then sign in from the Cursor row. Cursor runs on your Cursor plan: when you sign in, Zuse mints a Cursor API key for its sessions, which you can revoke from Cursor's dashboard. A `CURSOR_API_KEY` in Zuse's environment also works.
+
+The SDK's credentials are separate from `cursor-agent login`, so signing in to the CLI alone isn't enough. If credentials are missing, the chat shows the exact fix as an error.
+
+## Workflows in Zuse
+
+- Stream assistant text, thinking, tool calls, edits, to-dos, usage, and errors into the durable timeline.
+- Steer a running turn: your message is delivered at the agent's next model step.
+- Change the model for the next turn without restarting the agent.
+- Show the full transcript of Cursor subagents as nested subagent activity.
+- Use Plan mode and **Ask for approval** or **Full access**.
+- Discover skills from `.cursor/skills`, `.claude/skills`, `.codex/skills`, and `.agents/skills`.
+
+Cursor's question tool is turned off in Zuse sessions, because the SDK has no way to send an answer back.
+
+## Limits and recovery
+
+Account limits, model access, and network availability are controlled by Cursor. If a session fails:
+
+1. Check that `cursor-agent` is installed and Node.js is available.
+2. Sign in again from the Cursor row, then refresh **Settings → Providers & accounts**.
+3. Update the CLI with `cursor-agent update`.
+4. Start or restart the session.

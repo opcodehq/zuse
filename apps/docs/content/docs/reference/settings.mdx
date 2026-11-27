@@ -1,0 +1,64 @@
+---
+title: User settings
+icon: Settings
+navTitle: "User settings"
+description: Find each Settings section and understand where Zuse keeps your preferences.
+section: reference
+order: 91
+platforms: [desktop]
+providers: [claude, codex, grok, cursor, opencode, kiro, pi]
+prerequisites: []
+related: [/reference/keybindings, /reference/schemas, /concepts/local-first]
+next: /reference/keybindings
+lastVerified: "2026-11-27"
+---
+
+
+Open Settings with `⌘,` (`Ctrl+,` on Windows and Linux) or **Settings** in the application menu. Settings remembers the last section you opened.
+
+## Settings sections
+
+The sidebar groups sections under four headings. Some sections appear only when your build, account, or plan supports them.
+
+### App
+
+| Section | What it covers |
+| --- | --- |
+| **General** | Language, composer and conversation behavior (such as **Direct steer**), thread naming, links, worktree location, the Stable or Preview update channel, and **Import from Electron** |
+| **Appearance** | Themes, light or dark scheme, accent color, wallpapers, and motion |
+| **Notifications** | When Zuse alerts you about agent activity, and session sounds |
+| **Voice** | Dictation and microphone |
+| **Keyboard shortcuts** | Every rebindable shortcut. See [Keybindings](/reference/keybindings) |
+| **Files** | How the file editor saves, wraps, and lists files, including autosave |
+| **Remote access** | Use this computer from your phone, a browser, or another computer. See [Remote access](/remote) |
+| **Appshots** | Capture an app window and attach it to a chat. Shown on macOS and Linux |
+| **Archived chats** | Read archived conversations or restore them |
+
+### Plan & usage
+
+| Section | What it covers |
+| --- | --- |
+| **Usage** | Model and compute usage |
+| **Billing** | Your Cloud plan, minutes, and payment. Shown when you are signed in |
+
+### Local agents
+
+| Section | What it covers |
+| --- | --- |
+| **Providers & accounts** | Which agents are installed and signed in, accounts, versions, and updates. See [Provider setup](/providers/setup) |
+| **Default models** | The default agent and model for new chats |
+| **Plugins & MCP** | Plugins and MCP servers your agents can use. See [Skills and MCP](/composer/skills-mcp) |
+
+### Cloud computer
+
+Shown to Cloud subscribers: **Overview**, **Repositories**, **Environments**, **Machine**, **Agent accounts**, and **Your computers**.
+
+## Where preferences are stored
+
+Zuse saves app preferences, including your keyboard shortcuts, in `ui-settings.json` inside its data directory: `~/.zuse-native` on macOS and Linux, or `%LOCALAPPDATA%\Zuse` on Windows. `ZUSE_DATA_DIR` selects another data directory.
+
+Change preferences in the Settings UI. The file is written only by the running app and is not a public configuration format. If it cannot be read, Zuse starts with default settings, and out-of-range values are reset when the file loads.
+
+Some choices are stored elsewhere: the worktree location is kept per computer, and account-synced workspaces keep sidebar sections with your account.
+
+The access you pick in the composer also becomes the default for new chats, and new chats use a worktree unless you choose **Local**.

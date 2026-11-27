@@ -1,0 +1,60 @@
+---
+title: "Start a task from Slack"
+icon: MessagesSquare
+navTitle: "Start a task from Slack"
+description: "Connect Slack in Cloud settings, mention Zuse with a task, and follow the cloud chat it starts."
+section: how-to
+order: 28
+platforms: [desktop]
+providers: []
+prerequisites: [/how-to/cloud-start-chat]
+related: [/how-to/choose-cloud-provider, /how-to/cloud-share-chat]
+lastVerified: "2026-11-27"
+---
+
+<Callout title="Availability">
+Slack tasks are not part of Zuse 0.27.9. They are listed as unreleased in the changelog, and the Slack section of Cloud settings is hidden in current builds. This page describes the flow as it exists in the Zuse source.
+</Callout>
+
+## Goal
+
+Hand a coding task to Zuse from a Slack channel or direct message and get the result back in the same thread.
+
+## Applicability
+
+Slack starts **cloud chats** on your personal Zuse account. Organization workspaces cannot run Slack tasks yet. There are no slash commands: you mention Zuse or send it a direct message.
+
+## Prerequisites
+
+- [Zuse Cloud is set up](/how-to/cloud-start-chat/) and the agent you want is connected.
+- A cloud repository that is ready and prepared with Slack support. Rebuild an existing repository image if Zuse asks you to.
+
+## Steps
+
+1. In the desktop app, open **Settings → Cloud** and find **Slack**.
+2. Under **Zuse workspace**, choose **Personal**.
+3. Choose the **Repository** that new Slack threads use, and the **Agent and model**.
+4. Choose **Connect Slack**. Pick your Slack workspace in the browser, then return to Zuse, refresh, and confirm the Slack user and workspace shown. Choose **Decline** if they are not yours.
+5. In Slack, mention **@Zuse** with the task in a channel, or send it a direct message.
+6. Follow progress in the thread. Zuse replies there when the agent finishes.
+7. To continue, reply in the same thread and mention **@Zuse** again. Replies without a mention are ignored.
+
+Each Slack member connects their own Zuse account; only that member can use it, and existing threads keep the account that started them. Choosing a model in Slack settings does not sign in its agent. Questions and approvals that need a person still have to be answered in Zuse.
+
+## Link an existing chat to a channel
+
+You can also mirror a chat into Slack. Right-click the chat in the sidebar, open **Slack**, and choose a channel under **Link to Slack**. The chat's finished replies post into a Slack thread, and replies you write in that thread come back to the chat. Use **Sync to Slack** to pause or resume posting, **Open Slack thread** to jump to it, and **Unlink from Slack** to stop. Private channels need the Zuse app invited first.
+
+## Verify
+
+- The Slack thread shows progress and then a reply from Zuse.
+- In Zuse, a cloud chat appears with **Started from Slack**, and its first message shows the Slack author and channel.
+
+## Troubleshooting and recovery
+
+- **Prepare or rebuild a cloud repository with Slack support above before connecting:** no repository is ready for Slack. Prepare or rebuild one in Cloud settings.
+- **Organization cloud runtimes are not available on this deployment yet:** choose **Personal**.
+- **Your workspace changed. Refresh Slack settings.** or **Connection interrupted. Refresh Slack settings.:** choose **Refresh** and connect again.
+- **Slack sign-in declined. Nothing was connected.:** start again with **Connect Slack**.
+- **A follow-up was ignored:** mention **@Zuse** in the thread.
+- **You want to stop:** choose **Disconnect** in Slack settings. Work that is already running is not cancelled.

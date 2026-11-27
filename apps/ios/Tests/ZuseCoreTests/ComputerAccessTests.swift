@@ -3,48 +3,47 @@ import Testing
 
 @testable import ZuseCore
 
-@Test func pairingInvitationsKeepTheServerCodeAndExpiryTogether() throws {
-  let result: JSONValue = .object([
-    "browserUrl": .string("https://computer.tail.ts.net/#pair=ABCD2345"),
-    "code": .string("ABCD2345"), "expiresAt": .string("2026-10-17T12:00:00.123Z"),
-  ])
-  let now = try #require(ServerTimestamp.parse("2026-10-17T11:59:00Z"))
-  let invitation = try PairingInvitation(result, now: now)
-  #expect(invitation.browserURL.host == "computer.tail.ts.net")
-  #expect(invitation.code == "ABCD2345")
-  #expect(invitation.expiresAt.timeIntervalSince(now) > 60)
-  #expect(throws: ClientError.self) {
-    _ = try PairingInvitation(result.setting("code", to: .string("OTHER")), now: now)
-  }
+private let fragment =
+  "#pair=eyJ2IjoxLCJpZCI6IjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmIiwic2VjcmV0IjoiYWJjIn0"
+
+@Test func pairingInvitationsJoinTheOriginAndFragment() throws {
+  let now = Date(timeIntervalSince1970: 1_000)
+  let invitation = try PairingInvitation(
+    .object([
+      "peer": .object(["id": .string("pair-1"), "expiresAt": .number(1_600)]),
+      "fragment": .string(fragment), "origin": .string("http://100.101.102.103:27657"),
+    ]), now: now)
+  #expect(invitation.pairID == "pair-1")
+  #expect(invitation.link.absoluteString == "http://100.101.102.103:27657/" + fragment)
+  #expect(invitation.expiresAt.timeIntervalSince(now) == 600)
 }
 
-@Test func expiredOrInsecurePairingInvitationsCannotBeShared() throws {
-  let now = try #require(ServerTimestamp.parse("2026-10-17T12:00:00Z"))
-  for (link, expires) in [
-    ("https://computer.example/#pair=ABCD2345", "2026-10-17T11:00:00Z"),
-    ("http://public.example/#pair=ABCD2345", "2026-10-17T13:00:00Z"),
-    ("https://computer.example/#pair=ABCD2345", "invalid"),
-    ("https://computer.example/", "2026-10-17T13:00:00Z"),
+@Test func pairingInvitationsNeedAReachableCurrentLink() throws {
+  let now = Date(timeIntervalSince1970: 1_000)
+  let peer: JSONValue = .object(["id": .string("pair-1"), "expiresAt": .number(1_600)])
+  for result: JSONValue in [
+    .object(["peer": peer, "fragment": .string(fragment), "origin": .null]),
+    .object([
+      "peer": peer, "fragment": .string("#pair=not-json"), "origin": .string("http://10.0.0.2"),
+    ]),
+    .object([
+      "peer": .object(["id": .string("pair-1"), "expiresAt": .number(900)]),
+      "fragment": .string(fragment), "origin": .string("http://10.0.0.2"),
+    ]),
   ] {
-    #expect(throws: ClientError.self) {
-      _ = try PairingInvitation(
-        .object([
-          "browserUrl": .string(link), "expiresAt": .string(expires), "code": .string("ABCD2345"),
-        ]), now: now)
-    }
+    #expect(throws: ClientError.self) { _ = try PairingInvitation(result, now: now) }
   }
 }
 
-@Test func pairedDevicesPreserveRevocationAndUsageInformation() throws {
+@Test func pairedDevicesDecodeTheEnginePeerList() throws {
   let devices = try JSONDecoder().decode(
     [PairedDevice].self,
     from: Data(
       #"""
-      [{"id":"phone-token","deviceId":"phone","label":"My iPhone","createdAt":"2026-10-17T11:00:00.000Z","lastUsedAt":"2026-10-17T12:00:00Z"},
-       {"id":"old-token","createdAt":"2026-10-17T11:00:00Z","revokedAt":"2026-10-17T12:00:00.000Z"}]
+      [{"id":"a","label":"My iPhone","createdAt":10,"expiresAt":null,"pairedAt":20},
+       {"id":"b","label":"","createdAt":30,"expiresAt":630,"pairedAt":null}]
       """#.utf8))
-  #expect(devices.filter { $0.revokedAt == nil }.map(\.id) == ["phone-token"])
-  #expect(devices[0].displayName == "My iPhone")
-  #expect(ServerTimestamp.parse(try #require(devices[0].lastUsedAt)) != nil)
+  #expect(devices.filter(\.isPaired).map(\.id) == ["a"])
+  #expect(devices[0].pairedDate == Date(timeIntervalSince1970: 20))
   #expect(devices[1].displayName == "Paired device")
 }

@@ -12,10 +12,14 @@ enum CloudGateway {
     default: throw ClientError("This cloud runtime requires a newer app.")
     }
   }
-  static func validate(_ ticket: JSONValue, workspaceID: String, protocolName: String) throws -> URL
-  {
+  /// The ticket must point at this workspace's gateway on the API origin itself, like desktop.
+  static func validate(
+    _ ticket: JSONValue, workspaceID: String, protocolName: String, origin: URL
+  ) throws -> URL {
     guard let text = ticket["wsUrl"].string, let url = URLComponents(string: text),
-      url.scheme == "wss", url.host != nil, url.user == nil, url.password == nil,
+      url.scheme == "wss", let host = url.host, let expected = origin.host,
+      host.lowercased() == expected.lowercased(), url.port == origin.port,
+      url.user == nil, url.password == nil,
       url.query == nil, url.fragment == nil,
       url.path == "/v1/cloud/workspaces/\(workspaceID)/gateway",
       ticket["workspaceId"].string == workspaceID, ticket["protocol"].string == protocolName,

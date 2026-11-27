@@ -1,0 +1,52 @@
+---
+title: Skills, commands, and MCP servers
+icon: Sparkles
+navTitle: "Skills and MCP"
+description: Use provider skills and commands, Zuse's own commands, and MCP tools in a session.
+section: composer
+order: 53
+platforms: [desktop, browser, mobile]
+providers: [zuse, claude, codex, cursor, devin, grok, hermes, kiro, muse, opencode, pi, omp, antigravity]
+prerequisites: [/composer]
+related: [/composer/modes-permissions, /how-to/local-configure-mcp, /projects/repository-settings]
+next: /composer/subagents
+lastVerified: "2026-11-27"
+---
+
+Zuse keeps provider-native extensions visible without inventing a second configuration format.
+
+## Skills
+
+The composer discovers skills from each agent's own skill folders, in your home folder and in the project. Most agents read the shared `.agents/skills` folder; agents with their own folder add it, such as `.claude/skills` for Claude Code, `.codex/skills` for Codex, `.cursor/skills`, `.grok/skills`, `.kiro/skills`, `.opencode/skills`, `.pi/skills`, and `.zuse/skills` for the Zuse agent. Claude Code also picks up skills from installed Claude Code plugins. Muse Code resolves its own skills, so none are listed for it.
+
+Type `$` to search the skills available to the active session. A selected skill is passed to the agent with its name and arguments. Read a third-party skill before running it: its instructions can ask the agent to use tools, access services, or modify files, and the session's access level still governs those actions.
+
+## Commands
+
+Type `/` to search commands. These are handled by Zuse itself:
+
+| Command | What it does |
+| --- | --- |
+| `/model` | Choose agent, model, and reasoning |
+| `/new` | Start a new conversation |
+| `/resume` | Search and open conversations |
+| `/settings` | Open settings |
+| `/mcp` | Show the agent's MCP servers and your plugins, with connect and manage |
+| `/diff` | Open changes |
+| `/files` | Open project files |
+| `/terminal` | Open a terminal |
+| `/rename` | Rename this conversation |
+| `/stop` | Stop the active run |
+| `/permissions` | Review saved permission rules for this chat |
+
+The same picker lists the agent's own `/` commands, such as `/compact` or `/goal` when the agent offers them. Those are sent to the agent as written, so their behavior follows the installed version. When a provider command shares a name with a Zuse command, the Zuse command stays available as `/zuse:<name>`. With nothing typed, the empty `/` menu names the chat's agent, so a command that exists only in another agent reads as that agent's catalog.
+
+Each agent's settings have a **Provider commands** switch under **Completion**, with options to keep skills out of the `/` menu.
+
+## MCP servers
+
+Agents launched by Zuse get Zuse's own MCP server, which carries the plugins connected to your workspace and Zuse's chat tools. For Claude Code and Codex, Zuse adds it next to the MCP servers you've already configured for that agent, so both are available.
+
+To add another MCP server for every agent, add it in **Settings → Plugins & MCP**: connect one from the catalog, or choose **Add MCP server** and paste a local stdio server's configuration. See [Add an MCP server](/how-to/local-configure-mcp/). Agents can also show a connect card in chat when they need a plugin you haven't connected.
+
+Start a new chat after connecting a plugin. An existing agent process may still have its older tool set.

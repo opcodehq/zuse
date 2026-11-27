@@ -1,0 +1,53 @@
+---
+title: "Remote access"
+icon: Radio
+description: "Use the same Zuse environment from a phone, a browser, or another computer, on your network or away from it."
+section: "Remote access"
+order: 1
+platforms: [desktop, web, mobile, serve]
+providers: []
+prerequisites: []
+related: [/remote/nearby-pairing, /remote/local-browser, /remote/tailscale, /remote/hosted-access, /remote/security]
+next: /remote/nearby-pairing
+lastVerified: "2026-11-27"
+---
+
+Remote access lets another device use a computer that is already running Zuse. That computer owns the repositories, agents, credentials, terminals, and chats. A phone, browser, or other desktop app sends requests to it and shows the results; nothing moves onto the other device.
+
+## Where to find it
+
+In the desktop app, open **Settings → Remote access**. The page has three parts:
+
+- **This computer** shows whether other devices can reach it, the **Connect device** button, and a switch for each way to connect: **Wi-Fi** and **Tailscale**. **Zuse Relay** is listed as coming soon.
+- **Devices** lists every paired phone, browser, and computer with a **Revoke** button, plus computers linked to your Zuse account. The **+** button adds another computer to this app.
+- **Advanced settings** holds browser access at an address and certificate you choose, Tailscale HTTPS, and the device registry for your workspace.
+
+On a computer without a display, the same options are flags on [`zuse serve`](/serve/).
+
+## Ways to connect
+
+| Way | Reaches the computer from | Turn it on |
+| --- | --- | --- |
+| **Wi-Fi** | Devices on the same network | The **Wi-Fi** switch, or `zuse serve --lan` |
+| **Tailscale** | Devices on your tailnet, at home or away. Headscale works too. | The **Tailscale** switch, or `zuse serve --lan` |
+| **Zuse account** | Devices signed in to your account, from any network | `zuse link`, or `zuse serve --account` |
+
+Zuse picks the fastest working route on its own and moves to a better one when it appears, for example from Tailscale to Wi-Fi when you get home. Every route is end-to-end encrypted between the device and the computer.
+
+## Pick a guide
+
+| What you want | Guide |
+| --- | --- |
+| Use Zuse on your phone | [Pair a phone](/remote/nearby-pairing/) |
+| Open the computer in a browser on another device | [Browser access](/remote/local-browser/) |
+| Learn what the browser client can do | [Web client](/remote/web-client/) |
+| Reach the computer over your tailnet | [Tailscale access](/remote/tailscale/) |
+| Reach the computer from anywhere with your account | [Account access](/remote/hosted-access/) |
+| Open another computer's workspace in this desktop app | [Other computers](/remote/other-computers/) |
+| Run Zuse on a headless machine | [zuse serve](/serve/) |
+
+<SecurityNote title="Execution stays on the computer">
+Remote access does not install agents on the other device. Agent CLIs and their sign-ins must exist on the computer that runs Zuse.
+</SecurityNote>
+
+<NextStep href="/remote/nearby-pairing/" label="Pair a phone" />

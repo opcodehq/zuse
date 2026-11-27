@@ -34,6 +34,8 @@ public struct PairingLink: Sendable, Equatable {
       return values == [127, 0, 0, 1] || values[0] == 10 || (values[0] == 192 && values[1] == 168)
         || (values[0] == 172 && (16...31).contains(values[1]))
         || (values[0] == 169 && values[1] == 254)
+        // 100.64.0.0/10: Tailscale and Headscale tailnets, which the host also accepts.
+        || (values[0] == 100 && (64...127).contains(values[1]))
     }
     return host.hasPrefix("fe80:")
       || ((host.hasPrefix("fc") || host.hasPrefix("fd")) && host.contains(":"))
@@ -85,5 +87,26 @@ public struct PairingLink: Sendable, Equatable {
     endpoint.path = ""
     guard let http = endpoint.url else { throw ClientError("Invalid pairing endpoint.") }
     return PairingLink(httpURL: http, webSocketURL: ws, code: code)
+  }
+}
+
+/// `zuse://pair?link=<invitation>` opens an invitation in the app, for links shared from a
+/// computer or opened by automation. The app always confirms before pairing.
+public enum PairingDeepLink {
+  public static func invitation(from url: URL) -> String? {
+    guard url.scheme?.lowercased() == "zuse", url.host?.lowercased() == "pair",
+      let link = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+        .first(where: { $0.name == "link" })?.value,
+      PairingLink.isNativeInvitation(link)
+    else { return nil }
+    return link
+  }
+
+  /// The address a person checks before trusting the link, such as `192.168.1.4:27657`.
+  public static func destination(_ invitation: String) -> String {
+    guard let url = URLComponents(string: invitation), let host = url.host else {
+      return invitation
+    }
+    return url.port.map { "\(host):\($0)" } ?? host
   }
 }

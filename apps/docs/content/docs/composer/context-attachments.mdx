@@ -1,0 +1,46 @@
+---
+title: Context and attachments
+icon: Paperclip
+navTitle: "Context and attachments"
+description: Mention files, attach images and files, annotate pages and code, and queue precise follow-ups.
+section: composer
+order: 52
+platforms: [desktop, browser, mobile]
+providers: [zuse, claude, codex, cursor, devin, grok, hermes, kiro, muse, opencode, pi, omp, antigravity]
+prerequisites: [/composer]
+related: [/workspace/files-editor, /composer/modes-permissions, /projects/worktrees]
+next: /composer/skills-mcp
+lastVerified: "2026-11-27"
+---
+
+Good context is specific, current, and scoped to the active environment.
+
+## Mention a file
+
+Type `@` and search for a project file. Selecting it inserts a file chip rooted in the active checkout. In a worktree chat, search and resolution use that worktree rather than the main checkout. You can also drop a file from the file tree onto the composer to mention it.
+
+Mention the smallest set of files that establishes the problem. The agent can discover related code with its tools.
+
+## Images and files
+
+Add files with **Attach images or files** in the composer's **+** menu, by drag-and-drop, or by paste. Each file can be up to 24 MB. Staged documents preview inline, sent images show as thumbnails, and other files show as compact tiles. Whether an agent can read a particular file type depends on the agent and model.
+
+For a visual bug, include the screenshot and describe the expected state. For a specification, identify the exact pages or requirements that govern the task.
+
+## Start from an issue, pull request, or branch
+
+On a new chat, **Create from…** starts from an existing pull request, branch, or issue. Search pull requests by title, number, or author.
+
+## Annotations
+
+In the integrated browser, use **Annotate page** to mark an element on the page; the annotation is staged in the composer with your next message. Review pending annotations before sending so the target is unambiguous.
+
+## Queue a follow-up
+
+If a turn is already running, the next message joins the queue. From a queued message you can:
+
+- **Steer** the agent to it next, for agents that take messages mid-turn;
+- **Send now**;
+- **Edit** or **Remove** it.
+
+If the last turn fails or you stop it, the queue shows **Queue paused**. Choose **Resume**, or send a new message, to continue. Use the queue for a genuine next instruction; stop the current turn when the new information invalidates work already underway.

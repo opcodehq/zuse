@@ -5,6 +5,8 @@ import { dynamic } from "@solidjs/web";
 import type { Tokens } from "marked";
 import { createEffect, createMemo, createSignal, For, Match, onCleanup, Show, Switch, untrack, type Accessor } from "solid-js";
 import { copyText } from "./clipboard";
+import { HtmlPreview } from "./HtmlPreview";
+import { hasClosedFence, isHtmlPreviewLanguage } from "./html-preview";
 import { highlight, paintWindowed, renderTokens, SPAN_LINES } from "./highlight";
 import { blockHtml, IncrementalMarkdown, listItemHtml, tableCellHtml } from "./incremental-markdown";
 
@@ -54,7 +56,7 @@ function paced(source: Accessor<string>, live: Accessor<boolean>): Accessor<stri
   return value;
 }
 
-export function Markdown(props: { text: string; live: boolean; class?: string; decorate?: (html: string) => string; onClick?: (event: MouseEvent) => void }) {
+export function Markdown(props: { text: string; live: boolean; class?: string; htmlPreview?: boolean; decorate?: (html: string) => string; onClick?: (event: MouseEvent) => void }) {
   const doc = new IncrementalMarkdown();
   // eslint-disable-next-line solid/reactivity -- paced reads both accessors inside an effect
   const text = paced(() => props.text, () => props.live);
@@ -73,7 +75,7 @@ export function Markdown(props: { text: string; live: boolean; class?: string; d
             // eslint-disable-next-line solid/no-innerhtml -- blockHtml output is DOMPurify-sanitized
             <Switch fallback={<div class="md-block" innerHTML={decorate(blockHtml(block().token))} />}>
               <Match when={block().token.type === "code" && (block().token as Tokens.Code)}>
-                {(code) => <CodeBlock code={code().text} lang={code().lang} settled={settled()} />}
+                {(code) => <CodeBlock code={code().text} lang={code().lang} settled={settled()} closed={hasClosedFence(code().raw)} preview={props.htmlPreview} />}
               </Match>
               <Match when={block().token.type === "list" && (block().token as Tokens.List)}>{(list) => <MdList list={list()} decorate={decorate} />}</Match>
               <Match when={block().token.type === "table" && (block().token as Tokens.Table)}>{(table) => <MdTable table={table()} decorate={decorate} />}</Match>
@@ -150,7 +152,15 @@ function Cell(props: { cell: Tokens.TableCell; header: boolean; decorate: (html:
   );
 }
 
-export function CodeBlock(props: { code: string; lang?: string; settled: boolean }) {
+export function CodeBlock(props: { code: string; lang?: string; settled: boolean; closed?: boolean; preview?: boolean }) {
+  return (
+    <Show when={props.preview && isHtmlPreviewLanguage(props.lang)} fallback={<SourceCodeBlock code={props.code} lang={props.lang} settled={props.settled} />}>
+      <HtmlPreview code={props.code} ready={!!props.closed} source={<SourceCodeBlock code={props.code} lang="html" settled={props.settled} />} />
+    </Show>
+  );
+}
+
+function SourceCodeBlock(props: { code: string; lang?: string; settled: boolean }) {
   let pre!: HTMLElement;
   const [wrap, setWrap] = createSignal(false);
   const [copied, setCopied] = createSignal(false);

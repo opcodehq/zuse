@@ -1,0 +1,103 @@
+---
+title: "Set up a headless Zuse host"
+icon: Server
+navTitle: "Set up a headless host"
+description: "Install the zuse command on a server, keep zuse serve running as a service, pair devices, update it, and remove it."
+section: how-to
+order: 40
+platforms: [serve, browser, mobile]
+providers: []
+prerequisites: [/serve]
+related: [/serve/operations, /serve/command-reference, /serve/security, /how-to/remote-hosted-access]
+next: /serve/operations
+lastVerified: "2026-11-27"
+---
+
+Turn a Linux or macOS machine without a display into a Zuse computer you reach from your phone, browser, or desktop app.
+
+## Applicability
+
+Use this guide for a home server, a spare Mac, or a VM. `zuse daemon` supports macOS (launchd) and Linux (systemd user services). On Windows, run `zuse serve` from the portable archive without a service.
+
+## Prerequisites
+
+- Python 3.11 or newer, for the installer and updates.
+- At least one agent CLI installed and signed in for the user that will run Zuse.
+- Repositories cloned and readable by that user.
+- On Linux, a working systemd user session (`systemctl --user show-environment` succeeds).
+
+## Steps
+
+1. Download `install.sh` from the latest [release](https://github.com/opcodehq/zuse/releases) and install the standalone command:
+
+   ```sh
+   sh install.sh --cli --version 0.27.9
+   ```
+
+   This installs `zuse` and the browser app in your home directory, with a launcher in `~/.local/bin`.
+
+2. Try it in the foreground:
+
+   ```sh
+   zuse serve --lan
+   ```
+
+   Serve prints the routes it offers and a pairing link with a QR code. Stop it with Ctrl+C.
+
+3. Install it as a service with the options you want:
+
+   ```sh
+   zuse daemon install --serve --lan
+   ```
+
+   Add `--tailscale-serve` for a trusted browser address on your tailnet, or `--account` to link the computer to your Zuse account.
+
+4. Pair a device:
+
+   ```sh
+   zuse pair --app
+   ```
+
+   Scan the QR code with the Zuse app, or run `zuse pair` and open the **Browser** link on another device.
+
+## Verification
+
+```sh
+zuse daemon status
+zuse status
+```
+
+The service is running, `zuse status` reports a running engine, and its **Remote access** section lists your network routes (and the linked computer, if you used `--account`). The paired device shows the server's projects.
+
+## Update
+
+```sh
+zuse update
+zuse daemon restart
+```
+
+`update` installs the new command and browser app; the service uses them after it restarts. Finish or stop active agent work first. Previous versions and the data directory are kept.
+
+## Remove it
+
+```sh
+zuse unlink
+zuse daemon uninstall
+sh install.sh --cli --uninstall
+```
+
+Run `zuse unlink` first only if you linked the computer to your account. Uninstalling removes the service and launchers; repositories and the data directory (`~/.zuse-native`) stay.
+
+## Troubleshooting and recovery
+
+### No agents appear on the paired device
+
+The service only sees the `PATH` captured when you ran `zuse daemon install`. Make sure the agent CLI works for that user, then reinstall the service.
+
+### The service does not start
+
+On Linux, read `journalctl --user -u zuse.service`. On macOS, read `daemon.log` in the data directory. See [Serve troubleshooting](/serve/troubleshooting/) for specific errors.
+
+### The pairing link only works on this computer
+
+You started Serve without a route. Reinstall the service with `--lan` or `--account`.

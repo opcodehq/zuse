@@ -98,13 +98,36 @@ import ZuseCore
       view.window?.endEditing(true)
     }
     private var previousViewportHeight: CGFloat = 0
+    private var measuredWidth: CGFloat = 0
+    override func viewDidAppear(_ animated: Bool) {
+      super.viewDidAppear(animated)
+      // Rows laid out while the chat was hidden (under another page) may not have re-measured.
+      remeasureVisibleRows()
+    }
+    private func remeasureVisibleRows() {
+      guard dataSource != nil, !applying else { return }
+      let visible = collection.indexPathsForVisibleItems.compactMap {
+        dataSource.itemIdentifier(for: $0)
+      }
+      guard !visible.isEmpty else { return }
+      var snapshot = dataSource.snapshot()
+      snapshot.reconfigureItems(visible)
+      dataSource.apply(snapshot, animatingDifferences: false)
+    }
     override func viewDidLayoutSubviews() {
       super.viewDidLayoutSubviews()
       let height = collection.bounds.height
       defer { previousViewportHeight = height }
-      guard previousViewportHeight > 0, abs(height - previousViewportHeight) > 1,
-        !collection.isDragging, !collection.isDecelerating
-      else { return }
+      // Rows measured while the chat was off screen or mid-transition can carry another width.
+      if abs(collection.bounds.width - measuredWidth) > 1, collection.bounds.width > 0 {
+        measuredWidth = collection.bounds.width
+        remeasureVisibleRows()
+      }
+      guard previousViewportHeight > 0, abs(height - previousViewportHeight) > 1 else { return }
+      // A new viewport (the tab bar hiding, the keyboard) can leave self-sized rows at stale
+      // positions; re-measuring the visible rows puts them back in place.
+      remeasureVisibleRows()
+      guard !collection.isDragging, !collection.isDecelerating else { return }
       let previousDistance =
         collection.contentSize.height - collection.contentOffset.y
         - previousViewportHeight + collection.adjustedContentInset.bottom
@@ -400,35 +423,52 @@ struct MessageCell: View {
   let message: ChatMessage
   let rpc: RPCClient?
   var respond: ((String) async throws -> Void)?
-  private var isUser: Bool { message.role == "user" }
+  /// Text you sent, shown as a bubble; other user-role records (tool results) render as details.
+  private var isUserText: Bool { ["user", "user_rich"].contains(message.kind) }
   var body: some View {
-    VStack(alignment: .leading, spacing: 5) {
-      if ["assistant", "user", "user_rich"].contains(message.kind) {
-        ChatMarkdown(text: message.text)
-          .frame(maxWidth: .infinity, alignment: .leading)
-        if message.kind == "user_rich", !message.content["attachments"].array.isEmpty {
-          ForEach(Array(message.content["attachments"].array.enumerated()), id: \.offset) {
-            _, reference in
-            AttachmentView(reference: reference, sessionID: message.sessionId, rpc: rpc)
+    Group {
+      if isUserText {
+        // Your messages: a compact bubble on the trailing side.
+        // No spacers or fixed sizes: self-sizing cells measure this in one pass.
+        VStack(alignment: .leading, spacing: 6) {
+          ChatMarkdown(text: message.text)
+          attachments
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(
+          Color.secondary.opacity(0.1),
+          in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+        )
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(.leading, 56).padding(.vertical, 8)
+      } else {
+        VStack(alignment: .leading, spacing: 5) {
+          if message.kind == "assistant" {
+            ChatMarkdown(text: message.text).frame(maxWidth: .infinity, alignment: .leading)
+          } else {
+            MessageDetails(message: message, respond: respond)
+              .disclosureGroupStyle(TranscriptDisclosureStyle())
           }
         }
-      } else {
-        MessageDetails(message: message, respond: respond)
-          .disclosureGroupStyle(TranscriptDisclosureStyle())
+        .padding(.vertical, message.kind == "assistant" ? 7 : 3)
       }
     }
     .font(.subheadline)
-    .padding(isUser ? 12 : 0)
-    .background(
-      isUser ? Color.secondary.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 16)
-    )
-    .padding(.horizontal, 16).padding(
-      .vertical, isUser ? 10 : (message.kind == "assistant" ? 7 : 3)
-    )
+    .padding(.horizontal, 16)
     .frame(maxWidth: 720, alignment: .leading).frame(maxWidth: .infinity)
     .contextMenu {
       Button("Copy", systemImage: "doc.on.doc") { NativePlatform.copy(message.text) }
       ShareLink(item: message.text)
+    }
+    // Cells are hosted outside the window's SwiftUI tree, so they route PR links themselves.
+    .pullRequestLinks()
+  }
+  @ViewBuilder private var attachments: some View {
+    if message.kind == "user_rich" {
+      ForEach(Array(message.content["attachments"].array.enumerated()), id: \.offset) {
+        _, reference in
+        AttachmentView(reference: reference, sessionID: message.sessionId, rpc: rpc)
+      }
     }
   }
   private var title: String {

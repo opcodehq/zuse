@@ -301,11 +301,12 @@ export function referenceClick(event: MouseEvent, catalog: ReferenceCatalog, cha
   if (target) openReference(kind, target, chatId, Number(anchor.dataset.line) || undefined);
 }
 
-export function ReferenceMarkdown(props: { text: string; live: boolean; chatId: string; references: ReferenceCatalog }) {
+export function ReferenceMarkdown(props: { text: string; live: boolean; chatId: string; references: ReferenceCatalog; htmlPreview?: boolean }) {
   return (
     <Markdown
       text={props.text}
       live={props.live}
+      htmlPreview={props.htmlPreview}
       decorate={(html) => decorateReferences(html, props.references, props.chatId)}
       onClick={(event) => referenceClick(event, props.references, props.chatId)}
     />
