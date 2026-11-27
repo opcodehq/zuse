@@ -354,6 +354,7 @@ impl Shell {
                 .collect::<Vec<_>>();
             let active = self.cloud_conversation.is_some();
             self.cloud_conversation_events = None;
+            self.cloud_transcript_events = None;
             self.cloud_conversation = None;
             self.cloud_tabs = CloudTabs::default();
             self.cloud_activity.clear();
@@ -561,6 +562,7 @@ impl Shell {
         }
         self.stash_cloud_canvas(cx);
         self.cloud_conversation_events = None;
+        self.cloud_transcript_events = None;
         self.cloud_conversation = Some(view.clone());
         self.state
             .update(cx, |state, cx| state.select_chat(None, cx));
@@ -607,6 +609,7 @@ impl Shell {
         let device = draft.device.clone();
         let space = draft.space.clone();
         self.cloud_conversation_events = None;
+        self.cloud_transcript_events = None;
         self.cloud_conversation = None;
         self.active_chat.clear();
         self.state.update(cx, |state, cx| {

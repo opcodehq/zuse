@@ -15,6 +15,7 @@
 
 ### Fixed
 
+- Desktop: clicking a subagent in a cloud chat (its spawn chip or the composer's background-work tray) opens its conversation in the right pane again, read from the cloud computer.
 - Devin chats no longer show a stray "Waiting for 1 subagent" from the lead's own usage updates, and sidekick chips settle before the turn ends.
 - A steered Devin turn no longer leaves the running command's chip stuck before the steer.
 - Devin retries reopening a conversation another process still holds for about five seconds before starting a fresh session; if it stays locked, the new session starts without the earlier context.
