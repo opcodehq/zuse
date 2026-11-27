@@ -570,8 +570,8 @@ private struct NewChatProgressView: View {
         VStack(alignment: .leading, spacing: 10) {
           Text(failure).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
           if let retry = progress.retry {
-            Button("Try Again", action: retry).buttonStyle(.borderedProminent)
-              .tint(AppTheme.accent).buttonBorderShape(.capsule)
+            Button("Try Again", action: retry).brandProminentButton()
+              .buttonBorderShape(.capsule)
           }
         }
       }
@@ -604,6 +604,7 @@ struct NewChatDraftComposer: View {
   let options: AnyView
   let models: AnyView
   let submit: () -> Void
+  @Environment(\.focusesNewChatComposer) private var focusesOnAppear
   var body: some View {
     VStack(spacing: 0) {
       TextField("Ask Zuse", text: $text, axis: .vertical)
@@ -624,5 +625,11 @@ struct NewChatDraftComposer: View {
           .accessibilityIdentifier("new-chat-create").accessibilityLabel("Create chat")
       }
     }.padding(8).composerGlass()
+      .task {
+        guard focusesOnAppear, editable, !busy else { return }
+        // After the push settles, so the keyboard rises with the page in place.
+        try? await Task.sleep(for: .milliseconds(450))
+        focused = true
+      }
   }
 }

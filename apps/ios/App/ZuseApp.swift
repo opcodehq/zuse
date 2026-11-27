@@ -78,34 +78,48 @@ struct WorkspaceView: View {
   @State private var zapperInspector = false
   @State private var issuePath: [ZapperRoute] = []
   @State private var settingsPage: MoreRoute?
+  /// The iPad layout's orientation and whether pages open beside their list.
+  @State private var tabletLayout = TabletLayout()
   @Environment(\.scenePhase) private var scenePhase
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
   #endif
+  /// Lists push their pages over themselves: compact widths, and iPad in portrait.
   private var isCompact: Bool {
     #if os(iOS)
-      sizeClass == .compact
+      sizeClass == .compact || (usesTabletShell && !tabletLayout.split)
     #else
       false
     #endif
   }
-  /// iPad at full or wide split widths, and Mac, use the sidebar shell; compact widths use tabs.
+  /// Mac, and the widest iPhones in landscape, use the sidebar shell.
   private var usesRegularShell: Bool {
     #if os(iOS)
-      sizeClass == .regular
+      sizeClass == .regular && UIDevice.current.userInterfaceIdiom != .pad
     #else
       true
+    #endif
+  }
+  /// iPad at full or wide split widths: the tabs on a compact floating bar (`TabletShell`).
+  /// Narrow iPad windows use the iPhone tabs.
+  private var usesTabletShell: Bool {
+    #if os(iOS)
+      sizeClass == .regular && UIDevice.current.userInterfaceIdiom == .pad
+    #else
+      false
     #endif
   }
   private struct NewChatRoute: Equatable {
     let id = UUID()
     let cloud: Bool
     var prompt = ""
+    /// Opened to write straight away, so the composer takes the keyboard.
+    var focus = false
   }
   /// New chat is a page in the Chats tab's detail column: pushed on iPhone, full width elsewhere.
-  private func openNewChat(cloud: Bool, prompt: String = "") {
-    newChat = NewChatRoute(cloud: cloud, prompt: prompt)
+  private func openNewChat(cloud: Bool, prompt: String = "", focus: Bool = false) {
+    newChat = NewChatRoute(cloud: cloud, prompt: prompt, focus: focus)
     tab = .chats
     section = .chats
     chatsColumn = .detail
@@ -284,9 +298,31 @@ struct WorkspaceView: View {
     private func openZapperPreview(_ arguments: [String]) async {
       if let link = ProcessInfo.processInfo.environment["ZUSE_PAIR_LINK"], !link.isEmpty {
         do { try await workspace.pair(link) } catch { workspace.error = error.localizedDescription }
-        for _ in 0..<80 where workspace.zappers.zappers.isEmpty {
+        for _ in 0..<80
+        where workspace.zappers.zappers.isEmpty && arguments.contains("--zapper-detail-preview") {
           try? await Task.sleep(for: .milliseconds(250))
         }
+      }
+      // `--open-chat=<id>` opens one chat on the paired computer.
+      if let id = arguments.first(where: { $0.hasPrefix("--open-chat=") })?.dropFirst(12) {
+        for _ in 0..<80 where !workspace.sessions.contains(where: { $0.id == id }) {
+          try? await Task.sleep(for: .milliseconds(250))
+        }
+        if let session = workspace.sessions.first(where: { $0.id == id }) { openChat(session) }
+        // `--show-changes` then opens its changes, as the turn's changes card does.
+        if arguments.contains("--show-changes") {
+          try? await Task.sleep(for: .seconds(2))
+          showDiff = true
+        }
+        return
+      }
+      // `--zapper-thread-preview` opens the first Zapper's working thread, as the wide
+      // Zappers list does.
+      if arguments.contains("--zapper-thread-preview"), let first = workspace.zappers.zappers.first,
+        let worker = workspace.zappers.orderedThreads(first).first
+      {
+        openThread(first.id, worker)
+        return
       }
       guard arguments.contains("--zapper-detail-preview"),
         let first = workspace.zappers.zappers.first
@@ -501,7 +537,10 @@ struct WorkspaceView: View {
       chatsColumn = .detail
       if launchTab == nil { tab = .chats }
     }
-    if let launchTab { tab = launchTab }
+    if let launchTab {
+      tab = launchTab
+      opensRestoredChat = false
+    }
     #if DEBUG
       let arguments = ProcessInfo.processInfo.arguments
       if launchTab == nil && arguments.contains("--home-preview") { tab = .chats }
@@ -509,7 +548,9 @@ struct WorkspaceView: View {
         tab = .more
         section = .settings
       }
-      if arguments.contains("--new-chat-preview") { openNewChat(cloud: false) }
+      if arguments.contains("--new-chat-preview") {
+        openNewChat(cloud: false, focus: arguments.contains("--focus-composer"))
+      }
       if arguments.contains("--pairing-preview") { connectionMethod = .add }
       if arguments.contains("--chat-actions-preview"), let session = selection {
         try? await Task.sleep(for: .milliseconds(500))
@@ -588,7 +629,120 @@ struct WorkspaceView: View {
   }
 
   @ViewBuilder private var layout: some View {
-    if usesRegularShell { regularShell } else { tabs }
+    if usesRegularShell {
+      regularShell
+    } else if usesTabletShell {
+      tabletShell
+    } else {
+      tabs
+    }
+  }
+
+  /// iPad: the tabs on a compact floating bar. In landscape a list keeps its page beside it; in
+  /// portrait pages are pushed over the list and cover the bar, as on iPhone.
+  @ViewBuilder private var tabletShell: some View {
+    #if os(iOS)
+      TabletShell(
+        tab: $tab, layout: $tabletLayout, needsYou: needsYouCount, account: workspace.account,
+        showsPage: tabletShowsPage
+      ) {
+        switch tab {
+        case .zappers: zappersTab.environment(\.horizontalSizeClass, tabletColumns)
+        case .chats: chatsTab.environment(\.horizontalSizeClass, tabletColumns)
+        case .prs: tabletPullRequests
+        case .more: moreTab
+        case .search: searchTab
+        }
+      }
+      .onChange(of: tabletLayout.split) { _, split in
+        // Collapsing into one stack shows the list unless a page is open in it.
+        guard !split else { return }
+        if selection == nil && newChat == nil { chatsColumn = .sidebar }
+        if zapperRoute == nil { zappersColumn = .sidebar }
+      }
+    #endif
+  }
+
+  #if os(iOS)
+    /// Split views keep their columns side by side in landscape and collapse into one stack
+    /// in portrait.
+    private var tabletColumns: UserInterfaceSizeClass {
+      tabletLayout.split ? .regular : .compact
+    }
+  #endif
+
+  /// A page is pushed over the open tab's list.
+  private var tabletShowsPage: Bool {
+    switch tab {
+    case .zappers: return zapperRoute != nil && zappersColumn == .detail
+    case .chats: return (selection != nil || newChat != nil) && chatsColumn == .detail
+    case .prs: return !pullRequestPath.isEmpty
+    case .more: return !morePath.isEmpty
+    case .search: return !searchPath.isEmpty
+    }
+  }
+
+  /// Pull requests on iPad: in landscape the open one sits beside the list.
+  @ViewBuilder private var tabletPullRequests: some View {
+    let store = workspace.pullRequests
+    if tabletLayout.split && (store.available || store.preview) {
+      let open: PullRequestLink? = {
+        if case .detail(let link)? = pullRequestPath.first { return link }
+        return nil
+      }()
+      NavigationSplitView {
+        PullRequestListView(store: store, selectedURL: open?.url) { link in
+          pullRequestPath = [.detail(link)]
+        }
+        .navigationSplitViewColumnWidth(TabletLayout.listWidth)
+        .toolbar(removing: .sidebarToggle)
+      } detail: {
+        if let open {
+          PullRequestNavigator(
+            store: store, entry: .detail(open),
+            path: Binding(
+              get: { Array(pullRequestPath.dropFirst()) },
+              set: { pullRequestPath = [.detail(open)] + $0 })
+          )
+          .id(open.url)
+        } else {
+          emptyDetail(
+            "No pull request open", symbol: AppIcon.pullRequest,
+            detail: "Pick one to read its changes, checks and conversation.")
+        }
+      }
+      .navigationSplitViewStyle(.balanced)
+    } else {
+      PullRequestsTab(workspace: workspace, path: $pullRequestPath)
+    }
+  }
+
+  /// The thread on top of the open Zapper's stack, if any.
+  private var openZapperThread: String? {
+    for route in zapperPath.reversed() {
+      if case .chat(let session) = route { return session.id }
+    }
+    return nil
+  }
+
+  /// iPad's Zappers list folds out each Zapper's threads; iPhone's opens the Zapper.
+  private var tabletThreadOpener: ((String, ZapperWorker?) -> Void)? {
+    guard usesTabletShell else { return nil }
+    return { zapperID, worker in openThread(zapperID, worker) }
+  }
+
+  /// Opens a Zapper's thread from the wide Zappers list, or its overview for a thread that
+  /// hasn't started.
+  private func openThread(_ zapperID: String, _ worker: ZapperWorker?) {
+    openZapper(zapperID)
+    guard let worker, !worker.queued else {
+      zapperPath = [.overview(zapperID)]
+      return
+    }
+    let session = workspace.zappers.session(
+      for: worker.chatId, fallbackTitle: worker.objective,
+      known: workspace.sessions + workspace.archivedSessions)
+    zapperPath = [.chat(session)]
   }
 
   private var regularShell: some View {
@@ -632,7 +786,9 @@ struct WorkspaceView: View {
       }
     }
     .inspector(isPresented: $showDiff) {
-      if let session = workspace.selectedSession, let rpc = workspace.rpc {
+      // Built only while open: a hidden inspector still adds its toolbar to the chat's, which
+      // put a stray "Done" beside a live chat's buttons on iPad.
+      if showDiff, let session = workspace.selectedSession, let rpc = workspace.rpc {
         DiffView(rpc: rpc, session: session).inspectorColumnWidth(min: 320, ideal: 440, max: 680)
       }
     }
@@ -664,22 +820,46 @@ struct WorkspaceView: View {
         Label {
           Text("More")
         } icon: {
-          Image(systemName: "ellipsis.circle")
+          moreTabIcon
         }
         .environment(\.symbolVariants, .none)
       }
       Tab(value: AppTab.search, role: .search) { searchTab }
     }
     .tabViewStyle(.sidebarAdaptable)
+    .nativeTabBar(
+      askEnabled: tab == .chats && selection == nil && newChat == nil,
+      ask: { openNewChat(cloud: false, focus: true) },
+      askCloud: workspace.account.signedIn ? { openNewChat(cloud: true) } : nil
+    )
+    .task(id: workspace.account.pictureURL) {
+      if workspace.account.signedIn, let url = workspace.account.pictureURL {
+        await AccountPictureStore.shared.load(url)
+      }
+    }
+  }
+
+  /// Your picture once signed in (drawn in its own colours), the usual More glyph otherwise.
+  @ViewBuilder private var moreTabIcon: some View {
+    if workspace.account.signedIn, let url = workspace.account.pictureURL,
+      let picture = AccountPictureStore.shared.circularImage(for: url, size: 26)
+    {
+      Image(nativeImage: picture)
+    } else {
+      Image(systemName: "ellipsis.circle")
+    }
   }
 
   private var zappersTab: some View {
     NavigationSplitView(preferredCompactColumn: $zappersColumn) {
       ZappersListView(
-        workspace: workspace, open: openZapper, connect: { connectionMethod = .add }
+        workspace: workspace, open: openZapper, connect: { connectionMethod = .add },
+        openThread: tabletThreadOpener,
+        selectedZapper: usesTabletShell && !isCompact ? zapperRoute : nil,
+        selectedThread: openZapperThread
       )
-      .disabled(workspace.clearingAccount)
-      .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 360)
+      .disabled(workspace.clearingAccount).clearsTabletBar()
+      .modifier(TabletListColumn(enabled: usesTabletShell, min: 260, ideal: 300, max: 360))
     } detail: {
       if let zapperID = zapperRoute {
         ZapperNavigator(
@@ -704,17 +884,21 @@ struct WorkspaceView: View {
         workspace: workspace, selection: $selection, connect: { connectionMethod = .add },
         newChat: { prompt in openNewChat(cloud: false, prompt: prompt) },
         newCloudChat: { openNewChat(cloud: true) }, addProject: { showProject = true },
-        openComputers: { showComputers = true }
+        openComputers: { showComputers = true },
+        // iPad's own tab bar has no room for the ask row, so it stays under the list.
+        showsAsk: usesTabletShell || !NativeTabBar.hostsAsk,
+        highlightsSelection: usesTabletShell && !isCompact
       )
-      .disabled(workspace.clearingAccount)
-      .navigationSplitViewColumnWidth(min: 260, ideal: 320, max: 380)
-      .toolbar(removing: newChat == nil ? nil : .sidebarToggle)
+      .disabled(workspace.clearingAccount).clearsTabletBar()
+      .modifier(TabletListColumn(enabled: usesTabletShell, min: 260, ideal: 320, max: 380))
+      .toolbar(removing: newChat == nil && !usesTabletShell ? nil : .sidebarToggle)
     } detail: {
       if let route = newChat {
         NewChatSetupView(
           workspace: workspace, initialCloud: route.cloud, initialPrompt: route.prompt,
           showsClose: !isCompact, close: closeNewChat
         )
+        .environment(\.focusesNewChatComposer, route.focus)
         .id(route.id)
         .hidesTabBarWhenCompact()
       } else if let session = selection {
@@ -727,7 +911,9 @@ struct WorkspaceView: View {
     }
     .navigationSplitViewStyle(.balanced)
     .inspector(isPresented: $showDiff) {
-      if let session = workspace.selectedSession, let rpc = workspace.rpc {
+      // Built only while open: a hidden inspector still adds its toolbar to the chat's, which
+      // put a stray "Done" beside a live chat's buttons on iPad.
+      if showDiff, let session = workspace.selectedSession, let rpc = workspace.rpc {
         DiffView(rpc: rpc, session: session).inspectorColumnWidth(min: 320, ideal: 440, max: 680)
       }
     }
@@ -735,7 +921,7 @@ struct WorkspaceView: View {
 
   private var moreTab: some View {
     NavigationStack(path: $morePath) {
-      MoreView(workspace: workspace)
+      MoreView(workspace: workspace).clearsTabletBar()
         .navigationDestination(for: MoreRoute.self) { route in
           switch route {
           case .account: AccountSettingsView(workspace: workspace)
@@ -769,6 +955,7 @@ struct WorkspaceView: View {
           searchPath.append(.issue(zapper: entry.zapperID, issue: entry.issue.id))
         }
       )
+      .clearsTabletBar()
       .navigationDestination(for: ZapperRoute.self) { route in
         ZapperDestination(
           workspace: workspace, route: route, push: { searchPath.append($0) },
@@ -812,8 +999,23 @@ struct WorkspaceView: View {
       }
       TranscriptView(
         messages: workspace.transcript.messages, sessionID: session.id, rpc: workspace.rpc,
-        bottomInset: composerHeight,
-        respond: { message, text in try await workspace.respondToUI(message, text: text) })
+        running: workspace.transcript.activeTurnID != nil,
+        // Clear of the fade above the composer, so the latest line reads at full strength.
+        bottomInset: composerHeight + 20,
+        respond: { message, text in try await workspace.respondToUI(message, text: text) },
+        openChanges: workspace.rpc != nil && workspace.connectionState == "Connected"
+          && !workspace.zappers.keepsChat(session.id) ? { showDiff = true } : nil
+      )
+      .overlay {
+        if workspace.transcript.messages.isEmpty && workspace.transcript.activeTurnID == nil {
+          ChatEmptyState(
+            zapper: coordinatedBy(session),
+            loading: !workspace.sessionReady && workspace.connectionState != "Preview · offline"
+          )
+          .padding(.bottom, composerHeight)
+          .allowsHitTesting(false)
+        }
+      }
       if !workspace.outbox.isEmpty {
         ScrollView(.horizontal) {
           HStack {
@@ -858,9 +1060,10 @@ struct WorkspaceView: View {
         GeometryReader { geometry in
           LinearGradient(
             stops: [
+              // Text fades out before it reaches the composer instead of showing through it.
               .init(color: AppTheme.surface.opacity(0), location: 0),
-              .init(color: AppTheme.surface.opacity(0.18), location: 0.35),
-              .init(color: AppTheme.surface.opacity(0.55), location: 1),
+              .init(color: AppTheme.surface.opacity(0.75), location: 0.4),
+              .init(color: AppTheme.surface.opacity(0.95), location: 1),
             ], startPoint: .top, endPoint: .bottom
           )
           .frame(height: geometry.size.height + 64)
@@ -878,6 +1081,28 @@ struct WorkspaceView: View {
     .onAppear {
       if workspace.selectedSession?.id != session.id { workspace.selectSession(session) }
     }
+    #if DEBUG
+      // `--draft=<text>` writes a draft and `--focus-composer` raises the keyboard, for
+      // screenshots of a chat mid-message.
+      .task {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard
+          arguments.contains("--focus-composer")
+            || arguments.contains(where: {
+              $0.hasPrefix("--draft=")
+            })
+        else { return }
+        try? await Task.sleep(for: .milliseconds(900))
+        if let draft = arguments.first(where: { $0.hasPrefix("--draft=") })?.dropFirst(8) {
+          workspace.draft = String(draft)
+        }
+        // The detail column may still be settling; ask again until the field takes it.
+        for _ in 0..<8 where arguments.contains("--focus-composer") && !composerFocused {
+          composerFocused = true
+          try? await Task.sleep(for: .milliseconds(400))
+        }
+      }
+    #endif
     .toolbar {
       if let zapper = coordinatedBy(session) {
         // A Zapper's conversation: its face and name lead to the overview.
@@ -941,9 +1166,9 @@ struct WorkspaceView: View {
   private func coordinatedBy(_ session: SessionRow) -> Zapper? {
     workspace.zappers.zappers.first { $0.coordinatorChatId == session.id }
   }
+  /// The composer rests on one line and opens while you write.
   private var composerExpanded: Bool {
     composerFocused || !workspace.attachments.isEmpty
-      || workspace.transcript.activeTurnID != nil
   }
   /// Where a message from the composer will run.
   private var composerContext: String? {
@@ -990,7 +1215,7 @@ struct WorkspaceView: View {
           .focused($composerFocused).accessibilityIdentifier("chat-composer")
           .font(.system(size: 17)).lineLimit(1...(composerExpanded ? 6 : 1))
           .padding(.leading, composerExpanded ? 14 : 46)
-          .padding(.trailing, composerExpanded ? 14 : 160)
+          .padding(.trailing, composerExpanded ? 14 : 186)
           .padding(.top, composerExpanded ? 12 : 12).padding(.bottom, composerExpanded ? 2 : 12)
         if composerExpanded {
           HStack(spacing: 4) {
@@ -1005,7 +1230,7 @@ struct WorkspaceView: View {
       .overlay(alignment: .trailing) {
         if !composerExpanded {
           HStack(spacing: 4) {
-            modelMenu.frame(maxWidth: 94)
+            modelMenu.frame(maxWidth: 128)
             sendControl
           }.padding(.trailing, 3)
         }

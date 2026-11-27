@@ -347,7 +347,7 @@ struct PullRequestDetailView: View {
         }
         .font(.system(size: 17, weight: .semibold))
         .lineLimit(1).fixedSize()
-        .foregroundStyle(gate.canMerge || gate == .draft ? Color.white : Color.primary)
+        .foregroundStyle(gate.canMerge || gate == .draft ? AppTheme.onAccent : Color.primary)
         .padding(.horizontal, gate == .draft ? 18 : 22).frame(height: 48)
         .background {
           if gate.canMerge || gate == .draft {

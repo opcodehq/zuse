@@ -282,10 +282,10 @@ struct PullRequestMergeSheet: View {
   {
     Button(action: action) {
       HStack(spacing: 8) {
-        if busy { ProgressView().tint(.white).controlSize(.small) }
+        if busy { ProgressView().tint(AppTheme.onAccent).controlSize(.small) }
         Text(title)
       }
-      .font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+      .font(.system(size: 17, weight: .semibold)).foregroundStyle(AppTheme.onAccent)
       .frame(maxWidth: .infinity).frame(height: 52)
       .background(AppTheme.accent, in: Capsule())
       .contentShape(Capsule())

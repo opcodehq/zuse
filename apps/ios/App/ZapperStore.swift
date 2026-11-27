@@ -328,6 +328,12 @@ struct UnconfirmedZapperCommand: Identifiable, Equatable {
   // MARK: Preview
 
   #if DEBUG
+    /// `--loading-preview`: a computer with Zappers whose first snapshot hasn't arrived.
+    func loadLoadingPreview() {
+      available = true
+      loaded = false
+      zappers = []
+    }
     func loadPreview(
       zappers: [Zapper], chats: [String: ZapperChatInfo],
       running: [String: ZapperRunStatus], files: [String: [ZapperFile]],

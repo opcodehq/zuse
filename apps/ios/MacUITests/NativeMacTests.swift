@@ -24,6 +24,7 @@ final class NativeMacTests: XCTestCase {
     app.launch()
     let transcript = app.tables["chat-transcript"]
     XCTAssertTrue(transcript.waitForExistence(timeout: 15))
+    // 3,334 messages you sent, each but the last followed by one reply and the actions under it.
     let last = transcript.tableRows.element(boundBy: 9_999)
     XCTAssertTrue(last.waitForExistence(timeout: 10))
     XCTAssertTrue(last.isHittable, "The transcript must open at its latest message")

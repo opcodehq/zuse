@@ -12,14 +12,19 @@ import ZuseCore
     let messages: [ChatMessage]
     let sessionID: String
     let rpc: RPCClient?
+    /// The host reports a turn in progress.
+    var running = false
     var bottomInset: CGFloat = 0
     var respond: ((ChatMessage, String) async throws -> Void)?
+    /// Opens the computer's working changes from a turn's changes card.
+    var openChanges: (() -> Void)?
     func makeUIViewController(context: Context) -> TranscriptController { TranscriptController() }
     func updateUIViewController(_ controller: TranscriptController, context: Context) {
       controller.setBottomInset(bottomInset)
       controller.respond = respond
+      controller.setOpenChanges(openChanges)
       controller.setConnection(rpc)
-      controller.update(messages, sessionID: sessionID)
+      controller.update(messages, sessionID: sessionID, running: running)
     }
   }
 
@@ -27,22 +32,28 @@ import ZuseCore
     var respond: ((ChatMessage, String) async throws -> Void)?
     private var rpc: RPCClient?
     private var connectionChanged = false
+    private var openChanges: (() -> Void)?
     func setConnection(_ value: RPCClient?) {
       if rpc !== value {
         rpc = value
         connectionChanged = true
       }
     }
+    /// Cells capture the action when configured, so gaining or losing it reconfigures them.
+    func setOpenChanges(_ value: (() -> Void)?) {
+      if (openChanges == nil) != (value == nil) { connectionChanged = true }
+      openChanges = value
+    }
     private var collection: UICollectionView!
     private var dataSource: UICollectionViewDiffableDataSource<Int, String>!
-    private var rows: [String: TranscriptGroup] = [:]
+    private var rows: [String: TimelineItem] = [:]
     private var sessionID = ""
     private var applying = false
-    private var queued: ([ChatMessage], String)?
+    private var queued: ([ChatMessage], String, Bool)?
     override func viewDidLoad() {
       super.viewDidLoad()
       let size = NSCollectionLayoutSize(
-        widthDimension: .fractionalWidth(1), heightDimension: .estimated(36))
+        widthDimension: .fractionalWidth(1), heightDimension: .estimated(60))
       let item = NSCollectionLayoutItem(layoutSize: size)
       let group = NSCollectionLayoutGroup.vertical(layoutSize: size, subitems: [item])
       let section = NSCollectionLayoutSection(group: group)
@@ -69,21 +80,12 @@ import ZuseCore
         [weak self] cell, _, id in
         guard let row = self?.rows[id] else { return }
         cell.contentConfiguration = UIHostingConfiguration {
-          Group {
-            if row.isActivity {
-              ToolActivityGroup(
-                group: row,
-                toggleDisclosure: { [weak self] change in
-                  self?.resizeDisclosure(change)
-                })
-            } else {
-              MessageCell(
-                message: row.rows[0].message, rpc: self?.rpc,
-                respond: self?.respond.map { callback in
-                  { text in try await callback(row.rows[0].message, text) }
-                })
-            }
-          }.id(row.id)
+          TimelineItemView(
+            item: row, rpc: self?.rpc, respond: self?.respond,
+            resize: { [weak self] change in self?.resizeDisclosure(change) },
+            openChanges: self?.openChanges == nil ? nil : { [weak self] in self?.openChanges?() }
+          )
+          .id(row.id)
         }.margins(
           .all, 0
         ).minSize(width: 0, height: 0)
@@ -99,20 +101,87 @@ import ZuseCore
     }
     private var previousViewportHeight: CGFloat = 0
     private var measuredWidth: CGFloat = 0
+    /// Re-measuring waits for a snapshot in flight, then runs once it lands.
+    private enum Remeasure: Int, Comparable {
+      case none, visible, all
+      static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+    }
+    private var pendingRemeasure = Remeasure.none
     override func viewDidAppear(_ animated: Bool) {
       super.viewDidAppear(animated)
-      // Rows laid out while the chat was hidden (under another page) may not have re-measured.
-      remeasureVisibleRows()
+      // Rows laid out while the chat was hidden (under another page, or while a split view
+      // column was resizing) carry heights for another width.
+      remeasure(.all)
     }
-    private func remeasureVisibleRows() {
-      guard dataSource != nil, !applying else { return }
-      let visible = collection.indexPathsForVisibleItems.compactMap {
-        dataSource.itemIdentifier(for: $0)
+    /// Self-sized hosting cells keep the height they had at the width they were measured at, and
+    /// the layout stacks rows by those heights. After the column changes width every row has to
+    /// measure again, or rows overlap; after the viewport changes height, the visible rows do.
+    private func remeasure(_ scope: Remeasure) {
+      guard dataSource != nil, scope != .none else { return }
+      if applying {
+        pendingRemeasure = max(pendingRemeasure, scope)
+        return
       }
-      guard !visible.isEmpty else { return }
-      var snapshot = dataSource.snapshot()
-      snapshot.reconfigureItems(visible)
-      dataSource.apply(snapshot, animatingDifferences: false)
+      let snapshot = dataSource.snapshot()
+      guard !snapshot.itemIdentifiers.isEmpty else { return }
+      let position = savePosition()
+      applying = true
+      let done: () -> Void = { [weak self] in
+        guard let self else { return }
+        collection.collectionViewLayout.invalidateLayout()
+        collection.layoutIfNeeded()
+        restore(position)
+        finishApply()
+      }
+      if scope == .all {
+        dataSource.applySnapshotUsingReloadData(snapshot, completion: done)
+      } else {
+        var reconfigured = snapshot
+        reconfigured.reconfigureItems(
+          collection.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) })
+        dataSource.apply(reconfigured, animatingDifferences: false, completion: done)
+      }
+    }
+    private struct Position {
+      let atBottom: Bool
+      let anchorID: String?
+      let offset: CGFloat?
+    }
+    private var isAtBottom: Bool {
+      collection.contentSize.height - collection.bounds.maxY
+        + collection.adjustedContentInset.bottom < 100
+    }
+    private func savePosition() -> Position {
+      let anchor = collection.indexPathsForVisibleItems.sorted().first
+      return Position(
+        atBottom: isAtBottom,
+        anchorID: anchor.flatMap { dataSource.itemIdentifier(for: $0) },
+        offset: anchor.flatMap { collection.layoutAttributesForItem(at: $0)?.frame.minY }.map {
+          $0 - collection.contentOffset.y
+        })
+    }
+    private func restore(_ position: Position) {
+      if position.atBottom, !TranscriptPreviewFlags.startAtTop {
+        scrollToLatest(sessionID: sessionID, remainingPasses: 2)
+      } else if let id = position.anchorID, let offset = position.offset,
+        let path = dataSource.indexPath(for: id),
+        let attributes = collection.layoutAttributesForItem(at: path)
+      {
+        collection.contentOffset.y = attributes.frame.minY - offset
+      }
+    }
+    /// Ends a snapshot apply, then runs whatever waited for it.
+    private func finishApply() {
+      applying = false
+      if let queued {
+        self.queued = nil
+        update(queued.0, sessionID: queued.1, running: queued.2)
+      }
+      if !applying, pendingRemeasure != .none {
+        let scope = pendingRemeasure
+        pendingRemeasure = .none
+        remeasure(scope)
+      }
     }
     override func viewDidLayoutSubviews() {
       super.viewDidLayoutSubviews()
@@ -120,13 +189,14 @@ import ZuseCore
       defer { previousViewportHeight = height }
       // Rows measured while the chat was off screen or mid-transition can carry another width.
       if abs(collection.bounds.width - measuredWidth) > 1, collection.bounds.width > 0 {
+        let first = measuredWidth == 0
         measuredWidth = collection.bounds.width
-        remeasureVisibleRows()
+        if !first { remeasure(.all) }
       }
       guard previousViewportHeight > 0, abs(height - previousViewportHeight) > 1 else { return }
       // A new viewport (the tab bar hiding, the keyboard) can leave self-sized rows at stale
       // positions; re-measuring the visible rows puts them back in place.
-      remeasureVisibleRows()
+      remeasure(.visible)
       guard !collection.isDragging, !collection.isDecelerating else { return }
       let previousDistance =
         collection.contentSize.height - collection.contentOffset.y
@@ -166,15 +236,15 @@ import ZuseCore
         }
       }
     }
-    func update(_ messages: [ChatMessage], sessionID: String) {
+    func update(_ messages: [ChatMessage], sessionID: String, running: Bool) {
       loadViewIfNeeded()
       if applying {
-        queued = (messages, sessionID)
+        queued = (messages, sessionID, running)
         return
       }
       let changedSession = self.sessionID != sessionID
       let prior = dataSource.snapshot().itemIdentifiers
-      let presented = TranscriptGroup.project(messages)
+      let presented = ChatTimeline.project(messages, running: running)
       let incoming = presented.map(\.id)
       let changed = presented.filter { connectionChanged || rows[$0.id] != $0 }.map(\.id)
       connectionChanged = false
@@ -198,18 +268,14 @@ import ZuseCore
       dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
         guard let self else { return }
         collection.layoutIfNeeded()
-        if changedSession || atBottom, !incoming.isEmpty {
+        if changedSession || atBottom, !incoming.isEmpty, !TranscriptPreviewFlags.startAtTop {
           scrollToLatest(sessionID: sessionID, remainingPasses: 3)
         } else if let anchorID, let offset, let path = dataSource.indexPath(for: anchorID),
           let attributes = collection.layoutAttributesForItem(at: path)
         {
           collection.contentOffset.y = attributes.frame.minY - offset
         }
-        applying = false
-        if let queued {
-          self.queued = nil
-          update(queued.0, sessionID: queued.1)
-        }
+        finishApply()
       }
     }
     private func scrollToLatest(sessionID: String, remainingPasses: Int) {
@@ -235,13 +301,18 @@ import ZuseCore
     let messages: [ChatMessage]
     let sessionID: String
     let rpc: RPCClient?
+    /// The host reports a turn in progress.
+    var running = false
     var bottomInset: CGFloat = 0
     var respond: ((ChatMessage, String) async throws -> Void)?
+    var openChanges: (() -> Void)?
     func makeNSViewController(context: Context) -> MacTranscriptController {
       MacTranscriptController()
     }
     func updateNSViewController(_ controller: MacTranscriptController, context: Context) {
-      controller.update(messages, sessionID: sessionID, rpc: rpc, respond: respond)
+      controller.update(
+        ChatTimeline.project(messages, running: running), sessionID: sessionID, rpc: rpc,
+        respond: respond, openChanges: openChanges)
     }
   }
 
@@ -252,12 +323,13 @@ import ZuseCore
     private let table = NSTableView()
     private let scroll = NSScrollView()
     private let latest = NSButton(title: "Latest", target: nil, action: nil)
-    private var messages: [ChatMessage] = []
+    private var messages: [TimelineItem] = []
     private var sessionID = ""
     private var heights: [String: CGFloat] = [:]
     private var measuredWidth: CGFloat = 0
     private var rpc: RPCClient?
     private var respond: ((ChatMessage, String) async throws -> Void)?
+    private var openChanges: (() -> Void)?
     override func loadView() {
       view = NSView()
       let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("message"))
@@ -301,7 +373,7 @@ import ZuseCore
     func numberOfRows(in tableView: NSTableView) -> Int { messages.count }
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { false }
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-      heights[messages[row].id] ?? (messages[row].role == "user" ? 64 : 240)
+      heights[messages[row].id] ?? 120
     }
     func tableViewColumnDidResize(_ notification: Notification) {
       guard abs(measuredWidth - table.bounds.width) > 1 else { return }
@@ -316,30 +388,37 @@ import ZuseCore
       let cell =
         table.makeView(withIdentifier: id, owner: nil) as? MacMessageCell ?? MacMessageCell()
       cell.identifier = id
-      let message = messages[row]
+      let item = messages[row]
       cell.set(
-        MessageCell(
-          message: message, rpc: rpc,
-          respond: respond.map { callback in { text in try await callback(message, text) } }))
-      DispatchQueue.main.async { [weak self, weak cell] in
-        guard let self, let cell,
-          let index = self.messages.firstIndex(where: { $0.id == message.id }),
-          self.table.row(for: cell) == index
-        else { return }
-        let follow = self.atBottom
-        let height = max(32, cell.measuredHeight(width: self.table.bounds.width))
-        guard abs((self.heights[message.id] ?? 0) - height) > 1 else { return }
-        self.heights[message.id] = height
-        self.table.noteHeightOfRows(withIndexesChanged: IndexSet(integer: index))
-        if follow { self.table.scrollRowToVisible(self.messages.count - 1) }
-      }
+        TimelineItemView(
+          item: item, rpc: rpc, respond: respond,
+          resize: { [weak self] change in
+            change()
+            DispatchQueue.main.async { self?.measure(item.id) }
+          }, openChanges: openChanges))
+      DispatchQueue.main.async { [weak self] in self?.measure(item.id) }
       return cell
     }
+    /// Sizes a visible row to its content after it renders or changes.
+    private func measure(_ id: String) {
+      guard let index = messages.firstIndex(where: { $0.id == id }),
+        let cell = table.view(atColumn: 0, row: index, makeIfNecessary: false) as? MacMessageCell
+      else { return }
+      let follow = atBottom
+      let height = max(24, cell.measuredHeight(width: table.bounds.width))
+      guard abs((heights[id] ?? 0) - height) > 1 else { return }
+      heights[id] = height
+      table.noteHeightOfRows(withIndexesChanged: IndexSet(integer: index))
+      if follow { table.scrollRowToVisible(messages.count - 1) }
+    }
     func update(
-      _ incoming: [ChatMessage], sessionID: String, rpc: RPCClient?,
-      respond: ((ChatMessage, String) async throws -> Void)?
+      _ incoming: [TimelineItem], sessionID: String, rpc: RPCClient?,
+      respond: ((ChatMessage, String) async throws -> Void)?,
+      openChanges: (() -> Void)? = nil
     ) {
       _ = view
+      let actionChanged = (self.openChanges == nil) != (openChanges == nil)
+      self.openChanges = openChanges
       let switched = self.sessionID != sessionID
       let follow = switched || atBottom
       let visible = table.rows(in: scroll.documentVisibleRect)
@@ -350,7 +429,7 @@ import ZuseCore
       let structureChanged = switched || messages.map(\.id) != incoming.map(\.id)
       let changed = IndexSet(
         incoming.indices.filter {
-          self.rpc !== rpc || $0 >= messages.count || messages[$0] != incoming[$0]
+          actionChanged || self.rpc !== rpc || $0 >= messages.count || messages[$0] != incoming[$0]
         })
       self.sessionID = sessionID
       self.rpc = rpc
@@ -393,13 +472,13 @@ import ZuseCore
   }
 
   @MainActor private final class MacMessageCell: NSTableCellView {
-    private var hosting: NSHostingView<MessageCell>?
+    private var hosting: NSHostingView<TimelineItemView>?
     func measuredHeight(width: CGFloat) -> CGFloat {
       frame.size.width = width
       layoutSubtreeIfNeeded()
       return hosting?.fittingSize.height ?? 160
     }
-    func set(_ content: MessageCell) {
+    func set(_ content: TimelineItemView) {
       if let hosting {
         hosting.rootView = content
         return
@@ -418,65 +497,3 @@ import ZuseCore
   }
 
 #endif
-
-struct MessageCell: View {
-  let message: ChatMessage
-  let rpc: RPCClient?
-  var respond: ((String) async throws -> Void)?
-  /// Text you sent, shown as a bubble; other user-role records (tool results) render as details.
-  private var isUserText: Bool { ["user", "user_rich"].contains(message.kind) }
-  var body: some View {
-    Group {
-      if isUserText {
-        // Your messages: a compact bubble on the trailing side.
-        // No spacers or fixed sizes: self-sizing cells measure this in one pass.
-        VStack(alignment: .leading, spacing: 6) {
-          ChatMarkdown(text: message.text)
-          attachments
-        }
-        .padding(.horizontal, 14).padding(.vertical, 10)
-        .background(
-          Color.secondary.opacity(0.1),
-          in: RoundedRectangle(cornerRadius: 18, style: .continuous)
-        )
-        .frame(maxWidth: .infinity, alignment: .trailing)
-        .padding(.leading, 56).padding(.vertical, 8)
-      } else {
-        VStack(alignment: .leading, spacing: 5) {
-          if message.kind == "assistant" {
-            ChatMarkdown(text: message.text).frame(maxWidth: .infinity, alignment: .leading)
-          } else {
-            MessageDetails(message: message, respond: respond)
-              .disclosureGroupStyle(TranscriptDisclosureStyle())
-          }
-        }
-        .padding(.vertical, message.kind == "assistant" ? 7 : 3)
-      }
-    }
-    .font(.subheadline)
-    .padding(.horizontal, 16)
-    .frame(maxWidth: 720, alignment: .leading).frame(maxWidth: .infinity)
-    .contextMenu {
-      Button("Copy", systemImage: "doc.on.doc") { NativePlatform.copy(message.text) }
-      ShareLink(item: message.text)
-    }
-    // Cells are hosted outside the window's SwiftUI tree, so they route PR links themselves.
-    .pullRequestLinks()
-  }
-  @ViewBuilder private var attachments: some View {
-    if message.kind == "user_rich" {
-      ForEach(Array(message.content["attachments"].array.enumerated()), id: \.offset) {
-        _, reference in
-        AttachmentView(reference: reference, sessionID: message.sessionId, rpc: rpc)
-      }
-    }
-  }
-  private var title: String {
-    message.content["tool"].string
-      ?? message.kind.replacingOccurrences(of: "_", with: " ").capitalized
-  }
-  private var icon: String {
-    message.kind == "thinking"
-      ? "brain" : message.kind == "error" ? "exclamationmark.triangle" : "terminal"
-  }
-}

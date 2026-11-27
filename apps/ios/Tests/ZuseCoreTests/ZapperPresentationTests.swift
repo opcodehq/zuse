@@ -106,6 +106,21 @@ private func issue(
   #expect(z.finishedThreads == ["zapper-worker-1", "zapper-worker-3", "zapper-worker-2"])
 }
 
+@Test func threadIssuePrefersOpenIssuesItOwnsOrIsLinkedTo() {
+  let z = zapper(
+    workers: [worker("zapper-worker-a"), worker("zapper-worker-b")],
+    issues: [
+      issue("old", number: 1, status: .done, threads: ["zapper-worker-a"]),
+      issue("open", number: 2, status: .inReview, threads: ["zapper-worker-a"]),
+      issue("owned", number: 3, status: .todo, owner: .thread(chatId: "zapper-worker-b")),
+      issue("closed", number: 4, status: .canceled, owner: .thread(chatId: "zapper-worker-c")),
+    ])
+  #expect(z.issue(forThread: "zapper-worker-a")?.code == "ZAP-2")
+  #expect(z.issue(forThread: "zapper-worker-b")?.code == "ZAP-3")
+  #expect(z.issue(forThread: "zapper-worker-c")?.code == "ZAP-4")
+  #expect(z.issue(forThread: "zapper-worker-d") == nil)
+}
+
 @Test func driveListsEditedDocumentsNewestVersionFirst() {
   let files = [
     ZapperFile(path: "INSTRUCTIONS.md", version: 1, content: "Ship it"),

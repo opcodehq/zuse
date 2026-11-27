@@ -1,7 +1,8 @@
 import SwiftUI
 import ZuseCore
 
-/// The app's top-level tabs: a tab bar on iPhone, a sidebar on iPad and Mac.
+/// The app's top-level tabs: the system tab bar on iPhone, a compact floating bar on iPad
+/// (`TabletShell`) and a sidebar on Mac.
 enum AppTab: String, Hashable, CaseIterable {
   case zappers, chats, prs, more, search
   /// `--tab=<zappers|chats|prs|more>` picks the first tab for screenshots.
@@ -188,4 +189,90 @@ extension View {
       self
     #endif
   }
+}
+
+/// The iPhone tab bar as iOS draws it: it shrinks while you scroll down, and on Chats it carries
+/// an "Ask anything" accessory that opens a new chat, the way Music carries its player.
+enum NativeTabBar {
+  /// iOS 26.1 and later host the Chats ask row in the tab bar; earlier systems keep it under
+  /// the list.
+  static var hostsAsk: Bool {
+    #if os(iOS)
+      if #available(iOS 26.1, *) { return true }
+    #endif
+    return false
+  }
+}
+
+private struct NativeTabBarModifier: ViewModifier {
+  let askEnabled: Bool
+  let ask: () -> Void
+  let askCloud: (() -> Void)?
+  func body(content: Content) -> some View {
+    #if os(iOS)
+      if #available(iOS 26.1, *) {
+        content
+          .tabBarMinimizeBehavior(.onScrollDown)
+          .tabViewBottomAccessory(isEnabled: askEnabled) {
+            AskAccessory(ask: ask, askCloud: askCloud)
+          }
+      } else if #available(iOS 26, *) {
+        content.tabBarMinimizeBehavior(.onScrollDown)
+      } else {
+        content
+      }
+    #else
+      content
+    #endif
+  }
+}
+
+#if os(iOS)
+  /// "Ask anything" in the tab bar: opens a new chat ready to write, or a cloud chat.
+  @available(iOS 26.1, *)
+  private struct AskAccessory: View {
+    let ask: () -> Void
+    let askCloud: (() -> Void)?
+    @Environment(\.tabViewBottomAccessoryPlacement) private var placement
+    var body: some View {
+      HStack(spacing: 0) {
+        Button(action: ask) {
+          HStack(spacing: 10) {
+            Image(systemName: "plus").font(.system(size: 16, weight: .medium))
+              .foregroundStyle(.primary)
+            Text("Ask anything").font(.system(size: 16)).foregroundStyle(.secondary)
+              .lineLimit(1)
+            Spacer(minLength: 0)
+          }
+          .padding(.leading, 16)
+          .frame(maxHeight: .infinity).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("New chat")
+        .accessibilityIdentifier("ask-anything")
+        if let askCloud, placement != .inline {
+          Button(action: askCloud) {
+            Image(systemName: "cloud").font(.system(size: 15, weight: .medium))
+              .foregroundStyle(.secondary)
+              .frame(width: 48).frame(maxHeight: .infinity).contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel("New cloud chat")
+        }
+      }
+    }
+  }
+#endif
+
+extension View {
+  func nativeTabBar(
+    askEnabled: Bool, ask: @escaping () -> Void, askCloud: (() -> Void)?
+  ) -> some View {
+    modifier(NativeTabBarModifier(askEnabled: askEnabled, ask: ask, askCloud: askCloud))
+  }
+}
+
+/// Whether a new chat page opens with its composer focused.
+extension EnvironmentValues {
+  @Entry var focusesNewChatComposer = false
 }

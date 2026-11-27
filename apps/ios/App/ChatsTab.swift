@@ -93,6 +93,9 @@ struct ChatsListView: View {
     List(selection: $selection) {
       if showsConnectionBanner {
         ConnectionBanner(workspace: workspace).chatsRow(minHeight: 0).padding(.vertical, 4)
+        if rows.isEmpty && !workspace.connectionIssue {
+          LoadingRows(count: 5, tile: 18, circle: true).chatsRow(minHeight: 0).padding(.top, 10)
+        }
       }
       if let problem = workspace.catalogProblem {
         ChatsNotice(text: problem, icon: "arrow.clockwise")
@@ -275,6 +278,12 @@ struct ChatsListView: View {
 
   // MARK: Empty
 
+  /// A computer or Zuse Cloud is open, so a new chat is one message away.
+  private var hasPlaceToWork: Bool {
+    workspace.isCloudActive || workspace.connectionState == "Connected"
+      || (workspace.connectionState == "Preview · offline" && !workspace.projects.isEmpty)
+  }
+
   @ViewBuilder private var emptyState: some View {
     if view == .archived {
       ZappersEmptyState(
@@ -284,6 +293,12 @@ struct ChatsListView: View {
       ZappersEmptyState(
         symbol: "folder", title: "No chats in \(name)",
         detail: "Start one from the field below.")
+    } else if !showsConnectionBanner && hasPlaceToWork {
+      ZappersEmptyState(
+        symbol: "bubble.left.and.bubble.right", title: "No chats yet",
+        detail:
+          "Ask anything below to start one. Chats you start on your computer show up here too."
+      )
     } else if !showsConnectionBanner {
       ZappersEmptyState(
         symbol: "bubble.left.and.bubble.right", title: "No chats yet",
@@ -304,9 +319,19 @@ struct ChatsListView: View {
             } label: {
               Text(signingIn ? "Signing In…" : "Sign In").frame(maxWidth: 260)
             }
-            .buttonStyle(.borderedProminent).tint(AppTheme.accent).disabled(signingIn)
+            .brandProminentButton().disabled(signingIn)
           }
-          if workspace.savedConnections.isEmpty && workspace.environments.isEmpty {
+          if let computer = workspace.recentComputer,
+            workspace.isCloudActive || workspace.rpc == nil
+          {
+            Button {
+              workspace.openRemote(computer)
+            } label: {
+              Label("Reconnect to \(computer.displayName)", systemImage: "arrow.clockwise")
+                .lineLimit(1).frame(maxWidth: 300)
+            }
+            .buttonStyle(.bordered)
+          } else if workspace.savedConnections.isEmpty && workspace.environments.isEmpty {
             Button(action: connect) {
               Label("Add computer", systemImage: "desktopcomputer").frame(maxWidth: 260)
             }

@@ -7,8 +7,18 @@ struct ZappersListView: View {
   let workspace: WorkspaceModel
   let open: (String) -> Void
   let connect: () -> Void
+  /// The wide list: each Zapper's threads fold out under it, with their issues and pull
+  /// requests. Picking a thread opens it inside its Zapper.
+  var openThread: ((String, ZapperWorker?) -> Void)? = nil
+  /// The Zapper open beside the list, highlighted in it.
+  var selectedZapper: String? = nil
+  /// The thread open beside the list, highlighted in place of its Zapper.
+  var selectedThread: String? = nil
   @State private var filter: ArchiveFilter = .active
-  @State private var creating = false
+  /// Zappers folded or unfolded by hand, against their default (open while active).
+  @State private var toggled: Set<String> = []
+  /// The open New Zapper sheet, with the idea it starts from when one was picked.
+  @State private var creating: NewZapperRequest?
   private var store: ZapperStore { workspace.zappers }
 
   private var visible: [Zapper] {
@@ -30,20 +40,15 @@ struct ZappersListView: View {
           .zappersRow().padding(.vertical, 4)
       }
       ForEach(visible) { zapper in
-        let coordinator = store.chats[zapper.coordinatorChatId]
-        Button {
-          open(zapper.id)
-        } label: {
-          ZapperListRow(
-            zapper: zapper, working: store.workingCount(zapper),
-            busy: store.busy[zapper.id] != nil, preview: coordinator?.lastMessagePreview,
-            updated: coordinator?.lastMessageAt)
+        if openThread != nil {
+          outline(zapper)
+        } else {
+          row(zapper)
         }
-        .buttonStyle(.plain)
-        .zappersRow()
-        .contextMenu { rowActions(zapper) }
       }
-      if visible.isEmpty { emptyState.zappersRow().padding(.top, 72) }
+      if visible.isEmpty {
+        emptyState.zappersRow().padding(.top, firstRun ? 36 : 72).padding(.bottom, 24)
+      }
     }
     .listStyle(.plain)
     .contentMargins(.top, 4, for: .scrollContent)
@@ -53,7 +58,7 @@ struct ZappersListView: View {
     .compactNavigationTitle()
     .toolbar {
       ToolbarItemGroup(placement: .primaryAction) {
-        Button("New Zapper", systemImage: "plus") { creating = true }
+        Button("New Zapper", systemImage: "plus") { creating = NewZapperRequest() }
           .disabled(!canCreate)
           .accessibilityIdentifier("new-zapper")
         Menu {
@@ -69,18 +74,107 @@ struct ZappersListView: View {
       }
     }
     .tint(.primary)
-    .sheet(isPresented: $creating) {
-      NewZapperSheet(workspace: workspace) { id in
-        creating = false
+    .sheet(item: $creating) { request in
+      NewZapperSheet(workspace: workspace, starter: request.starter) { id in
+        creating = nil
         open(id)
       }
     }
     .refreshable { await workspace.refreshSessionCatalog() }
     .onAppear {
       #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("--new-zapper-preview") { creating = true }
+        let arguments = ProcessInfo.processInfo.arguments
+        // `--new-zapper-starter=<0-2>` opens the sheet from one of the first-run ideas.
+        if let index = arguments.first(where: { $0.hasPrefix("--new-zapper-starter=") })
+          .flatMap({ Int($0.dropFirst(21)) }), ZapperStarter.all.indices.contains(index)
+        {
+          creating = NewZapperRequest(starter: ZapperStarter.all[index])
+        }
+        if arguments.contains("--new-zapper-preview") && creating == nil {
+          creating = NewZapperRequest()
+        }
       #endif
     }
+  }
+
+  private func row(_ zapper: Zapper) -> some View {
+    let coordinator = store.chats[zapper.coordinatorChatId]
+    return Button {
+      open(zapper.id)
+    } label: {
+      ZapperListRow(
+        zapper: zapper, working: store.workingCount(zapper),
+        busy: store.busy[zapper.id] != nil, preview: coordinator?.lastMessagePreview,
+        updated: coordinator?.lastMessageAt)
+    }
+    .buttonStyle(.plain)
+    .zappersRow()
+    .contextMenu { rowActions(zapper) }
+  }
+
+  /// Most threads a folded-out Zapper lists before pointing at its overview.
+  private static let threadLimit = 6
+
+  @ViewBuilder private func outline(_ zapper: Zapper) -> some View {
+    let coordinator = store.chats[zapper.coordinatorChatId]
+    let threads = store.orderedThreads(zapper)
+    let expanded = !threads.isEmpty && isExpanded(zapper)
+    Button {
+      open(zapper.id)
+    } label: {
+      ZapperOutlineRow(
+        zapper: zapper, working: store.workingCount(zapper),
+        busy: store.busy[zapper.id] != nil, preview: coordinator?.lastMessagePreview,
+        updated: coordinator?.lastMessageAt, threadCount: threads.count, expanded: expanded
+      ) {
+        withAnimation(.snappy(duration: 0.25)) { toggled.formSymmetricDifference([zapper.id]) }
+      }
+    }
+    .buttonStyle(.plain)
+    .zappersRow(
+      selected: selectedZapper == zapper.id
+        && !(expanded && threads.contains { $0.chatId == selectedThread })
+    )
+    .contextMenu { rowActions(zapper) }
+    .accessibilityIdentifier("zapper-row-\(zapper.id)")
+    if expanded {
+      ForEach(threads.prefix(Self.threadLimit)) { worker in
+        Button {
+          openThread?(zapper.id, worker)
+        } label: {
+          ZapperThreadOutlineRow(
+            zapper: zapper, worker: worker,
+            title: store.title(of: worker.chatId, fallback: worker.objective),
+            rank: store.rank(of: worker), updated: store.chats[worker.chatId]?.lastMessageAt,
+            known: workspace.pullRequests.known)
+        }
+        .buttonStyle(.plain)
+        .zappersRow(selected: selectedZapper == zapper.id && worker.chatId == selectedThread)
+      }
+      if threads.count > Self.threadLimit {
+        Button {
+          openThread?(zapper.id, nil)
+        } label: {
+          Text("See all \(threads.count) threads").font(.system(size: 14, weight: .medium))
+            .foregroundStyle(.secondary)
+            .padding(.leading, 56).frame(minHeight: 32)
+        }
+        .buttonStyle(.plain)
+        .zappersRow()
+      }
+    }
+  }
+
+  /// Active Zappers open with their threads showing; paused and archived ones stay folded.
+  private func isExpanded(_ zapper: Zapper) -> Bool {
+    (zapper.status == .active) != toggled.contains(zapper.id)
+  }
+
+  /// Nothing made yet and nothing in the way of making one.
+  private var firstRun: Bool {
+    filter != .archived && store.zappers.isEmpty && (store.preview || store.available)
+      && (store.loaded || store.preview)
+      && (store.preview || workspace.connectionState == "Connected")
   }
 
   private var canCreate: Bool {
@@ -110,27 +204,37 @@ struct ZappersListView: View {
       ZappersEmptyState(
         symbol: "archivebox", title: "No archived Zappers",
         detail: "Zappers you archive show up here, ready to resume.")
-    } else if !store.loaded && workspace.connectionState == "Connected" && store.available {
-      ProgressView().frame(maxWidth: .infinity)
+    } else if store.available && !store.loaded {
+      LoadingRows().padding(.top, -60)
     } else if workspace.connectionState == "Connected" && !store.available && !store.preview {
       ZappersEmptyState(
         symbol: "arrow.down.circle", title: "Update Zuse to use Zappers",
         detail:
           "\(workspace.connectedComputer ?? "This computer") runs a version of Zuse without Zappers."
       )
+    } else if store.zappers.isEmpty && (store.available || store.preview) {
+      ZapperFirstRun { idea in
+        creating = NewZapperRequest(starter: idea)
+      }
     } else if store.available || store.preview {
       ZappersEmptyState(
-        symbol: AppIcon.zapper, title: "No Zappers yet",
-        detail:
-          "A Zapper looks after one goal for you. It plans the work, starts threads and asks when it needs you."
+        symbol: AppIcon.zapper, title: "No active Zappers",
+        detail: "Paused and archived Zappers are under All Zappers."
+      )
+    } else if let computer = workspace.recentComputer {
+      ZappersEmptyState(
+        symbol: "desktopcomputer", title: "Zappers run on your computer",
+        detail: "Reconnect to \(computer.displayName) to see its Zappers and start new ones."
       ) {
         Button {
-          creating = true
+          workspace.openRemote(computer)
         } label: {
-          Label("New Zapper", systemImage: "plus").frame(maxWidth: 260)
+          Label("Reconnect to \(computer.displayName)", systemImage: "arrow.clockwise")
+            .lineLimit(1).frame(maxWidth: 300)
         }
-        .buttonStyle(.borderedProminent).tint(AppTheme.accent).controlSize(.large)
+        .brandProminentButton().controlSize(.large)
         .buttonBorderShape(.capsule)
+        .disabled(workspace.connectionState == "Connecting…")
       }
     } else if workspace.isCloudActive {
       ZappersEmptyState(
@@ -144,7 +248,7 @@ struct ZappersListView: View {
         Button(action: connect) {
           Label("Add computer", systemImage: "plus").frame(maxWidth: 260)
         }
-        .buttonStyle(.borderedProminent).tint(AppTheme.accent).controlSize(.large)
+        .brandProminentButton().controlSize(.large)
         .buttonBorderShape(.capsule)
       }
     }
@@ -234,8 +338,9 @@ struct ZapperListRow: View {
     .accessibilityLabel(accessibilityLabel)
     .accessibilityHint("Opens this Zapper’s conversation")
   }
+  private var detail: String { Self.detail(zapper: zapper, preview: preview, working: working) }
   /// Paused or archived first, then the latest message, then what is running.
-  private var detail: String {
+  static func detail(zapper: Zapper, preview: String?, working: Int) -> String {
     if zapper.status != .active { return zapper.status.label }
     let text = preview?.split(whereSeparator: \.isNewline).joined(separator: " ")
       .trimmingCharacters(in: .whitespaces)
@@ -255,17 +360,25 @@ struct ZapperListRow: View {
 
 extension View {
   /// Row metrics for the Zappers list.
-  func zappersRow() -> some View {
+  func zappersRow(selected: Bool = false) -> some View {
     listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-      .listRowSeparator(.hidden).listRowBackground(Color.clear)
+      .listRowSeparator(.hidden).listRowBackground(SelectedRowBackground(selected: selected))
   }
 }
 
 // MARK: - New Zapper
 
+/// One showing of the New Zapper sheet.
+struct NewZapperRequest: Identifiable {
+  let id = UUID()
+  var starter: ZapperStarter? = nil
+}
+
 /// Name a Zapper, pick its project and model, and give it a face.
 struct NewZapperSheet: View {
   let workspace: WorkspaceModel
+  /// An idea from the first-run screen that fills in the name, purpose and face.
+  var starter: ZapperStarter? = nil
   let created: (String) -> Void
   @Environment(\.dismiss) private var dismiss
   @State private var draft = ZapperDraft()
@@ -292,49 +405,60 @@ struct NewZapperSheet: View {
     NavigationStack {
       Form {
         Section {
-          VStack(spacing: 8) {
-            ZapperMascotView(avatar: draft.avatar, size: 64)
-              .frame(width: 88, height: 88)
-              .background(
-                Color(hex: ZapperMascots.resolve(draft.avatar).1.body).opacity(0.16),
-                in: RoundedRectangle(cornerRadius: 24, style: .continuous)
-              )
+          VStack(spacing: 18) {
+            ZapperFace(avatar: draft.avatar, size: 92)
               .animation(.snappy, value: draft.avatar)
               .accessibilityHidden(true)
-            Button("Change look") {
-              withAnimation(.snappy) { draft.nextLook() }
-            }
-            .font(.subheadline.weight(.medium)).tint(AppTheme.accent).buttonStyle(.borderless)
-            .accessibilityHint("Shows a different face for this Zapper")
+            ZapperLookPicker(avatar: $draft.avatar)
+              .padding(.horizontal, -20)
           }
-          .frame(maxWidth: .infinity).padding(.vertical, 4)
+          .frame(maxWidth: .infinity).padding(.top, 4).padding(.bottom, 2)
           .listRowBackground(Color.clear)
+          .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
         }
         Section {
-          TextField("Name", text: $draft.name)
+          TextField("Name it, like Release lead", text: $draft.name)
             .font(.system(size: 17)).focused($nameFocused).submitLabel(.done)
             .accessibilityIdentifier("new-zapper-name")
+        } header: {
+          Text("Name")
         }
         Section {
-          Picker("Project", selection: $draft.projectID) {
+          TextField(
+            "Keep main green and ship a release every Friday", text: $draft.purpose,
+            axis: .vertical
+          )
+          .lineLimit(3...6)
+          .accessibilityIdentifier("new-zapper-purpose")
+        } header: {
+          Text("What it looks after")
+        } footer: {
+          Text("Optional. Becomes its instructions; you can change them later from its Drive.")
+        }
+        Section {
+          Picker(selection: $draft.projectID) {
             if draft.projectID == nil { Text("Choose").tag(String?.none) }
             ForEach(projects) { project in Text(project.name).tag(String?.some(project.id)) }
+          } label: {
+            FormRowLabel(title: "Project", symbol: "folder")
           }
           .tint(.secondary)
-          LabeledContent("Runs on") {
-            Text(workspace.connectedComputer ?? "This computer").foregroundStyle(.secondary)
+          LabeledContent {
+            HStack(spacing: 6) {
+              if let state = workspace.computersIndicator {
+                ComputerStatusDot(state: state, size: 7)
+              }
+              Text(workspace.connectedComputer ?? "This computer").foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+          } label: {
+            FormRowLabel(title: "Runs on", symbol: "desktopcomputer")
           }
           modelPicker.tint(.secondary)
+        } header: {
+          Text("Where it works")
         } footer: {
           Text("The Zapper and its threads work in this project’s repository.")
-        }
-        Section {
-          TextField("What should it look after? (optional)", text: $draft.purpose, axis: .vertical)
-            .lineLimit(2...6)
-        } header: {
-          Text("Purpose")
-        } footer: {
-          Text("Becomes its instructions. You can change them later from its Drive.")
         }
         if let failure {
           Section {
@@ -364,16 +488,18 @@ struct NewZapperSheet: View {
         }
       }
       .interactiveDismissDisabled(creating)
-      .task { await loadCatalog() }
+      // Opened while the computer is still connecting, it fills in once the lists arrive.
+      .task(id: workspace.connectionState) { if catalog.isEmpty { await loadCatalog() } }
+      .onChange(of: projects.map(\.id)) { chooseDefaultProject() }
       .onAppear {
-        if draft.projectID == nil {
-          draft.projectID =
-            (workspace.selectedProject.flatMap { selected in
-              projects.first { $0.id == selected.id }
-            } ?? projects.first)?.id
+        chooseDefaultProject()
+        if let starter, draft.name.isEmpty {
+          draft.name = starter.name
+          draft.purpose = starter.purpose
+          draft.avatar = starter.avatar
         }
         #if DEBUG
-          if ProcessInfo.processInfo.arguments.contains("--new-zapper-preview") {
+          if ProcessInfo.processInfo.arguments.contains("--new-zapper-preview") && starter == nil {
             draft.name = "Release lead"
           }
         #endif
@@ -385,15 +511,17 @@ struct NewZapperSheet: View {
 
   @ViewBuilder private var modelPicker: some View {
     if catalog.isEmpty {
-      LabeledContent("Model") {
+      LabeledContent {
         if catalogFailed {
           Text("Unavailable").foregroundStyle(.secondary)
         } else {
           ProgressView().controlSize(.small)
         }
+      } label: {
+        FormRowLabel(title: "Model", symbol: "sparkles")
       }
     } else {
-      Picker("Model", selection: modelKey) {
+      Picker(selection: modelKey) {
         ForEach(catalog) { provider in
           Section(provider.name) {
             ForEach(provider.models) { model in
@@ -401,8 +529,18 @@ struct NewZapperSheet: View {
             }
           }
         }
+      } label: {
+        FormRowLabel(title: "Model", symbol: "sparkles")
       }
     }
+  }
+
+  private func chooseDefaultProject() {
+    guard draft.projectID == nil else { return }
+    draft.projectID =
+      (workspace.selectedProject.flatMap { selected in
+        projects.first { $0.id == selected.id }
+      } ?? projects.first)?.id
   }
 
   private func loadCatalog() async {
@@ -417,6 +555,21 @@ struct NewZapperSheet: View {
     }
     catalog = providers
     catalogFailed = providers.isEmpty
+    #if DEBUG
+      // `--new-zapper-submit=<model>` picks that model and presses Create, to check creating
+      // against a paired computer end to end.
+      if let model = ProcessInfo.processInfo.arguments.first(where: {
+        $0.hasPrefix("--new-zapper-submit=")
+      })?.dropFirst(20),
+        let provider = providers.first(where: { $0.models.contains { $0.id == model } })
+      {
+        draft.harness = provider.id
+        draft.model = String(model)
+        try? await Task.sleep(for: .seconds(2))
+        create()
+        return
+      }
+    #endif
     guard draft.harness == nil else { return }
     let preferred =
       providers.first { $0.id.lowercased().contains("claude") } ?? providers.first
