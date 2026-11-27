@@ -30,6 +30,11 @@ public struct CanonicalWorkspace: Sendable {
         worktreeId: nil)
     }
   }
+  /// The branch a chat belongs to, as the host recorded it.
+  public func branch(chatID: String) async throws -> String? {
+    try await rpc.snapshot("WatchChats").array.first { $0["id"].string == chatID }?["branch"]
+      .string
+  }
   /// Every top-level chat from one snapshot, split into active and archived chats.
   public func chatsWithArchived() async throws -> (active: [SessionRow], archived: [SessionRow]) {
     Self.partition(try await rpc.snapshot("WatchChats").array)
@@ -159,7 +164,8 @@ public struct CanonicalWorkspace: Sendable {
           "harness": .string(creation.providerID), "model": .string(creation.model),
           "reasoning": .null,
           "modelOptions": .object((creation.modelOptions ?? [:]).mapValues(JSONValue.string)),
-          "sandbox": .string("workspace-write"),
+          "sandbox": .string(AccessLevel.sandbox(creation.runtimeMode)),
+          "plan": .bool(creation.permissionMode == "plan"),
         ]),
       ])
     let rows = try await sessions(projectID: creation.projectID)
@@ -263,7 +269,8 @@ public struct CanonicalWorkspace: Sendable {
             "harness": .string(harness),
             "cwd": .string(cwd), "model": config["model"], "reasoning": config["reasoning"],
             "modelOptions": options,
-            "sandbox": .string(config["sandbox"].string ?? "workspace-write"),
+            "sandbox": .string(config["sandbox"].string ?? AccessLevel.ask),
+            "plan": .bool(config["plan"].bool),
             "autoApprove": .bool(false), "resume": chat["harnessSessionId"],
           ]),
         ]),

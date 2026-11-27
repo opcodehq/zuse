@@ -221,7 +221,6 @@ struct ComputerDetailView: View {
   @State private var renaming = false
   @State private var newName = ""
   @State private var forgetting = false
-  @State private var showRuntime = false
 
   private var connection: RemoteConnection? {
     guard case .saved(let id) = reference else { return nil }
@@ -320,11 +319,6 @@ struct ComputerDetailView: View {
       }
       if isActive, state == .connected, let rpc = workspace.rpc {
         Section {
-          Button {
-            showRuntime = true
-          } label: {
-            Label("Computer settings", systemImage: "slider.horizontal.3")
-          }
           NavigationLink {
             ComputerAccessView(rpc: rpc)
           } label: {
@@ -371,9 +365,6 @@ struct ComputerDetailView: View {
       }
     } message: {
       Text("You’ll need a new link or SSH sign-in to connect again.")
-    }
-    .sheet(isPresented: $showRuntime) {
-      if let rpc = workspace.rpc { RuntimeSettingsView(rpc: rpc).nativeSheetSize() }
     }
   }
   private func reconnect() {

@@ -238,7 +238,9 @@ struct ToolTreeRow: View {
           }.frame(minHeight: 30, alignment: .leading).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel([title, summary].filter { !$0.isEmpty }.joined(separator: ", "))
+        .accessibilityLabel(
+          [step.label, step.detail].filter { !$0.isEmpty }.joined(separator: ", ")
+        )
         .accessibilityIdentifier("activity-\(message.id)")
         .accessibilityValue(expanded ? "Expanded" : "Collapsed")
         if expanded {
