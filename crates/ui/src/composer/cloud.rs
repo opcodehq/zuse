@@ -251,6 +251,10 @@ impl Composer {
     ) -> bool {
         self.send_cloud_task_as(text, queue, false, cx)
     }
+    /// Send the message still being delivered again, under its same identity.
+    fn retry_cloud_task(&mut self, text: String, queue: bool, cx: &mut Context<Self>) -> bool {
+        self.send_cloud_task_inner(text, queue, false, true, cx)
+    }
 
     /// Send, queue or steer a cloud chat's message, as a chat on this device
     /// does: while the agent runs, a steer goes into the running turn (when
@@ -264,14 +268,24 @@ impl Composer {
         steer: bool,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.send_cloud_task_inner(text, queue, steer, false, cx)
+    }
+    fn send_cloud_task_inner(
+        &mut self,
+        text: String,
+        queue: bool,
+        steer: bool,
+        retry: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if self.cloud.native.is_none() {
             return false;
         }
         // A new message written while an earlier one is still on its way
-        // waits behind it, in order (see [`outbox`]); the earlier one's
-        // retry, which carries its own text, goes on as before.
+        // waits behind it, in order (see [`outbox`]); a Retry of the earlier
+        // one goes on under its own identity.
         let earlier = self.cloud.pending_native.is_some() || self.cloud.task.is_some();
-        let retry = self.cloud.pending_native_text.as_deref() == Some(text.as_str());
+        let retry = retry && self.cloud.pending_native.is_some();
         if self.cloud.task.is_some() && retry {
             return true;
         }
@@ -522,7 +536,7 @@ impl Composer {
         if retained {
             let text = self.cloud.pending_native_text.clone().unwrap_or_default();
             self.keeping_draft(cx, |this, cx| {
-                this.send_cloud_task(text, true, cx);
+                this.retry_cloud_task(text, true, cx);
             });
             return;
         }
@@ -742,7 +756,7 @@ impl Composer {
         }
         let text = self.cloud.pending_native_text.clone().unwrap_or_default();
         self.keeping_draft(cx, |this, cx| {
-            this.send_cloud_task(text, false, cx);
+            this.retry_cloud_task(text, false, cx);
         });
     }
 

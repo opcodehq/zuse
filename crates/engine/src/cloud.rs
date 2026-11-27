@@ -52,7 +52,15 @@ impl std::error::Error for CloudUnreachable {}
 /// with its own code, so it waits for the connection and is sent again under
 /// its same command id instead of reading as refused.
 fn task_command_unreachable(error: anyhow::Error) -> anyhow::Error {
-    if error.downcast_ref::<CloudUnreachable>().is_some() {
+    // A proxy in front of the service answering 502/503/504 without the
+    // service's own error code is the same: the request never got to it.
+    let gateway =
+        error
+            .downcast_ref::<CloudHttpFailure>()
+            .is_some_and(|CloudHttpFailure(status, code)| {
+                code.is_none() && matches!(status.as_u16(), 502..=504)
+            });
+    if gateway || error.downcast_ref::<CloudUnreachable>().is_some() {
         zuse_rpc::RpcError::Capability(zuse_protocol::cloud_task_commands::TASK_UNREACHABLE.into())
             .into()
     } else {
@@ -2333,6 +2341,22 @@ mod tests {
             rpc_error(task_command_unreachable(error)),
             zuse_rpc::RpcError::Capability(code)
                 if code == zuse_protocol::cloud_task_commands::TASK_UNREACHABLE
+        ));
+        // A proxy's 502/503/504 never reached the service either; the
+        // service's own 503 (with its code) is an answer.
+        let gateway = CloudHttpFailure(reqwest::StatusCode::BAD_GATEWAY, None);
+        assert!(matches!(
+            rpc_error(task_command_unreachable(gateway.into())),
+            zuse_rpc::RpcError::Capability(code)
+                if code == zuse_protocol::cloud_task_commands::TASK_UNREACHABLE
+        ));
+        let answered = CloudHttpFailure(
+            reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            Some("cloud_workspace_effects_storage_failed".into()),
+        );
+        assert!(!matches!(
+            rpc_error(task_command_unreachable(answered.into())),
+            zuse_rpc::RpcError::Capability(_)
         ));
         // Any other failure keeps its meaning.
         assert!(matches!(

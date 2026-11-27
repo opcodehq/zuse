@@ -23,6 +23,8 @@ pub(super) const ATTEMPT_LIMIT: Duration = Duration::from_secs(60);
 /// The longest wait between automatic attempts.
 const MAX_BACKOFF: Duration = Duration::from_secs(15);
 pub(super) const WAITING: &str = "Waiting for connection";
+/// A Stop that couldn't reach the server in time.
+const STOP_UNREACHABLE: &str = "Couldn't reach the cloud to stop the agent. Try Stop again.";
 
 #[derive(Default)]
 pub(in crate::composer) struct State {
@@ -76,10 +78,7 @@ impl Composer {
         let outbox = &mut self.cloud.outbox;
         let since = *outbox.since.get_or_insert(now);
         if now.duration_since(since) >= OFFLINE_LIMIT {
-            outbox.retry = None;
-            outbox.given_up = true;
-            // Shown inline under the messages; no extra error in the tray.
-            self.keep_unsent_native_send(cx);
+            self.give_up_cloud_delivery(cx);
             return;
         }
         outbox.attempts += 1;
@@ -90,18 +89,65 @@ impl Composer {
         }));
         cx.notify();
     }
-    /// Send the waiting message again, as is.
+    /// Retried for [`OFFLINE_LIMIT`] without reaching the server. A message
+    /// shows as not sent inline under the messages (no extra tray error); a
+    /// Stop is let go with a short notice, so it never holds the messages
+    /// after it or turns into a message on Retry.
+    fn give_up_cloud_delivery(&mut self, cx: &mut Context<Self>) {
+        self.cloud.outbox.retry = None;
+        if self.cloud_pending_is_stop() {
+            self.cloud.pending_native = None;
+            self.cloud.outbox.settle();
+            self.send_next_waiting_cloud_message(cx);
+            // After the next message's dispatch, which clears older notices.
+            self.failure = Some(STOP_UNREACHABLE.into());
+            self.failure_key = None;
+            cx.notify();
+            return;
+        }
+        self.cloud.outbox.given_up = true;
+        self.keep_unsent_native_send(cx);
+    }
+    /// The request being delivered is a Stop, not a message.
+    fn cloud_pending_is_stop(&self) -> bool {
+        self.cloud
+            .pending_native
+            .as_ref()
+            .is_some_and(|request| request["action"]["payload"]["kind"] == "interrupt")
+    }
+    /// Send the waiting message again, as is, unless it has waited too long.
     fn retry_cloud_delivery(&mut self, cx: &mut Context<Self>) {
         self.cloud.outbox.retry = None;
-        if self.cloud_waiting_for_connection() && self.cloud.task.is_none() {
-            self.dispatch_cloud_task(cx);
+        if !self.cloud_waiting_for_connection() || self.cloud.task.is_some() {
+            return;
         }
+        let now = cx.background_executor().now();
+        if self
+            .cloud
+            .outbox
+            .since
+            .is_some_and(|since| now.duration_since(since) >= OFFLINE_LIMIT)
+        {
+            self.give_up_cloud_delivery(cx);
+            return;
+        }
+        self.dispatch_cloud_task(cx);
     }
     /// The server answered again (a history read went through): a message
-    /// waiting for the connection goes now instead of at its next attempt.
+    /// waiting for the connection goes now instead of at its next attempt,
+    /// and messages shown as not sent go again on their own, under their
+    /// same identities.
     pub(crate) fn cloud_connection_restored(&mut self, cx: &mut Context<Self>) {
-        if self.cloud_waiting_for_connection() && self.cloud.task.is_none() {
-            self.retry_cloud_delivery(cx);
+        if self.cloud.task.is_some() {
+            return;
+        }
+        if self.cloud_messages_not_sent() {
+            self.retry_cloud_messages_not_sent(cx);
+        } else if self.cloud_waiting_for_connection() {
+            // The server just answered: try now, whatever the clock says; a
+            // failure past the limit still shows it as not sent.
+            self.cloud.outbox.retry = None;
+            self.dispatch_cloud_task(cx);
         }
     }
     /// A message is waiting for the connection and is retried on its own.
@@ -125,6 +171,7 @@ impl Composer {
     /// Retry, instead of any turn progress.
     pub(crate) fn cloud_messages_not_sent(&self) -> bool {
         self.cloud.outbox.given_up
+            && !self.cloud_pending_is_stop()
             && self
                 .cloud
                 .pending_native
@@ -134,6 +181,9 @@ impl Composer {
     /// Retry from the not-sent line: the first waiting message goes again
     /// under its same identity; the rest follow it in order.
     pub(crate) fn retry_cloud_messages_not_sent(&mut self, cx: &mut Context<Self>) {
+        if !self.cloud_messages_not_sent() {
+            return;
+        }
         let Some(request) = self.cloud.pending_native.clone() else {
             return;
         };
@@ -358,6 +408,16 @@ mod tests {
             f.shown(cx),
             ["what was the issue?", "what?", "you are stuck?"]
         );
+        // Their identities, in the order they were sent.
+        let followers: Vec<String> = f.composer.read_with(cx, |c, _| {
+            c.cloud
+                .outbox
+                .later
+                .iter()
+                .map(|held| held.request["commandId"].as_str().unwrap().to_owned())
+                .collect()
+        });
+        assert_eq!(followers.len(), 2);
         assert!(f.admitted().is_empty());
         assert!(
             f.server
@@ -379,8 +439,11 @@ mod tests {
         cx.executor().advance_clock(Duration::from_secs(20));
         f.settle(cx);
         let admitted = f.admitted();
-        assert_eq!(admitted.len(), 3, "all three admitted: {admitted:?}");
-        assert_eq!(admitted[0], first);
+        assert_eq!(
+            admitted,
+            [first.clone(), followers[0].clone(), followers[1].clone()],
+            "each admitted once, in the order sent"
+        );
         let attempts = f.server.attempts.lock().unwrap().clone();
         let online_attempts: Vec<_> = attempts.iter().skip_while(|id| **id == first).collect();
         assert_eq!(
@@ -452,5 +515,72 @@ mod tests {
         }
         f.settle(cx);
         assert_eq!(f.admitted(), admitted);
+    }
+
+    #[gpui::test]
+    fn messages_shown_not_sent_go_on_their_own_once_the_server_answers(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let f = Fixture::new(cx);
+        f.send("what was the issue?", cx);
+        // The same words again are a new message, waiting behind the first.
+        f.send("what was the issue?", cx);
+        f.settle(cx);
+        for _ in 0..12 {
+            cx.executor().advance_clock(MAX_BACKOFF);
+            f.settle(cx);
+        }
+        assert!(f.composer.read_with(cx, |c, _| c.cloud_messages_not_sent()));
+        assert_eq!(f.shown(cx), ["what was the issue?", "what was the issue?"]);
+        // A history read goes through: both go, once each, without a click.
+        f.online(true);
+        {
+            let _entered = f.runtime.enter();
+            f.composer
+                .update(cx, |c, cx| c.cloud_connection_restored(cx));
+        }
+        f.settle(cx);
+        cx.executor().advance_clock(Duration::from_secs(1));
+        f.settle(cx);
+        let admitted = f.admitted();
+        assert_eq!(admitted.len(), 2, "{admitted:?}");
+        assert_ne!(admitted[0], admitted[1], "two messages, two identities");
+        f.composer.read_with(cx, |c, _| {
+            assert!(!c.cloud_messages_not_sent());
+            assert!(c.cloud.pending_native.is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn a_stop_that_never_reaches_the_server_lets_the_messages_after_it_go(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let f = Fixture::new(cx);
+        {
+            let _entered = f.runtime.enter();
+            f.composer.update(cx, |c, cx| {
+                assert!(c.interrupt_cloud_task(cx));
+            });
+        }
+        f.send("then do this", cx);
+        f.settle(cx);
+        // Until the Stop is let go.
+        for _ in 0..12 {
+            cx.executor().advance_clock(MAX_BACKOFF);
+            f.settle(cx);
+            if f.composer.read_with(cx, |c, _| !c.cloud_pending_is_stop()) {
+                break;
+            }
+        }
+        f.composer.read_with(cx, |c, _| {
+            assert!(
+                !c.cloud_messages_not_sent(),
+                "a Stop is never a message to retry"
+            );
+            assert_eq!(c.failure.as_deref(), Some(STOP_UNREACHABLE));
+            // The message after it is being delivered now, in its own right.
+            let pending = c.cloud.pending_native.as_ref().unwrap();
+            assert_eq!(pending["action"]["payload"]["kind"], "run");
+        });
     }
 }
