@@ -15,6 +15,11 @@ pub(super) struct Checkout {
     local: Vec<(String, String)>,
     folder: Option<Task<()>>,
     error: Option<String>,
+    /// Why the status couldn't be read, until a read succeeds.
+    read_error: Option<String>,
+    /// Advanced by every change, so a status read that started before one
+    /// never replaces its result.
+    revision: u64,
 }
 
 /// How a status reads, with its dot.
@@ -80,14 +85,14 @@ impl CloudConversation {
         let target = self.target.clone();
         self.computer.checkout.poll = Some(cx.spawn(async move |this, cx| {
             loop {
-                let Ok(Some((body, idle, often))) = this.update(cx, |this, cx| {
+                let Ok(Some((body, idle, often, revision))) = this.update(cx, |this, cx| {
                     if !this.authorized {
                         return None;
                     }
                     let body = this.checkout_body(cx)?;
-                    let often =
-                        this.computer.open || this.computer.checkout.status["enabled"] == true;
-                    Some((body, this.computer.checkout.change.is_none(), often))
+                    let checkout = &this.computer.checkout;
+                    let often = this.computer.open || checkout.status["enabled"] == true;
+                    Some((body, checkout.change.is_none(), often, checkout.revision))
                 }) else {
                     let _ = this.update(cx, |this, _| this.computer.checkout.poll = None);
                     return;
@@ -99,16 +104,21 @@ impl CloudConversation {
                         .call_scoped(methods::CLOUD_CHECKOUT_SYNC_STATUS, body)
                         .await;
                     let _ = this.update(cx, |this, cx| {
-                        if this.computer.checkout.change.is_some() {
+                        let checkout = &mut this.computer.checkout;
+                        if checkout.change.is_some() || checkout.revision != revision {
                             return;
                         }
-                        if let Ok(value) = result
-                            && value["accountId"] == target.subject
-                            && this.computer.checkout.status != value["status"]
-                        {
-                            this.computer.checkout.status = value["status"].clone();
-                            cx.notify();
+                        match result {
+                            Ok(value) if value["accountId"] == target.subject => {
+                                checkout.read_error = None;
+                                if checkout.status != value["status"] {
+                                    checkout.status = value["status"].clone();
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(error) => checkout.read_error = Some(error.to_string()),
                         }
+                        cx.notify();
                     });
                 }
                 let wait = if often { 2 } else { 15 };
@@ -138,10 +148,12 @@ impl CloudConversation {
         }
         let target = self.target.clone();
         self.computer.checkout.error = None;
+        self.computer.checkout.revision += 1;
         self.computer.checkout.change = Some(cx.spawn(async move |this, cx| {
             let result = target.controller.client().call_scoped(method, body).await;
             let _ = this.update(cx, |this, cx| {
                 this.computer.checkout.change = None;
+                this.computer.checkout.revision += 1;
                 match result {
                     Ok(value) if value["accountId"] == target.subject => {
                         this.computer.checkout.status = value["status"].clone()
@@ -406,6 +418,7 @@ impl CloudConversation {
         let problem = checkout
             .error
             .clone()
+            .or_else(|| checkout.read_error.clone())
             .or_else(|| status["error"].as_str().map(str::to_owned));
         if let Some(problem) = problem {
             rows.push(

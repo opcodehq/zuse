@@ -72,6 +72,10 @@ struct State {
     /// The checkpoint the checkout is on.
     #[serde(default)]
     checkpoint: Option<String>,
+    /// The checkpoint a move began toward, recorded before any file moves:
+    /// if HEAD is there, the move finished.
+    #[serde(default)]
+    pending: Option<String>,
 }
 impl State {
     fn saved(&self) -> Option<repo::Saved> {
@@ -158,6 +162,16 @@ pub(super) struct Manager {
     supervisor: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Tells the cloud the chat's synced folder changed on this computer.
     reporter: Mutex<Option<Reporter>>,
+    /// Checkouts being put back right now: one restore per checkout.
+    restoring: Mutex<std::collections::HashSet<PathBuf>>,
+}
+
+/// Holds a checkout's restore slot until dropped.
+struct RestoreSlot<'a>(&'a Manager, PathBuf);
+impl Drop for RestoreSlot<'_> {
+    fn drop(&mut self) {
+        lock(&self.0.restoring).remove(&self.1);
+    }
 }
 
 fn hashed(value: &str) -> String {
@@ -221,12 +235,16 @@ pub(crate) fn synced_path(
             && state.workspace_id == workspace
             && state.chat_id == chat
             && state.phase == Phase::On
-            && state.checkpoint.is_some())
+            && state
+                .checkpoint
+                .as_deref()
+                .is_some_and(|checkpoint| repo::holds(&state.path, checkpoint)))
         .then_some(state.path)
     })
 }
 
-/// Persist a chat as synced into `path` (tests of the connector's report).
+/// Make `path` a checkout synced to a chat (tests of the connector's
+/// report). The returned closure moves it onto a branch, as a user would.
 #[cfg(test)]
 pub(crate) fn record_synced_for_test(
     profile: &Path,
@@ -234,7 +252,30 @@ pub(crate) fn record_synced_for_test(
     workspace: &str,
     chat: &str,
     path: &Path,
-) {
+) -> impl Fn() {
+    let run = |args: &[&str]| {
+        let mut command = std::process::Command::new("git");
+        for name in repo::REPOSITORY_VARIABLES {
+            command.env_remove(name);
+        }
+        assert!(
+            command
+                .arg("-C")
+                .arg(path)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "Test")
+                .env("GIT_AUTHOR_EMAIL", "test@example.com")
+                .env("GIT_COMMITTER_NAME", "Test")
+                .env("GIT_COMMITTER_EMAIL", "test@example.com")
+                .status()
+                .unwrap()
+                .success()
+        );
+    };
+    run(&["init", "-q"]);
+    run(&["commit", "-q", "--allow-empty", "-m", "base"]);
+    run(&["checkout", "-q", "--detach"]);
+    let checkpoint = repo::head(path).unwrap();
     let state = State {
         version: 1,
         account_id: account.into(),
@@ -243,11 +284,28 @@ pub(crate) fn record_synced_for_test(
         path: path.to_owned(),
         phase: Phase::On,
         branch: None,
-        head: Some("0".repeat(40)),
+        head: Some(checkpoint.clone()),
         changes: None,
-        checkpoint: Some("1".repeat(40)),
+        checkpoint: Some(checkpoint),
+        pending: None,
     };
     write_state(&state_file(profile, path), &state).unwrap();
+    let path = path.to_owned();
+    move || {
+        let mut command = std::process::Command::new("git");
+        for name in repo::REPOSITORY_VARIABLES {
+            command.env_remove(name);
+        }
+        assert!(
+            command
+                .arg("-C")
+                .arg(&path)
+                .args(["switch", "-q", "-c", "elsewhere"])
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
 }
 
 /// Who reports a chat's synced folder to the cloud (the computer connector).
@@ -404,6 +462,11 @@ impl Manager {
     /// Put the checkout back; the record goes once it is. The caller has
     /// stopped its worker (or is it).
     async fn restore(&self, key: &Path, notice: Option<String>) -> Result<Status> {
+        ensure!(
+            lock(&self.restoring).insert(key.to_owned()),
+            "The folder is being put back already."
+        );
+        let _slot = RestoreSlot(self, key.to_owned());
         let Some(mut state) = self.state(key) else {
             anyhow::bail!("This chat isn't synced to a folder here.");
         };
@@ -419,7 +482,7 @@ impl Manager {
         let path = state.path.clone();
         let saved = state.saved();
         let restored = tokio::task::spawn_blocking(move || match saved {
-            Some(saved) if path.exists() => repo::restore(&path, &saved).map(Some),
+            Some(saved) if path.exists() => repo::restore(&path, &saved, true).map(Some),
             // Never checked out, or the folder is gone: nothing to put back.
             _ => Ok(None),
         })
@@ -510,6 +573,9 @@ async fn reconcile(api: &Arc<CloudApi>, auth: &Auth, profile: &Path) {
         .map(|(key, r)| (key.clone(), r.state.clone()))
         .collect::<Vec<_>>();
     for (key, state) in records {
+        if lock(&api.checkouts.restoring).contains(&key) {
+            continue;
+        }
         if state.phase == Phase::Restoring {
             let _ = api.checkouts.restore(&key, None).await;
         } else if current.as_deref() != Some(&state.account_id) {
@@ -551,6 +617,9 @@ async fn run(
     let mut delay = MIN_DELAY;
     let mut chat_checked: Option<tokio::time::Instant> = None;
     let mut chat_missing = 0u8;
+    let mut chat_listed = false;
+    // Whether the folder held the chat's files when last reported.
+    let mut held: Option<bool> = None;
     loop {
         if cancel.is_cancelled() {
             break;
@@ -568,7 +637,7 @@ async fn run(
             &state,
             &row,
             &mut chat_checked,
-            &mut chat_missing,
+            (&mut chat_missing, &mut chat_listed),
         )
         .await
         {
@@ -582,7 +651,24 @@ async fn run(
                 s.state = "syncing";
             }
         });
-        match cycle(&api, &key, &state, row, &mut known, &cancel).await {
+        let outcome = cycle(&api, &key, &state, row, &mut known, &cancel).await;
+        // Commands start in the folder only while it holds the chat's files.
+        if let Some(now) = api.checkouts.state(&key) {
+            let holding = match now.checkpoint.clone() {
+                Some(checkpoint) => {
+                    let dir = now.path.clone();
+                    tokio::task::spawn_blocking(move || repo::holds(&dir, &checkpoint))
+                        .await
+                        .unwrap_or(false)
+                }
+                None => false,
+            };
+            if held.is_some_and(|before| before != holding) {
+                api.checkouts.report(now.chat());
+            }
+            held = Some(holding);
+        }
+        match outcome {
             Ok(Cycle::Changed(files)) => {
                 delay = MIN_DELAY;
                 api.checkouts.set_status(&key, &cancel, |s| {
@@ -666,7 +752,7 @@ async fn ended(
     state: &State,
     row: &std::result::Result<Workspace, String>,
     chat_checked: &mut Option<tokio::time::Instant>,
-    chat_missing: &mut u8,
+    (chat_missing, chat_listed): (&mut u8, &mut bool),
 ) -> Option<String> {
     let folder = state.path.display();
     if !authorized(auth, &state.account_id) {
@@ -691,9 +777,12 @@ async fn ended(
     let now = tokio::time::Instant::now();
     if chat_checked.is_none_or(|at| now.duration_since(at) >= CHAT_CHECK) {
         *chat_checked = Some(now);
-        match chat_active(api, auth, state).await {
+        match chat_active(api, auth, state, *chat_listed).await {
             Some(false) => *chat_missing += 1,
-            Some(true) => *chat_missing = 0,
+            Some(true) => {
+                *chat_missing = 0;
+                *chat_listed = true;
+            }
             None => {}
         }
         // Twice in a row, so one odd listing never ends a sync.
@@ -707,7 +796,9 @@ async fn ended(
 }
 
 /// Whether the chat is still active: `None` when that can't be told.
-async fn chat_active(api: &CloudApi, auth: &Auth, state: &State) -> Option<bool> {
+/// `listed`: an earlier listing showed this chat, so this computer records
+/// its chats and an empty listing means its last chat was archived.
+async fn chat_active(api: &CloudApi, auth: &Auth, state: &State, listed: bool) -> Option<bool> {
     let token = auth.access_token().await.ok()?;
     let listing = api
         .request(
@@ -727,7 +818,7 @@ async fn chat_active(api: &CloudApi, auth: &Auth, state: &State) -> Option<bool>
     }
     // Only a complete listing from a computer that records its chats can
     // tell a chat is gone.
-    (!items.is_empty() && listing["nextCursor"].is_null()).then_some(false)
+    ((listed || !items.is_empty()) && listing["nextCursor"].is_null()).then_some(false)
 }
 
 /// One sync step: take a snapshot of the chat's files and move the checkout
@@ -760,6 +851,36 @@ async fn cycle(
         "{} isn't on this computer anymore.",
         path.display()
     );
+    // A move recorded but not confirmed: finished if HEAD got there.
+    let mut state = state.clone();
+    if let Some(pending) = state.pending.clone() {
+        let dir = path.clone();
+        let target = pending.clone();
+        let arrived = tokio::task::spawn_blocking(move || repo::holds(&dir, &target)).await?;
+        if arrived {
+            state.checkpoint = Some(pending);
+        }
+        state.pending = None;
+        api.checkouts.save_state(key, &state)?;
+    }
+    let state = &state;
+    if state.checkpoint.is_none() && state.head.is_some() {
+        // Saved, then stopped before the first checkpoint was recorded: put
+        // the folder back to what was saved before saving it again.
+        let dir = path.clone();
+        let saved = state.saved();
+        tokio::task::spawn_blocking(move || match saved {
+            Some(saved) => repo::restore(&dir, &saved, false).map(|_| ()),
+            None => Ok(()),
+        })
+        .await??;
+        let mut fresh = state.clone();
+        fresh.branch = None;
+        fresh.head = None;
+        fresh.changes = None;
+        api.checkouts.save_state(key, &fresh)?;
+        return Box::pin(cycle(api, key, &fresh, Ok(row), known, cancel)).await;
+    }
     if let Some(checkpoint) = state.checkpoint.clone() {
         let dir = path.clone();
         if let Some(reason) =
@@ -774,7 +895,9 @@ async fn cycle(
         .and_then(|environment| environment.ready_client())
     else {
         return Ok(Cycle::Behind(
-            "Waiting for the cloud computer to connect.".into(),
+            // Like "Sync to a local directory", sync rides the connection an
+            // open chat holds; it never connects (or wakes) on its own.
+            "Open this chat to keep syncing; its changes arrive once it connects.".into(),
         ));
     };
     if known.is_none() {
@@ -792,7 +915,7 @@ async fn cycle(
     let objects = objects_dir(&profile, key);
     let _ = fs::remove_dir_all(&objects);
     fs::create_dir_all(&objects)?;
-    let have = known
+    let have: Vec<String> = known
         .as_ref()
         .map(|known| known.keys().take(90_000).cloned().collect())
         .unwrap_or_default();
@@ -853,6 +976,7 @@ async fn cycle(
             next.branch = saved.branch.clone();
             next.head = Some(saved.head.clone());
             next.changes = saved.changes.clone();
+            next.pending = Some(commit.clone());
             api.checkouts.save_state(key, &next)?;
             let dir = path.clone();
             let to = commit.clone();
@@ -860,8 +984,12 @@ async fn cycle(
                 let saved = saved.clone();
                 tokio::task::spawn_blocking(move || repo::enter(&dir, &saved, &to)).await?
             };
+            let saved = saved.clone();
             if let Err(error) = entered {
-                // Nothing moved; the saved changes are back in the folder.
+                // Put the folder back from wherever entering stopped; the
+                // saved state stays recorded until that succeeded.
+                let dir = path.clone();
+                tokio::task::spawn_blocking(move || repo::restore(&dir, &saved, false)).await??;
                 let mut back = current.clone();
                 back.branch = None;
                 back.head = None;
@@ -870,10 +998,14 @@ async fn cycle(
                 return Err(error);
             }
             next.checkpoint = Some(commit);
+            next.pending = None;
             api.checkouts.save_state(key, &next)?;
             api.checkouts.report(next.chat());
         }
         Some(from) => {
+            let mut moving = current.clone();
+            moving.pending = Some(commit.clone());
+            api.checkouts.save_state(key, &moving)?;
             let dir = path.clone();
             let to = commit.clone();
             let advanced =
@@ -890,6 +1022,7 @@ async fn cycle(
             }
             let mut next = current.clone();
             next.checkpoint = Some(commit);
+            next.pending = None;
             api.checkouts.save_state(key, &next)?;
         }
     }
@@ -1093,6 +1226,7 @@ pub async fn handle(auth: Auth, method: &str, params: Value) -> Result<Value> {
         head: None,
         changes: None,
         checkpoint: None,
+        pending: None,
     };
     let file = state_file(&profile, &path);
     write_state(&file, &state)?;

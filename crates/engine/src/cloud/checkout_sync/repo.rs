@@ -13,10 +13,22 @@ use std::{
 };
 
 /// Hidden refs that keep the saved state (and the current checkpoint)
-/// reachable, so `git gc` can never collect them while synced.
-pub(crate) const REF_HEAD: &str = "refs/zuse/checkout-sync/head";
-pub(crate) const REF_CHANGES: &str = "refs/zuse/checkout-sync/changes";
-pub(crate) const REF_CHECKPOINT: &str = "refs/zuse/checkout-sync/checkpoint";
+/// reachable, so `git gc` can never collect them while synced. They are
+/// per worktree, so linked worktrees of one repository sync independently.
+pub(crate) const REF_HEAD: &str = "refs/worktree/zuse/checkout-sync/head";
+pub(crate) const REF_CHANGES: &str = "refs/worktree/zuse/checkout-sync/changes";
+pub(crate) const REF_CHECKPOINT: &str = "refs/worktree/zuse/checkout-sync/checkpoint";
+/// Variables that would point git at another repository than `-C` names.
+pub(crate) const REPOSITORY_VARIABLES: [&str; 8] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_NAMESPACE",
+    "GIT_PREFIX",
+];
 /// The local blobs hashed to recognize files the cloud doesn't need to send.
 const SEED_MAX_BLOBS: usize = 100_000;
 const SEED_MAX_BYTES: u64 = 4 * 1024 * 1024 * 1024;
@@ -44,11 +56,10 @@ fn git(dir: &Path) -> Command {
         ])
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("LC_ALL", "C")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .env_remove("GIT_OBJECT_DIRECTORY")
         .stdin(Stdio::null());
+    for name in REPOSITORY_VARIABLES {
+        command.env_remove(name);
+    }
     command
 }
 
@@ -496,24 +507,86 @@ fn friendly(error: anyhow::Error) -> anyhow::Error {
     error
 }
 
+/// Tracked paths a hard reset would write where something git doesn't
+/// track is in the way: a directory where a tracked file belongs, or a file
+/// where a tracked directory belongs.
+fn obstructions(dir: &Path) -> Result<Vec<String>> {
+    let changed = git_ok(dir, &["diff", "--name-only", "-z", "--no-renames", "HEAD"])?;
+    let changed = changed
+        .split('\0')
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>();
+    if changed.is_empty() {
+        return Ok(vec![]);
+    }
+    let mut blocked = Vec::new();
+    for chunk in changed.chunks(500) {
+        let mut args = vec!["ls-tree", "-r", "-z", "--name-only", "HEAD", "--"];
+        args.extend(chunk.iter().copied());
+        let tracked = git_ok(dir, &args)?;
+        for path in tracked.split('\0').filter(|p| !p.is_empty()) {
+            let target = dir.join(path);
+            if std::fs::symlink_metadata(&target).is_ok_and(|m| m.is_dir()) {
+                blocked.push(path.to_owned());
+                continue;
+            }
+            let mut parent = Path::new(path).parent();
+            while let Some(part) = parent.filter(|p| !p.as_os_str().is_empty()) {
+                if std::fs::symlink_metadata(dir.join(part)).is_ok_and(|m| !m.is_dir()) {
+                    blocked.push(path.to_owned());
+                    break;
+                }
+                parent = part.parent();
+            }
+        }
+    }
+    Ok(blocked)
+}
+
+/// Reset tracked files to HEAD, refusing when that would replace anything
+/// git doesn't track (which `git reset --hard` would delete).
+fn reset_tracked(dir: &Path) -> Result<()> {
+    let blocked = obstructions(dir)?;
+    ensure!(
+        blocked.is_empty(),
+        "Files in your folder that git doesn't track are in the way: {}. Move them, then try again.",
+        blocked
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    git_ok(dir, &["reset", "-q", "--hard", "HEAD"]).map(|_| ())
+}
+
+/// Whether HEAD is on a branch rather than detached.
+fn attached(dir: &Path) -> bool {
+    git(dir)
+        .args(["symbolic-ref", "-q", "HEAD"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// Whether the checkout is on `checkpoint`, detached, as sync left it.
+pub(crate) fn holds(dir: &Path, checkpoint: &str) -> bool {
+    head(dir).is_ok_and(|head| head == checkpoint) && !attached(dir)
+}
+
 /// Move the checkout from its saved state to `checkpoint`: the saved changes
 /// are already in `saved`, so tracked files are reset, then the checkpoint is
-/// checked out detached. Fails without changing anything left unsaved; on
-/// failure the saved changes are put back.
+/// checked out detached. On failure the caller puts the checkout back with
+/// [`restore`] (without keeping edits), wherever this stopped.
 pub(crate) fn enter(dir: &Path, saved: &Saved, checkpoint: &str) -> Result<()> {
     ensure!(
         head(dir)? == saved.head,
         "This folder changed while sync was starting. Try again."
     );
     pin(dir, REF_CHECKPOINT, checkpoint)?;
-    git_ok(dir, &["reset", "-q", "--hard", "HEAD"])?;
-    if let Err(error) = read_tree(dir, "HEAD", checkpoint) {
-        if let Some(changes) = &saved.changes {
-            apply_changes(dir, changes)?;
-        }
-        unpin(dir);
-        return Err(error);
-    }
+    reset_tracked(dir)?;
+    read_tree(dir, "HEAD", checkpoint)?;
     git_ok(
         dir,
         &[
@@ -531,7 +604,7 @@ pub(crate) fn enter(dir: &Path, saved: &Saved, checkpoint: &str) -> Result<()> {
 /// Why the checkout can't take the next checkpoint now, if it can't: it
 /// left `at` (another branch or commit), or tracked files were edited here.
 pub(crate) fn local_edits(dir: &Path, at: &str) -> Result<Option<&'static str>> {
-    if head(dir)? != at {
+    if head(dir)? != at || attached(dir) {
         return Ok(Some(
             "This folder moved to another branch or commit, so sync paused.",
         ));
@@ -569,21 +642,22 @@ pub(crate) fn advance(dir: &Path, from: &str, to: &str) -> Result<()> {
 /// continue. Their edits are already in the stash list; tracked files are
 /// reset, untracked and ignored ones stay.
 pub(crate) fn return_to(dir: &Path, checkpoint: &str) -> Result<()> {
-    git_ok(dir, &["reset", "-q", "--hard", "HEAD"])?;
+    reset_tracked(dir)?;
     if head(dir)? != checkpoint {
         read_tree(dir, "HEAD", checkpoint)?;
-        git_ok(
-            dir,
-            &[
-                "update-ref",
-                "--no-deref",
-                "-m",
-                "Zuse: sync a cloud chat",
-                "HEAD",
-                checkpoint,
-            ],
-        )?;
     }
+    // Detached even when a branch was made at the checkpoint itself.
+    git_ok(
+        dir,
+        &[
+            "update-ref",
+            "--no-deref",
+            "-m",
+            "Zuse: sync a cloud chat",
+            "HEAD",
+            checkpoint,
+        ],
+    )?;
     Ok(())
 }
 
@@ -597,7 +671,7 @@ fn apply_changes(dir: &Path, changes: &str) -> Result<bool> {
         return Ok(true);
     }
     // Never lost: the stash list keeps them.
-    git_ok(dir, &["reset", "-q", "--hard", "HEAD"])?;
+    reset_tracked(dir)?;
     git_ok(
         dir,
         &[
@@ -622,15 +696,17 @@ pub(crate) struct Restored {
 }
 
 /// Put the checkout back exactly as saved: the branch (or detached HEAD),
-/// its commit and the tracked changes it had. Edits made while synced go to
-/// the stash list first. Safe to repeat after an interruption.
-pub(crate) fn restore(dir: &Path, saved: &Saved) -> Result<Restored> {
+/// its commit and the tracked changes it had. With `keep_edits`, edits made
+/// while synced go to the stash list first (without it, tracked differences
+/// are sync's own, from an interrupted step). Safe to repeat after an
+/// interruption.
+pub(crate) fn restore(dir: &Path, saved: &Saved, keep_edits: bool) -> Result<Restored> {
     let mut restored = Restored::default();
-    if has_tracked_changes(dir)? {
+    if keep_edits && has_tracked_changes(dir)? {
         restored.kept_edits =
             keep_in_stash_list(dir, "Zuse: edits made while synced to a cloud chat")?;
     }
-    git_ok(dir, &["reset", "-q", "--hard", "HEAD"])?;
+    reset_tracked(dir)?;
     // The branch's own tip, unless it was deleted meanwhile (then it comes
     // back at the saved commit).
     let target = match &saved.branch {

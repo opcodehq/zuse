@@ -4,7 +4,11 @@ use super::*;
 use std::process::Command;
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    for name in repo::REPOSITORY_VARIABLES {
+        command.env_remove(name);
+    }
+    let output = command
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -62,19 +66,29 @@ fn repos() -> (tempfile::TempDir, PathBuf, PathBuf) {
     (root, local, cloud)
 }
 
-/// The cloud chat's files, received the way a snapshot arrives.
-async fn snapshot(cloud: &Path, objects: &Path) -> Vec<mirror::ReceivedFile> {
-    let stream = mirror::snapshot_stream(cloud.to_owned(), "checkout".into(), vec![]).unwrap();
-    mirror::receive_stream("w", stream, objects, CancellationToken::new())
-        .await
-        .unwrap()
+/// The cloud chat's files, received the way a snapshot arrives: bytes the
+/// checkout already has (`have`) are not sent.
+async fn snapshot(cloud: &Path, objects: &Path, have: Vec<String>) -> Vec<mirror::ReceivedFile> {
+    let stream =
+        mirror::snapshot_stream(cloud.to_owned(), "checkout".into(), have.clone()).unwrap();
+    mirror::receive_stream(
+        "w",
+        stream,
+        objects,
+        have.into_iter().collect(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap()
 }
 
 async fn checkpoint_of(local: &Path, cloud: &Path, parent: &str) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let objects = scratch.path().join("objects");
-    let files = snapshot(cloud, &objects).await;
     let mut known = repo::known_blobs(local, parent).unwrap();
+    // Unchanged files (README, .gitignore …) come without bytes.
+    assert!(!known.is_empty());
+    let files = snapshot(cloud, &objects, known.keys().cloned().collect()).await;
     repo::checkpoint(local, &files, &objects, &mut known, parent, "cloud").unwrap()
 }
 
@@ -193,14 +207,14 @@ async fn sync_round_trip_keeps_local_work_and_never_touches_untracked_files() {
     assert!(read(&local, "src/new.rs").is_none());
     assert_eq!(read(&local, "notes.txt").unwrap(), "untracked\n");
 
-    let restored = repo::restore(&local, &saved).unwrap();
+    let restored = repo::restore(&local, &saved, true).unwrap();
     assert_eq!(restored, repo::Restored::default());
     assert_eq!(git(&local, &["rev-parse", "HEAD"]), head);
     assert_local_work(&local);
     assert!(read(&local, "src/later.rs").is_none());
     assert!(read(&local, "run.sh").is_none());
     // No hidden refs are left behind.
-    assert_eq!(git(&local, &["for-each-ref", "refs/zuse"]), "");
+    assert_eq!(git(&local, &["for-each-ref", "refs/worktree"]), "");
     assert_eq!(git(&local, &["stash", "list"]), "");
 }
 
@@ -224,7 +238,7 @@ async fn edits_made_in_the_folder_pause_sync_and_are_kept_on_restore() {
         "edited on this computer\n"
     );
 
-    let restored = repo::restore(&local, &saved).unwrap();
+    let restored = repo::restore(&local, &saved, true).unwrap();
     assert!(restored.kept_edits);
     assert_eq!(read(&local, "src/lib.rs").unwrap(), "pub fn a() {}\n");
     assert!(git(&local, &["stash", "list"]).contains("edits made while synced"));
@@ -249,7 +263,7 @@ async fn resuming_keeps_edits_and_returns_to_the_checkpoint() {
     repo::return_to(&local, &checkpoint).unwrap();
     assert_eq!(repo::local_edits(&local, &checkpoint).unwrap(), None);
     assert_eq!(read(&local, "src/lib.rs").unwrap(), "cloud\n");
-    repo::restore(&local, &saved).unwrap();
+    repo::restore(&local, &saved, true).unwrap();
     assert_eq!(git(&local, &["symbolic-ref", "HEAD"]), "refs/heads/main");
     assert_eq!(read(&local, "README.md").unwrap(), "hello\n");
 }
@@ -264,12 +278,14 @@ async fn an_untracked_file_in_the_way_stops_sync_without_losing_anything() {
     let checkpoint = checkpoint_of(&local, &cloud, &saved.head).await;
     let error = repo::enter(&local, &saved, &checkpoint).unwrap_err();
     assert!(error.to_string().contains("src/new.rs"), "{error}");
+    // The worker puts the folder back from wherever entering stopped.
+    repo::restore(&local, &saved, false).unwrap();
     assert_eq!(
         read(&local, "src/new.rs").unwrap(),
         "my own untracked file\n"
     );
     assert_local_work(&local);
-    assert_eq!(git(&local, &["for-each-ref", "refs/zuse"]), "");
+    assert_eq!(git(&local, &["for-each-ref", "refs/worktree"]), "");
 }
 
 #[tokio::test]
@@ -294,7 +310,7 @@ async fn switching_chats_replaces_the_checkpoint_and_still_restores_the_original
     let first = checkpoint_of(&local, &cloud, &saved.head).await;
     repo::enter(&local, &saved, &first).unwrap();
     assert_eq!(read(&local, "first.txt").unwrap(), "first chat\n");
-    repo::restore(&local, &saved).unwrap();
+    repo::restore(&local, &saved, true).unwrap();
 
     let saved = repo::save(&local).unwrap();
     assert_eq!(saved.head, head);
@@ -302,7 +318,7 @@ async fn switching_chats_replaces_the_checkpoint_and_still_restores_the_original
     repo::enter(&local, &saved, &second).unwrap();
     assert!(read(&local, "first.txt").is_none());
     assert_eq!(read(&local, "second.txt").unwrap(), "second chat\n");
-    repo::restore(&local, &saved).unwrap();
+    repo::restore(&local, &saved, true).unwrap();
     assert_local_work(&local);
 }
 
@@ -316,7 +332,7 @@ async fn a_detached_checkout_and_submodule_pointers_come_back_as_they_were() {
     write(&cloud, "x.txt", "x\n");
     let checkpoint = checkpoint_of(&local, &cloud, &saved.head).await;
     repo::enter(&local, &saved, &checkpoint).unwrap();
-    repo::restore(&local, &saved).unwrap();
+    repo::restore(&local, &saved, true).unwrap();
     assert_eq!(git(&local, &["rev-parse", "HEAD"]), head);
     assert!(
         Command::new("git")
@@ -342,6 +358,7 @@ fn record_state(local: &Path, saved: &repo::Saved, checkpoint: &str, phase: Phas
         head: Some(saved.head.clone()),
         changes: saved.changes.clone(),
         checkpoint: Some(checkpoint.into()),
+        pending: None,
     }
 }
 
@@ -386,7 +403,7 @@ async fn an_interrupted_restore_finishes_after_a_restart() {
     assert_local_work(&local);
     assert!(read(&local, "cloud.txt").is_none());
     assert!(!file.exists());
-    assert_eq!(git(&local, &["for-each-ref", "refs/zuse"]), "");
+    assert_eq!(git(&local, &["for-each-ref", "refs/worktree"]), "");
 }
 
 #[tokio::test]
@@ -432,6 +449,7 @@ fn only_well_formed_states_in_their_own_file_are_loaded() {
         head: None,
         changes: None,
         checkpoint: None,
+        pending: None,
     };
     write_state(&state_file(profile, &state.path), &state).unwrap();
     // A file whose name doesn't match its folder is ignored.
@@ -472,5 +490,43 @@ fn only_a_repository_top_folder_without_an_operation_in_progress_is_accepted() {
             .unwrap_err()
             .to_string()
             .contains("merge")
+    );
+}
+
+#[tokio::test]
+async fn a_branch_made_at_the_checkpoint_pauses_and_resuming_detaches_again() {
+    let (_root, local, cloud) = repos();
+    let saved = repo::save(&local).unwrap();
+    write(&cloud, "src/lib.rs", "cloud\n");
+    let checkpoint = checkpoint_of(&local, &cloud, &saved.head).await;
+    repo::enter(&local, &saved, &checkpoint).unwrap();
+    assert!(repo::holds(&local, &checkpoint));
+    git(&local, &["switch", "-q", "-c", "my-branch"]);
+    // Same commit, same files, but no longer the chat's checkout.
+    assert!(!repo::holds(&local, &checkpoint));
+    assert!(repo::local_edits(&local, &checkpoint).unwrap().is_some());
+    repo::return_to(&local, &checkpoint).unwrap();
+    assert!(repo::holds(&local, &checkpoint));
+    assert_eq!(git(&local, &["rev-parse", "my-branch"]), checkpoint);
+}
+
+#[tokio::test]
+async fn an_untracked_folder_where_a_tracked_file_was_deleted_is_never_reset_away() {
+    let (_root, local, cloud) = repos();
+    // The tracked file is deleted (staged) and an untracked folder takes
+    // its name.
+    git(&local, &["rm", "-q", "src/old.rs"]);
+    write(&local, "src/old.rs/local.txt", "mine\n");
+    write(&cloud, "x.txt", "x\n");
+    let saved = repo::save(&local).unwrap();
+    let checkpoint = checkpoint_of(&local, &cloud, &saved.head).await;
+    let error = repo::enter(&local, &saved, &checkpoint).unwrap_err();
+    assert!(error.to_string().contains("src/old.rs"), "{error}");
+    assert_eq!(read(&local, "src/old.rs/local.txt").unwrap(), "mine\n");
+    repo::restore(&local, &saved, false).unwrap_err();
+    assert_eq!(read(&local, "src/old.rs/local.txt").unwrap(), "mine\n");
+    assert!(
+        git(&local, &["diff", "--cached", "--name-only"]).contains("src/old.rs"),
+        "the staged deletion is still staged"
     );
 }

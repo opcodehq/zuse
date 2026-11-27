@@ -68,7 +68,19 @@ fn stamp(m: &fs::Metadata) -> (u64, u64, u64, i64, i64, i64, i64, u32) {
     )
 }
 fn select(root: &Path, prefix: &str, paths: &mut Vec<String>) -> Result<()> {
-    let output = std::process::Command::new("git")
+    let mut command = std::process::Command::new("git");
+    for name in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_NAMESPACE",
+    ] {
+        command.env_remove(name);
+    }
+    let output = command
         .arg("-C")
         .arg(root)
         .args([
@@ -603,7 +615,8 @@ async fn receive_controlled(
     objects: Arc<unix::Dir>,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<SnapshotResult> {
-    let (result, files) = receive_files(&workspace, stream, &objects, &cancel).await?;
+    let (result, files) =
+        receive_files(&workspace, stream, &objects, &HashSet::new(), &cancel).await?;
     // Once publication begins, finish it under the caller's gate. Disable/archive
     // waits for this future; dropping a waiter must never release that gate early.
     tokio::task::spawn_blocking(move || publish(&root, &workspace, files, &objects)).await??;
@@ -611,10 +624,14 @@ async fn receive_controlled(
 }
 /// Receive and verify a complete snapshot: every file's bytes end up in
 /// `objects` under their SHA-256, nothing is published anywhere.
+/// `elsewhere` lists hashes whose bytes the caller holds outside `objects`
+/// (it advertised them and verifies them itself), so their files may arrive
+/// without bytes.
 async fn receive_files(
     workspace: &str,
     mut stream: BoxStream<'static, serde_json::Value>,
     objects: &Arc<unix::Dir>,
+    elsewhere: &HashSet<String>,
     cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<(SnapshotResult, Vec<Entry>)> {
     let workspace = workspace.to_owned();
@@ -728,6 +745,10 @@ async fn receive_files(
                             } == 0,
                             "Could not retain verified snapshot object."
                         );
+                    } else if elsewhere.contains(&entry.hash) {
+                        // Held by the caller, who verifies it.
+                        files.push(entry);
+                        continue;
                     } else if entry.size == 0 && objects.optional_file(&entry.hash)?.is_none() {
                         ensure!(
                             entry.hash == format!("{:x}", Sha256::digest([])),
@@ -812,26 +833,30 @@ pub async fn receive_snapshot(
         have.len() <= MAX_FILES,
         "Snapshot cache exceeds the file limit."
     );
+    let elsewhere = have.iter().cloned().collect::<HashSet<_>>();
     let mut params = serde_json::to_value(target)?;
     params["have"] = serde_json::to_value(have)?;
-    let stream = client
-        .subscribe(zuse_protocol::methods::WORKSPACE_SYNC_SNAPSHOT, params)
-        .await?;
+    // Stopping sync never waits behind a backpressured connection.
+    let stream = tokio::select! {biased;
+        _ = cancel.cancelled() => bail!("Sync stopped."),
+        stream = client.subscribe_scoped(zuse_protocol::methods::WORKSPACE_SYNC_SNAPSHOT, params) => stream?,
+    };
     let stream = futures::stream::unfold(stream, |mut stream| async move {
         stream.recv().await.map(|v| (v, stream))
     })
     .boxed();
-    receive_stream(workspace, stream, objects, cancel).await
+    receive_stream(workspace, stream, objects, elsewhere, cancel).await
 }
 /// Receive a snapshot stream into `objects` without publishing it.
 pub(crate) async fn receive_stream(
     workspace: &str,
     stream: BoxStream<'static, serde_json::Value>,
     objects: &Path,
+    elsewhere: HashSet<String>,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<Vec<ReceivedFile>> {
     let objects = Arc::new(ensure_dir(objects)?);
-    let (_, files) = receive_files(workspace, stream, &objects, &cancel).await?;
+    let (_, files) = receive_files(workspace, stream, &objects, &elsewhere, &cancel).await?;
     Ok(files.into_iter().map(ReceivedFile::from).collect())
 }
 /// One complete transfer on an already connected execution client. This never
