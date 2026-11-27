@@ -1247,6 +1247,9 @@ native-whats_new_got_it = 확인
 # Context: "What's new" dialog footer link to the website changelog with every release.
 native-whats_new_all_releases = 모든 릴리스
 
+# Context: "What's new" dialog footer button; opens this release's full notes on the website changelog.
+native-whats_new_full_release = 전체 릴리스 노트
+
 # Context: "What's new" dialog footer, shows the next newer release.
 native-whats_new_next = 다음
 
