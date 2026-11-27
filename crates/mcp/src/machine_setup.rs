@@ -128,11 +128,13 @@ impl Drop for Cleanup {
         #[cfg(unix)]
         if let Some(group) = self.group {
             // Harmless when the group already exited.
-            let _ = std::process::Command::new("kill")
-                .arg("-KILL")
-                .arg(format!("-{group}"))
-                .stderr(std::process::Stdio::null())
-                .status();
+            if let Ok(group) = libc::pid_t::try_from(group) {
+                // SAFETY: kill(2) with a negative pid signals that process
+                // group; it touches no memory of ours.
+                unsafe {
+                    libc::kill(-group, libc::SIGKILL);
+                }
+            }
         }
         let _ = std::fs::remove_file(&self.path);
     }
