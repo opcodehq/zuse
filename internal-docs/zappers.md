@@ -254,7 +254,9 @@ thread's queue accepted it, which is not proof it was handled), `answered`,
 `cancelled` or `held`. A report becomes the answer only by turn identity: the
 transcript entry that started the settled turn ending at `lastCompletedTurn`
 must be one of that thread's delivered `:answer` messages, so several queued
-answers each match their own turn. Delivery states are projected with a fixed
+answers each match their own turn. If several delivered answers are
+coalesced into one input turn, only the one that started it is linked; the
+others stay `sent`. Delivery states are projected with a fixed
 number of queries per Zapper. The link is stored on the comment
 (`delivery.reply`) before the report is recorded, is retried while the
 transcript hasn't caught up, and is never replaced. Interrupted, failed and
