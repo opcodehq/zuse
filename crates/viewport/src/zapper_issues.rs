@@ -1,6 +1,8 @@
 //! The same issue surface is embedded by the browser and native Zapper inspectors.
 use crate::tooltip::TooltipExt as _;
 use crate::zapper_avatar::{ZapperFace, known_face, person_avatar, unassigned_avatar, zapper_face};
+use crate::zapper_issue_timeline::{self as timeline, Item, Target};
+pub use crate::zapper_issue_timeline::RunState;
 use crate::{assets::icon, input::TextInput, palette::rgb};
 use gpui::{prelude::*, *};
 use std::collections::{HashMap, HashSet};
@@ -41,6 +43,9 @@ pub struct IssuePanel {
     needs_you_only: bool,
     collapsed: HashSet<String>,
     thread_states: HashMap<String, ThreadState>,
+    /// Confirmed run state per chat (threads and the coordinator), for the
+    /// line above the comment box. Absent means nothing is confirmed.
+    run_states: HashMap<String, RunState>,
     /// The signed-in person's name, for their avatar on comments.
     user_name: Option<String>,
     menu: Option<&'static str>,
@@ -97,6 +102,7 @@ impl IssuePanel {
             selected: None,
             needs_you_only: false,
             thread_states: HashMap::new(),
+            run_states: HashMap::new(),
             user_name: None,
             collapsed: ["Done".to_owned(), "Canceled".to_owned()]
                 .into_iter()
@@ -171,6 +177,12 @@ impl IssuePanel {
     pub fn thread_states(&mut self, states: HashMap<String, ThreadState>, cx: &mut Context<Self>) {
         if self.thread_states != states {
             self.thread_states = states;
+            cx.notify();
+        }
+    }
+    pub fn run_states(&mut self, states: HashMap<String, RunState>, cx: &mut Context<Self>) {
+        if self.run_states != states {
+            self.run_states = states;
             cx.notify();
         }
     }
@@ -1039,7 +1051,10 @@ impl IssuePanel {
         body.into_any_element()
     }
     fn detail(&self, issue: &ZapperIssue, cx: &mut Context<Self>) -> AnyElement {
-        let mut body = column().gap(px(8.)).pt(px(10.));
+        let mut body = column()
+            .gap(px(8.))
+            .pt(px(10.))
+            .child(self.threads_control(issue, cx));
         let edit = issue.id.clone();
         // Click the title to edit it in place.
         let title = match self.editing(&issue.id, Field::Title) {
@@ -1638,62 +1653,129 @@ impl IssuePanel {
                 replies.entry(parent.as_str()).or_default().push(event);
             }
         }
-        for event in issue
-            .activity
-            .iter()
-            .filter(|e| e.reply_to.is_none())
-            .filter(|e| match self.activity_filter {
-                1 => e.kind == "comment" || replies.contains_key(e.id.as_str()),
-                2 => e.actor.is_some(),
-                _ => true,
-            })
-        {
-            let (actor, text) = self.activity_text(issue, event);
-            let (glyph, color) = activity_glyph(event);
-            if !matches!(event.kind.as_str(), "comment" | "workerReport" | "question") {
-                // One line: glyph, who, what, when. Long text truncates
-                // instead of wrapping, so every row keeps the same rhythm.
-                body = body.child(
-                    row()
-                        .w_full()
-                        .h(px(24.))
-                        .gap(px(8.))
-                        .text_size(px(12.))
-                        .child(pixel_glyph(glyph, color))
-                        .child(div().flex_none().text_color(rgb(0xb0b0b0)).child(actor))
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_color(rgb(MUTED))
-                                .child(text.replace('\n', " · ")),
-                        )
-                        .child(div().flex_none().text_color(rgb(0x4a4a4a)).child("·"))
-                        .child(
-                            div()
-                                .flex_none()
-                                .text_color(rgb(0x6a6a6a))
-                                .child(relative_time(event.created_at)),
-                        ),
-                );
-                continue;
+        let shown = |e: &ZapperIssueActivity| match self.activity_filter {
+            1 => e.kind == "comment" || replies.contains_key(e.id.as_str()),
+            2 => e.actor.is_some(),
+            _ => true,
+        };
+        for item in timeline::timeline(&issue.activity) {
+            match item {
+                Item::Card(event) if shown(event) => {
+                    let (actor, text) = self.activity_text(issue, event);
+                    let thread = replies
+                        .get(event.id.as_str())
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[]);
+                    body = body.child(self.activity_card(
+                        issue,
+                        event,
+                        actor,
+                        text,
+                        activity_glyph(event),
+                        thread,
+                        cx,
+                    ));
+                }
+                Item::Event(event) if self.activity_filter != 1 && shown(event) => {
+                    body = body.child(self.event_row(issue, event, cx));
+                }
+                Item::Group(events) if self.activity_filter != 1 => {
+                    let events: Vec<_> = events.into_iter().filter(|e| shown(e)).collect();
+                    let Some(first) = events.first() else {
+                        continue;
+                    };
+                    let key = format!("group:{}", first.id);
+                    let open = self.expanded.contains(&key);
+                    let summary = timeline::summary(&events, |url| {
+                        issue
+                            .pull_requests
+                            .iter()
+                            .find(|pr| pr.url == url)
+                            .map(pr_label)
+                            .unwrap_or_else(|| url.to_owned())
+                    });
+                    body = body.child(
+                        row()
+                            .w_full()
+                            .gap(px(10.))
+                            .py(px(4.))
+                            .child(div().flex_1().h(px(1.)).bg(rgb(0x222222)))
+                            .child(
+                                button(SharedString::from(key.clone()), "")
+                                    .aria_label(SharedString::from(format!(
+                                        "{summary}. {}",
+                                        if open { "Collapse" } else { "Expand" }
+                                    )))
+                                    .flex_none()
+                                    .gap(px(6.))
+                                    .px(px(8.))
+                                    .py(px(3.))
+                                    .text_size(px(12.))
+                                    .text_color(rgb(0xa3a3a3))
+                                    .child(pixel_glyph(GLYPH_PENCIL, 0x8a8a8a))
+                                    .child(summary)
+                                    .child(
+                                        icon(if open { "alt-arrow-up" } else { "alt-arrow-down" })
+                                            .size(px(10.))
+                                            .text_color(rgb(MUTED)),
+                                    )
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if !this.expanded.remove(&key) {
+                                            this.expanded.insert(key.clone());
+                                        }
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(div().flex_1().h(px(1.)).bg(rgb(0x222222))),
+                    );
+                    if open {
+                        for event in events {
+                            body = body.child(self.event_row(issue, event, cx));
+                        }
+                    }
+                }
+                _ => {}
             }
-            let thread = replies
-                .get(event.id.as_str())
-                .map(Vec::as_slice)
-                .unwrap_or(&[]);
-            body = body.child(self.activity_card(
-                issue,
-                event,
-                actor,
-                text,
-                (glyph, color),
-                thread,
-                cx,
-            ));
         }
+        let names = |chat: &str| self.name_of(chat);
+        let status = timeline::indicator(
+            &self.zapper,
+            issue,
+            |chat| self.run_states.get(chat).copied(),
+            names,
+        );
         let id = issue.id.clone();
-        body.child(
+        body.when_some(status, |d, status| {
+            d.child(
+                row().w_full().justify_center().pt(px(14.)).child(
+                    row()
+                        .id("issue-run-state")
+                        .role(Role::Status)
+                        .aria_label(SharedString::from(status.text()))
+                        .gap(px(8.))
+                        .px(px(12.))
+                        .py(px(6.))
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(rgb(0x2a2a2a))
+                        .bg(rgb(0x141414))
+                        .text_size(px(12.5))
+                        .text_color(rgb(0xd0d0d0))
+                        .child(pixel_glyph(
+                            GLYPH_DOTS,
+                            match &status {
+                                timeline::Indicator::Working(_) => 0xd9bf60,
+                                timeline::Indicator::Failed(_)
+                                | timeline::Indicator::ReplyRetrying(_) => 0xe5736b,
+                                timeline::Indicator::NeedsInput(_) => NEEDS_YOU,
+                                _ => 0x777777,
+                            },
+                        ))
+                        .child(status.text()),
+                ),
+            )
+        })
+        .child(
             match self.inline_input(|k| matches!(k, EditorKind::Comment(i) if *i == issue.id)) {
                 Some(input) => inline_composer(input, "Comment", cx)
                     .mt(px(6.))
@@ -1715,6 +1797,74 @@ impl IssuePanel {
             },
         )
         .into_any_element()
+    }
+    /// A person, the Zapper or a thread, by a change value or chat id.
+    fn name_of(&self, id: &str) -> String {
+        match id {
+            "user" => self.user_name.clone().unwrap_or_else(|| "you".into()),
+            "zapper" => self.zapper.config.name.clone(),
+            id if id == self.zapper.coordinator_chat_id
+                || self.zapper.previous_coordinator_chats.iter().any(|c| c == id) =>
+            {
+                self.zapper.config.name.clone()
+            }
+            id => self.thread_title(id),
+        }
+    }
+    /// One quiet event: glyph, actor, what changed, a linked target, when.
+    fn event_row(
+        &self,
+        issue: &ZapperIssue,
+        event: &ZapperIssueActivity,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (actor, text) = self.activity_text(issue, event);
+        let phrase = timeline::phrase(event, |id| self.name_of(id), |url| {
+            issue
+                .pull_requests
+                .iter()
+                .find(|pr| pr.url == url)
+                .map(pr_label)
+                .unwrap_or_else(|| url.to_owned())
+        });
+        let (glyph, color) = activity_glyph(event);
+        let lead = match phrase.as_ref().and_then(|p| p.status) {
+            Some(status) => status_icon(status).into_any_element(),
+            None => pixel_glyph(glyph, color).into_any_element(),
+        };
+        let action = phrase
+            .as_ref()
+            .map(|p| p.action.clone())
+            .unwrap_or_else(|| text.replace('\n', " · "));
+        let target = phrase.and_then(|p| p.target).map(|(target, label)| {
+            let key = format!("issue-event-target-{}", event.id);
+            button(SharedString::from(key), label)
+                .flex_none()
+                .px(px(2.))
+                .text_color(rgb(0x8fb4ff))
+                .on_click(cx.listener(move |_, _, _, cx| match &target {
+                    Target::Thread(chat) => cx.emit(IssueEvent::OpenThread(chat.clone())),
+                    Target::PullRequest(url) => cx.emit(IssueEvent::OpenPullRequest(url.clone())),
+                }))
+        });
+        row()
+            .w_full()
+            .min_h(px(26.))
+            .gap(px(8.))
+            .text_size(px(12.))
+            .child(lead)
+            .when_some(self.actor_avatar(event, 14.), |d, avatar| d.child(avatar))
+            .child(div().flex_none().text_color(rgb(0xb0b0b0)).child(actor))
+            .child(div().min_w_0().truncate().text_color(rgb(MUTED)).child(action))
+            .when_some(target, |d, target| d.child(target))
+            .child(div().flex_none().text_color(rgb(0x4a4a4a)).child("·"))
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(rgb(0x6a6a6a))
+                    .child(relative_time(event.created_at)),
+            )
+            .into_any_element()
     }
     /// A titled block of issue text that edits in place on click.
     fn text_section(
@@ -1818,6 +1968,117 @@ impl IssuePanel {
         }
         (actor, text)
     }
+    /// Where a person's comment went, as a quiet footnote.
+    fn delivery_line(&self, event: &ZapperIssueActivity) -> Option<Div> {
+        let delivery = event.delivery.as_ref()?;
+        let (text, attention) = timeline::delivery_note(delivery, &self.name_of(&delivery.chat_id));
+        Some(
+            row()
+                .gap(px(6.))
+                .text_size(px(11.5))
+                .text_color(rgb(if attention { 0xe5a0a0 } else { 0x777777 }))
+                .child(pixel_glyph(
+                    if attention { GLYPH_PROMPT } else { GLYPH_REPLY },
+                    if attention { 0xe5736b } else { 0x6f7a8a },
+                ))
+                .child(div().min_w_0().child(text)),
+        )
+    }
+    /// "Threads N": the Zapper and each linked thread, the owner marked,
+    /// each one opening its conversation.
+    fn threads_control(&self, issue: &ZapperIssue, cx: &mut Context<Self>) -> AnyElement {
+        let owner = match issue.details.current_owner() {
+            Some(ZapperIssueOwner::Thread { chat_id }) => Some(chat_id),
+            Some(ZapperIssueOwner::Zapper) => Some(self.zapper.coordinator_chat_id.clone()),
+            _ => None,
+        };
+        let chats: Vec<String> = std::iter::once(self.zapper.coordinator_chat_id.clone())
+            .chain(issue.threads.iter().cloned())
+            .collect();
+        let open = self.menu == Some("issue-threads");
+        let mut control = row().relative().w_full().justify_end().child(
+            button("issue-threads", "")
+                .aria_label(SharedString::from(format!("Threads, {}", chats.len())))
+                .gap(px(8.))
+                .px(px(10.))
+                .py(px(5.))
+                .border_1()
+                .border_color(rgb(0x2a2a2a))
+                .rounded(px(8.))
+                .text_size(px(12.5))
+                .child(pixel_glyph(GLYPH_DOTS, 0xd9bf60))
+                .child("Threads")
+                .child(div().text_color(rgb(MUTED)).child(chats.len().to_string()))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.menu = if this.menu == Some("issue-threads") {
+                        None
+                    } else {
+                        Some("issue-threads")
+                    };
+                    cx.notify();
+                })),
+        );
+        if open {
+            let mut menu = menu_card("issue-threads-menu", 300.)
+                .top(px(34.))
+                .left_auto()
+                .right_0()
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                    this.menu = None;
+                    cx.notify();
+                }));
+            for (index, chat) in chats.iter().enumerate() {
+                let coordinator = index == 0;
+                let state = match self.run_states.get(chat) {
+                    Some(RunState::Running) => "Working",
+                    Some(RunState::AwaitingInput) => "Needs input",
+                    Some(RunState::Failed) => "Failed",
+                    Some(RunState::Unconfirmed) => "Not confirmed",
+                    None if !coordinator && !self.zapper.workers.iter().any(|w| w.chat_id == *chat) => "Left the Zapper",
+                    None => "",
+                };
+                let role = match (coordinator, owner.as_deref() == Some(chat.as_str())) {
+                    (true, true) => "Coordinator · owner".to_owned(),
+                    (true, false) => "Coordinator".to_owned(),
+                    (false, true) => "Owner".to_owned(),
+                    (false, false) => "Linked".to_owned(),
+                };
+                let lead = if coordinator {
+                    zapper_face(&self.avatar(), 18.).into_any_element()
+                } else {
+                    pixel_glyph(GLYPH_DOTS, 0x8a8a8a).into_any_element()
+                };
+                let target = chat.clone();
+                menu = menu.child(
+                    button(format!("issue-threads-{index}"), "")
+                        .aria_label(SharedString::from(format!("Open {}", self.name_of(chat))))
+                        .w_full()
+                        .gap(px(8.))
+                        .px(px(8.))
+                        .py(px(6.))
+                        .child(lead)
+                        .child(
+                            column()
+                                .flex_1()
+                                .min_w_0()
+                                .child(div().truncate().text_size(px(12.5)).child(self.name_of(chat)))
+                                .child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .text_color(rgb(MUTED))
+                                        .child(if state.is_empty() { role } else { format!("{role} · {state}") }),
+                                ),
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.menu = None;
+                            cx.emit(IssueEvent::OpenThread(target.clone()));
+                        })),
+                );
+            }
+            control = control.child(deferred(menu).priority(3));
+        }
+        control.into_any_element()
+    }
     /// A comment or worker report, its replies, and an inline reply box.
     #[allow(clippy::too_many_arguments)]
     fn activity_card(
@@ -1862,10 +2123,17 @@ impl IssuePanel {
             text.clone()
         };
         let key = event.id.clone();
-        let (issue_id, parent) = (issue.id.clone(), event.id.clone());
-        let replying = self.inline_input(
-            |k| matches!(k, EditorKind::Reply(i, p) if *i == issue.id && *p == event.id),
-        );
+        // Replying in a card continues with the thread that spoke last in it.
+        let parent = thread
+            .iter()
+            .rev()
+            .find(|r| r.kind == "workerReport" || r.actor.as_ref().is_some_and(|a| self.zapper.workers.iter().any(|w| w.chat_id == *a)))
+            .map_or_else(|| event.id.clone(), |r| r.id.clone());
+        let issue_id = issue.id.clone();
+        let replying = self.inline_input(|k| {
+            matches!(k, EditorKind::Reply(i, p) if *i == issue.id
+                && (*p == event.id || thread.iter().any(|r| r.id == *p)))
+        });
         let lead = match self.actor_avatar(event, 18.) {
             Some(avatar) => avatar.into_any_element(),
             None => pixel_glyph(glyph, color).into_any_element(),
@@ -1946,6 +2214,7 @@ impl IssuePanel {
                             .text_color(rgb(0xc8c8c8))
                             .child(shown),
                     )
+                    .when_some(self.delivery_line(event), |d, line| d.child(line))
                     .when(long, |d| {
                         let key = key.clone();
                         d.child(
@@ -2006,7 +2275,8 @@ impl IssuePanel {
                             .line_height(px(19.))
                             .text_color(rgb(0xbdbdbd))
                             .child(said.trim().to_owned()),
-                    ),
+                    )
+                    .when_some(self.delivery_line(reply), |d, line| d.child(line.pl(px(20.)))),
             );
         }
         if let Some(input) = replying {
@@ -2531,6 +2801,7 @@ const GLYPH_PROMPT: &[&str] = &["#....", ".#...", "..#..", ".#...", "#.###"];
 const GLYPH_BARS: &[&str] = &["....#", "..#.#", "..#.#", "#.#.#", "#.#.#"];
 const GLYPH_PENCIL: &[&str] = &["...##", "..##.", ".##..", "##...", "#...."];
 const GLYPH_REPLY: &[&str] = &["#....", "#....", "#...#", "#####", "....#"];
+const GLYPH_DOTS: &[&str] = &["#.#.#", ".....", "#.#.#", ".....", "#.#.#"];
 
 fn activity_glyph(event: &ZapperIssueActivity) -> (&'static [&'static str], u32) {
     let text = event.text.as_str();

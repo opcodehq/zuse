@@ -1,0 +1,49 @@
+/* The shared issue conversation: cards for discussion, quiet rows for events. */
+.zp-conversation { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.zp-card { border: 1px solid var(--hairline); border-radius: 10px; background: var(--card); overflow-wrap: anywhere; }
+.zp-card > .zp-card-head, .zp-card > .markdown, .zp-card > div:not(.zp-card-reply):not(.zp-composer), .zp-card > .zp-delivery { padding-left: 14px; padding-right: 14px; }
+.zp-card > .zp-card-head { padding-top: 10px; }
+.zp-card > :last-child:not(.zp-card-reply):not(.zp-composer) { padding-bottom: 12px; }
+.zp-card-head { display: flex; align-items: center; gap: 8px; font-size: 12px; min-width: 0; }
+.zp-card-head strong { font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.zp-card-head time { color: var(--text-faint); flex: none; }
+.zp-card-head .zp-icon-button { margin-left: auto; }
+.zp-card-tag { flex: none; padding: 0 5px; border-radius: 4px; font-size: 11px; color: var(--warning); background: color-mix(in srgb, var(--warning) 14%, transparent); }
+.zp-card-reply { border-top: 1px solid var(--hairline); padding: 10px 14px; }
+.zp-card-reply > :not(.zp-card-head) { padding-left: 24px; }
+.zp-card .zp-composer { margin: 4px 10px 10px; }
+.zp-icon-button { border: 0; background: none; color: var(--text-faint); padding: 4px; border-radius: 6px; cursor: pointer; display: inline-flex; }
+.zp-icon-button:hover, .zp-icon-button:focus-visible { color: var(--text); background: var(--hover); }
+.zp-author-link { border: 0; background: none; padding: 0; font: inherit; color: var(--accent, #8fb4ff); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px; }
+.zp-author-link:hover, .zp-author-link:focus-visible { text-decoration: underline; }
+.zp-person { flex: none; width: 18px; height: 18px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 10px; font-weight: 600; color: var(--bg); background: var(--text-muted); }
+.zp-delivery { margin: 2px 0 0; font-size: 11.5px; color: var(--text-faint); }
+.zp-delivery[data-attention] { color: var(--danger, #e16d76); }
+.zp-event { display: flex; align-items: center; gap: 8px; min-height: 26px; font-size: 12px; color: var(--text-muted); min-width: 0; }
+.zp-event > strong { font-weight: 400; color: var(--text); flex: none; }
+.zp-event-action { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zp-event time { flex: none; color: var(--text-faint); }
+.zp-event time::before { content: "·"; margin-right: 8px; }
+.zp-event-mark { flex: none; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--text-faint); }
+.zp-event[data-status="inProgress"] .zp-event-mark, .zp-event[data-status="inReview"] .zp-event-mark, .zp-event[data-status="done"] .zp-event-mark { border-color: var(--success, #00b80a); background: radial-gradient(circle, var(--success, #00b80a) 35%, transparent 40%); }
+.zp-event[data-status="needsYou"] .zp-event-mark, .zp-event[data-status="blocked"] .zp-event-mark { border-color: var(--warning); }
+.zp-event-group { display: flex; flex-direction: column; }
+.zp-event-summary { display: flex; align-items: center; gap: 6px; align-self: center; margin: 4px 0; padding: 3px 10px; border: 0; border-radius: 999px; background: none; color: var(--text-muted); font: inherit; font-size: 12px; cursor: pointer; }
+.zp-event-summary::before, .zp-event-summary::after { content: ""; }
+.zp-event-summary:hover, .zp-event-summary:focus-visible { color: var(--text); background: var(--hover); }
+.zp-run-state { align-self: center; display: inline-flex; align-items: center; gap: 8px; margin-top: 10px; padding: 6px 12px; border: 1px solid var(--hairline); border-radius: 8px; background: var(--card); font-size: 12.5px; color: var(--text); }
+.zp-run-state[data-kind="failed"], .zp-run-state[data-kind="replyRetrying"] { color: var(--danger, #e16d76); }
+.zp-run-dots { flex: none; width: 10px; height: 10px; background-image: radial-gradient(circle, var(--warning) 1px, transparent 1.5px); background-size: 4px 4px; }
+.zp-run-state[data-kind="unconfirmed"] .zp-run-dots, .zp-run-state[data-kind="queued"] .zp-run-dots, .zp-run-state[data-kind="replyQueued"] .zp-run-dots { background-image: radial-gradient(circle, var(--text-faint) 1px, transparent 1.5px); }
+.zp-composer { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--hairline); border-radius: 10px; background: var(--card); padding: 10px 12px 8px; }
+.zp-composer textarea { border: 0; background: none; color: var(--text); font: inherit; resize: vertical; min-height: 40px; outline: none; }
+.zp-composer-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.zp-threads-control { position: relative; display: flex; justify-content: flex-end; }
+.zp-threads-button { display: inline-flex; align-items: center; gap: 8px; padding: 5px 10px; border: 1px solid var(--hairline); border-radius: 8px; background: none; color: var(--text); font: inherit; font-size: 12.5px; cursor: pointer; }
+.zp-threads-button:hover, .zp-threads-button:focus-visible { background: var(--hover); }
+.zp-threads-menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 20; width: min(300px, 90vw); padding: 4px; border: 1px solid var(--hairline); border-radius: 8px; background: var(--card); box-shadow: 0 10px 30px rgb(0 0 0 / 30%); display: flex; flex-direction: column; }
+.zp-threads-menu button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 0; border-radius: 6px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.zp-threads-menu button:hover, .zp-threads-menu button:focus-visible { background: var(--hover); }
+.zp-threads-menu span { display: flex; flex-direction: column; min-width: 0; }
+.zp-threads-menu strong { font-weight: 500; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.zp-threads-menu small { font-size: 11px; color: var(--text-muted); }

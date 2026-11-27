@@ -110,7 +110,7 @@ fn sample_zapper(device: &str) -> Zapper {
                     created_at: asked.created_at,
                     kind: "question".into(),
                     text: "Should the Overview list only what waits on you?".into(),
-                    reply_to: None,
+                    ..Default::default()
                 });
                 asked
             },
