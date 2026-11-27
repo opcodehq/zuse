@@ -772,7 +772,6 @@ impl Render for ShortcutsPage {
         let escape_stops_active_agent = self.escape_stops_active_agent;
         let send_behavior = self.composer_send_behavior;
         let compact_mode = crate::settings::transcript_compact_mode(cx);
-        let runner_game = crate::settings::runner_game_enabled(cx);
         let quit_gesture = crate::settings::quit_gesture(cx);
         let customized = self.keymap != KeymapConfig::default()
             || escape_stops_active_agent
@@ -882,44 +881,6 @@ impl Render for ShortcutsPage {
                     .cursor_pointer()
                     .on_click(cx.listener(move |_, _, _, cx| {
                         crate::settings::set_transcript_compact_mode(!compact_mode, cx);
-                        cx.notify();
-                    })),
-            );
-        let runner_game_row = widgets::card_row(&theme, false)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(widgets::row_title(&theme, "Runner game"))
-                    .child(widgets::meta_line(
-                        &theme,
-                        vec![
-                            div()
-                                .child("Play a small game above the composer while an agent works.")
-                                .into_any_element(),
-                        ],
-                    )),
-            )
-            .child(
-                widgets::toggle_switch(&theme, runner_game, "runner-game")
-                    .id("runner-game-toggle")
-                    .tab_index(0)
-                    .role(gpui::Role::Switch)
-                    .aria_label("Runner game")
-                    .aria_toggled(if runner_game {
-                        gpui::Toggled::True
-                    } else {
-                        gpui::Toggled::False
-                    })
-                    .focus_visible(|s| s.border_2().border_color(theme.accent))
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        crate::settings::update(
-                            crate::settings::SavePolicy::Immediate,
-                            cx,
-                            |settings| settings.runner_game_enabled = !runner_game,
-                        );
-                        cx.refresh_windows();
                         cx.notify();
                     })),
             );
@@ -1145,7 +1106,6 @@ impl Render for ShortcutsPage {
                                                         .mt_0()
                                                         .child(send_behavior_row)
                                                         .child(compact_mode_row)
-                                                        .child(runner_game_row)
                                                         .child(compact_model_picker_row)
                                                         .child(escape_behavior_row)
                                                         .child(direct_steer_row),
