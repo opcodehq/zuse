@@ -29,6 +29,6 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The site runs on Cloudflare Workers through the [OpenNext Cloudflare adapter](https://opennext.js.org/cloudflare). `wrangler.jsonc` declares the Worker and its bindings, and `open-next.config.ts` keeps ISR pages in an R2 bucket revalidated by a Durable Object queue.
 
 - `bun run cf:preview` builds the Worker and serves it locally with Wrangler on http://localhost:8787.
-- `bun run cf:deploy` builds and deploys it (needs `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`).
+- `bun run cf:deploy` builds and deploys it by hand (needs `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`).
 
-`.github/workflows/website.yml` builds every pull request that touches the site and deploys from `main` when the Cloudflare secrets are set.
+Production deploys come from Cloudflare Workers Builds, connected to this repository with root `apps/website`: every push to `main` runs `bun install && bun run cf:build`, then `npx opennextjs-cloudflare deploy`. `.github/workflows/website.yml` only checks and builds the site on pull requests and on `main`.
