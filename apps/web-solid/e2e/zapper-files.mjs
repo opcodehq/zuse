@@ -23,6 +23,17 @@ const menu = async (page, trigger, item) => {
   await page.eval("[...document.querySelectorAll('[role=menuitem]')].find(e=>e.textContent.trim()===" + q(item) + ").setAttribute('data-files-item','')");
   await page.press("[data-files-item]");
 };
+// A real Enter: keydown with its text, so forms submit and buttons activate.
+const enter = async (page) => {
+  await page.call("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
+  await page.call("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+};
+// Focus inside an open dialog once it has placed its own initial focus.
+const focusIn = async (page, selector) => {
+  await page.waitFor("document.querySelector('[role=dialog]')?.contains(document.activeElement)");
+  await page.eval("document.querySelector(" + q(selector) + ").focus()");
+  await page.waitFor("document.activeElement===document.querySelector(" + q(selector) + ")");
+};
 const submit = (page) => page.eval("document.querySelector('[role=dialog] form').requestSubmit()");
 let page;
 try {
@@ -116,6 +127,53 @@ try {
     const saved = (await page.eval("files.requests()")).filter((r) => r.method === "ZotCommand").at(-1).params.action;
     assert.deepEqual(saved, { type: "writeFile", path: "WORKERS.md", content: "My new worker rules", expectedVersion: 3 });
 
+
+    // Keyboard only: Shift+F10 opens a row's menu, F2 moves, Delete deletes.
+    await page.click('.zp-tabs [aria-label="Drive"]');
+    await page.eval("document.querySelector(" + q(row("reports")) + ").focus()");
+    await page.key("F10", "F10", 121, 8);
+    await page.waitFor("document.activeElement?.getAttribute('role')==='menuitem'");
+    assert.equal(await page.eval("document.activeElement.textContent.trim()"), "New file here");
+    await enter(page);
+    await page.waitFor("document.querySelector('[role=dialog] input[required]')?.value==='reports/'");
+    await fill(page, "[role=dialog] input[required]", "reports/keyboard.md");
+    await focusIn(page, "[role=dialog] input[required]");
+    await enter(page);
+    await page.waitFor("!document.querySelector('[role=dialog]') && document.querySelector(" + q(row("reports/keyboard.md")) + ")?.getAttribute('aria-selected')==='true'");
+    await page.eval("document.querySelector(" + q(row("reports/keyboard.md")) + ").focus()");
+    await page.key("F2", "F2", 113);
+    await page.waitFor("document.querySelector('[role=dialog] input[required]')?.value==='reports/keyboard.md'");
+    await fill(page, "[role=dialog] input[required]", "reports/moved.md");
+    await focusIn(page, "[role=dialog] input[required]");
+    await enter(page);
+    await page.waitFor("!document.querySelector('[role=dialog]') && !!document.querySelector(" + q(row("reports/moved.md")) + ")");
+    assert.deepEqual((await page.eval("files.requests()")).filter((r) => r.method === "ZotCommand").at(-1).params.action, { type: "moveFile", path: "reports/keyboard.md", to: "reports/moved.md", expectedVersion: 1 });
+    await page.eval("document.querySelector(" + q(row("reports/moved.md")) + ").focus()");
+    await page.key("Delete", "Delete", 46);
+    await page.waitFor("document.querySelector('[role=dialog]')?.textContent.includes('Delete reports/moved.md?')");
+    await page.eval("[...document.querySelectorAll('[role=dialog] button')].find(b=>b.textContent.trim()==='Delete file').setAttribute('data-confirm','')");
+    await focusIn(page, "[role=dialog] [data-confirm]");
+    await enter(page);
+    await page.waitFor("!document.querySelector('[role=dialog]') && !document.querySelector(" + q(row("reports/moved.md")) + ")");
+    await page.eval("document.querySelector(" + q(row("NOTES.md")) + ").focus()");
+    await page.key("Delete", "Delete", 46);
+    await page.key("F2", "F2", 113);
+    assert.equal(await page.eval("!!document.querySelector('[role=dialog]')"), false, "reserved files ignore F2 and Delete");
+    assert.equal(await page.eval("document.querySelector(" + q(row("AGENTS.md")) + " + ' .zp-tree-hint')?.textContent"), "Coordinator rules");
+
+    // A file an older engine wrote over a folder shows beside it; its menu acts on the file only.
+    await page.eval("files.legacy('reports', 'legacy text')");
+    await page.waitFor("document.querySelectorAll('.zp-tree-row[data-path=\"reports\"]').length===2");
+    await shot(page, "conflict-legacy-file");
+    await page.eval("document.querySelector('[data-key=\"f:reports\"]').focus()");
+    await page.key("F2", "F2", 113);
+    await page.waitFor("document.querySelector('[role=dialog] input[required]')?.value==='reports'");
+    await fill(page, "[role=dialog] input[required]", "reports-legacy.md");
+    await focusIn(page, "[role=dialog] input[required]");
+    await enter(page);
+    await page.waitFor("!document.querySelector('[role=dialog]')");
+    assert.deepEqual((await page.eval("files.requests()")).filter((r) => r.method === "ZotCommand").at(-1).params.action, { type: "moveFile", path: "reports", to: "reports-legacy.md", expectedVersion: 1 });
+    await page.waitFor("document.querySelectorAll('.zp-tree-row[data-path=\"reports\"]').length===1 && !!document.querySelector(" + q(row("reports-legacy.md")) + ")");
     // Moving a folder keeps its contents together.
     await page.click('.zp-tabs [aria-label="Drive"]');
     await menu(page, row("reports") + " .zp-tree-more-button", "Rename or move…");

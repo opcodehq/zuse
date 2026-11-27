@@ -43,6 +43,9 @@ pub(super) struct ZapperUi {
     tree_zapper: Option<String>,
     /// The created folders of the Zapper Drive last showed.
     tree_folders: Vec<String>,
+    /// Keyboard focus of the file tree: arrows move, Enter opens, F2 moves,
+    /// Delete deletes.
+    tree_focus: Option<FocusHandle>,
     /// Threads just archived here. The engine applies it on its next pass, a
     /// few seconds later; until then the row should already be gone.
     archiving: std::collections::HashMap<String, std::time::Instant>,
@@ -1281,27 +1284,54 @@ impl Shell {
                 *tabs.active() == ZapperPage::Section(ZapperTab::Drive) && !editing,
                 |d| {
                     let new_folder = new_doc.clone();
+                    let (file_key, folder_key) = (new_doc.clone(), new_folder.clone());
+                    let new_file =
+                        move |this: &mut Shell, zapper: &Zapper, cx: &mut Context<Shell>| {
+                            let file = ZapperFile {
+                                path: this.zapper_tree_prefix(),
+                                ..Default::default()
+                            };
+                            this.open_zapper_dialog(zapper.clone(), Kind::File(file), cx)
+                        };
+                    let add_folder =
+                        move |this: &mut Shell, zapper: &Zapper, cx: &mut Context<Shell>| {
+                            let prefix = this.zapper_tree_prefix();
+                            this.open_zapper_dialog(zapper.clone(), Kind::Folder(prefix), cx)
+                        };
+                    let activates = |event: &gpui::KeyDownEvent| {
+                        matches!(event.keystroke.key.as_str(), "enter" | "space")
+                    };
                     d.child(
                         icon_button("zapper-new-document", icons::DOCUMENT_ADD, "New file")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                let file = ZapperFile {
-                                    path: this.zapper_tree_prefix(),
-                                    ..Default::default()
-                                };
-                                this.open_zapper_dialog(new_doc.clone(), Kind::File(file), cx)
-                            })),
+                            .tab_index(0)
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| new_file(this, &new_doc, cx)),
+                            )
+                            .on_key_down(cx.listener(
+                                move |this, event: &gpui::KeyDownEvent, _, cx| {
+                                    if activates(event) {
+                                        cx.stop_propagation();
+                                        new_file(this, &file_key, cx)
+                                    }
+                                },
+                            )),
                     )
                     .child(
-                        icon_button("zapper-new-folder", icons::FOLDER_ADD, "New folder").on_click(
-                            cx.listener(move |this, _, _, cx| {
-                                let prefix = this.zapper_tree_prefix();
-                                this.open_zapper_dialog(
-                                    new_folder.clone(),
-                                    Kind::Folder(prefix),
-                                    cx,
-                                )
-                            }),
-                        ),
+                        icon_button("zapper-new-folder", icons::FOLDER_ADD, "New folder")
+                            .tab_index(0)
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| {
+                                    add_folder(this, &new_folder, cx)
+                                }),
+                            )
+                            .on_key_down(cx.listener(
+                                move |this, event: &gpui::KeyDownEvent, _, cx| {
+                                    if activates(event) {
+                                        cx.stop_propagation();
+                                        add_folder(this, &folder_key, cx)
+                                    }
+                                },
+                            )),
                     )
                 },
             )
@@ -2468,21 +2498,10 @@ impl Shell {
         let Some(selected) = &self.zapper_ui.tree_selected else {
             return String::new();
         };
-        let inside = format!("{selected}/");
-        let folder = if self
-            .zapper_ui
-            .tree_folders
-            .iter()
-            .any(|f| f == selected || f.starts_with(&inside))
-            || self
-                .zapper_ui
-                .files
-                .iter()
-                .any(|f| f.path.starts_with(&inside))
-        {
-            selected.as_str()
-        } else {
-            selected.rsplit_once('/').map_or("", |(parent, _)| parent)
+        let folder = match selected.split_once(':') {
+            Some(("d", path)) => path,
+            Some((_, path)) => path.rsplit_once('/').map_or("", |(parent, _)| parent),
+            None => "",
         };
         if folder.is_empty() {
             String::new()
@@ -2508,6 +2527,11 @@ impl Shell {
             self.zapper_ui.tree_selected = None;
         }
         self.zapper_ui.tree_folders = zapper.folders.clone();
+        let focus = self
+            .zapper_ui
+            .tree_focus
+            .get_or_insert_with(|| cx.focus_handle().tab_stop(true))
+            .clone();
         let rows = tree_rows(files, &zapper.folders, &self.zapper_ui.tree_open);
         let mut view = div()
             .flex()
@@ -2518,6 +2542,10 @@ impl Shell {
                     .id("zapper-files-tree")
                     .role(gpui::Role::Tree)
                     .aria_label("Zapper files")
+                    .track_focus(&focus)
+                    .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                        this.zapper_tree_key(event, cx)
+                    }))
                     .mx(px(-8.0))
                     .flex()
                     .flex_col()
@@ -2540,6 +2568,43 @@ impl Shell {
         view.into_any_element()
     }
 
+    /// The file tree's keys, like the workspace explorer: Up and Down move
+    /// the selection, Right opens a folder or steps into it, Left closes it
+    /// or steps out, Enter opens a file or toggles a folder, F2 renames or
+    /// moves and Delete deletes, both behind their dialogs.
+    fn zapper_tree_key(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
+        use zuse_protocol::presentation::zapper_files::{TreeKey, tree_key, tree_rows};
+        let Some(zapper) = self.selected_zapper(cx) else {
+            return;
+        };
+        let files = self.zapper_ui.files.clone();
+        let rows = tree_rows(&files, &zapper.folders, &self.zapper_ui.tree_open);
+        let Some(action) = tree_key(
+            &rows,
+            self.zapper_ui.tree_selected.as_deref(),
+            event.keystroke.key.as_str(),
+        ) else {
+            return;
+        };
+        cx.stop_propagation();
+        match action {
+            TreeKey::Select(key) => self.zapper_ui.tree_selected = Some(key),
+            TreeKey::Expand(path) => {
+                self.zapper_ui.tree_open.insert(path);
+            }
+            TreeKey::Collapse(path) => {
+                self.zapper_ui.tree_open.remove(&path);
+            }
+            TreeKey::Open(path) => return self.show_zapper_page(ZapperPage::File(path), cx),
+            TreeKey::Move(row) | TreeKey::Delete(row) => {
+                let delete = matches!(event.keystroke.key.as_str(), "delete" | "backspace");
+                let kind = super::zapper_forms::file_action(&row, &files, &zapper.folders, delete);
+                return self.open_zapper_dialog(zapper, kind, cx);
+            }
+        }
+        cx.notify();
+    }
+
     fn zapper_file_row(
         &self,
         zapper: &Zapper,
@@ -2550,7 +2615,8 @@ impl Shell {
     ) -> AnyElement {
         use crate::file_icons::FileIconIdentity;
         use crate::files::tree::{TREE_INDENT, TREE_ROW_HEIGHT, with_indent_guides};
-        let selected = self.zapper_ui.tree_selected.as_deref() == Some(row.path.as_str());
+        let key = row.key();
+        let selected = self.zapper_ui.tree_selected.as_deref() == Some(key.as_str());
         let path = row.path.clone();
         let folder = row.folder;
         let trailing = |id: &str, glyph: &'static str, tip: &'static str| {
@@ -2600,14 +2666,14 @@ impl Shell {
                 )
         });
         let content = div()
-            .id(SharedString::from(format!("zapper-file-row-{}", row.path)))
+            .id(SharedString::from(format!("zapper-file-row-{key}")))
             .role(gpui::Role::TreeItem)
             .aria_label(SharedString::from(row.path.clone()))
             .aria_selected(selected)
             .when(folder, |d| d.aria_expanded(row.expanded))
             .debug_selector({
-                let path = row.path.clone();
-                move || format!("zapper-file:{path}")
+                let key = key.clone();
+                move || format!("zapper-file:{key}")
             })
             .h(px(TREE_ROW_HEIGHT))
             .w_full()
@@ -2669,18 +2735,36 @@ impl Shell {
                     })
                     .child(row.name.clone()),
             )
-            .when(!folder && row.version.is_none(), |d| {
+            .children(
+                zuse_protocol::presentation::zapper_files::reserved_role(&row.path)
+                    .filter(|_| !folder && row.depth == 0)
+                    .map(|role| {
+                        div()
+                            .flex_none()
+                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_color(theme.text_faint)
+                            .child(if row.version.is_none() {
+                                format!("{role} · not written")
+                            } else {
+                                role.to_owned()
+                            })
+                    }),
+            )
+            .when(row.conflict, |d| {
                 d.child(
                     div()
                         .flex_none()
                         .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.text_faint)
-                        .child("not written"),
+                        .text_color(theme.warning)
+                        .child("conflicts with folder"),
                 )
             })
             .children(actions)
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.zapper_ui.tree_selected = Some(path.clone());
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if let Some(focus) = &this.zapper_ui.tree_focus {
+                    focus.focus(window, cx);
+                }
+                this.zapper_ui.tree_selected = Some(key.clone());
                 if folder {
                     if !this.zapper_ui.tree_open.remove(&path) {
                         this.zapper_ui.tree_open.insert(path.clone());
@@ -2705,16 +2789,37 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        use zuse_protocol::presentation::zapper_files::{reserved_about, reserved_role};
+        let about = reserved_about(path).map(|about| muted(about, theme));
         let Some(file) = latest_file(files, path).cloned() else {
-            return muted(
-                if self.zapper_ui.loading || self.zapper_history_view() {
-                    "Loading document…"
-                } else {
-                    "This document is empty."
-                },
-                theme,
-            )
-            .into_any_element();
+            if self.zapper_ui.loading || self.zapper_history_view() {
+                return muted("Loading document…", theme).into_any_element();
+            }
+            let Some(about) = about else {
+                return muted("This file was moved or deleted.", theme).into_any_element();
+            };
+            // A reserved file an older Zapper never wrote: write it here.
+            let (z, path) = (zapper.clone(), path.to_owned());
+            return div()
+                .flex()
+                .flex_col()
+                .gap(px(10.0))
+                .child(about)
+                .child(muted("Not written yet.", theme))
+                .child(action(
+                    "zapper-document-write",
+                    "Write",
+                    theme,
+                    move |this, _, _, cx| {
+                        let file = ZapperFile {
+                            path: path.clone(),
+                            ..Default::default()
+                        };
+                        this.open_zapper_dialog(z.clone(), Kind::File(file), cx)
+                    },
+                    cx,
+                ))
+                .into_any_element();
         };
         let tree = match self.zapper_ui.documents.get(path) {
             Some((version, tree)) if *version == file.version => tree.clone(),
@@ -2750,6 +2855,13 @@ impl Shell {
                     .text_color(theme.text_strong)
                     .child(file.path.clone()),
             )
+            .children(reserved_role(path).map(|role| {
+                div()
+                    .flex_none()
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .text_color(theme.text_muted)
+                    .child(role)
+            }))
             .child(
                 div()
                     .text_size(crate::typography::ui_rems(11.0))
@@ -2770,6 +2882,7 @@ impl Shell {
             .flex_col()
             .gap(px(14.0))
             .child(header)
+            .children(about)
             .child(
                 div()
                     .min_w_0()
@@ -3016,6 +3129,13 @@ mod tests {
 /// Native visual QA of the Zapper panel with seeded documents.
 #[cfg(feature = "appshots-fixture")]
 impl Shell {
+    /// Focuses Drive's tree, so key presses the window receives reach it.
+    pub fn fixture_zapper_tree_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(focus) = self.zapper_ui.tree_focus.clone() {
+            focus.focus(window, cx);
+        }
+    }
+
     /// Keep a seeded pull request tab offline once its page exists.
     /// A `-menu` step also opens Merge's menu.
     pub fn fixture_zapper_settle(&mut self, step: &str, cx: &mut Context<Self>) {
@@ -3109,7 +3229,7 @@ impl Shell {
                 self.zapper_ui.tree_open = ["handoffs", "handoffs/design-references", "reports"]
                     .map(String::from)
                     .into();
-                self.zapper_ui.tree_selected = Some("NOTES.md".into());
+                self.zapper_ui.tree_selected = Some("f:NOTES.md".into());
                 self.show_zapper_page(ZapperPage::Section(ZapperTab::Drive), cx);
                 let files = self.zapper_ui.files.clone();
                 let row = |path: &str| {
@@ -3117,6 +3237,20 @@ impl Shell {
                         .into_iter()
                         .find(|r| r.path == path)
                 };
+                if step == "drive-keyboard" {
+                    self.zapper_ui.tree_selected =
+                        Some("f:handoffs/design-references/sidebar.md".into());
+                }
+                if step == "drive-conflict" {
+                    // What an older engine leaves: a file over a folder.
+                    self.zapper_ui.files.push(ZapperFile {
+                        path: "handoffs".into(),
+                        version: 1,
+                        content: "Written by an older engine".into(),
+                        deleted: false,
+                    });
+                    self.zapper_ui.tree_selected = Some("f:handoffs".into());
+                }
                 let kind = match step {
                     "drive-delete" => row("handoffs")
                         .map(|r| super::zapper_forms::file_action(&r, &files, &folders, true)),

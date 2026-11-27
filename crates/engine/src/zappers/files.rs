@@ -89,6 +89,56 @@ pub(super) fn live(db: &Connection, zapper: &str) -> Result<BTreeMap<String, u32
         .collect::<rusqlite::Result<_>>()?)
 }
 
+impl Zappers {
+    /// What a coordinator turn reads, in one statement so it is one
+    /// snapshot: the reserved files with their text, and how many other live
+    /// files there are. Other files' text is never read here.
+    pub(super) fn turn_files(&self, id: &str) -> Result<(Vec<ZapperFile>, usize)> {
+        let db = self
+            .inner
+            .db
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?;
+        let mut stmt = db.prepare_cached(
+            "SELECT f.path,f.version,CASE WHEN f.path IN (?2,?3,?4,?5,?6) THEN f.content END
+             FROM zapper_files f WHERE f.zapper=?1
+               AND f.version=(SELECT MAX(version) FROM zapper_files WHERE zapper=f.zapper AND path=f.path)
+               AND NOT EXISTS(SELECT 1 FROM zapper_file_deletions d
+                   WHERE d.zapper=f.zapper AND d.path=f.path AND d.version=f.version)",
+        )?;
+        let rows = stmt.query_map(
+            params![
+                id,
+                RESERVED[0],
+                RESERVED[1],
+                RESERVED[2],
+                RESERVED[3],
+                RESERVED[4]
+            ],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, u32>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            },
+        )?;
+        let (mut reserved, mut others) = (vec![], 0);
+        for row in rows {
+            match row? {
+                (path, version, Some(content)) => reserved.push(ZapperFile {
+                    path,
+                    version,
+                    content,
+                    deleted: false,
+                }),
+                _ => others += 1,
+            }
+        }
+        Ok((reserved, others))
+    }
+}
+
 /// Folders people created, sorted.
 pub(super) fn folders(db: &Connection, zapper: &str) -> Result<Vec<String>> {
     let mut stmt =
@@ -876,5 +926,72 @@ mod tests {
             3,
             "written by an older engine".into()
         )));
+    }
+
+    #[test]
+    fn an_older_engines_colliding_file_stays_visible_and_movable_without_touching_the_folder() {
+        let (_dir, store) = store();
+        write(&store, "notes/day.md", "day one", 0).unwrap();
+        write(&store, "notes/day.md", "day two", 1).unwrap();
+        run(
+            &store,
+            ZapperAction::CreateFolder {
+                path: "handoffs/empty".into(),
+            },
+        )
+        .unwrap();
+        {
+            // An older engine ignores folders and writes straight over them.
+            let db = store.inner.db.lock().unwrap();
+            for path in ["handoffs", "notes"] {
+                db.execute(
+                    "INSERT INTO zapper_files VALUES(?1,?2,?3,?4)",
+                    params!["release", path, 1, format!("legacy {path}")],
+                )
+                .unwrap();
+            }
+        }
+        let store = Zappers::open(_dir.path(), "local").unwrap();
+        let live = live_paths(&store);
+        assert!(live.contains(&("handoffs".into(), 1, "legacy handoffs".into())));
+        assert!(live.contains(&("notes".into(), 1, "legacy notes".into())));
+        assert_eq!(
+            store.get("release").unwrap().folders,
+            ["handoffs", "handoffs/empty", "reports"]
+        );
+
+        run(
+            &store,
+            ZapperAction::MoveFile {
+                path: "handoffs".into(),
+                to: "handoffs-legacy.md".into(),
+                expected_version: 1,
+            },
+        )
+        .unwrap();
+        run(
+            &store,
+            ZapperAction::DeleteFile {
+                path: "notes".into(),
+                expected_version: 1,
+            },
+        )
+        .unwrap();
+        let live = live_paths(&store);
+        assert!(live.contains(&("handoffs-legacy.md".into(), 1, "legacy handoffs".into())));
+        assert!(live.contains(&("notes/day.md".into(), 2, "day two".into())));
+        assert!(!live.iter().any(|f| f.0 == "handoffs" || f.0 == "notes"));
+        assert_eq!(
+            store.get("release").unwrap().folders,
+            ["handoffs", "handoffs/empty", "reports"]
+        );
+        let history: Vec<_> = store
+            .files("release", true)
+            .unwrap()
+            .into_iter()
+            .filter(|f| f.path == "notes/day.md")
+            .map(|f| f.content)
+            .collect();
+        assert_eq!(history, ["day two", "day one"]);
     }
 }

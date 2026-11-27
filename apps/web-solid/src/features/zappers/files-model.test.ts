@@ -1,6 +1,8 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { ancestors, buildTree, filesUnder, pathProblem, visibleRows } from "./files-model";
+import { ancestors, buildTree, filesUnder, isReserved, pathProblem, RESERVED, reservedRole, rowKey, visibleRows } from "./files-model";
+
+const RESERVED_PATHS = Object.keys(RESERVED);
 import type { ZapperFile } from "@/core/zapper-types";
 
 const file = (path: string, version = 1, deleted = false): ZapperFile => ({ path, version, content: path, ...(deleted ? { deleted } : {}) });
@@ -34,6 +36,28 @@ describe("Zapper file tree", () => {
       tree.find((node) => node.path === "AGENTS.md"),
       { kind: "file", name: "AGENTS.md", path: "AGENTS.md", file: null },
     );
+  });
+
+  test("a file an older engine wrote over a folder shows beside it with its own key", () => {
+    const tree = buildTree([file("notes/day.md"), file("notes"), file("handoffs")], ["handoffs"]);
+    const rows = visibleRows(tree, new Set(["notes"]))
+      .filter((row) => !RESERVED_PATHS.includes(row.node.path))
+      .map((row) => [rowKey(row.node), row.node.kind === "file" && !!row.node.conflict]);
+    assert.deepEqual(rows, [
+      ["d:handoffs", false],
+      ["d:notes", false],
+      ["f:notes/day.md", false],
+      ["f:handoffs", true],
+      ["f:notes", true],
+    ]);
+  });
+
+  test("only exact reserved names get a role", () => {
+    assert.equal(reservedRole("AGENTS.md"), "Coordinator rules");
+    for (const lookalike of ["AGENTS.md ", "agents.md", "\u0410GENTS.md", "docs/AGENTS.md", "toString", "__proto__"]) {
+      assert.equal(reservedRole(lookalike), null, lookalike);
+      assert.equal(isReserved(lookalike), false, lookalike);
+    }
   });
 
   test("a folder action names every live file under it, however deep, and nothing beside it", () => {

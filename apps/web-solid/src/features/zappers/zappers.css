@@ -802,3 +802,5 @@
 .zp-delete-scope ul { margin: 0; padding-left: 18px; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text); }
 @media (max-width: 520px) { .zp-tree-more { opacity: 1; } }
 
+.zp-tree-conflict { color: var(--warning); }
+.zp-file-role { flex-shrink: 0; font-size: var(--text-xs); color: var(--text-muted); }

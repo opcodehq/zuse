@@ -284,6 +284,26 @@ fn main() -> anyhow::Result<()> {
                         window.update(cx, |s, _, cx| s.fixture_zapper_panel(files(), step, cx))?;
                         pause(cx, 900).await;
                         window.update(cx, |s, _, cx| s.fixture_zapper_settle(step, cx))?;
+                        if step == "drive-keyboard" {
+                            // Out of a nested file, close its folder, up to
+                            // handoffs, then F2 to rename or move it.
+                            window.update(cx, |s, window, cx| s.fixture_zapper_tree_focus(window, cx))?;
+                            pause(cx, 200).await;
+                            let any: gpui::AnyWindowHandle = window.into();
+                            for key in ["left", "left", "up", "f2"] {
+                                any.update(cx, |_, window, cx| {
+                                    window.dispatch_event(
+                                        gpui::PlatformInput::KeyDown(gpui::KeyDownEvent {
+                                            keystroke: gpui::Keystroke::parse(key).unwrap(),
+                                            is_held: false,
+                                            prefer_character_input: false,
+                                        }),
+                                        cx,
+                                    );
+                                })?;
+                                pause(cx, 150).await;
+                            }
+                        }
                         pause(cx, 300).await;
                         capture(window.into(), cx, &output, step).await?;
                     }

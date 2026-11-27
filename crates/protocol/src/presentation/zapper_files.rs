@@ -16,6 +16,86 @@ pub struct FileRow {
     /// not written yet.
     pub version: Option<u32>,
     pub reserved: bool,
+    /// A file at a path that is also a folder, which only an older engine
+    /// writes. Both rows show, so neither hides the other.
+    pub conflict: bool,
+}
+
+impl FileRow {
+    /// Identifies the row: a conflicting file and its folder share a path.
+    pub fn key(&self) -> String {
+        format!("{}:{}", if self.folder { "d" } else { "f" }, self.path)
+    }
+}
+
+/// What a key does in the tree, given the selected row's key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TreeKey {
+    /// Select the row with this key.
+    Select(String),
+    Expand(String),
+    Collapse(String),
+    /// Open a file in its tab.
+    Open(String),
+    /// Rename or move, or delete, the selected row.
+    Move(FileRow),
+    Delete(FileRow),
+}
+
+/// The workspace explorer's keys: Up, Down, Home and End move; Right opens a
+/// folder or steps into it; Left closes it or steps to its parent; Enter or
+/// Space opens a file or toggles a folder; F2 moves and Delete or Backspace
+/// deletes, except reserved files.
+pub fn tree_key(rows: &[FileRow], selected: Option<&str>, key: &str) -> Option<TreeKey> {
+    if rows.is_empty() {
+        return None;
+    }
+    let at = selected.and_then(|s| rows.iter().position(|r| r.key() == s));
+    let pick = |i: usize| Some(TreeKey::Select(rows[i.min(rows.len() - 1)].key()));
+    let row = at.map(|i| &rows[i]);
+    match key {
+        "down" => pick(at.map_or(0, |i| i + 1)),
+        "up" => pick(at.map_or(0, |i| i.saturating_sub(1))),
+        "home" => pick(0),
+        "end" => pick(rows.len() - 1),
+        "right" => match row? {
+            r if r.folder && !r.expanded => Some(TreeKey::Expand(r.path.clone())),
+            r if r.folder => pick(at? + 1),
+            _ => None,
+        },
+        "left" => match row? {
+            r if r.folder && r.expanded => Some(TreeKey::Collapse(r.path.clone())),
+            r => {
+                let (parent, _) = r.path.rsplit_once('/')?;
+                Some(TreeKey::Select(format!("d:{parent}")))
+            }
+        },
+        "enter" | "space" => match row? {
+            r if r.folder && r.expanded => Some(TreeKey::Collapse(r.path.clone())),
+            r if r.folder => Some(TreeKey::Expand(r.path.clone())),
+            r => Some(TreeKey::Open(r.path.clone())),
+        },
+        "f2" => row
+            .filter(|r| !r.reserved)
+            .map(|r| TreeKey::Move(r.clone())),
+        "delete" | "backspace" => row
+            .filter(|r| !r.reserved)
+            .map(|r| TreeKey::Delete(r.clone())),
+        _ => None,
+    }
+}
+
+/// A reserved root file's role, shown beside its name so a look-alike name
+/// can't pass for it. Matching is exact.
+pub fn reserved_role(path: &str) -> Option<&'static str> {
+    Some(match path {
+        "AGENTS.md" => "Coordinator rules",
+        "WORKERS.md" => "Thread rules",
+        "NOTES.md" => "Notes",
+        "INSTRUCTIONS.md" => "Purpose",
+        "DIGEST.md" => "Digest",
+        _ => return None,
+    })
 }
 
 /// Each live file's newest version; `files` may be a whole history.
@@ -71,6 +151,7 @@ pub fn tree_rows(
             expanded: expanded.contains(folder),
             version: None,
             reserved: false,
+            conflict: false,
         });
     }
     for file in &live {
@@ -85,6 +166,7 @@ pub fn tree_rows(
                 expanded: false,
                 version: Some(file.version),
                 reserved: RESERVED_FILES.contains(&file.path.as_str()),
+                conflict: all.contains(&file.path),
             });
     }
     for path in RESERVED_FILES {
@@ -97,6 +179,7 @@ pub fn tree_rows(
                 expanded: false,
                 version: None,
                 reserved: true,
+                conflict: false,
             });
         }
     }
@@ -236,6 +319,72 @@ mod tests {
                 "NOTES.md",
                 "WORKERS.md (not written)",
             ]
+        );
+    }
+
+    #[test]
+    fn a_file_an_older_engine_wrote_over_a_folder_shows_beside_it() {
+        let files = [
+            file("notes/day.md", 1, false),
+            file("notes", 1, false),
+            file("handoffs", 1, false),
+        ];
+        let folders = vec!["handoffs".to_owned()];
+        let open = BTreeSet::from(["notes".to_owned()]);
+        let rows: Vec<(String, bool)> = tree_rows(&files, &folders, &open)
+            .iter()
+            .filter(|r| !r.reserved)
+            .map(|r| (format!("{}{}", "  ".repeat(r.depth), r.key()), r.conflict))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("d:handoffs".to_owned(), false),
+                ("d:notes".into(), false),
+                ("  f:notes/day.md".into(), false),
+                ("f:handoffs".into(), true),
+                ("f:notes".into(), true),
+            ]
+        );
+    }
+
+    #[test]
+    fn keys_move_through_the_tree_and_never_move_or_delete_reserved_files() {
+        let files = [
+            file("a/x.md", 1, false),
+            file("a/y.md", 1, false),
+            file("NOTES.md", 1, false),
+        ];
+        let open = BTreeSet::from(["a".to_owned()]);
+        let rows = tree_rows(&files, &[], &open);
+        let key = |selected: &str, key: &str| tree_key(&rows, Some(selected), key);
+        assert_eq!(
+            key("f:a/x.md", "down"),
+            Some(TreeKey::Select("f:a/y.md".into()))
+        );
+        assert_eq!(key("d:a", "up"), Some(TreeKey::Select("d:a".into())));
+        assert_eq!(key("f:a/y.md", "left"), Some(TreeKey::Select("d:a".into())));
+        assert_eq!(key("d:a", "left"), Some(TreeKey::Collapse("a".into())));
+        assert_eq!(
+            key("d:a", "right"),
+            Some(TreeKey::Select("f:a/x.md".into()))
+        );
+        assert_eq!(
+            key("f:a/x.md", "enter"),
+            Some(TreeKey::Open("a/x.md".into()))
+        );
+        assert!(matches!(key("f:a/x.md", "f2"), Some(TreeKey::Move(r)) if r.path == "a/x.md"));
+        assert!(matches!(key("d:a", "delete"), Some(TreeKey::Delete(r)) if r.folder));
+        assert_eq!(key("f:NOTES.md", "f2"), None);
+        assert_eq!(key("f:NOTES.md", "delete"), None);
+        assert_eq!(
+            tree_key(&rows, None, "down"),
+            Some(TreeKey::Select("d:a".into()))
+        );
+        let closed = tree_rows(&files, &[], &BTreeSet::new());
+        assert_eq!(
+            tree_key(&closed, Some("d:a"), "enter"),
+            Some(TreeKey::Expand("a".into()))
         );
     }
 

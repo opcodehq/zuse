@@ -5,7 +5,7 @@ import { createEffect, createMemo, createSignal, createStore, For, Show } from "
 import type { Zapper, ZapperAction, ZapperFile } from "@/core/zapper-types";
 import { Button, Dialog, IconButton, Menu } from "@/ui/primitives";
 import { closePage, panelFor, pageKey, showPage } from "./panel";
-import { ancestors, buildTree, filesUnder, foldersUnder, isReserved, latestFiles, parentOf, pathProblem, RESERVED, visibleRows, type TreeNode, type TreeRow } from "./files-model";
+import { ancestors, buildTree, filesUnder, foldersUnder, isReserved, latestFiles, parentOf, pathProblem, RESERVED, reservedRole, rowKey, visibleRows, type TreeNode, type TreeRow } from "./files-model";
 import { command, commandState, loadResources, resources } from "./state";
 
 // Per Zapper: which folders are open and which row is selected, kept while the inspector changes pages.
@@ -17,9 +17,9 @@ function updateTree(id: string, change: (tree: { expanded: string[]; selected: s
     change(draft[id]!);
   });
 }
-const reveal = (id: string, path: string) =>
+const reveal = (id: string, path: string, folder = false) =>
   updateTree(id, (tree) => {
-    tree.selected = path;
+    tree.selected = (folder ? "d:" : "f:") + path;
     tree.expanded = [...new Set([...tree.expanded, ...ancestors(path)])];
   });
 
@@ -60,7 +60,7 @@ function FileTree(props: { zapper: Zapper; onOpen?: (path: string) => void }) {
   const tree = () => treeOf(props.zapper.id);
   const expanded = createMemo(() => new Set(tree().expanded));
   const rows = createMemo(() => visibleRows(nodes(), expanded()));
-  const rowAt = createMemo(() => new Map(rows().map((r) => [r.node.path, r])));
+  const rowAt = createMemo(() => new Map(rows().map((r) => [rowKey(r.node), r])));
   const extra = () => latestFiles(resources.files).filter((f) => !isReserved(f.path)).length + folders().length;
   // Open the top folders that hold something the first time the files arrive.
   createEffect(
@@ -80,24 +80,37 @@ function FileTree(props: { zapper: Zapper; onOpen?: (path: string) => void }) {
     updateTree(props.zapper.id, (draft) => {
       draft.expanded = draft.expanded.includes(path) ? draft.expanded.filter((p) => p !== path) : [...draft.expanded, path];
     });
-  const activate = (row: TreeRow) => {
+  const select = (key: string) =>
     updateTree(props.zapper.id, (draft) => {
-      draft.selected = row.node.path;
+      draft.selected = key;
     });
+  const activate = (row: TreeRow) => {
+    select(rowKey(row.node));
     if (row.node.kind === "folder") toggle(row.node.path);
     else props.onOpen?.(row.node.path);
   };
+  const rowElement = (key: string) => document.querySelector<HTMLElement>('.zp-tree [data-key="' + CSS.escape(key) + '"]');
   const focusRow = (index: number) => {
     const row = rows()[index];
     if (!row) return;
-    updateTree(props.zapper.id, (draft) => {
-      draft.selected = row.node.path;
-    });
-    queueMicrotask(() => document.querySelector<HTMLElement>('.zp-tree [data-path="' + CSS.escape(row.node.path) + '"]')?.focus());
+    const key = rowKey(row.node);
+    select(key);
+    queueMicrotask(() => rowElement(key)?.focus());
+  };
+  // The row's action menu from the keyboard: its trigger takes focus and opens
+  // the menu, which returns focus to it when it closes.
+  const openMenu = (key: string) => {
+    const trigger = rowElement(key)?.querySelector<HTMLElement>(".zp-tree-more-button");
+    trigger?.focus();
+    trigger?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   };
   const onKeyDown = (event: KeyboardEvent) => {
-    const index = rows().findIndex((row) => row.node.path === tree().selected);
+    const onTrigger = (event.target as Element).closest(".zp-tree-more");
+    if (onTrigger && (event.key === "Enter" || event.key === " ")) return;
+    const focused = (event.target as Element).closest(".zp-tree-row")?.getAttribute("data-key") ?? tree().selected;
+    const index = rows().findIndex((row) => rowKey(row.node) === focused);
     const row = rows()[index];
+    const editable = row && !isReserved(row.node.path);
     const keys: Record<string, () => void> = {
       ArrowDown: () => focusRow(Math.min(rows().length - 1, index + 1)),
       ArrowUp: () => focusRow(Math.max(0, index - 1)),
@@ -106,18 +119,26 @@ function FileTree(props: { zapper: Zapper; onOpen?: (path: string) => void }) {
       ArrowRight: () => row?.node.kind === "folder" && (row.expanded ? focusRow(index + 1) : toggle(row.node.path)),
       ArrowLeft: () => {
         if (row?.node.kind === "folder" && row.expanded) toggle(row.node.path);
-        else if (row && parentOf(row.node.path)) focusRow(rows().findIndex((r) => r.node.path === parentOf(row.node.path)));
+        else if (row && parentOf(row.node.path)) focusRow(rows().findIndex((r) => rowKey(r.node) === "d:" + parentOf(row.node.path)));
       },
       Enter: () => row && activate(row),
+      " ": () => row && activate(row),
+      F2: () => editable && setPending({ kind: "move", node: row.node, to: row.node.path }),
+      Delete: () => editable && setPending({ kind: "delete", node: row.node }),
+      Backspace: () => editable && setPending({ kind: "delete", node: row.node }),
+      ContextMenu: () => row && openMenu(rowKey(row.node)),
+      Escape: () => onTrigger && row && rowElement(rowKey(row.node))?.focus(),
     };
-    if (!keys[event.key] || (event.target as Element).closest(".zp-tree-more")) return;
+    const key = event.key === "F10" && event.shiftKey ? "ContextMenu" : event.key;
+    if (!keys[key]) return;
     event.preventDefault();
-    keys[event.key]!();
+    keys[key]!();
   };
   const selectedFolder = () => {
-    const path = tree().selected;
-    if (!path) return "";
-    return nodes().length && rows().find((r) => r.node.path === path)?.node.kind === "folder" ? path : parentOf(path);
+    const key = tree().selected;
+    if (!key) return "";
+    const path = key.slice(2);
+    return key.startsWith("d:") ? path : parentOf(path);
   };
   return (
     <div class="zp-files">
@@ -140,14 +161,14 @@ function FileTree(props: { zapper: Zapper; onOpen?: (path: string) => void }) {
         fallback={<p class="zp-muted">Loading files…</p>}
       >
         <div class="zp-tree" role="tree" aria-label="Zapper files" onKeyDown={onKeyDown}>
-          <For each={rows().map((r) => r.node.path)}>
-            {(path, index) => {
-              let last = rowAt().get(path)!;
-              const row = () => (last = rowAt().get(path) ?? last);
+          <For each={rows().map((r) => rowKey(r.node))}>
+            {(key, index) => {
+              let last = rowAt().get(key)!;
+              const row = () => (last = rowAt().get(key) ?? last);
               const node = () => row().node;
               const folder = () => node().kind === "folder";
               const file = () => (node().kind === "file" ? (node() as Extract<TreeNode, { kind: "file" }>).file : null);
-              const selected = () => tree().selected === node().path;
+              const selected = () => tree().selected === key;
               return (
                 <div
                   class="zp-tree-row"
@@ -157,8 +178,11 @@ function FileTree(props: { zapper: Zapper; onOpen?: (path: string) => void }) {
                   aria-expanded={folder() ? (row().expanded ? "true" : "false") : undefined}
                   tabindex={selected() || (!tree().selected && index() === 0) ? 0 : -1}
                   data-path={node().path}
+                  data-key={key}
+                  data-conflict={node().kind === "file" && (node() as Extract<TreeNode, { kind: "file" }>).conflict ? "true" : undefined}
                   data-missing={!folder() && !file() ? "true" : undefined}
                   style={{ "padding-left": 8 + row().depth * 16 + "px" }}
+                  onFocus={(event) => event.target === event.currentTarget && select(key)}
                   onClick={(event) => {
                     if (!(event.target as Element).closest(".zp-tree-more")) activate(row());
                   }}
@@ -173,8 +197,11 @@ function FileTree(props: { zapper: Zapper; onOpen?: (path: string) => void }) {
                   </span>
                   <FileIcon name={node().name} directory={folder()} open={row().expanded} />
                   <span class="zp-tree-name">{node().name}</span>
-                  <Show when={!folder() && !file()}>
-                    <span class="zp-tree-hint">not written</span>
+                  <Show when={!folder() && row().depth === 0 && reservedRole(node().path)}>
+                    {(role) => <span class="zp-tree-hint">{file() ? role() : role() + " · not written"}</span>}
+                  </Show>
+                  <Show when={node().kind === "file" && (node() as Extract<TreeNode, { kind: "file" }>).conflict}>
+                    <span class="zp-tree-hint zp-tree-conflict">conflicts with folder</span>
                   </Show>
                   <span class="zp-tree-more">
                     <Menu
@@ -202,6 +229,7 @@ function FileTree(props: { zapper: Zapper; onOpen?: (path: string) => void }) {
   );
 }
 
+const reservedAbout = (path: string) => (isReserved(path) ? RESERVED[path] : undefined);
 const prefix = (folder: string) => (folder ? folder + "/" : "");
 const newFile = (folder: string) => setPending({ kind: "edit", draft: { path: prefix(folder), content: "", version: 0 } });
 
@@ -237,6 +265,7 @@ function FilePage(props: { zapper: Zapper; path: string }) {
       <div class="zp-file-header">
         <FileIcon name={props.path} />
         <strong class="zp-file-title" title={props.path}>{props.path}</strong>
+        <Show when={reservedRole(props.path)}>{(role) => <small class="zp-file-role">{role()}</small>}</Show>
         <Show when={file()}>{(f) => <small class="zp-muted">v{f().version}</small>}</Show>
         <Show when={file() || reserved()}>
           <Button size="sm" onClick={() => editFile(props.zapper, props.path)}>{file() ? "Edit" : "Write"}</Button>
@@ -255,7 +284,7 @@ function FilePage(props: { zapper: Zapper; path: string }) {
           />
         </Show>
       </div>
-      <Show when={RESERVED[props.path]}>{(about) => <p class="zp-muted zp-file-about">{about()}</p>}</Show>
+      <Show when={reservedAbout(props.path)}>{(about) => <p class="zp-muted zp-file-about">{about()}</p>}</Show>
       <Show
         when={file()}
         fallback={
@@ -350,14 +379,14 @@ function History(props: { zapper: Zapper }) {
 export function FileDialogs(props: { zapper: Zapper }) {
   const close = () => setPending(null);
   const patch = (change: Partial<Pending>) => setPending((p) => (p ? ({ ...p, ...change } as Pending) : p));
-  const reopen = (from: string, to: string) => {
+  const reopen = (from: string, to: string, folder: boolean) => {
     const panel = panelFor(props.zapper.id);
     const open = panel.open.find((page) => pageKey(page) === "file:" + from);
     if (open) {
       closePage(props.zapper.id, open);
       showPage(props.zapper.id, { kind: "file", path: to });
     }
-    reveal(props.zapper.id, to);
+    reveal(props.zapper.id, to, folder);
   };
   const saveFile = async (event: SubmitEvent) => {
     event.preventDefault();
@@ -398,7 +427,7 @@ export function FileDialogs(props: { zapper: Zapper }) {
     try {
       await run(props.zapper, { type: "createFolder", path });
       close();
-      reveal(props.zapper.id, path);
+      reveal(props.zapper.id, path, true);
     } catch (error) {
       patch({ error: failure(error) });
     }
@@ -414,7 +443,7 @@ export function FileDialogs(props: { zapper: Zapper }) {
       if (p.node.kind === "folder") await run(props.zapper, { type: "moveFolder", path: p.node.path, to, files: filesUnder(resources.files, p.node.path) });
       else await run(props.zapper, { type: "moveFile", path: p.node.path, to, expectedVersion: p.node.file?.version ?? 0 });
       close();
-      reopen(p.node.path, to);
+      reopen(p.node.path, to, p.node.kind === "folder");
     } catch (error) {
       patch({ error: failure(error) });
     }
@@ -441,7 +470,7 @@ export function FileDialogs(props: { zapper: Zapper }) {
     <>
       <Show when={pending()?.kind === "edit" && (pending() as Extract<Pending, { kind: "edit" }>).draft}>
         {(draft) => (
-          <Dialog open onOpenChange={(open) => !open && close()} title={draft().version ? "Edit " + draft().path : "New file"} description={RESERVED[draft().path]}>
+          <Dialog open onOpenChange={(open) => !open && close()} title={draft().version ? "Edit " + draft().path : "New file"} description={reservedAbout(draft().path)}>
             <form class="zp-form" onSubmit={saveFile}>
               <Show when={!draft().version && !isReserved(draft().path)}>
                 <label>

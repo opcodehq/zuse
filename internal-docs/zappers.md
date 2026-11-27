@@ -236,13 +236,17 @@ the two new tables and changes no file.
 brief. The brief rides again only when its hash changes, so an edit applies
 from the next turn and a running turn is never altered. `NOTES.md` rides in
 the first turn of a conversation and again whenever its version changes. It
-is fenced in `<notes>` and labelled as information that grants no
-permission. A worker gets `WORKERS.md` exactly as the engine always delivered
+is fenced in `<notes>`, with `&`, `<` and `>` written as entities so the
+text can't close the block or open a new one, and labelled as information
+that grants no permission. The fence is formatting, not an authorization
+boundary: what the coordinator may do is decided by the engine's checks. A worker gets `WORKERS.md` exactly as the engine always delivered
 it, plus its linked issues. It never gets `AGENTS.md`, `NOTES.md`,
 `INSTRUCTIONS.md`, `DIGEST.md`, other files or coordinator history. Every
 other file and folder stays out of every prompt; the coordinator sees only how
-many there are and opens them with `zapper_files`. Each turn reads one file
-snapshot, so its brief, notes and file versions come from the same read. The
+many there are and opens them with `zapper_files`. Each turn reads its files
+in one statement, so its brief, notes and file versions come from one
+snapshot. That statement returns the reserved files' text and only the paths
+of the rest, so large documents are never read while a turn is assembled. The
 turn's ledger (`zapper_coordinator_turns`) records the version of every
 reserved file it saw, and turns report changes as "AGENTS.md changed
 (version 3)".
@@ -259,11 +263,23 @@ placement event and is unchanged here.
 **Precedence.** The coordinator's hard rules and the engine's permission
 checks come first, then `AGENTS.md`, then `INSTRUCTIONS.md`. `NOTES.md`,
 thread reports and other files are information. Markdown can't widen scope,
-grant a permission or change who may call a command. A Zapper's `AGENTS.md`
-is stored in the profile and never written into any checkout, so it doesn't
-collide with a repository's `AGENTS.md`. Workers keep reading the
-repository's file natively through their harness: it governs that
-repository's conventions, and `WORKERS.md` adds how to work for this Zapper.
+grant a permission or change who may call a command.
+
+**Two different AGENTS.md files.** The Zapper's `AGENTS.md` is a row in the
+Zapper database. The engine puts it in the coordinator's brief, and it is
+never written into a checkout or the coordinator's folder. A repository's
+`AGENTS.md` is an ordinary file on disk that a worker's harness reads
+natively from its worktree, as it always did. It governs that repository's
+conventions, and `WORKERS.md` adds how to work for this Zapper. "Only people
+edit it" is a rule of the Zapper file API (`writeFile` and `restoreFile`
+from a coordinator credential are refused). It is not an operating-system
+sandbox: anything with access to the profile database can change the row.
+
+**Reserved names are exact.** Only these five exact ASCII root paths load
+into prompts or count as reserved. Drive shows each one's role ("Coordinator
+rules", "Thread rules", "Notes", "Purpose", "Digest") beside its name. A
+look-alike name, such as `agents.md`, a Cyrillic `А` or the same name in a
+folder, gets no role and is an ordinary document.
 
 **Folders and paths.** A folder exists while a live file sits under it or
 after someone creates it (`zapper_folders`), so an empty folder stays until
@@ -287,17 +303,35 @@ or removed since, so nothing a client didn't show is swept up. Each command
 runs in one transaction.
 
 **Compatibility.** `zapper_files` keeps its columns, so an older engine
-opening the same database still reads and writes it; it shows a deleted file
-as an empty one. `Zapper.folders` and `ZapperFile.deleted` are additive and
-optional on the wire. Older clients ignore them: they list current files as
-before, and a history shows a deletion as an empty version.
+opening the same database can still read and write it. That is schema
+compatibility only. Older engines don't know about deletions or folders, so
+their writes aren't guarded the way this version's are:
+- They show a deleted file as an empty one, and saving it brings it back.
+- They can write a file at a path that is also a folder.
+
+This version doesn't hide such a collision. Both trees show the folder and
+the file side by side. Rows are keyed by kind and path, and the file is
+marked "conflicts with folder". Moving or deleting that file acts on the file
+alone: the folder, its children and their history stay as they are.
+
+`Zapper.folders` and `ZapperFile.deleted` are additive and optional on the
+wire. Older clients ignore them: they list current files as before, and a
+history shows a deletion as an empty version.
 
 **Clients.** Native and browser Drive show the files as a tree. Folders come
 first, nesting is drawn with guides, and the open file is quietly selected.
 Folders toggle and files open in their own tab. Both clients create files and
 folders in the selected folder, rename or move, and delete only after a
 confirmation that lists everything the delete removes. Reserved files offer
-no move or delete. A failed save keeps the draft. On a version conflict the
+no move or delete.
+
+Both trees work from the keyboard, as the workspace explorer does:
+- Up, Down, Home and End move the selection.
+- Right opens a folder and Left closes it or steps to its parent.
+- Enter or Space opens a file or toggles a folder.
+- F2 renames or moves, and Delete or Backspace deletes, each through its dialog.
+- In the browser, Shift+F10 or the context-menu key opens a row's action menu, which also offers new file and new folder in that folder.
+- The native New file and New folder buttons can be reached with Tab and pressed with Enter or Space. A failed save keeps the draft. On a version conflict the
 editor rebases onto the current version and says that saving replaces it; the
 browser also shows the latest text beside the draft.
 

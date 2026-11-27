@@ -10,12 +10,27 @@ export const RESERVED: Record<string, string> = {
   "INSTRUCTIONS.md": "The coordinator's purpose and working rules, in its own words.",
   "DIGEST.md": "The coordinator's short status summary for you.",
 };
-export const isReserved = (path: string) => path in RESERVED;
+export const isReserved = (path: string) => Object.hasOwn(RESERVED, path);
 
-export type FileNode = { kind: "file"; name: string; path: string; file: ZapperFile | null };
+/** A reserved file's role, shown beside its name so a look-alike can't pass for it. Exact match. */
+export function reservedRole(path: string): string | null {
+  const roles: Record<string, string> = {
+    "AGENTS.md": "Coordinator rules",
+    "WORKERS.md": "Thread rules",
+    "NOTES.md": "Notes",
+    "INSTRUCTIONS.md": "Purpose",
+    "DIGEST.md": "Digest",
+  };
+  return Object.hasOwn(roles, path) ? roles[path]! : null;
+}
+
+/** A file an older engine wrote at a folder's path is `conflict`: both rows show. */
+export type FileNode = { kind: "file"; name: string; path: string; file: ZapperFile | null; conflict?: boolean };
 export type FolderNode = { kind: "folder"; name: string; path: string; children: TreeNode[] };
 export type TreeNode = FileNode | FolderNode;
 export type TreeRow = { node: TreeNode; depth: number; expanded: boolean };
+/** Identifies a row: a conflicting file and its folder share a path. */
+export const rowKey = (node: TreeNode) => (node.kind === "folder" ? "d:" : "f:") + node.path;
 
 const byName = (a: TreeNode, b: TreeNode) =>
   a.kind !== b.kind ? (a.kind === "folder" ? -1 : 1) : a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
@@ -42,10 +57,14 @@ export function buildTree(files: readonly ZapperFile[], folders: readonly string
   };
   for (const folder of folders) ensure(folder);
   const live = latestFiles(files);
+  const placed: FileNode[] = [];
   for (const file of live) {
     const cut = file.path.lastIndexOf("/");
-    ensure(cut < 0 ? "" : file.path.slice(0, cut)).children.push({ kind: "file", name: file.path.slice(cut + 1), path: file.path, file });
+    const node: FileNode = { kind: "file", name: file.path.slice(cut + 1), path: file.path, file };
+    ensure(cut < 0 ? "" : file.path.slice(0, cut)).children.push(node);
+    placed.push(node);
   }
+  for (const node of placed) if (folderAt.has(node.path)) node.conflict = true;
   for (const path of Object.keys(RESERVED))
     if (!live.some((file) => file.path === path)) root.children.push({ kind: "file", name: path, path, file: null });
   const sort = (node: FolderNode) => {

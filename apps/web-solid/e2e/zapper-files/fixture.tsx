@@ -97,6 +97,7 @@ Object.assign(window, {
     nested: () => { files = structuredClone(nested); zapper.folders = ["handoffs", "handoffs/design-references", "reports"]; show(); },
     fail: (message: string | null) => { fail = message; },
     listError: (message: string | null) => { listError = message; show(); },
+    legacy: (path: string, content: string) => { files.push({ path, version: (live().get(path)?.version ?? 0) + 1, content }); show(); },
     change: (path: string, content: string) => { files.push({ path, version: (live().get(path)?.version ?? 0) + 1, content }); },
     theme: (theme: "light" | "dark") => { setView((draft) => { draft.preferences.theme = theme; }); flush(); },
     requests: () => requests,
