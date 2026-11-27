@@ -159,6 +159,11 @@ pub struct RuntimeControl {
     pub(crate) mailbox_changes: tokio::sync::broadcast::Sender<()>,
     /// Set once database NOTIFY forwards mailbox changes from other processes.
     mailbox_push: std::sync::atomic::AtomicBool,
+    /// A computer request changed (made, decided, claimed, finished or
+    /// stopped); bridge long-polls in this process re-read.
+    bridge_changes: tokio::sync::broadcast::Sender<()>,
+    /// Set once database NOTIFY forwards bridge changes from other processes.
+    bridge_push: std::sync::atomic::AtomicBool,
     runtime_releases: runtime_updates::RuntimeReleaseConfig,
     harness_bundles: harness_updates::HarnessBundleConfig,
     /// Whether this worker runs the provider reconciliation pass (its due time
@@ -322,6 +327,8 @@ impl RuntimeControl {
             object_writes: Arc::new(tokio::sync::Semaphore::new(1)),
             mailbox_changes: tokio::sync::broadcast::channel(128).0,
             mailbox_push: std::sync::atomic::AtomicBool::new(false),
+            bridge_changes: tokio::sync::broadcast::channel(128).0,
+            bridge_push: std::sync::atomic::AtomicBool::new(false),
             runtime_releases: runtime_updates::RuntimeReleaseConfig::default(),
             harness_bundles: harness_updates::HarnessBundleConfig::default(),
             provider_reconciliation: std::sync::atomic::AtomicBool::new(false),
@@ -433,6 +440,8 @@ impl RuntimeControl {
         let weak = Arc::downgrade(self);
         self.mailbox_push
             .store(true, std::sync::atomic::Ordering::Release);
+        self.bridge_push
+            .store(true, std::sync::atomic::Ordering::Release);
         tokio::spawn(async move {
             let _wakeups = wakeups;
             use crate::db::wake::Work;
@@ -441,19 +450,44 @@ impl RuntimeControl {
                 let work = notifications.recv().await;
                 let Some(control) = weak.upgrade() else { break };
                 match work {
-                    Ok(Work::Mailbox | Work::All) | Err(RecvError::Lagged(_)) => {
+                    Ok(Work::Mailbox) => {
                         let _ = control.mailbox_changes.send(());
+                    }
+                    Ok(Work::Bridge) => {
+                        let _ = control.bridge_changes.send(());
+                    }
+                    Ok(Work::All) | Err(RecvError::Lagged(_)) => {
+                        let _ = control.mailbox_changes.send(());
+                        let _ = control.bridge_changes.send(());
                     }
                     Ok(_) => {}
                     Err(RecvError::Closed) => {
-                        control
-                            .mailbox_push
-                            .store(false, std::sync::atomic::Ordering::Release);
+                        for push in [&control.mailbox_push, &control.bridge_push] {
+                            push.store(false, std::sync::atomic::Ordering::Release);
+                        }
                         break;
                     }
                 }
             }
         });
+    }
+    /// Wake this process's bridge long-polls after a committed change. Other
+    /// processes hear it through the tables' NOTIFY triggers.
+    pub(crate) fn bridge_changed(&self) {
+        let _ = self.bridge_changes.send(());
+    }
+    pub(crate) fn bridge_changes(&self) -> tokio::sync::broadcast::Receiver<()> {
+        self.bridge_changes.subscribe()
+    }
+    /// How often a bridge long-poll re-reads while waiting: on changes and
+    /// its deadline with pushed changes, otherwise at the connector's old
+    /// polling cadence.
+    pub(crate) fn bridge_recheck(&self) -> Duration {
+        if self.bridge_push.load(std::sync::atomic::Ordering::Acquire) {
+            Duration::from_millis(u64::from(zuse_protocol::computer_tasks::MAX_WAIT_MS) + 1000)
+        } else {
+            Duration::from_secs(zuse_protocol::computer_tasks::HEARTBEAT_SECS)
+        }
     }
     /// How often a mailbox long-poll re-reads while waiting. With pushed
     /// changes it waits for a change or its deadline; otherwise every second.

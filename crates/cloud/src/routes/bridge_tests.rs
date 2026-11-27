@@ -2,7 +2,10 @@
 //! deadlines, stop, unknown outcomes and attachment boundaries.
 use super::bridge_approvals::{Decision, decide_for, pending_for};
 use super::bridge_computers::{attached_for, claim_for, primary_for};
-use super::bridge_tasks::{Action, cancel_for, host_action, results_for, runtime_request};
+use super::bridge_tasks::{
+    Action, Changes, cancel_for, hint, host_action, results_for, runtime_request, wait_claimable,
+    wait_settled,
+};
 use serde_json::{Value, json};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use zuse_protocol::computer_tasks::Request;
@@ -59,6 +62,17 @@ async fn database() -> Option<PgPool> {
     sqlx::raw_sql(migration).execute(&pool).await.unwrap();
     sqlx::raw_sql(include_str!(
         "../../migrations/0056_bridge_synced_checkout.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    // The account event outbox, then the hint kind request changes add.
+    let (outbox, _) = include_str!("../../migrations/0017_account_events.sql")
+        .split_once("CREATE TABLE zuse_rust_account_event_cursors")
+        .unwrap();
+    sqlx::raw_sql(outbox).execute(&pool).await.unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../migrations/0057_computer_request_hints.sql"
     ))
     .execute(&pool)
     .await
@@ -1152,4 +1166,163 @@ async fn a_synced_checkout_is_the_default_folder_for_that_chat_on_that_computer(
     )
     .await
     .unwrap();
+}
+
+/// Changes a test announces by hand; nothing re-reads on its own.
+struct Announced(tokio::sync::broadcast::Sender<()>);
+impl Changes for Announced {
+    fn subscribe(&self) -> tokio::sync::broadcast::Receiver<()> {
+        self.0.subscribe()
+    }
+    fn recheck(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(60)
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
+async fn waits_answer_as_soon_as_work_is_approved_or_a_request_settles() {
+    use std::time::{Duration, Instant};
+    let Some(pool) = database().await else { return };
+    let changes = std::sync::Arc::new(Announced(tokio::sync::broadcast::channel(8).0));
+    let task = uuid::Uuid::new_v4();
+    attach(&pool, "w", "chat", "mac").await;
+    offer(&pool, "mac", task).await;
+    // Nothing approved: the wait ends at its deadline.
+    let started = Instant::now();
+    let ready = wait_claimable(
+        &pool,
+        "owner",
+        "mac",
+        task,
+        Duration::from_millis(300),
+        &*changes,
+    )
+    .await
+    .unwrap();
+    assert!(!ready && started.elapsed() >= Duration::from_millis(300));
+    let id = command(&pool, "w", "chat", "mac", "uname -a", None)
+        .await
+        .unwrap();
+    let connector = tokio::spawn({
+        let (pool, changes) = (pool.clone(), changes.clone());
+        async move {
+            let started = Instant::now();
+            let ready = wait_claimable(
+                &pool,
+                "owner",
+                "mac",
+                task,
+                Duration::from_secs(30),
+                &*changes,
+            )
+            .await
+            .unwrap();
+            (ready, started.elapsed())
+        }
+    });
+    let tool = tokio::spawn({
+        let (pool, changes) = (pool.clone(), changes.clone());
+        async move {
+            let started = Instant::now();
+            let rows = wait_settled(
+                &pool,
+                "owner",
+                "w",
+                "chat",
+                id,
+                Duration::from_secs(30),
+                &*changes,
+            )
+            .await
+            .unwrap();
+            (rows, started.elapsed())
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!connector.is_finished(), "pending work is not claimable");
+    decide_for(&pool, "owner", "w", "chat", id, Decision::Once)
+        .await
+        .unwrap();
+    let _ = changes.0.send(());
+    let (ready, waited) = connector.await.unwrap();
+    assert!(ready && waited < Duration::from_secs(5), "{waited:?}");
+    assert_eq!(claim(&pool, "mac", task).await["id"], id.to_string());
+    let _ = changes.0.send(());
+    // Claimed and running is not settled: the tool call keeps waiting.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!tool.is_finished());
+    host_action(
+        &pool,
+        "owner",
+        "mac",
+        Action::Finish {
+            task,
+            request: id,
+            output: "Linux\n".into(),
+            status: "exit status: 0".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let _ = changes.0.send(());
+    let (rows, waited) = tool.await.unwrap();
+    assert!(waited < Duration::from_secs(5), "{waited:?}");
+    let row = rows.iter().find(|r| r["id"] == id.to_string()).unwrap();
+    assert_eq!(row["state"], "finished");
+    assert_eq!(row["result"]["output"], "Linux\n");
+    // A request this chat doesn't list answers at once.
+    let started = Instant::now();
+    wait_settled(
+        &pool,
+        "owner",
+        "w",
+        "chat",
+        uuid::Uuid::new_v4(),
+        Duration::from_secs(30),
+        &*changes,
+    )
+    .await
+    .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
+async fn a_request_change_hints_its_chat_to_the_owners_apps() {
+    let Some(pool) = database().await else { return };
+    let hints = || async {
+        sqlx::query_as::<_, (String, String, Option<String>, Value)>(
+            "SELECT owner_id,resource_id,workspace_id,payload FROM zuse_rust_account_event_outbox
+             WHERE kind='computer-request' ORDER BY outbox_id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+    };
+    let task = uuid::Uuid::new_v4();
+    attach(&pool, "w", "chat", "mac").await;
+    offer(&pool, "mac", task).await;
+    let id = command(&pool, "w", "chat", "mac", "secret --token x", None)
+        .await
+        .unwrap();
+    hint(&pool, id).await.unwrap();
+    // The chat and its computer only: never the command.
+    assert_eq!(
+        hints().await,
+        [("owner".into(), "chat".into(), Some("w".into()), json!({}))]
+    );
+    hint(&pool, uuid::Uuid::new_v4()).await.unwrap();
+    assert_eq!(hints().await.len(), 1, "an unknown request hints nothing");
+    // A database before the hint kind refuses it; the change itself stands.
+    sqlx::raw_sql(
+        "ALTER TABLE zuse_rust_account_event_outbox DROP CONSTRAINT zuse_rust_account_event_outbox_kind_check;
+         ALTER TABLE zuse_rust_account_event_outbox ADD CONSTRAINT zuse_rust_account_event_outbox_kind_check
+         CHECK(kind IN ('workspace','billing')) NOT VALID",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(hint(&pool, id).await.is_err());
+    assert_eq!(state_of(&pool, "w", "chat", id).await["state"], "pending");
 }

@@ -34,6 +34,9 @@ pub struct McpConfig {
     pub ipc_port: u16,
     /// The chat whose agent spawned this server, when injected by the engine.
     pub origin: Origin,
+    /// A cloud chat that can run commands on the owner's computers
+    /// (`ZUSE_CLOUD_COMPUTERS=1`): those tools are loaded up front.
+    pub cloud_computers: bool,
 }
 
 impl McpConfig {
@@ -47,6 +50,7 @@ impl McpConfig {
         Self {
             ipc_port,
             origin: Origin::from_env(),
+            cloud_computers: std::env::var("ZUSE_CLOUD_COMPUTERS").as_deref() == Ok("1"),
         }
     }
 }
@@ -54,7 +58,7 @@ impl McpConfig {
 /// Run the MCP server on this process's stdin/stdout until stdin closes.
 pub async fn run(config: McpConfig) -> anyhow::Result<()> {
     let zuse = Zuse::new(format!("ws://127.0.0.1:{}", config.ipc_port), config.origin);
-    let tools = Tools::new(std::sync::Arc::new(zuse));
+    let tools = Tools::new(std::sync::Arc::new(zuse)).with_cloud_computers(config.cloud_computers);
     serve_stdio(std::sync::Arc::new(tools)).await
 }
 

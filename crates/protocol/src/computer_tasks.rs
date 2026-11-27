@@ -9,6 +9,9 @@ pub const MAX_TIMEOUT_SECS: u32 = 3600;
 pub const HEARTBEAT_SECS: u64 = 2;
 /// A claimed command silent for this long shows "Outcome unknown".
 pub const UNKNOWN_AFTER_SECS: u64 = 80;
+/// The longest a long-poll (a connector's claim, a runtime's [`Request::Wait`])
+/// is held open before it answers "nothing yet"; callers ask again.
+pub const MAX_WAIT_MS: u32 = 8000;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "camelCase", deny_unknown_fields)]
@@ -35,8 +38,21 @@ pub enum Request {
         timeout_seconds: Option<u32>,
     },
     Results,
+    /// Like [`Request::Results`], answered once request `request_id` has
+    /// settled (finished, denied, stopped or unknown) or after `wait_ms`
+    /// (at most [`MAX_WAIT_MS`]), whichever comes first. Servers from before
+    /// this request refuse it; callers then poll `Results`.
+    Wait {
+        request_id: uuid::Uuid,
+        wait_ms: u32,
+    },
 }
 pub const METHOD: &str = "ComputerTasks";
+
+/// A request state that will not change any more (see the cloud's results).
+pub fn settled(state: &str) -> bool {
+    matches!(state, "finished" | "denied" | "cancelled" | "unknown")
+}
 
 /// The deadline in milliseconds for a requested timeout, or `None` when the
 /// request is out of range.

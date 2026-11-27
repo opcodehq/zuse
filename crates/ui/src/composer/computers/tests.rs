@@ -418,3 +418,87 @@ fn a_full_read_clears_requests_that_went_away(cx: &mut gpui::TestAppContext) {
         assert!(c.computers.runs.is_empty());
     });
 }
+
+/// A pushed `computer-request` hint shows a new approval at once, without
+/// waiting for the next poll.
+#[gpui::test]
+fn a_pushed_request_hint_fetches_the_approval_at_once(cx: &mut gpui::TestAppContext) {
+    let runtime = runtime();
+    let _entered = runtime.enter();
+    let (composer, _, mut requests, replies) = cloud_composer(cx, true);
+    let quiet = |label: &str, params: &Value| match label {
+        "pending" | "results" => Ok(json!([])),
+        _ => account(label, params),
+    };
+    let asked = serve(cx, &runtime, &mut requests, &replies, quiet);
+    let feed = asked
+        .iter()
+        .find(|r| r["method"] == methods::CLOUD_EVENTS)
+        .expect("the composer follows the account feed");
+    assert_eq!(feed["params"]["expectedAccountId"], "owner");
+    composer.update(cx, |c, _| assert!(c.computer_request_waiting().is_none()));
+    let hint = |workspace: &str| {
+        json!({"id":feed["id"],"item":{"accountId":"owner","organizationId":null,
+            "data":{"type":"events","events":[{"kind":"computer-request","resourceId":"session","workspaceId":workspace}]}}})
+    };
+    // Another computer's hint is not this chat's business.
+    runtime
+        .block_on(replies.send(format!("{}\n", hint("another-task"))))
+        .unwrap();
+    let asked = serve(cx, &runtime, &mut requests, &replies, account);
+    assert!(
+        !asked.iter().any(|r| r["params"]["action"] == "pending"),
+        "{asked:?}"
+    );
+    runtime
+        .block_on(replies.send(format!("{}\n", hint("task"))))
+        .unwrap();
+    let asked = serve(cx, &runtime, &mut requests, &replies, account);
+    assert!(asked.iter().any(|r| r["params"]["action"] == "pending"));
+    composer.update(cx, |c, _| {
+        assert_eq!(
+            c.computer_request_waiting().map(|p| p.id.as_str()),
+            Some("r1")
+        );
+    });
+}
+
+#[test]
+fn only_this_accounts_hints_for_this_computer_refetch() {
+    let frame = |account: &str, org: Value, data: Value| json!({"accountId":account,"organizationId":org,"data":data});
+    let hint = json!({"type":"events","events":[{"kind":"computer-request","workspaceId":"task","resourceId":"chat"}]});
+    assert!(requests_changed(
+        &frame("owner", Value::Null, hint.clone()),
+        "owner",
+        "task"
+    ));
+    assert!(!requests_changed(
+        &frame("owner", Value::Null, hint.clone()),
+        "owner",
+        "other"
+    ));
+    assert!(!requests_changed(
+        &frame("someone", Value::Null, hint.clone()),
+        "owner",
+        "task"
+    ));
+    assert!(!requests_changed(
+        &frame("owner", json!("org"), hint),
+        "owner",
+        "task"
+    ));
+    let other = json!({"type":"events","events":[{"kind":"billing","workspaceId":"task"}]});
+    assert!(!requests_changed(
+        &frame("owner", Value::Null, other),
+        "owner",
+        "task"
+    ));
+    // Hints may have been missed: read again.
+    for kind in ["connected", "reset"] {
+        assert!(requests_changed(
+            &frame("owner", Value::Null, json!({"type":kind})),
+            "owner",
+            "task"
+        ));
+    }
+}

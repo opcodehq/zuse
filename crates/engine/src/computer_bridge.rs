@@ -20,7 +20,9 @@ use std::{
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
-use zuse_protocol::computer_tasks::{DEFAULT_TIMEOUT_SECS, HEARTBEAT_SECS, MAX_TIMEOUT_SECS};
+use zuse_protocol::computer_tasks::{
+    DEFAULT_TIMEOUT_SECS, HEARTBEAT_SECS, MAX_TIMEOUT_SECS, MAX_WAIT_MS,
+};
 
 /// Commands one computer runs at once; later approvals wait their turn.
 const MAX_CONCURRENT: usize = 4;
@@ -208,6 +210,9 @@ pub(crate) struct Timing {
     pub backoff_max: Duration,
     /// A session online this long resets the reconnect backoff.
     pub stable_after: Duration,
+    /// How long one wait for approved work is held open by the cloud. Zero
+    /// polls every `heartbeat` instead.
+    pub claim_wait: Duration,
 }
 impl Default for Timing {
     fn default() -> Self {
@@ -217,6 +222,7 @@ impl Default for Timing {
             backoff_min: Duration::from_secs(1),
             backoff_max: Duration::from_secs(30),
             stable_after: Duration::from_secs(60),
+            claim_wait: Duration::from_millis(u64::from(MAX_WAIT_MS)),
         }
     }
 }
@@ -325,6 +331,12 @@ impl Host {
             async move { while runs.join_next().await.is_some() {} }
         };
         let mut online = false;
+        // Wait for approved work instead of sleeping between claims, until a
+        // cloud from before waits refuses them.
+        let mut waits = !self.timing.claim_wait.is_zero();
+        // The last wait said work was ready; if the claim then finds none, the
+        // next round sleeps instead of asking again at once.
+        let mut woken = false;
         loop {
             while runs.try_join_next().is_some() {}
             self.set_running(runs.len());
@@ -344,11 +356,39 @@ impl Host {
                         });
                     }
                     if runs.len() < MAX_CONCURRENT && !stop.is_cancelled() {
+                        let was_woken = std::mem::take(&mut woken);
                         match self
                             .transport
                             .send(json!({"action":"claim","task":self.task}))
                             .await
                         {
+                            Ok(Value::Null) if waits && !was_woken => {
+                                let wait = json!({"action":"wait","task":self.task,
+                                    "waitMs":self.timing.claim_wait.as_millis() as u64});
+                                let started = Instant::now();
+                                // Dropping a wait is harmless: it never claims.
+                                tokio::select! {
+                                    _ = stop.cancelled() => {
+                                        finish(&mut runs).await;
+                                        return Ok(Exit::Shutdown);
+                                    }
+                                    Some(_) = runs.join_next(), if !runs.is_empty() => continue,
+                                    reply = self.transport.send(wait) => match reply {
+                                        Ok(Value::Bool(true)) => {
+                                            woken = true;
+                                            continue;
+                                        }
+                                        // Waited its full time: offer again and keep waiting.
+                                        Ok(_) if started.elapsed() >= self.timing.heartbeat => continue,
+                                        Ok(_) => {}
+                                        Err(SendError::Rejected(400 | 404 | 405 | 422)) => {
+                                            waits = false;
+                                        }
+                                        Err(error) if runs.is_empty() => return Err(error.into()),
+                                        Err(_) => {}
+                                    },
+                                }
+                            }
                             Ok(Value::Null) => {}
                             Ok(value) => match serde_json::from_value::<Claimed>(value) {
                                 Ok(claimed) => {
