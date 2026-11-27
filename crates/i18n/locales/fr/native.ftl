@@ -1247,6 +1247,9 @@ native-whats_new_got_it = Compris
 # Context: "What's new" dialog footer link to the website changelog with every release.
 native-whats_new_all_releases = Toutes les versions
 
+# Context: "What's new" dialog footer button; opens this release's full notes on the website changelog.
+native-whats_new_full_release = Notes de version complètes
+
 # Context: "What's new" dialog footer, shows the next newer release.
 native-whats_new_next = Suivant
 

@@ -19,6 +19,12 @@ const nextConfig = {
 	async redirects() {
 		return [
 			{
+				source: "/:path*",
+				has: [{ type: "host", value: "zuse.sh" }],
+				destination: "https://www.zuse.sh/:path*",
+				permanent: true,
+			},
+			{
 				source: "/docs/repository-settings",
 				destination: "https://docs.zuse.sh/projects/repository-settings",
 				permanent: true,

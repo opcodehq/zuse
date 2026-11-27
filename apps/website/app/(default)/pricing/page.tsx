@@ -6,7 +6,7 @@ import { getSEO } from "@/lib/seo";
 export const metadata = getSEO({
 	title: "Pricing: local and cloud coding agents",
 	description:
-		"Use Zuse locally for free during beta. Cloud Workspace costs $40/month with $35 compute included. Bring your own agent subscriptions.",
+		"Use Zuse locally for free during beta. Zuse Cloud is $20/month with 33,600 machine minutes included, or $50/month for Cloud Max. Try the first week for $1. Bring your own agent subscriptions.",
 	path: "/pricing",
 });
 
@@ -25,15 +25,29 @@ const plans = [
 		download: true,
 	},
 	{
-		name: "Cloud Workspace",
-		price: "$40",
-		period: "/ month · USD",
-		summary: "Isolated compute for work beyond your laptop.",
+		name: "Cloud",
+		price: "$20",
+		period: "/ month · USD · first week $1",
+		summary: "Isolated cloud computers for work beyond your laptop.",
 		features: [
-			"Cloud beta",
-			"$35 of provider compute included monthly",
-			"Additional compute at provider cost + 5%",
-			"Configurable overage cap; $25 default",
+			"33,600 machine minutes a month, about 140 awake hours on the default 4 vCPU / 16 GB machine",
+			"Asleep machines use no minutes",
+			"Pay as you go past the allowance at the same rate, no markup",
+			"Configurable monthly cap; $25 default",
+			"Trial: first week for $1 with 8,400 machine minutes and no overage",
+		],
+		download: false,
+	},
+	{
+		name: "Cloud Max",
+		price: "$50",
+		period: "/ month · USD",
+		summary: "More time and larger machines for heavier cloud work.",
+		features: [
+			"84,000 machine minutes a month, about 350 awake hours on the default machine",
+			"Larger machines, up to 8 vCPU / 32 GB",
+			"Pay as you go past the allowance at the same rate, no markup",
+			"Configurable monthly cap; $25 default",
 		],
 		download: false,
 	},
@@ -53,7 +67,7 @@ export default function PricingPage() {
 				description="Use the agents you already pay for. Choose where the work runs."
 				artwork="handoff"
 			/>
-			<div className="grid md:grid-cols-2">
+			<div className="grid md:grid-cols-3">
 				{plans.map((plan) => (
 					<section key={plan.name} className="pricing-card flex flex-col">
 						<p className="editorial-label">
@@ -94,19 +108,24 @@ export default function PricingPage() {
 			</div>
 			<section className="grid gap-10 px-5 py-16 md:grid-cols-2 md:px-16">
 				<div>
-					<h2 className="text-3xl">What does compute cover?</h2>
+					<h2 className="text-3xl">What is a machine minute?</h2>
 					<p className="mt-4 text-muted-foreground leading-relaxed">
-						Cloud Workspace compute is infrastructure usage, not model tokens.
-						Agent subscriptions and API usage are billed separately by your
-						provider. Cloud prices are in USD, before applicable taxes.
+						One machine minute is one minute of a 1 vCPU / 4 GB machine. The
+						default 4 vCPU / 16 GB machine uses 4 per awake minute and an 8 vCPU
+						/ 32 GB machine uses 8. Asleep machines use none. Extra minutes cost
+						the same as included ones: $20 per 33,600. Machine minutes cover
+						cloud computers, not model tokens; agent subscriptions and API usage
+						are billed separately by your provider. Cloud prices are in USD,
+						before applicable taxes.
 					</p>
 				</div>
 				<div>
 					<h2 className="text-3xl">Can I stay local?</h2>
 					<p className="mt-4 text-muted-foreground leading-relaxed">
 						Yes. Cloud is optional. Download the desktop app and connect your
-						existing coding agents. Cloud access remains in beta; book a call to
-						discuss availability and setup.
+						existing coding agents. Zuse Cloud is in beta: the first week of
+						Cloud costs $1 and includes 8,400 machine minutes, then it renews as
+						Cloud at $20/month. Book a call to discuss availability and setup.
 					</p>
 				</div>
 			</section>

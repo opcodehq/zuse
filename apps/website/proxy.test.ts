@@ -43,7 +43,7 @@ describe("proxy", () => {
 		expect(response.status).toBe(200);
 		expect(response.headers.get("x-middleware-next")).toBe("1");
 		expect(response.headers.get("vary")).toBe(
-			"Accept, Accept-Encoding, Accept-Language, Cookie, X-Vercel-IP-Country",
+			"Accept, Accept-Encoding, Accept-Language, Cookie, CF-IPCountry",
 		);
 	});
 
@@ -118,7 +118,7 @@ describe("homepage language preference", () => {
 		expect(response.headers.get("vary")).toContain("Cookie");
 	});
 	it("lets saved English and other explicit choices beat browser and IP hints", () => {
-		const hints = { "Accept-Language": "fr", "x-vercel-ip-country": "DE" };
+		const hints = { "Accept-Language": "fr", "cf-ipcountry": "DE" };
 		expect(
 			proxy(request("/", { ...hints, Cookie: "zuse-language=en" })).status,
 		).toBe(200);
@@ -131,12 +131,12 @@ describe("homepage language preference", () => {
 	it("uses the IP country only without a supported browser preference", () => {
 		expect(
 			proxy(
-				request("/", { "Accept-Language": "ru", "x-vercel-ip-country": "TW" }),
+				request("/", { "Accept-Language": "ru", "cf-ipcountry": "TW" }),
 			).headers.get("location"),
 		).toBe("https://zuse.sh/zh-Hant");
 		expect(
 			proxy(
-				request("/", { "Accept-Language": "en", "x-vercel-ip-country": "TW" }),
+				request("/", { "Accept-Language": "en", "cf-ipcountry": "TW" }),
 			).status,
 		).toBe(200);
 	});
