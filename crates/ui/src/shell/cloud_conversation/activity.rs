@@ -8,6 +8,8 @@ pub(super) struct Activity {
 }
 /// The label of a turn waiting on the user.
 pub(super) const NEEDS_INPUT: &str = "Agent needs your input";
+/// The label of messages held behind one whose outcome is unknown.
+pub(super) const REVIEW_FIRST: &str = "Waiting for you to review the previous message";
 /// The label of a turn the agent is working on.
 pub(super) const WORKING: &str = "Agent working…";
 pub(super) fn preparation(row: &Value, initial: bool) -> Option<Activity> {
@@ -28,9 +30,11 @@ pub(super) fn status_line(
     computer: Option<&Activity>,
     agent: Option<&Activity>,
 ) -> Option<(String, bool)> {
+    // Messages held for review show under the messages; the composer's
+    // review prompt is the action.
     computer
         .filter(|stage| !stage.busy)
-        .or(agent.filter(|activity| !activity.busy))
+        .or(agent.filter(|activity| !activity.busy && activity.label != REVIEW_FIRST))
         .map(|activity| (activity.label.clone(), false))
 }
 pub(super) fn command(
@@ -78,6 +82,24 @@ pub(super) fn command(
     else {
         return refused(rows, messages);
     };
+    // A message whose outcome is unknown holds every later one until it is
+    // reviewed: say so instead of a turn that never comes.
+    let held = matches!(
+        row["executionState"].as_str(),
+        Some("admitted" | "accepted" | "queued")
+    ) && rows.iter().any(|unknown| {
+        unknown["executionState"] == "outcome-unknown"
+            && unknown["unknownReviewed"] != true
+            && unknown["createdAt"].as_i64().unwrap_or_default()
+                <= row["createdAt"].as_i64().unwrap_or_default()
+    });
+    if held {
+        return Some(Activity {
+            label: REVIEW_FIRST.into(),
+            next: None,
+            busy: false,
+        });
+    }
     let (label, busy) = match row["executionState"].as_str()? {
         "starting" => ("Starting agent turn…", true),
         "running" => (WORKING, true),
@@ -418,6 +440,28 @@ mod tests {
             "control rows are not inference"
         );
         assert_eq!(command(&json!([{"executionState":"queued","messageId":"q","text":"queued","createdAt":2},{"executionState":"running","messageId":"r","text":"run","createdAt":1}])).unwrap().label,"Agent working…");
+    }
+    #[test]
+    fn messages_held_behind_an_unreviewed_unknown_say_review_it() {
+        let unknown = json!({"commandId":"lost","executionState":"outcome-unknown",
+            "unknownReviewed":false,"messageId":"m1","text":"what was the issue?","createdAt":1});
+        let queued = json!({"commandId":"next","executionState":"queued",
+            "messageId":"m2","text":"what?","createdAt":2});
+        let held = command(&json!([unknown, queued])).unwrap();
+        assert_eq!(
+            (held.label.as_str(), held.busy),
+            (REVIEW_FIRST, false),
+            "not a turn starting, and not running"
+        );
+        // Not in the composer's status line: its review prompt is the action.
+        assert!(status_line(None, Some(&held)).is_none());
+        // Reviewed: the queued message is simply waiting for the agent again.
+        let mut reviewed = unknown.clone();
+        reviewed["unknownReviewed"] = json!(true);
+        assert_eq!(
+            command(&json!([reviewed, queued])).unwrap().label,
+            "Waiting for agent…"
+        );
     }
     #[test]
     fn a_refused_newest_message_says_why_until_another_is_sent() {

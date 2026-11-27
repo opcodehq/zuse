@@ -3677,6 +3677,10 @@ pub struct Transcript {
     /// computer starting or a first message on its way to the agent. While
     /// set, the working line under the last message shows it.
     external_activity: Option<SharedString>,
+    /// The newest messages never reached their executor (a cloud chat's
+    /// server stayed unreachable): the line under them says "Not sent" with
+    /// Retry instead of any working line.
+    external_not_sent: bool,
     /// The session notice the working row last showed, to repaint on change.
     last_notice: Option<String>,
     /// Memory-only viewport state for primary chats visited in this window.
@@ -4003,6 +4007,9 @@ pub enum TranscriptEvent {
     SendUiBlockReply { row_id: SharedString, text: String },
     /// A plugin card's button (connect, manage, browse, sign in).
     UiBlockPlugin(zuse_viewport::ui_block::PluginAction),
+    /// The not-sent line's Retry (see [`Transcript::set_external_not_sent`]):
+    /// send the messages the server never took again.
+    RetryNotSent,
 }
 
 /// Where a reply's Fork menu sends the copy.
@@ -4349,6 +4356,7 @@ impl Transcript {
             land_end_pending: doc_override.is_some() && !follow,
             doc_live: doc_override.is_some() && follow,
             external_activity: None,
+            external_not_sent: false,
             last_notice: None,
             doc_override,
             saved_viewports: SavedViewportCache::default(),
@@ -4509,6 +4517,20 @@ impl Transcript {
             self.remeasure_last_row();
             cx.notify();
         }
+    }
+
+    /// Show (or clear) the not-sent line under the last message.
+    pub(crate) fn set_external_not_sent(&mut self, not_sent: bool, cx: &mut Context<Self>) {
+        if self.external_not_sent != not_sent {
+            self.external_not_sent = not_sent;
+            self.remeasure_last_row();
+            cx.notify();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn external_not_sent_for_test(&self) -> bool {
+        self.external_not_sent
     }
 
     pub fn set_rail_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
@@ -9346,6 +9368,30 @@ impl Transcript {
         Some(turn_timing_line(theme).child(label))
     }
 
+    /// The not-sent line (see [`Self::set_external_not_sent`]): its click
+    /// asks the owner to send those messages again.
+    fn render_not_sent_line(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::of(cx).clone();
+        div()
+            .id("not-sent-retry")
+            .debug_selector(|| "not-sent-retry".into())
+            .role(gpui::Role::Button)
+            .aria_label("Not sent. Retry sending")
+            .tab_index(0)
+            .focus_visible(|style| style.underline())
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(Theme::SPACE_SM))
+            .pt(px(Theme::SPACE_LG))
+            .text_size(crate::typography::text_xs())
+            .text_color(theme.danger)
+            .cursor_pointer()
+            .on_click(cx.listener(|_, _, _, cx| cx.emit(TranscriptEvent::RetryNotSent)))
+            .child(SharedString::from("Not sent — Retry"))
+            .into_any_element()
+    }
+
     fn render_working_trailer(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if let Some((entry, elapsed)) = self.live_work(cx) {
             self.last_live_elapsed.insert(entry.to_string(), elapsed);
@@ -9376,6 +9422,11 @@ impl Transcript {
                 (false, false, 0, elapsed, last.created_at)
             } else {
                 let chat_id = self.chat_id.clone()?;
+                // A cloud chat's messages the server never took: the line is
+                // their Retry, never a turn starting for them.
+                if self.external_not_sent {
+                    return Some(self.render_not_sent_line(cx));
+                }
                 // Failed-send state first: past the grace window the trailer IS
                 // the retry affordance, whatever the indicator fell back to.
                 if self.state.read(cx).send_undelivered(&chat_id, now) {
