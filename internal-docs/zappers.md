@@ -236,14 +236,26 @@ the Zapper is paused or a remote worker is offline, or for a free slot. Closed
 issues, stopped or archived Zappers, threads that left the Zapper or the issue,
 and threads the person stopped are never revived: the comment is kept with
 `delivery.state = held` and a reason, and the same checks run again just
-before dispatch (`cancelled`). The coordinator's event says the comment was
-delivered and must not be relayed.
+before dispatch (`cancelled`). An answer held from its thread hands the issue to
+the Zapper, never to that thread or another one. Answers without an
+`expectedRevision` stay with the Zapper and say a revision is required. The
+coordinator's event shows the comment as plain text; the recipient lives in the
+board's hidden `delivery` metadata, and the coordinator guide says not to relay
+a delivered comment.
+
+Each supervision pass holds the admission lock every command takes, so the
+pre-dispatch check is the linearization point: a stop, release or close commits
+either before it (the answer is cancelled) or after the message was queued
+(the thread's turn is then interrupted like any other stop). A queued message
+is not recalled.
 
 `delivery.state` is `queued`, `retrying` (with the error), `sent` (the
 thread's queue accepted it, which is not proof it was handled), `answered`,
 `cancelled` or `held`. A report becomes the answer only by turn identity: the
 transcript entry that started the settled turn ending at `lastCompletedTurn`
-must be that `:answer` message. The link is stored on the comment
+must be one of that thread's delivered `:answer` messages, so several queued
+answers each match their own turn. Delivery states are projected with a fixed
+number of queries per Zapper. The link is stored on the comment
 (`delivery.reply`) before the report is recorded, is retried while the
 transcript hasn't caught up, and is never replaced. Interrupted, failed and
 input-request turns are not linked; their comment stays `sent`.

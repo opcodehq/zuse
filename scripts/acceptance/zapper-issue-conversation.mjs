@@ -75,10 +75,14 @@ try {
   assert.equal(after.report.answers.length, 2, 'no answer was replayed after restart');
   assert.equal(after.report.workerTurns, 3, 'one kickoff plus one turn per answer');
   assert.equal((await userMessages()).filter(m => m.id.endsWith(':answer')).length, 2);
-  // The Zapper hears about each answer, told it was delivered and not to relay it.
+  // The Zapper hears each answer as readable text; where it went rides the
+  // board's delivery metadata, never the visible summary.
   const events = await host.call('ZapperEvents', {zapperId: 'release'});
-  for (const id of ['issue-answer-1', 'issue-answer-2'])
-    assert.match(events.find(e => e.id === id)?.summary ?? '', /Delivered directly to thread zapper-worker-fixture-delegate[\s\S]*Don't relay/, id);
+  for (const id of ['issue-answer-1', 'issue-answer-2']) {
+    const summary = events.find(e => e.id === id)?.summary ?? '';
+    assert.ok(summary && !summary.includes(':answer') && !summary.includes('relay'), id + ': ' + summary);
+  }
+  assert.deepEqual(after.issue.activity.filter(a => a.delivery).map(a => [a.id, a.delivery.chatId, a.delivery.state]), [['answer-1', worker, 'answered'], ['answer-2', worker, 'answered']]);
   artifact('zapper-issue-conversation-acceptance.json', {realEngine: true, paidModelCalls: 0, exactRecipient: worker, answersDelivered: after.report.answers.length, workerTurns: after.report.workerTurns, nestedReplies: 2, retryDuplicates: 0, restartReplays: 0, workerImpersonationRouted: false, profile: host.root});
   console.log('Zapper issue conversation accepted.');
 } catch (error) { console.error('Zapper issue conversation failed: ' + error.message); process.exitCode = 1; } finally { await host?.close(); }

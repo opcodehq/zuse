@@ -277,13 +277,23 @@ pub(super) fn apply(
             // A person answering an issue that waits on them hands it back:
             // to the thread doing the work, else to the Zapper.
             if !coordinator && waiting {
-                let routed = delivery
-                    .as_ref()
-                    .filter(|d| {
-                        d.state == ZapperIssueDeliveryState::Queued && d.chat_id != coordinator_chat
-                    })
-                    .map(|d| d.chat_id.as_str());
-                hand_back(issue, &zapper_workers, routed);
+                match delivery.as_ref() {
+                    // The thread the answer went to takes the issue back.
+                    Some(d)
+                        if d.state == ZapperIssueDeliveryState::Queued
+                            && d.chat_id != coordinator_chat =>
+                    {
+                        hand_back(issue, &zapper_workers, Some(&d.chat_id))
+                    }
+                    // Held from its thread: the Zapper owns it, never that
+                    // stopped thread or another one picked in its place.
+                    Some(d) if d.state == ZapperIssueDeliveryState::Held => {
+                        issue.details.owner = Some(ZapperIssueOwner::Zapper);
+                        issue.details.normalize(!issue.threads.is_empty());
+                    }
+                    // Left to the Zapper, or no routing: the existing contract.
+                    _ => hand_back(issue, &zapper_workers, None),
+                }
             }
             (issue_id, "comment", text.trim().to_owned())
         }
@@ -453,25 +463,14 @@ pub(super) fn apply(
                 format!("\nIn reply to: {quoted}")
             })
             .unwrap_or_default();
-        // A comment that already went to its thread must not be relayed again.
-        let routing = match &routed {
-            Some((chat, ZapperIssueDeliveryState::Queued, _)) => format!(
-                "\nDelivered directly to thread {chat} as message {}; its reply comes back as that thread's report. Don't relay this comment.",
-                answer_id(&command.command_id)
-            ),
-            Some((chat, _, detail)) => format!(
-                "\nNot delivered to thread {chat}: {}",
-                detail.as_deref().unwrap_or("unavailable")
-            ),
-            None => String::new(),
-        };
+        // Where the comment went rides the board's hidden `delivery`, not
+        // this visible summary; the guide says not to relay a delivered one.
         let summary = format!(
-            "{}: {}\n{}{}{}",
+            "{}: {}\n{}{}",
             issue.code(),
             issue.details.title,
             text,
-            context,
-            routing
+            context
         );
         tx.execute(
             "INSERT INTO zapper_events(id,zapper,worker,kind,summary) VALUES(?1,?2,'','issueChanged',?3)",
@@ -679,14 +678,17 @@ fn recipient(
                 "A newer question replaced this one, so the Zapper routes your answer",
             );
         }
-        match &q.thread {
-            Some(chat) if expected.is_some_and(|e| changed.is_none_or(|c| e >= c)) => {
+        match (&q.thread, expected) {
+            (Some(_), None) => Recipient::Zapper(
+                "Routing an answer to its thread needs the issue revision you answered, so the Zapper routes this one",
+            ),
+            (Some(chat), Some(e)) if changed.is_none_or(|c| e >= c) => {
                 Recipient::Thread(chat.clone())
             }
-            Some(_) => Recipient::Zapper(
+            (Some(_), Some(_)) => Recipient::Zapper(
                 "The issue changed after you opened it, so the Zapper routes your answer",
             ),
-            None => Recipient::Zapper(
+            (None, _) => Recipient::Zapper(
                 "No single thread is tied to this question, so the Zapper routes your answer",
             ),
         }
@@ -802,57 +804,88 @@ fn answer_message(issue: &ZapperIssue, text: &str, reply: Option<&str>) -> Strin
 /// Refresh routed comments from the outbox: queued, retrying, sent, or
 /// answered once a report was correlated to the delivered message.
 pub(super) fn mark_deliveries(db: &Connection, zapper: &mut Zapper) -> Result<()> {
+    use std::collections::{HashMap, HashSet};
     let coordinators: Vec<String> = std::iter::once(zapper.coordinator_chat_id.clone())
         .chain(zapper.previous_coordinator_chats.iter().cloned())
         .collect();
+    let routed = |d: &ZapperIssueDelivery| d.state != ZapperIssueDeliveryState::Held;
+    let entries = || {
+        zapper
+            .issues
+            .iter()
+            .flat_map(|i| &i.activity)
+            .filter(|a| a.delivery.as_ref().is_some_and(routed))
+    };
+    if entries().next().is_none() {
+        return Ok(());
+    }
+    // A fixed number of queries per Zapper, whatever its history.
+    let outbox: HashMap<String, (String, Option<String>)> = db
+        .prepare_cached(
+            "SELECT id,phase,error FROM zapper_outbox WHERE zapper=?1 AND id LIKE '%:answer'",
+        )?
+        .query_map([&zapper.id], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))?
+        .collect::<rusqlite::Result<_>>()?;
+    let to_zapper: Vec<String> = entries()
+        .filter(|a| {
+            a.delivery
+                .as_ref()
+                .is_some_and(|d| coordinators.contains(&d.chat_id))
+        })
+        .map(|a| format!("issue-{}", a.id))
+        .collect();
+    let mut acknowledged: HashSet<String> = HashSet::new();
+    let mut notified: HashSet<String> = HashSet::new();
+    if !to_zapper.is_empty() {
+        acknowledged = db
+            .prepare_cached(
+                "SELECT id FROM zapper_events WHERE zapper=?1 AND id LIKE 'issue-%' AND acknowledged<>0",
+            )?
+            .query_map([&zapper.id], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        let wanted: Vec<String> = to_zapper
+            .iter()
+            .flat_map(|event| {
+                coordinators
+                    .iter()
+                    .map(move |chat| super::supervision::event_id(&[chat, event]))
+            })
+            .collect();
+        for chunk in wanted.chunks(400) {
+            let sql = format!(
+                "SELECT id FROM zapper_notifications WHERE id IN ({})",
+                vec!["?"; chunk.len()].join(",")
+            );
+            let mut stmt = db.prepare(&sql)?;
+            for id in
+                stmt.query_map(rusqlite::params_from_iter(chunk), |r| r.get::<_, String>(0))?
+            {
+                notified.insert(id?);
+            }
+        }
+    }
     let paused = zapper.status == ZapperStatus::Paused;
     for issue in &mut zapper.issues {
-        let ids: std::collections::HashSet<String> =
-            issue.activity.iter().map(|a| a.id.clone()).collect();
+        let ids: HashSet<String> = issue.activity.iter().map(|a| a.id.clone()).collect();
         for entry in &mut issue.activity {
-            let Some(delivery) = entry.delivery.as_mut() else {
+            let Some(delivery) = entry.delivery.as_mut().filter(|d| routed(d)) else {
                 continue;
             };
-            if delivery.state == ZapperIssueDeliveryState::Held {
-                continue;
-            }
             if coordinators.contains(&delivery.chat_id) {
                 // The Zapper hears through its event; it's sent once the
                 // Zapper was woken with it or acknowledged it.
                 let event = format!("issue-{}", entry.id);
-                let acknowledged: bool = db
-                    .query_row(
-                        "SELECT acknowledged FROM zapper_events WHERE id=?1",
-                        [&event],
-                        |r| r.get(0),
-                    )
-                    .optional()?
-                    .unwrap_or(false);
-                let notified = coordinators.iter().try_fold(false, |seen, chat| {
-                    let id = super::supervision::event_id(&[chat, &event]);
-                    db.query_row(
-                        "SELECT 1 FROM zapper_notifications WHERE id=?1",
-                        [&id],
-                        |_| Ok(()),
-                    )
-                    .optional()
-                    .map(|row| seen || row.is_some())
-                })?;
-                if acknowledged || notified {
+                let woken = coordinators
+                    .iter()
+                    .any(|chat| notified.contains(&super::supervision::event_id(&[chat, &event])));
+                if acknowledged.contains(&event) || woken {
                     delivery.state = ZapperIssueDeliveryState::Sent;
                 } else if paused {
                     delivery.state = ZapperIssueDeliveryState::Queued;
                 }
                 continue;
             }
-            let row: Option<(String, Option<String>)> = db
-                .query_row(
-                    "SELECT phase,error FROM zapper_outbox WHERE id=?1",
-                    [answer_id(&entry.id)],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .optional()?;
-            let Some((phase, error)) = row else {
+            let Some((phase, error)) = outbox.get(&answer_id(&entry.id)).cloned() else {
                 continue;
             };
             (delivery.state, delivery.detail) = match phase.as_str() {
@@ -920,47 +953,67 @@ pub(super) fn answered_message(
     )
 }
 impl Zappers {
-    /// The routed comment `chat` was last sent, while no report answered it.
-    /// Only worth checking once a turn finished after it was sent.
-    pub(super) fn awaiting_answer(
-        &self,
-        zapper: &str,
-        chat: &str,
-        turn: &str,
-    ) -> Result<Option<String>> {
+    /// Whether `chat` was sent a routed comment that no report answers yet:
+    /// only then is a finished turn worth matching against its transcript.
+    pub(super) fn unanswered(&self, zapper: &str, chat: &str) -> Result<bool> {
         let db = self
             .inner
             .db
             .lock()
             .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?;
-        let newest: Option<(String, Option<String>)> = db
-            .query_row(
-                "SELECT o.id,d.baseline FROM zapper_outbox o JOIN zapper_delivery d ON d.id=o.id WHERE o.zapper=?1 AND o.chat=?2 AND o.phase IN ('sent','settled') ORDER BY o.rowid DESC LIMIT 1",
-                params![zapper, chat],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()?;
-        let Some((message, baseline)) = newest.filter(|(id, _)| id.ends_with(ANSWER)) else {
-            return Ok(None);
-        };
-        if baseline.as_deref() == Some(turn) {
-            return Ok(None);
+        let sent: Vec<String> = db
+            .prepare_cached(
+                "SELECT id FROM zapper_outbox WHERE zapper=?1 AND chat=?2 AND id LIKE '%:answer' AND phase IN ('sent','settled')",
+            )?
+            .query_map(params![zapper, chat], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        if sent.is_empty() {
+            return Ok(false);
         }
         let state: Option<String> = db
             .query_row("SELECT state FROM zappers WHERE id=?1", [zapper], |r| {
                 r.get(0)
             })
             .optional()?;
-        let comment = message.trim_end_matches(ANSWER);
-        let answered = state
-            .map(|s| serde_json::from_str::<Zapper>(&s))
-            .transpose()?
-            .is_some_and(|z| {
-                z.issues.iter().flat_map(|i| &i.activity).any(|a| {
-                    a.id == comment && a.delivery.as_ref().is_some_and(|d| d.reply.is_some())
-                })
-            });
-        Ok((!answered).then_some(message))
+        let Some(state) = state else {
+            return Ok(false);
+        };
+        let zapper: Zapper = serde_json::from_str(&state)?;
+        Ok(zapper.issues.iter().flat_map(|i| &i.activity).any(|a| {
+            sent.iter()
+                .any(|id| id.strip_suffix(ANSWER) == Some(a.id.as_str()))
+                && a.delivery.as_ref().is_some_and(|d| d.reply.is_none())
+        }))
+    }
+    /// Match a finished turn to the routed comment whose message started it,
+    /// by transcript identity alone. `Ok(false)`: it answers none.
+    pub(super) fn correlate(
+        &self,
+        zapper: &str,
+        chat: &str,
+        report: &str,
+        started: Option<&str>,
+    ) -> Result<bool> {
+        let Some(message) = started else {
+            return Ok(false);
+        };
+        let delivered = self
+            .inner
+            .db
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?
+            .query_row(
+                "SELECT 1 FROM zapper_outbox WHERE id=?1 AND zapper=?2 AND chat=?3 AND phase IN ('sent','settled')",
+                params![message, zapper, chat],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !delivered {
+            return Ok(false);
+        }
+        self.link_answer(zapper, chat, report, message)?;
+        Ok(true)
     }
     /// Record that `report` answers the comment delivered as `message`, and
     /// nest the report under it if it's already posted. A recorded answer is
@@ -2114,14 +2167,22 @@ mod routing_tests {
             text.contains("B") && text.contains("other: A or B?"),
             "{text}"
         );
-        // The Zapper is told, and told not to relay it.
+        // The Zapper hears the comment; where it went stays in the board's
+        // delivery metadata, out of the visible summary.
         let event = store
             .events("release")
             .unwrap()
             .into_iter()
             .find(|e| e.id == "issue-answer")
             .unwrap();
-        assert!(event.summary.contains("Don't relay"), "{}", event.summary);
+        assert!(
+            !event.summary.contains("answer:answer"),
+            "{}",
+            event.summary
+        );
+        let view = coordinator_view(&store.get("release").unwrap()).unwrap();
+        let recent = view["issues"][0]["recentActivity"].as_array().unwrap();
+        assert_eq!(recent.last().unwrap()["delivery"]["chatId"], "other");
         // A restart replays the receipt, never a second delivery.
         drop(store);
         let store = Zappers::open(dir.path(), "local").unwrap();
@@ -2261,7 +2322,14 @@ mod routing_tests {
                 store.get("release").unwrap().coordinator_chat_id,
                 "{case}"
             );
-            assert!(routed.detail.unwrap().contains("Zapper routes"), "{case}");
+            let detail = routed.detail.unwrap();
+            assert!(detail.contains("Zapper routes"), "{case}");
+            // A caller that sends no revision is told exactly that.
+            assert_eq!(
+                case == "unversioned",
+                detail.contains("revision you answered"),
+                "{case}: {detail}"
+            );
         }
     }
 
@@ -2340,7 +2408,7 @@ mod routing_tests {
                 .into_iter()
                 .find(|e| e.id == "issue-answer")
                 .unwrap();
-            assert!(event.summary.contains("Not delivered"), "{case}");
+            assert!(!event.summary.contains("Not delivered"), "{case}");
         }
     }
 
@@ -2431,17 +2499,24 @@ mod routing_tests {
             delivery(&store, "answer").state,
             ZapperIssueDeliveryState::Sent
         );
-        // No turn finished since it was sent: nothing to check.
-        assert_eq!(
-            store.awaiting_answer("release", "other", "turn-0").unwrap(),
-            None
+        assert!(store.unanswered("release", "other").unwrap());
+        // Another message started this turn: it answers nothing.
+        assert!(
+            !store
+                .correlate("release", "other", "report-1", Some("typed"))
+                .unwrap()
         );
-        let message = store.awaiting_answer("release", "other", "turn-1").unwrap();
-        assert_eq!(message.as_deref(), Some("answer:answer"));
+        assert!(
+            !store
+                .correlate("release", "other", "report-1", None)
+                .unwrap()
+        );
         // Linked before the report is recorded, as reconcile does.
-        store
-            .link_answer("release", "other", "report-2", "answer:answer")
-            .unwrap();
+        assert!(
+            store
+                .correlate("release", "other", "report-2", Some("answer:answer"))
+                .unwrap()
+        );
         report(&store, "report-2");
         // Replies stay one level deep: it joins the card the comment is in.
         assert_eq!(
@@ -2452,9 +2527,10 @@ mod routing_tests {
             delivery(&store, "answer").state,
             ZapperIssueDeliveryState::Answered
         );
+        assert!(!store.unanswered("release", "other").unwrap());
         // A replayed link or a later report never moves the reply.
         store
-            .link_answer("release", "other", "report-3", "answer:answer")
+            .correlate("release", "other", "report-3", Some("answer:answer"))
             .unwrap();
         report(&store, "report-3");
         assert_eq!(entry(&store, "report-3").reply_to, None);
@@ -2462,10 +2538,71 @@ mod routing_tests {
             delivery(&store, "answer").reply.as_deref(),
             Some("report-2")
         );
-        assert_eq!(
-            store.awaiting_answer("release", "other", "turn-2").unwrap(),
-            None
+        // Only the thread it went to can be answered from.
+        assert!(
+            !store
+                .correlate("release", "worker", "report-x", Some("answer:answer"))
+                .unwrap()
         );
+    }
+
+    #[test]
+    fn queued_answers_each_match_their_own_turn_across_a_restart() {
+        use MessageRole::{Assistant, User};
+        let (dir, store) = store();
+        board(&store);
+        store.command(reply("a", "report-other")).unwrap();
+        store.command(reply("b", "report-other")).unwrap();
+        // A went out and its turn finished; B waited behind it.
+        sent(&store, "a:answer", "turn-0");
+        let transcript = vec![message("a:answer", User), message("turn-a", Assistant)];
+        let started = answered_message(&transcript, "turn-a").unwrap();
+        assert!(
+            store
+                .correlate("release", "other", "report-a", started.as_deref())
+                .unwrap()
+        );
+        report(&store, "report-a");
+        assert_eq!(
+            delivery(&store, "a").state,
+            ZapperIssueDeliveryState::Answered
+        );
+        assert_eq!(
+            delivery(&store, "b").state,
+            ZapperIssueDeliveryState::Queued
+        );
+        // B goes out; a restart before its turn finishes changes nothing.
+        sent(&store, "b:answer", "turn-a");
+        assert_eq!(delivery(&store, "b").state, ZapperIssueDeliveryState::Sent);
+        drop(store);
+        let store = Zappers::open(dir.path(), "local").unwrap();
+        assert_eq!(delivery(&store, "a").reply.as_deref(), Some("report-a"));
+        assert!(store.unanswered("release", "other").unwrap());
+        let transcript = vec![
+            message("a:answer", User),
+            message("turn-a", Assistant),
+            message("b:answer", User),
+            message("turn-b", Assistant),
+        ];
+        // Rereading A's turn never touches B.
+        let again = answered_message(&transcript, "turn-a").unwrap();
+        store
+            .correlate("release", "other", "report-a", again.as_deref())
+            .unwrap();
+        assert_eq!(delivery(&store, "b").state, ZapperIssueDeliveryState::Sent);
+        let started = answered_message(&transcript, "turn-b").unwrap();
+        assert!(
+            store
+                .correlate("release", "other", "report-b", started.as_deref())
+                .unwrap()
+        );
+        report(&store, "report-b");
+        assert_eq!(
+            delivery(&store, "b").state,
+            ZapperIssueDeliveryState::Answered
+        );
+        assert_eq!(delivery(&store, "a").reply.as_deref(), Some("report-a"));
+        assert_eq!(delivery(&store, "b").reply.as_deref(), Some("report-b"));
     }
 
     #[test]
@@ -2480,25 +2617,109 @@ mod routing_tests {
         assert_eq!(entry(&store, "report-2").reply_to, None);
         drop(store);
         let store = Zappers::open(dir.path(), "local").unwrap();
-        let message = store
-            .awaiting_answer("release", "other", "turn-1")
-            .unwrap()
-            .unwrap();
-        store
-            .link_answer("release", "other", "report-2", &message)
-            .unwrap();
+        assert!(
+            store
+                .correlate("release", "other", "report-2", Some("answer:answer"))
+                .unwrap()
+        );
         assert_eq!(
             entry(&store, "report-2").reply_to.as_deref(),
             Some("report-other")
         );
-        // Only the thread it went to can answer it.
+    }
+
+    #[test]
+    fn a_stop_before_dispatch_cancels_the_answer() {
+        let (_dir, store) = store();
+        board(&store);
+        store.command(reply("answer", "report-other")).unwrap();
+        run(
+            &store,
+            "stop",
+            ZapperAction::StopWorker {
+                chat_id: "other".into(),
+            },
+        );
+        let cancelled = delivery(&store, "answer");
+        assert_eq!(cancelled.state, ZapperIssueDeliveryState::Cancelled);
+        let zapper = store.get("release").unwrap();
+        let db = store.inner.db.lock().unwrap();
         assert!(
-            store
-                .link_answer("release", "worker", "report-x", &message)
-                .is_err()
+            answer_hold(&db, &zapper, "answer:answer")
+                .unwrap()
+                .unwrap()
+                .contains("You stopped")
         );
     }
 
+    #[test]
+    fn an_answer_held_from_a_stopped_thread_goes_back_to_the_zapper() {
+        let (_dir, store) = store();
+        board(&store);
+        ask(&store, Some("worker"));
+        run(
+            &store,
+            "stop",
+            ZapperAction::StopWorker {
+                chat_id: "worker".into(),
+            },
+        );
+        let revision = store.get("release").unwrap().revision;
+        answer(&store, "answer", Some(revision));
+        assert!(answers(&store).is_empty());
+        assert_eq!(
+            delivery(&store, "answer").state,
+            ZapperIssueDeliveryState::Held
+        );
+        // Neither the stopped thread nor the other linked one takes it.
+        assert_eq!(
+            issue(&store).details.current_owner(),
+            Some(ZapperIssueOwner::Zapper)
+        );
+    }
+
+    #[test]
+    fn delivery_states_project_the_same_from_one_batch() {
+        let (_dir, store) = store();
+        board(&store);
+        for n in 0..40 {
+            store
+                .command(reply(&format!("c{n}"), "report-other"))
+                .unwrap();
+        }
+        sent(&store, "c1:answer", "t");
+        sent(&store, "c2:answer", "t");
+        store
+            .outbox_phase(
+                "c3:answer",
+                "sending",
+                Some("worker conversation unavailable"),
+            )
+            .unwrap();
+        store.outbox_phase("c4:answer", "cancelled", None).unwrap();
+        store
+            .correlate("release", "other", "report-2", Some("c2:answer"))
+            .unwrap();
+        report(&store, "report-2");
+        let states: Vec<_> = (0..6)
+            .map(|n| {
+                let d = delivery(&store, &format!("c{n}"));
+                (d.state, d.detail)
+            })
+            .collect();
+        use ZapperIssueDeliveryState::*;
+        assert_eq!(
+            states,
+            vec![
+                (Queued, None),
+                (Sent, None),
+                (Answered, None),
+                (Retrying, Some("worker conversation unavailable".into())),
+                (Cancelled, Some("Stopped before it was sent".into())),
+                (Queued, None),
+            ]
+        );
+    }
     fn message(id: &str, role: MessageRole) -> SessionMessageEntry {
         SessionMessageEntry {
             id: id.into(),
