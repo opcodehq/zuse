@@ -1070,7 +1070,16 @@ impl Tools {
                 .await
                 .map_err(computer_wait::explain)
         };
-        let results = || call(json!({"action":"results"}));
+        // Reads may reconnect; only submissions must never be replayed.
+        let results = || async move {
+            self.zuse
+                .call(
+                    zuse_protocol::computer_tasks::METHOD,
+                    json!({"chatId":chat,"request":{"action":"results"}}),
+                )
+                .await
+                .map_err(computer_wait::explain)
+        };
         if name == "computer_task_results"
             && let Some(id) = args["request_id"].as_str().filter(|id| !id.is_empty())
         {

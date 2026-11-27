@@ -10,6 +10,8 @@ use zuse_protocol::computer_tasks::{DEFAULT_TIMEOUT_SECS, UNKNOWN_AFTER_SECS};
 
 /// How often a waiting call reads the request's state.
 pub(crate) const POLL: Duration = Duration::from_millis(1500);
+/// Failed reads in a row before the call returns the request ID to resume with.
+const READ_ATTEMPTS: u32 = 3;
 /// How long the owner has to decide before the call returns still waiting.
 pub(crate) const APPROVAL_WAIT: Duration = Duration::from_secs(600);
 
@@ -74,8 +76,30 @@ where
 {
     let deadline = tokio::time::Instant::now() + budget;
     let mut last = None;
+    let mut failures = 0;
     loop {
-        let rows = results().await?;
+        let rows = match results().await {
+            Ok(rows) => {
+                failures = 0;
+                rows
+            }
+            // The request was accepted: never lose its ID to a failed read.
+            Err(error) => {
+                failures += 1;
+                if failures >= READ_ATTEMPTS || tokio::time::Instant::now() + poll > deadline {
+                    let mut out = match &last {
+                        Some(row) => outcome(row, false),
+                        None => json!({"requestId":id,"state":"unknown"}),
+                    };
+                    out["note"] = json!(format!(
+                        "Couldn't read this request's result ({error:#}). Call computer_task_results with this request_id to keep waiting; never resubmit it."
+                    ));
+                    return Ok(out);
+                }
+                tokio::time::sleep(poll).await;
+                continue;
+            }
+        };
         let row = rows
             .as_array()
             .and_then(|rows| rows.iter().find(|row| row["id"].as_str() == Some(id)))
@@ -187,6 +211,30 @@ mod tests {
         assert_eq!(out["output"], "partial");
         assert!(out["note"].as_str().unwrap().contains("keep waiting"));
         assert!(*reads.lock().unwrap() >= 6);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn failed_reads_return_the_request_id_to_resume_with() {
+        let reads = Arc::new(Mutex::new(0));
+        let counter = reads.clone();
+        let results = move || {
+            let mut n = counter.lock().unwrap();
+            *n += 1;
+            std::future::ready(if *n == 1 {
+                Ok(row("pending", "Waiting for approval", ""))
+            } else {
+                Err(anyhow::anyhow!("engine closed"))
+            })
+        };
+        let out = wait("req", results, POLL, budget(None)).await.unwrap();
+        assert_eq!(out["requestId"], "req");
+        assert_eq!(out["state"], "pending");
+        let note = out["note"].as_str().unwrap();
+        assert!(
+            note.contains("request_id") && note.contains("never resubmit"),
+            "{note}"
+        );
+        assert_eq!(*reads.lock().unwrap(), 1 + READ_ATTEMPTS as usize);
     }
 
     #[test]

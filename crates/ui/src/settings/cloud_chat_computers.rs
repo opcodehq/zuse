@@ -302,7 +302,7 @@ impl CloudChatComputers {
                 kit::menu_item(
                     SharedString::from(format!("bridge-revoke-{device}")),
                     "restart",
-                    "Ask before every command",
+                    "Stop running without asking",
                     false,
                 )
                 .on_click(cx.listener(move |page, _, _, cx| {
@@ -405,7 +405,11 @@ impl CloudChatComputers {
             .flex_nowrap()
             // The tile takes a bare glyph name: a laptop for macOS, a desktop otherwise.
             .child(kit::icon_tile(
-                if platform == "macos" { "laptop" } else { "monitor" },
+                if platform == "macos" {
+                    "laptop"
+                } else {
+                    "monitor"
+                },
                 28.,
             ))
             .child(
@@ -509,7 +513,7 @@ impl CloudChatComputers {
         trailing.push(switch);
         kit::section(
             "This computer",
-            "Cloud chats can run commands here while this is on. Each command asks you first, in the chat.",
+            "Cloud chats can run commands here while this is on. Each command asks you first in the chat, unless you allowed that chat or this computer.",
             None,
             Self::computer_row(
                 true,
