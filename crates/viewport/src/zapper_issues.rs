@@ -2377,6 +2377,29 @@ impl IssuePanel {
         );
         body.into_any_element()
     }
+    /// Visual fixtures: open the threads menu (`threads`), every folded
+    /// event group (`events`), or show a failed write (`error`).
+    pub fn fixture_show(&mut self, what: &str, cx: &mut Context<Self>) {
+        match what {
+            "threads" => self.menu = Some("issue-threads"),
+            "events" => {
+                if let Some(issue) = self.selected.as_ref().and_then(|id| self.zapper.issues.iter().find(|i| i.id == *id)) {
+                    for item in timeline::timeline(&issue.activity) {
+                        if let Item::Group(events) = item {
+                            self.expanded.insert(format!("group:{}", events[0].id));
+                        }
+                    }
+                }
+            }
+            "error" => {
+                self.error = Some(
+                    "Couldn't save your comment: the connection closed before the engine confirmed it. Your text is kept; retrying reuses the same comment.".into(),
+                )
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
     /// Called by the shell when a command succeeds; a failed write preserves the draft.
     pub fn committed(&mut self, cx: &mut Context<Self>) {
         self.editor = None;

@@ -2979,6 +2979,17 @@ impl Shell {
                     self.show_zapper_page(page, cx);
                 }
             }
+            // `issue-threads`, `issue-events`, `issue-error`: the first issue
+            // with its threads menu, folded events or a failed write shown.
+            step if step.starts_with("issue-") => {
+                self.show_zapper_page(ZapperPage::Section(ZapperTab::Issues), cx);
+                if let Some(page) = issue {
+                    self.show_zapper_page(page, cx);
+                }
+                if let Some(panel) = self.zapper_ui.issues.clone() {
+                    panel.update(cx, |p, cx| p.fixture_show(&step["issue-".len()..], cx));
+                }
+            }
             "drive" => self.show_zapper_page(ZapperPage::Section(ZapperTab::Drive), cx),
             "file" => {
                 if let Some(page) = file {
