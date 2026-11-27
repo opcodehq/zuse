@@ -37,7 +37,7 @@ The Zuse agent can also run Kimi (Moonshot AI) and GLM (Z.ai) models with your o
 
 - Z.ai bills by key type: a Standard API Key uses your account balance, and a Coding Plan key uses your plan quota. GLM-5.4 is only available with a Coding Plan key for now.
 - Kimi Code plans below Pro cap requests at 256K tokens, so Zuse uses that window for every Kimi Code model.
-- GLM-5.3 and Kimi K3 accept text only; attach images to Kimi K3.1 Pro, GLM-5.4, or GLM-5.3 Flash instead.
+- GLM-5.3 accepts text only; attach images to a Kimi model, GLM-5.4, or GLM-5.3 Flash instead.
 - Keys are saved on the computer that runs the agent, readable only by your user, and sent only to their provider. **Remove** deletes a saved key.
 - Without a saved key, Zuse reads `MOONSHOT_API_KEY`, `KIMI_CODE_API_KEY`, or `ZAI_API_KEY` from the environment of the Zuse process, which is handy for `zuse serve`.
 - Usage reports price these models at the vendor's published per-token rates. Coding-plan usage shows as an estimate, not a charge.
