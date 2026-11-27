@@ -28,6 +28,58 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(70);
 pub const FULL_HISTORY_MAX_BYTES: u64 = 384 * 1024 * 1024;
 /// Leftover snapshot directories older than this are removed.
 const STALE_SECS: u64 = 24 * 60 * 60;
+/// Disk-backed directory for snapshots. A snapshot holds the fetched
+/// repository and its tar at once (hundreds of MB for a large history), so it
+/// must not live on a small or memory-backed `/tmp`.
+pub const SNAPSHOT_DIR_ENV: &str = "ZUSE_USER_IMAGE_REPOSITORY_DIR";
+/// Newest Git stderr bytes kept to explain a failed step.
+const STDERR_TAIL: usize = 16 * 1024;
+
+/// The configured absolute directory, else `$TMPDIR/zuse-user-image-repos`.
+pub(crate) fn snapshot_root(configured: Option<std::ffi::OsString>) -> PathBuf {
+    configured
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| std::env::temp_dir().join("zuse-user-image-repos"))
+}
+
+/// Drop all but the newest `limit` bytes.
+pub(crate) fn keep_tail(bytes: &mut Vec<u8>, limit: usize) {
+    if bytes.len() > limit {
+        bytes.drain(..bytes.len() - limit);
+    }
+}
+
+/// Why a Git step failed, from its stderr: a full staging disk is reported
+/// as such, since retrying cannot help until space is freed.
+pub(crate) fn failure_reason(stderr: &[u8]) -> &'static str {
+    let text = String::from_utf8_lossy(stderr);
+    if text.contains("No space left on device") || text.contains("Disk quota exceeded") {
+        "repository_staging_full"
+    } else {
+        "repository_fetch_failed"
+    }
+}
+
+/// The last meaningful stderr line, printable and bounded, for the log.
+/// Tokens travel only as an environment header that Git never prints, but any
+/// line naming credentials is withheld regardless.
+pub(crate) fn stderr_summary(stderr: &[u8]) -> String {
+    let text = String::from_utf8_lossy(stderr);
+    let line = text
+        .lines()
+        .map(str::trim)
+        .rfind(|line| !line.is_empty())
+        .unwrap_or("");
+    let lower = line.to_ascii_lowercase();
+    if ["authorization", "x-access-token", "password", "token"]
+        .iter()
+        .any(|word| lower.contains(word))
+    {
+        return "[withheld]".into();
+    }
+    line.chars().filter(|c| !c.is_control()).take(240).collect()
+}
 
 /// Mints a fetch token for one private repository of one building image.
 #[async_trait::async_trait]
@@ -43,10 +95,10 @@ pub struct GitRepositorySource {
 }
 
 impl GitRepositorySource {
-    /// Snapshots live under `$TMPDIR/zuse-user-image-repos/<image>/<repo>`.
+    /// Snapshots live under `<root>/<image>/<repo>`; see [`snapshot_root`].
     pub fn new(credentials: Option<Arc<dyn RepositoryCredentials>>) -> Self {
         Self {
-            root: std::env::temp_dir().join("zuse-user-image-repos"),
+            root: snapshot_root(std::env::var_os(SNAPSHOT_DIR_ENV)),
             credentials,
             origin: "https://github.com".into(),
             full_history_max: FULL_HISTORY_MAX_BYTES,
@@ -139,7 +191,7 @@ async fn git(
             "pack.threads=2",
         ])
         .stdin(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .stdout(Stdio::piped())
         .kill_on_drop(true);
     if !origin.starts_with("file://") {
@@ -161,6 +213,24 @@ async fn git(
         let mut out = Vec::new();
         let _ = (&mut stdout).take(64 * 1024).read_to_end(&mut out).await;
         out
+    });
+    let mut stderr = child.stderr.take().expect("piped");
+    // Git reports the fatal cause last, so keep the newest bytes.
+    let errors = tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+        let mut tail = Vec::new();
+        let mut chunk = [0u8; 4096];
+        while let Ok(n) = stderr.read(&mut chunk).await {
+            if n == 0 {
+                break;
+            }
+            tail.extend_from_slice(&chunk[..n]);
+            if tail.len() > 2 * STDERR_TAIL {
+                keep_tail(&mut tail, STDERR_TAIL);
+            }
+        }
+        keep_tail(&mut tail, STDERR_TAIL);
+        tail
     });
     let deadline = tokio::time::Instant::now() + FETCH_TIMEOUT;
     let status = loop {
@@ -184,7 +254,15 @@ async fn git(
     };
     let out = reader.await.unwrap_or_default();
     if !status.success() {
-        return Err(SourceError::Retry("repository_fetch_failed"));
+        let stderr = errors.await.unwrap_or_default();
+        let reason = failure_reason(&stderr);
+        tracing::warn!(
+            step = args.first().copied().unwrap_or(""),
+            reason,
+            detail = %stderr_summary(&stderr),
+            "User image repository Git step failed"
+        );
+        return Err(SourceError::Retry(reason));
     }
     String::from_utf8(out)
         .map(|s| s.trim().to_owned())

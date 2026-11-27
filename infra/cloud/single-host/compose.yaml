@@ -68,6 +68,24 @@ services:
       - path: ${ZUSE_CONFIG_DIR:?}/storage.env
         format: raw
         required: false
+    environment:
+      ZUSE_DEPLOYMENT_ENVIRONMENT: ${ZUSE_ENV:?}
+      ZUSE_USER_IMAGE_REPOSITORY_DIR: /home/zuse/user-image-repos
+    # Machine-image builds stage each repository snapshot (repository + tar,
+    # hundreds of MB for a large history) on disk. The read-only root and the
+    # 16 MB /tmp cannot hold one. A named volume mounted on the image's own
+    # zuse-owned home inherits that ownership, so no host step is needed.
+    # A service-level list replaces the anchor's, so the CA bind is repeated.
+    volumes:
+      - type: bind
+        source: ${ZUSE_DATABASE_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}
+        target: /etc/zuse/cloud/database-ca.crt
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: volume
+        source: worker-home
+        target: /home/zuse
     cpus: ${WORKER_CPUS:-0.5}
     mem_limit: ${WORKER_MEMORY:-192m}
     networks: [edge]
@@ -119,3 +137,6 @@ networks:
   edge:
     external: true
     name: zuse-${ZUSE_ENV:?}-edge
+
+volumes:
+  worker-home:
