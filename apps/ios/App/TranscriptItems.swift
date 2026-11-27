@@ -124,27 +124,16 @@ private struct UserMessageView: View {
   }
 }
 
-/// Your message's bubble: a soft lime wash that brightens towards the bottom, a faint neon
-/// edge, and a low glow in dark mode. Text stays 12:1 or better on both.
+/// Your message's bubble: one flat lime tint, no edge or glow. Text stays 12:1 or better.
 struct UserBubbleBackground: View {
   var radius: CGFloat = 18
   @Environment(\.colorScheme) private var colorScheme
   var body: some View {
-    let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-    let dark = colorScheme == .dark
-    let lime = AppTheme.lime
-    shape.fill(
-      LinearGradient(
-        colors: dark
-          ? [lime.opacity(0.24), lime.opacity(0.11)]
-          : [
-            Color(red: 236 / 255, green: 249 / 255, blue: 212 / 255),
-            Color(red: 216 / 255, green: 241 / 255, blue: 166 / 255),
-          ],
-        startPoint: .top, endPoint: .bottom)
-    )
-    .overlay { shape.strokeBorder(lime.opacity(dark ? 0.32 : 0.4), lineWidth: 1) }
-    .shadow(color: lime.opacity(dark ? 0.22 : 0), radius: 10)
+    RoundedRectangle(cornerRadius: radius, style: .continuous)
+      .fill(
+        colorScheme == .dark
+          ? AppTheme.lime.opacity(0.2)
+          : Color(red: 222 / 255, green: 244 / 255, blue: 180 / 255))
   }
 }
 
