@@ -3811,8 +3811,6 @@ pub struct Transcript {
     /// Last live elapsed (seconds) per assistant entry, used if `duration_ms`
     /// has not landed on the doc yet when the turn settles.
     last_live_elapsed: HashMap<String, i64>,
-    /// One redraw per second while the live timing line is visible.
-    live_timing_tick: Option<Task<()>>,
     /// Natural heights of compact-fold body rows, written by each row's
     /// prepaint probe without notifying. The work fold's TOOL_FOLD tween
     /// clips the sibling rows against one shared budget without knowing
@@ -4395,7 +4393,6 @@ impl Transcript {
             split_diffs: crate::settings::split_diffs(cx),
             compact_mode: crate::settings::transcript_compact_mode(cx),
             last_live_elapsed: HashMap::new(),
-            live_timing_tick: None,
             compact_fold_heights: HashMap::new(),
             compact_fold_settle: None,
             turn_worked_secs: HashMap::new(),
@@ -9232,8 +9229,8 @@ impl Transcript {
         }
     }
 
-    /// The live turn owns the timing line once it has a row to display it on.
-    /// Until then the trailer reports sending and working beneath the prompt.
+    /// The live turn's streaming reply row and its elapsed seconds, recorded
+    /// so the settled turn can show "Worked for …" above the reply.
     fn live_work(&self, cx: &gpui::App) -> Option<(SharedString, i64)> {
         let now = chrono::Utc::now();
         let state = self.state.read(cx);
@@ -9278,35 +9275,24 @@ impl Transcript {
         {
             return None;
         }
-        let label =
-            if let Some((entry, secs)) = self.live_work(cx).filter(|(id, _)| id == &row.entry_id) {
-                self.last_live_elapsed.insert(entry.to_string(), secs);
-                if self.live_timing_tick.is_none() {
-                    self.live_timing_tick = Some(cx.spawn(async move |this, cx| {
-                        cx.background_executor().timer(Duration::from_secs(1)).await;
-                        this.update(cx, |this, cx| {
-                            this.live_timing_tick = None;
-                            cx.notify();
-                        })
-                        .ok();
-                    }));
-                }
-                tr(cx, |l10n| {
-                    msg::chat::turn_working_for(l10n, &format_elapsed(secs))
-                })
-            } else {
-                let secs = *self.turn_worked_secs.get(&row.entry_id)?;
-                tr(cx, |l10n| {
-                    msg::chat::turn_worked_for(l10n, &format_elapsed(secs))
-                })
-            };
+        // While the turn runs, the working trailer beneath the reply owns the
+        // timer; the line above the reply only appears once it settles.
+        if self
+            .live_work(cx)
+            .is_some_and(|(id, _)| id == row.entry_id)
+        {
+            return None;
+        }
+        let secs = *self.turn_worked_secs.get(&row.entry_id)?;
+        let label = tr(cx, |l10n| {
+            msg::chat::turn_worked_for(l10n, &format_elapsed(secs))
+        });
         Some(turn_timing_line(theme).child(label))
     }
 
     fn render_working_trailer(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if let Some((entry, elapsed)) = self.live_work(cx) {
             self.last_live_elapsed.insert(entry.to_string(), elapsed);
-            return None;
         }
         let now = chrono::Utc::now();
         // `turn` (the turn's start, ms) keys the rolling word and timer, so a
@@ -13692,7 +13678,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn work_timer_moves_from_the_prompt_to_the_reply_and_uses_the_recorded_duration(
+    fn work_timer_stays_below_while_live_and_uses_the_recorded_duration(
         cx: &mut gpui::TestAppContext,
     ) {
         with_tool_group_navigation(cx, |state, transcript, cx| {
@@ -13737,8 +13723,8 @@ mod tests {
             transcript.update(cx, |this, cx| {
                 this.sync(cx);
                 let row = this.rows.last().unwrap().clone();
-                assert!(this.render_turn_timing(&row, &Theme::dark(), cx).is_some());
-                assert!(this.render_working_trailer(cx).is_none());
+                assert!(this.render_turn_timing(&row, &Theme::dark(), cx).is_none());
+                assert!(this.render_working_trailer(cx).is_some());
                 assert!(this.last_live_elapsed["reply"] >= 12);
             });
 
