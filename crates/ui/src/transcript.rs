@@ -9277,10 +9277,7 @@ impl Transcript {
         }
         // While the turn runs, the working trailer beneath the reply owns the
         // timer; the line above the reply only appears once it settles.
-        if self
-            .live_work(cx)
-            .is_some_and(|(id, _)| id == row.entry_id)
-        {
+        if self.live_work(cx).is_some_and(|(id, _)| id == row.entry_id) {
             return None;
         }
         let secs = *self.turn_worked_secs.get(&row.entry_id)?;
