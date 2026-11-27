@@ -431,20 +431,64 @@ impl CloudConversation {
             online: self.computer_online(),
         }
     }
-    /// The message's progress once it is with the agent.
+    /// What the computer's live session says about the current turn, when
+    /// it is attached: the same state the transcript's "Working for" line
+    /// and a local chat's controls follow.
+    fn session_turn(&self, cx: &App) -> Option<activity::Activity> {
+        let state = self.state.read(cx);
+        state.engine()?;
+        let chat = state.selected_chat.as_deref()?;
+        match state.indicator_for(chat, chrono::Utc::now()) {
+            crate::state::Indicator::Working => Some(activity::Activity {
+                label: activity::WORKING.into(),
+                next: None,
+                busy: true,
+            }),
+            crate::state::Indicator::AwaitingInput => Some(activity::Activity {
+                label: activity::NEEDS_INPUT.into(),
+                next: None,
+                busy: false,
+            }),
+            _ => None,
+        }
+    }
+    /// The message's progress once it is with the agent. The one answer the
+    /// transcript's working line, the composer's Stop and the sidebar row
+    /// all follow: a send in flight, the server's command record, or the
+    /// attached computer's live session, whichever knows the turn runs.
     fn agent_activity(&self, cx: &App) -> Option<activity::Activity> {
         if self.access_revoked {
             return None;
         }
-        self.composer
+        let composer = self
+            .composer
             .read(cx)
             .cloud_activity()
             .map(|(label, busy)| activity::Activity {
                 label: label.into(),
                 next: None,
                 busy,
-            })
-            .or_else(|| activity::command(&self.admissions, &self.state.read(cx).transcript))
+            });
+        let command = activity::command(&self.admissions, &self.state.read(cx).transcript);
+        let session = self.session_turn(cx);
+        // A send in flight first, then whichever record knows the turn
+        // runs: the server's command row can trail the live session (a
+        // progress event not read yet) and the other way round.
+        let reports = [composer, command, session];
+        let busy = reports
+            .iter()
+            .flatten()
+            .find(|activity| activity.busy)
+            .cloned();
+        busy.or_else(|| reports.into_iter().flatten().next())
+    }
+    /// The agent's turn is running: its working line shows and the composer
+    /// offers Stop (or queues a message) instead of sending a new turn.
+    fn turn_running(&self, cx: &App) -> bool {
+        !self.access_revoked
+            && (activity::command(&self.admissions, &self.state.read(cx).transcript)
+                .is_some_and(|activity| activity.busy)
+                || self.session_turn(cx).is_some_and(|activity| activity.busy))
     }
     /// Id of the stand-in for the launch prompt until history delivers it.
     fn launch_echo_id(&self) -> String {
@@ -547,9 +591,11 @@ impl CloudConversation {
                 .filter(|activity| activity.busy)
                 .map(|activity| SharedString::from(activity.label))
         };
+        let turn_running = self.turn_running(cx);
         self.composer.update(cx, |composer, cx| {
             composer.set_cloud_status(status, cx);
             composer.set_cloud_status_actions(failed, cx);
+            composer.set_cloud_turn_running(turn_running, cx);
         });
         self.transcript.update(cx, |transcript, cx| {
             transcript.set_external_activity(line, cx)
@@ -2427,6 +2473,121 @@ mod tests {
             assert!(view.activity(cx).is_none(),"revocation is terminal, not a new computer starting");
             assert!(view.error.as_deref().unwrap().contains("Cloud access changed"));
 
+        });
+    }
+    /// A long cloud turn (text, a finished segment, then a command still
+    /// running) reads as running everywhere at once: the transcript's working
+    /// line, the sidebar row and tab, and the composer's Stop. Whichever
+    /// record knows first (the server's command row or the attached
+    /// computer's live session) is enough, and both settle together.
+    #[gpui::test]
+    fn a_running_cloud_turn_reads_running_in_the_transcript_sidebar_and_composer(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(initialize);
+        let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
+            std::sync::Arc::new(PendingController),
+        ));
+        let view = cx.new(|cx| {
+            CloudConversation::new(
+                CloudTarget {
+                    controller: controller.clone(),
+                    subject: "owner".into(),
+                    organization: None,
+                    workspace: "task".into(),
+                    initial_session: "session".into(),
+                },
+                json!({"workspaceId":"task","state":"ready"}),
+                json!({}),
+                boot(dir.path()),
+                cx,
+            )
+        });
+        view.update(cx, |view, cx| {
+            use zuse_model::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
+            let entry = |id: &str, role, text: &str, status| SessionMessageEntry {
+                id: id.into(),
+                role,
+                parts: vec![MessagePart::Text {
+                    id: format!("text:{id}"),
+                    text: text.into(),
+                }],
+                created_at: 1,
+                device_id: String::new(),
+                status,
+                continuation_of: None,
+                duration_ms: None,
+            };
+            view.authorized = true;
+            view.computer.metadata = json!({"state":"ready"});
+            view.state.update(cx, |state, _| {
+                state.selected_chat = Some("session".into());
+                state.transcript = vec![
+                    entry("runtime-user", MessageRole::User, "compare features", None),
+                    entry(
+                        "segment-1",
+                        MessageRole::Assistant,
+                        "I'll inspect the app first.",
+                        Some(MessageStatus::Complete),
+                    ),
+                    entry(
+                        "segment-2",
+                        MessageRole::Assistant,
+                        "Running the build now.",
+                        Some(MessageStatus::Streaming),
+                    ),
+                ];
+            });
+            let running = |view: &mut CloudConversation, cx: &mut Context<CloudConversation>| {
+                view.sync_progress(cx);
+                let working_line = view.transcript.read(cx).external_activity_for_test();
+                (
+                    working_line.is_some(),
+                    view.live_activity(cx).working,
+                    view.composer.read(cx).run_live(cx),
+                )
+            };
+            // The server's command row says running; an earlier finished
+            // segment of the same turn does not end it.
+            view.admissions = json!([{"commandId":"launch:task","messageId":"admitted",
+                "text":"compare features","executionState":"running","createdAt":1}]);
+            assert_eq!(running(view, cx), (true, true, true), "command row running");
+            // No command row read yet and no computer attached: nothing
+            // knows the turn runs.
+            view.admissions = json!([]);
+            assert_eq!(
+                running(view, cx),
+                (false, false, false),
+                "nothing knows it runs"
+            );
+            // The attached computer's live session is working: running
+            // everywhere, though the row has not caught up.
+            let session = |status: &str| {
+                serde_json::from_value::<zuse_protocol::Session>(json!({
+                    "chatId":"session","deviceId":"cloud:task","status":status,
+                    "startedAt":chrono::Utc::now(),"updatedAt":chrono::Utc::now()}))
+                .unwrap()
+            };
+            view.state.update(cx, |state, _| {
+                state.set_test_engine(controller.clone());
+                state.apply_sessions(vec![session("working")]);
+            });
+            assert_eq!(
+                running(view, cx),
+                (true, true, true),
+                "live session working"
+            );
+            // The turn ends: the session settles and its row completes.
+            view.state.update(cx, |state, _| {
+                state.apply_sessions(vec![session("idle")]);
+                state.transcript[2].status = Some(MessageStatus::Complete);
+            });
+            view.admissions = json!([{"commandId":"launch:task","messageId":"admitted",
+                "text":"compare features","executionState":"completed","createdAt":1}]);
+            assert_eq!(running(view, cx), (false, false, false), "turn over");
         });
     }
     /// The owner's "yoo" sequence: the first message shows at once as the

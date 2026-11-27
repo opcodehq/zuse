@@ -8,6 +8,8 @@ pub(super) struct Activity {
 }
 /// The label of a turn waiting on the user.
 pub(super) const NEEDS_INPUT: &str = "Agent needs your input";
+/// The label of a turn the agent is working on.
+pub(super) const WORKING: &str = "Agent working…";
 pub(super) fn preparation(row: &Value, initial: bool) -> Option<Activity> {
     let progress = zuse_viewport::cloud_preparation_progress(row, initial);
     progress.visible.then(|| Activity {
@@ -78,7 +80,7 @@ pub(super) fn command(
     };
     let (label, busy) = match row["executionState"].as_str()? {
         "starting" => ("Starting agent turn…", true),
-        "running" => ("Agent working…", true),
+        "running" => (WORKING, true),
         "waiting-input" => (NEEDS_INPUT, false),
         _ => ("Waiting for agent…", true),
     };
@@ -120,13 +122,20 @@ pub(super) fn turn_ended(
     let Some(start) = start else {
         return false;
     };
-    messages[start + 1..].iter().any(|entry| {
-        entry.role == MessageRole::Assistant
-            && matches!(
+    // One turn can hold several assistant entries: the engine finishes a
+    // segment at a steer boundary, a new agent round or a self-continued
+    // resume and streams the rest into the next one. Only the newest entry
+    // says whether the turn is over; an earlier finished segment does not.
+    messages[start + 1..]
+        .iter()
+        .rev()
+        .find(|entry| entry.role == MessageRole::Assistant)
+        .is_some_and(|entry| {
+            matches!(
                 entry.status,
                 Some(MessageStatus::Complete | MessageStatus::Aborted)
             )
-    })
+        })
 }
 /// The newest message failed for a known reason before it ran (the computer
 /// refused it): say why until another message is sent. A refusal older than
@@ -271,6 +280,58 @@ mod tests {
         );
         // The same, with the message recorded under the computer's own id.
         messages[0].id = "runtime-id".into();
+        assert!(super::command(&rows, &messages).is_none());
+    }
+    /// A long turn the runtime splits into several assistant entries (text,
+    /// a finished segment, then a command still running in the next one)
+    /// keeps working until its newest entry finishes.
+    #[test]
+    fn an_earlier_finished_segment_does_not_end_a_running_turn() {
+        use zuse_model::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
+        let entry = |id: &str, role, parts: Vec<MessagePart>, status| SessionMessageEntry {
+            id: id.into(),
+            role,
+            parts,
+            created_at: 1,
+            device_id: String::new(),
+            status,
+            continuation_of: None,
+            duration_ms: None,
+        };
+        let text = |id: &str, text: &str| MessagePart::Text {
+            id: format!("text:{id}"),
+            text: text.into(),
+        };
+        let rows = json!([{"commandId":"launch:task","messageId":"admitted","text":"compare features",
+            "executionState":"running","createdAt":1}]);
+        let mut messages = vec![
+            entry(
+                "runtime-user",
+                MessageRole::User,
+                vec![text("u", "compare features")],
+                None,
+            ),
+            entry(
+                "segment-1",
+                MessageRole::Assistant,
+                vec![text("a", "I'll inspect the app first.")],
+                Some(MessageStatus::Complete),
+            ),
+            entry(
+                "segment-2",
+                MessageRole::Assistant,
+                vec![text("b", "Running the build now.")],
+                Some(MessageStatus::Streaming),
+            ),
+        ];
+        assert!(!turn_ended(&messages, "admitted", Some("compare features")));
+        assert_eq!(
+            super::command(&rows, &messages).map(|activity| (activity.label, activity.busy)),
+            Some(("Agent working…".into(), true)),
+            "the turn's newest entry still streams"
+        );
+        messages[2].status = Some(MessageStatus::Complete);
+        assert!(turn_ended(&messages, "admitted", Some("compare features")));
         assert!(super::command(&rows, &messages).is_none());
     }
     #[test]
