@@ -11,11 +11,13 @@ ROOT = File.expand_path('..', __dir__)
 PROJECT_PATH = File.join(ROOT, 'Zuse.xcodeproj')
 PROFILE = JSON.parse(File.read(File.join(ROOT, 'config/deployment-profiles.json'))).fetch('production')
 SWIFT_VERSION = '6.0'
-MARKETING_VERSION = '0.1.0'
+MARKETING_VERSION = '1.2.0'
+# The App Store team; the iOS app ships as the existing Zuse app (com.zuse.sh).
+TEAM = 'HMCST4VV42'
 # Bundled as-is; see README.md for where each resource comes from.
 RESOURCES = %w[
   UIParser.js Assets.xcassets
-  Diagram.html Mermaid.js Mermaid-LICENSE.txt ThirdPartyNotices.txt
+  Diagram.html Mermaid.js Mermaid-LICENSE.txt ThirdPartyNotices.txt PrivacyInfo.xcprivacy
 ].freeze
 
 project = Xcodeproj::Project.new(PROJECT_PATH)
@@ -64,6 +66,8 @@ def app_target(project, name, platform, deployment, sources, resources, settings
     'SWIFT_VERSION' => SWIFT_VERSION,
     'GENERATE_INFOPLIST_FILE' => 'NO',
     'CODE_SIGN_STYLE' => 'Automatic',
+    'DEVELOPMENT_TEAM' => TEAM,
+    # Release builds pass CURRENT_PROJECT_VERSION on the xcodebuild command line.
     'CURRENT_PROJECT_VERSION' => '1',
     'MARKETING_VERSION' => MARKETING_VERSION
   }.merge(settings))
@@ -80,6 +84,7 @@ def ui_test_target(project, name, platform, deployment, app, directory, settings
   configure(target, {
     'SWIFT_VERSION' => SWIFT_VERSION,
     'GENERATE_INFOPLIST_FILE' => 'YES',
+    'DEVELOPMENT_TEAM' => TEAM,
     'TEST_TARGET_NAME' => app.name
   }.merge(settings))
   target
@@ -88,7 +93,7 @@ end
 # The Mac app shares the protocol, persistence and SwiftUI presentation with iOS.
 # Keep platform integration behind NativePlatform rather than forking app behavior.
 ios = app_target(project, 'Zuse', :ios, '18.0', sources, resources, {
-  'PRODUCT_BUNDLE_IDENTIFIER' => 'sh.zuse.native',
+  'PRODUCT_BUNDLE_IDENTIFIER' => 'com.zuse.sh',
   'INFOPLIST_FILE' => 'App/Info.plist',
   'ASSETCATALOG_COMPILER_APPICON_NAME' => 'AppIcon',
   'TARGETED_DEVICE_FAMILY' => '1,2',
@@ -106,7 +111,7 @@ mac = app_target(project, 'ZuseMac', :osx, '15.0', sources, resources, {
 # product references from hashing to the same identifier.
 mac.product_reference.name = 'Zuse Native (Mac).app'
 ios_tests = ui_test_target(project, 'ZuseUITests', :ios, '18.0', ios, 'UITests', {
-  'PRODUCT_BUNDLE_IDENTIFIER' => 'sh.zuse.native.uitests',
+  'PRODUCT_BUNDLE_IDENTIFIER' => 'com.zuse.sh.uitests',
   'TARGETED_DEVICE_FAMILY' => '1,2'
 })
 mac_tests = ui_test_target(project, 'ZuseMacUITests', :osx, '15.0', mac, 'MacUITests', {
@@ -130,13 +135,8 @@ project.save
   scheme.save_as(PROJECT_PATH, app.name, true)
 end
 
-# The Mac icon reuses the canonical app icon rather than a second design asset.
-mac_icon = File.join(ROOT, 'App/Assets.xcassets/MacAppIcon.appiconset')
-FileUtils.mkdir_p(mac_icon)
-FileUtils.cp(File.join(ROOT, 'App/Assets.xcassets/AppIcon.appiconset/icon.png'), File.join(mac_icon, 'icon.png'))
-
 ios_info = {
-  'CFBundleDisplayName' => 'Zuse Native',
+  'CFBundleDisplayName' => 'Zuse',
   'CFBundleIdentifier' => '$(PRODUCT_BUNDLE_IDENTIFIER)',
   'CFBundleExecutable' => '$(EXECUTABLE_NAME)',
   'CFBundleName' => '$(PRODUCT_NAME)',
