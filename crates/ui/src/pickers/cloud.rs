@@ -58,6 +58,16 @@ impl Cloud {
         self.error = Some(error);
     }
 
+    /// Whether the launch context's row for `project` (same project and
+    /// account) says new chats on it accept reasoning and model options.
+    pub(super) fn context_supports_model_configuration(&self, project: &Value) -> bool {
+        self.rows.iter().any(|row| {
+            row["projectId"] == project["projectId"]
+                && row["accountId"] == project["accountId"]
+                && row["supportsModelConfiguration"] == true
+        })
+    }
+
     #[cfg(test)]
     pub(super) fn set_project_rows_for_test(&mut self, rows: Vec<Value>) {
         self.rows = rows;
