@@ -343,11 +343,7 @@ impl Pickers {
             return false;
         };
         project["supportsModelConfiguration"] == true
-            || self.cloud.rows.iter().any(|row| {
-                row["projectId"] == project["projectId"]
-                    && row["accountId"] == project["accountId"]
-                    && row["supportsModelConfiguration"] == true
-            })
+            || self.cloud.context_supports_model_configuration(project)
     }
 
     pub(crate) fn cloud_model_notice(&self, cx: &App) -> Option<(String, bool)> {
