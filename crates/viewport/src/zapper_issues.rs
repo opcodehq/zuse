@@ -1836,10 +1836,10 @@ impl IssuePanel {
             .as_ref()
             .map(|p| p.action.clone())
             .unwrap_or_else(|| text.replace('\n', " · "));
+        let tail = phrase.as_ref().map(|p| p.tail.clone()).filter(|t| !t.is_empty());
         let target = phrase.and_then(|p| p.target).map(|(target, label)| {
             let key = format!("issue-event-target-{}", event.id);
             button(SharedString::from(key), label)
-                .flex_none()
                 .px(px(2.))
                 .text_color(rgb(0x8fb4ff))
                 .on_click(cx.listener(move |_, _, _, cx| match &target {
@@ -1854,9 +1854,18 @@ impl IssuePanel {
             .text_size(px(12.))
             .child(lead)
             .when_some(self.actor_avatar(event, 14.), |d, avatar| d.child(avatar))
-            .child(div().flex_none().text_color(rgb(0xb0b0b0)).child(actor))
-            .child(div().min_w_0().truncate().text_color(rgb(MUTED)).child(action))
-            .when_some(target, |d, target| d.child(target))
+            .child(div().flex_none().text_color(rgb(0xa3a3a3)).child(actor))
+            .child(
+                div()
+                    .text_color(rgb(MUTED))
+                    .when(target.is_some(), |d| d.flex_none())
+                    .when(target.is_none(), |d| d.min_w_0().truncate())
+                    .child(action),
+            )
+            .when_some(target, |d, target| d.child(target.min_w_0().truncate()))
+            .when_some(tail, |d, tail| {
+                d.child(div().min_w_0().truncate().text_color(rgb(MUTED)).child(tail))
+            })
             .child(div().flex_none().text_color(rgb(0x4a4a4a)).child("·"))
             .child(
                 div()
@@ -2148,7 +2157,7 @@ impl IssuePanel {
                     .min_w_0()
                     .truncate()
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(rgb(0xdedede))
+                    .text_color(rgb(TEXT))
                     .child(actor),
             )
             .when_some(tag, |d, tag| {
@@ -2211,7 +2220,7 @@ impl IssuePanel {
                         div()
                             .text_size(px(12.5))
                             .line_height(px(19.))
-                            .text_color(rgb(0xc8c8c8))
+                            .text_color(rgb(TEXT))
                             .child(shown),
                     )
                     .when_some(self.delivery_line(event), |d, line| d.child(line))
@@ -2236,7 +2245,13 @@ impl IssuePanel {
                     }),
             );
         for reply in thread {
-            let (who, said) = self.activity_text(issue, reply);
+            let (who, mut said) = self.activity_text(issue, reply);
+            // A routine "Worker update" label repeats the author.
+            if reply.kind == "workerReport" {
+                if let Some(rest) = said.strip_prefix("Worker update\n") {
+                    said = rest.to_owned();
+                }
+            }
             card = card.child(
                 column()
                     .px(px(14.))
@@ -2258,7 +2273,7 @@ impl IssuePanel {
                                     .min_w_0()
                                     .truncate()
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(rgb(0xcfcfcf))
+                                    .text_color(rgb(TEXT))
                                     .child(who),
                             )
                             .child(
@@ -2273,7 +2288,7 @@ impl IssuePanel {
                             .pl(px(20.))
                             .text_size(px(12.5))
                             .line_height(px(19.))
-                            .text_color(rgb(0xbdbdbd))
+                            .text_color(rgb(TEXT))
                             .child(said.trim().to_owned()),
                     )
                     .when_some(self.delivery_line(reply), |d, line| d.child(line.pl(px(20.)))),

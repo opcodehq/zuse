@@ -121,6 +121,8 @@ pub enum Target {
 pub struct Phrase {
     pub action: String,
     pub target: Option<(Target, String)>,
+    /// What follows the target, so a long row truncates after the link.
+    pub tail: String,
     pub status: Option<ZapperIssueStatus>,
 }
 
@@ -134,6 +136,7 @@ pub fn phrase(
         return Some(Phrase {
             action: "created the issue".into(),
             target: None,
+            tail: String::new(),
             status: None,
         });
     }
@@ -143,7 +146,16 @@ pub fn phrase(
     let mut actions: Vec<String> = vec![];
     let mut target = None;
     let mut status = None;
+    // Linking a thread that also takes the issue reads as one act.
+    let linked = event
+        .changes
+        .iter()
+        .find(|c| c.field == "thread")
+        .and_then(|c| c.after.as_deref());
     for change in &event.changes {
+        if change.field == "owner" && change.after.is_some() && change.after.as_deref() == linked {
+            continue;
+        }
         let (before, after) = (change.before.as_deref(), change.after.as_deref());
         match change.field.as_str() {
             "status" => {
@@ -169,7 +181,7 @@ pub fn phrase(
                     (None, None) => continue,
                 };
                 if target.is_none() {
-                    actions.push(verb.into());
+                    actions.insert(0, verb.into());
                     target = Some(if change.field == "thread" {
                         (Target::Thread(value.to_owned()), name(value))
                     } else {
@@ -177,13 +189,33 @@ pub fn phrase(
                     });
                 }
             }
+            "title" => actions.push(format!("renamed the issue to “{}”", after.unwrap_or_default())),
+            "dueDate" => actions.push(match after {
+                Some(date) => format!("set the due date to {date}"),
+                None => "cleared the due date".into(),
+            }),
+            "labels" => actions.push(match after {
+                Some(labels) => format!("set labels to {labels}"),
+                None => "cleared the labels".into(),
+            }),
+            "description" => actions.push("edited the description".into()),
+            "doneCriteria" => actions.push("edited what done means".into()),
+            "outOfScope" => actions.push("edited what's out of scope".into()),
             _ => actions.push("updated the details".into()),
         }
     }
     actions.dedup();
+    let (action, tail) = match (&target, actions.split_first()) {
+        (Some(_), Some((verb, rest))) => (
+            verb.clone(),
+            rest.iter().map(|a| format!("and {a}")).collect::<Vec<_>>().join(" "),
+        ),
+        _ => (actions.join(" and "), String::new()),
+    };
     Some(Phrase {
-        action: actions.join(" and "),
+        action,
         target,
+        tail,
         status,
     })
 }
@@ -360,10 +392,23 @@ mod tests {
         let owner = event("e", "updated", vec![change("owner", Some("user"), Some("worker-1"))]);
         let p = phrase(&owner, name, |u| u.to_owned()).unwrap();
         assert_eq!(p.action, "assigned Deploy thread and unassigned Swaraj");
+        let delegate = event(
+            "g",
+            "thread",
+            vec![
+                change("thread", None, Some("worker-1")),
+                change("owner", Some("zapper"), Some("worker-1")),
+                change("status", Some("todo"), Some("inProgress")),
+            ],
+        );
+        let p = phrase(&delegate, name, |u| u.to_owned()).unwrap();
+        assert_eq!((p.action.as_str(), p.tail.as_str()), ("linked", "and moved the issue to In progress"));
         let link = event("l", "thread", vec![change("thread", None, Some("worker-1"))]);
         let p = phrase(&link, name, |u| u.to_owned()).unwrap();
         assert_eq!(p.action, "linked");
         assert_eq!(p.target, Some((Target::Thread("worker-1".into()), "Deploy thread".into())));
+        let due = event("d", "updated", vec![change("dueDate", None, Some("2026-12-05"))]);
+        assert_eq!(phrase(&due, name, |u| u.to_owned()).unwrap().action, "set the due date to 2026-12-05");
         // Entries from before typed changes keep their own text.
         assert_eq!(phrase(&event("old", "updated", vec![]), name, |u| u.to_owned()), None);
         // An unknown stored value reads as unknown, never as markup or a guess.

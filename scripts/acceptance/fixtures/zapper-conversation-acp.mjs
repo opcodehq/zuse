@@ -55,6 +55,8 @@ for await (const line of readline.createInterface({input: process.stdin})) {
         } else {
           const answers = [...(state.answers ?? []), {issue: answer[1], text: answer[2]}];
           record({answers, workerTurns: (state.workerTurns ?? 0) + 1});
+          // Lets a capture see a running turn, and a reply queued behind it.
+          if (answer[2].includes('take your time')) await new Promise(resolve => setTimeout(resolve, 75000));
           say(answers.length === 1 ? 'B it is. I will build the Cloudflare deploy first.' : 'Will do: ' + answer[2]);
         }
       } else throw new Error('Missing engine-stamped Zapper scope');

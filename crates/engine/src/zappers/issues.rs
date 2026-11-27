@@ -101,9 +101,31 @@ pub(super) fn apply(
                 summary.push(format!("Priority changed to {}", details.priority.label()));
                 changes.push(change("priority", Some(wire(&issue.details.priority)), Some(wire(&details.priority))));
             }
+            let old = &issue.details;
+            if old.title != details.title {
+                changes.push(change("title", Some(old.title.clone()), Some(details.title.clone())));
+            }
+            if old.due_date != details.due_date {
+                changes.push(change("dueDate", old.due_date.clone(), details.due_date.clone()));
+            }
+            if old.labels != details.labels {
+                let joined = |labels: &[String]| (!labels.is_empty()).then(|| labels.join(", "));
+                changes.push(change("labels", joined(&old.labels), joined(&details.labels)));
+            }
+            for (field, before, after) in [
+                ("description", &old.description, &details.description),
+                ("doneCriteria", &old.done_criteria, &details.done_criteria),
+                ("outOfScope", &old.out_of_scope, &details.out_of_scope),
+            ] {
+                if before != after {
+                    changes.push(change(field, None, None));
+                }
+            }
             if summary.is_empty() {
                 summary.push("Updated issue details".into());
-                changes.push(change("details", None, None));
+                if changes.is_empty() {
+                    changes.push(change("details", None, None));
+                }
             }
             issue.details = details;
             (issue_id, "updated", summary.join(" · "))
@@ -2355,6 +2377,17 @@ mod routing_tests {
             vec![
                 change("owner", Some("zapper".into()), Some("worker".into())),
                 change("status", Some("backlog".into()), Some("inReview".into())),
+            ]
+        );
+        let mut details = issue(&store).details;
+        details.labels = vec!["web".into()];
+        details.due_date = Some("2026-12-05".into());
+        run(&store, "details", ZapperAction::EditIssue { issue_id: "fix".into(), details });
+        assert_eq!(
+            entry(&store, "details").changes,
+            vec![
+                change("dueDate", None, Some("2026-12-05".into())),
+                change("labels", None, Some("web".into())),
             ]
         );
         assert_eq!(

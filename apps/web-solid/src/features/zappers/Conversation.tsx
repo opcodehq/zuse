@@ -146,6 +146,7 @@ function EventRow(props: { event: IssueActivity; name: (id: string) => string; p
       <Show when={p()?.target}>
         {t => <button type="button" class="zp-author-link" onClick={() => t().kind === "thread" ? openChat(t().value) : props.onOpenPr ? props.onOpenPr(t().value, props.issue.threads[0] ?? props.zapper.coordinatorChatId) : window.open(t().value, "_blank", "noreferrer")}>{t().label}</button>}
       </Show>
+      <Show when={p()?.tail}><span class="zp-event-action">{p()?.tail}</span></Show>
       <time title={exact(props.event.createdAt)}>{relative(props.event.createdAt)}</time>
     </div>
   );

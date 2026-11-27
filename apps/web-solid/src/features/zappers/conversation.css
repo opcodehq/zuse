@@ -28,6 +28,7 @@
 .zp-event { display: flex; align-items: center; gap: 8px; min-height: 26px; font-size: 12px; color: var(--text-muted); min-width: 0; }
 .zp-event > strong { font-weight: 400; color: var(--text); flex: none; }
 .zp-event-action { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zp-event .zp-event-action:first-of-type { flex: none; }
 .zp-event time { flex: none; color: var(--text-faint); }
 .zp-event time::before { content: "·"; margin-right: 8px; }
 .zp-event-mark { flex: none; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--text-faint); }

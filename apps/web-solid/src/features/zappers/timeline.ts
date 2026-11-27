@@ -61,7 +61,7 @@ export function summary(events: IssueActivity[], pullRequest: (url: string) => s
 }
 
 export type Target = { kind: "thread" | "pullRequest"; value: string; label: string };
-export interface Phrase { action: string; target?: Target; status?: IssueStatus }
+export interface Phrase { action: string; target?: Target; tail?: string; status?: IssueStatus }
 
 /** undefined for entries saved before typed changes: they keep their text. */
 export function phrase(e: IssueActivity, name: (id: string) => string, pullRequest: (url: string) => string): Phrase | undefined {
@@ -70,7 +70,10 @@ export function phrase(e: IssueActivity, name: (id: string) => string, pullReque
   const actions: string[] = [];
   let target: Target | undefined;
   let status: IssueStatus | undefined;
+  // Linking a thread that also takes the issue reads as one act.
+  const linked = e.changes.find(c => c.field === "thread")?.after;
   for (const c of e.changes) {
+    if (c.field === "owner" && c.after && c.after === linked) continue;
     if (c.field === "status") {
       status = statusOf(c.after);
       actions.push(`moved the issue to ${status ? statusLabels[status] : "an unknown status"}`);
@@ -80,11 +83,19 @@ export function phrase(e: IssueActivity, name: (id: string) => string, pullReque
     else if (c.field === "thread" || c.field === "pullRequest") {
       const value = c.after ?? c.before;
       if (!value || target) continue;
-      actions.push(c.after ? "linked" : "unlinked");
+      actions.unshift(c.after ? "linked" : "unlinked");
       target = { kind: c.field, value, label: c.field === "thread" ? name(value) : pullRequest(value) };
-    } else actions.push("updated the details");
+    } else if (c.field === "title") actions.push("renamed the issue to “" + (c.after ?? "") + "”");
+    else if (c.field === "dueDate") actions.push(c.after ? "set the due date to " + c.after : "cleared the due date");
+    else if (c.field === "labels") actions.push(c.after ? "set labels to " + c.after : "cleared the labels");
+    else if (c.field === "description") actions.push("edited the description");
+    else if (c.field === "doneCriteria") actions.push("edited what done means");
+    else if (c.field === "outOfScope") actions.push("edited what's out of scope");
+    else actions.push("updated the details");
   }
-  return { action: actions.filter((a, i) => a !== actions[i - 1]).join(" and "), target, status };
+  const unique = actions.filter((a, i) => a !== actions[i - 1]);
+  if (target && unique.length) return { action: unique[0]!, target, tail: unique.slice(1).map(a => "and " + a).join(" "), status };
+  return { action: unique.join(" and "), target, status };
 }
 
 export type RunState = "running" | "awaitingInput" | "failed" | "unconfirmed";

@@ -29,6 +29,7 @@ describe("issue timeline", () => {
     assert.equal(phrase(event("e", "updated", [{ field: "owner", before: "user", after: "w" }]), name, u => u)?.action, "assigned Deploy thread and unassigned Swaraj");
     assert.equal(phrase(event("o", "updated", [{ field: "status", after: "<b>x</b>" }]), name, u => u)?.action, "moved the issue to an unknown status");
     assert.equal(phrase(event("old", "updated"), name, u => u), undefined);
+    assert.equal(phrase(event("l", "updated", [{ field: "labels", before: "web", after: "web, deploy" }]), name, u => u)?.action, "set labels to web, deploy");
   });
   test("only a fresh session confirms a run", () => {
     const now = 1_000_000;

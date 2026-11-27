@@ -48,8 +48,9 @@ const WORKER: &str = "zapper-worker-deploy";
 
 /// `ZAPPER_FIXTURE_CONVERSATION=1`: an issue shared by the Zapper and one
 /// thread, answered by the person, with replies, quiet events and delivery
-/// states, shaped like what the engine stores. `=error` adds a held reply.
-fn conversation(now: i64, error: bool) -> ZapperIssue {
+/// states, shaped like what the engine stores. `=error` adds a held reply,
+/// `=queued` one waiting for the thread's turn to end.
+fn conversation(now: i64, mode: &str) -> ZapperIssue {
     let at = |minutes: i64| now - minutes * 60_000;
     let change = |field: &str, before: Option<&str>, after: Option<&str>| ZapperIssueChange {
         field: field.into(),
@@ -111,12 +112,20 @@ fn conversation(now: i64, error: bool) -> ZapperIssue {
         },
         entry("summary", Some(COORDINATOR), 1, "comment", &format!("Swaraj picked B: a standalone app on code.zuse.sh that connects to engines with tokens. {WORKER} is building the Cloudflare deploy PR first, and will write the scope for the cross-origin connection work before building any of it.")),
     ];
-    if error {
+    if mode == "error" || mode == "queued" {
+        let (state, detail) = if mode == "error" {
+            (
+                ZapperIssueDeliveryState::Held,
+                Some("You stopped this thread. Continue it from its conversation first".into()),
+            )
+        } else {
+            (ZapperIssueDeliveryState::Queued, None)
+        };
         activity.push(ZapperIssueActivity {
             delivery: Some(ZapperIssueDelivery {
                 chat_id: WORKER.into(),
-                state: ZapperIssueDeliveryState::Held,
-                detail: Some("You stopped this thread. Continue it from its conversation first".into()),
+                state,
+                detail,
                 reply: None,
             }),
             reply_to: Some("report-2".into()),
@@ -211,7 +220,7 @@ fn sample_zapper(device: &str) -> Zapper {
             answer: None,
         }],
         issues: if let Ok(mode) = std::env::var("ZAPPER_FIXTURE_CONVERSATION") {
-            vec![conversation(chrono::Utc::now().timestamp_millis(), mode == "error")]
+            vec![conversation(chrono::Utc::now().timestamp_millis(), &mode)]
         } else {
             vec![
             {
