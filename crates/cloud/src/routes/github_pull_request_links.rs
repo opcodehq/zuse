@@ -35,10 +35,7 @@ pub(super) fn routes() -> Router<AppState> {
         .layer(DefaultBodyLimit::max(8192))
 }
 
-async fn owned(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<Value>, ApiError> {
+async fn owned(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<Value>, ApiError> {
     let access = state.access(&headers, AccessKind::Content).await?;
     let owned = native_github(&state)?.owned_pull_requests(&access).await?;
     Ok(Json(json!({ "pullRequests": owned })))
@@ -63,7 +60,12 @@ async fn release(
 ) -> Result<Json<Value>, ApiError> {
     let access = state.access(&headers, AccessKind::Content).await?;
     native_github(&state)?
-        .release_pull_request(&access, &request.chat_key, &request.repository, request.number)
+        .release_pull_request(
+            &access,
+            &request.chat_key,
+            &request.repository,
+            request.number,
+        )
         .await?;
     Ok(Json(json!({ "released": true })))
 }
@@ -86,10 +88,7 @@ async fn policy(
     Ok(Json(json!({ "pullRequest": owned })))
 }
 
-async fn inbox(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<Value>, ApiError> {
+async fn inbox(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<Value>, ApiError> {
     let access = state.access(&headers, AccessKind::Content).await?;
     let events = native_github(&state)?.pull_request_inbox(&access).await?;
     Ok(Json(json!({ "events": events })))

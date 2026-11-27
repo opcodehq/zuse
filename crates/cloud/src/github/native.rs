@@ -889,7 +889,8 @@ impl NativeGithub {
         self.commit_membership_jobs(&mut tx, event, &value).await?;
         // Pull request activity for the chats that own it, in the same
         // transaction that marks the delivery complete.
-        self.route_pull_request_event(&mut tx, event, &value).await?;
+        self.route_pull_request_event(&mut tx, event, &value)
+            .await?;
         sqlx::query("UPDATE zuse_rust_github_deliveries SET completed=true WHERE delivery_id=$1 AND body_hash=$2").bind(delivery).bind(digest).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(())

@@ -618,7 +618,10 @@ impl CloudApi {
             }
             if path.get(2) == Some(&"github") && path.get(3) == Some(&"pull-requests") {
                 let error: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-                anyhow::bail!("{}", pull_request_link_error(error["error"].as_str(), status.as_u16()));
+                anyhow::bail!(
+                    "{}",
+                    pull_request_link_error(error["error"].as_str(), status.as_u16())
+                );
             }
             if path
                 .get(2)
@@ -2178,12 +2181,18 @@ fn pull_request_link_error(code: Option<&str>, status: u16) -> &'static str {
         Some("pull_request_not_found") => NO_PULL_REQUEST,
         Some("pull_request_not_owned") => "This chat isn't linked to that pull request.",
         Some("invalid_pull_request_link") => "That isn't a pull request this chat can link.",
-        Some("github_repository_access_denied" | "github_repository_not_selected" | "github_installation_changed") => {
+        Some(
+            "github_repository_access_denied"
+            | "github_repository_not_selected"
+            | "github_installation_changed",
+        ) => {
             "Zuse's GitHub app can't see that repository. Add it to the app's installation, then try again."
         }
-        Some("github_reconnect_required" | "github_user_reconnect_required" | "github_user_connection_required") => {
-            "Reconnect GitHub in Settings → Cloud to link pull requests."
-        }
+        Some(
+            "github_reconnect_required"
+            | "github_user_reconnect_required"
+            | "github_user_connection_required",
+        ) => "Reconnect GitHub in Settings → Cloud to link pull requests.",
         Some("github_native_disabled" | "pull_request_links_unavailable") => {
             "Linking pull requests isn't available on this cloud service yet."
         }

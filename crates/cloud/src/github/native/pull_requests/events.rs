@@ -11,7 +11,10 @@ pub(crate) enum Target {
     Number(i64),
     /// Check results name their pull requests only for same-repository
     /// branches; otherwise they are matched by head commit.
-    Checks { numbers: Vec<i64>, head_sha: String },
+    Checks {
+        numbers: Vec<i64>,
+        head_sha: String,
+    },
 }
 
 /// New values for the owner row's copy of the pull request.
@@ -74,13 +77,17 @@ pub(crate) fn classify(event: &str, value: &Value) -> Option<Classified> {
                 "closed" if pr["merged"] == true => Some(PullRequestEventKind::Merged),
                 "closed" => Some(PullRequestEventKind::Closed),
                 "reopened" => Some(PullRequestEventKind::Reopened),
-                "opened" | "edited" | "synchronize" | "ready_for_review"
-                | "converted_to_draft" => None,
+                "opened" | "edited" | "synchronize" | "ready_for_review" | "converted_to_draft" => {
+                    None
+                }
                 _ => return None,
             };
             let draft = kind.map(|kind| Draft {
                 kind,
-                event_id: format!("pr:{number}:{action}:{}", pr["updated_at"].as_str().unwrap_or("")),
+                event_id: format!(
+                    "pr:{number}:{action}:{}",
+                    pr["updated_at"].as_str().unwrap_or("")
+                ),
                 url: url(&pr["html_url"]),
                 author: login(sender),
                 author_id: positive(&sender["id"]),
@@ -199,12 +206,19 @@ pub(crate) fn classify(event: &str, value: &Value) -> Option<Classified> {
             }
             let app = &run["app"];
             (
-                checks_target(&run["pull_requests"], run["head_sha"].as_str(), repository_id)?,
+                checks_target(
+                    &run["pull_requests"],
+                    run["head_sha"].as_str(),
+                    repository_id,
+                )?,
                 Update::default(),
                 Some(Draft {
                     kind: PullRequestEventKind::ChecksFailed,
                     event_id: format!("check-run:{}", positive(&run["id"])?),
-                    url: url(run.get("details_url").filter(|v| v.is_string()).unwrap_or(&run["html_url"])),
+                    url: url(run
+                        .get("details_url")
+                        .filter(|v| v.is_string())
+                        .unwrap_or(&run["html_url"])),
                     author: app["name"].as_str().map(|n| clip(n, 100)),
                     author_id: None,
                     bot: false,
@@ -254,7 +268,10 @@ fn pull_request_update(pr: &Value) -> Update {
             .as_str()
             .filter(|r| r.len() <= 255)
             .map(str::to_owned),
-        head_sha: pr["head"]["sha"].as_str().filter(|s| sha_ok(s)).map(str::to_owned),
+        head_sha: pr["head"]["sha"]
+            .as_str()
+            .filter(|s| sha_ok(s))
+            .map(str::to_owned),
     }
 }
 
@@ -393,7 +410,13 @@ mod tests {
             base(),
             json!({"action":"created","issue":{"number":7,"pull_request":{}},"comment":{"id":56,"body":"Coverage 80%","user":{"login":"codecov[bot]","id":3,"type":"Bot"}}}),
         );
-        assert!(classify("issue_comment", &value).unwrap().draft.unwrap().bot);
+        assert!(
+            classify("issue_comment", &value)
+                .unwrap()
+                .draft
+                .unwrap()
+                .bot
+        );
     }
 
     #[test]
@@ -404,10 +427,13 @@ mod tests {
                 json!({"action":"submitted","pull_request":{"number":3},"review":{"id":8,"state":state,"body":body,"html_url":"https://github.com/acme/app/pull/3#pullrequestreview-8","user":{"login":"bob","id":2}}}),
             )
         };
-        let changes = classify("pull_request_review", &review("CHANGES_REQUESTED", "Split it"))
-            .unwrap()
-            .draft
-            .unwrap();
+        let changes = classify(
+            "pull_request_review",
+            &review("CHANGES_REQUESTED", "Split it"),
+        )
+        .unwrap()
+        .draft
+        .unwrap();
         assert_eq!(changes.kind, PullRequestEventKind::Review);
         assert_eq!(changes.body, "Requested changes: Split it");
         let approved = classify("pull_request_review", &review("approved", ""))

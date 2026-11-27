@@ -1433,8 +1433,7 @@ fn zapper_full_prompt(
         Some(
             source @ (zuse_protocol::slack::MessageSource::Zapper { typed: false, .. }
             | zuse_protocol::slack::MessageSource::GitHub { .. }),
-        ) if !raw.trim().is_empty() && raw.trim() != source.text().trim() =>
-        {
+        ) if !raw.trim().is_empty() && raw.trim() != source.text().trim() => {
             Some(raw.to_owned().into())
         }
         _ => None,

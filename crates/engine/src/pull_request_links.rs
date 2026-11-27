@@ -297,9 +297,9 @@ impl PullRequestLinks {
 
     fn remember(&self, owned: OwnedPullRequest) {
         let mut state = lock(&self.inner.state);
-        state
-            .owned
-            .retain(|pr| !(pr.repository.eq_ignore_ascii_case(&owned.repository) && pr.number == owned.number));
+        state.owned.retain(|pr| {
+            !(pr.repository.eq_ignore_ascii_case(&owned.repository) && pr.number == owned.number)
+        });
         state.owned.insert(0, owned);
         self.publish(&state);
         self.save(&state);
@@ -441,7 +441,9 @@ impl PullRequestLinks {
                     self.save(&state);
                     handled.extend(batch.iter().map(|e| e.sequence));
                 }
-                Err(error) => tracing::warn!(%error, "pull request activity could not be delivered"),
+                Err(error) => {
+                    tracing::warn!(%error, "pull request activity could not be delivered")
+                }
             }
         }
         if !handled.is_empty() {
@@ -459,7 +461,8 @@ impl PullRequestLinks {
     /// Split inbox events into what to deliver now (per chat), what to
     /// acknowledge without delivering, and when held feedback is due.
     fn plan(&self, events: Vec<InboxEvent>, now: Instant) -> Plan {
-        let delivered: HashSet<String> = lock(&self.inner.state).delivered.iter().cloned().collect();
+        let delivered: HashSet<String> =
+            lock(&self.inner.state).delivered.iter().cloned().collect();
         let watches = self.inner.pr_watches.subscribe().borrow().clone();
         let mut seen = lock(&self.inner.seen);
         let mut plan = Plan::default();
@@ -479,10 +482,16 @@ impl PullRequestLinks {
                     w.chat_id == chat
                         && w.enabled
                         && w.auto_fix
-                        && zuse_protocol::pull_request_links::parse_url(&w.url)
-                            .is_some_and(|(repo, n)| repo.eq_ignore_ascii_case(&event.repository) && n == event.number)
+                        && zuse_protocol::pull_request_links::parse_url(&w.url).is_some_and(
+                            |(repo, n)| {
+                                repo.eq_ignore_ascii_case(&event.repository) && n == event.number
+                            },
+                        )
                 });
-            if delivered.contains(&event.event_id) || repaired || event.action == EventAction::Ignore {
+            if delivered.contains(&event.event_id)
+                || repaired
+                || event.action == EventAction::Ignore
+            {
                 plan.skip.push(event.sequence);
                 continue;
             }
@@ -496,7 +505,8 @@ impl PullRequestLinks {
                 .filter(|e| e.kind.is_feedback())
                 .filter_map(|e| seen.get(&e.event_id).copied())
                 .max();
-            let hold = latest.and_then(|at| FEEDBACK_QUIET.checked_sub(now.saturating_duration_since(at)));
+            let hold =
+                latest.and_then(|at| FEEDBACK_QUIET.checked_sub(now.saturating_duration_since(at)));
             let (ready, held): (Vec<_>, Vec<_>) = events
                 .into_iter()
                 .partition(|e| !(hold.is_some() && e.kind.is_feedback()));
@@ -516,7 +526,12 @@ impl PullRequestLinks {
         let row = self.inner.workspace.chat(chat)?.context("chat is gone")?;
         let doc = self.inner.docs.open(chat)?.doc_arc();
         let entries = doc.read_entries()?;
-        let wake = should_wake(events, &entries, row.archived, chrono::Utc::now().timestamp_millis());
+        let wake = should_wake(
+            events,
+            &entries,
+            row.archived,
+            chrono::Utc::now().timestamp_millis(),
+        );
         let text = activity_text(events);
         let first = &events[0];
         let ids: Vec<&str> = events.iter().map(|e| e.event_id.as_str()).collect();
@@ -528,7 +543,10 @@ impl PullRequestLinks {
             repository: first.repository.clone(),
             number: first.number,
             url: if first.url.is_empty() {
-                format!("https://github.com/{}/pull/{}", first.repository, first.number)
+                format!(
+                    "https://github.com/{}/pull/{}",
+                    first.repository, first.number
+                )
             } else {
                 first.url.clone()
             },
@@ -595,7 +613,10 @@ impl PullRequestLinks {
     }
 
     /// Claim pull requests a chat opened or pushed to, once its turn ends.
-    async fn follow_turns(inner: Weak<Inner>, mut statuses: watch::Receiver<Vec<zuse_protocol::Session>>) {
+    async fn follow_turns(
+        inner: Weak<Inner>,
+        mut statuses: watch::Receiver<Vec<zuse_protocol::Session>>,
+    ) {
         let mut seen: HashMap<String, Option<String>> = statuses
             .borrow_and_update()
             .iter()
@@ -668,10 +689,12 @@ struct Plan {
 /// Whether an account feed frame may mean new pull request activity.
 fn refresh_hint(frame: &Value) -> bool {
     let data = &frame["data"];
-    matches!(data["type"].as_str(), Some("ready" | "reset" | "revalidate"))
-        || data["events"]
-            .as_array()
-            .is_some_and(|events| events.iter().any(|e| e["kind"] == FEED_KIND))
+    matches!(
+        data["type"].as_str(),
+        Some("ready" | "reset" | "revalidate")
+    ) || data["events"]
+        .as_array()
+        .is_some_and(|events| events.iter().any(|e| e["kind"] == FEED_KIND))
 }
 
 /// A person (not pull request activity) wrote this entry.
@@ -689,7 +712,10 @@ fn should_wake(
     archived: bool,
     now_ms: i64,
 ) -> bool {
-    let waking: Vec<_> = events.iter().filter(|e| e.action == EventAction::Wake).collect();
+    let waking: Vec<_> = events
+        .iter()
+        .filter(|e| e.action == EventAction::Wake)
+        .collect();
     if archived || waking.is_empty() {
         return false;
     }
@@ -769,7 +795,12 @@ fn summary(events: &[InboxEvent]) -> String {
     }
     let prs: HashSet<_> = events.iter().map(|e| (&e.repository, e.number)).collect();
     if prs.len() == 1 {
-        format!("{} updates on {}#{}", events.len(), events[0].repository, events[0].number)
+        format!(
+            "{} updates on {}#{}",
+            events.len(),
+            events[0].repository,
+            events[0].number
+        )
     } else {
         format!("{} updates on {} pull requests", events.len(), prs.len())
     }
@@ -794,7 +825,9 @@ fn pushed(entries: &[SessionMessageEntry]) -> bool {
 fn runs_git_push(command: &str) -> bool {
     command.split(['&', ';', '|', '\n']).any(|part| {
         let part = part.trim_start();
-        part.starts_with("git push") || part.contains(" git push") || part.contains("git -C ") && part.contains(" push")
+        part.starts_with("git push")
+            || part.contains(" git push")
+            || part.contains("git -C ") && part.contains(" push")
     })
 }
 
@@ -908,8 +941,18 @@ mod tests {
     fn state_changes_only_wake_recently_used_chats() {
         let merged = [event(PullRequestEventKind::Merged, EventAction::Wake)];
         let history = [entry("u", 0, false)];
-        assert!(should_wake(&merged, &history, false, STATE_CHANGE_RECENCY_MS));
-        assert!(!should_wake(&merged, &history, false, STATE_CHANGE_RECENCY_MS + 1));
+        assert!(should_wake(
+            &merged,
+            &history,
+            false,
+            STATE_CHANGE_RECENCY_MS
+        ));
+        assert!(!should_wake(
+            &merged,
+            &history,
+            false,
+            STATE_CHANGE_RECENCY_MS + 1
+        ));
         assert!(!should_wake(&merged, &[], false, 0));
     }
 
@@ -965,9 +1008,13 @@ mod tests {
 
     #[test]
     fn hints_and_resets_trigger_a_read() {
-        assert!(refresh_hint(&json!({"data":{"events":[{"kind":"pull-request","resourceId":"chat:c"}]}})));
+        assert!(refresh_hint(
+            &json!({"data":{"events":[{"kind":"pull-request","resourceId":"chat:c"}]}})
+        ));
         assert!(refresh_hint(&json!({"data":{"type":"ready"}})));
-        assert!(!refresh_hint(&json!({"data":{"events":[{"kind":"billing","resourceId":"a"}]}})));
+        assert!(!refresh_hint(
+            &json!({"data":{"events":[{"kind":"billing","resourceId":"a"}]}})
+        ));
     }
 
     #[test]
@@ -981,9 +1028,18 @@ mod tests {
 
     #[test]
     fn github_remotes_parse() {
-        assert_eq!(github_repository("https://github.com/acme/app.git").as_deref(), Some("acme/app"));
-        assert_eq!(github_repository("git@github.com:acme/app.git").as_deref(), Some("acme/app"));
-        assert_eq!(github_repository("ssh://git@github.com/acme/app").as_deref(), Some("acme/app"));
+        assert_eq!(
+            github_repository("https://github.com/acme/app.git").as_deref(),
+            Some("acme/app")
+        );
+        assert_eq!(
+            github_repository("git@github.com:acme/app.git").as_deref(),
+            Some("acme/app")
+        );
+        assert_eq!(
+            github_repository("ssh://git@github.com/acme/app").as_deref(),
+            Some("acme/app")
+        );
         assert_eq!(github_repository("https://gitlab.com/acme/app.git"), None);
     }
 }

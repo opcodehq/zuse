@@ -40,7 +40,8 @@ fn inbox_context(account: &str, event_id: &str) -> String {
     format!("pull-request-inbox:{account}:{event_id}")
 }
 
-const OWNER_COLUMNS: &str = "chat_key,repository,number,url,title,state,draft,head_ref,claimed_by,claimed_at,checks,policy";
+const OWNER_COLUMNS: &str =
+    "chat_key,repository,number,url,title,state,draft,head_ref,claimed_by,claimed_at,checks,policy";
 
 fn owned(row: &sqlx::postgres::PgRow) -> Result<OwnedPullRequest, ApiError> {
     Ok(OwnedPullRequest {
@@ -123,7 +124,11 @@ impl NativeGithub {
             return Err(invalid());
         }
         let grant = self
-            .scoped_git(&access.owner_id, &access.actor.account_id, &request.repository)
+            .scoped_git(
+                &access.owner_id,
+                &access.actor.account_id,
+                &request.repository,
+            )
             .await?;
         let pr = match (request.number, &request.branch) {
             (Some(number), _) => {
@@ -134,7 +139,11 @@ impl NativeGithub {
                 .await?
             }
             (None, Some(branch)) => {
-                let owner = request.repository.split_once('/').map(|(o, _)| o).unwrap_or("");
+                let owner = request
+                    .repository
+                    .split_once('/')
+                    .map(|(o, _)| o)
+                    .unwrap_or("");
                 let mut url = self.api(&format!("/repos/{}/pulls", request.repository));
                 url.query_pairs_mut()
                     .append_pair("head", &format!("{owner}:{branch}"))
@@ -166,7 +175,10 @@ impl NativeGithub {
         pr: &Value,
         installation_id: i64,
     ) -> Result<OwnedPullRequest, ApiError> {
-        let number = pr["number"].as_i64().filter(|n| *n > 0).ok_or_else(unavailable)?;
+        let number = pr["number"]
+            .as_i64()
+            .filter(|n| *n > 0)
+            .ok_or_else(unavailable)?;
         let repository_id = pr["base"]["repo"]["id"]
             .as_i64()
             .filter(|n| *n > 0)
@@ -251,7 +263,11 @@ impl NativeGithub {
         policy: &EventPolicy,
     ) -> Result<OwnedPullRequest, ApiError> {
         self.require_pull_requests(access).await?;
-        if !valid_chat_key(chat_key) || !valid_repository(repository) || number == 0 || !policy.is_valid() {
+        if !valid_chat_key(chat_key)
+            || !valid_repository(repository)
+            || number == 0
+            || !policy.is_valid()
+        {
             return Err(invalid());
         }
         let policy = serde_json::to_value(policy).map_err(|_| invalid())?;
@@ -320,11 +336,13 @@ impl NativeGithub {
                 .bind(sequences).bind(&access.owner_id).bind(&access.actor.account_id)
                 .execute(&self.pool).await?.rows_affected()
         };
-        sqlx::query("DELETE FROM zuse_rust_pull_request_inbox WHERE account_id=$1 AND created_at<$2")
-            .bind(&access.owner_id)
-            .bind(now() - INBOX_RETENTION_MS)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "DELETE FROM zuse_rust_pull_request_inbox WHERE account_id=$1 AND created_at<$2",
+        )
+        .bind(&access.owner_id)
+        .bind(now() - INBOX_RETENTION_MS)
+        .execute(&self.pool)
+        .await?;
         Ok(acked)
     }
 
@@ -444,7 +462,12 @@ mod tests {
         let policy = EventPolicy::default();
         let own = draft(PullRequestEventKind::Comment, Some(5), false, "Done, fixed");
         assert_eq!(decide(&policy, &own, Some(5)), EventAction::Context);
-        let asked = draft(PullRequestEventKind::Comment, Some(5), false, "@zuse rename it");
+        let asked = draft(
+            PullRequestEventKind::Comment,
+            Some(5),
+            false,
+            "@zuse rename it",
+        );
         assert_eq!(decide(&policy, &asked, Some(5)), EventAction::Wake);
         let other = draft(PullRequestEventKind::Comment, Some(6), false, "Rename it");
         assert_eq!(decide(&policy, &other, Some(5)), EventAction::Wake);
@@ -461,7 +484,12 @@ mod tests {
         assert_eq!(decide(&policy, &bot, None), EventAction::Wake);
         let merged = draft(PullRequestEventKind::Merged, Some(5), false, "");
         assert_eq!(decide(&policy, &merged, Some(5)), EventAction::Context);
-        let failed = draft(PullRequestEventKind::ChecksFailed, None, false, "test failed");
+        let failed = draft(
+            PullRequestEventKind::ChecksFailed,
+            None,
+            false,
+            "test failed",
+        );
         assert_eq!(decide(&policy, &failed, Some(5)), EventAction::Wake);
     }
 }

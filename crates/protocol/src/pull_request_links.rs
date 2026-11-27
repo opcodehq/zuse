@@ -253,7 +253,9 @@ fn valid_component(value: &str) -> bool {
 /// `chat:{id}` keys, bounded like the Slack link keys.
 pub fn valid_chat_key(key: &str) -> bool {
     key.strip_prefix("chat:").is_some_and(|id| {
-        !id.is_empty() && id.len() <= 200 && !id.chars().any(|c| c.is_control() || c.is_whitespace())
+        !id.is_empty()
+            && id.len() <= 200
+            && !id.chars().any(|c| c.is_control() || c.is_whitespace())
     })
 }
 
