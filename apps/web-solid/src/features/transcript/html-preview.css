@@ -1,0 +1,32 @@
+/* The chrome inherits the app theme. Author styles live only in the opaque-origin frame. */
+.html-preview { position: static; display: block; margin: 0; padding: 0; width: 100%; max-width: none; min-width: 0; color: var(--text); background: var(--card); border: 1px solid var(--border-strong); border-radius: 12px; overflow: hidden; font: 13px/1.5 var(--font-sans); }
+.html-preview:not([open]) { display: none; }
+.html-preview-head { min-height: 46px; padding: 7px 10px 7px 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border); background: var(--raised); }
+.html-preview-label { display: flex; gap: 8px; align-items: center; min-width: 0; font-size: 11px; font-weight: 600; letter-spacing: .03em; }
+.html-preview-label > .icon { color: var(--accent); }
+.html-preview-label small { color: var(--text-muted); font-size: 11px; font-weight: 400; letter-spacing: 0; white-space: nowrap; }
+.html-preview-dot { height: 3px; width: 3px; border-radius: 50%; background: var(--text-faint); }
+.html-preview-controls { display: flex; align-items: center; gap: 3px; flex-shrink: 0; }
+.html-preview-switch { display: flex; padding: 2px; gap: 2px; background: var(--bg); border: 1px solid var(--border); border-radius: 7px; margin-right: 5px; }
+.html-preview-switch button { padding: 3px 9px; border: 0; border-radius: 4px; background: none; color: var(--text-muted); font: inherit; font-size: 11px; cursor: pointer; }
+.html-preview-switch button[aria-pressed="true"] { background: var(--active); color: var(--text-strong); box-shadow: 0 1px 3px var(--scrim); }
+.html-preview-action { border: 0; background: none; color: var(--text-muted); display: grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; cursor: pointer; }
+.html-preview-action:hover:not(:disabled) { color: var(--text); background: var(--hover); }
+.html-preview-action:disabled { opacity: .4; cursor: default; }
+.html-preview-stage { min-height: 200px; }
+.html-preview-stage[hidden], .html-preview-source[hidden] { display: none; }
+.html-preview-stage iframe { display: block; width: 100%; border: 0; background: var(--card); }
+.html-preview-source { max-height: 640px; overflow: auto; }
+.html-preview-source .code-block { border: 0; border-radius: 0; margin: 0; }
+.html-preview-placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; min-height: 240px; padding: 24px; color: var(--text-muted); text-align: center; }
+.html-preview-placeholder b { color: var(--text); font-size: 13px; font-weight: 500; }
+.html-preview-placeholder span { font-size: 12px; }
+.html-preview-foot { display: flex; justify-content: space-between; gap: 12px; padding: 7px 14px; border-top: 1px solid var(--border); font-size: 10px; color: var(--text-faint); }
+.html-preview-error { padding: 10px 14px; color: var(--warning); background: var(--raised); font-size: 12px; }
+.html-preview:modal { position: fixed; inset: 0; margin: auto; width: min(1200px, calc(100vw - 40px)); height: min(900px, calc(100dvh - 40px)); max-height: none; display: flex; flex-direction: column; box-shadow: var(--shadow); }
+.html-preview:modal::backdrop { background: var(--scrim); backdrop-filter: blur(5px); }
+.html-preview:modal .html-preview-stage { flex: 1; min-height: 0; }
+.html-preview:modal .html-preview-stage iframe { height: 100% !important; }
+.html-preview:modal .html-preview-source { flex: 1; max-height: none; min-height: 0; }
+.html-preview:modal .html-preview-head, .html-preview:modal .html-preview-foot { flex-shrink: 0; }
+@media (max-width: 540px) { .html-preview-label small, .html-preview-dot { display: none; } .html-preview-head { gap: 4px; padding-left: 10px; } .html-preview-switch button { padding-inline: 7px; } .html-preview:modal { width: calc(100vw - 16px); height: calc(100dvh - 16px); } }

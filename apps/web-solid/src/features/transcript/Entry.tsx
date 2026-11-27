@@ -168,8 +168,8 @@ function TextItem(props: { part: Extract<MessagePart, { kind: "text" }>; live: b
   // Tokens land in the store as they arrive; the DOM sees at most one update per frame.
   const text = frameThrottled(() => props.part.text, () => props.live);
   return (
-    <Show when={props.ctx.references} fallback={<Markdown text={text()} live={props.live} />}>
-      {(references) => <ReferenceMarkdown text={text()} live={props.live} chatId={props.ctx.chatId} references={references()()} />}
+    <Show when={props.ctx.references} fallback={<Markdown text={text()} live={props.live} htmlPreview />}>
+      {(references) => <ReferenceMarkdown text={text()} live={props.live} chatId={props.ctx.chatId} references={references()()} htmlPreview />}
     </Show>
   );
 }
