@@ -1,0 +1,65 @@
+---
+title: "Browser access"
+icon: Laptop
+navTitle: "Browser access"
+description: "Authorize a browser with a temporary connect link or pairing code and manage its access from the desktop app."
+section: "Remote access"
+order: 2
+platforms: [desktop, web]
+providers: []
+prerequisites: [/remote]
+related: [/remote/nearby-pairing, /remote/tailscale, /remote/security, /remote/recovery]
+next: /remote/nearby-pairing
+lastVerified: latest
+---
+
+
+A browser can open the projects and chats of a computer running Zuse once you authorize it. The desktop app creates a temporary connect link and pairing code; using either one turns that browser into a revocable client.
+
+Before you begin:
+
+- Zuse is open on the computer that owns the environment.
+- The browser can reach that computer through at least one connection: the same Wi-Fi, the same tailnet, or Zuse Serve.
+- If you turn on the local network, you can let running agents stop while the app restarts.
+
+<Workflow>
+  <Step title="Turn on a connection">
+    In the desktop app, open **Settings → Remote access**. Under **Connections**, choose **Turn on** next to **Local network**, then confirm **Restart and turn on**. The app restarts, and running agents stop during that restart. To reach the computer from other networks instead, set up [Tailscale](/remote/tailscale/) or [Zuse Serve](/remote/hosted-access/).
+  </Step>
+  <Step title="Create a connect link">
+    Under **Connect another device**, choose **Create link**. In **Connect through**, pick the connection the browser should use. The dialog shows the link, a pairing code, and a countdown. Each link lasts five minutes; while the dialog stays open, Zuse replaces an expired link automatically. Choose **New link** to replace it yourself.
+  </Step>
+  <Step title="Authorize the browser">
+    Choose **Copy link** and open it in the target browser, or choose **Show QR** and scan the code. If the browser already shows **Pair this browser**, choose **Copy code** and enter the pairing code there. The desktop dialog confirms when the new device is connected.
+  </Step>
+</Workflow>
+
+A link or code works once. After that, the browser keeps its own access credential at the same address, so the link expiring does not sign it out. Its access remains until you revoke that browser or turn off the connection it uses.
+
+## Revoke a browser
+
+Return to **Settings → Remote access**. Under **Connected devices**, find the browser by its label and last-connected time, then choose **Revoke**. Reloading that browser now shows **Pair this browser** and asks for a new pairing code.
+
+Access credentials created by earlier Zuse versions are grouped as **Older device access**. Use **Revoke all** to invalidate that group.
+
+## Turn the local network off
+
+Choose **Turn off** next to **Local network**, then confirm **Restart and turn off**. The desktop app restarts, and browsers and mobile devices connected over this network disconnect. Tailscale and Zuse Serve are managed separately.
+
+<Troubleshooting>
+
+### “This pairing link expired”
+
+Create a new link in **Settings → Remote access**, then enter its pairing code in the browser. Links are valid for only five minutes.
+
+### “Zuse versions do not match”
+
+Update the environment, then reload the page. The client will not connect across an incompatible protocol version.
+
+### “Could not reach Zuse Serve”
+
+Confirm the computer is awake, Zuse is open, and the connection you chose is on. For the local network, both devices must be on a network that allows device-to-device traffic; guest and corporate Wi-Fi networks commonly block it. Then choose **Try again**.
+
+</Troubleshooting>
+
+<NextStep href="/remote/nearby-pairing/" label="Pair an iPhone nearby" />

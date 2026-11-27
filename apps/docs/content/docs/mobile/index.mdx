@@ -1,0 +1,52 @@
+---
+title: "Zuse for iPhone"
+icon: Smartphone
+description: "Monitor agents, send messages, handle approvals, and review workspace changes from your iPhone."
+section: "Mobile"
+order: 1
+platforms: [mobile]
+providers: []
+prerequisites: [/remote]
+related: [/mobile/connect, /mobile/chats, /mobile/review, /mobile/offline-notifications]
+next: /mobile/connect
+lastVerified: latest
+---
+
+
+Zuse for iPhone is a native client for environments running on your Mac or a Serve computer. It gives you the shared inbox, live conversation timeline, composer, approvals, files, and change review while all execution remains on the connected computer.
+
+## What you can do
+
+- See chats grouped by project and computer.
+- Search, pin, archive, and reopen chats.
+- Create a chat that works locally, in a new worktree, on an existing branch, or on a pull request.
+- Choose an installed provider, model, intelligence level, and approval mode.
+- Send text, photos, and files, and start plan or goal work.
+- Follow streaming agent output and queued work.
+- Answer questions, review plans, and decide permission requests.
+- Browse project files, review changes, and commit, push, or merge from the phone.
+- Restore a checkpoint or review a turn's attempt history.
+- Receive notifications when an agent needs your attention.
+
+When you sign in, the inbox can also include your cloud chats.
+
+## What runs where
+
+The phone does not clone repositories or run provider CLIs. It asks the connected environment to do the work and presents the resulting state. Provider availability and model choices come from that environment, so two connected computers can offer different agents.
+
+## Start with a connection
+
+Choose the connection path that matches where you are:
+
+- [Pair a nearby Mac](/remote/nearby-pairing/) directly over the local network, without an account.
+- Scan the QR code from a connect link created in the computer's **Settings → Remote access**.
+- [Sign in for hosted access](/remote/hosted-access/) to reach an account-linked computer away from home or the office.
+- Use **Settings → Computers → Add manually** only when you know the server address and port.
+
+After a successful connection, Zuse opens the inbox and refreshes the environment's projects, chats, and sessions over WebSocket.
+
+<Callout title="Mobile is a control surface">
+Keep the environment awake and online while an agent is working. Cached history remains readable during a disconnect, but new execution waits for the environment to return.
+</Callout>
+
+<NextStep href="/mobile/connect/" label="Connect your iPhone" />

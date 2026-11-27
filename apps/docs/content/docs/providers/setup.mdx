@@ -1,0 +1,56 @@
+---
+title: Install, sign in, and update providers
+icon: Wrench
+navTitle: "Setup and updates"
+description: Make provider CLIs available and resolve common readiness problems.
+section: providers
+order: 31
+platforms: [desktop]
+providers: [claude, codex, grok, cursor, opencode, opencode2, kiro, pi]
+prerequisites: [/providers]
+related: [/start/install, /reference/settings, /reference/diagnostics]
+next: /composer
+lastVerified: latest
+---
+
+
+Open **Settings → Providers** for the authoritative status of each integration on this computer. The **Agent providers** list has one row per built-in provider with its status, version, and an on/off switch; expand a row for setup, models, and keys. [ACP agents](/providers/acp) are listed below it.
+
+## Read the status
+
+- **Ready** means the provider is installed, authenticated, and passes required compatibility checks.
+- A warning can mean an update is available or an account check could not be completed.
+- An error identifies a confirmed blocker such as missing authentication or an incompatible CLI.
+- Disabled providers remain installed but are hidden from normal selection.
+
+For CLI-backed providers, Zuse detects commands through the desktop service environment and known installation locations. If a command works in an interactive shell but Zuse cannot find it, fully restart the app after changing your shell path or installation. Cursor uses Zuse's bundled SDK and does not require a separate Cursor CLI.
+
+## Sign in
+
+Use the sign-in action shown for the provider. Depending on the integration, Zuse opens an inline flow, launches the provider's official login command, or accepts an API key. Complete browser authorization before returning to the app. Cursor authentication is API-key only. Other providers accept an optional API key in their row.
+
+Zuse keeps API keys in an encrypted credential store whose key is held by your system keychain. They never go into `settings.json`.
+
+### Multiple accounts
+
+Claude Code and Codex rows have an **Accounts** section. Choose **Connect another account** to add one, and **Use for new chats** to pick the default. When a chat hits a usage limit, you can switch it to another account from the composer.
+
+Provider login is separate from signing in to Zuse for hosted remote access.
+
+## Update
+
+When Zuse knows the installed and current versions, settings can offer an update. Required minimum versions block new sessions because their protocol is incompatible; ordinary newer-version notices do not.
+
+After updating a provider, create or restart its session so the process uses the new installation. Existing live sessions do not replace their running process in place.
+
+## Models and provider settings
+
+The model picker reflects the models each provider reports. Some models expose additional controls such as reasoning effort.
+
+In a provider's row you can hide models from the picker (at least one stays visible) and add a custom model ID that the provider accepts but doesn't list. To choose which model and permission mode new chats start with, open **Settings → Default models**.
+
+OpenCode and OpenCode 2 manage their own connected providers and models instead; see [OpenCode](/providers/opencode).
+
+## Pi
+
+Install `@earendil-works/pi-coding-agent`, then run `pi` and `/login` in a terminal. Set an optional absolute binary path in Pi provider settings. Pi uses native permissions and its existing project trust configuration. See [Pi setup and capabilities](/providers/pi).

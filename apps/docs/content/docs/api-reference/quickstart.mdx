@@ -1,0 +1,120 @@
+---
+title: API quickstart
+icon: Zap
+navTitle: "API quickstart"
+description: Create an API key, start a cloud workspace with a prompt, and read the agent's reply.
+section: api
+order: 2
+platforms: [cloud]
+providers: []
+prerequisites: [/api-reference]
+related: [/api-reference/webhook-signatures, /how-to/choose-cloud-provider]
+lastVerified: latest
+---
+
+This walkthrough uses `curl`. You need Zuse Cloud set up in the app, with at least one connected repository and agent.
+
+## 1. Create an API key
+
+In the Zuse app, open **Settings → Cloud workspaces → Advanced → API keys**. Enter a name, choose **Create key**, and copy the `zk_` key. It's shown only once.
+
+```bash title="Terminal"
+export ZUSE_API_KEY=zk_...
+```
+
+## 2. Find your project
+
+```bash title="Terminal"
+curl https://api.zuse.sh/v1/api/projects \
+  -H "Authorization: Bearer $ZUSE_API_KEY"
+```
+
+```json title="Response"
+{
+  "projects": [
+    {
+      "projectId": "proj_8f2c1a",
+      "repository": "acme/api",
+      "displayName": "acme-api",
+      "defaultBranch": "main",
+      "state": "ready"
+    }
+  ]
+}
+```
+
+Workspaces start from `ready` projects. If you have only one, you can leave `projectId` out of the next request.
+
+## 3. Start a workspace
+
+```bash title="Terminal"
+curl https://api.zuse.sh/v1/api/workspaces \
+  -H "Authorization: Bearer $ZUSE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -d '{
+    "projectId": "proj_8f2c1a",
+    "agent": "codex",
+    "model": "gpt-5.6-sol",
+    "prompt": "Return a 400 with the validation issues when POST /orders gets an invalid body."
+  }'
+```
+
+The response has the new workspace. Its machine starts right away, and the agent begins working on a new branch:
+
+```json title="Response"
+{
+  "workspace": {
+    "workspaceId": "workspace_Q2x8mN4pR7sT1vWz",
+    "branch": "pikachu-4k2d",
+    "state": "queued",
+    "agentStatus": "working",
+    "latestSeq": 1
+  }
+}
+```
+
+`agent` and `model` default to the ones from your most recent workspace. Use [List agents](/api-reference/providers/list-agents) to see which agents are connected. API workspaces run with full access by default; set `runtimeMode` to change that.
+
+## 4. Read the reply
+
+Poll the conversation, passing the last sequence number you've seen:
+
+```bash title="Terminal"
+curl "https://api.zuse.sh/v1/api/workspaces/workspace_Q2x8mN4pR7sT1vWz/messages?afterSeq=0" \
+  -H "Authorization: Bearer $ZUSE_API_KEY"
+```
+
+When the agent finishes, its reply appears as an `assistant` message with an `outcome`. Pass `latestSeq` from each response as the next `afterSeq` to get only new messages. To avoid polling, [register a webhook](/api-reference/webhooks/create-webhook) instead.
+
+## 5. Follow up
+
+```bash title="Terminal"
+curl https://api.zuse.sh/v1/api/workspaces/workspace_Q2x8mN4pR7sT1vWz/messages \
+  -H "Authorization: Bearer $ZUSE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "text": "Also add a test for the 400 response." }'
+```
+
+Messages sent while the agent is busy are queued and handled in order. A paused workspace resumes automatically. The workspace also appears in the Zuse app, where you can review the diff and open a pull request.
+
+## Attach files
+
+Upload a file to the workspace, then reference it in a message:
+
+```bash title="Terminal"
+curl https://api.zuse.sh/v1/api/workspaces/workspace_Q2x8mN4pR7sT1vWz/attachments \
+  -H "Authorization: Bearer $ZUSE_API_KEY" \
+  -H "Content-Type: image/png" \
+  -H "X-Zuse-File-Name: error.png" \
+  --data-binary @error.png
+```
+
+```bash title="Terminal"
+curl https://api.zuse.sh/v1/api/workspaces/workspace_Q2x8mN4pR7sT1vWz/messages \
+  -H "Authorization: Bearer $ZUSE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "text": "This is the error users see.", "attachments": ["asset_4kQ9mZr2Lp8vTx1nWc6bYs0d"] }'
+```
+
+To include files with the first prompt, create the workspace without a `prompt`, upload the files, then send the prompt as a message.

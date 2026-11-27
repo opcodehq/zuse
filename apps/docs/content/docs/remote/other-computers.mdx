@@ -1,0 +1,45 @@
+---
+title: "Use other computers from the desktop app"
+icon: MonitorSmartphone
+navTitle: "Other computers"
+description: "Add another computer to the desktop app with your account, a connect link, or SSH, and work with its projects in the same sidebar."
+section: "Remote access"
+order: 6
+platforms: [desktop, serve]
+providers: []
+prerequisites: [/remote]
+related: [/remote/hosted-access, /remote/tailscale, /serve, /remote/security]
+next: /remote/security
+lastVerified: latest
+---
+
+
+The desktop app can connect to other computers that run Zuse. Their projects and chats appear in the same sidebar, and work still runs on the computer that owns each project. Removing a computer only forgets it on this device; its projects and data stay untouched.
+
+Open **Settings → Remote access** and find the **Computers** card, or choose **Add computer** from the computer switcher in the sidebar.
+
+## Computers on your account
+
+When you are signed in, computers linked to your Zuse account through [Zuse Serve](/remote/hosted-access/) appear automatically under **On your account**. You do not need to add them by hand.
+
+## Add a computer with a connect link
+
+1. On the other computer, open **Settings → Remote access**, choose **Create link** under **Connect another device**, then choose **Copy link**.
+2. On this computer, choose **Add computer** and select **Connect link**.
+3. Paste the link, optionally enter a label, and choose **Connect**.
+
+Any Zuse connect link works here. The dialog shows whether the link connects through Tailscale, the Zuse account, your local network, or a remote address before you connect.
+
+## Add a computer over SSH
+
+Choose **Add computer**, then select **SSH**. Pick a suggestion from your tailnet or SSH config, or enter the **Host** with an optional username, port, and label, then choose **Connect**.
+
+Zuse uses the `ssh` command on this computer and your existing SSH setup. On the remote computer it installs a private Zuse Serve runtime under `~/.zuse/ssh` and starts it bound to loopback, without account linking. The remote computer needs Node.js 22.5 or newer and npm. Provider CLIs and their authentication must also exist on that computer.
+
+## Manage saved computers
+
+In the **Computers** card, choose **Manage** to rename, retry, disconnect, or remove saved computers. Use **Retry** next to a computer that is offline or reports an error.
+
+If the remote computer's identity changes, Zuse stops the connection. Remove the computer and add it again only after you confirm the new environment is the one you expect.
+
+<NextStep href="/remote/security/" label="Review the security model" />

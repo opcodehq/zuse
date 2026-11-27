@@ -1,0 +1,50 @@
+---
+title: Projects, chats, and sessions
+icon: Boxes
+navTitle: "Projects, chats, sessions"
+description: Learn the ownership and lifecycle rules behind Zuse conversations.
+section: concepts
+order: 11
+platforms: [desktop, browser, mobile]
+providers: [claude, codex, grok, cursor, opencode, kiro, pi]
+prerequisites: [/concepts]
+related: [/projects/worktrees, /composer/subagents, /desktop/navigation]
+next: /projects/worktrees
+lastVerified: latest
+---
+
+
+## Project
+
+A project is a folder you explicitly added to Zuse. Its path is the anchor for file browsing, terminals, repository settings, Git operations, and all chats beneath it. You can collect projects into named groups in the sidebar. Removing a project from Zuse removes it from the app's workspace; it does not delete the repository.
+
+## Chat
+
+A chat is one durable unit of work. It owns the environment used by all of its session tabs. If the chat uses a worktree, every session in that chat works against that same worktree.
+
+Choose a chat boundary that matches a branch-sized outcome: one fix, one feature, one investigation, or one review. This keeps its messages, changes, and pull-request state coherent.
+
+The environment becomes fixed after work begins. Choose the main checkout, a new worktree, or an existing branch, pull request, or issue from **Create from…** before the first message.
+
+## Session tab
+
+A session tab is a conversation with one provider and model. A chat can contain multiple tabs, letting you ask another agent for a review or continue with a different approach while keeping the same files and branch. Use **+** in the tab strip or `⌘T` to open another tab in the current chat.
+
+You can change a session's model, or move it to another provider, from the model picker. The change applies once current work finishes, and the timeline records it. When the provider changes, Zuse hands the earlier conversation to the new provider as a transcript. Open another tab instead when you want a clean context alongside the existing one.
+
+## Fork a conversation
+
+Use the fork button on an agent message to branch the conversation from that point:
+
+- **Fork in this chat** opens a new session tab that shares the chat and its current worktree.
+- **Fork into a new worktree** creates a separate chat in an isolated Git worktree for parallel work.
+
+A forked session offers **Merge context into parent**, which gives the parent conversation the new context on its next turn. Files are unchanged.
+
+## Import a provider chat
+
+On a new chat, **Import chat** lists recent Claude Code and Codex conversations found on the computer. Importing one continues it as a Zuse chat in the project for its folder, adding that project if needed.
+
+## Archive and delete
+
+Archive a finished chat to remove it from the active workspace while keeping its record. Open **Archived chats** from a project's menu in the sidebar to read an archived transcript or **Unarchive** it. Worktree cleanup follows repository and archive controls and can run a configured archive script. Read confirmation text carefully before discarding uncommitted files or removing a checkout.

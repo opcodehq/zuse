@@ -1,0 +1,58 @@
+---
+title: "Remote access"
+icon: Radio
+description: "Use the same Zuse environment from a browser, iPhone, or another computer, nearby or away from your network."
+section: "Remote access"
+order: 1
+platforms: [desktop, web, mobile, serve]
+providers: []
+prerequisites: []
+related: [/remote/local-browser, /remote/nearby-pairing, /remote/hosted-access, /remote/tailscale, /remote/security]
+next: /remote/local-browser
+lastVerified: latest
+---
+
+
+Remote access gives another Zuse client a secure view into an environment that is already running. The environment owns the repositories, agents, credentials, terminals, and durable session state. A browser, phone, or other desktop app sends commands to that environment and renders its results; it does not move the workspace onto the client device.
+
+All remote access settings live in the desktop app under **Settings → Remote access**. The **Connections** card lists three ways other Zuse apps and browsers can reach the computer:
+
+| Connection | Reaches the computer from | Account required? |
+| --- | --- | --- |
+| **Zuse Serve** | Anywhere, through an encrypted outbound connection | Yes |
+| **Tailscale** | Devices on the same tailnet | No Zuse account; Tailscale must be signed in |
+| **Local network** | Devices on the same Wi-Fi | No |
+
+Turn on at least one connection, then use **Connect another device** to authorize a specific browser or app.
+
+| What you need | Best path |
+| --- | --- |
+| A browser on another device | [Browser access](/remote/local-browser/) |
+| An iPhone near your computer | [Nearby pairing](/remote/nearby-pairing/) |
+| A browser or iPhone away from the computer | [Hosted remote access](/remote/hosted-access/) |
+| Private access over your tailnet | [Tailscale access](/remote/tailscale/) |
+| Another computer's projects in your desktop app | [Other computers](/remote/other-computers/) |
+| A headless Mac or Linux computer | [Zuse Serve](/serve/) |
+
+## What follows you
+
+Once connected, supported clients read the environment's projects, chats, sessions, agent output, and repository state. Actions still execute on the environment. Closing a browser tab or putting the phone to sleep does not relocate or duplicate a running agent.
+
+Hosted clients show an environment as offline when its heartbeat stops; bring the computer and Zuse back online to reconnect.
+
+## Choose the narrowest access you need
+
+Use the local network when both devices are together. Use Tailscale when every device you use is already on your tailnet. Use Zuse Serve only when you need to reach the computer from anywhere. You can revoke each authorized browser or phone independently under **Connected devices** in **Settings → Remote access**.
+
+<SecurityNote title="Execution stays on the environment">
+Remote access does not install agent providers on the client. Provider CLIs and their authentication must exist on the computer that runs the environment.
+</SecurityNote>
+
+## Continue
+
+- [Authorize a browser with a connect link](/remote/local-browser/)
+- [Pair a nearby iPhone](/remote/nearby-pairing/)
+- [Reach an account-linked computer from anywhere](/remote/hosted-access/)
+- [Share privately over Tailscale](/remote/tailscale/)
+- [Add other computers to the desktop app](/remote/other-computers/)
+- [Understand the security boundaries](/remote/security/)

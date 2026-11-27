@@ -1,0 +1,65 @@
+---
+title: User settings
+icon: Settings
+navTitle: "User settings"
+description: Configure global Zuse defaults and understand persisted preferences.
+section: reference
+order: 91
+platforms: [desktop]
+providers: [claude, codex, grok, cursor, opencode, kiro, pi]
+prerequisites: []
+related: [/projects/repository-settings, /reference/keybindings, /reference/schemas]
+next: /reference/keybindings
+lastVerified: latest
+---
+
+
+Zuse stores global preferences in:
+
+```text
+~/.zuse/settings.json
+```
+
+The settings UI is the safest way to edit this file. Changes are validated and synchronized through the running desktop service.
+
+## Main preference groups
+
+| Group | Persisted behavior |
+| --- | --- |
+| Defaults | Provider, model by provider, runtime permission mode, worktree creation |
+| Appearance | System, light, or dark mode |
+| Notifications | Provider update notifications, completion sound, and sound preset |
+| Providers | Enabled providers, visible models, custom model IDs, and CLI binary paths |
+| OpenCode | Connected provider visibility, model visibility, and custom provider metadata |
+| Skills | Claude and Zuse skills you switched off globally |
+| Subagents | Default enablement and preset overrides |
+| Git | Branch naming style/prefix and merge preferences |
+| Desktop | Notch tray enablement and pinning |
+
+New installs start in dark mode, with approval-required permissions, automatic worktree creation, and the `username-slug` branch style. Completion sounds and provider update notifications start off.
+
+Repository values such as provider, model, runtime mode, and worktree default can override global choices for one project. Put shared project behavior in `.zuse/settings.toml`, not this user file.
+
+## Direct editing
+
+Keep `schemaVersion` at `1`. Zuse watches the file and applies saved edits while it is running. Zuse reads only the properties it knows: it drops unknown properties and resets invalid values to their defaults the next time it writes the file.
+
+<Callout type="warn">
+If `settings.json` is not valid JSON when Zuse starts, Zuse replaces it with default settings. Check the syntax before you relaunch.
+</Callout>
+
+For editor validation and completion, use:
+
+```text
+https://zuse.sh/schemas/settings.schema.json
+```
+
+The file does not contain provider API keys. Zuse encrypts the secrets it manages and keeps the encryption key in your system credential store, which is the Keychain on macOS. OpenCode stores provider API keys in its own `auth.json`.
+
+## Settings surfaces
+
+The settings sidebar lists **General**, **Providers**, **Default models**, **Plugins**, **Remote access**, **Cloud workspaces · Public beta**, **Browser**, **Keyboard shortcuts**, **Experimental**, and **Diagnostics**. **Cloud workspaces** appears only in the desktop app. **Plugins** has separate **Plugins** and **Skills** tabs.
+
+Your projects are listed under **Repositories** below the global entries. Select one to open its committed repository settings.
+
+When you switch to an organization workspace, the sidebar shows that organization's settings: **General**, **Members**, **Repositories & scripts**, **Cloud image**, **Providers**, **Default models**, **Billing**, **Browser**, **Keyboard shortcuts**, and **Diagnostics**. Members with the billing role see only **Billing**.

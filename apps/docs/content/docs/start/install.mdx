@@ -1,0 +1,89 @@
+---
+title: Install and connect Zuse
+icon: Download
+navTitle: "Install"
+description: Install Zuse on macOS or x64 Linux and make a supported coding-agent CLI available.
+section: start
+order: 2
+platforms: [desktop]
+providers: [claude, codex, grok, cursor, opencode, kiro, pi]
+prerequisites: []
+related: [/start/first-chat, /providers, /reference/diagnostics]
+next: /start/first-chat
+lastVerified: latest
+---
+
+
+Zuse ships for macOS and x64 Linux. It uses coding-agent installations already available on your computer, so the first launch checks which supported CLIs are installed and authenticated.
+
+## Install the app
+
+### macOS
+
+1. Download the current macOS build from [zuse.sh/download](https://zuse.sh/download).
+2. Open the downloaded disk image and move Zuse to **Applications**.
+3. Launch Zuse. The onboarding flow opens automatically on a fresh installation.
+
+Zuse ships as a signed, notarized universal app for Apple silicon and Intel Macs. Updates are offered in the app when a newer release is available.
+
+### Debian and Ubuntu
+
+Install the latest x64 `.deb` release from a terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/swarajbachu/zuse/main/scripts/install-linux.sh | sh
+```
+
+The installer verifies the GitHub-published SHA-256 digest before invoking `apt`. The package installs the Secret Service and Avahi runtime dependencies.
+
+### Other Linux distributions
+
+Download the x64 `.AppImage` from [GitHub Releases](https://github.com/swarajbachu/zuse/releases/latest), make it executable, and launch it:
+
+```bash
+chmod +x Zuse-*-linux-x86_64.AppImage
+./Zuse-*-linux-x86_64.AppImage
+```
+
+AppImage users must provide a Secret Service implementation such as GNOME Keyring or KWallet. Install `avahi-publish-service` if you want nearby-device discovery.
+
+## Add Zuse to Slack
+
+[Add Zuse to Slack](https://api.zuse.sh/slack/install) to work on your cloud projects through mentions and direct messages.
+
+1. Open the installation link and authorize your Slack workspace.
+2. In Slack, open **Zuse → Home**, click **Connect Zuse account**, and sign in. If WorkOS skips organization selection and you have available Zuse organizations, Zuse will ask you to choose **Personal** or an organization. Otherwise, it uses the organization selected during sign-in, or Personal if none is available.
+3. Invite Zuse to a channel and mention it with a task, or send the app a direct message.
+4. Choose a repository and, if prompted, an agent and model. The repository must already be a ready cloud project in Zuse, and the selected agent needs cloud credentials configured in Zuse.
+
+Mention Zuse again in the same thread to continue working in that workspace. Start a new thread for a separate task.
+
+## Connect a provider
+
+Zuse has built-in support for Claude Code, Codex, Grok, Cursor, OpenCode, Kiro, and Pi. Other agents, including Gemini CLI, run through [ACP](/providers/acp). You need at least one agent installed and signed in.
+
+On a fresh installation, onboarding walks you through picking your default agent, adding your first project, choosing an appearance, and setting defaults for the model, permission mode, and whether each new chat gets its own worktree. It ends with an optional Zuse account sign-in; local agents work without one. You can replay onboarding from **Settings → General**.
+
+The agent step shows each provider's current state, such as **CLI logged in**, **API key set**, **Not installed**, **Update required**, **Sign in required**, or **Subscription required**. Use **Recheck** after you fix something outside Zuse.
+
+Open **Settings → Providers** at any time to install, sign in, update, enable, or disable providers, and to choose which models appear in the picker. Authentication is performed through each provider's supported flow. App-managed API keys are encrypted with a key held by the macOS Keychain or Linux Secret Service, not stored in Zuse's settings JSON.
+
+## Add a project
+
+Choose **New project** in the sidebar, the **+** next to **Projects**, or **File → Open Project…** (`⌘O`, or `Ctrl+O` on Linux). The **Add project** dialog offers three starting points:
+
+- **Existing folder** opens a project already on disk.
+- **Clone repository** clones from a Git URL or one of your recent GitHub repositories.
+- **Quick start** creates a new project from a template, optionally with a private GitHub repository.
+
+Git repositories get the full worktree, Changes, branch, and pull-request workflow. A plain folder can still be used for agent sessions, files, and terminal work, and Zuse offers **Initialize Git repository** when you need version control.
+
+## If a provider is not ready
+
+1. Open **Settings → Providers** and inspect its status.
+2. Confirm its CLI runs from your normal shell.
+3. Complete the provider's sign-in flow.
+4. Apply an offered update if Zuse reports an incompatible version.
+5. Return to the project and create a new session.
+
+Provider authentication and model availability can change outside Zuse. Refresh provider status after changing an installation or account.

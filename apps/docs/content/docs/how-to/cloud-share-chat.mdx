@@ -1,0 +1,67 @@
+---
+title: "Share a cloud chat and its previews"
+icon: Share2
+navTitle: "Share a cloud chat"
+description: "Give organization members access to a cloud chat, and share or forward the web servers it runs."
+section: how-to
+order: 27
+platforms: [desktop, browser]
+providers: []
+prerequisites: [/how-to/cloud-start-chat]
+related: [/how-to/choose-cloud-provider, /how-to/cloud-agent-local-commands]
+lastVerified: latest
+---
+
+## Goal
+
+Let teammates follow or continue a cloud chat, and open the app it is running from a browser or your own `localhost`.
+
+## Applicability
+
+Use this guide in the **desktop app** or a hosted browser session, for a running cloud chat. Chat sharing applies to chats in an **organization** workspace; personal cloud chats have no **Share** button. Public preview URLs are available on boxd cloud chats. Forwarding to `localhost` requires the desktop app.
+
+## Prerequisites
+
+- [Start a cloud chat](/how-to/cloud-start-chat/) in the organization workspace you want to share it with.
+- To change a chat's access, you need permission to manage sharing for it. Organization admins always can.
+- For previews, start the web server in the cloud chat first, for example by asking the agent to run the development server.
+
+## Steps
+
+### Share the chat with your organization
+
+1. Open the cloud chat and choose **Share** in the top bar. The **Workspace access** popover opens.
+2. Under **Who has access**, choose **Private** or **Everyone in _organization_**, and set the organization permission:
+   - **View** lets members read the chat.
+   - **Edit** also lets them make changes and interact with the agent.
+3. To give one member different access, change their row from **Default: _permission_** to **View** or **Edit**.
+4. Choose **Save**.
+5. Choose **Copy link** and send it to the people who now have access. The link does not grant access by itself.
+
+Admins set the starting access for new chats in organization **Settings → General → New cloud chats**. Changing it does not affect existing chats.
+
+### Share or forward a preview
+
+1. In the cloud chat's top bar, open **Ports and previews**.
+2. On a boxd chat, turn on **Auto-create preview URLs** to publish detected web servers, then choose **Copy preview URL** for the server you want.
+3. In the desktop app, turn on **Forward to localhost** to reach the servers from your own computer's `localhost` instead.
+4. If a server is missing, enter its **Port number** and choose **Add port**, then enable URLs or forwarding.
+
+Preview links are public: anyone with the link can reach the server. Turning **Auto-create preview URLs** off revokes issued links.
+
+## Verify
+
+- A teammate who opens the copied link sees the chat with the access you chose.
+- The preview URL loads the running app in a browser that is not signed in to Zuse.
+- With forwarding on, the app loads from `localhost` on your computer.
+
+## Troubleshooting and recovery
+
+- **There is no Share button:** the chat is personal or local, or you are signed out. Only organization cloud chats can be shared.
+- **The access controls are disabled:** you cannot manage sharing for this chat. Ask an organization admin.
+- **A teammate cannot open the link:** confirm you chose **Save** after changing access. Copying the link does not save pending changes.
+- **Could not load or save sharing settings:** choose **Retry**.
+- **Auto-create preview URLs cannot be turned on:** the chat is not on boxd. Use **Forward to localhost** in the desktop app instead.
+- **No web servers detected:** start the server in the cloud chat, or add its port manually.
+- **URL creation failed · retrying** or **Forwarding failed · retrying:** keep the chat open while Zuse retries. Confirm the server is still running.
+- **A link must stop working:** turn off **Auto-create preview URLs**. If revocation is still pending, switch it off again to retry.

@@ -1,0 +1,41 @@
+---
+title: Skills, commands, and MCP servers
+icon: Sparkles
+navTitle: "Skills and MCP"
+description: Discover provider-native skills and commands, and how sessions get MCP tools.
+section: composer
+order: 54
+platforms: [desktop, browser, mobile]
+providers: [claude, codex]
+prerequisites: [/composer]
+related: [/reference/bundled-skill, /composer/modes-permissions, /projects/repository-settings]
+next: /workspace
+lastVerified: latest
+---
+
+
+Zuse keeps provider-native extensions visible without inventing a second configuration format.
+
+## Skills
+
+For Claude Code and Codex, the composer discovers global and project skills from the provider's native skill directories, such as `.claude/skills` and `.codex/skills`, including skills from installed Claude Code plugins. Type `$` to search the skills available to the active session. The list refreshes when relevant skill files change.
+
+A selected skill is passed to the active provider with its name and arguments. Read a third-party skill before running it: skill instructions can ask the agent to use tools, access services, or modify files, and the session's permission posture still governs those actions.
+
+To turn skills on or off, open **Settings → Plugins** and choose the **Skills** tab. Each skill is labeled **Personal** or **Project**. Claude Code skill toggles are saved in Zuse. Codex toggles are saved in Codex's own config, so they also apply outside Zuse.
+
+Zuse also installs its own [bundled skill](/reference/bundled-skill) for configuration and troubleshooting help.
+
+## Built-in commands
+
+Type `/` to search commands. Commands such as `/new`, `/clear`, `/model`, `/mode`, `/plan`, `/run`, and `/help` are handled by Zuse. The same picker surfaces provider commands, such as `/compact` for Claude Code. Those commands are sent to the provider as written, so their exact behavior follows the installed provider version.
+
+Only commands applicable to the active provider appear. `/goal` is exposed for supported Codex and Grok versions.
+
+## MCP servers
+
+Agents launched by Zuse receive MCP tools only through Zuse's session gateway, which serves the plugins connected to your workspace. Zuse does not pass through MCP servers configured in a provider's own files, and stops each provider CLI from loading them where the CLI supports it.
+
+To use another MCP server, add it in **Plugins**, either from the catalog or as a custom remote server. See [Add an MCP server](/how-to/local-configure-mcp/).
+
+Start a new chat after connecting a plugin. An existing provider process may still have its older tool set.

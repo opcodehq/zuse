@@ -1,0 +1,84 @@
+---
+title: Verify webhooks
+icon: ShieldCheck
+navTitle: "Webhooks"
+description: Receive turn-completed events, verify their signature, and handle retries.
+section: api
+order: 3
+platforms: [cloud]
+providers: []
+prerequisites: [/api-reference]
+related: [/api-reference/webhooks/create-webhook, /api-reference/webhooks/workspace-turn-completed]
+lastVerified: latest
+---
+
+Webhooks tell your service when an agent finishes a turn, so you don't have to poll. Zuse sends a [`workspace.turn.completed`](/api-reference/webhooks/workspace-turn-completed) event for every workspace on your account, including ones started from the app or Slack.
+
+## Register an endpoint
+
+```bash title="Terminal"
+curl https://api.zuse.sh/v1/api/webhooks \
+  -H "Authorization: Bearer $ZUSE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "url": "https://example.com/zuse/webhooks", "description": "Production" }'
+```
+
+The response includes a `whsec_` signing secret. It's shown only once, so store it with your other secrets. The URL must be public `https`; local, private-network, and IP-address hosts are rejected. You can register up to 20 endpoints.
+
+## What Zuse sends
+
+Each delivery is a `POST` with a JSON body and these headers:
+
+| Header | Value |
+| --- | --- |
+| `zuse-signature` | `t=<unix seconds>,v1=<hex signature>` |
+| `zuse-event-id` | The event's `eventId` |
+| `zuse-delivery-attempt` | `1` for the first attempt, then `2`, `3`, … |
+| `user-agent` | `zuse-webhooks/1` |
+
+```json title="Body"
+{
+  "eventId": "evt_3f1c9a7e5b2d8046c1e9f7a3b5d2c8e0f4a6b1c3",
+  "type": "workspace.turn.completed",
+  "createdAt": 1760697600000,
+  "workspaceId": "workspace_Q2x8mN4pR7sT1vWz",
+  "branch": "fix-order-validation",
+  "turnId": "turn_01",
+  "outcome": "completed",
+  "reply": { "text": "Done. POST /orders now returns 400 with the issues.", "truncated": false },
+  "messageId": "msg_turn_8e1d…"
+}
+```
+
+## Verify the signature
+
+`v1` is the hex HMAC-SHA256 of `<t>.<raw body>`, keyed with your full secret, including the `whsec_` prefix. Compute it over the raw request bytes, before parsing JSON, and compare in constant time. Reject requests whose timestamp is more than five minutes old.
+
+```ts title="verify.ts"
+import { createHmac, timingSafeEqual } from "node:crypto";
+
+export function verifyZuseWebhook(rawBody: string, header: string, secret: string) {
+	const parts = Object.fromEntries(
+		header.split(",").map((part) => part.split("=", 2) as [string, string]),
+	);
+	const timestamp = Number(parts.t);
+	if (!Number.isFinite(timestamp) || Math.abs(Date.now() / 1000 - timestamp) > 300) {
+		return false;
+	}
+	const expected = createHmac("sha256", secret)
+		.update(`${parts.t}.${rawBody}`)
+		.digest();
+	const received = Buffer.from(parts.v1 ?? "", "hex");
+	return received.length === expected.length && timingSafeEqual(received, expected);
+}
+```
+
+## Respond and retry
+
+Return any `2xx` status within 10 seconds to acknowledge the event. Anything else, including redirects and timeouts, counts as a failure.
+
+Failed deliveries are retried with backoff, starting at 30 seconds and doubling up to one hour between attempts, for up to 20 attempts. Delivery is at least once and isn't ordered, so use `zuse-event-id` to ignore duplicates. Respond quickly and do slow work in the background.
+
+## Manage endpoints
+
+Use [List webhooks](/api-reference/webhooks/list-webhooks) to see your endpoints and [Delete webhook](/api-reference/webhooks/delete-webhook) to remove one. Deleting an endpoint cancels its pending deliveries. To rotate a secret, register a new endpoint, switch your receiver to the new secret, then delete the old one.

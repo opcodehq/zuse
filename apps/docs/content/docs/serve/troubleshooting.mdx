@@ -1,0 +1,85 @@
+---
+title: "Serve troubleshooting"
+icon: LifeBuoy
+navTitle: "Troubleshooting"
+description: "Recover failed installation, authorization, service startup, tunnel, provider detection, and update rollback."
+section: "Serve CLI"
+order: 6
+platforms: [serve, web, mobile]
+providers: []
+prerequisites: [/serve]
+related: [/serve/status-json, /serve/operations, /remote/recovery, /serve/security]
+next: /remote/recovery
+lastVerified: latest
+---
+
+
+Start with a fresh status report against the same data directory used at installation:
+
+```sh
+zuse serve status
+zuse serve status --json
+```
+
+The JSON form is useful when asking for help because it separates service state from local reachability and account-link state. Review paths and environment identifiers before sharing it publicly.
+
+## The service is missing
+
+`service: "missing"` means no Serve service definition is installed for this operating-system user. Run:
+
+```sh
+zuse serve start
+```
+
+If you originally used `--data-dir`, include the exact same path. A status check against another directory reads that directory's saved port and account link, so its `reachable`, `tunnel`, and `environmentId` values can be misleading.
+
+## The service is stopped
+
+Run `zuse serve start` to refresh and start the durable service. Repeat any access options, such as `--tailscale` or `--port`, that you used before. On Linux, confirm the user has a working systemd user session (`systemctl --user show-environment` succeeds). Without one, `start` fails; use `zuse serve start --foreground` for a temporary session and keep that terminal open.
+
+## Running but not reachable
+
+When `service` is `running` and `reachable` is false:
+
+1. Wait briefly and run status again after startup.
+2. Inspect the service logs. On macOS, they are `serve.log` and `serve.error.log` in the data directory's `logs` folder. On Linux, the service writes to the systemd journal: `journalctl --user -u zuse-serve.service`.
+3. Check whether another process is using the configured local port.
+4. Stop and start the service during a safe work window.
+5. Confirm the runtime uses Node.js 22.13.0 or newer.
+
+Serve probes `127.0.0.1` on the port saved by `start --port`, or `4859` by default. If you rely on `ZUSE_PORT` instead, use the same environment when checking status.
+
+## Authorization does not finish
+
+- Open the printed verification URL manually if no browser launched.
+- Enter the displayed device code before it expires.
+- Confirm the computer can reach the identity and api services.
+- Run the start command again to request a fresh grant.
+- If start reports that the background host did not become reachable, run `zuse serve status --json` and follow [Running but not reachable](#running-but-not-reachable).
+
+Set `ZUSE_NO_OPEN=1` only when you intentionally do not want Serve to launch a browser; the URL and code are still printed.
+
+## The computer is not in the hosted app
+
+Check `environmentId`, `tunnel`, and `reachable` together. The environment should have a non-null ID, a configured tunnel, and local reachability. A computer started with `--no-account` or `--ssh-managed` is never linked to your account. Then confirm the hosted browser or phone uses the same account. If the registration was removed, run `zuse serve logout` to clear stale local state, then start and authorize again.
+
+If logout reports that the account authorization is missing, the local registration still exists but the saved sign-in does not. Run `zuse serve start` to sign in again, then retry `zuse serve logout`.
+
+## No agents detected
+
+Serve probes supported executables using their `--version` command with a 2-second timeout. An empty list means none completed successfully in the environment of the user running the command.
+
+- Install the provider CLI for the same operating-system user that runs Serve.
+- Authenticate it as that user.
+- Ensure its executable directory is available to the background service, not only an interactive shell profile.
+- Run the provider's `--version` command as that user, then check Serve status again.
+
+## An update failed
+
+If the new runtime fails readiness and a previous runtime exists, Serve restores the previous runtime and reports that rollback. Run status to confirm reachability. If no previous runtime was available, start a known working package version, for example `npx @zusehq/serve@<version> start`; `start` installs the runtime version of the package that runs it.
+
+Do not repeatedly force updates while agents are active. Preserve logs from the failed attempt before another install changes them.
+
+## Uninstall did not delete a workspace
+
+That is intentional. `zuse serve uninstall` removes the service definition and managed runtime, not repositories or workspaces. Delete project data only through your normal repository and backup workflow after you have verified the exact target.

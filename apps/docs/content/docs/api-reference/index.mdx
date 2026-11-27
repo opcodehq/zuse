@@ -1,0 +1,96 @@
+---
+title: API reference
+icon: Code
+navTitle: "API reference"
+description: Start cloud workspaces, talk to their agents, and get notified when they finish, from your own scripts and services.
+section: api
+order: 1
+platforms: [cloud]
+providers: []
+prerequisites: []
+related: [/api-reference/quickstart, /api-reference/webhook-signatures, /how-to/choose-cloud-provider]
+lastVerified: latest
+---
+
+The Zuse API gives your own tools the same cloud workspaces the app uses. You create a workspace with a prompt, the agent works on a fresh branch in a cloud machine, and you read its replies or get a webhook when it finishes. Slack bots, CI jobs, and internal tools are typical callers.
+
+The API is part of Zuse Cloud. Your account needs a Cloud subscription or a connected cloud provider account.
+
+## Base URL
+
+```text
+https://api.zuse.sh/v1/api
+```
+
+The [OpenAPI document](https://docs.zuse.sh/openapi.json) describes every endpoint and schema, if you want to generate a client.
+
+## Authentication
+
+Send an API key as a bearer token:
+
+```bash title="Terminal"
+curl https://api.zuse.sh/v1/api/projects \
+  -H "Authorization: Bearer $ZUSE_API_KEY"
+```
+
+Create keys in the Zuse app under **Settings → Cloud workspaces → Advanced → API keys**. Keys start with `zk_` and are shown once, so copy the key when you create it. A key acts on the personal account that created it, with full access to that account's workspaces and webhooks. **Revoke** takes effect immediately.
+
+Keep keys on your servers. The API doesn't allow calls from other websites' browser code.
+
+## Resources
+
+| Resource | What you can do |
+| --- | --- |
+| [Workspaces](/api-reference/workspaces/create-workspace) | Start a cloud workspace on a new branch, list your workspaces, and check one's state |
+| [Messages](/api-reference/messages/send-message) | Send the agent a message and read the conversation |
+| [Attachments](/api-reference/attachments/upload-attachment) | Upload images, PDFs, and text files to attach to a message |
+| [Projects](/api-reference/projects/list-projects) | List the repositories you can start workspaces from |
+| [Providers](/api-reference/providers/list-agents) | List connected agents and the cloud machines available to you |
+| [Webhooks](/api-reference/webhooks/create-webhook) | Get a signed request when an agent finishes a turn |
+
+## Following a workspace
+
+A workspace's agent works asynchronously. After you create a workspace or send a message, follow progress in one of two ways:
+
+- **Webhooks.** Register an endpoint once, and Zuse sends a [`workspace.turn.completed`](/api-reference/webhooks/workspace-turn-completed) event with the agent's reply whenever a turn finishes.
+- **Polling.** Call [List messages](/api-reference/messages/list-messages) with the last `latestSeq` you saw as `afterSeq`. [Get workspace](/api-reference/workspaces/get-workspace) reports `agentStatus: "working"` while the agent is busy.
+
+A paused workspace resumes when you send it a message.
+
+## Errors
+
+Errors return a status code and a JSON body with a machine-readable code:
+
+```json
+{ "error": "cloud_project_required" }
+```
+
+| Status | Meaning |
+| --- | --- |
+| `400` | The request is invalid. The code names the problem, such as `invalid_prompt`. |
+| `401` | The API key is missing (`missing_api_key`) or unknown or revoked (`invalid_api_key`). |
+| `403` | Your account needs Cloud (`cloud_entitlement_required`) or has a billing hold. |
+| `404` | The workspace, project, or other resource doesn't exist on your account. |
+| `409` | The request conflicts with current state, such as a branch that's already in use. |
+| `500`, `503` | Something failed on our side. Retry with backoff. |
+
+Each endpoint page lists the codes it can return.
+
+## Retries and idempotency
+
+Creating a workspace, sending a message, and uploading an attachment accept an `Idempotency-Key` header of up to 200 characters. If a request with the same key already succeeded, Zuse returns the original result instead of doing the work twice; a create that's replayed returns `200` instead of `201`. Reusing a key with a different request returns `409`.
+
+Use a fresh key, such as a UUID, for each new action, and reuse it when you retry that action.
+
+## Limits
+
+| Limit | Value |
+| --- | --- |
+| Prompt and message text | 65,536 characters |
+| Attachments per message | 8 |
+| Attachment size | 20 MiB |
+| Messages per page | 200 |
+| Webhook endpoints per account | 20 |
+| Agent reply text | 16,384 characters |
+
+Timestamps are Unix epoch milliseconds.

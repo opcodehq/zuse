@@ -1,0 +1,35 @@
+---
+title: Local-first data and security
+icon: ShieldCheck
+navTitle: "Local-first data"
+description: Understand where Zuse stores work, credentials, and persistent history.
+section: concepts
+order: 12
+platforms: [desktop, browser, mobile]
+providers: []
+prerequisites: [/concepts]
+related: [/reference/settings, /reference/diagnostics, /projects/repository-settings]
+next: /desktop
+lastVerified: latest
+---
+
+
+The desktop service is the source of truth for local projects, chats, sessions, messages, tool calls, worktrees, and settings. Zuse stores durable application state under `~/.zuse/` and leaves repository contents in their existing checkout or Zuse-created worktree.
+
+## Credentials
+
+Provider authentication remains with the provider's own CLI or supported account flow. API keys managed by Zuse are encrypted, and the encryption key is held by your system keychain: the macOS Keychain, or the Secret Service on Linux (such as GNOME Keyring or KWallet). They are not written to `~/.zuse/settings.json`.
+
+Zuse does not passively enumerate browser credentials. Importing browser sessions is an explicit action under **Settings → Browser**. Imported cookies are encrypted and restored on restart; passwords are never imported.
+
+## Remote clients
+
+Browser and mobile clients connect to a running Zuse computer; they do not become a second canonical database for the project. Revoking a paired device removes its access. See [Remote access](/remote) for connection and threat-model details.
+
+## Diagnostics
+
+Diagnostics are designed to report runtime health and bounded technical metadata. Review **Settings → Diagnostics** before exporting or sharing a report; **Help → Export Diagnostics for Bug Report** creates a bundle you can attach to an issue.
+
+## Backups
+
+Repository files should continue to be protected with Git and your normal backup strategy. If you back up Zuse's local application data, do it while the app is closed so the SQLite state is captured consistently.

@@ -1,0 +1,57 @@
+---
+title: "Start a task from Slack"
+icon: MessagesSquare
+navTitle: "Start a task from Slack"
+description: "Connect your Zuse account in Slack, mention Zuse with a task, and follow the cloud chat it starts."
+section: how-to
+order: 28
+platforms: [desktop, browser]
+providers: []
+prerequisites: [/how-to/cloud-start-chat]
+related: [/how-to/choose-cloud-provider, /how-to/cloud-share-chat]
+lastVerified: latest
+---
+
+## Goal
+
+Hand a coding task to Zuse from a Slack channel or DM, and get the result back in the same thread.
+
+## Applicability
+
+Zuse for Slack starts **cloud chats** on your account. It works only with repositories that are ready in Zuse Cloud and agents you have connected in Zuse. There are no slash commands; you mention Zuse or send it a DM.
+
+## Prerequisites
+
+- Zuse is installed in your Slack workspace. A Slack member with permission to add apps can install it from [api.zuse.sh/slack](https://api.zuse.sh/slack) with **Add to Slack**.
+- [Zuse Cloud is set up](/how-to/cloud-start-chat/): the repository is in your cloud image and at least one agent is connected under **Zuse agent accounts**.
+
+## Steps
+
+1. In a channel or DM, mention **@Zuse** with the task, for example: “@Zuse fix the failing date parser test in the billing service.”
+2. The first time, Zuse replies privately with **Connect your Zuse account**. Choose **Connect Zuse account** and sign in. If Zuse asks you to **Choose your workspace**, select **Personal** or an organization, then choose **Connect workspace**.
+3. When Zuse asks **Which repository should I work on?**, choose **Select repository** (or **Choose agent**).
+4. In **Configure request**, choose the **Repository** and the **Agent and model**. Optionally save them as your default or the channel's default, then choose **Start request**.
+5. Follow progress in the thread. Zuse posts the result as a reply when the agent finishes.
+6. To continue, reply in the same thread and mention **@Zuse** again. The follow-up goes to the same cloud chat.
+
+To change defaults, open Zuse's **Home** tab in Slack:
+
+- **My follow-up replies**: keep **Only when I @mention Zuse**, or choose **All my replies in active threads** so your untagged thread replies continue the task.
+- **Default repository**, **Agent and model**, and **Sandbox provider** apply to new threads; existing threads keep their workspace.
+- **Workspace task access** (installer only) decides whether **Each person connects their own account**, **Only the installer can run tasks**, or **Everyone uses the installer’s account**.
+
+## Verify
+
+- The thread shows progress and then a result reply from Zuse.
+- In the Zuse app, a new cloud chat appears in the sidebar with the Slack mark and **Started from Slack**, attributed to the Slack author and channel.
+- Opening that chat shows the same task and the agent's work.
+
+## Troubleshooting and recovery
+
+- **Prepare a cloud repository in Zuse first:** the repository is not ready in Zuse Cloud. Connect it and update your cloud image, then try again.
+- **This request expired or your account changed:** close the dialog and send the task again.
+- **This workspace is set to installer-only:** ask the person who installed Zuse to change **Workspace task access** in Home.
+- **Your saved sandbox provider is unavailable:** choose another **Sandbox provider** in Home before starting a new task.
+- **The agent needs sign-in:** choosing a model in Slack does not authenticate it. Reconnect the agent in Zuse under **Zuse agent accounts**.
+- **A follow-up was ignored:** mention **@Zuse** in the thread, or turn on **All my replies in active threads**.
+- **You want to stop using your account from Slack:** choose **Disconnect my account** in Home. Work that is already running is not cancelled.

@@ -1,0 +1,35 @@
+---
+title: Public schemas
+icon: Braces
+navTitle: "Public schemas"
+description: Stable JSON Schema URLs for user and repository configuration.
+section: reference
+order: 93
+platforms: [desktop]
+providers: []
+prerequisites: []
+related: [/reference/settings, /reference/keybindings, /projects/repository-settings]
+next: /reference/diagnostics
+lastVerified: latest
+---
+
+
+Zuse publishes schemas at stable `zuse.sh` URLs so editors and agents can validate configuration without depending on the docs deployment host.
+
+```text
+https://zuse.sh/schemas/settings.schema.json
+https://zuse.sh/schemas/repository-settings.schema.json
+https://zuse.sh/schemas/keybindings.schema.json
+```
+
+| Schema | Local file |
+| --- | --- |
+| `settings.schema.json` | `~/.zuse/settings.json` |
+| `repository-settings.schema.json` | `<repository>/.zuse/settings.toml` after TOML-to-object interpretation |
+| `keybindings.schema.json` | `~/.zuse/keybindings.json` |
+
+The schemas use JSON Schema 2020-12 and set `additionalProperties: false`, so your editor flags unknown or misspelled properties. A constant `schemaVersion` of `1` makes incompatible future formats explicit. The user settings and keybindings schemas require it.
+
+Schema validation runs only in your editor. When Zuse reads `settings.json` or `keybindings.json`, it keeps the values it recognizes and ignores the rest. See [User settings](/reference/settings#direct-editing) and [Keybindings](/reference/keybindings#file-format).
+
+Public schema routes remain on `zuse.sh` even though guides are served from `docs.zuse.sh`. The routes allow cross-origin requests, so browser-based editors and tools can fetch them.

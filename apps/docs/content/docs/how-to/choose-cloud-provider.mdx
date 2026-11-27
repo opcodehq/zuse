@@ -1,0 +1,97 @@
+---
+title: "Choose a cloud machine"
+icon: Cloud
+navTitle: "Choose a cloud machine"
+description: "Choose boxd, Boat, or E2B and a machine size for new cloud chats, and prepare each provider's image."
+section: how-to
+order: 25
+platforms: [desktop, browser]
+providers: []
+related: [/how-to/cloud-start-chat, /how-to/cloud-agent-local-commands, /api-reference]
+lastVerified: latest
+---
+
+Zuse can run cloud chats on **boxd**, **Boat** (formerly Box), and **E2B**. Choose a machine in the new-chat composer's computer picker: **Cloud · boxd**, **Cloud · Boat**, or **Cloud · E2B**. The choice applies to that
+new chat. Existing chats stay on their original provider, including after a pause
+or restart. Changing providers does not move an existing workspace's files.
+Available choices depend on which providers your Zuse deployment has configured.
+
+Zuse lists boxd first and marks it **Recommended** in Cloud settings. The picker
+selects the first provider whose image is ready for the project, unless you
+picked another provider for that project before. When a provider offers more than one size,
+choose it under **Machine size** in the same menu.
+
+| | boxd | Boat | E2B |
+| --- | --- | --- | --- |
+| Machine sizes | Small (1 vCPU / 4 GB), Standard (2 vCPU / 8 GB), Large (4 vCPU / 16 GB) | Small (2 vCPU / 4 GB), Standard (4 vCPU / 8 GB), Large (8 vCPU / 16 GB) | One size, set by the deployment's E2B template |
+| Pause and resume | Pauses hibernate the machine; memory, processes, and files return on resume | Disk state is preserved; Zuse restarts its runtime and agents | Normal pauses preserve disk and memory state |
+| Tradeoff | Choosing a size other than the template's adds one reboot when the chat starts | A cold resume can take longer while services restart | Memory restoration can avoid that restart, but reconnects and runtime updates still take time |
+| Best fit | Long-lived chats that pause often and want their processes back quickly | General coding, builds, and choosing more CPU or memory | Workflows that benefit from keeping processes alive between pauses |
+
+Only boxd chats can be forked into a new machine or publish preview URLs. See [Start a cloud chat](/how-to/cloud-start-chat) and [Share a cloud chat and its previews](/how-to/cloud-share-chat).
+
+Boat preserves files and installed packages when stopped; manually launched
+processes need restarting. See [Boat's lifecycle overview](https://boat.dev/).
+E2B normally preserves both memory and files; filesystem-only recovery can still
+require a cold boot. See [E2B persistence](https://docs.e2b.dev/sandbox/persistence).
+boxd hibernates a paused machine to disk and wakes it with its memory intact; see
+[Suspend, resume, and hibernate](https://docs.boxd.sh/guides/suspend-resume).
+These are lifecycle differences, not a promise that one provider is always faster.
+Resume time also depends on the image, services, region, and current capacity.
+Zuse subscription and usage charges are shown in Cloud settings; provider retail
+pricing is not the price of your Zuse subscription.
+
+## Bring your own provider key
+
+In **Settings → Cloud workspaces · Public beta**, under **Hosting**, choose
+**Connect** beside **Your cloud account**. Select the **Sandbox provider**, paste
+its API key, and choose **Connect**. You can also do this during onboarding.
+A Zuse subscription is not required for compute billed to your connected provider
+account. A replaced key applies to new workspaces only; existing workspaces keep
+using the key they started with.
+
+For an existing boxd development environment, see
+[Use your own Boxd snapshot](/how-to/custom-boxd-snapshot).
+
+## Prepare each provider
+
+In **Settings → Cloud workspaces · Public beta → Cloud image**, select the
+provider, then choose **Build image** (or **Update image** when one exists).
+Each provider has its own image, and each image includes your connected
+repositories. Build every provider you want to use for new chats. Updating one
+does not replace another provider's image or running workspaces.
+
+Connect your coding agents once under **Zuse agent accounts**. The same account
+credentials work on every machine provider; you do not authenticate each agent
+again per provider. Repository connections, uploads, queued delivery, port forwarding,
+local-device command approvals, and workspace APIs use the same Zuse workflows.
+
+## Choose through the API
+
+When you create a workspace through the public API, pass `providerId` as `"boxd"`,
+`"box"` (Boat), or `"e2b"`. Omitting it uses the deployment default. An
+unavailable provider returns an error rather than silently switching machines,
+and the provider must have a ready image containing the project. See the
+[API reference](/api-reference/) for request details.
+
+## Sending while paused
+
+Send normally. Your message and attachments wait in the composer queue while
+Zuse resumes the workspace. The prompt moves into the conversation when the
+runtime takes the command. Cancel is available while the mailbox still allows
+cancellation. Delivery failures and required sign-in remain visible next to the
+composer; the gray cloud icon in the sidebar only identifies a cloud chat.
+
+## Usage and cost
+
+Cloud settings show usage attributed to your workspaces and image builds, and
+mark each provider as **Billed by Zuse** or **Billed by your provider**. For
+Boat, Zuse uses [Boat's reported usage and cost](https://docs.boat.dev/api/reference/sandboxes/get-sandbox-usage),
+which already accounts for machine size and excludes stopped time. Running usage
+is provisional and can include a short reservation for continued operation;
+confirmed usage is reconciled after the machine stops.
+
+Boat reports list-price compute cost, before provider plan discounts or credits.
+Your Zuse allowance, overage markup, and spending cap still determine your Zuse
+bill. With your own provider key, view compute and storage charges in that
+provider's account. Provider choice alone does not change your subscription price.

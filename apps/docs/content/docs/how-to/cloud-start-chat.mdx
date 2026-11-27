@@ -1,0 +1,79 @@
+---
+title: "Start a cloud chat"
+icon: CloudUpload
+navTitle: "Start a cloud chat"
+description: "Set up Zuse Cloud once, then start a chat that runs on a cloud machine instead of your computer."
+section: how-to
+order: 23
+platforms: [desktop, browser]
+providers: []
+prerequisites: [/start/first-chat]
+related: [/how-to/choose-cloud-provider, /how-to/cloud-share-chat, /how-to/cloud-agent-local-commands]
+next: /how-to/choose-cloud-provider
+lastVerified: latest
+---
+
+## Goal
+
+Run an agent on a cloud machine so the work continues while your computer sleeps, and follow it from any signed-in Zuse client.
+
+## Applicability
+
+Use this guide in the **desktop app** or a hosted browser session. Cloud chats are in public beta. They work on repositories with a GitHub `origin` that you connect to Zuse Cloud. A cloud chat runs in its own machine with a fresh branch; it does not use your local checkout or uncommitted files.
+
+## Prerequisites
+
+- Sign in to Zuse.
+- Have cloud access: a Zuse Cloud subscription, or your own boxd, Boat, or E2B key connected under **Hosting → Your cloud account**. See [Choose a cloud machine](/how-to/choose-cloud-provider/).
+- Open the project locally at least once so Zuse knows its GitHub repository.
+
+## Steps
+
+### Set up Zuse Cloud once
+
+1. Open **Settings → Cloud workspaces · Public beta**. If you have not built an image yet, Zuse shows **Set up your cloud workspace**. You can reopen it later from **Advanced → Open setup guide**.
+2. **1. Connect GitHub**: choose **Connect GitHub**, install the Zuse GitHub App, and select at least one repository. Cloud agents commit, push, and open pull requests as you.
+3. **2. Connect an agent**: under **Zuse agent accounts**, sign in to each agent you want to use in the cloud. You connect each agent once for all cloud chats.
+4. **3. Build your image**: select a provider and choose **Build image**. The image includes your connected repositories.
+5. Choose **Start using Cloud**, or **Finish later** to return to the wizard another time.
+
+### Start the chat
+
+1. Start a new chat in the project.
+2. Open the computer picker in the composer and choose a **Cloud · _provider_** row, such as **Cloud · boxd**.
+3. If the provider offers several sizes, choose one under **Machine size**.
+4. Choose the agent and model, write the task, and send it. The composer shows the launch progress, including **Copying files to the sandbox…** and **Sending message…**.
+
+Zuse remembers the cloud choice for that project, so the next new chat starts on the same provider.
+
+### Fork a cloud chat
+
+On a boxd cloud chat, open the fork menu on a message:
+
+- **Fork in new tab** opens a new session tab on the same machine with the conversation up to that message.
+- **Fork in new machine** clones the machine and continues the conversation in a separate chat.
+
+Other providers and archived cloud chats do not offer fork options. A local chat cannot be moved to a cloud machine, and a cloud chat cannot be moved to your computer. To continue elsewhere, push the branch and start a new chat from it.
+
+## Verify
+
+- The new chat appears in the sidebar with a cloud icon.
+- The composer's computer picker shows **Cloud · _provider_** for the chat.
+- The agent's first reply arrives in the timeline.
+- Open the chat from [code.zuse.sh](https://code.zuse.sh) or another signed-in client and confirm the same timeline loads.
+
+## Troubleshooting and recovery
+
+The picker shows why a provider cannot start a chat yet. Choosing that row opens Cloud settings.
+
+- **Subscription required:** subscribe, or connect your own provider key under **Hosting**.
+- **Connect repository:** add the repository to the Zuse GitHub App, then update the image so it includes the repository.
+- **Building cloud image:** wait for the build to finish.
+- **Update cloud image:** choose **Update image** for that provider. The image does not include this repository yet or is outdated.
+- **Rebuild authentication:** reconnect the affected agent under **Zuse agent accounts**, then follow the image status.
+- **Unavailable:** the provider cannot place a machine right now. Choose another provider or retry later.
+- **No cloud rows appear:** confirm you are signed in and that the project has a GitHub `origin`.
+- **Sign-in is required in the chat:** choose **Open Cloud Authentication**, reconnect the agent, then retry the failed prompt once.
+- **Messages wait while the machine resumes:** send normally. Queued messages are delivered when the workspace is ready.
+
+To let the cloud agent run commands on your computer, see [Let cloud agents run commands on your computer](/how-to/cloud-agent-local-commands/). To start cloud chats from scripts, see the [API quickstart](/api-reference/quickstart/).
