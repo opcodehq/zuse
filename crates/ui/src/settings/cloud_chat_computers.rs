@@ -403,8 +403,9 @@ impl CloudChatComputers {
     ) -> gpui::Div {
         s::row(first)
             .flex_nowrap()
+            // The tile takes a bare glyph name: a laptop for macOS, a desktop otherwise.
             .child(kit::icon_tile(
-                crate::composer::computers::platform_icon(platform),
+                if platform == "macos" { "laptop" } else { "monitor" },
                 28.,
             ))
             .child(
