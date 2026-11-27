@@ -128,9 +128,61 @@ impl Pickers {
         self.source_picker
             .update(cx, |picker, cx| picker.clear_selection(cx));
         self.config.branch = None;
+        // Cloud chosen for the user (a project or first run), not by them:
+        // the remembered destination stays as it was.
         if let Some(project) = project {
-            self.select_cloud(project, cx);
+            self.apply_cloud(project, cx);
         }
+    }
+    /// The user's own picks, as the composer's menus make them.
+    #[cfg(test)]
+    pub(crate) fn pick_space_for_test(&mut self, space: String, cx: &mut Context<Self>) {
+        self.pick_space(space, cx);
+    }
+    #[cfg(test)]
+    pub(crate) fn pick_worktree_for_test(&mut self, worktree: bool, cx: &mut Context<Self>) {
+        use super::workspace::WorkspaceChoice;
+        let choice = if worktree {
+            WorkspaceChoice::Worktree
+        } else {
+            WorkspaceChoice::Local
+        };
+        self.pick_workspace(choice, cx);
+    }
+    #[cfg(test)]
+    pub(crate) fn select_cloud_for_test(&mut self, row: Value, cx: &mut Context<Self>) {
+        self.select_cloud(row, cx);
+    }
+    #[cfg(test)]
+    pub(crate) fn on_worktree_for_test(&self) -> bool {
+        self.workspace_choice() == super::workspace::WorkspaceChoice::Worktree
+    }
+    /// Where the user last headed a new chat; `None` before their first pick.
+    pub(crate) fn remembered_destination(&self) -> Option<&NewChatDestination> {
+        self.defaults.destination.as_ref()
+    }
+    /// A new chat opened on a project the user chose (a sidebar project's
+    /// plus): it is the project the next new chat reopens on. On Cloud, a
+    /// remembered Cloud destination moves to its repository.
+    pub(crate) fn remember_new_chat_project(
+        &mut self,
+        space: Option<String>,
+        cloud: Option<&Value>,
+    ) {
+        if let Some(space) = space {
+            self.defaults.project = Some(space);
+            self.defaults.no_project = false;
+        }
+        if let Some(row) = cloud
+            && matches!(
+                self.defaults.destination,
+                Some(NewChatDestination::Cloud { .. })
+            )
+            && let Some(destination) = NewChatDestination::cloud(row)
+        {
+            self.defaults.destination = Some(destination);
+        }
+        self.save_defaults();
     }
     pub(crate) fn restore_cloud_canvas(
         &mut self,
@@ -330,7 +382,18 @@ impl Pickers {
         }
         self.catalog_rev += 1;
     }
-    fn select_cloud(&mut self, mut row: Value, cx: &mut Context<Self>) {
+    /// The user picks Cloud on `row`: the next new chat reopens there.
+    fn select_cloud(&mut self, row: Value, cx: &mut Context<Self>) {
+        let destination = NewChatDestination::cloud(&row);
+        if self.apply_cloud(row, cx)
+            && let Some(destination) = destination
+        {
+            self.defaults.destination = Some(destination);
+            self.save_defaults();
+        }
+    }
+    /// Head the chat to Cloud on `row`; whether it took.
+    fn apply_cloud(&mut self, mut row: Value, cx: &mut Context<Self>) -> bool {
         let state = self.state.read(cx);
         let expected = state
             .cloud_organization_id()
@@ -340,10 +403,10 @@ impl Pickers {
             self.cloud.error =
                 Some("Your account or organization changed. Open the picker again.".into());
             cx.notify();
-            return;
+            return false;
         }
         if self.cloud.task_binding.is_some() || self.cloud_launch_frozen() {
-            return;
+            return false;
         }
         // New computers use the account's default provider; a repository's
         // own provider applies only when the context has none ready.
@@ -371,6 +434,7 @@ impl Pickers {
             cx.notify();
         });
         self.close(cx);
+        true
     }
     fn align_cloud_model(&mut self, cx: &mut Context<Self>) {
         let current = self.resolved(cx);

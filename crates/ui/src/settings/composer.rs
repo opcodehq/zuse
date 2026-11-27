@@ -40,6 +40,38 @@ pub struct FavoriteModel {
     pub model: String,
 }
 
+/// The destination a new chat reopens on: a computer (this one or a remote
+/// one, with Local or Worktree remembered per project) or Cloud on a
+/// connected repository.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum NewChatDestination {
+    Computer,
+    Cloud {
+        #[serde(rename = "projectId")]
+        project_id: String,
+        #[serde(rename = "accountId")]
+        account_id: String,
+    },
+}
+
+impl NewChatDestination {
+    /// Cloud on `row` (a cloud project row), when it names its repository.
+    pub fn cloud(row: &serde_json::Value) -> Option<Self> {
+        Some(Self::Cloud {
+            project_id: row["projectId"].as_str()?.to_owned(),
+            account_id: row["accountId"].as_str()?.to_owned(),
+        })
+    }
+
+    /// Whether this is Cloud on `row`'s repository.
+    pub fn is_cloud_on(&self, row: &serde_json::Value) -> bool {
+        matches!(self, Self::Cloud { project_id, account_id }
+            if row["projectId"].as_str() == Some(project_id)
+                && row["accountId"].as_str() == Some(account_id))
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ComposerDefaults {
@@ -70,6 +102,9 @@ pub struct ComposerDefaults {
     pub project: Option<String>,
     /// Remembered "Don't work in a project" opt-out.
     pub no_project: bool,
+    /// Where the last new chat was headed, as the user picked it. `None`
+    /// until the first pick: only then may a new chat choose Cloud by itself.
+    pub destination: Option<NewChatDestination>,
     /// New-chat workspace mode, remembered independently for each project.
     pub workspace_by_project: HashMap<String, zuse_protocol::presentation::WorkspaceMode>,
     /// Starred models (the picker's favorites rail), in starring order.
