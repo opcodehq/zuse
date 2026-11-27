@@ -235,8 +235,9 @@ pub struct HarnessModels {
 impl HarnessModels {
     pub fn new(accounts: ModelConnections, directory: PathBuf) -> Result<Self, Error> {
         let transport = NativeTransport::new()?;
+        let keys = crate::harness_vendors::ApiKeys::open(directory.join("api-keys.json"));
         Self::configured_api(
-            crate::harness_api::ApiModels::load(&directory.join("providers.json"))?,
+            crate::harness_api::ApiModels::load(&directory.join("providers.json"), keys)?,
             Arc::new(accounts),
             Arc::new(transport),
             [
@@ -293,6 +294,9 @@ impl HarnessModels {
             .local
             .set(crate::harness_local::LocalModels::new(accounts, registry));
         self
+    }
+    pub(crate) fn api_keys(&self) -> crate::harness_vendors::ApiKeys {
+        self.transport.api.keys()
     }
     pub fn subscribe(&self) -> broadcast::Receiver<AccountNotice> {
         self.transport.notices.subscribe()
@@ -1179,7 +1183,7 @@ mod local_tests {
             "models":[{"id":"api-first","label":"API first","contextWindowTokens":32000}]
         }]}).to_string()).unwrap();
         let models = HarnessModels::configured_api(
-            crate::harness_api::ApiModels::load(&api_path).unwrap(),
+            crate::harness_api::ApiModels::load(&api_path, Default::default()).unwrap(),
             Arc::new(EmptyAccounts),
             Arc::new(LocalWire),
             ["unused".into(), "unused".into()],

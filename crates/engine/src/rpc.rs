@@ -748,6 +748,7 @@ pub struct EngineRpc {
     zappers: Option<crate::zappers::Zappers>,
     slack_links: Option<crate::slack_links::SlackLinks>,
     model_connections: Option<crate::model_connections::ModelConnections>,
+    model_api_keys: Option<crate::harness_vendors::ApiKeys>,
     account: Option<crate::account::Account>,
     managed_access: Option<crate::managed_access::AccountClient>,
     managed_host: Option<crate::managed_access::host::Host>,
@@ -817,6 +818,7 @@ impl EngineRpc {
             zappers: None,
             slack_links: None,
             model_connections: None,
+            model_api_keys: None,
             account: None,
             managed_access: None,
             managed_host: None,
@@ -894,6 +896,11 @@ impl EngineRpc {
         connections: crate::model_connections::ModelConnections,
     ) -> Self {
         self.model_connections = Some(connections);
+        self
+    }
+
+    pub(crate) fn with_model_api_keys(mut self, keys: crate::harness_vendors::ApiKeys) -> Self {
+        self.model_api_keys = Some(keys);
         self
     }
 
@@ -1966,6 +1973,9 @@ fn forwardable(method: &str) -> bool {
             | methods::CANCEL_AGENT_LOGIN
             | methods::GET_CLAUDE_CONNECTION
             | methods::SET_CLAUDE_CONNECTION
+            // Zuse agent API keys are saved on the device that runs the agent.
+            | methods::GET_MODEL_API_KEYS
+            | methods::SET_MODEL_API_KEY
             // Uploads/attachments target the chat's host device (the agent reads
             // the committed file from that device's disk).
             | methods::UPLOAD_CHUNK
@@ -4124,6 +4134,25 @@ impl EngineRpc {
             }
             methods::GET_CLAUDE_CONNECTION => {
                 RpcReply::value(&self.agent_accounts.get_claude_connection().await)
+            }
+            methods::GET_MODEL_API_KEYS | methods::SET_MODEL_API_KEY => {
+                let keys = self.model_api_keys.as_ref().ok_or_else(|| {
+                    RpcError::Failed("The Zuse agent is unavailable on this device.".into())
+                })?;
+                if method == methods::SET_MODEL_API_KEY {
+                    #[derive(Deserialize)]
+                    #[serde(rename_all = "camelCase")]
+                    struct Params {
+                        id: String,
+                        #[serde(default)]
+                        api_key: String,
+                    }
+                    let p: Params = parse_params(params)?;
+                    let key = zeroize::Zeroizing::new(p.api_key);
+                    keys.set(&p.id, &key)
+                        .map_err(|e| RpcError::Failed(e.to_string()))?;
+                }
+                RpcReply::value(&keys.status())
             }
             methods::SET_CLAUDE_CONNECTION => {
                 #[derive(Deserialize)]
