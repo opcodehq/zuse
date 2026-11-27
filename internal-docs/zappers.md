@@ -274,6 +274,9 @@ conventions, and `WORKERS.md` adds how to work for this Zapper. "Only people
 edit it" is a rule of the Zapper file API (`writeFile` and `restoreFile`
 from a coordinator credential are refused). It is not an operating-system
 sandbox: anything with access to the profile database can change the row.
+Separately, the coordinator's own harness may load an on-disk `AGENTS.md` or
+`CLAUDE.md` from its private working folder if one is there; that is neither
+the Zapper's database `AGENTS.md` nor a repository's rules for workers.
 
 **Reserved names are exact.** Only these five exact ASCII root paths load
 into prompts or count as reserved. Drive shows each one's role ("Coordinator
