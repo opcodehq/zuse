@@ -3944,6 +3944,8 @@ pub struct Transcript {
     ui_blocks: HashMap<SharedString, Entity<zuse_viewport::ui_block::UiBlockView>>,
     /// Follows the app's plugins once a block shows live plugin cards.
     plugin_watch: Option<Subscription>,
+    /// Follows setup chats' image proposals once a card shows one.
+    machine_setup_watch: Option<Subscription>,
     /// Live pull request cards by row id, like [`Self::visuals`].
     pull_request_cards: HashMap<SharedString, Entity<crate::pull_request_card::PullRequestCard>>,
     /// Scheduled retry wake-ups for errored sources (the 2s→15s ladder).
@@ -4453,6 +4455,7 @@ impl Transcript {
             visuals: HashMap::new(),
             ui_blocks: HashMap::new(),
             plugin_watch: None,
+            machine_setup_watch: None,
             pull_request_cards: HashMap::new(),
             attachment_retries: HashMap::new(),
             blob_details: HashMap::new(),
@@ -8716,6 +8719,7 @@ impl Transcript {
                     view
                 });
                 let id = row_id.clone();
+                let this_state = self.state.clone();
                 cx.subscribe(
                     &view,
                     move |_, _, event: &zuse_viewport::ui_block::UiBlockEvent, cx| match event {
@@ -8727,6 +8731,13 @@ impl Transcript {
                         }
                         zuse_viewport::ui_block::UiBlockEvent::Plugin(action) => {
                             cx.emit(TranscriptEvent::UiBlockPlugin(action.clone()));
+                        }
+                        zuse_viewport::ui_block::UiBlockEvent::MachineSetup(action) => {
+                            let cards = crate::machine_setup_cards::MachineSetupCards::shared(
+                                this_state.clone(),
+                                cx,
+                            );
+                            cards.update(cx, |cards, cx| cards.act(action, cx));
                         }
                     },
                 )
@@ -8740,6 +8751,9 @@ impl Transcript {
             .uses_plugins()
             .then(|| self.plugin_directory(cx));
         let plugin_actions = self.doc_override.is_none();
+        let proposals = view.read(cx).machine_setup_proposals();
+        let machine_setup =
+            (!proposals.is_empty()).then(|| self.machine_setup_directory(&proposals, cx));
         view.update(cx, |view, cx| {
             view.set_palette(palette, cx);
             view.set_interactive(interactive, cx);
@@ -8747,8 +8761,43 @@ impl Transcript {
                 view.set_plugins(plugins, cx);
                 view.set_plugin_actions(plugin_actions, cx);
             }
+            if let Some(directory) = machine_setup {
+                view.set_machine_setup(directory, cx);
+                view.set_plugin_actions(plugin_actions, cx);
+            }
         });
         div().w_full().child(view).into_any_element()
+    }
+
+    /// Setup chats' proposals for live image cards: reads each shown
+    /// proposal once and pushes every change to the cards showing one.
+    fn machine_setup_directory(
+        &mut self,
+        proposals: &[String],
+        cx: &mut Context<Self>,
+    ) -> std::rc::Rc<zuse_viewport::ui_block::MachineSetupDirectory> {
+        use crate::machine_setup_cards::MachineSetupCards;
+        if self.state.read(cx).engine().is_none() {
+            return std::rc::Rc::new(zuse_viewport::ui_block::MachineSetupDirectory {
+                unavailable: true,
+                ..Default::default()
+            });
+        }
+        let cards = MachineSetupCards::shared(self.state.clone(), cx);
+        if self.machine_setup_watch.is_none() {
+            self.machine_setup_watch = Some(cx.observe(&cards, |this, cards, cx| {
+                let directory = std::rc::Rc::new(cards.read(cx).directory());
+                let views: Vec<_> = this.ui_blocks.values().cloned().collect();
+                for view in views {
+                    if !view.read(cx).machine_setup_proposals().is_empty() {
+                        view.update(cx, |view, cx| view.set_machine_setup(directory.clone(), cx));
+                    }
+                }
+            }));
+        }
+        let wanted = proposals.to_vec();
+        cards.update(cx, |cards, cx| cards.ensure(&wanted, cx));
+        std::rc::Rc::new(cards.read(cx).directory())
     }
 
     /// The app's plugins for live plugin cards. The first card starts

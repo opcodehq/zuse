@@ -64,6 +64,8 @@ impl WorkspaceView {
                         this.ui_block_plugin_action(action.clone(), cx);
                         return;
                     }
+                    // Image changes are reviewed in the desktop app.
+                    UiBlockEvent::MachineSetup(_) => return,
                 };
                 match this.send_ui_block_reply(text.clone(), cx) {
                     Some(request) => {
@@ -88,10 +90,20 @@ impl WorkspaceView {
             .read(cx)
             .uses_plugins()
             .then(|| std::rc::Rc::new(self.ui_block_plugins()));
+        let setup = !view.read(cx).machine_setup_proposals().is_empty();
         view.update(cx, |view, cx| {
             view.set_interactive(interactive, cx);
             if let Some(plugins) = plugins {
                 view.set_plugins(plugins, cx);
+            }
+            if setup {
+                view.set_machine_setup(
+                    std::rc::Rc::new(crate::ui_block::MachineSetupDirectory {
+                        unavailable: true,
+                        ..Default::default()
+                    }),
+                    cx,
+                );
             }
         });
         view

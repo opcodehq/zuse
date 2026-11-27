@@ -348,6 +348,9 @@ pub fn handles(method: &str) -> bool {
             | zuse_protocol::methods::CLOUD_MACHINE
             | zuse_protocol::methods::CLOUD_MACHINE_SAVE
             | zuse_protocol::methods::CLOUD_MACHINE_REBUILD
+            | zuse_protocol::methods::CLOUD_MACHINE_SETUP_PROPOSAL
+            | zuse_protocol::methods::CLOUD_MACHINE_SETUP_APPLY
+            | zuse_protocol::methods::CLOUD_MACHINE_SETUP_DISCARD
             | zuse_protocol::methods::CLOUD_PROJECT_SECRETS
             | zuse_protocol::methods::CLOUD_PROJECT_SECRET_SAVE
             | zuse_protocol::methods::CLOUD_PROJECT_SECRET_REVOKE
@@ -1363,6 +1366,9 @@ impl CloudApi {
             | zuse_protocol::methods::CLOUD_MACHINE
             | zuse_protocol::methods::CLOUD_MACHINE_SAVE
             | zuse_protocol::methods::CLOUD_MACHINE_REBUILD
+            | zuse_protocol::methods::CLOUD_MACHINE_SETUP_PROPOSAL
+            | zuse_protocol::methods::CLOUD_MACHINE_SETUP_APPLY
+            | zuse_protocol::methods::CLOUD_MACHINE_SETUP_DISCARD
             | zuse_protocol::methods::CLOUD_PROJECT_SECRETS
             | zuse_protocol::methods::CLOUD_PROJECT_SECRET_SAVE
             | zuse_protocol::methods::CLOUD_PROJECT_SECRET_REVOKE => {
@@ -1523,6 +1529,35 @@ impl CloudApi {
                             org.as_deref(),
                             &[],
                             reqwest::Method::POST,
+                        )
+                        .await?
+                    }
+                    zuse_protocol::methods::CLOUD_MACHINE_SETUP_PROPOSAL
+                    | zuse_protocol::methods::CLOUD_MACHINE_SETUP_APPLY
+                    | zuse_protocol::methods::CLOUD_MACHINE_SETUP_DISCARD => {
+                        let proposal = input["proposalId"]
+                            .as_str()
+                            .filter(|id| zuse_protocol::machine_setup::proposal_id_valid(id))
+                            .ok_or_else(|| anyhow::anyhow!("Unknown image proposal."))?
+                            .to_owned();
+                        let action = match method {
+                            zuse_protocol::methods::CLOUD_MACHINE_SETUP_APPLY => Some("apply"),
+                            zuse_protocol::methods::CLOUD_MACHINE_SETUP_DISCARD => Some("discard"),
+                            _ => None,
+                        };
+                        let mut path = vec!["v1", "cloud", "machine", "setup-proposals", &proposal];
+                        path.extend(action);
+                        self.request_scoped_verb(
+                            &token,
+                            &path,
+                            action.map(|_| serde_json::json!({})),
+                            org.as_deref(),
+                            &[],
+                            if action.is_some() {
+                                reqwest::Method::POST
+                            } else {
+                                reqwest::Method::GET
+                            },
                         )
                         .await?
                     }

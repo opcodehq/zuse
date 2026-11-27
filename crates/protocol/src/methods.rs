@@ -387,6 +387,7 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | CLOUD_AGENT_LOGIN_STATUS
         | CLOUD_PROJECT_ENVIRONMENT
         | CLOUD_MACHINE
+        | CLOUD_MACHINE_SETUP_PROPOSAL
         | CLOUD_PREPAID_BALANCE
         | CLOUD_BILLING_ENTITLEMENTS
         | CLOUD_BILLING_SUMMARY
@@ -593,6 +594,11 @@ pub const CLOUD_MACHINE: &str = "CloudMachine";
 pub const CLOUD_MACHINE_SAVE: &str = "CloudMachineSave";
 /// Rebuild the account's user image from its current setup script now.
 pub const CLOUD_MACHINE_REBUILD: &str = "CloudMachineRebuild";
+/// A setup chat's proposed image configuration, with the account machine.
+pub const CLOUD_MACHINE_SETUP_PROPOSAL: &str = "CloudMachineSetupProposal";
+/// Apply a proposal: save its setup script and repositories, then rebuild.
+pub const CLOUD_MACHINE_SETUP_APPLY: &str = "CloudMachineSetupApply";
+pub const CLOUD_MACHINE_SETUP_DISCARD: &str = "CloudMachineSetupDiscard";
 pub const CLOUD_PROJECT_SECRETS: &str = "CloudProjectSecrets";
 pub const CLOUD_PROJECT_SECRET_SAVE: &str = "CloudProjectSecretSave";
 pub const CLOUD_PROJECT_SECRET_REVOKE: &str = "CloudProjectSecretRevoke";

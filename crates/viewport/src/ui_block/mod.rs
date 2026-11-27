@@ -12,6 +12,7 @@ mod connect;
 mod demos;
 mod form;
 pub mod layout;
+mod machine_image;
 mod palette;
 #[cfg(test)]
 mod tests;
@@ -28,6 +29,9 @@ use zuse_ui_block::{Component, FieldValue, StepStatus, Tone};
 
 pub use connect::{CardState, PluginAction, PluginDirectory, status_line};
 pub use demos::demo_specs;
+pub use machine_image::{
+    DiffLine, MachineSetupAction, MachineSetupDirectory, ProposalCard, line_diff,
+};
 pub use palette::UiBlockPalette;
 
 use layout::{
@@ -42,6 +46,8 @@ pub enum UiBlockEvent {
     Send { text: String },
     /// A plugin card's button: connect, manage, browse or sign in.
     Plugin(PluginAction),
+    /// A machine image proposal card's Apply & rebuild or Discard.
+    MachineSetup(MachineSetupAction),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,6 +96,8 @@ pub struct UiBlockView {
     /// Plugin buttons work in every turn (their state is live), unlike
     /// forms; the host turns them off for read-only views.
     plugin_actions: bool,
+    /// Proposals for live `MachineImageProposal` cards.
+    machine_setup: Rc<MachineSetupDirectory>,
 }
 
 impl EventEmitter<UiBlockEvent> for UiBlockView {}
@@ -146,6 +154,7 @@ impl UiBlockView {
             _subscriptions: Vec::new(),
             plugins: Rc::new(PluginDirectory::default()),
             plugin_actions: true,
+            machine_setup: Rc::new(MachineSetupDirectory::default()),
         }
     }
 
@@ -379,6 +388,9 @@ impl UiBlockView {
                 }],
             ),
             Component::ConnectedPlugins {} => self.connected_plugins(path, cx),
+            Component::MachineImageProposal { proposal } => {
+                self.machine_image_card(proposal, path, cx)
+            }
         }
     }
 

@@ -107,6 +107,7 @@ mod pull_request_pane;
 mod search_warm;
 mod session_info;
 mod settings_cloud;
+pub(crate) use settings_cloud::SETUP_PROJECT_FLAG;
 mod side_chats;
 mod sidebar_controls;
 mod sidebar_pins;
@@ -14159,10 +14160,22 @@ impl Shell {
                         .top(px(-1.))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(hero_ink.map_or(theme.text_strong, |ink| ink.0))
-                        .child(project.as_ref().map_or_else(
-                            || "What should we build today?".to_owned(),
-                            |name| format!("What should we build in {name}?"),
-                        )),
+                        .child(
+                            if self
+                                .state
+                                .read(cx)
+                                .cloud_project
+                                .as_ref()
+                                .is_some_and(|project| project[SETUP_PROJECT_FLAG] == true)
+                            {
+                                "What should every cloud computer have?".to_owned()
+                            } else {
+                                project.as_ref().map_or_else(
+                                    || "What should we build today?".to_owned(),
+                                    |name| format!("What should we build in {name}?"),
+                                )
+                            },
+                        ),
                 )
                 .children(self.first_cloud_chat_guide(&theme, cx))
                 .when(project.is_some(), |view| {

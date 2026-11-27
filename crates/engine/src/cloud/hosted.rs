@@ -342,6 +342,9 @@ fn allowed(method: &str) -> bool {
             | methods::CLOUD_MACHINE
             | methods::CLOUD_MACHINE_SAVE
             | methods::CLOUD_MACHINE_REBUILD
+            | methods::CLOUD_MACHINE_SETUP_PROPOSAL
+            | methods::CLOUD_MACHINE_SETUP_APPLY
+            | methods::CLOUD_MACHINE_SETUP_DISCARD
             | methods::CLOUD_PROJECT_SECRETS
             | methods::CLOUD_PROJECT_SECRET_SAVE
             | methods::CLOUD_PROJECT_SECRET_REVOKE

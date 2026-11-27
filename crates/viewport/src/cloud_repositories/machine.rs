@@ -14,6 +14,30 @@ pub(super) struct MachineView {
     pub(super) poll: Option<Task<()>>,
     /// Fallback reads since the last change, for the backoff.
     polls: u32,
+    /// "Configure with an agent" opened the repository picker because the
+    /// account had no repository: start the setup chat once one is added.
+    pub(super) setup_after_add: bool,
+}
+
+/// Asks the host to open a setup chat: a cloud chat on `repository` whose
+/// agent configures the account's machine image.
+#[derive(Clone, Debug)]
+pub struct StartSetupChat {
+    pub repository: super::FirstChatRepository,
+}
+
+impl StartSetupChat {
+    pub(super) fn on(project: &CloudProject) -> Self {
+        Self {
+            repository: super::FirstChatRepository {
+                project_id: project.project_id.clone(),
+                repository_identity: project.repository_identity.clone(),
+                repository_url: project.repository_url.clone(),
+                display_name: project.display_name.clone(),
+                default_branch: project.default_branch.clone(),
+            },
+        }
+    }
 }
 
 impl MachineView {
@@ -44,6 +68,7 @@ impl MachineView {
             notice: None,
             poll: None,
             polls: 0,
+            setup_after_add: false,
         }
     }
     pub(super) fn stop_polling(&mut self) {
@@ -182,6 +207,38 @@ fn day(ms: i64) -> String {
 impl RepositoryPanel {
     pub(super) fn load_machine(&mut self, cx: &mut Context<Self>) {
         self.call("machine-read", methods::CLOUD_MACHINE, json!({}), cx);
+    }
+    /// "Configure with an agent": a setup chat on the account's first
+    /// repository. A chat needs one, so without any the picker opens first
+    /// and the chat starts once a repository is added.
+    pub(super) fn configure_with_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.can_manage() {
+            return;
+        }
+        if let Some(project) = self.projects.first() {
+            cx.emit(StartSetupChat::on(project));
+            return;
+        }
+        if !self.github_connected() {
+            cx.emit(OpenPage(CloudPage::Repositories));
+            return;
+        }
+        self.machine.setup_after_add = true;
+        self.open_palette(window, cx);
+    }
+    /// The button: dithered, like every primary action here.
+    fn configure_button(&self, busy: bool, cx: &mut Context<Self>) -> AnyElement {
+        use crate::cloud_settings::kit;
+        let enabled = self.can_manage() && !busy;
+        kit::primary_button(
+            "cloud-machine-configure-agent",
+            "Configure with an agent",
+            enabled,
+        )
+        .when(enabled, |b| {
+            b.on_click(cx.listener(|this, _, window, cx| this.configure_with_agent(window, cx)))
+        })
+        .into_any_element()
     }
     pub(super) fn rebuild_machine(&mut self, cx: &mut Context<Self>) {
         if self.pending.values().any(|p| p.kind.starts_with("machine")) {
@@ -479,10 +536,16 @@ impl RepositoryPanel {
                 cx,
             )
         });
+        let actions = row()
+            .items_center()
+            .gap(px(8.))
+            .child(self.configure_button(busy, cx))
+            .children(rebuild)
+            .into_any_element();
         kit::section(
             "Image",
-            "Your setup script and repositories, built into the image every new computer boots from. It rebuilds by itself when they change.",
-            rebuild,
+            "Your setup script and repositories, built into the image every new computer boots from. It rebuilds by itself when they change. Configure with an agent to have one install tools and pick repositories for you.",
+            Some(actions),
             body,
         )
     }

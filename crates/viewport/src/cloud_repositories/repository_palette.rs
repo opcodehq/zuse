@@ -421,6 +421,9 @@ impl RepositoryPanel {
         }
         self.picker = false;
         self.fresh_repos.clear();
+        if self.adding.is_empty() && self.queue.is_empty() {
+            self.machine.setup_after_add = false;
+        }
         window.focus(&self.picker_trigger, cx);
         cx.notify();
     }

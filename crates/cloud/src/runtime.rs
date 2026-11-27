@@ -427,6 +427,47 @@ impl RuntimeControl {
         Ok(owner)
     }
 
+    /// The account a setup computer's chat configures: the runtime
+    /// credential, the active chat and the setup mark must all match.
+    pub(crate) async fn machine_setup_owner(
+        &self,
+        id: &str,
+        chat: &str,
+        credential: &str,
+    ) -> Result<String, ApiError> {
+        self.scope_access(id, None, true).await?;
+        let mut tx = self.pool.begin().await?;
+        let (row, _, _) = locked_workspace(&mut tx, id).await?;
+        let now = chrono::Utc::now().timestamp_millis();
+        if blocked(&row)
+            || row["desired_state"] != "ready"
+            || row["runtime_credential_hash"]
+                .as_str()
+                .is_none_or(|h| !equal(h, &hash(credential)))
+            || row["request_config"]["runtimeCredentialExpiresAtMs"]
+                .as_i64()
+                .unwrap_or(0)
+                <= now
+            || !enrollment_matches(&row)
+        {
+            return Err(ApiError::unauthorized("workspace_runtime_fenced"));
+        }
+        if !setup_workspace(&row) {
+            return Err(ApiError::forbidden("machine_setup_chat_required"));
+        }
+        let owner = row["account_id"]
+            .as_str()
+            .ok_or_else(|| ApiError::unavailable("cloud_workspace_record_invalid"))?
+            .to_owned();
+        let active:bool=sqlx::query_scalar("SELECT EXISTS(SELECT FROM zuse_rust_task_command_sessions WHERE workspace_id=$1 AND session_id=$2 AND state='active')")
+            .bind(id).bind(chat).fetch_one(&mut *tx).await?;
+        if !active {
+            return Err(ApiError::forbidden("machine_setup_chat_unavailable"));
+        }
+        tx.commit().await?;
+        Ok(owner)
+    }
+
     pub fn shared_pool(&self) -> PgPool {
         self.pool.clone()
     }
@@ -868,9 +909,22 @@ impl RuntimeControl {
                 caps.iter()
                     .any(|c| c == zuse_protocol::cloud_computers::MACHINE_DELIVERY_CAPABILITY)
             });
-            if delivers_machine
-                && let Some(delivery) = crate::computers::machine::delivery(&mut tx, owner).await?
-            {
+            let mut delivery = if delivers_machine {
+                crate::computers::machine::delivery(&mut tx, owner).await?
+            } else {
+                None
+            };
+            // A setup chat's agent configures the image; it is told how on
+            // top of the account's own instructions.
+            if config[zuse_protocol::machine_setup::BOOTSTRAP_FLAG] == true {
+                response[zuse_protocol::machine_setup::BOOTSTRAP_FLAG] = json!(true);
+                if delivers_machine {
+                    delivery = Some(crate::computers::machine_setup::with_setup_instructions(
+                        delivery,
+                    ));
+                }
+            }
+            if let Some(delivery) = delivery {
                 response["machineDelivery"] = serde_json::to_value(delivery)
                     .map_err(|_| ApiError::unavailable("machine_record_invalid"))?;
             }
@@ -1687,6 +1741,10 @@ pub(super) fn log_fence(site: &'static str, id: &str, row: &Value, credential: &
 }
 fn required<'a>(row: &'a Value, key: &str) -> Result<&'a str, ApiError> {
     row[key].as_str().ok_or_else(rejected)
+}
+/// A setup computer: its chat configures the account's machine image.
+pub(crate) fn setup_workspace(row: &Value) -> bool {
+    row["request_config"][zuse_protocol::machine_setup::BOOTSTRAP_FLAG] == true
 }
 fn blocked(row: &Value) -> bool {
     matches!(

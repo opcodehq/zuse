@@ -876,3 +876,235 @@ async fn machine_status_reports_build_progress_failure_log_and_last_good_image_a
         .await
         .unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn setup_chat_proposals_apply_through_the_normal_recipe_and_rebuild() {
+    let (admin, pool, schema) = isolated_pool("machine_setup").await;
+    for sql in [
+        include_str!("../../tests/fixtures/legacy-catalog.sql"),
+        include_str!("../../tests/fixtures/projects.sql"),
+        include_str!("../../migrations/0009_computers.sql"),
+        include_str!("../../migrations/0031_machine_images.sql"),
+        include_str!("../../migrations/0037_user_images.sql"),
+        include_str!("../../migrations/0041_user_image_repositories.sql"),
+        include_str!("../../migrations/0058_machine_setup_proposals.sql"),
+        BILLING,
+    ] {
+        sqlx::raw_sql(sql).execute(&pool).await.unwrap();
+    }
+    let accounts = crate::access_policy::AccessPolicy::Entitled.accounts(Vec::new());
+    let store = Store::from_pool(pool.clone())
+        .with_computer_control(ComputerControl::from_pool(pool.clone(), accounts));
+    let app = router(
+        AppState {
+            store: store.clone(),
+            identity: Arc::new(TestIdentity),
+            organizations_enabled: false,
+            organization_ids: Arc::new(vec![]),
+            runtime: None,
+            gateway: Arc::new(Hub::default()),
+        },
+        vec![],
+    );
+    let now = chrono::Utc::now().timestamp_millis();
+    sqlx::query("INSERT INTO api_entitlements VALUES('ent-carol','user-carol','cloud-workspace','cloud-workspace-standard-v1','stripe','sub-carol','active',9999999999999,NULL,1,1)")
+        .execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO api_cloud_billing_periods VALUES('period-carol','user-carol','active','USD',0,9999999999999,1000000,0,0)")
+        .execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO api_cloud_projects VALUES('project_a','user-carol','github.com/carol/app','https://github.com/carol/app.git','app','main','private','github-app','{}','[]','d','connected',true,NULL,'k',1,1)")
+        .execute(&pool).await.unwrap();
+    let (status, _) = call(
+        &app,
+        "PUT",
+        "/v1/cloud/machine",
+        "carol",
+        false,
+        json!({"expectedRevision":0,"recipe":{"setupScript":"sudo apt-get install -y jq","instructions":"Keep commits small."}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let config = store.machine_setup_config("user-carol").await.unwrap();
+    assert_eq!(config.revision, 1);
+    assert_eq!(config.repositories[0].identity, "github.com/carol/app");
+
+    // The agent's proposals: a secret is refused, a newer one replaces an older one.
+    let propose = |script: &str, repositories: Vec<String>| {
+        store.machine_setup_propose(
+            &pool,
+            "user-carol",
+            "workspace-setup",
+            "chat-setup",
+            script.to_owned(),
+            repositories,
+            Some("Adds Rust.".into()),
+            now,
+        )
+    };
+    let refused = propose("export GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz", vec![])
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, "machine_setup_script_contains_secret");
+    let first = propose("true", vec!["carol/app".into()]).await.unwrap();
+    let script = "sudo apt-get install -y jq\ncommand -v cargo || curl -fsSL https://sh.rustup.rs | sh -s -- -y";
+    let second = propose(script, vec!["github.com/carol/app".into()])
+        .await
+        .unwrap();
+    assert_eq!(second.current_setup_script, "sudo apt-get install -y jq");
+    assert_eq!(second.current_repositories, ["github.com/carol/app"]);
+    let path = |id: &str, action: &str| format!("/v1/cloud/machine/setup-proposals/{id}{action}");
+    let (status, body) = call(
+        &app,
+        "GET",
+        &path(&first.proposal_id, ""),
+        "carol",
+        false,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["proposal"]["state"], "superseded");
+    let (status, body) = call(
+        &app,
+        "POST",
+        &path(&first.proposal_id, "/apply"),
+        "carol",
+        false,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "machine_setup_proposal_superseded");
+
+    // Another account never sees it.
+    let (status, _) = call(
+        &app,
+        "GET",
+        &path(&second.proposal_id, ""),
+        "mallory",
+        false,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(
+        &app,
+        "POST",
+        &path(&second.proposal_id, "/apply"),
+        "mallory",
+        false,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Applying saves the script (instructions kept) and queues the manual rebuild.
+    let (status, body) = call(
+        &app,
+        "POST",
+        &path(&second.proposal_id, "/apply"),
+        "carol",
+        false,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["proposal"]["state"], "applied");
+    assert_eq!(body["proposal"]["appliedRevision"], 2);
+    assert_eq!(body["machine"]["recipe"]["setupScript"], script);
+    assert_eq!(
+        body["machine"]["recipe"]["instructions"],
+        "Keep commits small."
+    );
+    assert_eq!(body["machine"]["image"]["reason"], "manual");
+    // Twice is a no-op; discarding an applied proposal is refused.
+    let (status, again) = call(
+        &app,
+        "POST",
+        &path(&second.proposal_id, "/apply"),
+        "carol",
+        false,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(again["machine"]["revision"], 2);
+    let (status, _) = call(
+        &app,
+        "POST",
+        &path(&second.proposal_id, "/discard"),
+        "carol",
+        false,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    // A proposal made against an older script is stale; adding a repository
+    // needs the GitHub connection and changes nothing without it.
+    let stale = propose("true", vec![]).await.unwrap();
+    store
+        .computers
+        .as_ref()
+        .unwrap()
+        .save_machine_as(
+            "user-carol",
+            "user-carol",
+            None,
+            SaveMachine {
+                expected_revision: 2,
+                recipe: MachineRecipe {
+                    setup_script: "echo edited in settings".into(),
+                    ..Default::default()
+                },
+            },
+            now,
+        )
+        .await
+        .unwrap();
+    let (status, body) = call(
+        &app,
+        "POST",
+        &path(&stale.proposal_id, "/apply"),
+        "carol",
+        false,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "machine_setup_proposal_stale");
+    let adding = propose(
+        "echo edited in settings",
+        vec!["github.com/carol/app".into(), "carol/new".into()],
+    )
+    .await
+    .unwrap();
+    let (status, body) = call(
+        &app,
+        "POST",
+        &path(&adding.proposal_id, "/apply"),
+        "carol",
+        false,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "machine_setup_github_required");
+    assert_eq!(store.machine("user-carol").await.unwrap().revision, 3);
+    let (status, body) = call(
+        &app,
+        "POST",
+        &path(&adding.proposal_id, "/discard"),
+        "carol",
+        false,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["proposal"]["state"], "discarded");
+    pool.close().await;
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
+}
