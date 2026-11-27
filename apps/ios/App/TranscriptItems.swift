@@ -19,7 +19,15 @@ enum TranscriptPreviewFlags {
 
 /// The content column every transcript row shares.
 private let columnWidth: CGFloat = 720
-private let gutter: CGFloat = 18
+private let gutter: CGFloat = 20
+
+/// Type sizes the transcript shares, so every row reads as one voice.
+private enum TextSize {
+  static let body: CGFloat = 16
+  static let meta: CGFloat = 14
+  static let small: CGFloat = 12.5
+  static let mono: CGFloat = 12.5
+}
 
 /// One transcript row: a message you sent, the agent's work or reply, or an event between them.
 struct TimelineItemView: View {
@@ -27,6 +35,8 @@ struct TimelineItemView: View {
   let rpc: RPCClient?
   var respond: ((ChatMessage, String) async throws -> Void)?
   var resize: RowResize?
+  /// Opens the computer's working changes, when a chat can show them.
+  var openChanges: (() -> Void)?
   var body: some View {
     content
       .padding(.horizontal, gutter)
@@ -39,6 +49,7 @@ struct TimelineItemView: View {
     case .user(let user): UserMessageView(user: user, rpc: rpc, resize: resize)
     case .reply(let reply): ReplyView(reply: reply)
     case .activity(let activity): ActivityView(activity: activity, rpc: rpc, resize: resize)
+    case .footer(let footer): TurnFooterView(footer: footer, openChanges: openChanges)
     case .notice(let notice): NoticeView(notice: notice)
     case .images(_, let attachments, let sessionID):
       AttachmentRow(attachments: attachments, sessionID: sessionID, rpc: rpc, alignment: .leading)
@@ -52,7 +63,8 @@ struct TimelineItemView: View {
       .disclosureGroupStyle(TranscriptDisclosureStyle())
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.vertical, 6)
-    case .waiting(_, let since): WaitingView(since: since)
+    case .waiting(_, let since):
+      LiveLine(title: "Thinking…", since: since).padding(.vertical, 6)
     }
   }
 }
@@ -66,6 +78,13 @@ private struct UserMessageView: View {
   @State private var showsAll = false
   /// Pasted logs and long prompts fold so one message can't fill the screen.
   private var folds: Bool { user.text.count > 900 || user.text.filter { $0 == "\n" }.count > 14 }
+  /// Inline Markdown only (`code`, emphasis, links), keeping your line breaks as typed.
+  private var styledText: AttributedString {
+    (try? AttributedString(
+      markdown: user.text,
+      options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+      ?? AttributedString(user.text)
+  }
   var body: some View {
     VStack(alignment: .trailing, spacing: 6) {
       if !user.attachments.isEmpty {
@@ -74,9 +93,9 @@ private struct UserMessageView: View {
       }
       if !user.text.isEmpty {
         VStack(alignment: .leading, spacing: 6) {
-          Text(user.text)
-            .font(.system(size: 16))
-            .lineSpacing(2)
+          Text(styledText)
+            .font(.system(size: TextSize.body))
+            .lineSpacing(3)
             .lineLimit(folds && !showsAll ? 12 : nil)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
@@ -84,12 +103,14 @@ private struct UserMessageView: View {
             Button(showsAll ? "Show less" : "Show more") {
               if let resize { resize { showsAll.toggle() } } else { showsAll.toggle() }
             }
-            .font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary)
+            .font(.system(size: TextSize.meta, weight: .semibold)).opacity(0.8)
             .buttonStyle(.plain)
           }
         }
-        .padding(.horizontal, 14).padding(.vertical, 10)
-        .background(AppTheme.bubble, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .foregroundStyle(.white)
+        .tint(.white)
+        .padding(.horizontal, 15).padding(.vertical, 10)
+        .background(AppTheme.userBubble, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .contextMenu {
           Button("Copy", systemImage: "doc.on.doc") { NativePlatform.copy(user.text) }
           ShareLink(item: user.text)
@@ -97,8 +118,8 @@ private struct UserMessageView: View {
       }
     }
     .frame(maxWidth: .infinity, alignment: .trailing)
-    .padding(.leading, 44)
-    .padding(.top, 18).padding(.bottom, 6)
+    .padding(.leading, 48)
+    .padding(.top, 22).padding(.bottom, 8)
     .accessibilityElement(children: .contain)
   }
 }
@@ -179,18 +200,34 @@ private struct WrappingRow: Layout {
 
 // MARK: - The agent's reply
 
+/// The answer itself: plain, well-set prose with no container.
 private struct ReplyView: View {
   let reply: TimelineReply
   var body: some View {
-    VStack(alignment: .leading, spacing: 2) {
-      ChatMarkdown(text: reply.text, size: .reply)
-        .frame(maxWidth: .infinity, alignment: .leading)
-      if reply.streaming {
-        PulsingDots().padding(.top, 6)
-      } else {
-        HStack(spacing: 0) {
-          CopyButton(label: "Copy reply") { NativePlatform.copy(reply.text) }
-          ShareLink(item: reply.text) {
+    ChatMarkdown(text: reply.text, size: .reply)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.top, 6).padding(.bottom, 2)
+      .contextMenu {
+        Button("Copy", systemImage: "doc.on.doc") { NativePlatform.copy(reply.text) }
+        ShareLink(item: reply.text)
+      }
+  }
+}
+
+/// How a settled turn ends: the files it changed, then quiet actions and how long it took.
+private struct TurnFooterView: View {
+  let footer: TimelineFooter
+  var openChanges: (() -> Void)?
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      if !footer.changes.isEmpty {
+        ChangesCard(footer: footer, open: openChanges)
+          .padding(.top, 4)
+      }
+      HStack(spacing: 0) {
+        if !footer.text.isEmpty {
+          CopyButton(label: "Copy reply") { NativePlatform.copy(footer.text) }
+          ShareLink(item: footer.text) {
             Image(systemName: "square.and.arrow.up")
               .font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
               .frame(width: 30, height: 30).contentShape(Rectangle())
@@ -198,49 +235,113 @@ private struct ReplyView: View {
           .buttonStyle(.plain)
           .accessibilityLabel("Share reply")
         }
-        .padding(.leading, -7)
+        if let meta {
+          Text(meta)
+            .font(.system(size: 12)).monospacedDigit()
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .padding(.leading, footer.text.isEmpty ? 0 : 6)
+        }
+        Spacer(minLength: 0)
       }
+      .padding(.leading, footer.text.isEmpty ? 0 : -7)
     }
-    .padding(.top, 4).padding(.bottom, 10)
-    .contextMenu {
-      Button("Copy", systemImage: "doc.on.doc") { NativePlatform.copy(reply.text) }
-      ShareLink(item: reply.text)
-    }
+    .padding(.top, 2).padding(.bottom, 14)
+    .accessibilityElement(children: .contain)
+  }
+  /// "Worked for 17s · 9:41 AM".
+  private var meta: String? {
+    let time = footer.finishedAt.map { $0.formatted(date: .omitted, time: .shortened) }
+    let parts = [footer.worked, time].compactMap { $0 }
+    return parts.isEmpty ? nil : parts.joined(separator: " · ")
   }
 }
 
-/// Three dots that breathe while the agent writes.
-private struct PulsingDots: View {
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+/// "calc.py  +5 −1" or "3 files  +12 −4", opening the computer's changes.
+private struct ChangesCard: View {
+  let footer: TimelineFooter
+  var open: (() -> Void)?
+  private let listLimit = 4
   var body: some View {
-    TimelineView(.animation(minimumInterval: 1 / 20, paused: reduceMotion)) { context in
-      let phase = context.date.timeIntervalSinceReferenceDate * 2.4
-      HStack(spacing: 4) {
-        ForEach(0..<3) { index in
-          Circle()
-            .frame(width: 6, height: 6)
-            .opacity(reduceMotion ? 0.5 : 0.25 + 0.6 * max(0, sin(phase - Double(index) * 0.7)))
+    Button {
+      open?()
+    } label: {
+      VStack(alignment: .leading, spacing: 0) {
+        HStack(spacing: 8) {
+          Image(systemName: "doc.text").font(.system(size: 12, weight: .medium))
+            .foregroundStyle(.secondary)
+          Text(title).font(.system(size: 13.5, weight: .medium)).foregroundStyle(.primary)
+            .lineLimit(1).truncationMode(.middle)
+          LineCounts(additions: footer.additions, deletions: footer.deletions)
+          if open != nil {
+            Spacer(minLength: 6)
+            Text("Review").font(.system(size: 12.5, weight: .medium)).foregroundStyle(.secondary)
+            Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold))
+              .foregroundStyle(.tertiary)
+          }
+        }
+        .padding(.horizontal, 12).frame(minHeight: 38)
+        if footer.changes.count > 1 {
+          Rectangle().fill(AppTheme.hairline).frame(height: 1)
+          VStack(alignment: .leading, spacing: 0) {
+            ForEach(footer.changes.prefix(listLimit), id: \.path) { change in
+              HStack(spacing: 8) {
+                Text(ToolPresentation.fileName(change.path))
+                  .font(.system(size: TextSize.mono, design: .monospaced)).foregroundStyle(
+                    .secondary
+                  )
+                  .lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 8)
+                LineCounts(additions: change.additions, deletions: change.deletions, size: 11.5)
+              }
+              .frame(minHeight: 26)
+            }
+            if footer.changes.count > listLimit {
+              Text("\(footer.changes.count - listLimit) more")
+                .font(.system(size: 12)).foregroundStyle(.tertiary).frame(minHeight: 24)
+            }
+          }
+          .padding(.horizontal, 12).padding(.vertical, 4)
         }
       }
-      .foregroundStyle(.secondary)
+      .frame(maxWidth: footer.changes.count > 1 ? 420 : nil, alignment: .leading)
+      .fixedSize(horizontal: footer.changes.count == 1, vertical: false)
+      .background(AppTheme.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+      .overlay(
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+          .strokeBorder(AppTheme.hairline, lineWidth: 1)
+      )
+      .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
-    .frame(height: 10)
-    .accessibilityLabel("Writing")
+    .buttonStyle(.plain)
+    // Without a computer to ask, the card still reads normally; it just doesn't open anything.
+    .allowsHitTesting(open != nil)
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel(
+      "\(title), \(footer.additions) lines added, \(footer.deletions) removed"
+    )
+    .accessibilityHint(open == nil ? "" : "Opens the changes")
+    .accessibilityIdentifier("turn-changes")
+  }
+  private var title: String {
+    footer.changes.count == 1
+      ? ToolPresentation.fileName(footer.changes[0].path)
+      : "\(footer.changes.count) files changed"
   }
 }
 
-/// Before the agent has said or done anything in a running turn.
-private struct WaitingView: View {
-  let since: Date?
+/// "+5 −1" in the diff colours.
+private struct LineCounts: View {
+  let additions: Int
+  let deletions: Int
+  var size: CGFloat = 12.5
   var body: some View {
-    HStack(spacing: 10) {
-      PulsingDots()
-      Text("Thinking").font(.system(size: 14)).foregroundStyle(.secondary)
-      if let since { Elapsed(since: since).foregroundStyle(.tertiary) }
+    HStack(spacing: 4) {
+      Text("+\(additions)").foregroundStyle(AppTheme.added)
+      Text("−\(deletions)").foregroundStyle(AppTheme.removed)
     }
-    .padding(.vertical, 10)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .accessibilityElement(children: .combine)
+    .font(.system(size: size, weight: .medium, design: .monospaced))
+    .lineLimit(1).fixedSize()
   }
 }
 
@@ -258,6 +359,59 @@ private struct Elapsed: View {
   }
 }
 
+/// A running turn's one line: a spinner, what it's doing with a soft shimmer, and a timer.
+private struct LiveLine: View {
+  let title: String
+  let since: Date?
+  var body: some View {
+    HStack(spacing: 8) {
+      ProgressView().controlSize(.mini).frame(width: 14)
+      ShimmerText(text: title, size: TextSize.meta)
+        .lineLimit(1).truncationMode(.middle)
+        .layoutPriority(1)
+      if let since { Elapsed(since: since).foregroundStyle(.tertiary).fixedSize() }
+      Spacer(minLength: 0)
+    }
+    .frame(minHeight: 32)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .accessibilityElement(children: .combine)
+  }
+}
+
+/// Muted text with a band of light passing over it; still when motion is reduced.
+private struct ShimmerText: View {
+  let text: String
+  let size: CGFloat
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  var body: some View {
+    let base = Text(text).font(.system(size: size))
+    if reduceMotion {
+      base.foregroundStyle(.secondary)
+    } else {
+      base.foregroundStyle(.tertiary)
+        .overlay {
+          TimelineView(.animation(minimumInterval: 1 / 30)) { context in
+            let period = 1.8
+            let phase =
+              context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period)
+              / period
+            base.foregroundStyle(.primary)
+              .mask {
+                GeometryReader { geometry in
+                  let band = max(48, geometry.size.width * 0.4)
+                  LinearGradient(
+                    colors: [.clear, .black, .clear], startPoint: .leading, endPoint: .trailing
+                  )
+                  .frame(width: band)
+                  .offset(x: -band + (geometry.size.width + band) * phase)
+                }
+              }
+          }
+        }
+    }
+  }
+}
+
 // MARK: - Events
 
 private struct NoticeView: View {
@@ -265,27 +419,23 @@ private struct NoticeView: View {
   var body: some View {
     switch notice.kind {
     case .error:
-      HStack(alignment: .firstTextBaseline, spacing: 10) {
-        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
-        VStack(alignment: .leading, spacing: 2) {
-          Text("Error").font(.system(size: 14, weight: .semibold))
-          Text(notice.title).font(.system(size: 14)).foregroundStyle(.secondary)
-            .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-        }
+      HStack(alignment: .firstTextBaseline, spacing: 9) {
+        Image(systemName: "exclamationmark.circle.fill")
+          .font(.system(size: 13)).foregroundStyle(AppTheme.removed)
+        Text(notice.title).font(.system(size: TextSize.meta)).foregroundStyle(.secondary)
+          .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
         Spacer(minLength: 0)
       }
-      .padding(12)
+      .padding(.horizontal, 12).padding(.vertical, 10)
       .background(
-        Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-      )
-      .overlay(
-        RoundedRectangle(cornerRadius: 14, style: .continuous)
-          .strokeBorder(Color.red.opacity(0.18), lineWidth: 1)
+        AppTheme.removed.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous)
       )
       .padding(.vertical, 6)
       .contextMenu {
         Button("Copy", systemImage: "doc.on.doc") { NativePlatform.copy(notice.title) }
       }
+      .accessibilityElement(children: .combine)
+      .accessibilityLabel("Error, \(notice.title)")
     case .stopped:
       Label(notice.title, systemImage: "stop.circle")
         .font(.system(size: 13)).foregroundStyle(.secondary)
@@ -309,7 +459,7 @@ private struct NoticeView: View {
       HStack(spacing: 10) {
         Image(systemName: "sparkles.rectangle.stack").foregroundStyle(.secondary)
         VStack(alignment: .leading, spacing: 2) {
-          Text(notice.title).font(.system(size: 14, weight: .medium))
+          Text(notice.title).font(.system(size: TextSize.meta, weight: .medium))
           if let detail = notice.detail {
             Text(detail).font(.system(size: 13)).foregroundStyle(.secondary)
           }
@@ -318,30 +468,30 @@ private struct NoticeView: View {
       }
       .padding(12)
       .background(
-        AppTheme.codeBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+        AppTheme.codeBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous)
       )
       .padding(.vertical, 6)
     }
   }
   private var rule: some View {
-    Rectangle().fill(Color.primary.opacity(0.1)).frame(height: 1)
+    Rectangle().fill(AppTheme.hairline).frame(height: 1)
   }
 }
 
 // MARK: - The agent's work
 
-/// One quiet line per turn ("Worked for 32s · Ran 3 commands"), opening onto every step.
+/// One quiet line per turn ("Read 2 files · edited calc.py · ran 2 commands") that opens onto a
+/// timeline of every step. A running turn shows one live line instead.
 struct ActivityView: View {
   let activity: TimelineActivity
   let rpc: RPCClient?
   var resize: RowResize?
-  /// Set only by a tap. Otherwise running work stays open and settled work folds.
-  @State private var choice: Bool? = TranscriptPreviewFlags.expandActivity ? true : nil
+  /// Set only by a tap; work stays folded until you open it, running or not.
+  @State private var expanded = TranscriptPreviewFlags.expandActivity
   @State private var showsEarlier = false
-  private var expanded: Bool { choice ?? activity.live }
   private var expandable: Bool { !activity.steps.isEmpty }
   /// Long turns open on their latest steps.
-  private let recentLimit = 8
+  private let recentLimit = 10
   private var hiddenCount: Int {
     showsEarlier ? 0 : max(0, activity.steps.count - recentLimit)
   }
@@ -349,6 +499,7 @@ struct ActivityView: View {
     VStack(alignment: .leading, spacing: 0) {
       header
       if expanded && expandable {
+        let shown = Array(activity.steps.suffix(activity.steps.count - hiddenCount))
         VStack(alignment: .leading, spacing: 0) {
           if hiddenCount > 0 {
             Button {
@@ -359,61 +510,59 @@ struct ActivityView: View {
                 .frame(minHeight: 30).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .padding(.leading, StepRow.textInset)
           }
-          ForEach(activity.steps.suffix(activity.steps.count - hiddenCount)) { step in
-            StepView(step: step, rpc: rpc, resize: resize)
+          ForEach(Array(shown.enumerated()), id: \.element.id) { index, step in
+            StepRow(
+              step: step, first: index == 0 && hiddenCount == 0, last: index == shown.count - 1,
+              rpc: rpc, resize: resize)
           }
         }
-        .padding(.leading, 12)
-        .overlay(alignment: .leading) {
-          RoundedRectangle(cornerRadius: 1).fill(Color.primary.opacity(0.1)).frame(width: 2)
-            .padding(.vertical, 4)
-        }
-        .padding(.leading, 6).padding(.bottom, 6)
+        .padding(.top, 2).padding(.bottom, 8)
       }
     }
-    .padding(.top, 2).padding(.bottom, 2)
+    .padding(.vertical, 2)
     .frame(maxWidth: .infinity, alignment: .leading)
   }
-  private var header: some View {
+  @ViewBuilder private var header: some View {
     Button {
       guard expandable else { return }
-      change { choice = !expanded }
+      change { expanded.toggle() }
     } label: {
-      HStack(spacing: 7) {
+      HStack(spacing: 6) {
         if activity.live {
-          ProgressView().controlSize(.mini)
-          Text(activity.liveTitle)
-            .font(.system(size: 14)).foregroundStyle(.secondary)
-            .lineLimit(1).truncationMode(.middle)
-          if let since = activity.startedAt {
-            Elapsed(since: since).foregroundStyle(.tertiary)
-          }
+          LiveLine(title: activity.liveTitle, since: activity.startedAt)
+            .fixedSize(horizontal: false, vertical: true)
         } else {
-          Text(activity.headline)
-            .font(.system(size: 14)).foregroundStyle(.secondary)
-            .lineLimit(1).truncationMode(.tail)
-          if activity.failedCount > 0 {
-            // Failures never truncate away.
-            Text("· \(activity.failedCount) failed")
-              .font(.system(size: 14)).foregroundStyle(.red.opacity(0.85))
-              .lineLimit(1).fixedSize()
-          }
+          // One flowing line (two at most), so failures and the chevron stay with the words.
+          summary
+            .font(.system(size: TextSize.meta))
+            .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
+          Spacer(minLength: 0)
         }
-        if expandable {
-          Image(systemName: "chevron.right")
-            .font(.system(size: 10, weight: .semibold)).foregroundStyle(.tertiary)
-            .rotationEffect(.degrees(expanded ? 90 : 0))
-        }
-        Spacer(minLength: 0)
       }
-      .frame(minHeight: 34).contentShape(Rectangle())
+      .frame(minHeight: 32).contentShape(Rectangle())
     }
     .buttonStyle(.plain)
     .disabled(!expandable)
-    .accessibilityLabel(activity.live ? activity.liveTitle : activity.title)
+    .accessibilityLabel(activity.title)
     .accessibilityValue(expandable ? (expanded ? "Expanded" : "Collapsed") : "")
+    .accessibilityHint(expandable ? "Shows each step" : "")
     .accessibilityIdentifier("tool-group-\(activity.id)")
+  }
+  private var summary: Text {
+    var text = Text(activity.title).foregroundStyle(.secondary)
+    if activity.failedCount > 0 {
+      text = text + Text(" · \(activity.failedCount) failed").foregroundStyle(AppTheme.removed)
+    }
+    if expandable {
+      text =
+        text + Text("\u{00A0}\u{00A0}\u{2060}")
+        + Text(Image(systemName: expanded ? "chevron.down" : "chevron.right"))
+        .font(.system(size: 10, weight: .semibold)).foregroundStyle(.tertiary)
+    }
+    return text
   }
   private func change(_ update: () -> Void) {
     if let resize {
@@ -426,55 +575,130 @@ struct ActivityView: View {
   }
 }
 
-/// One step: a thought, a line of narration, or a tool call that opens onto its details.
-private struct StepView: View {
+/// One step on the activity timeline: a glyph on a hairline rail, a verb and its target. Tool
+/// calls open onto their output; edits show their diff straight away.
+private struct StepRow: View {
   let step: TimelineStep
+  let first: Bool
+  let last: Bool
   let rpc: RPCClient?
   var resize: RowResize?
   @State private var expanded = TranscriptPreviewFlags.expandSteps
+  /// Where step text starts: past the glyph column.
+  static let textInset: CGFloat = 26
+  private static let glyph: CGFloat = 16
+  private static let lineHeight: CGFloat = 26
   var body: some View {
+    HStack(alignment: .top, spacing: 0) {
+      Color.clear.frame(width: Self.textInset, height: 1)
+      VStack(alignment: .leading, spacing: 6) {
+        content
+      }
+      .padding(.bottom, last ? 0 : 4)
+    }
+    .background(alignment: .topLeading) { rail }
+    .overlay(alignment: .topLeading) { glyph }
+  }
+  /// A hairline joining the glyphs, broken around each one. Rows touch, so it runs unbroken
+  /// from the first step to the last.
+  private var rail: some View {
+    GeometryReader { geometry in
+      let x = Self.glyph / 2
+      let middle = Self.lineHeight / 2
+      Path { path in
+        if !first {
+          path.move(to: CGPoint(x: x, y: 0))
+          path.addLine(to: CGPoint(x: x, y: middle - 9))
+        }
+        if !last {
+          path.move(to: CGPoint(x: x, y: middle + 9))
+          path.addLine(to: CGPoint(x: x, y: geometry.size.height))
+        }
+      }
+      .stroke(AppTheme.hairline, lineWidth: 1)
+    }
+    .accessibilityHidden(true)
+  }
+  private var glyph: some View {
+    Group {
+      if step.running {
+        ProgressView().controlSize(.mini)
+      } else {
+        Image(systemName: symbol)
+          .font(.system(size: 11, weight: .medium))
+          .foregroundStyle(step.failed ? AppTheme.removed : Color.secondary)
+      }
+    }
+    .frame(width: Self.glyph, height: Self.lineHeight)
+    .accessibilityHidden(true)
+  }
+  private var symbol: String {
+    switch step.kind {
+    case .thinking: "brain"
+    case .narration: "text.bubble"
+    case .tool:
+      if let subagent = step.subagent {
+        subagent.status == .failed ? "xmark.circle" : "checkmark.circle"
+      } else {
+        step.tool.symbol
+      }
+    }
+  }
+  @ViewBuilder private var content: some View {
     switch step.kind {
     case .narration:
       ChatMarkdown(text: step.text, size: .compact)
         .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 6)
+        .padding(.top, 4)
     case .thinking:
-      VStack(alignment: .leading, spacing: 0) {
-        row(symbol: "brain", label: "Thinking", detail: expanded ? "" : preview, mono: false)
-        if expanded {
-          Group {
-            if step.redacted {
-              Text("Reasoning is private.").font(.system(size: 14))
-            } else {
-              ChatMarkdown(text: step.text, size: .compact)
-            }
-          }
-          .foregroundStyle(.secondary)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(.leading, 25).padding(.bottom, 8)
-        }
+      // Reasoning reads as an aside: italic, muted, no box.
+      Button {
+        toggle()
+      } label: {
+        Text(
+          step.redacted
+            ? "Reasoning is private." : step.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        .font(.system(size: 14)).italic()
+        .foregroundStyle(.secondary)
+        .lineSpacing(2)
+        .lineLimit(expanded ? nil : 3)
+        .multilineTextAlignment(.leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 4)
+        .contentShape(Rectangle())
       }
+      .buttonStyle(.plain)
+      .accessibilityLabel("Reasoning")
+      .accessibilityValue(step.redacted ? "Private" : step.text)
+      .accessibilityIdentifier("activity-\(step.id)")
     case .tool:
       let tool = step.tool
-      VStack(alignment: .leading, spacing: 0) {
-        if let subagent = step.subagent {
-          row(
-            symbol: tool.symbol, label: tool.detail.isEmpty ? "Agent" : tool.detail,
-            detail: subagent.tail ?? status(subagent.status), mono: false)
-        } else {
-          row(symbol: tool.symbol, label: tool.label, detail: shortPath(tool), mono: true)
-        }
-        if expanded {
-          ToolDetailView(step: step, rpc: rpc, resize: resize)
-            .padding(.leading, 25).padding(.top, 2).padding(.bottom, 8)
-        }
+      if let subagent = step.subagent {
+        line(
+          label: tool.detail.isEmpty ? "Agent" : tool.detail,
+          detail: subagent.tail ?? status(subagent.status), mono: false)
+      } else {
+        line(label: tool.label, detail: shortPath(tool), mono: true)
+      }
+      if showsDiff {
+        EditCard(step: step, rpc: rpc, resize: resize, open: expanded)
+      } else if expanded {
+        ToolDetailView(step: step, rpc: rpc, resize: resize)
       }
     }
   }
-  private var preview: String {
-    step.redacted
-      ? "" : ToolPresentation.oneLineSummary(step.text)
+  /// Edits show their change inline, like a code review.
+  private var showsDiff: Bool {
+    guard step.kind == .tool, !step.failed else { return false }
+    let category = step.tool.category
+    return (category == .edit || category == .write)
+      && (step.diff != nil || (step.diffRef != nil && rpc != nil))
+  }
+  private func toggle() {
+    if let resize { resize { expanded.toggle() } } else { expanded.toggle() }
   }
   /// Absolute paths keep their last two parts in the row; the full path shows when expanded.
   private func shortPath(_ tool: ToolStep) -> String {
@@ -491,47 +715,29 @@ private struct StepView: View {
     case .failed: "Failed"
     }
   }
-  private func row(symbol: String, label: String, detail: String, mono: Bool) -> some View {
+  private func line(label: String, detail: String, mono: Bool) -> some View {
     Button {
-      if let resize { resize { expanded.toggle() } } else { expanded.toggle() }
+      toggle()
     } label: {
-      HStack(spacing: 7) {
-        Group {
-          if step.running {
-            ProgressView().controlSize(.mini)
-          } else if let subagent = step.subagent {
-            Image(
-              systemName: subagent.status == .failed
-                ? "xmark.circle.fill" : "checkmark.circle.fill"
-            )
-            .foregroundStyle(subagent.status == .failed ? Color.red : Color.green)
-          } else {
-            Image(systemName: symbol).foregroundStyle(.secondary)
-          }
-        }
-        .font(.system(size: 12)).frame(width: 18)
-        Text(label).font(.system(size: 14, weight: .medium)).foregroundStyle(.primary)
+      HStack(alignment: .firstTextBaseline, spacing: 6) {
+        Text(label).font(.system(size: 13.5, weight: .medium)).foregroundStyle(.secondary)
           .lineLimit(1).layoutPriority(1)
         if !detail.isEmpty {
           Text(detail)
-            .font(mono ? .system(size: 13, design: .monospaced) : .system(size: 13))
-            .foregroundStyle(.secondary)
+            .font(mono ? .system(size: TextSize.mono, design: .monospaced) : .system(size: 13.5))
+            .foregroundStyle(.secondary.opacity(0.85))
             .lineLimit(1).truncationMode(mono ? .middle : .tail)
         }
-        if step.additions > 0 {
-          Text("+\(step.additions)").font(.system(size: 12, weight: .medium)).monospacedDigit()
-            .foregroundStyle(.green)
-        }
-        if step.deletions > 0 {
-          Text("−\(step.deletions)").font(.system(size: 12, weight: .medium)).monospacedDigit()
-            .foregroundStyle(.red)
+        if step.additions > 0 || step.deletions > 0 {
+          LineCounts(additions: step.additions, deletions: step.deletions, size: 11.5)
         }
         if step.failed {
-          Text("error").font(.system(size: 12, weight: .medium)).foregroundStyle(.red)
+          Text("failed").font(.system(size: 12, weight: .medium))
+            .foregroundStyle(AppTheme.removed).fixedSize()
         }
         Spacer(minLength: 0)
       }
-      .frame(minHeight: 30).contentShape(Rectangle())
+      .frame(minHeight: Self.lineHeight).contentShape(Rectangle())
     }
     .buttonStyle(.plain)
     .accessibilityLabel(
@@ -543,7 +749,113 @@ private struct StepView: View {
   }
 }
 
-/// What a tool call did: the invocation, then its output, diff or checklist.
+/// An edit as a small review card: the file, its line counts and the changed lines.
+private struct EditCard: View {
+  let step: TimelineStep
+  let rpc: RPCClient?
+  var resize: RowResize?
+  /// The step was opened, so the whole change shows.
+  var open: Bool
+  @State private var fetched: [TimelineDiff]?
+  @State private var showsAll = false
+  private let previewLines = 8
+  var body: some View {
+    let diffs = step.diff.map { [$0] } ?? fetched ?? []
+    VStack(alignment: .leading, spacing: 0) {
+      if diffs.isEmpty {
+        ProgressView().controlSize(.small).padding(12)
+      }
+      ForEach(Array(diffs.enumerated()), id: \.offset) { index, diff in
+        if index > 0 { Rectangle().fill(AppTheme.hairline).frame(height: 1) }
+        lines(diff)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(AppTheme.codeBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    .overlay(
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .strokeBorder(AppTheme.hairline, lineWidth: 1)
+    )
+    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    .padding(.bottom, 4)
+    .task(id: step.id) { await load() }
+  }
+  private func lines(_ diff: TimelineDiff) -> some View {
+    let all = diff.lines(context: 1)
+    let limit = open || showsAll ? 200 : previewLines
+    return VStack(alignment: .leading, spacing: 0) {
+      VStack(alignment: .leading, spacing: 0) {
+        ForEach(all.prefix(limit)) { line in
+          DiffRow(line: line)
+        }
+      }
+      .padding(.vertical, 6)
+      if all.count > limit {
+        Button {
+          if let resize { resize { showsAll = true } } else { showsAll = true }
+        } label: {
+          Text("Show \(all.count - limit) more \(all.count - limit == 1 ? "line" : "lines")")
+            .font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12).frame(minHeight: 30)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .top) { Rectangle().fill(AppTheme.hairline).frame(height: 1) }
+      }
+    }
+    .textSelection(.enabled)
+  }
+  private func load() async {
+    guard step.diff == nil, fetched == nil, let reference = step.diffRef, let rpc else { return }
+    if let page = try? await Attachments.toolOutput(reference, rpc: rpc) {
+      let decoded = TimelineDiff.decode(page.text)
+      if let resize { resize { fetched = decoded } } else { fetched = decoded }
+    }
+  }
+}
+
+/// One line of a diff: a sign column and the text, tinted when it changed.
+private struct DiffRow: View {
+  let line: DiffLine
+  var body: some View {
+    HStack(alignment: .top, spacing: 8) {
+      Text(marker).foregroundStyle(tint).frame(width: 8)
+      Text(line.text.isEmpty ? " " : line.text)
+        .foregroundStyle(line.kind == .addition || line.kind == .deletion ? .primary : .secondary)
+        .fixedSize(horizontal: false, vertical: true)
+      Spacer(minLength: 0)
+    }
+    .font(.system(size: 11.5, design: .monospaced))
+    .lineSpacing(1)
+    .padding(.horizontal, 10).padding(.vertical, 1.5)
+    .background(background.padding(.vertical, -0.5))
+  }
+  private var marker: String {
+    switch line.kind {
+    case .addition: "+"
+    case .deletion: "−"
+    case .header: "⋯"
+    default: " "
+    }
+  }
+  private var tint: Color {
+    switch line.kind {
+    case .addition: AppTheme.added
+    case .deletion: AppTheme.removed
+    default: .secondary
+    }
+  }
+  private var background: Color {
+    switch line.kind {
+    case .addition: AppTheme.added.opacity(0.1)
+    case .deletion: AppTheme.removed.opacity(0.09)
+    default: .clear
+    }
+  }
+}
+
+/// What a tool call did: the invocation, then its output or checklist, in one restrained card.
 private struct ToolDetailView: View {
   let step: TimelineStep
   let rpc: RPCClient?
@@ -551,7 +863,6 @@ private struct ToolDetailView: View {
   @State private var output: String?
   @State private var outputTotal: Int?
   @State private var outputError: String?
-  @State private var fetchedDiffs: [TimelineDiff]?
   @State private var showsAllOutput = false
   private let outputLines = 24
   var body: some View {
@@ -565,10 +876,10 @@ private struct ToolDetailView: View {
           .lineLimit(8)
           .fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(10)
+          .padding(.horizontal, 12).padding(.vertical, 9)
       }
       if let plan = step.plan {
-        ChatMarkdown(text: plan, size: .compact).padding(10)
+        ChatMarkdown(text: plan, size: .compact).padding(12)
       }
       if !step.todos.isEmpty {
         VStack(alignment: .leading, spacing: 6) {
@@ -578,44 +889,35 @@ private struct ToolDetailView: View {
                 systemName: todo.done
                   ? "checkmark.circle.fill" : todo.active ? "circle.dotted" : "circle"
               )
-              .foregroundStyle(todo.done ? Color.green : Color.secondary)
+              .foregroundStyle(todo.done ? AppTheme.added : Color.secondary)
               Text(todo.text).strikethrough(todo.done).foregroundStyle(
                 todo.done ? .secondary : .primary)
             }
             .font(.system(size: 13))
           }
         }
-        .padding(10)
+        .padding(12)
       }
       if let subagent = step.subagent, let tail = subagent.tail {
-        Text(tail).font(.system(size: 13)).foregroundStyle(.secondary).padding(10)
+        Text(tail).font(.system(size: 13)).foregroundStyle(.secondary).padding(12)
       }
-      ForEach(Array(diffs.enumerated()), id: \.offset) { index, diff in
-        if hasHeader || index > 0 { divider }
-        DiffPreview(diff: diff)
-      }
-      if !diffs.isEmpty || (step.diffRef != nil && fetchedDiffs == nil && rpc != nil) {
-        // An edit's diff says more than its "file updated" output.
-      } else if let result = step.result {
+      if let result = step.result {
         if hasHeader { divider }
-        ToolOutput(value: result.content["output"]).padding(10)
+        ToolOutput(value: result.content["output"]).padding(12)
       } else if let text = output ?? step.output?.string, !text.isEmpty {
         if hasHeader { divider }
         outputText(text)
       } else if let outputError {
         if hasHeader { divider }
-        Text(outputError).font(.system(size: 12)).foregroundStyle(.secondary).padding(10)
+        Text(outputError).font(.system(size: 12)).foregroundStyle(.secondary).padding(12)
       } else if step.outputRef != nil, rpc != nil {
         if hasHeader { divider }
-        ProgressView().controlSize(.small).padding(10)
+        ProgressView().controlSize(.small).padding(12)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(AppTheme.codeBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-    .overlay(
-      RoundedRectangle(cornerRadius: 12, style: .continuous)
-        .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1)
-    )
+    .background(AppTheme.codeBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    .padding(.bottom, 4)
     .task(id: step.id) { await load() }
   }
   /// The row already names the subject; commands and absolute paths repeat in full, unclipped.
@@ -629,11 +931,7 @@ private struct ToolDetailView: View {
   private var hasHeader: Bool {
     showsInvocation || step.plan != nil || !step.todos.isEmpty || step.subagent?.tail != nil
   }
-  private var diffs: [TimelineDiff] {
-    if let diff = step.diff { return [diff] }
-    return fetchedDiffs ?? []
-  }
-  private var divider: some View { Divider().opacity(0.7) }
+  private var divider: some View { Rectangle().fill(AppTheme.hairline).frame(height: 1) }
   private func outputText(_ text: String) -> some View {
     let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
     let clipped = !showsAllOutput && lines.count > outputLines
@@ -641,7 +939,8 @@ private struct ToolDetailView: View {
     return VStack(alignment: .leading, spacing: 6) {
       Text(shown)
         .font(.system(size: 12, design: .monospaced))
-        .foregroundStyle(step.failed ? Color.red.opacity(0.9) : Color.secondary)
+        .foregroundStyle(step.failed ? AppTheme.removed : Color.secondary)
+        .lineSpacing(1.5)
         .textSelection(.enabled)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -659,18 +958,12 @@ private struct ToolDetailView: View {
         .buttonStyle(.plain).disabled(!clipped)
       }
     }
-    .padding(10)
+    .padding(.horizontal, 12).padding(.vertical, 10)
   }
   private func load() async {
-    guard let rpc else { return }
-    if step.diff == nil, fetchedDiffs == nil, let reference = step.diffRef {
-      if let page = try? await Attachments.toolOutput(reference, rpc: rpc) {
-        let decoded = TimelineDiff.decode(page.text)
-        change { fetchedDiffs = decoded }
-      }
+    guard let rpc, step.result == nil, output == nil, let reference = step.outputRef else {
+      return
     }
-    guard step.result == nil, output == nil, diffs.isEmpty, let reference = step.outputRef
-    else { return }
     do {
       let page = try await Attachments.toolOutput(reference, rpc: rpc)
       change {
@@ -683,67 +976,5 @@ private struct ToolDetailView: View {
   }
   private func change(_ update: () -> Void) {
     if let resize { resize(update) } else { update() }
-  }
-}
-
-/// An edit's changed lines with a little context.
-private struct DiffPreview: View {
-  let diff: TimelineDiff
-  private let limit = 40
-  var body: some View {
-    let lines = diff.lines()
-    VStack(alignment: .leading, spacing: 0) {
-      ForEach(lines.prefix(limit)) { line in
-        HStack(alignment: .top, spacing: 6) {
-          Text(marker(line.kind)).foregroundStyle(color(line.kind)).frame(width: 10)
-          Text(line.text.isEmpty ? " " : line.text)
-            .foregroundStyle(line.kind == .context || line.kind == .header ? .secondary : .primary)
-            .fixedSize(horizontal: false, vertical: true)
-          Spacer(minLength: 0)
-        }
-        .font(.system(size: 12, design: .monospaced))
-        .padding(.horizontal, 10).padding(.vertical, 1)
-        .background(background(line.kind))
-      }
-      if lines.count > limit {
-        Text("\(lines.count - limit) more lines").font(.system(size: 12)).foregroundStyle(
-          .secondary
-        )
-        .padding(10)
-      }
-    }
-    .padding(.vertical, 6)
-    .textSelection(.enabled)
-  }
-  private func marker(_ kind: DiffLine.Kind) -> String {
-    switch kind {
-    case .addition: "+"
-    case .deletion: "−"
-    default: " "
-    }
-  }
-  private func color(_ kind: DiffLine.Kind) -> Color {
-    switch kind {
-    case .addition: .green
-    case .deletion: .red
-    default: .secondary
-    }
-  }
-  private func background(_ kind: DiffLine.Kind) -> Color {
-    switch kind {
-    case .addition: Color.green.opacity(0.1)
-    case .deletion: Color.red.opacity(0.1)
-    default: .clear
-    }
-  }
-}
-
-extension ToolPresentation {
-  /// The first line of some prose, for a collapsed preview.
-  static func oneLineSummary(_ text: String) -> String {
-    let line =
-      text.split(whereSeparator: \.isNewline).first.map(String.init)?
-      .trimmingCharacters(in: .whitespaces) ?? ""
-    return line.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "`", with: "")
   }
 }

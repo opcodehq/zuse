@@ -86,8 +86,18 @@ import ZuseCore
       UIColor(red: red / 255, green: green / 255, blue: blue / 255, alpha: 1)
     }
   #endif
-  /// Your messages in a chat.
+  /// Neutral fills: attachment tiles, pills.
   static let bubble = adaptive(light: rgb(234, 234, 230), dark: rgb(38, 38, 40))
+  /// Your messages in a chat: the brand green, deep enough for white text (4.5:1 or better).
+  static let userBubble = adaptive(light: rgb(82, 131, 4), dark: rgb(72, 116, 8))
+  /// Hairlines and quiet rules in the transcript.
+  static let hairline = adaptive(
+    light: rgb(23, 23, 22).withAlphaComponent(0.09),
+    dark: rgb(255, 255, 255).withAlphaComponent(0.09)
+  )
+  /// Line counts and diff gutters.
+  static let added = adaptive(light: rgb(58, 122, 0), dark: rgb(141, 201, 60))
+  static let removed = adaptive(light: rgb(196, 54, 44), dark: rgb(255, 120, 108))
   /// Code cards and expanded tool output.
   static let codeBackground = adaptive(light: rgb(241, 241, 238), dark: rgb(26, 26, 28))
   static let link = adaptive(light: rgb(0, 102, 214), dark: rgb(116, 172, 255))
@@ -286,7 +296,7 @@ struct ComposerSendGlyph: View {
     }
     .foregroundStyle(enabled ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
     .frame(width: 32, height: 32)
-    .background(enabled ? AppTheme.accent : Color.secondary.opacity(0.16), in: Circle())
+    .background(enabled ? AppTheme.userBubble : Color.secondary.opacity(0.16), in: Circle())
     .frame(width: 44, height: 44).contentShape(Rectangle())
   }
 }

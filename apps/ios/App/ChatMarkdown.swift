@@ -25,16 +25,19 @@ struct ChatMarkdown: View {
         } else {
           StructuredText(markdown: block.content, syntaxExtensions: [.math])
             .font(size.font)
-            .textual.lineSpacing(.fontScaled(size == .reply ? 0.3 : 0.2))
-            .textual.blockSpacing(.fontScaled(top: 0.5, bottom: 0.5))
-            .textual.listItemSpacing(.fontScaled(top: 0.2, bottom: 0.2))
+            // About 16 on 24 for replies: room to breathe without looking double-spaced.
+            .textual.lineSpacing(.fontScaled(size == .reply ? 0.36 : 0.26))
+            .textual.blockSpacing(.fontScaled(top: 0.55, bottom: 0.55))
+            .textual.listItemSpacing(.fontScaled(top: 0.18, bottom: 0.18))
+            .textual.unorderedListMarker(ChatListMarker())
             .textual.inlineStyle(
               InlineStyle()
                 .code(
-                  .monospaced, .fontScale(0.85),
+                  .monospaced, .fontScale(0.88),
                   .backgroundColor(
-                    DynamicColor(light: .black.opacity(0.05), dark: .white.opacity(0.09)))
+                    DynamicColor(light: .black.opacity(0.045), dark: .white.opacity(0.08)))
                 )
+                .strong(.fontWeight(.semibold))
                 .link(.foregroundColor(AppTheme.link))
             )
             .textual.headingStyle(ChatHeadingStyle())
@@ -49,74 +52,66 @@ struct ChatMarkdown: View {
   }
 }
 
-/// Headings sized for a chat column rather than a document page.
-private struct ChatHeadingStyle: StructuredText.HeadingStyle {
+/// A small, muted dot: lists read as rhythm, not as a column of heavy bullets.
+private struct ChatListMarker: StructuredText.UnorderedListMarker {
   func makeBody(configuration: Configuration) -> some View {
-    let scales: [CGFloat] = [1.3, 1.18, 1.08, 1, 1, 1]
-    configuration.label
-      .textual.fontScale(scales[min(configuration.headingLevel, 6) - 1])
-      .textual.blockSpacing(.fontScaled(top: 1.1, bottom: 0.45))
-      .fontWeight(.semibold)
+    Circle()
+      .fill(Color.secondary.opacity(configuration.indentationLevel > 1 ? 0.45 : 0.75))
+      .frame(width: 5, height: 5)
+      .textual.frame(minWidth: .fontScaled(1.1), alignment: .center)
   }
 }
 
-/// A rounded code card with its language and a copy button.
+/// Headings sized for a chat column rather than a document page, set in a calm medium weight.
+private struct ChatHeadingStyle: StructuredText.HeadingStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    let scales: [CGFloat] = [1.25, 1.15, 1.06, 1, 1, 0.94]
+    configuration.label
+      .textual.fontScale(scales[min(configuration.headingLevel, 6) - 1])
+      .textual.blockSpacing(.fontScaled(top: 1.0, bottom: 0.3))
+      .fontWeight(.medium)
+  }
+}
+
+/// A quiet code card: a tinted surface, the language and a copy button, nothing else.
 private struct ChatCodeBlockStyle: StructuredText.CodeBlockStyle {
   func makeBody(configuration: Configuration) -> some View {
     VStack(alignment: .leading, spacing: 0) {
       HStack(spacing: 6) {
         Text(configuration.languageHint?.lowercased() ?? "code")
-          .font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+          .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+          .foregroundStyle(.tertiary)
         Spacer(minLength: 8)
         CopyButton(label: "Copy code") { configuration.codeBlock.copyToPasteboard() }
       }
-      .padding(.leading, 12).padding(.trailing, 4).frame(height: 32)
-      Divider().opacity(0.6)
+      .padding(.leading, 12).padding(.trailing, 2).frame(height: 30)
       Overflow {
         configuration.label
-          .textual.lineSpacing(.fontScaled(0.3))
-          .textual.fontScale(0.84)
+          .textual.lineSpacing(.fontScaled(0.32))
+          .textual.fontScale(0.82)
           .fixedSize(horizontal: false, vertical: true)
           .monospaced()
-          .padding(.horizontal, 12).padding(.vertical, 10)
+          .padding(.horizontal, 12).padding(.bottom, 12)
       }
     }
-    .background(AppTheme.codeBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-    .overlay(
-      RoundedRectangle(cornerRadius: 12, style: .continuous)
-        .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1)
-    )
-    .textual.blockSpacing(.fontScaled(top: 0.6, bottom: 0.6))
+    .background(AppTheme.codeBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    .textual.blockSpacing(.fontScaled(top: 0.7, bottom: 0.7))
   }
 }
 
-/// Tables read as a quiet card: hairline rules and a bold header row.
+/// Tables stay light: a ruled header and hairlines between rows, no box or column lines.
 private struct ChatTableStyle: StructuredText.TableStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .textual.tableCellSpacing(horizontal: 1, vertical: 1)
-      .textual.blockSpacing(.fontScaled(top: 0.6, bottom: 0.6))
-      .textual.tableBackground { layout in
-        Canvas { context, _ in
-          if layout.numberOfRows > 0 {
-            let header = layout.rowBounds(0)
-            context.fill(Path(header.integral), with: .color(.primary.opacity(0.045)))
-          }
-        }
-      }
+      .textual.tableCellSpacing(horizontal: 0, vertical: 1)
+      .textual.blockSpacing(.fontScaled(top: 0.7, bottom: 0.7))
       .textual.tableOverlay { layout in
         Canvas { context, _ in
-          for divider in layout.dividers() {
-            context.fill(Path(divider), with: .color(.primary.opacity(0.1)))
+          for (index, divider) in layout.horizontalDividers().enumerated() {
+            context.fill(Path(divider), with: .color(.primary.opacity(index == 0 ? 0.16 : 0.08)))
           }
         }
       }
-      .padding(1)
-      .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-      .overlay(
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
-          .strokeBorder(Color.primary.opacity(0.1), lineWidth: 1)
-      )
   }
 }
 
@@ -124,8 +119,9 @@ private struct ChatTableCellStyle: StructuredText.TableCellStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
       .fontWeight(configuration.row == 0 ? .semibold : .regular)
-      .textual.fontScale(0.94)
-      .padding(.vertical, 7).padding(.horizontal, 11)
+      .textual.fontScale(0.92)
+      .padding(.vertical, 7)
+      .padding(.leading, configuration.column == 0 ? 0 : 10).padding(.trailing, 14)
   }
 }
 

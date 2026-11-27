@@ -43,10 +43,14 @@ final class NativeChatTests: XCTestCase {
     app.launch()
     let transcript = app.collectionViews["chat-transcript"]
     XCTAssertTrue(transcript.waitForExistence(timeout: 15))
-    // The latest turn folds its work behind one line: timing, then what it did.
+    // The latest turn folds its work behind one line saying what it did; how long it took
+    // closes the turn beside the reply's actions.
     let heading = app.buttons["tool-group-turn-2:t0:activity"]
     XCTAssertTrue(heading.waitForExistence(timeout: 10))
-    XCTAssertTrue(heading.label.hasPrefix("Worked for 21s · Ran 2 commands"))
+    XCTAssertTrue(heading.label.hasPrefix("Ran 2 commands · searched once"))
+    XCTAssertTrue(
+      app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked for 21s"))
+        .firstMatch.exists)
     XCTAssertFalse(app.buttons["activity-reply-2:x2"].exists)
     heading.tap()
     let run = app.buttons["activity-reply-2:x2"]
@@ -194,6 +198,31 @@ final class NativeChatTests: XCTestCase {
     XCTAssertTrue(resting.waitForExistence(timeout: 5))
     XCTAssertLessThanOrEqual(resting.frame.height, 48)
     XCTAssertEqual(input.value as? String, "Keep this draft")
+  }
+
+  /// Self-sized rows keep the height they measured at the old width; after the column changes
+  /// width they must measure again or they stack on top of each other.
+  @MainActor func testTranscriptRowsStayApartWhenTheColumnChangesWidth() throws {
+    let app = XCUIApplication()
+    app.launchArguments = ["--native-preview", "--conversation-preview", "--expand-activity"]
+    app.launch()
+    let transcript = app.collectionViews["chat-transcript"]
+    XCTAssertTrue(transcript.waitForExistence(timeout: 15))
+    addTeardownBlock { @MainActor in XCUIDevice.shared.orientation = .portrait }
+    for orientation in [UIDeviceOrientation.landscapeLeft, .portrait] {
+      XCUIDevice.shared.orientation = orientation
+      Thread.sleep(forTimeInterval: 1.5)
+      let frames = transcript.cells.allElementsBoundByIndex
+        .map(\.frame).filter { !$0.isEmpty }.sorted { $0.minY < $1.minY }
+      XCTAssertGreaterThan(frames.count, 1)
+      for (upper, lower) in zip(frames, frames.dropFirst()) {
+        XCTAssertLessThanOrEqual(upper.maxY, lower.minY + 1, "Rows overlap after rotating")
+      }
+    }
+    let screenshot = XCTAttachment(screenshot: app.screenshot())
+    screenshot.name = "Transcript after rotating"
+    screenshot.lifetime = .keepAlways
+    add(screenshot)
   }
 
   @MainActor func testLargeTranscriptOpensAtLatestMessageAndScrolls() throws {

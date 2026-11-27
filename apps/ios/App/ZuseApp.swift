@@ -295,6 +295,11 @@ struct WorkspaceView: View {
           try? await Task.sleep(for: .milliseconds(250))
         }
         if let session = workspace.sessions.first(where: { $0.id == id }) { openChat(session) }
+        // `--show-changes` then opens its changes, as the turn's changes card does.
+        if arguments.contains("--show-changes") {
+          try? await Task.sleep(for: .seconds(2))
+          showDiff = true
+        }
         return
       }
       guard arguments.contains("--zapper-detail-preview"),
@@ -641,7 +646,9 @@ struct WorkspaceView: View {
       }
     }
     .inspector(isPresented: $showDiff) {
-      if let session = workspace.selectedSession, let rpc = workspace.rpc {
+      // Built only while open: a hidden inspector still adds its toolbar to the chat's, which
+      // put a stray "Done" beside a live chat's buttons on iPad.
+      if showDiff, let session = workspace.selectedSession, let rpc = workspace.rpc {
         DiffView(rpc: rpc, session: session).inspectorColumnWidth(min: 320, ideal: 440, max: 680)
       }
     }
@@ -736,7 +743,9 @@ struct WorkspaceView: View {
     }
     .navigationSplitViewStyle(.balanced)
     .inspector(isPresented: $showDiff) {
-      if let session = workspace.selectedSession, let rpc = workspace.rpc {
+      // Built only while open: a hidden inspector still adds its toolbar to the chat's, which
+      // put a stray "Done" beside a live chat's buttons on iPad.
+      if showDiff, let session = workspace.selectedSession, let rpc = workspace.rpc {
         DiffView(rpc: rpc, session: session).inspectorColumnWidth(min: 320, ideal: 440, max: 680)
       }
     }
@@ -824,7 +833,9 @@ struct WorkspaceView: View {
         running: workspace.transcript.activeTurnID != nil,
         // Clear of the fade above the composer, so the latest line reads at full strength.
         bottomInset: composerHeight + 20,
-        respond: { message, text in try await workspace.respondToUI(message, text: text) })
+        respond: { message, text in try await workspace.respondToUI(message, text: text) },
+        openChanges: workspace.rpc != nil && workspace.connectionState == "Connected"
+          && !workspace.zappers.keepsChat(session.id) ? { showDiff = true } : nil)
       if !workspace.outbox.isEmpty {
         ScrollView(.horizontal) {
           HStack {

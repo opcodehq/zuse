@@ -77,4 +77,5 @@ entries (`App/PreviewConversation.swift`), so it renders through the same
 `--running-preview` for a turn in progress, `--expand-activity` and `--expand-steps` to open
 the work behind each turn, and `--transcript-top` to start at the first message.
 `--large-transcript` loads 10,000 messages in the older record shape. With a paired computer
-(`SIMCTL_CHILD_ZUSE_PAIR_LINK`), `--open-chat=<id>` opens one of its chats.
+(`SIMCTL_CHILD_ZUSE_PAIR_LINK`), `--open-chat=<id>` opens one of its chats and `--show-changes`
+then opens its changes.
