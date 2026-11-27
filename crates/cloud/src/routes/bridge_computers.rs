@@ -175,13 +175,14 @@ pub(super) async fn claim_primary(
     .fetch_optional(&pool)
     .await?
     .ok_or_else(|| ApiError::forbidden("computer_not_enrolled"))?;
-    let primary = primary_for(
+    let primary = claim_for(
         &pool,
         &owner,
         &input.workspace_id,
         &input.chat_id,
         &device,
         input.command_id.as_deref(),
+        input.synced_cwd.as_deref(),
     )
     .await?;
     Ok(Json(json!({"deviceId":primary})))
@@ -195,6 +196,10 @@ pub(super) struct PrimaryClaim {
     /// The admitted message this claim follows; omitted for a new chat.
     #[serde(default)]
     command_id: Option<String>,
+    /// The folder this chat is synced into on the claiming computer; omitted
+    /// when it isn't synced there.
+    #[serde(default)]
+    synced_cwd: Option<String>,
 }
 
 /// When the owner's message `command` was admitted in the chat (ms).
@@ -222,6 +227,7 @@ async fn admitted_at(
 /// earlier message never replaces a later one; a claim without a message
 /// (a new chat) only sets a default when there is none. The previous
 /// computer keeps its running work. Returns the chat's default after.
+#[cfg(test)]
 pub(super) async fn primary_for(
     pool: &sqlx::PgPool,
     owner: &str,
@@ -230,6 +236,37 @@ pub(super) async fn primary_for(
     device: &str,
     command: Option<&str>,
 ) -> Result<Option<String>, ApiError> {
+    claim_for(pool, owner, workspace, chat, device, command, None).await
+}
+
+/// A folder path on the owner's computer: absolute (Unix or Windows), at
+/// most 4 KiB, without control characters.
+fn valid_folder(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    let absolute = path.starts_with('/')
+        || (bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'\\' | b'/'));
+    absolute && path.len() <= 4096 && !path.chars().any(char::is_control)
+}
+
+/// [`primary_for`], also recording the folder the chat is synced into on
+/// that computer (`None`: not synced there). The folder is the default
+/// working directory of the chat's commands on that computer and is set
+/// whether or not this claim moves the default computer.
+pub(super) async fn claim_for(
+    pool: &sqlx::PgPool,
+    owner: &str,
+    workspace: &str,
+    chat: &str,
+    device: &str,
+    command: Option<&str>,
+    synced: Option<&str>,
+) -> Result<Option<String>, ApiError> {
+    if synced.is_some_and(|path| !valid_folder(path)) {
+        return Err(ApiError::bad_request("invalid_synced_folder"));
+    }
     let mut tx = pool.begin().await?;
     usable_chat(&mut tx, owner, workspace, chat, device).await?;
     let ordered_at = match command {
@@ -244,6 +281,18 @@ pub(super) async fn primary_for(
     .bind(workspace)
     .bind(chat)
     .bind(device)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE api_bridge_attachments SET synced_cwd=$5
+         WHERE owner_id=$1 AND workspace_id=$2 AND chat_id=$3 AND enrollment_id=$4
+           AND synced_cwd IS DISTINCT FROM $5",
+    )
+    .bind(owner)
+    .bind(workspace)
+    .bind(chat)
+    .bind(device)
+    .bind(synced)
     .execute(&mut *tx)
     .await?;
     sqlx::query(

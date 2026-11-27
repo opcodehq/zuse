@@ -939,6 +939,11 @@ fn read_enabled(profile: &Path) -> Option<Enabled> {
     serde_json::from_slice(&std::fs::read(enabled_path(profile)).ok()?).ok()
 }
 
+/// Whether this profile's connector is allowed for `account`.
+pub(crate) fn enabled_for(profile: &Path, account: &str) -> bool {
+    read_enabled(profile).is_some_and(|enabled| enabled.owner == account)
+}
+
 fn write_enabled(profile: &Path, enabled: &Enabled) -> Result<()> {
     let path = enabled_path(profile);
     let dir = path.parent().context("Invalid profile")?;
@@ -1156,6 +1161,32 @@ impl Connector {
         )
         .await
     }
+
+    /// Tell the cloud which folder a chat is synced into on this computer
+    /// (none once it isn't), so its commands here start there. Only an
+    /// enabled computer reports; it never changes the chat's default
+    /// computer.
+    pub async fn report_synced_checkout(
+        &self,
+        profile: &Path,
+        account: &crate::account::Account,
+        account_id: &str,
+        workspace: &str,
+        chat: &str,
+    ) -> Result<()> {
+        if !enabled_for(profile, account_id) {
+            return Ok(());
+        }
+        claim_primary_at(
+            &api_origin()?,
+            profile,
+            account,
+            account_id,
+            (workspace, chat, None),
+        )
+        .await
+        .map(|_| ())
+    }
 }
 
 async fn claim_primary_at(
@@ -1214,6 +1245,14 @@ async fn claim_primary_at(
     let mut body = json!({"workspaceId":workspace,"chatId":chat});
     if let Some(command) = &command {
         body["commandId"] = json!(command);
+    }
+    // The folder this chat is synced into here: its commands start there.
+    // Omitted (cleared) when it isn't synced.
+    #[cfg(unix)]
+    if let Some(path) =
+        crate::cloud::checkout_sync::synced_path(profile, account_id, &workspace, &chat)
+    {
+        body["syncedCwd"] = json!(path);
     }
     let claimed: Claimed = client
         .post(url)
