@@ -93,7 +93,8 @@ public struct TimelineStep: Identifiable, Equatable, Sendable {
     guard kind == .tool else { return false }
     if subagent?.status == .running { return true }
     if result != nil { return false }
-    return content["resolved"] == .bool(false) || (live && content["resolved"] == .null)
+    // An interrupted turn leaves its tool unresolved; only a live turn is still running it.
+    return live && (content["resolved"] == .bool(false) || content["resolved"] == .null)
   }
   public var failed: Bool {
     guard kind == .tool else { return false }
@@ -171,7 +172,7 @@ public struct TimelineStep: Identifiable, Equatable, Sendable {
       case "done": .done
       default:
         content["isError"].bool
-          ? .failed : (content["resolved"].bool || result != nil) ? .done : .running
+          ? .failed : (content["resolved"].bool || result != nil || !live) ? .done : .running
       }
     let tail = content["subagentTail"].string.map(ToolPresentation.oneLine)
     return TimelineSubagent(

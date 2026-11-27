@@ -44,7 +44,8 @@ struct AttachmentView: View {
     .disabled(loading || (rpc == nil && thumbnail == nil))
     .accessibilityLabel(attachment.name)
     .accessibilityHint(error ?? "Opens a preview")
-    .task(id: attachment.id) { await loadThumbnail() }
+    // Restarts when the connection appears, so a tile loaded while offline fills in later.
+    .task(id: "\(attachment.id)|\(rpc != nil)") { await loadThumbnail() }
     .sheet(item: $preview, onDismiss: cleanup) { file in
       NavigationStack {
         FilePreview(url: file.url).ignoresSafeArea(edges: .bottom)
@@ -99,9 +100,11 @@ struct AttachmentView: View {
     .background(AppTheme.bubble, in: Capsule())
     .overlay(Capsule().strokeBorder(Color.primary.opacity(0.06), lineWidth: 1))
   }
+  /// Host paths repeat across computers and chats, so the cache is keyed per chat too.
+  private var cacheKey: NSString { "\(sessionID)|\(attachment.id)" as NSString }
   private func loadThumbnail() async {
     guard attachment.isImage, thumbnail == nil else { return }
-    if let cached = ThumbnailCache.images.object(forKey: attachment.id as NSString) {
+    if let cached = ThumbnailCache.images.object(forKey: cacheKey) {
       thumbnail = cached
       return
     }
@@ -113,11 +116,12 @@ struct AttachmentView: View {
     #endif
     guard let rpc else { return }
     loading = true
+    error = nil
     defer { loading = false }
     do {
       let (data, _, _) = try await Attachments.read(attachment.id, sessionID: sessionID, rpc: rpc)
       guard let image = NativeImage(data: data) else { return }
-      ThumbnailCache.images.setObject(image, forKey: attachment.id as NSString)
+      ThumbnailCache.images.setObject(image, forKey: cacheKey)
       thumbnail = image
     } catch {
       self.error = error.localizedDescription
@@ -142,10 +146,16 @@ struct AttachmentView: View {
       let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
         UUID().uuidString)
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      // The name comes from the host: keep only its last component so it stays in `directory`.
+      let name = (attachment.name as NSString).lastPathComponent
+      let stem = (name as NSString).deletingPathExtension
+      let named = (name as NSString).pathExtension
+      let fileExtension =
+        UTType(mimeType: mime)?.preferredFilenameExtension
+        ?? (named.isEmpty ? "bin" : named)
       let file = directory.appendingPathComponent(
-        (attachment.name as NSString).deletingPathExtension.isEmpty
-          ? "Attachment" : (attachment.name as NSString).deletingPathExtension
-      ).appendingPathExtension(UTType(mimeType: mime)?.preferredFilenameExtension ?? "bin")
+        stem.isEmpty || stem == "." || stem == ".." ? "Attachment" : stem
+      ).appendingPathExtension(fileExtension)
       try data.write(to: file, options: [.atomic, .completeFileProtection])
       cleanup()
       temporaryDirectory = directory

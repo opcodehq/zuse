@@ -115,6 +115,24 @@ public enum Attachments {
     else { throw ClientError("The host sent an unreadable tool output.") }
     return ToolOutputPage(text: text, next: next, total: total, done: page["done"].bool)
   }
+
+  /// The whole blob (an edit's `.diff` JSON), following pages until the host reports `done`.
+  public static func toolBlob(
+    _ reference: String, maximumBytes: Int = 8 * 1024 * 1024, rpc: RPCClient
+  ) async throws -> String {
+    var text = ""
+    var offset = 0
+    while true {
+      let page = try await toolOutput(reference, offset: offset, rpc: rpc)
+      text += page.text
+      if page.done || page.next >= page.total { return text }
+      guard page.next > offset else { throw ClientError("The host stopped sending the change.") }
+      guard page.next <= maximumBytes else {
+        throw ClientError("This change is too large to show.")
+      }
+      offset = page.next
+    }
+  }
 }
 
 public struct ToolOutputPage: Equatable, Sendable {

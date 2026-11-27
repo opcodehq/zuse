@@ -10,6 +10,8 @@ final class AccountPictureStore {
   /// Circular, full-colour copies for the tab bar, which draws images at their own size.
   private var tabImages: [URL: NativeImage] = [:]
   private var loading: Set<URL> = []
+  /// Bumped by `clear()`, so a load that started before sign-out doesn't write its result.
+  private var generation = 0
   private static let maximumAge: TimeInterval = 7 * 24 * 60 * 60
 
   func load(_ url: URL) async {
@@ -36,11 +38,12 @@ final class AccountPictureStore {
         return
       }
     #endif
+    let started = generation
     var request = URLRequest(url: url)
     request.timeoutInterval = 20
     guard let (data, response) = try? await URLSession.shared.data(for: request),
       let status = (response as? HTTPURLResponse)?.statusCode, (200..<300).contains(status),
-      let image = NativeImage(data: data)
+      let image = NativeImage(data: data), generation == started
     else { return }
     images[url] = image
     tabImages[url] = nil
@@ -69,6 +72,7 @@ final class AccountPictureStore {
 
   /// Signing out forgets the picture along with the account.
   func clear() {
+    generation += 1
     images = [:]
     tabImages = [:]
     try? FileManager.default.removeItem(at: Self.directory)

@@ -769,13 +769,19 @@ private struct EditCard: View {
   /// The step was opened, so the whole change shows.
   var open: Bool
   @State private var fetched: [TimelineDiff]?
+  @State private var failed = false
   @State private var showsAll = false
   private let previewLines = 8
   var body: some View {
     let diffs = step.diff.map { [$0] } ?? fetched ?? []
     VStack(alignment: .leading, spacing: 0) {
       if diffs.isEmpty {
-        ProgressView().controlSize(.small).padding(12)
+        if failed || (step.diffRef == nil && step.diff == nil) || rpc == nil {
+          Text("Couldn't load the change").font(.system(size: 13))
+            .foregroundStyle(.secondary).padding(12)
+        } else {
+          ProgressView().controlSize(.small).padding(12)
+        }
       }
       ForEach(Array(diffs.enumerated()), id: \.offset) { index, diff in
         if index > 0 { Rectangle().fill(AppTheme.hairline).frame(height: 1) }
@@ -790,7 +796,8 @@ private struct EditCard: View {
     )
     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     .padding(.bottom, 4)
-    .task(id: step.id) { await load() }
+    // Restarts when the reference arrives, for steps opened while the edit was running.
+    .task(id: step.id + (step.diffRef ?? "")) { await load() }
   }
   private func lines(_ diff: TimelineDiff) -> some View {
     let all = diff.lines(context: 1)
@@ -820,9 +827,14 @@ private struct EditCard: View {
   }
   private func load() async {
     guard step.diff == nil, fetched == nil, let reference = step.diffRef, let rpc else { return }
-    if let page = try? await Attachments.toolOutput(reference, rpc: rpc) {
-      let decoded = TimelineDiff.decode(page.text)
+    failed = false
+    do {
+      let decoded = TimelineDiff.decode(try await Attachments.toolBlob(reference, rpc: rpc))
+      guard !decoded.isEmpty else { throw ClientError("The change was empty.") }
       if let resize { resize { fetched = decoded } } else { fetched = decoded }
+    } catch is CancellationError {
+    } catch {
+      if let resize { resize { failed = true } } else { failed = true }
     }
   }
 }
@@ -930,7 +942,7 @@ private struct ToolDetailView: View {
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(AppTheme.codeBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     .padding(.bottom, 4)
-    .task(id: step.id) { await load() }
+    .task(id: step.id + (step.outputRef ?? "")) { await load() }
   }
   /// The row already names the subject; commands and absolute paths repeat in full, unclipped.
   private var showsInvocation: Bool {

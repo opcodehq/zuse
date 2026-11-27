@@ -204,6 +204,18 @@ private func project(_ entries: [JSONValue], running: Bool = false) throws -> [T
   #expect(end.changes == [TimelineDiffStat(path: "src/a.rs", additions: 3, deletions: 1)])
 }
 
+@Test func interruptedTurnDoesNotLeaveItsToolRunning() throws {
+  let items = try project(
+    [
+      entry("u1", "user", [part("t", "text", ["text": .string("Test it")])]),
+      entry("a1", "assistant", [exec("cut", "swift test", resolved: false)], status: "done"),
+    ])
+  let work = try #require(activity(items))
+  #expect(!work.live)
+  #expect(work.steps.last?.running == false)
+  #expect(work.steps.last?.tool.label != "Running")
+}
+
 @Test func runningTurnStreamsTheReplyAndNamesTheCurrentStep() throws {
   let user = entry("u1", "user", [part("t", "text", ["text": .string("Test it")])])
   let waiting = try project([user], running: true)
