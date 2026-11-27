@@ -85,7 +85,7 @@ fn config(model: &ZapperModel, sandbox: Option<SandboxLevel>) -> Result<ChatConf
         sandbox: sandbox.unwrap_or(SandboxLevel::Auto),
     })
 }
-fn event_id(parts: &[&str]) -> String {
+pub(super) fn event_id(parts: &[&str]) -> String {
     format!("{:x}", Sha256::digest(parts.join("\0")))
 }
 
@@ -314,6 +314,27 @@ fn reconcile(
                     .unwrap_or_else(|| status.updated_at.to_rfc3339())
             };
             let report_id = event_id(&[&zapper.id, &worker.chat_id, kind, &marker]);
+            // A settled turn answers a person's routed comment only when that
+            // comment's message started it. Checked before the report is
+            // recorded, and again later if the transcript hadn't caught up.
+            if let (false, Some(turn)) = (interrupted, status.last_completed_turn.as_deref())
+                && kind == "settled"
+                && !issues::checked_turn(&report_id)
+                && let Some(message) = zappers.awaiting_answer(&zapper.id, &worker.chat_id, turn)?
+                && let Some(started) = docs
+                    .open(&worker.chat_id)
+                    .ok()
+                    .and_then(|doc| doc.doc_arc().read_entries().ok())
+                    .and_then(|entries| issues::answered_message(&entries, turn))
+            {
+                if started.as_deref() == Some(message.as_str()) {
+                    zappers.link_answer(&zapper.id, &worker.chat_id, &report_id, &message)?;
+                } else {
+                    // Another message started this turn, and a transcript
+                    // that has the turn can't change that: stop rereading.
+                    issues::remember_turn(&report_id);
+                }
+            }
             if zappers
                 .events(&zapper.id)?
                 .iter()
@@ -525,6 +546,22 @@ fn reconcile(
         );
         if !stopping && zapper.status != ZapperStatus::Active {
             continue;
+        }
+        if phase == "pending" {
+            let hold = issues::answer_hold(
+                &zappers
+                    .inner
+                    .db
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?
+                    as &Connection,
+                zapper,
+                &id,
+            )?;
+            if let Some(reason) = hold {
+                zappers.outbox_phase(&id, "cancelled", Some(&reason))?;
+                continue;
+            }
         }
         if phase == "pending" && !stopping {
             let busy = |chat: &str| {

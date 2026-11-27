@@ -961,7 +961,7 @@ pub struct ZapperIssuePullRequest {
     pub url: String,
     pub title: String,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ZapperIssueActivity {
     #[serde(default)]
@@ -974,6 +974,61 @@ pub struct ZapperIssueActivity {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub reply_to: Option<String>,
+    /// A person's comment routed straight to one thread, and how far it got.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub delivery: Option<ZapperIssueDelivery>,
+    /// The live thread a question was asked for; its answer goes there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub thread: Option<String>,
+    /// What an update changed, before and after. Older entries only have text.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<ZapperIssueChange>>", optional)]
+    pub changes: Vec<ZapperIssueChange>,
+}
+/// Where a person's comment was sent. `Sent` means the thread's queue
+/// accepted it, not that it was handled; only a reply correlated to that
+/// message makes it `Answered`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ZapperIssueDelivery {
+    pub chat_id: String,
+    pub state: ZapperIssueDeliveryState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub detail: Option<String>,
+    /// The thread's report whose turn this message started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reply: Option<String>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ZapperIssueDeliveryState {
+    /// Waiting for the thread to finish its turn, a free slot, or the Zapper to resume.
+    Queued,
+    /// Handing it over failed and will be tried again.
+    Retrying,
+    Sent,
+    Answered,
+    /// Stopped before it was sent.
+    Cancelled,
+    /// Kept on the issue without sending; `detail` says why.
+    Held,
+}
+/// One field an update changed. Values use wire names (`inProgress`,
+/// `user`, a thread's chat id) so clients can render them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ZapperIssueChange {
+    pub field: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub before: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub after: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]

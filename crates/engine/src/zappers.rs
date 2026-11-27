@@ -445,6 +445,7 @@ impl Zappers {
                 |r| r.get(0),
             )?;
             mark_queue(&db, &mut zapper)?;
+            issues::mark_deliveries(&db, &mut zapper)?;
             Ok(zapper)
         })
         .collect()
