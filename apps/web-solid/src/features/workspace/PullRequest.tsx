@@ -13,7 +13,7 @@ import { createEffect, createMemo, createSignal, For, Match, Show, Switch } from
 import { parsePatch } from "./diff";
 import { DiffView } from "./DiffView";
 import { Banner, DiffStat, Empty, PrStateIcon } from "./parts";
-import { errorText, liveSubscribe, readErrorText, workspace, type Target } from "./store";
+import { errorText, liveSubscribe, readErrorText, setWorkspace, workspace, type Target } from "./store";
 import type { ChangeRequestCheck, ChangeRequestComment, ChangeRequestDetail, ChangeRequestListItem, ChangeRequestPage, ChangeRequestUpdate, SourceControlFrame } from "./types";
 import { copyText, plural, timeAgo } from "./util";
 
@@ -37,7 +37,12 @@ export function PullRequest(props: { target: Target; active: boolean; url?: stri
   const [picked, setPicked] = createSignal<string | null>(null);
   // The branch's pull request shows by default; the list is one step back.
   const [browsing, setBrowsing] = createSignal(false);
-  const url = () => props.url ?? picked() ?? (browsing() ? null : own()?.url ?? null);
+  const focus = () => workspace.pullRequestFocus[props.target.chatId] ?? null;
+  const url = () => props.url ?? picked() ?? focus() ?? (browsing() ? null : own()?.url ?? null);
+  const clearFocus = () => {
+    const chatId = props.target.chatId;
+    if (focus()) setWorkspace(draft => { draft["pullRequestFocus"]![chatId] = null; });
+  };
 
   return (
     <div class="ws-surface-col ws-pr">
@@ -64,6 +69,7 @@ export function PullRequest(props: { target: Target; active: boolean; url?: stri
             onBack={() => {
               if(props.url) {props.onBack?.();return;}
               setPicked(null);
+              clearFocus();
               setBrowsing(true);
             }}
           />
@@ -224,6 +230,49 @@ type DetailTab = "overview" | "activity" | "files";
 const drafts = new Map<string, string>();
 /** Pull requests whose last comment post lost its receipt. */
 const uncertain = new Set<string>();
+
+/** Which chat this pull request is linked to: that chat hears its comments, reviews and check results. */
+function LinkRow(props: { target: Target; url: string }) {
+  const [busy, setBusy] = createSignal(false);
+  const [failed, setFailed] = createSignal<string | null>(null);
+  const owner = () => (workspace.ownedPullRequests[props.target.deviceId] ?? []).find((pr) => pr.url === props.url) ?? null;
+  const mine = () => owner()?.chatKey === `chat:${props.target.chatId}`;
+  const otherTitle = () => {
+    const id = owner()?.chatKey.slice(5);
+    return id ? state.chats[id]?.title || "another chat" : null;
+  };
+  const act = (method: string, params: Record<string, unknown>) => {
+    setBusy(true);
+    setFailed(null);
+    rpc
+      .call(method, { chatId: props.target.chatId, url: props.url, targetDeviceId: props.target.deviceId, ...params })
+      .catch((e) => setFailed(errorText(e)))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <div class="ws-pr-meta ws-small">
+      <Icon name="link" size={12} />
+      <Switch fallback={<span class="ws-muted">Not linked to a chat</span>}>
+        <Match when={mine()}>
+          <span title="Comments, reviews and check results on this pull request come to this chat.">Linked to this chat</span>
+        </Match>
+        <Match when={owner()}>
+          <span class="ws-muted ws-truncate">Linked to {otherTitle()}</span>
+        </Match>
+      </Switch>
+      <div class="ws-grow" />
+      <Show
+        when={mine()}
+        fallback={<Button size="sm" variant="ghost" disabled={busy()} onClick={() => act(M.CLAIM_PULL_REQUEST, { source: "manual" })}>{owner() ? "Link here instead" : "Link to this chat"}</Button>}
+      >
+        <Button size="sm" variant="ghost" disabled={busy()} onClick={() => act(M.RELEASE_PULL_REQUEST, {})}>Unlink</Button>
+      </Show>
+      <Show when={failed()}>
+        <span class="ws-danger ws-truncate" title={failed() ?? undefined}>{failed()}</span>
+      </Show>
+    </div>
+  );
+}
 
 function PullRequestDetail(props: { target: Target; url: string; own: boolean; onBack: () => void }) {
   const [detail, setDetail] = createSignal<ChangeRequestDetail | null>(null);
@@ -441,6 +490,7 @@ function PullRequestDetail(props: { target: Target; url: string; own: boolean; o
                   <span class="ws-chip">This branch</span>
                 </Show>
               </div>
+              <LinkRow target={props.target} url={props.url} />
               <div class="ws-pr-meta ws-small">
                 <DiffStat additions={d().additions} deletions={d().deletions} />
                 <span class="ws-faint">· {plural(d().files.length, "file")}</span>

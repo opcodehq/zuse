@@ -195,6 +195,21 @@ export interface ChangeRequestSummary {
   reviewDecision?: string;
 }
 
+/** A pull request a chat owns: it receives the pull request's comments, reviews and check results. */
+export interface OwnedPullRequest {
+  chatKey: string;
+  repository: string;
+  number: number;
+  url: string;
+  title: string;
+  state: "open" | "closed" | "merged";
+  draft?: boolean;
+  headRef?: string | null;
+  claimedBy: "created" | "pushed" | "manual" | "branch";
+  claimedAt: number;
+  checks?: "failed" | "passed" | null;
+}
+
 export interface CheckoutChangeRequestStatus {
   error?: string | null;
   checkoutId: string;

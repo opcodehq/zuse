@@ -35,6 +35,7 @@ pub mod plugin_mentions;
 pub mod plugin_tools;
 pub mod plugins;
 pub mod pr_watch;
+pub mod pull_request_links;
 pub mod presentation;
 pub mod preview;
 pub mod project_creation;

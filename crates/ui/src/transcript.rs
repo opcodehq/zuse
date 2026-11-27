@@ -1430,8 +1430,10 @@ fn zapper_full_prompt(
     raw: &str,
 ) -> Option<SharedString> {
     match source {
-        Some(source @ zuse_protocol::slack::MessageSource::Zapper { typed: false, .. })
-            if !raw.trim().is_empty() && raw.trim() != source.text().trim() =>
+        Some(
+            source @ (zuse_protocol::slack::MessageSource::Zapper { typed: false, .. }
+            | zuse_protocol::slack::MessageSource::GitHub { .. }),
+        ) if !raw.trim().is_empty() && raw.trim() != source.text().trim() =>
         {
             Some(raw.to_owned().into())
         }

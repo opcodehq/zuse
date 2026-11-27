@@ -95,6 +95,7 @@ pub mod rpc;
 pub mod run_journal;
 mod secret_broker;
 pub mod sessions;
+pub mod pull_request_links;
 pub mod slack_links;
 pub mod source_control;
 mod source_control_refresh;
@@ -205,6 +206,7 @@ pub struct EngineCore {
     _zapper_supervisor: Option<zappers::ZapperSupervisor>,
     _memory_watchdog: Option<memory_watchdog::MemoryWatchdog>,
     slack_links: slack_links::SlackLinks,
+    pull_request_links: pull_request_links::PullRequestLinks,
     pub account: account::Account,
     pub managed_access: managed_access::AccountClient,
     pub managed_host: managed_access::host::Owner,
@@ -584,6 +586,13 @@ impl EngineCore {
             workspace.clone(),
             doc_host.clone(),
         );
+        let pull_request_links = pull_request_links::PullRequestLinks::new(
+            profile.store_root(),
+            workspace.clone(),
+            doc_host.clone(),
+            sessions.clone(),
+            pr_watches.clone(),
+        );
         let slack_links = slack_links::SlackLinks::new(
             profile.store_root(),
             zappers.clone(),
@@ -602,6 +611,7 @@ impl EngineCore {
             _zapper_supervisor: zapper_supervisor,
             _memory_watchdog: memory_watchdog,
             slack_links,
+            pull_request_links,
             zappers,
             harness_models,
             model_connections,
@@ -657,6 +667,10 @@ impl EngineCore {
             if let Some(old) = task.take() {
                 old.abort();
             }
+            self.pull_request_links.attach(
+                cloud::identity::CloudIdentity::workspace(auth.clone())
+                    .with_account(Some(self.account.clone())),
+            );
             *task = Some(cloud::start_mirror_reconciliation(
                 cloud::identity::CloudIdentity::workspace(auth.clone())
                     .with_account(Some(self.account.clone())),
@@ -807,6 +821,7 @@ impl EngineCore {
         .with_managed_host(self.managed_host.control())
         .with_auth(self.auth())
         .with_slack_links(self.slack_links.clone())
+        .with_pull_request_links(self.pull_request_links.clone())
         .with_previews(self.previews.clone())
         .with_harness_updates(self.harness_updates.clone());
         if let Some(links) = self.links() {
@@ -855,6 +870,7 @@ impl EngineCore {
         self.plugins.shutdown_computer_bridge().await;
         self.account.retire();
         self.slack_links.shutdown().await;
+        self.pull_request_links.shutdown().await;
         self.project_creation.shutdown().await;
         let reconcile = self
             .cloud_mirror_reconcile

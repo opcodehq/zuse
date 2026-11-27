@@ -11,6 +11,7 @@ mod bridge_tests;
 #[cfg(test)]
 mod github_browser_policy_test;
 mod github_organizations;
+mod github_pull_request_links;
 mod recreations;
 mod task_commands;
 use crate::{
@@ -437,6 +438,7 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
             "/v1/cloud/github/remove",
             post(github_remove).layer(DefaultBodyLimit::max(4096)),
         )
+        .merge(github_pull_request_links::routes())
         .route(
             "/v1/cloud/github/pull-requests",
             post(github_pull_request).layer(DefaultBodyLimit::max(70 * 1024)),

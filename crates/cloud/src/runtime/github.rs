@@ -196,6 +196,7 @@ mod deadline_tests {
         );
         let grant = crate::github::native::ScopedGitCredential {
             github_user_id: 42,
+            installation_id: 7,
             token: zeroize::Zeroizing::new("test-scoped-token".into()),
             authority_expires_at: 3_600_000,
             provider_expires_at: 28_800_000,

@@ -8,7 +8,7 @@ import { state } from "@/core/store";
 import { errorText } from "@/core/util";
 import { setView, view, type RightPanel } from "@/core/view";
 import { createEffect, createMemo, createRoot, createStore, reconcile, snapshot as snapshotStore, untrack } from "solid-js";
-import type { CheckoutChangeRequestStatus, CheckoutDiff, GitWorkspace, PreviewSnapshot, SourceControlFrame, } from "./types";
+import type { CheckoutChangeRequestStatus, CheckoutDiff, GitWorkspace, OwnedPullRequest, PreviewSnapshot, SourceControlFrame, } from "./types";
 
 export interface Target {
   chatId: string;
@@ -88,6 +88,10 @@ export interface GitState {
 interface WorkspaceData {
   diffStats: Record<string, DiffStat>;
   changeRequests: Record<string, CheckoutChangeRequestStatus | null>;
+  /** Pull requests owned by chats, per hosting device. */
+  ownedPullRequests: Record<string, OwnedPullRequest[]>;
+  /** The pull request the panel shows for a chat, when one was picked elsewhere. */
+  pullRequestFocus: Record<string, string | null>;
   git: Record<string, GitState>;
   previews: Record<string, PreviewSnapshot & { failed?: string | null }>;
   /** The checkout's current branch per chat; chat rows keep the branch they started on. */
@@ -101,6 +105,8 @@ interface WorkspaceData {
 export const [workspace, setWorkspace] = createStore<WorkspaceData>({
   diffStats: {},
   changeRequests: {},
+  ownedPullRequests: {},
+  pullRequestFocus: {},
   git: {},
   previews: {},
   branches: {},
@@ -171,6 +177,18 @@ function applyDiffFrame(value: unknown) {
       });
     }
   })();
+}
+
+/** Pull requests `chatId` owns, newest claim first. */
+export function ownedPullRequests(chatId: string, deviceId: string | null | undefined): OwnedPullRequest[] {
+  if (!deviceId) return [];
+  return (workspace.ownedPullRequests[deviceId] ?? []).filter((pr) => pr.chatKey === `chat:${chatId}`);
+}
+
+/** Show one pull request in a chat's pull request panel. */
+export function openPullRequest(chatId: string, url: string) {
+  setWorkspace(draft => { draft["pullRequestFocus"]![chatId] = url; });
+  openPanel("pullRequest");
 }
 
 /** Open a surface in the right panel, adding its tab when needed. */
@@ -248,6 +266,38 @@ createRoot(() => {
             (status) => setWorkspace(draft => { { const next = status; if (draft["changeRequests"]![chatId] == null) draft["changeRequests"]![chatId] = next; else reconcile(next)(draft["changeRequests"]![chatId]); } }),
           )
         : undefined,
+  );
+
+  // Pull requests the chat's host says its chats own, as they change.
+  keyedWatch(
+    () => [selectedTarget()?.deviceId ?? null, state.epoch, connected()] as const,
+    ([deviceId, , live]) =>
+      deviceId && live
+        ? liveSubscribe<OwnedPullRequest[]>(
+            M.WATCH_PULL_REQUEST_LINKS,
+            { targetDeviceId: deviceId },
+            (owned) => setWorkspace(draft => { draft["ownedPullRequests"]![deviceId] = owned; }),
+          )
+        : undefined,
+  );
+
+  // A branch's pull request nobody owns becomes this chat's, so its review
+  // comments and check results reach it. Never takes one from another chat.
+  const claimed = new Set<string>();
+  createEffect(
+    () => {
+      const t = selectedTarget();
+      const pr = t ? workspace.changeRequests[t.chatId]?.changeRequest : null;
+      const owned = t ? workspace.ownedPullRequests[t.deviceId] : undefined;
+      return t && !t.archived && pr?.url && owned && pr.state === "open" ? { chatId: t.chatId, deviceId: t.deviceId, url: pr.url, owned } : null;
+    },
+    (next) => {
+      if (!next || next.owned.some((o) => o.url === next.url)) return;
+      const key = `${next.chatId}\n${next.url}`;
+      if (claimed.has(key)) return;
+      claimed.add(key);
+      rpc.call(M.CLAIM_PULL_REQUEST, { chatId: next.chatId, url: next.url, source: "branch", targetDeviceId: next.deviceId }).catch(() => {});
+    },
   );
 
   // The top bar's branch follows checkouts and switches made elsewhere: re-read when the diff changes.

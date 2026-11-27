@@ -10,7 +10,7 @@ import { Icon } from "@/ui/Icon";
 import { DitherRing } from "@/ui/loaders";
 import { createMemo, createSignal, For, lazy, onCleanup, Show } from "solid-js";
 import { DiffStat, PrStateIcon } from "./parts";
-import { diffStatFor, openPanel, selectedTarget, targetMemoOptions, workspace } from "./store";
+import { diffStatFor, openPanel, openPullRequest, ownedPullRequests, selectedTarget, targetMemoOptions, workspace } from "./store";
 import type { BackgroundTask } from "./types";
 
 // The project's run actions, as desktop's card ends with them; loaded with the first open card.
@@ -39,6 +39,8 @@ export function SessionInfo(props: { onClose: () => void }) {
         const online = () => t().local || deviceOnline(t().deviceId);
         const stat = () => diffStatFor(t().chatId);
         const pr = () => workspace.changeRequests[t().chatId]?.changeRequest ?? null;
+        // Pull requests this chat is linked to, besides its branch's own.
+        const linked = () => ownedPullRequests(t().chatId, t().deviceId).filter((o) => o.url !== pr()?.url);
         const worktree = () => !!t().space && !!t().cwd && t().cwd !== t().space!.path;
         const background = () =>
           ((state.sessions[t().chatId]?.backgroundTasks as BackgroundTask[] | undefined) ?? []).filter((task) => !task.endedAt && task.kind !== "agent");
@@ -95,6 +97,19 @@ export function SessionInfo(props: { onClose: () => void }) {
                 </button>
               )}
             </Show>
+            <For each={linked()}>
+              {(owned) => (
+                <button type="button" class="ws-summary-row ws-summary-action" title={owned.url} onClick={() => { props.onClose(); openPullRequest(t().chatId, owned.url); }}>
+                  <span class="ws-summary-icon"><PrStateIcon state={owned.state} draft={!!owned.draft} /></span>
+                  <span class="ws-truncate ws-grow">
+                    {owned.repository.split("/")[1]}#{owned.number} {owned.title}
+                  </span>
+                  <Show when={owned.checks === "failed"}>
+                    <span class="ws-summary-meta"><span class="ws-dot" data-tone="danger" role="img" aria-label="Checks failing" /></span>
+                  </Show>
+                </button>
+              )}
+            </For>
             {/* What runs for it, under a rule apart from the workspace it runs in. */}
             <Show when={background().length}>
               <div class="ws-fade-rule" />

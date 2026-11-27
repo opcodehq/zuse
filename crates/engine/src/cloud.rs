@@ -616,6 +616,10 @@ impl CloudApi {
                     }
                 );
             }
+            if path.get(2) == Some(&"github") && path.get(3) == Some(&"pull-requests") {
+                let error: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+                anyhow::bail!("{}", pull_request_link_error(error["error"].as_str(), status.as_u16()));
+            }
             if path
                 .get(2)
                 .is_some_and(|p| matches!(*p, "launch-assets" | "workspaces"))
@@ -2166,6 +2170,66 @@ pub(crate) async fn slack_link_request(
     api.request_scoped_verb(&token, path, body, None, query, verb)
         .await
 }
+/// Shown when there is no open pull request to claim for a pushed branch.
+pub(crate) const NO_PULL_REQUEST: &str = "This branch has no open pull request.";
+
+fn pull_request_link_error(code: Option<&str>, status: u16) -> &'static str {
+    match code {
+        Some("pull_request_not_found") => NO_PULL_REQUEST,
+        Some("pull_request_not_owned") => "This chat isn't linked to that pull request.",
+        Some("invalid_pull_request_link") => "That isn't a pull request this chat can link.",
+        Some("github_repository_access_denied" | "github_repository_not_selected" | "github_installation_changed") => {
+            "Zuse's GitHub app can't see that repository. Add it to the app's installation, then try again."
+        }
+        Some("github_reconnect_required" | "github_user_reconnect_required" | "github_user_connection_required") => {
+            "Reconnect GitHub in Settings → Cloud to link pull requests."
+        }
+        Some("github_native_disabled" | "pull_request_links_unavailable") => {
+            "Linking pull requests isn't available on this cloud service yet."
+        }
+        _ if status == 404 => "Linking pull requests isn't available on this cloud service yet.",
+        _ => "Pull request links are unavailable right now. Try again.",
+    }
+}
+
+/// Pull request ownership requests, scoped like the account feed so its
+/// `pull-request` hints and these reads concern the same account.
+pub(crate) async fn pull_request_link_request(
+    auth: &Auth,
+    verb: reqwest::Method,
+    path: &[&str],
+    body: Option<Value>,
+) -> Result<Value> {
+    let api = CloudApi::shared()?;
+    ensure!(
+        (auth.workos_enabled() || api.loopback) && auth.user_id().is_some(),
+        "Sign in to Zuse Cloud to link pull requests."
+    );
+    let token = auth.access_token().await.map_err(|_| {
+        anyhow::anyhow!("Could not refresh your Cloud session. Check your connection or reconnect in Settings → General.")
+    })?;
+    let organization = auth.state().org_id().map(str::to_owned);
+    api.request_scoped_verb(&token, path, body, organization.as_deref(), &[], verb)
+        .await
+}
+
+/// The shared account event socket: invalidation frames, and whether it is
+/// connected (readers poll only while it is not).
+pub(crate) struct AccountFeed {
+    _feed: Arc<events::Feed>,
+    pub(crate) frames: tokio::sync::broadcast::Receiver<Value>,
+    pub(crate) live: tokio::sync::watch::Receiver<bool>,
+}
+pub(crate) fn account_feed(auth: &Auth) -> Result<AccountFeed> {
+    let api = CloudApi::shared()?;
+    let (feed, frames) = api.account_events.subscribe(api.clone(), auth.clone())?;
+    Ok(AccountFeed {
+        live: feed.live(),
+        frames,
+        _feed: feed,
+    })
+}
+
 pub async fn handle(auth: &Auth, method: &str, params: Value) -> Result<Value> {
     let api = CloudApi::shared()?;
     if matches!(
