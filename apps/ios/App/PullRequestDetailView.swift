@@ -100,7 +100,7 @@ struct PullRequestDetailView: View {
             PullRequestFilesView(model: model)
           }
         }
-        .frame(maxWidth: 760).frame(maxWidth: .infinity)
+        .frame(maxWidth: tab == .files ? 1200 : 760).frame(maxWidth: .infinity)
         .padding(.bottom, barHeight + 24)
       }
       .scrollDismissesKeyboard(.interactively)

@@ -8,7 +8,7 @@ final class NativeMacTests: XCTestCase {
     let composer = app.descendants(matching: .any).matching(identifier: "chat-composer").firstMatch
     XCTAssertTrue(composer.waitForExistence(timeout: 20))
     XCTAssertFalse(app.buttons["Send message"].isEnabled)
-    // Settings live in the More tab.
+    // Command-comma opens Settings.
     app.typeKey(",", modifierFlags: .command)
     XCTAssertTrue(app.staticTexts["Appearance"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.staticTexts["Sign in"].exists)
@@ -24,7 +24,7 @@ final class NativeMacTests: XCTestCase {
     app.launch()
     let transcript = app.tables["chat-transcript"]
     XCTAssertTrue(transcript.waitForExistence(timeout: 15))
-    let last = transcript.rows.element(boundBy: 9_999)
+    let last = transcript.tableRows.element(boundBy: 9_999)
     XCTAssertTrue(last.waitForExistence(timeout: 10))
     XCTAssertTrue(last.isHittable, "The transcript must open at its latest message")
     XCTAssertTrue(last.staticTexts["Review the changes for task 9999."].exists)

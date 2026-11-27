@@ -51,14 +51,17 @@ struct ZapperNavigator<Chat: View>: View {
   /// Selects a conversation before its transcript is shown.
   let select: (SessionRow) -> Void
   let close: () -> Void
+  /// Dresses each page pushed on the stack, like the wide layout's overview inspector.
+  var page: ((AnyView) -> AnyView)?
   @ViewBuilder let chat: (SessionRow) -> Chat
   private var store: ZapperStore { workspace.zappers }
   var body: some View {
     NavigationStack(path: $path) {
       root
         .navigationDestination(for: ZapperRoute.self) { route in
-          ZapperDestination(
-            workspace: workspace, route: route, push: push, close: close, chat: chat)
+          dressed(
+            ZapperDestination(
+              workspace: workspace, route: route, push: push, close: close, chat: chat))
         }
     }
     .onChange(of: path) { _, path in selectVisibleChat(path) }
@@ -73,6 +76,9 @@ struct ZapperNavigator<Chat: View>: View {
       // Still loading, or removed: the overview explains either.
       ZapperDetailView(workspace: workspace, zapperID: zapperID, push: push, close: close)
     }
+  }
+  @ViewBuilder private func dressed(_ content: some View) -> some View {
+    if let page { page(AnyView(content)) } else { content }
   }
   /// The coordinator chat, titled with the Zapper's name.
   private func coordinator(_ zapper: Zapper) -> SessionRow {
@@ -108,6 +114,9 @@ struct ZapperDetailView: View {
   let zapperID: String
   let push: (ZapperRoute) -> Void
   let close: () -> Void
+  /// Beside the conversation, as the wide layout's inspector: the page leaves the header's
+  /// title and actions to the conversation, which already has them.
+  var sidePanel = false
   @State private var section: ZapperSection = .overview
   @State private var events: [ZapperEvent] = []
   @State private var files: [ZapperFile] = []
@@ -183,11 +192,7 @@ struct ZapperDetailView: View {
       }
     }
     .zapperList()
-    .navigationTitle(zapper.config.name)
-    .compactNavigationTitle()
-    .toolbar {
-      ToolbarItem(placement: .primaryAction) { manageMenu(zapper) }
-    }
+    .modifier(PageHeader(title: zapper.config.name, enabled: !sidePanel) { manageMenu(zapper) })
     .task(id: "\(zapper.id)|\(zapper.revision)|\(zapper.activityRevision)") {
       await reload(zapper.id)
     }
@@ -741,6 +746,25 @@ struct ZapperDetailView: View {
         section = chosen
       }
     #endif
+  }
+}
+
+/// A page's title and trailing actions, left off where another page owns the header.
+private struct PageHeader<Actions: View>: ViewModifier {
+  let title: String
+  let enabled: Bool
+  @ViewBuilder let actions: Actions
+  func body(content: Content) -> some View {
+    if enabled {
+      content
+        .navigationTitle(title)
+        .compactNavigationTitle()
+        .toolbar {
+          ToolbarItem(placement: .primaryAction) { actions }
+        }
+    } else {
+      content
+    }
   }
 }
 

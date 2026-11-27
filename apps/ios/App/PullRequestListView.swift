@@ -112,6 +112,8 @@ import ZuseCore
 
 struct PullRequestListView: View {
   let store: PullRequestStore
+  /// The pull request open beside the list, highlighted in it.
+  var selectedURL: String?
   let open: (PullRequestLink) -> Void
   @State private var model: PullRequestListModel
   @AppStorage("native.pullRequests.filter") private var filterRaw = PullRequestFilter.all.rawValue
@@ -124,8 +126,12 @@ struct PullRequestListView: View {
     #endif
   }
 
-  init(store: PullRequestStore, open: @escaping (PullRequestLink) -> Void) {
+  init(
+    store: PullRequestStore, selectedURL: String? = nil,
+    open: @escaping (PullRequestLink) -> Void
+  ) {
     self.store = store
+    self.selectedURL = selectedURL
     self.open = open
     _model = State(initialValue: PullRequestListModel(store: store))
   }
@@ -265,7 +271,8 @@ struct PullRequestListView: View {
             .onTapGesture { if let link = PullRequestLink(item.url) { open(link) } }
             .accessibilityAddTraits(.isButton)
             .listRowInsets(EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16))
-            .listRowSeparator(.hidden).listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .listRowBackground(SelectedRowBackground(selected: item.url == selectedURL))
             .contextMenu { rowMenu(item) }
           }
         } header: {

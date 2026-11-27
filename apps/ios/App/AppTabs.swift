@@ -68,6 +68,8 @@ struct SearchView: View {
   let openChat: (SessionRow) -> Void
   let openCloud: (CloudChat) -> Void
   let openIssue: (IssueEntry) -> Void
+  /// Off when the field lives elsewhere, like the wide layout's sidebar.
+  var searchable = true
   private var needle: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
 
   var body: some View {
@@ -151,8 +153,7 @@ struct SearchView: View {
     .listStyle(.plain)
     .scrollContentBackground(.hidden).background(AppTheme.surface)
     .navigationTitle("Search").compactNavigationTitle()
-    .searchable(text: $query, prompt: "Zappers, chats and issues")
-    .autocorrectionDisabled()
+    .modifier(SearchField(enabled: searchable, query: $query))
   }
 
   private func matches(_ text: String) -> Bool {
@@ -163,6 +164,19 @@ struct SearchView: View {
     Text(title).font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary)
       .chatsRow(minHeight: 34).padding(.top, 8)
       .accessibilityAddTraits(.isHeader)
+  }
+}
+
+private struct SearchField: ViewModifier {
+  let enabled: Bool
+  @Binding var query: String
+  func body(content: Content) -> some View {
+    if enabled {
+      content.searchable(text: $query, prompt: "Zappers, chats and issues")
+        .autocorrectionDisabled()
+    } else {
+      content
+    }
   }
 }
 

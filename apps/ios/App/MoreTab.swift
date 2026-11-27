@@ -9,6 +9,9 @@ enum MoreRoute: Hashable {
 /// The More tab: your account, everything across Zappers, your computers and the app's settings.
 struct MoreView: View {
   @Bindable var workspace: WorkspaceModel
+  /// The wide layout's settings list: its pages open beside it, and Issues and Computers
+  /// have their own places in the sidebar.
+  var selection: Binding<MoreRoute?>?
   @Environment(\.openURL) private var openURL
   @AppStorage("native.appearance") private var appearance = "system"
   private var version: String {
@@ -28,11 +31,24 @@ struct MoreView: View {
   }
 
   var body: some View {
-    List {
-      Section {
-        NavigationLink(value: MoreRoute.account) { accountRow }
-          .accessibilityIdentifier("more-account")
+    Group {
+      if let selection {
+        List(selection: selection) { rows }
+      } else {
+        List { rows }
       }
+    }
+    .settingsList()
+    .navigationTitle(selection == nil ? "More" : "Settings").compactNavigationTitle()
+    .disabled(workspace.clearingAccount)
+  }
+
+  @ViewBuilder private var rows: some View {
+    Section {
+      NavigationLink(value: MoreRoute.account) { accountRow }
+        .accessibilityIdentifier("more-account")
+    }
+    if selection == nil {
       Section {
         NavigationLink(value: MoreRoute.issues) {
           MoreRow(title: "Issues", icon: "circle.dashed") {
@@ -53,39 +69,36 @@ struct MoreView: View {
         }
         .accessibilityIdentifier("settings-computers")
       }
-      Section("Settings") {
-        NavigationLink(value: MoreRoute.appearance) {
-          MoreRow(title: "Appearance", icon: "circle.lefthalf.filled") {
-            Text(appearance.capitalized).foregroundStyle(.secondary)
-          }
-        }
-        NavigationLink(value: MoreRoute.archived) {
-          MoreRow(title: "Archived chats", icon: "archivebox") {
-            if archivedCount > 0 {
-              Text("\(archivedCount)").monospacedDigit().foregroundStyle(.secondary)
-            }
-          }
-        }
-        NavigationLink(value: MoreRoute.help) {
-          MoreRow(title: "Help", icon: "questionmark.circle")
-        }
-        Button {
-          openURL(supportAddress)
-        } label: {
-          MoreRow(title: "Contact support", icon: "envelope")
-        }
-        .buttonStyle(.plain)
-      }
-      Section {
-        MoreRow(title: "Version", icon: "info.circle") {
-          Text(version).foregroundStyle(.secondary).monospacedDigit()
-        }
-        .accessibilityElement(children: .combine)
-      }
     }
-    .settingsList()
-    .navigationTitle("More").compactNavigationTitle()
-    .disabled(workspace.clearingAccount)
+    Section("Settings") {
+      NavigationLink(value: MoreRoute.appearance) {
+        MoreRow(title: "Appearance", icon: "circle.lefthalf.filled") {
+          Text(appearance.capitalized).foregroundStyle(.secondary)
+        }
+      }
+      NavigationLink(value: MoreRoute.archived) {
+        MoreRow(title: "Archived chats", icon: "archivebox") {
+          if archivedCount > 0 {
+            Text("\(archivedCount)").monospacedDigit().foregroundStyle(.secondary)
+          }
+        }
+      }
+      NavigationLink(value: MoreRoute.help) {
+        MoreRow(title: "Help", icon: "questionmark.circle")
+      }
+      Button {
+        openURL(supportAddress)
+      } label: {
+        MoreRow(title: "Contact support", icon: "envelope")
+      }
+      .buttonStyle(.plain)
+    }
+    Section {
+      MoreRow(title: "Version", icon: "info.circle") {
+        Text(version).foregroundStyle(.secondary).monospacedDigit()
+      }
+      .accessibilityElement(children: .combine)
+    }
   }
 
   @ViewBuilder private var accountRow: some View {
