@@ -82,7 +82,8 @@ Debug builds read these to open a screen in a given state, for screenshots and m
 | `--loading-preview` | The same computer while its lists are still arriving |
 | `--new-zapper-preview`, `--new-zapper-starter=<0-2>` | New Zapper, blank or from a first-run idea |
 | `--new-zapper-submit=<model>` | Picks that model and presses Create (checks creating against a paired computer) |
-| `--show-sidebar` | The iPad sidebar over a narrow layout |
+| `--zapper-thread-preview` | The first Zapper's working thread, opened from the iPad Zappers list |
+| `--show-sidebar` | The Mac sidebar over a narrow window |
 | `--expand-activity`, `--expand-steps`, `--running-preview` | Open activity, open steps, a turn in progress |
 
 `SIMCTL_CHILD_ZUSE_PAIR_LINK=<invitation>` pairs with a computer at launch, and

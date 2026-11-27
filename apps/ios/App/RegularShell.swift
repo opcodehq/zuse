@@ -21,9 +21,10 @@ struct ShellActions {
   let addProject: () -> Void
 }
 
-/// The iPad and Mac layout: a sidebar of Zappers and lists, each list beside its selection.
+/// The Mac layout (and the widest iPhones in landscape): a sidebar of Zappers and lists, each
+/// list beside its selection.
 /// A Zapper opens on its conversation with its overview in a trailing inspector. Compact
-/// widths use the tab layout in `WorkspaceView` instead.
+/// widths use the tab layout in `WorkspaceView`, and iPad uses `TabletShell`.
 struct RegularShell<Chat: View, ChatsDetail: View>: View {
   @Bindable var workspace: WorkspaceModel
   @Binding var section: ShellSection?

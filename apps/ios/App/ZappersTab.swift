@@ -7,7 +7,16 @@ struct ZappersListView: View {
   let workspace: WorkspaceModel
   let open: (String) -> Void
   let connect: () -> Void
+  /// The wide list: each Zapper's threads fold out under it, with their issues and pull
+  /// requests. Picking a thread opens it inside its Zapper.
+  var openThread: ((String, ZapperWorker?) -> Void)? = nil
+  /// The Zapper open beside the list, highlighted in it.
+  var selectedZapper: String? = nil
+  /// The thread open beside the list, highlighted in place of its Zapper.
+  var selectedThread: String? = nil
   @State private var filter: ArchiveFilter = .active
+  /// Zappers folded or unfolded by hand, against their default (open while active).
+  @State private var toggled: Set<String> = []
   /// The open New Zapper sheet, with the idea it starts from when one was picked.
   @State private var creating: NewZapperRequest?
   private var store: ZapperStore { workspace.zappers }
@@ -31,18 +40,11 @@ struct ZappersListView: View {
           .zappersRow().padding(.vertical, 4)
       }
       ForEach(visible) { zapper in
-        let coordinator = store.chats[zapper.coordinatorChatId]
-        Button {
-          open(zapper.id)
-        } label: {
-          ZapperListRow(
-            zapper: zapper, working: store.workingCount(zapper),
-            busy: store.busy[zapper.id] != nil, preview: coordinator?.lastMessagePreview,
-            updated: coordinator?.lastMessageAt)
+        if openThread != nil {
+          outline(zapper)
+        } else {
+          row(zapper)
         }
-        .buttonStyle(.plain)
-        .zappersRow()
-        .contextMenu { rowActions(zapper) }
       }
       if visible.isEmpty {
         emptyState.zappersRow().padding(.top, firstRun ? 36 : 72).padding(.bottom, 24)
@@ -93,6 +95,79 @@ struct ZappersListView: View {
         }
       #endif
     }
+  }
+
+  private func row(_ zapper: Zapper) -> some View {
+    let coordinator = store.chats[zapper.coordinatorChatId]
+    return Button {
+      open(zapper.id)
+    } label: {
+      ZapperListRow(
+        zapper: zapper, working: store.workingCount(zapper),
+        busy: store.busy[zapper.id] != nil, preview: coordinator?.lastMessagePreview,
+        updated: coordinator?.lastMessageAt)
+    }
+    .buttonStyle(.plain)
+    .zappersRow()
+    .contextMenu { rowActions(zapper) }
+  }
+
+  /// Most threads a folded-out Zapper lists before pointing at its overview.
+  private static let threadLimit = 6
+
+  @ViewBuilder private func outline(_ zapper: Zapper) -> some View {
+    let coordinator = store.chats[zapper.coordinatorChatId]
+    let threads = store.orderedThreads(zapper)
+    let expanded = !threads.isEmpty && isExpanded(zapper)
+    Button {
+      open(zapper.id)
+    } label: {
+      ZapperOutlineRow(
+        zapper: zapper, working: store.workingCount(zapper),
+        busy: store.busy[zapper.id] != nil, preview: coordinator?.lastMessagePreview,
+        updated: coordinator?.lastMessageAt, threadCount: threads.count, expanded: expanded
+      ) {
+        withAnimation(.snappy(duration: 0.25)) { toggled.formSymmetricDifference([zapper.id]) }
+      }
+    }
+    .buttonStyle(.plain)
+    .zappersRow(
+      selected: selectedZapper == zapper.id
+        && !(expanded && threads.contains { $0.chatId == selectedThread })
+    )
+    .contextMenu { rowActions(zapper) }
+    .accessibilityIdentifier("zapper-row-\(zapper.id)")
+    if expanded {
+      ForEach(threads.prefix(Self.threadLimit)) { worker in
+        Button {
+          openThread?(zapper.id, worker)
+        } label: {
+          ZapperThreadOutlineRow(
+            zapper: zapper, worker: worker,
+            title: store.title(of: worker.chatId, fallback: worker.objective),
+            rank: store.rank(of: worker), updated: store.chats[worker.chatId]?.lastMessageAt,
+            known: workspace.pullRequests.known)
+        }
+        .buttonStyle(.plain)
+        .zappersRow(selected: selectedZapper == zapper.id && worker.chatId == selectedThread)
+      }
+      if threads.count > Self.threadLimit {
+        Button {
+          openThread?(zapper.id, nil)
+        } label: {
+          Text("See all \(threads.count) threads").font(.system(size: 14, weight: .medium))
+            .foregroundStyle(.secondary)
+            .padding(.leading, 56).frame(minHeight: 32)
+        }
+        .buttonStyle(.plain)
+        .zappersRow()
+      }
+    }
+  }
+
+  /// Active Zappers open with their threads showing; paused and archived ones stay folded.
+  private func isExpanded(_ zapper: Zapper) -> Bool {
+    (zapper.status == .active) != toggled.contains(zapper.id)
   }
 
   /// Nothing made yet and nothing in the way of making one.
@@ -248,8 +323,9 @@ struct ZapperListRow: View {
     .accessibilityLabel(accessibilityLabel)
     .accessibilityHint("Opens this Zapper’s conversation")
   }
+  private var detail: String { Self.detail(zapper: zapper, preview: preview, working: working) }
   /// Paused or archived first, then the latest message, then what is running.
-  private var detail: String {
+  static func detail(zapper: Zapper, preview: String?, working: Int) -> String {
     if zapper.status != .active { return zapper.status.label }
     let text = preview?.split(whereSeparator: \.isNewline).joined(separator: " ")
       .trimmingCharacters(in: .whitespaces)
@@ -269,9 +345,9 @@ struct ZapperListRow: View {
 
 extension View {
   /// Row metrics for the Zappers list.
-  func zappersRow() -> some View {
+  func zappersRow(selected: Bool = false) -> some View {
     listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-      .listRowSeparator(.hidden).listRowBackground(Color.clear)
+      .listRowSeparator(.hidden).listRowBackground(SelectedRowBackground(selected: selected))
   }
 }
 

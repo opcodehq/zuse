@@ -270,6 +270,11 @@
               doneCriteria: "Ten consecutive green runs on the Linux runners."),
             createdAt: now - 300 * minute, updatedAt: now - 4 * minute,
             threads: ["zapper-worker-sync"],
+            pullRequests: [
+              ZapperIssuePullRequest(
+                url: "https://github.com/zuse-dev/zuse/pull/421",
+                title: "Wait for the first snapshot before watching files")
+            ],
             activity: [
               activity("a1", "created", "Created the issue", ago: 300, actor: "zapper-release-2"),
               activity(

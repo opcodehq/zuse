@@ -88,6 +88,17 @@ extension Zapper {
     }
     return finished
   }
+  /// The issue a thread is working on: one it owns or is linked to, open issues before closed
+  /// ones, then the most recently updated.
+  public func issue(forThread chatId: String) -> ZapperIssue? {
+    issues.filter { issue in
+      if case .thread(let owner) = issue.details.owner, owner == chatId { return true }
+      return issue.threads.contains(chatId)
+    }.max { lhs, rhs in
+      lhs.details.status.terminal == rhs.details.status.terminal
+        ? lhs.updatedAt < rhs.updatedAt : lhs.details.status.terminal
+    }
+  }
   /// The queued worker that owns `issue`, if any; that issue reads as Queued.
   public func queuedWorker(for issue: ZapperIssue) -> ZapperWorker? {
     guard case .thread(let chatId) = issue.details.owner else { return nil }

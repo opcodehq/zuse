@@ -78,24 +78,36 @@ struct WorkspaceView: View {
   @State private var zapperInspector = false
   @State private var issuePath: [ZapperRoute] = []
   @State private var settingsPage: MoreRoute?
+  /// The iPad layout's orientation and whether pages open beside their list.
+  @State private var tabletLayout = TabletLayout()
   @Environment(\.scenePhase) private var scenePhase
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
   #endif
+  /// Lists push their pages over themselves: compact widths, and iPad in portrait.
   private var isCompact: Bool {
     #if os(iOS)
-      sizeClass == .compact
+      sizeClass == .compact || (usesTabletShell && !tabletLayout.split)
     #else
       false
     #endif
   }
-  /// iPad at full or wide split widths, and Mac, use the sidebar shell; compact widths use tabs.
+  /// Mac, and the widest iPhones in landscape, use the sidebar shell.
   private var usesRegularShell: Bool {
     #if os(iOS)
-      sizeClass == .regular
+      sizeClass == .regular && UIDevice.current.userInterfaceIdiom != .pad
     #else
       true
+    #endif
+  }
+  /// iPad at full or wide split widths: the tabs on a compact floating bar (`TabletShell`).
+  /// Narrow iPad windows use the iPhone tabs.
+  private var usesTabletShell: Bool {
+    #if os(iOS)
+      sizeClass == .regular && UIDevice.current.userInterfaceIdiom == .pad
+    #else
+      false
     #endif
   }
   private struct NewChatRoute: Equatable {
@@ -302,6 +314,14 @@ struct WorkspaceView: View {
           try? await Task.sleep(for: .seconds(2))
           showDiff = true
         }
+        return
+      }
+      // `--zapper-thread-preview` opens the first Zapper's working thread, as the wide
+      // Zappers list does.
+      if arguments.contains("--zapper-thread-preview"), let first = workspace.zappers.zappers.first,
+        let worker = workspace.zappers.orderedThreads(first).first
+      {
+        openThread(first.id, worker)
         return
       }
       guard arguments.contains("--zapper-detail-preview"),
@@ -609,7 +629,120 @@ struct WorkspaceView: View {
   }
 
   @ViewBuilder private var layout: some View {
-    if usesRegularShell { regularShell } else { tabs }
+    if usesRegularShell {
+      regularShell
+    } else if usesTabletShell {
+      tabletShell
+    } else {
+      tabs
+    }
+  }
+
+  /// iPad: the tabs on a compact floating bar. In landscape a list keeps its page beside it; in
+  /// portrait pages are pushed over the list and cover the bar, as on iPhone.
+  @ViewBuilder private var tabletShell: some View {
+    #if os(iOS)
+      TabletShell(
+        tab: $tab, layout: $tabletLayout, needsYou: needsYouCount, account: workspace.account,
+        showsPage: tabletShowsPage
+      ) {
+        switch tab {
+        case .zappers: zappersTab.environment(\.horizontalSizeClass, tabletColumns)
+        case .chats: chatsTab.environment(\.horizontalSizeClass, tabletColumns)
+        case .prs: tabletPullRequests
+        case .more: moreTab
+        case .search: searchTab
+        }
+      }
+      .onChange(of: tabletLayout.split) { _, split in
+        // Collapsing into one stack shows the list unless a page is open in it.
+        guard !split else { return }
+        if selection == nil && newChat == nil { chatsColumn = .sidebar }
+        if zapperRoute == nil { zappersColumn = .sidebar }
+      }
+    #endif
+  }
+
+  #if os(iOS)
+    /// Split views keep their columns side by side in landscape and collapse into one stack
+    /// in portrait.
+    private var tabletColumns: UserInterfaceSizeClass {
+      tabletLayout.split ? .regular : .compact
+    }
+  #endif
+
+  /// A page is pushed over the open tab's list.
+  private var tabletShowsPage: Bool {
+    switch tab {
+    case .zappers: return zapperRoute != nil && zappersColumn == .detail
+    case .chats: return (selection != nil || newChat != nil) && chatsColumn == .detail
+    case .prs: return !pullRequestPath.isEmpty
+    case .more: return !morePath.isEmpty
+    case .search: return !searchPath.isEmpty
+    }
+  }
+
+  /// Pull requests on iPad: in landscape the open one sits beside the list.
+  @ViewBuilder private var tabletPullRequests: some View {
+    let store = workspace.pullRequests
+    if tabletLayout.split && (store.available || store.preview) {
+      let open: PullRequestLink? = {
+        if case .detail(let link)? = pullRequestPath.first { return link }
+        return nil
+      }()
+      NavigationSplitView {
+        PullRequestListView(store: store, selectedURL: open?.url) { link in
+          pullRequestPath = [.detail(link)]
+        }
+        .navigationSplitViewColumnWidth(TabletLayout.listWidth)
+        .toolbar(removing: .sidebarToggle)
+      } detail: {
+        if let open {
+          PullRequestNavigator(
+            store: store, entry: .detail(open),
+            path: Binding(
+              get: { Array(pullRequestPath.dropFirst()) },
+              set: { pullRequestPath = [.detail(open)] + $0 })
+          )
+          .id(open.url)
+        } else {
+          emptyDetail(
+            "No pull request open", symbol: AppIcon.pullRequest,
+            detail: "Pick one to read its changes, checks and conversation.")
+        }
+      }
+      .navigationSplitViewStyle(.balanced)
+    } else {
+      PullRequestsTab(workspace: workspace, path: $pullRequestPath)
+    }
+  }
+
+  /// The thread on top of the open Zapper's stack, if any.
+  private var openZapperThread: String? {
+    for route in zapperPath.reversed() {
+      if case .chat(let session) = route { return session.id }
+    }
+    return nil
+  }
+
+  /// iPad's Zappers list folds out each Zapper's threads; iPhone's opens the Zapper.
+  private var tabletThreadOpener: ((String, ZapperWorker?) -> Void)? {
+    guard usesTabletShell else { return nil }
+    return { zapperID, worker in openThread(zapperID, worker) }
+  }
+
+  /// Opens a Zapper's thread from the wide Zappers list, or its overview for a thread that
+  /// hasn't started.
+  private func openThread(_ zapperID: String, _ worker: ZapperWorker?) {
+    openZapper(zapperID)
+    guard let worker, !worker.queued else {
+      zapperPath = [.overview(zapperID)]
+      return
+    }
+    let session = workspace.zappers.session(
+      for: worker.chatId, fallbackTitle: worker.objective,
+      known: workspace.sessions + workspace.archivedSessions)
+    zapperPath = [.chat(session)]
   }
 
   private var regularShell: some View {
@@ -720,10 +853,13 @@ struct WorkspaceView: View {
   private var zappersTab: some View {
     NavigationSplitView(preferredCompactColumn: $zappersColumn) {
       ZappersListView(
-        workspace: workspace, open: openZapper, connect: { connectionMethod = .add }
+        workspace: workspace, open: openZapper, connect: { connectionMethod = .add },
+        openThread: tabletThreadOpener,
+        selectedZapper: usesTabletShell && !isCompact ? zapperRoute : nil,
+        selectedThread: openZapperThread
       )
-      .disabled(workspace.clearingAccount)
-      .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 360)
+      .disabled(workspace.clearingAccount).clearsTabletBar()
+      .modifier(TabletListColumn(enabled: usesTabletShell, min: 260, ideal: 300, max: 360))
     } detail: {
       if let zapperID = zapperRoute {
         ZapperNavigator(
@@ -748,11 +884,14 @@ struct WorkspaceView: View {
         workspace: workspace, selection: $selection, connect: { connectionMethod = .add },
         newChat: { prompt in openNewChat(cloud: false, prompt: prompt) },
         newCloudChat: { openNewChat(cloud: true) }, addProject: { showProject = true },
-        openComputers: { showComputers = true }, showsAsk: !NativeTabBar.hostsAsk
+        openComputers: { showComputers = true },
+        // iPad's own tab bar has no room for the ask row, so it stays under the list.
+        showsAsk: usesTabletShell || !NativeTabBar.hostsAsk,
+        highlightsSelection: usesTabletShell && !isCompact
       )
-      .disabled(workspace.clearingAccount)
-      .navigationSplitViewColumnWidth(min: 260, ideal: 320, max: 380)
-      .toolbar(removing: newChat == nil ? nil : .sidebarToggle)
+      .disabled(workspace.clearingAccount).clearsTabletBar()
+      .modifier(TabletListColumn(enabled: usesTabletShell, min: 260, ideal: 320, max: 380))
+      .toolbar(removing: newChat == nil && !usesTabletShell ? nil : .sidebarToggle)
     } detail: {
       if let route = newChat {
         NewChatSetupView(
@@ -782,7 +921,7 @@ struct WorkspaceView: View {
 
   private var moreTab: some View {
     NavigationStack(path: $morePath) {
-      MoreView(workspace: workspace)
+      MoreView(workspace: workspace).clearsTabletBar()
         .navigationDestination(for: MoreRoute.self) { route in
           switch route {
           case .account: AccountSettingsView(workspace: workspace)
@@ -816,6 +955,7 @@ struct WorkspaceView: View {
           searchPath.append(.issue(zapper: entry.zapperID, issue: entry.issue.id))
         }
       )
+      .clearsTabletBar()
       .navigationDestination(for: ZapperRoute.self) { route in
         ZapperDestination(
           workspace: workspace, route: route, push: { searchPath.append($0) },

@@ -1,7 +1,8 @@
 import SwiftUI
 import ZuseCore
 
-/// The app's top-level tabs: a tab bar on iPhone, a sidebar on iPad and Mac.
+/// The app's top-level tabs: the system tab bar on iPhone, a compact floating bar on iPad
+/// (`TabletShell`) and a sidebar on Mac.
 enum AppTab: String, Hashable, CaseIterable {
   case zappers, chats, prs, more, search
   /// `--tab=<zappers|chats|prs|more>` picks the first tab for screenshots.
