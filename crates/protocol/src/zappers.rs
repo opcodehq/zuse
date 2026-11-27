@@ -281,6 +281,17 @@ pub struct ZapperFile {
     pub deleted: bool,
 }
 
+/// Root files with a fixed meaning: the coordinator's purpose doc, the user's
+/// rules for it, its notes and digest, and the rules every thread gets. They
+/// can be edited and restored, never moved, deleted or replaced by a folder.
+pub const RESERVED_FILES: [&str; 5] = [
+    "AGENTS.md",
+    "DIGEST.md",
+    "INSTRUCTIONS.md",
+    "NOTES.md",
+    "WORKERS.md",
+];
+
 /// A file at the version the caller saw, for folder moves and deletes: the
 /// engine refuses them unless these are exactly the folder's current files.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
@@ -1268,6 +1279,7 @@ mod tests {
                 pull_requests: vec![],
                 activity: vec![],
             }],
+            folders: vec![],
         };
         let command = ZapperCommand {
             command_id: "c".into(),

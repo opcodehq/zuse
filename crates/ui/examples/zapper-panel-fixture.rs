@@ -116,7 +116,11 @@ fn sample_zapper(device: &str) -> Zapper {
             },
             issue(7, "Zapper panel: closable tabs", ZapperIssueStatus::Todo),
         ],
-        folders: vec![],
+        folders: vec![
+            "handoffs".into(),
+            "handoffs/design-references".into(),
+            "reports".into(),
+        ],
     }
 }
 
@@ -128,6 +132,20 @@ fn files() -> Vec<ZapperFile> {
         deleted: false,
     };
     vec![
+        file(
+            "AGENTS.md",
+            2,
+            "# Rules\n\n- Ask before opening pull requests that touch billing.\n- Keep threads to one issue each.",
+        ),
+        file(
+            "handoffs/conversational-pr-research.md",
+            1,
+            "# Research\n\nNotes from the conversational review study.",
+        ),
+        file("handoffs/design-references/composer.md", 2, "# Composer"),
+        file("handoffs/design-references/sidebar.md", 1, "# Sidebar"),
+        file("reports/2026-11-26.md", 1, "# Weekly report"),
+        file("INSTRUCTIONS.md", 2, "I keep the release train moving."),
         file(
             "DIGEST.md",
             2,
@@ -199,7 +217,12 @@ fn main() -> anyhow::Result<()> {
             );
             theme_library::init(data.clone(), cx);
             appearance::init(
-                appearance::AppearanceMode::Dark,
+                // ZAPPER_FIXTURE_LIGHT captures the light theme.
+                if std::env::var_os("ZAPPER_FIXTURE_LIGHT").is_some() {
+                    appearance::AppearanceMode::Light
+                } else {
+                    appearance::AppearanceMode::Dark
+                },
                 settings.theme_selection,
                 settings.accent,
                 settings.surface,
@@ -237,7 +260,14 @@ fn main() -> anyhow::Result<()> {
                         window_background: theme::Theme::of(cx).window_background_appearance(),
                         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                             gpui::point(px(20.), px(40.)),
-                            size(px(1180.), px(820.)),
+                            // ZAPPER_FIXTURE_WIDTH captures a narrower window.
+                            size(
+                                px(std::env::var("ZAPPER_FIXTURE_WIDTH")
+                                    .ok()
+                                    .and_then(|w| w.parse().ok())
+                                    .unwrap_or(1180.)),
+                                px(820.),
+                            ),
                         ))),
                         ..Default::default()
                     },

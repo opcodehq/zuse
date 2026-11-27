@@ -18,15 +18,7 @@ pub(crate) const WORKERS_FILE: &str = "WORKERS.md";
 pub(crate) const NOTES_FILE: &str = "NOTES.md";
 pub(crate) const DIGEST_FILE: &str = "DIGEST.md";
 
-/// Root files with a fixed meaning: they can be edited and restored, never
-/// deleted, moved, or replaced by a folder.
-pub(crate) const RESERVED: [&str; 5] = [
-    PURPOSE_FILE,
-    RULES_FILE,
-    WORKERS_FILE,
-    NOTES_FILE,
-    DIGEST_FILE,
-];
+pub(crate) use zuse_protocol::zappers::RESERVED_FILES as RESERVED;
 
 /// Folders a new Zapper starts with. Files are text, so there is no folder
 /// for images.

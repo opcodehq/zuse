@@ -92,11 +92,19 @@ export interface Zapper {
   workers: ZapperWorker[];
   decisions: ZapperDecision[];
   issues: ZapperIssue[];
+  /** Created folders, empty ones included; engines before folders omit it. */
+  folders?: string[];
 }
 export interface ZapperFile {
   path: string;
   version: number;
   content: string;
+  /** This version deleted the file; only histories list deletions. */
+  deleted?: boolean;
+}
+export interface ZapperFileVersion {
+  path: string;
+  version: number;
 }
 export interface ZapperEvent {
   id: string;
@@ -132,6 +140,11 @@ export type ZapperAction =
       version: number;
       expectedVersion: number;
     }
+  | { type: "deleteFile"; path: string; expectedVersion: number }
+  | { type: "moveFile"; path: string; to: string; expectedVersion: number }
+  | { type: "createFolder"; path: string }
+  | { type: "moveFolder"; path: string; to: string; files: ZapperFileVersion[] }
+  | { type: "deleteFolder"; path: string; files: ZapperFileVersion[] }
   | {
       type: "createIssue" | "editIssue";
       issueId: string;

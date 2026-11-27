@@ -37,6 +37,12 @@ pub(super) struct ZapperUi {
     files: Vec<ZapperFile>,
     /// The Zapper `files` came from, kept while a reload is in flight.
     files_zapper: Option<String>,
+    /// Drive's open folders and selected row, for the Zapper in `tree_zapper`.
+    tree_open: std::collections::BTreeSet<String>,
+    tree_selected: Option<String>,
+    tree_zapper: Option<String>,
+    /// The created folders of the Zapper Drive last showed.
+    tree_folders: Vec<String>,
     /// Threads just archived here. The engine applies it on its next pass, a
     /// few seconds later; until then the row should already be gone.
     archiving: std::collections::HashMap<String, std::time::Instant>,
@@ -178,19 +184,9 @@ pub(super) const ZAPPER_PANEL_WIDTH: f32 = 520.0;
 /// A document worth listing: seeded placeholders stay empty, and the
 /// instructions file only appears once rewritten. Until then it holds just
 /// the purpose the Overview already shows.
+#[cfg(feature = "appshots-fixture")]
 fn is_document(file: &ZapperFile) -> bool {
     (file.path != "INSTRUCTIONS.md" || file.version > 1) && !file.content.trim().is_empty()
-}
-
-/// Drive only appears once it has something to show. `keep` holds the open
-/// section while its files are still loading.
-fn visible_tabs(files: &[ZapperFile], keep: Option<ZapperTab>) -> Vec<ZapperTab> {
-    ZAPPER_SECTIONS
-        .into_iter()
-        .filter(|tab| {
-            Some(*tab) == keep || *tab != ZapperTab::Drive || files.iter().any(is_document)
-        })
-        .collect()
 }
 
 fn section_icon(tab: ZapperTab) -> &'static str {
@@ -1284,17 +1280,28 @@ impl Shell {
             .when(
                 *tabs.active() == ZapperPage::Section(ZapperTab::Drive) && !editing,
                 |d| {
+                    let new_folder = new_doc.clone();
                     d.child(
-                        icon_button("zapper-new-document", icons::DOCUMENT_ADD, "New document")
+                        icon_button("zapper-new-document", icons::DOCUMENT_ADD, "New file")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 let file = ZapperFile {
-                                    path: String::new(),
-                                    version: 0,
-                                    content: String::new(),
-                                    deleted: false,
+                                    path: this.zapper_tree_prefix(),
+                                    ..Default::default()
                                 };
                                 this.open_zapper_dialog(new_doc.clone(), Kind::File(file), cx)
                             })),
+                    )
+                    .child(
+                        icon_button("zapper-new-folder", icons::FOLDER_ADD, "New folder").on_click(
+                            cx.listener(move |this, _, _, cx| {
+                                let prefix = this.zapper_tree_prefix();
+                                this.open_zapper_dialog(
+                                    new_folder.clone(),
+                                    Kind::Folder(prefix),
+                                    cx,
+                                )
+                            }),
+                        ),
                     )
                 },
             )
@@ -1520,23 +1527,12 @@ impl Shell {
                 .detach();
             }
         }
-        // A reload must not read as "no files": that used to hide the tab just
-        // clicked and bounce the panel to Overview.
         let files = if self.zapper_ui.files_zapper.as_deref() == Some(zapper.id.as_str()) {
             self.zapper_ui.files.clone()
         } else {
             vec![]
         };
-        let settled = self
-            .zapper_ui
-            .loaded
-            .as_ref()
-            .is_some_and(|(id, _, _)| id == &zapper.id);
-        let section = self.zapper_ui.tabs.section();
-        let visible = visible_tabs(&files, (!settled).then_some(section));
-        if !visible.contains(&section) {
-            self.zapper_ui.tabs.hide_section(section);
-        }
+        let visible = ZAPPER_SECTIONS;
         let editing = self.zapper_editor_open(cx);
         let tab_bar = self.zapper_tab_bar(&zapper, &visible, editing, &theme, cx);
         if editing {
@@ -1667,7 +1663,7 @@ impl Shell {
                 self.zapper_issue_surface(&zapper, false, cx)
             }
             ZapperPage::Section(ZapperTab::Threads) => self.zapper_threads(&zapper, &theme, cx),
-            ZapperPage::Section(ZapperTab::Drive) => self.zapper_drive(files, &theme, cx),
+            ZapperPage::Section(ZapperTab::Drive) => self.zapper_drive(&zapper, &files, &theme, cx),
             ZapperPage::File(path) => {
                 self.zapper_document(&zapper, &path, &files, &theme, window, cx)
             }
@@ -2466,85 +2462,236 @@ impl Shell {
         Some(group.into_any_element())
     }
 
+    /// The folder new files and folders go in: the selected folder, or the
+    /// selected file's folder, as a path prefix.
+    fn zapper_tree_prefix(&self) -> String {
+        let Some(selected) = &self.zapper_ui.tree_selected else {
+            return String::new();
+        };
+        let inside = format!("{selected}/");
+        let folder = if self
+            .zapper_ui
+            .tree_folders
+            .iter()
+            .any(|f| f == selected || f.starts_with(&inside))
+            || self
+                .zapper_ui
+                .files
+                .iter()
+                .any(|f| f.path.starts_with(&inside))
+        {
+            selected.as_str()
+        } else {
+            selected.rsplit_once('/').map_or("", |(parent, _)| parent)
+        };
+        if folder.is_empty() {
+            String::new()
+        } else {
+            format!("{folder}/")
+        }
+    }
+
+    /// Drive: the Zapper's files and folders as a tree, like the workspace
+    /// explorer. Folders toggle, files open in their own tab.
     fn zapper_drive(
         &mut self,
-        files: Vec<ZapperFile>,
+        zapper: &Zapper,
+        files: &[ZapperFile],
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let files: Vec<_> = files.into_iter().filter(is_document).collect();
+        use zuse_protocol::presentation::zapper_files::{initially_open, tree_rows};
+        let loaded = self.zapper_ui.files_zapper.as_deref() == Some(zapper.id.as_str());
+        if loaded && self.zapper_ui.tree_zapper.as_deref() != Some(zapper.id.as_str()) {
+            self.zapper_ui.tree_zapper = Some(zapper.id.clone());
+            self.zapper_ui.tree_open = initially_open(files, &zapper.folders);
+            self.zapper_ui.tree_selected = None;
+        }
+        self.zapper_ui.tree_folders = zapper.folders.clone();
+        let rows = tree_rows(files, &zapper.folders, &self.zapper_ui.tree_open);
         let mut view = div()
             .flex()
             .flex_col()
-            .gap(px(8.0))
-            .child(section(format!("Drive · {}", files.len()), theme));
-        if files.is_empty() {
-            view = view.child(muted(
-                if self.zapper_ui.loading {
-                    "Loading documents…"
-                } else {
-                    "Rules, notes and the digest this Zapper keeps live here."
-                },
-                theme,
-            ));
-        }
-        for file in files {
-            let preview: String = file.content.lines().take(6).collect::<Vec<_>>().join("\n");
-            view = view.child(
+            .child(section("Files", theme))
+            .child(
                 div()
-                    .id(SharedString::from(format!("zapper-edit-{}", file.path)))
-                    .role(gpui::Role::Button)
-                    .aria_label(SharedString::from(file.path.clone()))
-                    .p(px(10.0))
+                    .id("zapper-files-tree")
+                    .role(gpui::Role::Tree)
+                    .aria_label("Zapper files")
+                    .mx(px(-8.0))
                     .flex()
                     .flex_col()
-                    .gap(px(6.0))
-                    .rounded(px(8.0))
-                    .border_1()
-                    .border_color(theme.border)
-                    .bg(theme.surface_card)
-                    .cursor_pointer()
-                    .hover(|d| d.border_color(theme.border_strong))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.0))
-                            .child(
-                                icon(icons::DOCUMENT)
-                                    .size(px(14.0))
-                                    .text_color(theme.text_muted),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(crate::typography::ui_rems(12.5))
-                                    .text_color(theme.text)
-                                    .child(file.path.clone()),
-                            )
-                            .child(
-                                div()
-                                    .text_size(crate::typography::ui_rems(11.0))
-                                    .text_color(theme.text_faint)
-                                    .child(format!("v{}", file.version)),
-                            ),
-                    )
-                    .when(!preview.trim().is_empty(), |d| {
-                        d.child(
-                            div()
-                                .text_size(crate::typography::ui_rems(11.5))
-                                .text_color(theme.text_muted)
-                                .child(preview),
-                        )
-                    })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.show_zapper_page(ZapperPage::File(file.path.clone()), cx)
-                    })),
+                    .children(
+                        rows.iter()
+                            .map(|row| self.zapper_file_row(zapper, row, files, theme, cx)),
+                    ),
+            );
+        if !loaded && files.is_empty() {
+            view = view.child(muted("Loading files…", theme));
+        } else if !rows.iter().any(|r| r.folder || !r.reserved) {
+            view = view.child(
+                div()
+                    .pt(px(10.0))
+                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_color(theme.text_faint)
+                    .child("Add folders and documents for the coordinator and its threads to open when they need them. Files you add stay out of their prompts until opened."),
             );
         }
         view.into_any_element()
+    }
+
+    fn zapper_file_row(
+        &self,
+        zapper: &Zapper,
+        row: &zuse_protocol::presentation::zapper_files::FileRow,
+        files: &[ZapperFile],
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use crate::file_icons::FileIconIdentity;
+        use crate::files::tree::{TREE_INDENT, TREE_ROW_HEIGHT, with_indent_guides};
+        let selected = self.zapper_ui.tree_selected.as_deref() == Some(row.path.as_str());
+        let path = row.path.clone();
+        let folder = row.folder;
+        let trailing = |id: &str, glyph: &'static str, tip: &'static str| {
+            div()
+                .id(SharedString::from(format!("{id}-{}", row.path)))
+                .role(gpui::Role::Button)
+                .aria_label(SharedString::from(format!("{tip} {}", row.path)))
+                .tip(tip)
+                .size(px(20.0))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(5.0))
+                .cursor_pointer()
+                .hover(|d| d.bg(theme.element_hover))
+                .child(icon(glyph).size(px(12.0)).text_color(theme.text_muted))
+        };
+        let actions = (selected && !row.reserved).then(|| {
+            let (move_zapper, delete_zapper) = (zapper.clone(), zapper.clone());
+            let (move_kind, delete_kind) = (
+                super::zapper_forms::file_action(row, files, &zapper.folders, false),
+                super::zapper_forms::file_action(row, files, &zapper.folders, true),
+            );
+            div()
+                .ml_auto()
+                .flex()
+                .gap(px(2.0))
+                .child(
+                    trailing("zapper-file-move", icons::PEN, "Rename or move").on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.open_zapper_dialog(move_zapper.clone(), move_kind.clone(), cx)
+                        }),
+                    ),
+                )
+                .child(
+                    trailing(
+                        "zapper-file-delete",
+                        icons::TRASH_BIN_MINIMALISTIC,
+                        "Delete",
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.open_zapper_dialog(delete_zapper.clone(), delete_kind.clone(), cx)
+                    })),
+                )
+        });
+        let content = div()
+            .id(SharedString::from(format!("zapper-file-row-{}", row.path)))
+            .role(gpui::Role::TreeItem)
+            .aria_label(SharedString::from(row.path.clone()))
+            .aria_selected(selected)
+            .when(folder, |d| d.aria_expanded(row.expanded))
+            .debug_selector({
+                let path = row.path.clone();
+                move || format!("zapper-file:{path}")
+            })
+            .h(px(TREE_ROW_HEIGHT))
+            .w_full()
+            .pl(px(8.0 + row.depth as f32 * TREE_INDENT))
+            .pr(px(6.0))
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .rounded(px(6.0))
+            .cursor_pointer()
+            .when(selected, |d| d.bg(crate::theme::wash(0.12)))
+            .when(!selected, |d| d.hover(|s| s.bg(crate::theme::wash(0.055))))
+            .child(
+                div()
+                    .size(px(14.0))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(folder, |d| {
+                        d.child(
+                            icon(if row.expanded {
+                                icons::ALT_ARROW_DOWN
+                            } else {
+                                icons::ALT_ARROW_RIGHT
+                            })
+                            .size(px(11.0))
+                            .text_color(theme.text_faint),
+                        )
+                    }),
+            )
+            .child(if folder {
+                icon(if row.expanded {
+                    icons::FOLDER_OPEN
+                } else {
+                    icons::FOLDER
+                })
+                .size(px(14.0))
+                .flex_none()
+                .text_color(theme.text_muted)
+                .into_any_element()
+            } else {
+                crate::file_icons::icon(FileIconIdentity::file(&row.name), theme.appearance)
+                    .size(px(14.0))
+                    .when(row.version.is_none(), |d| d.opacity(0.55))
+                    .into_any_element()
+            })
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(crate::typography::ui_rems(12.5))
+                    .text_color(if selected {
+                        theme.text_strong
+                    } else if folder && !row.expanded || row.version.is_none() && !folder {
+                        theme.text_muted
+                    } else {
+                        theme.text
+                    })
+                    .child(row.name.clone()),
+            )
+            .when(!folder && row.version.is_none(), |d| {
+                d.child(
+                    div()
+                        .flex_none()
+                        .text_size(crate::typography::ui_rems(11.0))
+                        .text_color(theme.text_faint)
+                        .child("not written"),
+                )
+            })
+            .children(actions)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.zapper_ui.tree_selected = Some(path.clone());
+                if folder {
+                    if !this.zapper_ui.tree_open.remove(&path) {
+                        this.zapper_ui.tree_open.insert(path.clone());
+                    }
+                    cx.notify();
+                } else {
+                    this.show_zapper_page(ZapperPage::File(path.clone()), cx);
+                }
+            }))
+            .into_any_element();
+        with_indent_guides(content, row.depth, TREE_ROW_HEIGHT, theme)
     }
 
     /// A Drive document in its own tab, rendered as markdown. Edit opens the
@@ -2843,29 +2990,6 @@ mod tests {
     }
 
     #[test]
-    fn empty_drive_and_history_tabs_stay_hidden() {
-        let seeded = [
-            file("INSTRUCTIONS.md", 1, "Ship the release"),
-            file("NOTES.md", 1, ""),
-        ];
-        assert_eq!(
-            visible_tabs(&seeded, None),
-            [ZapperTab::Overview, ZapperTab::Issues, ZapperTab::Threads]
-        );
-        assert!(visible_tabs(&[], Some(ZapperTab::Drive)).contains(&ZapperTab::Drive));
-        let written = [file("NOTES.md", 2, "Decided on Tuesday")];
-        assert_eq!(visible_tabs(&written, None), ZAPPER_SECTIONS);
-        let rewritten = [file("INSTRUCTIONS.md", 2, "I keep the release moving.")];
-        assert_eq!(visible_tabs(&rewritten, None), ZAPPER_SECTIONS);
-    }
-
-    #[test]
-    fn history_lives_in_the_menu_not_the_strip() {
-        let written = [file("NOTES.md", 4, "Decided on Tuesday")];
-        assert!(!visible_tabs(&written, None).contains(&ZapperTab::History));
-    }
-
-    #[test]
     fn the_expanded_section_fits_every_label() {
         let width = section_width(&ZAPPER_SECTIONS);
         for tab in ZAPPER_SECTIONS {
@@ -2960,6 +3084,51 @@ impl Shell {
                 }
             }
             "drive" => self.show_zapper_page(ZapperPage::Section(ZapperTab::Drive), cx),
+            // `drive-nested`, `drive-delete`, `drive-move`, `drive-folder`,
+            // `drive-empty`: the file tree opened, with a dialog for the action.
+            step if step.starts_with("drive-") => {
+                use zuse_protocol::{
+                    presentation::zapper_files::tree_rows, zappers::RESERVED_FILES,
+                };
+                if step == "drive-empty" {
+                    self.zapper_ui
+                        .files
+                        .retain(|f| RESERVED_FILES.contains(&f.path.as_str()));
+                    self.state.update(cx, |state, _| {
+                        if let Some(z) = state.zappers.iter_mut().find(|z| z.id == zapper.id) {
+                            z.folders.clear();
+                        }
+                    });
+                }
+                let folders = if step == "drive-empty" {
+                    vec![]
+                } else {
+                    zapper.folders.clone()
+                };
+                self.zapper_ui.tree_zapper = Some(zapper.id.clone());
+                self.zapper_ui.tree_open = ["handoffs", "handoffs/design-references", "reports"]
+                    .map(String::from)
+                    .into();
+                self.zapper_ui.tree_selected = Some("NOTES.md".into());
+                self.show_zapper_page(ZapperPage::Section(ZapperTab::Drive), cx);
+                let files = self.zapper_ui.files.clone();
+                let row = |path: &str| {
+                    tree_rows(&files, &folders, &self.zapper_ui.tree_open)
+                        .into_iter()
+                        .find(|r| r.path == path)
+                };
+                let kind = match step {
+                    "drive-delete" => row("handoffs")
+                        .map(|r| super::zapper_forms::file_action(&r, &files, &folders, true)),
+                    "drive-move" => row("reports")
+                        .map(|r| super::zapper_forms::file_action(&r, &files, &folders, false)),
+                    "drive-folder" => Some(Kind::Folder("handoffs/".into())),
+                    _ => None,
+                };
+                if let Some(kind) = kind {
+                    self.open_zapper_dialog(zapper.clone(), kind, cx);
+                }
+            }
             "file" => {
                 if let Some(page) = file {
                     self.show_zapper_page(page, cx);

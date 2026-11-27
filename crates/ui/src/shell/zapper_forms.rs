@@ -8,11 +8,66 @@ use crate::settings::widgets::{self, ActionTone};
 use zuse_protocol::presentation::zapper_mascots;
 use zuse_protocol::zappers::*;
 
+#[derive(Clone)]
 pub(super) enum Kind {
     Config,
     File(ZapperFile),
+    /// A new folder; the path the field starts with.
+    Folder(String),
+    /// Rename or move a file or folder; `files` is everything under a folder
+    /// at the version Drive showed.
+    Move {
+        path: String,
+        folder: bool,
+        version: u32,
+        files: Vec<ZapperFileVersion>,
+    },
+    /// Confirm deleting a file or folder, naming everything it removes.
+    Delete {
+        path: String,
+        folder: bool,
+        version: u32,
+        files: Vec<ZapperFileVersion>,
+        folders: Vec<String>,
+    },
     Thread(Option<String>),
     Decision(ZapperDecision),
+}
+
+/// The move or delete dialog for a Drive row, with what it acts on as shown.
+pub(super) fn file_action(
+    row: &zuse_protocol::presentation::zapper_files::FileRow,
+    files: &[ZapperFile],
+    folders: &[String],
+    delete: bool,
+) -> Kind {
+    use zuse_protocol::presentation::zapper_files::{files_under, folders_under};
+    let (path, folder, version) = (row.path.clone(), row.folder, row.version.unwrap_or(0));
+    let inner = if folder {
+        files_under(files, &path)
+    } else {
+        vec![]
+    };
+    if delete {
+        Kind::Delete {
+            folders: if folder {
+                folders_under(folders, &path)
+            } else {
+                vec![]
+            },
+            path,
+            folder,
+            version,
+            files: inner,
+        }
+    } else {
+        Kind::Move {
+            path,
+            folder,
+            version,
+            files: inner,
+        }
+    }
 }
 
 pub(super) struct Form {
@@ -85,10 +140,13 @@ fn fields(kind: &Kind, zapper: Option<&Zapper>) -> Vec<(&'static str, String, Li
             ),
         ],
         Kind::File(file) if file.version == 0 => vec![
-            ("Name", String::new(), Lines::Single),
-            ("Content", String::new(), Lines::Prose),
+            ("Path", file.path.clone(), Lines::Single),
+            ("Content", file.content.clone(), Lines::Prose),
         ],
         Kind::File(file) => vec![("Content", file.content.clone(), Lines::Prose)],
+        Kind::Folder(path) => vec![("Path", path.clone(), Lines::Single)],
+        Kind::Move { path, .. } => vec![("New path", path.clone(), Lines::Single)],
+        Kind::Delete { .. } => vec![],
         Kind::Decision(_) => vec![("Your answer", String::new(), Lines::Message)],
         Kind::Thread(Some(_)) => vec![("Message", String::new(), Lines::Message)],
         Kind::Thread(None) => vec![
@@ -659,6 +717,58 @@ impl Shell {
                     expected_version: file.version,
                 }
             }
+            Kind::Folder(_) => {
+                let path = values[0].trim().trim_end_matches('/').to_owned();
+                if path.is_empty() {
+                    error(self, "Name the folder", cx);
+                    return;
+                }
+                ZapperAction::CreateFolder { path }
+            }
+            Kind::Move {
+                path,
+                folder,
+                version,
+                files,
+            } => {
+                let to = values[0].trim().trim_end_matches('/').to_owned();
+                if to.is_empty() || &to == path {
+                    error(self, "Choose a different name or folder", cx);
+                    return;
+                }
+                if *folder {
+                    ZapperAction::MoveFolder {
+                        path: path.clone(),
+                        to,
+                        files: files.clone(),
+                    }
+                } else {
+                    ZapperAction::MoveFile {
+                        path: path.clone(),
+                        to,
+                        expected_version: *version,
+                    }
+                }
+            }
+            Kind::Delete {
+                path,
+                folder,
+                version,
+                files,
+                ..
+            } => {
+                if *folder {
+                    ZapperAction::DeleteFolder {
+                        path: path.clone(),
+                        files: files.clone(),
+                    }
+                } else {
+                    ZapperAction::DeleteFile {
+                        path: path.clone(),
+                        expected_version: *version,
+                    }
+                }
+            }
             Kind::Decision(decision) => {
                 let answer = values[0].trim().to_owned();
                 if answer.is_empty() {
@@ -822,7 +932,17 @@ impl Shell {
                         {
                             panel.update(cx, |p, cx| p.failed(error.to_string(), cx));
                         }
-                        this.show_notice(crate::toast::ToastKind::Error, error.to_string(), cx)
+                        let error = error.to_string();
+                        if let Some(current) = this.rebase_file_draft(&error) {
+                            this.zapper_ui.loaded = None;
+                            this.show_notice(
+                                crate::toast::ToastKind::Error,
+                                format!("This file changed while you were editing. Your draft is kept; saving again replaces version {current}."),
+                                cx,
+                            )
+                        } else {
+                            this.show_notice(crate::toast::ToastKind::Error, error, cx)
+                        }
                     }
                 }
                 cx.notify();
@@ -830,6 +950,30 @@ impl Shell {
         })
         .detach();
         cx.notify();
+    }
+
+    /// After a file version conflict, points the open editor at the current
+    /// version so the kept draft can be saved over it. Returns that version.
+    fn rebase_file_draft(&mut self, error: &str) -> Option<u32> {
+        let current: u32 = error
+            .split_once("current version is ")?
+            .1
+            .split(|c: char| !c.is_ascii_digit())
+            .next()?
+            .parse()
+            .ok()?;
+        let Some(Form {
+            kind: Kind::File(file),
+            ..
+        }) = self.zapper_ui.dialog.as_mut()
+        else {
+            return None;
+        };
+        if !error.contains(&format!("conflict on {}:", file.path)) {
+            return None;
+        }
+        file.version = current;
+        Some(current)
     }
 
     fn finish_zapper_command(
@@ -1805,18 +1949,29 @@ impl Shell {
         let theme = Theme::of(cx).for_popup();
         let saving = self.zapper_ui.pending;
         let form = self.zapper_ui.dialog.as_mut()?;
-        if std::mem::take(&mut form.focus_pending) {
-            window.focus(&form.inputs[0].focus_handle(cx), cx);
+        if std::mem::take(&mut form.focus_pending)
+            && let Some(input) = form.inputs.first()
+        {
+            window.focus(&input.focus_handle(cx), cx);
         }
         let inputs = form.inputs.clone();
         let (title, submit, width): (String, &str, f32) = match &form.kind {
-            Kind::File(file) if file.version == 0 => ("New document".into(), "Save", 560.0),
+            Kind::File(file) if file.version == 0 => ("New file".into(), "Save", 560.0),
             Kind::File(file) => (file.path.clone(), "Save", 560.0),
+            Kind::Folder(_) => ("New folder".into(), "Create folder", 420.0),
+            Kind::Move { path, .. } => (format!("Rename or move {path}"), "Move", 460.0),
+            Kind::Delete { path, folder, .. } if *folder => (
+                format!("Delete {path} and everything in it?"),
+                "Delete",
+                460.0,
+            ),
+            Kind::Delete { path, .. } => (format!("Delete {path}?"), "Delete", 420.0),
             Kind::Decision(_) => ("Answer".into(), "Send answer", 420.0),
             Kind::Thread(Some(_)) => ("Message thread".into(), "Send", 420.0),
             Kind::Thread(None) => ("New thread".into(), "Start thread", 460.0),
             Kind::Config => (String::new(), "", 0.0),
         };
+        let destructive = matches!(form.kind, Kind::Delete { .. });
         let question = match &form.kind {
             Kind::Decision(decision) => Some(decision.question.clone()),
             _ => None,
@@ -1824,9 +1979,76 @@ impl Shell {
         let mut body = div().mt(px(14.0)).flex().flex_col().gap(px(12.0));
         body = match &form.kind {
             Kind::File(file) if file.version == 0 => body
-                .child(labelled(&theme, "Name", inputs[0].clone(), 36.0, cx))
+                .child(labelled(&theme, "Path", inputs[0].clone(), 36.0, cx))
                 .child(labelled(&theme, "Content", inputs[1].clone(), 260.0, cx)),
-            Kind::File(_) => body.child(text_box(inputs[0].clone(), 300.0, cx)),
+            Kind::File(file) => body
+                .children(
+                    zuse_protocol::presentation::zapper_files::reserved_about(&file.path)
+                        .map(|about| hint(&theme, about)),
+                )
+                .child(text_box(inputs[0].clone(), 300.0, cx)),
+            Kind::Folder(_) => body
+                .child(hint(&theme, "Folders hold documents the coordinator and threads open when they need them."))
+                .child(labelled(&theme, "Path", inputs[0].clone(), 36.0, cx)),
+            Kind::Move { folder, .. } => body
+                .child(hint(
+                    &theme,
+                    if *folder {
+                        "Everything inside moves with it. Version history stays with each file's old path."
+                    } else {
+                        "Version history stays with the old path."
+                    },
+                ))
+                .child(labelled(&theme, "New path", inputs[0].clone(), 36.0, cx)),
+            Kind::Delete {
+                path,
+                files,
+                folders,
+                ..
+            } => {
+                let mut scope = div().flex().flex_col().gap(px(4.0)).child(hint(
+                    &theme,
+                    "Version history keeps every version, so you can restore files later.",
+                ));
+                if !files.is_empty() || !folders.is_empty() {
+                    let count = |n: usize, one: &str, many: &str| {
+                        format!("{n} {}", if n == 1 { one } else { many })
+                    };
+                    scope = scope.child(
+                        div()
+                            .pt(px(6.0))
+                            .text_size(crate::typography::ui_rems(12.0))
+                            .text_color(theme.text_muted)
+                            .child(format!(
+                                "{}{} inside {path}:",
+                                count(files.len(), "file", "files"),
+                                if folders.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(" and {}", count(folders.len(), "folder", "folders"))
+                                }
+                            )),
+                    );
+                    let names: Vec<String> = files
+                        .iter()
+                        .map(|f| f.path.clone())
+                        .chain(folders.iter().map(|f| format!("{f}/")))
+                        .collect();
+                    for name in names.iter().take(8) {
+                        scope = scope.child(
+                            div()
+                                .pl(px(10.0))
+                                .text_size(crate::typography::ui_rems(11.5))
+                                .text_color(theme.text)
+                                .child(name[path.len() + 1..].to_owned()),
+                        );
+                    }
+                    if names.len() > 8 {
+                        scope = scope.child(hint(&theme, format!("and {} more", names.len() - 8)));
+                    }
+                }
+                body.child(scope)
+            }
             Kind::Thread(None) => body
                 .child(labelled(&theme, "Task", inputs[0].clone(), 84.0, cx))
                 .child(labelled(&theme, "Start from", inputs[1].clone(), 36.0, cx)),
@@ -1907,13 +2129,15 @@ impl Shell {
                             })),
                     )
                     .child(
-                        popover::btn_primary(&theme, submit)
-                            .id("zapper-dialog-save")
-                            .role(gpui::Role::Button)
-                            .when(saving, |d| d.opacity(0.6))
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.submit_zapper_form(true, cx)),
-                            ),
+                        if destructive {
+                            popover::btn_danger(&theme, submit)
+                        } else {
+                            popover::btn_primary(&theme, submit)
+                        }
+                        .id("zapper-dialog-save")
+                        .role(gpui::Role::Button)
+                        .when(saving, |d| d.opacity(0.6))
+                        .on_click(cx.listener(|this, _, _, cx| this.submit_zapper_form(true, cx))),
                     ),
             )
             .into_any_element();

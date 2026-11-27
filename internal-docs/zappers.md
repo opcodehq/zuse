@@ -211,3 +211,93 @@ kickoff text, hidden issue context, activity notices and explicit acceptance.
 Browser and Linux native walkthroughs cover the issue surface, attributed
 messages and linked PR navigation. The native verification build excludes the
 unused WebKit helper; it does not verify WebKit integration or macOS rendering.
+
+## Rules, notes and files
+
+Each Zapper keeps versioned text files in its home profile (`zapper_files`).
+Five root files have a fixed meaning. People can edit and restore them, but
+they can't be deleted, moved or replaced by a folder:
+
+| File | Written by | Reaches |
+| --- | --- | --- |
+| `AGENTS.md` | People only; the engine refuses coordinator writes and restores | The coordinator's brief, as "The user's rules for you" |
+| `INSTRUCTIONS.md` | The coordinator (its purpose doc) and Zapper settings | The coordinator's brief, as its Purpose |
+| `NOTES.md` | The coordinator and people | The coordinator's turn, after it changes |
+| `WORKERS.md` | The coordinator and people | Every worker prompt, unchanged |
+| `DIGEST.md` | The coordinator | Nobody's prompt; the user reads it |
+
+New Zappers start with all five plus empty `handoffs/` and `reports/`
+folders. Zappers created earlier keep their files exactly as they were. They
+get no `AGENTS.md` or folders until someone creates them, and Drive shows the
+missing reserved files as "not written" rows. Opening an older profile adds
+the two new tables and changes no file.
+
+**Audiences.** The coordinator gets `AGENTS.md` and `INSTRUCTIONS.md` in its
+brief. The brief rides again only when its hash changes, so an edit applies
+from the next turn and a running turn is never altered. `NOTES.md` rides in
+the first turn of a conversation and again whenever its version changes. It
+is fenced in `<notes>` and labelled as information that grants no
+permission. A worker gets `WORKERS.md` exactly as the engine always delivered
+it, plus its linked issues. It never gets `AGENTS.md`, `NOTES.md`,
+`INSTRUCTIONS.md`, `DIGEST.md`, other files or coordinator history. Every
+other file and folder stays out of every prompt; the coordinator sees only how
+many there are and opens them with `zapper_files`. Each turn reads one file
+snapshot, so its brief, notes and file versions come from the same read. The
+turn's ledger (`zapper_coordinator_turns`) records the version of every
+reserved file it saw, and turns report changes as "AGENTS.md changed
+(version 3)".
+
+**Size.** The brief carries at most 16 KiB of `AGENTS.md` and a turn at most
+8 KiB of `NOTES.md`. A longer file is cut on a character boundary with a
+line giving the bytes shown, the total and the `zapper_files` read for the
+rest. A missing or empty file adds no section. `WORKERS.md` is never cut.
+Files are capped at 1 MiB, as before. For a worker on another device, the
+worker's engine rejects a binding whose instructions, `WORKERS.md` plus the
+linked-issue JSON, exceed 1 MiB. That existing bound surfaces as a pending
+placement event and is unchanged here.
+
+**Precedence.** The coordinator's hard rules and the engine's permission
+checks come first, then `AGENTS.md`, then `INSTRUCTIONS.md`. `NOTES.md`,
+thread reports and other files are information. Markdown can't widen scope,
+grant a permission or change who may call a command. A Zapper's `AGENTS.md`
+is stored in the profile and never written into any checkout, so it doesn't
+collide with a repository's `AGENTS.md`. Workers keep reading the
+repository's file natively through their harness: it governs that
+repository's conventions, and `WORKERS.md` adds how to work for this Zapper.
+
+**Folders and paths.** A folder exists while a live file sits under it or
+after someone creates it (`zapper_folders`), so an empty folder stays until
+it is deleted. Paths are relative and `/`-separated, at most 256 bytes. They
+can't have empty, `.` or `..` segments, backslashes, control characters,
+names with spaces around them, or the `guide/` prefix. A new file or folder
+is refused where a file or folder already is, or under a path that is a file.
+Paths saved before these rules stay editable.
+
+**Operations.** `deleteFile`, `moveFile`, `createFolder`, `moveFolder` and
+`deleteFolder` are ordinary Zapper commands with receipts, so the same
+authentication and revision rules apply as for every other action; workers
+can't call them. Deleting writes a new empty version and records it in
+`zapper_file_deletions`. History keeps every version, and restoring an
+earlier one brings the file back. Restoring a deletion itself is refused, as
+is restoring into a path a folder now holds. A move deletes the source and
+writes the destination, so history stays with the old path. `moveFolder` and
+`deleteFolder` must name every live file under the folder at the version the
+caller saw. The engine refuses the whole command if a file was added, edited
+or removed since, so nothing a client didn't show is swept up. Each command
+runs in one transaction.
+
+**Compatibility.** `zapper_files` keeps its columns, so an older engine
+opening the same database still reads and writes it; it shows a deleted file
+as an empty one. `Zapper.folders` and `ZapperFile.deleted` are additive and
+optional on the wire. Older clients ignore them: they list current files as
+before, and a history shows a deletion as an empty version.
+
+**Clients.** Native and browser Drive show the files as a tree. Folders come
+first, nesting is drawn with guides, and the open file is quietly selected.
+Folders toggle and files open in their own tab. Both clients create files and
+folders in the selected folder, rename or move, and delete only after a
+confirmation that lists everything the delete removes. Reserved files offer
+no move or delete. A failed save keeps the draft. On a version conflict the
+editor rebases onto the current version and says that saving replaces it; the
+browser also shows the latest text beside the draft.
+

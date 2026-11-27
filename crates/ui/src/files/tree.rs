@@ -21,11 +21,11 @@ use crate::{
 const TREE_FADE_BAND: f32 = 24.0;
 
 pub const TREE_ROW_HEIGHT: f32 = 27.0;
-pub(super) const TREE_INDENT: f32 = 14.0;
+pub(crate) const TREE_INDENT: f32 = 14.0;
 
 /// Draw each ancestor's guide in the row itself so virtualized rows join
 /// seamlessly, including when the parent has scrolled out of view.
-pub(super) fn with_indent_guides(
+pub(crate) fn with_indent_guides(
     row: AnyElement,
     depth: usize,
     height: f32,

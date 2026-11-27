@@ -2163,6 +2163,7 @@ mod tests {
                 pull_requests: vec![],
                 activity: vec![],
             }],
+            folders: vec![],
         };
         let full = serde_json::to_value(Some(&zapper)).unwrap();
         let args = json!({
