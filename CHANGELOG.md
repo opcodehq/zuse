@@ -19,26 +19,30 @@
 - A steered Devin turn no longer leaves the running command's chip stuck before the steer.
 - Devin retries reopening a conversation another process still holds for about five seconds before starting a fresh session; if it stays locked, the new session starts without the earlier context.
 
-## 0.27.10 - 2026-11-26
+## 0.27.10 - 2026-11-27
 
 ### Added
 
-- Cloud chats can run commands on your own computers. The computer you are typing on is used by default, another one only when the agent names it, and every command asks you first in place of the composer (Allow once, for this chat, or always). Commands show the device they ran on, stream their output and can be stopped. Manage computers in Settings → Cloud computer → Your computers.
-- Expandable agent activity in the transcript: "Working for…" during a turn and "Worked for…" afterwards, with the work behind the response one click away.
+- Cloud chats can run commands on your own computers. The computer you are typing on is used by default, another one only when the agent names it, and every command asks you first in place of the composer (Allow once, for this chat, or always). The agent waits for the result and continues in the same turn; requests appear instantly and output streams as the command runs. Manage computers in Settings → Cloud computer → Your computers.
+- Sync a cloud chat's files into your own local checkout: your branch and changes are saved first and restored when you turn it off, edits on your Mac pause sync instead of being overwritten, and commands on your Mac start in that folder.
+- Expandable agent activity in the transcript ("Working for…" / "Worked for…") and issue, PR, conversation and subagent references shown as status chips.
 - Steer an agent's sidekicks mid-turn and see them as subagents; open subagents from the web app.
-- A Cloud / Tokens toggle on the Usage page.
+- A Cloud / Tokens toggle on the Usage page, and a redesigned release dialog with full release notes.
 
 ### Changed
 
-- Easier-to-read chats: softer text contrast, clearer typography and spacing.
-- Sidebar threads are two-line cards with project or branch, PR state, diff size and where the thread runs, plus a Settled section and cleaner project headings.
-- Newly opened files appear first among file tabs, cloud chat tabs show your first message until the generated title arrives, and new conversation tabs stay visible while the chat list catches up.
-- Cloud settings follow the selected theme, and conversation navigation stays visible in split layouts.
+- Easier-to-read chats with softer contrast and clearer spacing, and a green glyph loader with rotating status text.
+- Sidebar threads are two-line cards with project or branch, PR state, diff size and where the thread runs, plus a Settled section.
+- New chats open on the project you choose from the sidebar, and New thread remembers your last pick (Local, Worktree or Cloud) across restarts.
+- The model detail card opens on the right when it fits; newly opened files appear first among file tabs; cloud chat tabs show your first message until the title arrives.
 
 ### Fixed
 
-- The new chat page keeps your unsent draft (text, files, project, Local or Cloud and model choices) when you switch to another chat and come back.
-- HTML files from cloud chats preview from the cloud computer instead of failing with a file-not-found error.
+- Claude models in cloud chats show the reasoning slider and 1M context again when a chat starts from a sidebar project.
+- A sent message leaves the cloud queue exactly once instead of lingering there.
+- File and image tabs on a running cloud computer load immediately instead of waiting on a wake.
+- HTML files from cloud chats preview from the cloud computer.
+- The new chat page keeps your unsent draft when you switch chats and come back.
 
 ## 0.27.9 - 2026-11-25
 
