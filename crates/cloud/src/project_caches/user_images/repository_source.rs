@@ -32,8 +32,8 @@ const STALE_SECS: u64 = 24 * 60 * 60;
 /// repository and its tar at once (hundreds of MB for a large history), so it
 /// must not live on a small or memory-backed `/tmp`.
 pub const SNAPSHOT_DIR_ENV: &str = "ZUSE_USER_IMAGE_REPOSITORY_DIR";
-/// Most Git stderr kept to explain a failed step.
-const STDERR_LIMIT: u64 = 16 * 1024;
+/// Newest Git stderr bytes kept to explain a failed step.
+const STDERR_TAIL: usize = 16 * 1024;
 
 /// The configured absolute directory, else `$TMPDIR/zuse-user-image-repos`.
 pub(crate) fn snapshot_root(configured: Option<std::ffi::OsString>) -> PathBuf {
@@ -41,6 +41,13 @@ pub(crate) fn snapshot_root(configured: Option<std::ffi::OsString>) -> PathBuf {
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
         .unwrap_or_else(|| std::env::temp_dir().join("zuse-user-image-repos"))
+}
+
+/// Drop all but the newest `limit` bytes.
+pub(crate) fn keep_tail(bytes: &mut Vec<u8>, limit: usize) {
+    if bytes.len() > limit {
+        bytes.drain(..bytes.len() - limit);
+    }
 }
 
 /// Why a Git step failed, from its stderr: a full staging disk is reported
@@ -208,13 +215,22 @@ async fn git(
         out
     });
     let mut stderr = child.stderr.take().expect("piped");
+    // Git reports the fatal cause last, so keep the newest bytes.
     let errors = tokio::spawn(async move {
         use tokio::io::AsyncReadExt;
-        let mut out = Vec::new();
-        let _ = (&mut stderr).take(STDERR_LIMIT).read_to_end(&mut out).await;
-        // Keep draining so a chatty Git never blocks on a full pipe.
-        let _ = tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await;
-        out
+        let mut tail = Vec::new();
+        let mut chunk = [0u8; 4096];
+        while let Ok(n) = stderr.read(&mut chunk).await {
+            if n == 0 {
+                break;
+            }
+            tail.extend_from_slice(&chunk[..n]);
+            if tail.len() > 2 * STDERR_TAIL {
+                keep_tail(&mut tail, STDERR_TAIL);
+            }
+        }
+        keep_tail(&mut tail, STDERR_TAIL);
+        tail
     });
     let deadline = tokio::time::Instant::now() + FETCH_TIMEOUT;
     let status = loop {

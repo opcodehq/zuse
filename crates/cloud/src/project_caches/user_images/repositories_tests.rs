@@ -454,6 +454,12 @@ fn a_full_staging_disk_is_named_and_git_stderr_is_summarized_safely() {
         "[withheld]"
     );
     assert!(stderr_summary(&[b'a'; 1000]).len() <= 240);
+    // Noisy progress ahead of the fatal line does not hide the cause.
+    let mut noisy = b"remote: Counting objects\n".repeat(4096);
+    noisy.extend_from_slice(full);
+    super::repository_source::keep_tail(&mut noisy, 16 * 1024);
+    assert_eq!(noisy.len(), 16 * 1024);
+    assert_eq!(failure_reason(&noisy), "repository_staging_full");
 }
 
 #[test]
