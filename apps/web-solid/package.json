@@ -19,6 +19,7 @@
     "e2e:model-picker": "node e2e/model-picker-parity.mjs",
     "e2e:web-parity": "node e2e/web-parity.mjs",
     "e2e:zappers": "node e2e/zappers.mjs",
+    "e2e:references": "node e2e/transcript/references.mjs",
     "e2e:solid2": "node e2e/solid2.mjs"
   },
   "dependencies": {
