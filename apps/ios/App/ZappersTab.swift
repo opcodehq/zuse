@@ -221,6 +221,21 @@ struct ZappersListView: View {
         symbol: AppIcon.zapper, title: "No active Zappers",
         detail: "Paused and archived Zappers are under All Zappers."
       )
+    } else if let computer = workspace.recentComputer {
+      ZappersEmptyState(
+        symbol: "desktopcomputer", title: "Zappers run on your computer",
+        detail: "Reconnect to \(computer.displayName) to see its Zappers and start new ones."
+      ) {
+        Button {
+          workspace.openRemote(computer)
+        } label: {
+          Label("Reconnect to \(computer.displayName)", systemImage: "arrow.clockwise")
+            .lineLimit(1).frame(maxWidth: 300)
+        }
+        .brandProminentButton().controlSize(.large)
+        .buttonBorderShape(.capsule)
+        .disabled(workspace.connectionState == "Connecting…")
+      }
     } else if workspace.isCloudActive {
       ZappersEmptyState(
         symbol: "desktopcomputer", title: "Zappers run on your computer",

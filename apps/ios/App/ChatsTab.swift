@@ -321,7 +321,17 @@ struct ChatsListView: View {
             }
             .brandProminentButton().disabled(signingIn)
           }
-          if workspace.savedConnections.isEmpty && workspace.environments.isEmpty {
+          if let computer = workspace.recentComputer,
+            workspace.isCloudActive || workspace.rpc == nil
+          {
+            Button {
+              workspace.openRemote(computer)
+            } label: {
+              Label("Reconnect to \(computer.displayName)", systemImage: "arrow.clockwise")
+                .lineLimit(1).frame(maxWidth: 300)
+            }
+            .buttonStyle(.bordered)
+          } else if workspace.savedConnections.isEmpty && workspace.environments.isEmpty {
             Button(action: connect) {
               Label("Add computer", systemImage: "desktopcomputer").frame(maxWidth: 260)
             }

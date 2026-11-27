@@ -195,20 +195,33 @@ import ZuseCore
       !ProcessInfo.processInfo.arguments.contains("--rpc-fixture")
     else { return }
     do {
-      guard let data = try Vault.read("last-workspace") else { return }
-      let saved = try JSONDecoder().decode(WorkspaceLocation.self, from: data)
-      switch saved.kind {
-      case .computer:
-        if let connection = savedConnections.first(where: { $0.id == saved.id }) {
-          openRemote(connection)
+      if let data = try Vault.read("last-workspace") {
+        let saved = try JSONDecoder().decode(WorkspaceLocation.self, from: data)
+        switch saved.kind {
+        case .computer:
+          if let connection = savedConnections.first(where: { $0.id == saved.id }) {
+            openRemote(connection)
+            return
+          }
+        case .cloud, .environment:
+          if account.signedIn, account.archiveIdentity == saved.account {
+            startConnection(
+              saved.kind == .cloud ? .cloud(saved.id) : .environment(saved.id), sessionID: nil,
+              wakePausedCloud: false)
+            return
+          }
         }
-      case .cloud, .environment:
-        guard account.signedIn, account.archiveIdentity == saved.account else { return }
-        startConnection(
-          saved.kind == .cloud ? .cloud(saved.id) : .environment(saved.id), sessionID: nil,
-          wakePausedCloud: false)
       }
     } catch { self.error = error.localizedDescription }
+    // Nothing to resume (no last place, a cloud chat from another session, a removed
+    // computer): reopen the computer you used most recently rather than an empty app.
+    if let computer = recentComputer { openRemote(computer) }
+  }
+  /// The saved computer connected to most recently, if any.
+  var recentComputer: RemoteConnection? {
+    savedConnections.max {
+      ($0.lastConnectedAt ?? .distantPast) < ($1.lastConnectedAt ?? .distantPast)
+    }
   }
 
   init() {
