@@ -6,54 +6,45 @@ description: Control whether an agent plans, edits, runs commands, or asks first
 section: composer
 order: 51
 platforms: [desktop, browser, mobile]
-providers: [claude, codex, grok, cursor, opencode, kiro]
+providers: [zuse, claude, codex, cursor, devin, grok, hermes, kiro, muse, opencode, pi, omp, antigravity]
 prerequisites: [/composer]
 related: [/composer/subagents, /reference/settings, /concepts/local-first]
 next: /composer/context-attachments
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
-
-Zuse has two related controls: **Plan mode** decides whether the agent may implement, while the **runtime permission mode** decides which actions can proceed without asking.
+Zuse has two separate controls: **Plan mode** decides whether the agent may change files, and the **access level** decides which actions can proceed without asking.
 
 ## Plan mode
 
-Plan mode is read-only. The agent can inspect and reason about the project, then proposes a plan. Mutating tools remain blocked even if the runtime permission mode is **Full access**.
+In Plan mode the agent inspects the project and proposes without changing files. Turn it on from **Plan mode** in the composer's **+** menu. While it's on, a **Plan** chip sits beside the access control; click it to turn Plan mode off. Turning Plan mode on or off doesn't change the access level.
 
-Turn Plan mode on or off with `⇧Tab`, the plan button in the composer, or **Plan mode** in the composer's **+** menu. When the agent proposes a plan, a **Review plan** bar appears above the composer:
+Plan mode isn't available for Pi, Muse Code, Zapper coordinator chats, or cloud launches; the menu item shows **Not available for this agent**.
 
-- **Approve** returns the session to normal execution so the agent can implement the plan.
-- **Hand off →** opens a new session tab in the same chat in build mode, with the plan attached as context.
-- **Abandon** declines the plan without implementing it.
+Use Plan mode when the implementation shape, scope, or tradeoff is not yet settled. Use normal execution when the desired result is already decided.
 
-You can also type feedback in the composer instead of approving. The proposed plan stays in the timeline, and the **Plan** panel can show it alongside the chat.
+## Access levels
 
-Use Plan mode when the implementation shape, scope, or tradeoff is not yet settled. Use normal execution when the desired result is already decision-complete.
+The access control is a single icon with three levels:
 
-## Runtime permission modes
+| Level | What it does |
+| --- | --- |
+| **Ask for approval** | Asks before restricted actions. |
+| **Approve for me** | The agent's own automatic reviewer decides, and asks you when needed. |
+| **Full access** | Runs actions without approval. Plan mode and sensitive paths (`.env`, `.ssh`, credentials, keys) still prompt. |
 
-| Mode | Automatically allowed | Still asks |
-| --- | --- | --- |
-| **Ask for approval** (locked) | Read-only tools | Bash, edits, web requests, MCP and other tools |
-| **Approve for me** | Actions approved by the provider's native safety review | Actions the provider escalates for your decision |
-| **Full access** | Ordinary tools | Plan-mode exits and sensitive paths |
+**Approve for me** is available only for Claude Code, which uses its native `auto` permission mode, and Codex, which uses its automatic reviewer. Other agents show it as **Not available for this agent**.
 
-Approve for me uses native automatic review in compatible Codex, Claude, and Grok installations. Grok requires its native Auto-mode feature to be enabled; when disabled, Grok asks for approval. Other providers ask for approval when this mode is inherited from a default. A provider that cannot start automatic review reports an error; Zuse does not silently grant Full access.
+Choosing a level in the composer also saves it as the default for future chats. An existing chat keeps its own level when the default changes. Changing a chat's access restarts its agent process with the new level; Zuse never reuses a process launched with different permissions.
 
-Changing access stops the current turn and retires the old provider runtime. Your next message resumes the conversation with the selected mode. This also ensures locking a previously unrestricted session takes effect.
+Full access uses the agent's unrestricted mode. It is not a sandbox. Questions the agent asks you stay interactive even in Full access.
 
-Existing sessions saved with Auto-accept edits or Auto-accept edits + Bash retain their behavior until you choose a new mode. Those legacy modes are no longer offered for new selections.
+## Permission prompts and saved rules
 
-Cursor runs local edits and commands through its bundled SDK sandbox with automatic review, so it does not use these modes. Pi does not support Plan mode or runtime permission modes.
+When an action needs approval, Zuse shows the request at the composer with its operation and target. Choose to allow it once, **Allow for this chat**, **Always allow in this project**, or **Deny this action**. Denying returns control to the agent so it can explain or choose another approach.
 
-Full access uses the provider's unrestricted execution mode. Zuse-owned sensitive-path approval gates and read-only Plan mode still apply; Full access is not a sandbox.
+Saved rules match the exact tool and resource in the same checkout, and never go beyond the chat's access level. Sensitive paths, sign-in operations, and leaving Plan mode always ask and can't be saved as rules. Type `/permissions` to review saved rules: change a rule to Allow, Ask, or Deny, move its scope, or remove it.
 
-## Permission prompts
+## Defaults
 
-When an action needs approval, Zuse places the request at the composer with its operation and context. Approve only after the target and consequence are clear. Denying a request returns control to the agent so it can explain, adjust, or choose another approach.
-
-The permission inspector records decisions and exposes applicable controls. Session overrides affect the active session. The default permission mode is configured globally in settings or per repository under **Default permission mode** in its repository settings, where **Project permissions → Manage** also lets you review and revoke saved tool permission decisions.
-
-## Slash commands
-
-Use `/plan` to enter Plan mode and `/run` to return to normal execution. `/mode &lt;name&gt;` changes the runtime posture; use `approval-required`, `auto`, or `full-access` as the name. The command picker also includes provider-specific commands only when they apply to the selected provider.
+Set the model and permission mode new chats start with in **Settings → Default models**.

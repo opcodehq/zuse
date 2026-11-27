@@ -6,11 +6,11 @@ description: Split work into isolated tasks or shared review sessions without lo
 section: how-to
 order: 8
 platforms: [desktop, browser, mobile]
-providers: [claude, codex, grok]
+providers: []
 prerequisites: [/composer/orchestration, /projects/worktrees]
 related: [/composer/parallel-agents, /composer/monitor-delegated-work, /workspace/changes-pull-requests]
 next: /how-to/local-test-in-browser
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
 Use delegation when two or more pieces can progress independently. Keep one coordinating agent responsible for integration, final checks, and the combined diff.
@@ -29,19 +29,19 @@ Do not parallelize a change that still depends on an unresolved shared design de
 
 ## Choose isolation or a shared session
 
-Ask the coordinating agent for a **separate task** when another agent will implement independently. Zuse creates a visible sidebar chat with its own worktree and branch.
+Zuse agents can start other agents through Zuse's own tools. They can create a **standalone chat**, which appears in the sidebar, or a **side chat** under the current chat, which opens in the right pane. Each can use a different provider or model, and can start in plan mode so it inspects and proposes without changing files.
 
-Ask for another **session tab** when the new agent should review or continue the exact same checkout. Session tabs share files and uncommitted changes, even when they use different providers or models.
+A chat an agent creates runs in the project folder unless the agent passes the path of an existing worktree. Side chats share the parent chat's checkout, including uncommitted changes. So when another agent will implement independently, give it its own checkout first: start a chat with **Worktree** selected yourself, or ask the coordinating agent to hand the new chat an existing worktree path.
 
 For example:
 
-> Create one isolated task for the settings implementation and one read-only session in this chat for review. The implementation owns the settings form and focused tests. The reviewer must not edit. Bring both results back here and run the combined checks before proposing a commit.
+> Create a standalone chat in the worktree at `<path>` for the settings implementation, and a side chat in plan mode for review. The implementation owns the settings form and focused tests. The reviewer must not edit. Bring both results back here and run the combined checks before proposing a commit.
 
-Review the requested boundary before approving task creation. Creating delegated work does not authorize merging, deployment, publication, or another external action.
+Review the requested boundary before the agent creates the chats, and approve the tool call if the chat's access mode asks. Creating delegated work does not authorize merging, deployment, publication, or another external action.
 
 ## Monitor at meaningful boundaries
 
-Use **Open chat** to inspect a delegated task directly. Read its latest conclusion, **Changes**, and terminal output instead of treating an idle or completed label as proof.
+Open a delegated chat from the sidebar, or a side chat in the right pane, to inspect it directly. Read its latest conclusion, **Diff**, and terminal output instead of treating an idle or finished status as proof.
 
 Send follow-up instructions when there is new evidence, a failed check, or a changed boundary. Avoid repeated status prompts while an agent is actively working.
 
@@ -61,7 +61,7 @@ When sessions share a checkout, use sequential ownership: one writer finishes an
 
 ## Recover partial work
 
-If a delegated response fails, open its chat before replacing it. The worktree may still contain useful files, commits, setup output, or a diagnosis. Continue the existing task when its environment is correct; add another session tab when a different provider should take over the same files; create a new isolated task only when the ownership or checkout boundary is wrong.
+If a delegated response fails, open its chat before replacing it. The worktree may still contain useful files, commits, setup output, or a diagnosis. Continue the existing task when its environment is correct; add a side chat or a new conversation tab when a different provider should take over the same files; create a new chat in its own worktree only when the ownership or checkout boundary is wrong.
 
 Preserve useful changes before archiving or abandoning the task. A written summary does not transfer files.
 

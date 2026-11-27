@@ -1,96 +1,106 @@
 ---
-title: API reference
+title: Control API
 icon: Code
-navTitle: "API reference"
-description: Start cloud workspaces, talk to their agents, and get notified when they finish, from your own scripts and services.
+navTitle: "Overview"
+description: Control a running Zuse engine from your own scripts, tools, and agents with the versioned application control API.
 section: api
 order: 1
-platforms: [cloud]
+platforms: [desktop, serve]
 providers: []
 prerequisites: []
-related: [/api-reference/quickstart, /api-reference/webhook-signatures, /how-to/choose-cloud-provider]
-lastVerified: latest
+related: [/api-reference/quickstart, /api-reference/cli, /api-reference/sdk, /api-reference/operations]
+next: /api-reference/quickstart
+lastVerified: "2026-11-27"
 ---
 
-The Zuse API gives your own tools the same cloud workspaces the app uses. You create a workspace with a prompt, the agent works on a fresh branch in a cloud machine, and you read its replies or get a webhook when it finishes. Slack bots, CI jobs, and internal tools are typical callers.
+The control API lets your own programs drive a running Zuse engine: the same engine the app uses. You read and change Zappers (persistent coordinators), watch devices, environments, and chats, queue messages, work with repositories, files, terminals, and diffs, and check for updates. The app, the `zuse-control` CLI, the `@zuse/sdk` package, and the CLI's MCP server all call the same engine operations.
 
-The API is part of Zuse Cloud. Your account needs a Cloud subscription or a connected cloud provider account.
+The control API never starts an engine. Zuse must already be running, locally or as Zuse Serve.
 
-## Base URL
+## Ways to call it
 
-```text
-https://api.zuse.sh/v1/api
+| Client | Use it for |
+| --- | --- |
+| [`zuse-control`](/api-reference/cli) | Shell scripts and one-off calls: `info`, `call`, `watch` |
+| [`zuse-control mcp`](/api-reference/cli#use-it-as-an-mcp-server) | Giving an agent the operations as MCP tools over stdin and stdout |
+| [`@zuse/sdk`](/api-reference/sdk) | Typed TypeScript client for Node.js 22 or newer |
+
+## Transport
+
+Every client opens one WebSocket to the engine and multiplexes calls over it.
+
+- A local engine listens on loopback. Its endpoint looks like `ws://127.0.0.1:<port>`.
+- Zuse Serve exposes the control endpoint at `/api/control`, for example `wss://<host>/api/control`. That endpoint accepts only authenticated control calls. Browser cookies grant no access, and raw engine operations are rejected.
+
+Plain `ws://` is accepted only for `localhost`, `127.0.0.1`, and `::1`. Any other host must use `wss://`. Endpoints can't contain a username, password, query string, or fragment, so a token never goes in the URL.
+
+## Discovery file
+
+When a local engine starts, it writes a discovery file at `<profile>/zappers/control.json`:
+
+```json title="control.json"
+{
+  "endpoint": "ws://127.0.0.1:<port>",
+  "token": "<control token>",
+  "apiVersion": 1,
+  "deviceId": "<this device's id>"
+}
 ```
 
-The [OpenAPI document](https://docs.zuse.sh/openapi.json) describes every endpoint and schema, if you want to generate a client.
+For the default local profile, `<profile>` is `~/.zuse-native/profiles/local` on macOS and Linux. If you set `ZUSE_DATA_DIR`, the profile lives under that directory instead.
+
+`zuse-control` looks for the file in `~/.zuse/profiles/local/zappers/` and `~/.zuse-native/profiles/local/zappers/`. For any other profile, pass `--discovery <path>` or set `ZUSE_CONTROL_FILE`.
+
+<SecurityNote title="Keep the discovery file private">
+The token in `control.json` is an installation-owner credential. The engine creates the `zappers` folder readable only by you, and `zuse-control` refuses a discovery file that group or other users can read. Don't copy the token into URLs, logs, or shared files.
+</SecurityNote>
 
 ## Authentication
 
-Send an API key as a bearer token:
+Every call carries the token inside its request envelope, not in a header or URL. A call with a missing or wrong token fails with `control.unauthorized`.
 
-```bash title="Terminal"
-curl https://api.zuse.sh/v1/api/projects \
-  -H "Authorization: Bearer $ZUSE_API_KEY"
-```
+For a remote engine, use an explicit discovery file whose `endpoint` is a `wss://.../api/control` URL, or pass the endpoint and token to the SDK directly. `--endpoint` overrides only the address; the token still comes from the discovery file.
 
-Create keys in the Zuse app under **Settings → Cloud workspaces → Advanced → API keys**. Keys start with `zk_` and are shown once, so copy the key when you create it. A key acts on the personal account that created it, with full access to that account's workspaces and webhooks. **Revoke** takes effect immediately.
+## Versioning
 
-Keep keys on your servers. The API doesn't allow calls from other websites' browser code.
+The API version is `1`. Call `ControlInfo` to check it. It returns:
 
-## Resources
-
-| Resource | What you can do |
+| Field | Meaning |
 | --- | --- |
-| [Workspaces](/api-reference/workspaces/create-workspace) | Start a cloud workspace on a new branch, list your workspaces, and check one's state |
-| [Messages](/api-reference/messages/send-message) | Send the agent a message and read the conversation |
-| [Attachments](/api-reference/attachments/upload-attachment) | Upload images, PDFs, and text files to attach to a message |
-| [Projects](/api-reference/projects/list-projects) | List the repositories you can start workspaces from |
-| [Providers](/api-reference/providers/list-agents) | List connected agents and the cloud machines available to you |
-| [Webhooks](/api-reference/webhooks/create-webhook) | Get a signed request when an agent finishes a turn |
+| `apiVersion` | Control API version. Clients refuse to continue when it doesn't match theirs. |
+| `appVersion` | Version of the engine you connected to |
+| `capabilities` | Optional features the engine supports, such as `zappers.v1` when Zappers are available |
+| `methods` | The operation catalog. See [Operations](/api-reference/operations). |
+| `schemas` | JSON Schemas, currently `ZapperCommand` |
 
-## Following a workspace
+`zuse-control` and the SDK both call `ControlInfo` and check `apiVersion` before they do anything else.
 
-A workspace's agent works asynchronously. After you create a workspace or send a message, follow progress in one of two ways:
+## Calls and subscriptions
 
-- **Webhooks.** Register an endpoint once, and Zuse sends a [`workspace.turn.completed`](/api-reference/webhooks/workspace-turn-completed) event with the agent's reply whenever a turn finishes.
-- **Polling.** Call [List messages](/api-reference/messages/list-messages) with the last `latestSeq` you saw as `afterSeq`. [Get workspace](/api-reference/workspaces/get-workspace) reports `agentStatus: "working"` while the agent is busy.
-
-A paused workspace resumes when you send it a message.
+Most operations return one result. Operations whose names start with `Watch`, plus `SubscribeTerminal` and `UpdateStatus`, are subscriptions: they keep sending values until you cancel them. Use `watch` for those and `call` for everything else.
 
 ## Errors
 
-Errors return a status code and a JSON body with a machine-readable code:
+A failed operation returns an error message. The SDK sorts errors into stable codes; see [Errors in the SDK](/api-reference/sdk#errors). `zuse-control` prints the message and exits with a non-zero status.
 
-```json
-{ "error": "cloud_project_required" }
-```
+A dropped connection fails every request still in flight. No client replays a request on its own, because a mutation may already have taken effect. Check the current state, then retry if you still need to.
 
-| Status | Meaning |
-| --- | --- |
-| `400` | The request is invalid. The code names the problem, such as `invalid_prompt`. |
-| `401` | The API key is missing (`missing_api_key`) or unknown or revoked (`invalid_api_key`). |
-| `403` | Your account needs Cloud (`cloud_entitlement_required`) or has a billing hold. |
-| `404` | The workspace, project, or other resource doesn't exist on your account. |
-| `409` | The request conflicts with current state, such as a branch that's already in use. |
-| `500`, `503` | Something failed on our side. Retry with backoff. |
+## Retrying Zapper commands safely
 
-Each endpoint page lists the codes it can return.
+Every `ZapperCommand` carries a `commandId` that you choose (letters, digits, `-`, and `_`, up to 160 characters). The engine stores each command's input and result together:
 
-## Retries and idempotency
+- Sending the same `commandId` with identical input returns the original result, even if later commands changed the Zapper.
+- Sending the same `commandId` with different input fails with `command ID was already used with different input`.
 
-Creating a workspace, sending a message, and uploading an attachment accept an `Idempotency-Key` header of up to 200 characters. If a request with the same key already succeeded, Zuse returns the original result instead of doing the work twice; a create that's replayed returns `200` instead of `201`. Reusing a key with a different request returns `409`.
+So when a command's outcome is uncertain, reuse its `commandId` and input. Use a new ID for every new command.
 
-Use a fresh key, such as a UUID, for each new action, and reuse it when you retry that action.
+## Updates to the CLI and SDK
 
-## Limits
+Packaged Zuse apps include the `zuse-control` binary and the SDK. At startup the app verifies them and installs the binary under `~/.zuse/control/<version>`, linked from `~/.zuse/bin/zuse-control`; the previous version stays available. If you installed `@zuse/sdk` globally with npm, the app updates it too. It never edits project manifests or lockfiles.
 
-| Limit | Value |
-| --- | --- |
-| Prompt and message text | 65,536 characters |
-| Attachments per message | 8 |
-| Attachment size | 20 MiB |
-| Messages per page | 200 |
-| Webhook endpoints per account | 20 |
-| Agent reply text | 16,384 characters |
+Call `ControlUpdateStatus` to see the installed version and update state, and `RetryControlUpdate` to retry a failed update. A source build without a bundle reports `unmanaged`.
 
-Timestamps are Unix epoch milliseconds.
+<Cards>
+  <Card title="Quickstart" href="/api-reference/quickstart" description="Make your first call with the CLI and the SDK." />
+  <Card title="Operations" href="/api-reference/operations" description="Every operation in the catalog, and Zapper command actions." />
+</Cards>

@@ -10,44 +10,55 @@ providers: []
 prerequisites: [/workspace]
 related: [/composer/context-attachments, /workspace/changes-pull-requests, /reference/keybindings]
 next: /workspace/terminal-browser
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
 
-The **Files** panel shows the active environment's directory tree. Select a file to open it in the main area without losing the conversation tab. The tree marks Git changes, including deleted and renamed files, so repository state stays visible while browsing.
+The **Files** panel shows the active chat's checkout as a directory tree. Select a file to open it in the workspace pane beside the conversation. The tree marks Git changes, including deleted and renamed files, so repository state stays visible while you browse.
+
+## Open the Files panel
+
+- Choose **Files** from the **+** menu in the workspace pane, or from the launcher an empty pane shows.
+- Type `/files` in the composer.
+- Press `⌘E` (`Ctrl+E` on Windows and Linux) to show or hide the file tree.
 
 ## Find and manage files
 
-Press `⌘P` or click **Search files** in the panel header to search the current project or worktree by name. The header also has **New File** and **New Folder**.
+The panel header has **New File**, **New Folder**, and **Search files**, which filters the tree by name. To search the whole checkout from anywhere, press `⌘P`: it opens the command palette on its **Files** tab.
 
-Right-click a file or folder for:
+Shift-click or `⌘`-click to select several entries. Drag files or folders onto another folder to move them. Right-click an entry for:
 
-- **Open in editor**
-- **Rename**, which edits the name in place
-- **Attach to chat**, which adds it to the composer
-- **Copy path**, which copies the absolute path
-- **Open in**, which lists the installed apps that can open it
-- **New File** and **New Folder**
-- **Delete**, which asks for confirmation; deletion cannot be undone
+- **Add to chat**, which adds it to the composer
+- **Copy path** (**Copy paths** for a selection), which copies the full path
+- **Rename…**, which edits the name in place
+- **Delete…**, which asks for confirmation; deletion cannot be undone
+- **Reveal in Finder** (**Reveal in File Explorer** on Windows, **Reveal in Files** on Linux)
+- **Show hidden files** or **Hide hidden files**
+
+New files and folders can be created only in a checkout on this computer.
 
 ## Views
 
-Switch between **Diff**, **Edit**, and **Preview** in the editor toolbar:
+The editor toolbar changes with the file type:
 
-- **Edit** is the syntax-highlighted editor.
-- **Diff** compares the working tree with `HEAD`.
-- **Preview** renders Markdown and HTML files. Markdown files open in Preview by default.
+- **Diff** and **Edit** appear for a changed text file that Git can compare. **Diff** shows the change; **Edit** is the syntax-highlighted editor.
+- Markdown files open as a rendered preview. Use **Show Markdown code** to edit the source and **Preview Markdown** to return.
+- HTML files offer **Preview / Edit** to switch between the rendered page and its source.
+- **Enable word wrap** or **Disable word wrap** toggles long-line wrapping.
+- **Reveal file in tree** selects the open file in the Files panel, and **Open in** lists the installed applications that can open it.
 
-PNG, JPEG, GIF, WebP, and AVIF files open as image previews. Binary files that cannot be previewed show their size instead.
+Common image formats, including PNG, JPEG, GIF, WebP, SVG, BMP, and TIFF, open as image previews. Binary files, very large files, and files with unsupported encodings show a message instead of an editor. Symlink targets and files with mixed line endings open read-only.
 
 ## Save safely
 
-Press `⌘S` to save. A dot and **modified** mark unsaved changes, and unsaved drafts are kept when you switch to another file. Zuse checks the file's modification time to avoid silently overwriting a newer external edit. When the file changed on disk, the editor reports the conflict; choose **Reload** to discard your changes and load the new content, or keep editing.
+Press `⌘S` to save. Zuse checks the file on disk before writing so it does not silently overwrite a newer external edit. The toolbar shows **Save failed**, **Save conflict**, **Changed on disk**, or **Deleted on disk** when something needs your attention; your editor buffer is kept in every case.
+
+When the open file changes outside Zuse, a banner says **This file changed outside Zuse.** Choose **Keep Editing** to keep your version, or **Reload from Disk** to load the new content. If you have unsaved edits, Zuse asks again before **Discard & Reload** replaces them.
 
 ## Comment on code
 
-Select lines in **Edit** or **Diff** and click the gutter button to open a comment box. Describe the change, then press `Enter` or click **Save annotation** to attach the comment and its line range to the current chat, where it appears with the composer's annotations. Comments need an open chat session. See [Context and attachments](/composer/context-attachments).
+Click the gutter beside a line, or place the cursor and press `⌘⇧A` (**Annotate selection**), to open a comment box. Describe the change and click **Comment**. The comment and its line are staged in the composer's **Annotations** tray for the current chat, where you can edit or remove it before sending. See [Context and attachments](/composer/context-attachments).
 
 ## Add context to a prompt
 
-Use `@` in the composer to find a file without navigating the tree. Mention resolution is scoped to the same active checkout, so worktree chats do not accidentally attach the main checkout's version.
+Use `@` in the composer to find a file without navigating the tree. Mention search is scoped to the same active checkout, so a worktree chat does not attach the main checkout's version.

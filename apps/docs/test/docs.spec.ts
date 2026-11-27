@@ -30,11 +30,16 @@ test("browser and orchestration guides render as linked documentation", async ({
 	await expect(
 		page.getByRole("link", { name: "Run agents in parallel" }).first(),
 	).toBeVisible();
-	await page.getByRole("link", { name: "agent CLI" }).first().click();
+	await page
+		.getByRole("link", { name: "Scripting and agent tools" })
+		.first()
+		.click();
 	await expect(page).toHaveURL(/\/serve\/agent-cli/u);
-	await expect(page.getByRole("heading", { name: "Agent CLI" })).toBeVisible();
 	await expect(
-		page.getByText("zuse chat create", { exact: false }).first(),
+		page.getByRole("heading", { name: "Scripting and agent tools" }),
+	).toBeVisible();
+	await expect(
+		page.getByText("zuse pair --json", { exact: false }).first(),
 	).toBeVisible();
 });
 
@@ -87,49 +92,24 @@ test("documentation search supports the keyboard", async ({
 	await page.goto("/start/first-chat");
 	await page.keyboard.press("Control+k");
 	const search = page.getByRole("textbox", { name: "Search" });
-	await search.fill("status json");
-	await expect(
-		page.getByRole("button", { name: /Serve status JSON/ }).first(),
-	).toBeVisible();
-	await page
-		.getByRole("button", { name: /Serve status JSON/ })
-		.first()
-		.click();
-	await expect(page).toHaveURL(/\/serve\/status-json/u);
+	await search.fill("zuse.json");
+	const result = page
+		.getByRole("button", { name: /Share actions with zuse\.json/ })
+		.first();
+	await expect(result).toBeVisible();
+	await result.click();
+	await expect(page).toHaveURL(/\/projects\/repository-settings/u);
 });
 
-test("documentation search indexes only pages and headings", async ({
+test("documentation search ships a static page and heading index", async ({
 	request,
 }) => {
-	const shortQuery = await request.get("/api/search?query=n");
-	expect(shortQuery.ok()).toBeTruthy();
-	const shortResults = (await shortQuery.json()) as SearchResult[];
-	expect(shortResults.length).toBeGreaterThan(0);
-	expect(shortResults.every((result) => result.type !== "text")).toBeTruthy();
-
-	const pageQuery = await request.get("/api/search?query=status%20json");
-	expect(pageQuery.ok()).toBeTruthy();
-	const pageResults = (await pageQuery.json()) as SearchResult[];
-	expect(pageResults).toContainEqual(
-		expect.objectContaining({
-			type: "page",
-			url: "/serve/status-json",
-		}),
-	);
-
-	const headingQuery = await request.get("/api/search?query=JSON%20contract");
-	expect(headingQuery.ok()).toBeTruthy();
-	const headingResults = (await headingQuery.json()) as SearchResult[];
-	expect(headingResults).toContainEqual(
-		expect.objectContaining({
-			type: "heading",
-			url: "/serve/agent-cli#json-contract",
-		}),
-	);
-
-	const bodyQuery = await request.get("/api/search?query=modification%20time");
-	expect(bodyQuery.ok()).toBeTruthy();
-	expect(await bodyQuery.json()).toEqual([]);
+	const index = await request.get("/api/search");
+	expect(index.ok()).toBeTruthy();
+	expect(index.headers()["content-type"]).toContain("application/json");
+	const body = await index.text();
+	expect(body).toContain("/projects/repository-settings");
+	expect(body).toContain("/serve/agent-cli");
 });
 
 test("navigation uses flat labeled groups and a filled active row", async ({
@@ -199,7 +179,7 @@ test("Markdown responses and missing routes are explicit", async ({
 	const markdown = await request.get("/serve/command-reference.md");
 	expect(markdown.ok()).toBeTruthy();
 	expect(markdown.headers()["content-type"]).toContain("text/markdown");
-	expect(await markdown.text()).toContain("zuse serve status [--json]");
+	expect(await markdown.text()).toContain("zuse serve [--listen <addr>]");
 	const missing = await request.get("/not-a-public-route");
 	expect(missing.status()).toBe(404);
 });
@@ -226,13 +206,13 @@ test("LLM requests receive Markdown without changing the page URL", async ({
 		headers: { "User-Agent": "GPTBot/1.0" },
 	});
 	expect(crawler.headers()["content-type"]).toContain("text/markdown");
-	expect(await crawler.text()).toContain("# Zuse Serve");
+	expect(await crawler.text()).toContain("# zuse serve");
 
 	const index = await request.get("/llms.txt");
 	expect(index.ok()).toBeTruthy();
 	expect(index.headers()["content-type"]).toContain("text/markdown");
 	const indexText = await index.text();
-	expect(indexText).toContain("Serve command reference");
+	expect(indexText).toContain("[Command reference]");
 	expect(indexText).toContain(
 		"https://docs.zuse.sh/serve/command-reference.md",
 	);
@@ -270,13 +250,11 @@ test("mobile navigation contains search", async ({ page, isMobile }) => {
 	await expect(page.getByRole("textbox", { name: "Search" })).toBeVisible();
 });
 
-test("API reference renders generated endpoint pages", async ({ page }) => {
-	await page.goto("/api-reference/workspaces/create-workspace");
+test("API reference covers the control API", async ({ page }) => {
+	await page.goto("/api-reference");
 	await expect(
-		page.getByRole("heading", { name: "Create workspace", level: 1 }),
+		page.getByRole("heading", { name: "Discovery file" }).first(),
 	).toBeVisible();
-	await expect(page.getByText("/v1/api/workspaces").first()).toBeVisible();
-	await expect(page.getByText("Idempotency-Key").first()).toBeVisible();
 });
 
 test("OpenAPI document and retired provider routes are served", async ({
@@ -286,12 +264,10 @@ test("OpenAPI document and retired provider routes are served", async ({
 	expect(document.ok()).toBeTruthy();
 	const spec = (await document.json()) as {
 		openapi: string;
-		paths: Record<string, unknown>;
 	};
 	expect(spec.openapi).toBe("3.1.0");
-	expect(Object.keys(spec.paths)).toContain("/v1/api/workspaces");
 
 	const gemini = await request.get("/providers/gemini", { maxRedirects: 0 });
 	expect(gemini.status()).toBe(308);
-	expect(gemini.headers().location).toBe("/providers/acp#gemini-cli");
+	expect(gemini.headers().location).toMatch(/\/providers\/acp#gemini-cli$/u);
 });

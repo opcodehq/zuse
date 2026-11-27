@@ -4,13 +4,13 @@ icon: Columns3
 navTitle: "Parallel agents"
 description: Split independent work across agents while preserving isolation and a clear integration path.
 section: composer
-order: 55
+order: 56
 platforms: [desktop, browser, mobile]
-providers: [claude, codex, grok]
+providers: [zuse, claude, codex, cursor, devin, grok, hermes, kiro, muse, opencode, pi, omp, antigravity]
 prerequisites: [/composer/orchestration]
 related: [/projects/worktrees, /how-to/local-parallel-worktrees, /workspace/changes-pull-requests]
 next: /composer/monitor-delegated-work
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
 
@@ -30,7 +30,7 @@ Keep one agent responsible when the work changes a shared data model, repeatedly
 
 ## Start with isolation
 
-For concurrent editing, ask for a separate delegated task. Zuse creates a new chat on its own worktree and branch, leaving the parent and other tasks untouched. Use another session tab only when sharing the current diff is the point of the exercise.
+For concurrent editing, give each editing task its own worktree and branch, either by starting those chats yourself in worktree mode or by asking the coordinating agent to point each delegated chat at its own worktree. A chat an agent creates works in the project folder unless it's given a worktree. Share a checkout only when sharing the current diff is the point of the exercise.
 
 Before work begins, confirm:
 
@@ -60,7 +60,7 @@ After integration, run the broad checks once against the combined state. Focused
 
 ## When agents share a checkout
 
-Every session tab inside one chat shares that chat's checkout. Provider subagents also work inside the parent environment unless the provider explicitly supplies another boundary. Separate conversation histories do not mean separate files.
+Every conversation tab inside one chat shares that chat's checkout, and so does a delegated chat created without its own worktree. Provider subagents also work inside the parent environment. Separate conversation histories do not mean separate files.
 
 If sharing is necessary, name one integrator, give each agent exclusive files or modules, and state whether commits are allowed. Ask every agent to re-read the current diff before editing because another session may have changed it since the previous turn.
 

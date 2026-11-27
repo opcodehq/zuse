@@ -2,7 +2,7 @@
 title: Create your first chat
 icon: MessageSquarePlus
 navTitle: "First chat"
-description: Open a repository, choose an isolated environment, and take an agent task through review.
+description: Open a repository, choose where the agent works, and take a task through review.
 section: start
 order: 3
 platforms: [desktop]
@@ -10,7 +10,7 @@ providers: [claude, codex, grok, cursor, opencode, kiro, pi]
 prerequisites: [/start/install]
 related: [/concepts/project-chat-session, /projects/worktrees, /composer/modes-permissions, /workspace/changes-pull-requests]
 next: /workspace/changes-pull-requests
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
 
@@ -18,19 +18,19 @@ A good first task is small enough to review but meaningful enough to touch the r
 
 ## 1. Open the project
 
-Choose **New project** in the sidebar, then **Existing folder**, and select the repository. Zuse adds it to the projects panel and reads its current Git state. Opening a project does not copy or move the repository. Zuse adds `.context` to the repository's `.gitignore`, because chat attachments are stored there, and creates a starter `.zuse/settings.toml` if the repository does not have one.
+Choose **New project** in the sidebar and open the repository's folder, or clone it. Zuse adds it to the sidebar and reads its Git state. Opening a project does not copy or move the repository.
 
 ## 2. Start the chat
 
-Choose **New chat** (`⌘N`, or `Ctrl+N` on Linux). Before sending, select:
+Choose **New thread** in the sidebar (`⌘N`, or `Ctrl+N` on Windows and Linux). Before sending, check the controls on the composer:
 
-- **Provider and model** — the coding agent that will handle the first session.
-- **Workspace** — **Worktree** for a fresh isolated branch, or **Local** to use the main checkout.
-- **Permission mode** — how often Zuse pauses for approval.
+- **Agent and model**: the chip shows the model and its reasoning level. Open it to pick another agent or model.
+- **Workspace**: **Worktree** gives the chat a fresh isolated branch, **Local** uses the main checkout, and **Cloud** runs the chat on a cloud computer when your account has Cloud.
+- **Access**: **Ask for approval**, **Approve for me**, or **Full access**. Your choice also becomes the default for new chats.
 
-For an implementation task, use a worktree. It keeps the task on its own branch and leaves your main checkout available for other work. For a read-only explanation, the main checkout is usually enough.
+For an implementation task, use a worktree. It keeps the task on its own branch and leaves your main checkout free for other work. For a read-only explanation, the main checkout is usually enough.
 
-To continue existing work, use **Create from…** to start from a pull request, a branch, or a GitHub issue, or **Import chat** to continue a recent Claude Code or Codex conversation from this computer.
+To continue work you started elsewhere, use **Import chat** to pick up a recent conversation from a supported agent app on this computer.
 
 ## 3. Give the agent a verifiable outcome
 
@@ -42,26 +42,24 @@ Find the cause, fix it without changing the surrounding layout, and run the focu
 Tell me which behavior you verified and call out any checks you could not run.
 ```
 
-Use `@` to attach a relevant file. You can also attach images, PDFs, or other files when the task depends on visual or document context.
+Type `@` to mention a file. You can also attach images and other files, or drop them onto the composer.
 
-## 4. Follow the work without micromanaging it
+## 4. Follow the work
 
-The timeline separates reasoning, tool calls, edits, questions, and errors. You can:
+The transcript shows the agent's messages, tool calls, edits, and questions as they happen. You can:
 
 - answer a question inline;
-- approve or deny a requested action;
-- queue a follow-up while the current turn is running;
-- stop a turn that is heading in the wrong direction;
-- open a changed file or terminal without leaving the chat.
+- allow or deny a requested action, for this chat or always in this project;
+- queue another message while the agent works, or press `⌘Enter` to send it into the running turn now;
+- stop the turn by pressing `Esc` twice;
+- open a changed file, the diff, or a terminal beside the chat.
 
-Turn on Plan mode (`⇧Tab`) before sending when you want exploration and a proposed implementation before any edits.
+Turn on Plan mode (`⇧Tab`) before sending when you want the agent to explore and propose a plan before it edits anything.
 
 ## 5. Review the result
 
-Open **Changes** and read the diff. Select only the files that belong in the commit, run the relevant checks in **Terminal**, and send corrections in the same chat if needed.
-
-When the branch is ready, use the action in the top bar to commit and push, create a pull request, fix failing checks, resolve conflicts, mark a draft ready, or merge. The available action changes with the actual Git and pull-request state.
+Open the **Diff** panel on the right and read the changes. Run the relevant checks in **Terminal**, and send corrections in the same chat if needed. When the branch is ready, commit, push, and open a pull request. See [Changes and pull requests](/workspace/changes-pull-requests).
 
 ## What persists
 
-The project, chat, session timeline, tool results, and worktree association remain available after an app restart. A provider process may have to resume or restart, but Zuse keeps the durable local history as the record of what happened.
+The project, the chat, its conversations, tool results, and its worktree stay available after you restart the app. An agent process may have to resume, but Zuse keeps the conversation history on your computer.

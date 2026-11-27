@@ -1,58 +1,53 @@
 ---
 title: "Remote access"
 icon: Radio
-description: "Use the same Zuse environment from a browser, iPhone, or another computer, nearby or away from your network."
+description: "Use the same Zuse environment from a phone, a browser, or another computer, on your network or away from it."
 section: "Remote access"
 order: 1
 platforms: [desktop, web, mobile, serve]
 providers: []
 prerequisites: []
-related: [/remote/local-browser, /remote/nearby-pairing, /remote/hosted-access, /remote/tailscale, /remote/security]
-next: /remote/local-browser
-lastVerified: latest
+related: [/remote/nearby-pairing, /remote/local-browser, /remote/tailscale, /remote/hosted-access, /remote/security]
+next: /remote/nearby-pairing
+lastVerified: "2026-11-27"
 ---
 
+Remote access lets another device use a computer that is already running Zuse. That computer owns the repositories, agents, credentials, terminals, and chats. A phone, browser, or other desktop app sends requests to it and shows the results; nothing moves onto the other device.
 
-Remote access gives another Zuse client a secure view into an environment that is already running. The environment owns the repositories, agents, credentials, terminals, and durable session state. A browser, phone, or other desktop app sends commands to that environment and renders its results; it does not move the workspace onto the client device.
+## Where to find it
 
-All remote access settings live in the desktop app under **Settings → Remote access**. The **Connections** card lists three ways other Zuse apps and browsers can reach the computer:
+In the desktop app, open **Settings → Remote access**. The page has three parts:
 
-| Connection | Reaches the computer from | Account required? |
+- **This computer** shows whether other devices can reach it, the **Connect device** button, and a switch for each way to connect: **Wi-Fi** and **Tailscale**. **Zuse Relay** is listed as coming soon.
+- **Devices** lists every paired phone, browser, and computer with a **Revoke** button, plus computers linked to your Zuse account. The **+** button adds another computer to this app.
+- **Advanced settings** holds browser access at an address and certificate you choose, Tailscale HTTPS, and the device registry for your workspace.
+
+On a computer without a display, the same options are flags on [`zuse serve`](/serve/).
+
+## Ways to connect
+
+| Way | Reaches the computer from | Turn it on |
 | --- | --- | --- |
-| **Zuse Serve** | Anywhere, through an encrypted outbound connection | Yes |
-| **Tailscale** | Devices on the same tailnet | No Zuse account; Tailscale must be signed in |
-| **Local network** | Devices on the same Wi-Fi | No |
+| **Wi-Fi** | Devices on the same network | The **Wi-Fi** switch, or `zuse serve --lan` |
+| **Tailscale** | Devices on your tailnet, at home or away. Headscale works too. | The **Tailscale** switch, or `zuse serve --lan` |
+| **Zuse account** | Devices signed in to your account, from any network | `zuse link`, or `zuse serve --account` |
 
-Turn on at least one connection, then use **Connect another device** to authorize a specific browser or app.
+Zuse picks the fastest working route on its own and moves to a better one when it appears, for example from Tailscale to Wi-Fi when you get home. Every route is end-to-end encrypted between the device and the computer.
 
-| What you need | Best path |
+## Pick a guide
+
+| What you want | Guide |
 | --- | --- |
-| A browser on another device | [Browser access](/remote/local-browser/) |
-| An iPhone near your computer | [Nearby pairing](/remote/nearby-pairing/) |
-| A browser or iPhone away from the computer | [Hosted remote access](/remote/hosted-access/) |
-| Private access over your tailnet | [Tailscale access](/remote/tailscale/) |
-| Another computer's projects in your desktop app | [Other computers](/remote/other-computers/) |
-| A headless Mac or Linux computer | [Zuse Serve](/serve/) |
+| Use Zuse on your phone | [Pair a phone](/remote/nearby-pairing/) |
+| Open the computer in a browser on another device | [Browser access](/remote/local-browser/) |
+| Learn what the browser client can do | [Web client](/remote/web-client/) |
+| Reach the computer over your tailnet | [Tailscale access](/remote/tailscale/) |
+| Reach the computer from anywhere with your account | [Account access](/remote/hosted-access/) |
+| Open another computer's workspace in this desktop app | [Other computers](/remote/other-computers/) |
+| Run Zuse on a headless machine | [zuse serve](/serve/) |
 
-## What follows you
-
-Once connected, supported clients read the environment's projects, chats, sessions, agent output, and repository state. Actions still execute on the environment. Closing a browser tab or putting the phone to sleep does not relocate or duplicate a running agent.
-
-Hosted clients show an environment as offline when its heartbeat stops; bring the computer and Zuse back online to reconnect.
-
-## Choose the narrowest access you need
-
-Use the local network when both devices are together. Use Tailscale when every device you use is already on your tailnet. Use Zuse Serve only when you need to reach the computer from anywhere. You can revoke each authorized browser or phone independently under **Connected devices** in **Settings → Remote access**.
-
-<SecurityNote title="Execution stays on the environment">
-Remote access does not install agent providers on the client. Provider CLIs and their authentication must exist on the computer that runs the environment.
+<SecurityNote title="Execution stays on the computer">
+Remote access does not install agents on the other device. Agent CLIs and their sign-ins must exist on the computer that runs Zuse.
 </SecurityNote>
 
-## Continue
-
-- [Authorize a browser with a connect link](/remote/local-browser/)
-- [Pair a nearby iPhone](/remote/nearby-pairing/)
-- [Reach an account-linked computer from anywhere](/remote/hosted-access/)
-- [Share privately over Tailscale](/remote/tailscale/)
-- [Add other computers to the desktop app](/remote/other-computers/)
-- [Understand the security boundaries](/remote/security/)
+<NextStep href="/remote/nearby-pairing/" label="Pair a phone" />

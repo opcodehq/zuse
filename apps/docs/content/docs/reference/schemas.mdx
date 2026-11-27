@@ -1,35 +1,33 @@
 ---
-title: Public schemas
+title: Configuration files
 icon: Braces
-navTitle: "Public schemas"
-description: Stable JSON Schema URLs for user and repository configuration.
+navTitle: "Configuration files"
+description: The files Zuse reads and writes for preferences, project actions, and cloud environments.
 section: reference
 order: 93
 platforms: [desktop]
 providers: []
 prerequisites: []
-related: [/reference/settings, /reference/keybindings, /projects/repository-settings]
+related: [/reference/settings, /reference/keybindings, /projects]
 next: /reference/diagnostics
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
 
-Zuse publishes schemas at stable `zuse.sh` URLs so editors and agents can validate configuration without depending on the docs deployment host.
+The current Zuse app is configured through its Settings UI. It does not read the `~/.zuse/settings.json`, `~/.zuse/keybindings.json`, or `.zuse/settings.toml` files that earlier versions used, so the JSON schemas for those files no longer describe how the app is configured.
 
-```text
-https://zuse.sh/schemas/settings.schema.json
-https://zuse.sh/schemas/repository-settings.schema.json
-https://zuse.sh/schemas/keybindings.schema.json
-```
+## Files Zuse uses
 
-| Schema | Local file |
-| --- | --- |
-| `settings.schema.json` | `~/.zuse/settings.json` |
-| `repository-settings.schema.json` | `<repository>/.zuse/settings.toml` after TOML-to-object interpretation |
-| `keybindings.schema.json` | `~/.zuse/keybindings.json` |
+| File | Where | Purpose |
+| --- | --- | --- |
+| `ui-settings.json` | Zuse data directory | App preferences and keyboard shortcuts. Written by the app; change it through Settings |
+| `worktree-settings.json` | Zuse data directory | Where this computer creates new worktrees |
+| `project-actions.json` | Zuse data directory | Saved project actions for each project on this computer |
+| `zuse.json` | Project folder | Actions you can import into a project explicitly |
+| `.zuse/setup.json` | Repository | The environment recipe for the repository's cloud computers, when present |
 
-The schemas use JSON Schema 2020-12 and set `additionalProperties: false`, so your editor flags unknown or misspelled properties. A constant `schemaVersion` of `1` makes incompatible future formats explicit. The user settings and keybindings schemas require it.
+The data directory is `~/.zuse-native` on macOS and Linux and `%LOCALAPPDATA%\Zuse` on Windows, unless `ZUSE_DATA_DIR` sets another one.
 
-Schema validation runs only in your editor. When Zuse reads `settings.json` or `keybindings.json`, it keeps the values it recognizes and ignores the rest. See [User settings](/reference/settings#direct-editing) and [Keybindings](/reference/keybindings#file-format).
+The keyboard shortcut import on **Settings → Keyboard shortcuts** still accepts a `keybindings.json` file from the Electron version with `schemaVersion` `1`. See [Keybindings](/reference/keybindings).
 
-Public schema routes remain on `zuse.sh` even though guides are served from `docs.zuse.sh`. The routes allow cross-origin requests, so browser-based editors and tools can fetch them.
+For project actions and cloud environments, see [Projects and worktrees](/projects).

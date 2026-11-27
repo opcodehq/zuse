@@ -1,64 +1,51 @@
 ---
-title: Repository settings
+title: Share actions with zuse.json
 icon: Settings2
-description: Configure shared worktree behavior in .zuse/settings.toml.
+navTitle: "zuse.json"
+description: Offer project actions to everyone who opens a repository by committing a zuse.json file.
 section: projects
-order: 42
-platforms: [desktop]
-providers: [claude, codex, grok, cursor, opencode, kiro]
-prerequisites: [/projects]
-related: [/projects/file-includes, /projects/scripts, /reference/schemas]
-next: /projects/file-includes
-lastVerified: latest
+order: 43
+platforms: [desktop, browser]
+providers: []
+prerequisites: [/projects/scripts]
+related: [/projects/scripts, /projects/worktrees]
+next: /composer
+lastVerified: "2026-11-27"
 ---
 
+[Project actions](/projects/scripts) are saved on each Zuse host, not in the repository. To give everyone who works in a repository the same starting commands, commit a `zuse.json` file at the root of the project folder. Zuse reads it and offers its entries for import; nothing in the file runs until someone reviews and saves it as an action.
 
-Commit `.zuse/settings.toml` when everyone working in a repository should get the same Zuse setup. When you add a repository that has no settings file, Zuse creates a starter `.zuse/settings.toml` with empty scripts and common environment-file includes. User preferences remain in `~/.zuse/settings.json` and can be overridden by applicable repository values.
-
-```toml
-schemaVersion = 1
-autoCreateWorktree = false
-
-file_include_globs = [
-  ".env",
-  ".env.local",
-  ".env.*.local",
-]
-
-[scripts]
-setup = "bun install"
-run = "bun run dev"
-archive = ""
-auto_run_after_setup = false
-
-[environment_variables]
-NODE_ENV = "development"
+```json
+{
+  "actions": [
+    { "name": "Setup", "command": "bun install --frozen-lockfile", "icon": "configure", "runOnWorktreeCreate": true },
+    { "name": "Dev", "command": "bun run dev", "icon": "play" },
+    { "name": "Test", "command": "bun test", "icon": "test" }
+  ]
+}
 ```
 
-## Top-level fields
+## Fields
 
-| Field | Purpose |
-| --- | --- |
-| `schemaVersion` | Settings format; currently `1` |
-| `defaultProviderId` | Optional provider default for this repository |
-| `defaultModel` | Optional model default |
-| `defaultRuntimeMode` | Optional runtime permission default |
-| `autoCreateWorktree` | Whether new chats default to isolated worktrees |
-| `worktreeBaseDir` | Optional custom directory for worktree creation |
-| `file_include_globs` | Local files linked into new worktrees |
-| `scripts` | Setup, run, archive, and auto-run behavior |
-| `environment_variables` | String values passed to repository scripts |
+The file has one top-level field, `actions`, an array of up to 50 entries. Each entry has:
 
-Use the public schema at `https://zuse.sh/schemas/repository-settings.schema.json` for editor validation.
+| Field | Required | Value |
+| --- | --- | --- |
+| `name` | Yes | Action name, up to 80 characters |
+| `command` | Yes | Command to run, up to 16 KiB |
+| `icon` | Yes | One of `play`, `test`, `lint`, `configure`, `build`, `debug` |
+| `runOnWorktreeCreate` | No | `true` to offer the action as the project's worktree setup command. Defaults to `false` |
 
-## Edit settings in the app
+Unknown fields are rejected, and the whole file must be valid JSON no larger than 256 KiB. Zuse reads `zuse.json` from the project folder, not from individual worktrees.
 
-Open a project's settings from the gear next to it in the sidebar, or from the project's entry under **Repositories** in **Settings**. The page edits the same file and is organized into:
+## Import actions
 
-- **Defaults**: a repository **Default agent** and model, and a **Default permission mode**. Leave the overrides off to inherit your global settings.
-- **Project permissions**: **Manage** reviews and revokes saved tool permission decisions for this repository.
-- **Worktrees**: **Auto-create a worktree for new chats** sets whether the composer's workspace picker pre-selects a fresh worktree. The list shows this repository's existing worktrees and can remove a checkout; uncommitted changes are saved to its branch first.
-- **Scripts**: the setup, run, and archive scripts, and **Auto-run after setup**.
-- **Environment variables** and **Worktree file includes**.
+Open the environment summary in a chat and expand **Actions**. Entries from `zuse.json` appear below your saved actions with **Import**. Importing opens the action editor filled in from the file, so you can review the command before choosing **Save action**. In the browser app the entries are listed under **Available in project files** with **Review and import**.
 
-Do not commit secrets in `[environment_variables]`. Use ignored local files and [worktree file includes](/projects/file-includes) for machine-specific secrets.
+An entry is hidden once you have a saved action with the same command or the same name (ignoring case). Editing `zuse.json` later does not change actions you already saved.
+
+If the file is invalid, the **Actions** section shows a message starting with **Invalid zuse.json:** and the reason, such as invalid JSON, an unknown field, a missing name or command, or too many actions.
+
+## Keep secrets out
+
+`zuse.json` is committed with your code. Do not put tokens, passwords, or private machine paths in commands. Read secrets from ignored local files or your shell environment instead.

@@ -1,0 +1,99 @@
+---
+title: "Set up a repository for cloud chats"
+icon: Wrench
+navTitle: "Repository setup"
+description: "Give each repository the setup commands, services, variables, and secrets its cloud computers need, in Settings or in .zuse/setup.json."
+section: how-to
+order: 27
+platforms: [desktop, browser]
+providers: []
+prerequisites: [/how-to/cloud-start-chat]
+related: [/how-to/choose-cloud-provider, /how-to/cloud-start-chat]
+next: /how-to/cloud-share-chat
+lastVerified: "2026-11-27"
+---
+
+## Goal
+
+Make every new cloud computer for a repository install its dependencies, start its services, and receive the settings and tokens the agent needs, before the agent starts.
+
+## Applicability
+
+Each repository connected to Zuse Cloud has its own environment. Tools every repository needs belong in the machine image instead; see [Choose a cloud computer](/how-to/choose-cloud-provider/). Changes apply to new computers. Running computers keep the environment they started with.
+
+## Steps
+
+### Add setup commands
+
+1. Open **Settings → Cloud computer → Environments** and choose the repository. If it isn't listed, choose **Add repository**.
+2. Under **Setup commands**, fill in:
+   - **Install** runs once on each fresh computer, from the repository root, before the agent starts.
+   - **Refresh dependencies** runs when the lockfile or setup changes.
+3. To reuse a command you've already run successfully on your computer, choose **Add tested command**, paste it, and choose **Add to Install**. It's appended to **Install**.
+4. Save your changes.
+
+Use secrets for tokens rather than putting them in commands.
+
+### Add services
+
+Services are long-running processes, such as a development server, that start with the computer and restart if it reboots.
+
+1. Under **Services**, choose **Add service**.
+2. Enter a **Name**, such as `web`, a command, such as `pnpm dev`, and optionally its **Port**.
+3. Save your changes.
+
+Each service needs a unique name. A repository can have up to 16 services.
+
+### Add variables and secrets
+
+1. Under the repository's variables, choose **Paste .env** to paste a `.env` file, or **Add one by one**. Every `NAME=value` line becomes a row you can review before saving.
+2. Keep **Secret** on for tokens and passwords. Turn it off for non-sensitive settings, which are saved as plain text with the repository's setup.
+3. For a secret your setup commands need, turn on **Available to setup commands**. The agent and services always receive secrets.
+4. Choose **Save changes**.
+
+Secrets are encrypted and can't be read back; to change one, choose **Replace value**. Deleting a secret stops new computers from receiving it, but running computers keep the value they already have.
+
+### Keep the setup in the repository
+
+To version the setup with your code, commit a `.zuse/setup.json` file at the repository root. When the file exists, the Environments page shows **Managed by the repository** and **From .zuse/setup.json**, and you change commands and services by editing the file.
+
+```json title=".zuse/setup.json"
+{
+  "version": 1,
+  "scripts": {
+    "initialize": "pnpm install --frozen-lockfile",
+    "refresh": "pnpm install"
+  },
+  "startup": [
+    { "name": "web", "command": "pnpm dev", "port": 3000 }
+  ],
+  "environment": {
+    "NODE_ENV": "development"
+  },
+  "setupTimeoutSeconds": 900
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `version` | Always `1`. |
+| `scripts.initialize` | The **Install** command. |
+| `scripts.refresh` | The **Refresh dependencies** command. |
+| `startup` | Up to 16 services. Each has a `name` (letters, digits, `-` and `_`, up to 80 characters), a `command`, an optional `port` (1 to 65535), and an optional `timeoutSeconds` (1 to 900, default 60). |
+| `environment` | Up to 128 plain-text variables. Names use uppercase letters, digits, and `_`, and can't start with a digit. |
+| `secretBindings` | Up to 64 names of secrets the setup uses. |
+| `setupTimeoutSeconds` | Time limit for setup, 1 to 3600 seconds. Defaults to 900. |
+
+Zuse rejects the file if it has unknown fields, is larger than 256 KiB, or points outside the repository. Never put secret values in it: a variable whose name contains `TOKEN`, `SECRET`, `PASSWORD`, `PRIVATE`, `CREDENTIAL`, or `API_KEY` is rejected. Store those as secrets in Settings instead.
+
+## Verify
+
+- Start a cloud chat on the repository and ask the agent to run the tests or open the service. The install has already run, and services are up.
+- **Secret saved. New computers for this repository will receive it.** confirms a saved secret.
+
+## Troubleshooting and recovery
+
+- **This repository's setup couldn't be loaded:** reload the page. If the repository has a `.zuse/setup.json`, check that it's valid JSON with only the fields above.
+- **Saved project setup changed. Reload saved settings before changing it:** someone else saved first. Reload, then make your change again.
+- **Use a unique service name, a command and at most 16 startup services:** fix the service list before saving.
+- **A setup command fails on a new computer:** run the same command on your own checkout first, then add it with **Add tested command**.

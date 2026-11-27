@@ -2,88 +2,112 @@
 title: Keybindings
 icon: Keyboard
 navTitle: "Keybindings"
-description: Customize application, navigation, pane, composer, and editor commands.
+description: Every default keyboard shortcut and how to change them.
 section: reference
 order: 92
 platforms: [desktop]
 providers: []
 prerequisites: []
-related: [/desktop/navigation, /reference/settings, /reference/schemas]
+related: [/desktop/navigation, /reference/settings]
 next: /reference/schemas
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
 
-Open **Settings → Keyboard shortcuts** to record a new shortcut, add another binding for a command, or reset a command to its default. The editor warns when two commands share a shortcut. Overrides are stored in:
+Open **Settings → Keyboard shortcuts** to record a new shortcut, reset one row, or choose **Restore defaults**. Zuse refuses a recording that conflicts with another shortcut and names the shortcut that already uses it. Press `⌘/` anywhere to see the shortcut reference.
 
-```text
-~/.zuse/keybindings.json
-```
-
-The file holds only your overrides. Defaults are built into the app, so updates can change them without rewriting your file.
+Your shortcuts are saved with your other preferences. See [User settings](/reference/settings#where-preferences-are-stored). To bring over custom rules from the Electron version of Zuse, use the import action on the Keyboard shortcuts page and choose its `keybindings.json`.
 
 ## Default shortcuts
 
-`mod` is Command on macOS and Ctrl on other platforms.
+The table lists macOS defaults. On Windows and Linux, `⌘` is `Ctrl` and `⌥` is `Alt`; rows marked † have a different default there, listed under the table.
 
-| Command ID | Action | Default |
-| --- | --- | --- |
-| `new-chat` | New chat | `mod+n` |
-| `new-chat-without-project` | New chat without a project | `mod+alt+n` |
-| `open-project` | Open project | `mod+o` |
-| `settings` | Open or close Settings | `mod+,` |
-| `close-tab` | Close tab | `mod+w` |
-| `toggle-left-sidebar` | Toggle projects panel | `mod+b` |
-| `toggle-right-sidebar` | Toggle files panel | `mod+alt+b` |
-| `toggle-terminal` | Toggle terminal | `mod+j` |
-| `focus-composer` | Focus composer | `mod+l` |
-| `search-files` | Search files | `mod+p` |
-| `open-chat-switcher` | Switch chat | `mod+k` |
-| `next-tab` / `prev-tab` | Next or previous tab | `mod+shift+]` / `mod+shift+[` |
-| `select-tab-1` … `select-tab-8` | Go to tab 1–8 | `mod+1` … `mod+8` |
-| `select-last-tab` | Go to last tab | `mod+9` |
-| `new-tab` | New tab | `mod+t` |
-| `next-chat` / `prev-chat` | Next or previous chat | `ctrl+tab` / `ctrl+shift+tab` |
-| `next-panel` / `prev-panel` | Next or previous right-pane panel | `mod+alt+]` / `mod+alt+[` |
-| `focus-next-pane` / `focus-prev-pane` | Move focus to the next or previous region | ``ctrl+` `` / ``ctrl+shift+` `` |
-| `composer.submit` | Submit message | `enter` |
-| `composer.newline` | Insert newline | `shift+enter` |
-| `composer.forceSubmit` | Send now or steer the running agent | `mod+enter` |
-| `composer.queueSubmit` | Queue instead of steering | `alt+enter` |
-| `composer.previousMessage` | Recall an earlier message at the start of the composer | `up` |
-| `composer.nextMessage` | Recall a newer message or restore the draft at the end of the composer | `down` |
-| `composer.deleteToStart` | Delete to line start | `ctrl+u` |
-| `composer.deleteToEnd` | Delete to line end | `ctrl+k` |
-| `composer.deleteWord` | Delete previous word | `ctrl+backspace` or `alt+backspace` |
-| `composer.interrupt` | Stop the response and keep the draft | `escape` twice |
-| `composer.togglePlanMode` | Toggle Plan mode | `shift+tab` |
-| `editor.save` | Save file | `mod+s` |
-| `editor.annotate` | Annotate selection | `mod+shift+a` |
+### Application
 
-Enable **Settings → General → Composer → Direct steer** to make Enter steer a running agent by default. It is off by default. Alt+Enter keeps messages queued. Offline messages stay queued until delivery is available. History recall pauses while an attachment is uploading. It preserves saved annotations and attachments and returns to the unsent draft with Down. Typing in a recalled message starts a new draft. Press Escape twice within half a second to stop a response; a single Escape can dismiss menus. New-chat text, image files, and pasted context stay with the composer when you change projects on the same computer.
+| Action | Default |
+| --- | --- |
+| New chat | `⌘N` |
+| New chat without a project | `⌘⌥N` |
+| Open project | `⌘O` |
+| Settings | `⌘,` |
+| Close tab | `⌘W` |
+| Toggle projects panel | `⌘B` |
+| Toggle files sidebar | `⌘⌥B` |
+| Toggle terminal | `⌘J` |
+| Focus composer | `⌘L` |
+| Open chat switcher | `⌘K` |
+| Show keyboard shortcuts | `⌘/` |
+| Find in chat | `⌘F` |
+| Switch model | `⌥P` |
+| Change reasoning effort | `⌥T` |
+| Toggle fast mode | `⌥O` |
+| Expand or collapse tool details † | `Ctrl+O` |
+| Show or hide task list † | `Ctrl+T` |
+| Stop background tasks | `⌘⇧K` |
 
-`composer.*` commands work only while the composer has focus, and `editor.*` commands work only in the file editor. All other commands are global. Shortcuts for new chat, open project, settings, close tab, the sidebar and terminal toggles, and focus composer also appear in the menu bar.
+### Navigation
 
-## File format
+| Action | Default |
+| --- | --- |
+| Next tab / Previous tab | `⌘⇧]` / `⌘⇧[` |
+| Go to tab 1–8 | `⌘1` … `⌘8` |
+| Go to last tab | `⌘9` |
+| New tab | `⌘T` |
+| Next chat / Previous chat | `Ctrl+Tab` / `Ctrl+⇧Tab` |
+| Next panel / Previous panel | `⌘⌥]` / `⌘⌥[` |
+| Focus next pane / Focus previous pane | `Ctrl+\`` / `Ctrl+⇧\`` |
 
-```json
-{
-  "schemaVersion": 1,
-  "rules": [
-    { "key": "mod+shift+k", "command": "open-chat-switcher" },
-    { "key": "mod+alt+t", "command": "toggle-terminal" }
-  ]
-}
-```
+### Composer
 
-A rule for a command replaces that command's default shortcut. To bind several keys to one command, add one rule per key. When two rules use the same key, the later rule wins.
+These work only while the composer has focus.
 
-Keys combine modifiers with one base key, joined by `+`. Modifiers are `mod`, `cmd` (or `meta`), `ctrl`, `alt` (or `option`), and `shift`. Use `cmd` or `ctrl` to target one physical modifier on every platform.
+| Action | Default |
+| --- | --- |
+| Send message | `Enter` |
+| Insert newline | `⇧Enter` |
+| Send message now | `⌘Enter` |
+| Queue message | `⌥Enter` |
+| Toggle plan mode | `⇧Tab` |
+| Previous sent message / Next sent message | `↑` / `↓` |
+| Delete to line start † | `Ctrl+U` |
+| Delete to line end † | `Ctrl+K` |
+| Delete previous word † | `Ctrl+Backspace` |
+| Stop agent (press twice) | `Esc` |
+| Paste deleted text † | `Ctrl+Y` |
+| Cycle deleted text | `⌥Y` |
+| Stash draft † | `Ctrl+S` |
+| Search sent messages † | `Ctrl+R` |
+| Hold to dictate | `⌘D` |
 
-Zuse reads at most 256 rules and skips rules with an unknown command. A rule whose key has no base key, such as `shift` alone, has no effect. Zuse applies saved edits while it is running. Leave out the optional `when` field. Zuse does not define any context names for it, so a global shortcut whose `when` names one never fires.
+### Files, panels, and other
 
-For validation and completion, configure your editor with:
+| Action | Default |
+| --- | --- |
+| Search files | `⌘P` |
+| Save file | `⌘S` |
+| Annotate selection | `⌘⇧A` |
+| Toggle files panel | `⌘E` |
+| Reload browser page | `⌘⇧R` |
+| Random wallpaper | `⌘U` |
+| Capture Appshot † | `Ctrl+⌥Space` |
+| Archive session | Unbound |
+| Jump to session 1–9 | Unbound |
 
-```text
-https://zuse.sh/schemas/keybindings.schema.json
-```
+† Windows and Linux defaults:
+
+| Action | Default |
+| --- | --- |
+| Expand or collapse tool details | `Ctrl+Shift+O` |
+| Show or hide task list | `Ctrl+Shift+T` |
+| Delete to line start / Delete to line end | Unbound |
+| Delete previous word | `Ctrl+Backspace` |
+| Paste deleted text | `Ctrl+Y` |
+| Stash draft | `Ctrl+S` |
+| Search sent messages | `Alt+R` |
+| Capture Appshot (Linux) | `Ctrl+Alt+Space` |
+
+## Composer behavior
+
+By default, `Enter` sends a message, and a message sent while the agent is working joins the queue. `⌘Enter` sends it into the running turn right away, and `⌥Enter` always queues. Turn on **Direct steer** in **Settings → General** to make `Enter` send to a running agent right away.
+
+`Esc` stops the agent only when you press it twice. **Settings → General** also lets you choose whether `Enter` or the modifier key sends messages and whether `Esc` stops the active agent when no dialog or menu is open.

@@ -28,6 +28,19 @@ describe("docs worker", () => {
 		);
 	});
 
+	it("redirects removed pages to their replacements", async () => {
+		const includes = await get("/projects/file-includes");
+		expect(includes.status).toBe(308);
+		expect(includes.headers.get("location")).toBe(
+			"https://docs.zuse.sh/projects/worktrees",
+		);
+
+		const endpoint = await get("/api-reference/workspaces/create-workspace");
+		expect(endpoint.headers.get("location")).toBe(
+			"https://docs.zuse.sh/api-reference",
+		);
+	});
+
 	it("serves page Markdown at <path>.md and the legacy route", async () => {
 		const page = await get("/start/install.md");
 		expect(await page.text()).toBe("markdown /api/markdown/start/install.md");

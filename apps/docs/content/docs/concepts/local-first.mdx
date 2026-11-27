@@ -2,34 +2,39 @@
 title: Local-first data and security
 icon: ShieldCheck
 navTitle: "Local-first data"
-description: Understand where Zuse stores work, credentials, and persistent history.
+description: Understand where Zuse stores your work, its preferences, and its history.
 section: concepts
 order: 12
 platforms: [desktop, browser, mobile]
 providers: []
 prerequisites: [/concepts]
-related: [/reference/settings, /reference/diagnostics, /projects/repository-settings]
+related: [/reference/settings, /reference/diagnostics, /projects/worktrees]
 next: /desktop
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
 
-The desktop service is the source of truth for local projects, chats, sessions, messages, tool calls, worktrees, and settings. Zuse stores durable application state under `~/.zuse/` and leaves repository contents in their existing checkout or Zuse-created worktree.
+The Zuse engine on each computer is the source of truth for that computer's projects, chats, conversations, tool results, and checkouts. Repository contents stay in their existing folder or in a worktree Zuse created.
+
+## Where Zuse keeps data
+
+| What | Location |
+| --- | --- |
+| App data: chats, history, preferences | `~/.zuse-native` on macOS and Linux, `%LOCALAPPDATA%\Zuse` on Windows |
+| New worktrees | `~/.zuse/worktrees/<repository>/<worktree>` by default |
+
+Set `ZUSE_DATA_DIR` to use another data directory. Two running engines cannot share one data directory. Choose another worktree location in **Settings → General**.
 
 ## Credentials
 
-Provider authentication remains with the provider's own CLI or supported account flow. API keys managed by Zuse are encrypted, and the encryption key is held by your system keychain: the macOS Keychain, or the Secret Service on Linux (such as GNOME Keyring or KWallet). They are not written to `~/.zuse/settings.json`.
+Agent sign-in stays with each agent's own CLI and its own credential files. Zuse does not move them into its data directory. Model account keys that Zuse stores itself are encrypted.
 
-Zuse does not passively enumerate browser credentials. Importing browser sessions is an explicit action under **Settings → Browser**. Imported cookies are encrypted and restored on restart; passwords are never imported.
+When an agent asks for a secret through a private secret request, you type it into a masked input. Zuse uses it for the one approved request, and the value does not enter the model context or the chat history.
 
 ## Remote clients
 
-Browser and mobile clients connect to a running Zuse computer; they do not become a second canonical database for the project. Revoking a paired device removes its access. See [Remote access](/remote) for connection and threat-model details.
-
-## Diagnostics
-
-Diagnostics are designed to report runtime health and bounded technical metadata. Review **Settings → Diagnostics** before exporting or sharing a report; **Help → Export Diagnostics for Bug Report** creates a bundle you can attach to an issue.
+Browsers, phones, and other computers connect to a running Zuse computer; they do not become a second copy of its database. Revoke a paired device to remove its access. See [Remote access](/remote) for connection and security details.
 
 ## Backups
 
-Repository files should continue to be protected with Git and your normal backup strategy. If you back up Zuse's local application data, do it while the app is closed so the SQLite state is captured consistently.
+Keep protecting repository files with Git and your normal backup strategy. If you back up Zuse's data directory, quit the app first so the state is captured consistently.

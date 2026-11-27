@@ -1,20 +1,4 @@
 {
 	"title": "API reference",
-	"pages": [
-		"index",
-		"quickstart",
-		"webhook-signatures",
-		"---Workspaces---",
-		"...workspaces",
-		"---Messages---",
-		"...messages",
-		"---Attachments---",
-		"...attachments",
-		"---Projects---",
-		"...projects",
-		"---Providers---",
-		"...providers",
-		"---Webhooks---",
-		"...webhooks"
-	]
+	"pages": ["index", "quickstart", "cli", "sdk", "operations"]
 }

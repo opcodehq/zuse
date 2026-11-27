@@ -1,64 +1,53 @@
 ---
-title: "Hosted remote access"
+title: "Account access"
 icon: Globe
-navTitle: "Hosted access"
-description: "Link a computer to your account with Zuse Serve and reach it from a browser or iPhone away from your local network."
+navTitle: "Account access"
+description: "Link a computer to your Zuse account so your other signed-in devices can reach it from any network."
 section: "Remote access"
-order: 4
-platforms: [desktop, web, mobile, serve]
+order: 6
+platforms: [desktop, mobile, serve]
 providers: []
 prerequisites: [/remote]
-related: [/serve, /mobile/connect, /remote/security, /remote/recovery]
-next: /remote/tailscale
-lastVerified: latest
+related: [/serve, /remote/other-computers, /remote/security, /remote/recovery]
+next: /remote/other-computers
+lastVerified: "2026-11-27"
 ---
 
+Linking a computer to your Zuse account makes it available to your other devices wherever you are signed in, without Tailscale or open router ports. The computer stays the owner of its code, credentials, and chats; your account supplies sign-in and discovery.
 
-Hosted remote access adds identity, computer discovery, and a secure connection path to an environment you already run. In the desktop app this connection is called **Zuse Serve**. The remote client signs in to the same account, selects an online computer, and connects to it. The environment remains the authority for code, credentials, agent processes, and session state.
+## Link a computer
 
-## Link the desktop app
-
-1. Sign in to Zuse in the desktop app.
-2. Open **Settings → Remote access**.
-3. Under **Connections**, choose **Set up** next to **Zuse Serve**, then confirm **Set up Zuse Serve**.
-4. Wait until the row shows **Available anywhere** with the computer's address.
-
-Zuse Serve uses an encrypted outbound connection. No router ports are opened, and the connection stays available after restart until you turn it off. If the computer disconnects, it remains listed as offline and remote access resumes when the computer reconnects.
-
-## Open it from a browser
-
-Open the hosted Zuse web app at `code.zuse.sh` and sign in with the same account. In the sidebar, turn on **Include laptop chats**, then choose the computer to show its chats.
-
-To review every linked computer, open **Settings → Remote access** in the web app. Each computer shows **Online**, **Offline · saved**, or **Status unavailable**, its known addresses, and when it was last seen. Choose **Show chats** to open it. Availability reflects the latest heartbeat, not a connection test.
-
-If no computers appear, set up Zuse Serve in the desktop app or run [Zuse Serve](/serve/) on a headless machine, then choose **Refresh computers**. If a computer is missing after you linked it, confirm both clients use the same account.
-
-## Open it from iPhone
-
-In the mobile app, open **Settings**, choose **Sign in**, then choose **Sign in for remote access**. Account-linked computers appear in **Settings → Computers** with **Online**, **Offline**, or **Checking…** state. Online computers connect automatically, and their chats appear in the inbox.
-
-Local pairing remains available when signed out. Signing in is only required for account-linked access away from the local network.
-
-## Switch computers
-
-In the desktop app, use the computer switcher in the sidebar to move between computers. In the web app, change the computer under **Include laptop chats**. On iPhone, choose the computer while creating a chat.
-
-## Turn remote access off
-
-In the desktop app, choose **Turn off** next to **Zuse Serve**, then confirm **Turn off Zuse Serve**. Devices that rely on internet access disconnect; Tailscale and local-network access keep working if enabled.
-
-To remove a computer from your account entirely, choose **Remove computer** in the web app's **Settings → Remote access**. This revokes remote access for your account and frees the computer's slot. Chats and files on the computer are not deleted.
-
-For a Serve environment, run:
+Run this in a terminal on the computer while the desktop app or `zuse serve` is running:
 
 ```sh
-zuse serve logout
+zuse link --name studio-mac
 ```
 
-Logging out revokes that environment's account registration, stops its service, and clears its saved Serve session. It does not delete repositories or workspaces.
+If you are not signed in, Zuse prints an address and a code. Open the address on any device and confirm the code. When it finishes, Zuse prints `Available through your account as … at …`. `--name` is the computer name shown on your other devices; it defaults to the hostname.
 
-<Warning title="Remote access is not workspace storage">
-Do not use hosted access as a substitute for repository backups. It is a control path to a computer, not cloud storage for the workspace.
+On a headless computer you can link at startup instead:
+
+```sh
+zuse serve --account
+```
+
+Run `zuse status` to see the signed-in account and the linked computer.
+
+## Open it from another device
+
+- **Desktop app:** sign in, then open **Settings → Remote access**. Linked computers appear under **Devices**. Choose **Connect** to open one, or **Remove** to remove it from your account. A computer that runs an older version shows **Update Zuse on this computer to connect.**
+- **Mobile app:** open **Settings**, choose **Sign in to Zuse**, and sign in with the same account. Computers linked to your account appear with your other computers.
+
+## Unlink
+
+```sh
+zuse unlink
+```
+
+The computer is no longer available through your account. Local chats stay on the computer, and devices paired over Wi-Fi or Tailscale keep working.
+
+<Warning title="Account access is not a backup">
+Linking makes a computer reachable. It does not copy repositories or chats to the cloud.
 </Warning>
 
-<NextStep href="/remote/tailscale/" label="Share privately over Tailscale" />
+<NextStep href="/remote/other-computers/" label="Open other computers in the desktop app" />

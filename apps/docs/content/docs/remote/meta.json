@@ -2,10 +2,11 @@
 	"title": "Remote access",
 	"pages": [
 		"index",
-		"local-browser",
 		"nearby-pairing",
-		"hosted-access",
+		"local-browser",
+		"web-client",
 		"tailscale",
+		"hosted-access",
 		"other-computers",
 		"security",
 		"recovery"

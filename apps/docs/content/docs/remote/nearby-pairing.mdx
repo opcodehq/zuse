@@ -1,61 +1,45 @@
 ---
-title: "Pair a nearby iPhone"
+title: "Pair a phone"
 icon: Smartphone
-navTitle: "Nearby pairing"
-description: "Connect the mobile app directly to a nearby Mac with device discovery, identity checks, and explicit approval."
+navTitle: "Pair a phone"
+description: "Pair the Zuse mobile app with a computer by scanning a QR code, pasting a link, or signing in over SSH."
 section: "Remote access"
-order: 3
-platforms: [desktop, mobile]
+order: 2
+platforms: [desktop, mobile, serve]
 providers: []
 prerequisites: [/remote]
-related: [/mobile/connect, /remote/local-browser, /remote/security, /remote/recovery]
-next: /mobile
-lastVerified: latest
+related: [/mobile/connect, /remote/security, /remote/recovery]
+next: /remote/local-browser
+lastVerified: "2026-11-27"
 ---
 
-
-Zuse for iPhone discovers nearby Macs over Wi-Fi or peer-to-peer. Pairing is local and does not require a Zuse account. The Mac must explicitly approve the phone before Zuse stores a revocable device credential.
+Pairing gives the Zuse app on your phone its own access to one computer. It does not need a Zuse account. The phone keeps the pairing and reconnects on its own until you revoke it.
 
 <Workflow>
-  <Step title="Make the Mac discoverable">
-    On the Mac, open **Settings → Remote access**. If **Local network** is off, choose **Turn on** and confirm **Restart and turn on**.
+  <Step title="Let the phone reach the computer">
+    In the desktop app, open **Settings → Remote access** and turn on **Wi-Fi**, **Tailscale**, or both. The status under **This computer** changes from **Only this computer can use Zuse** to **Reachable on your Wi-Fi** or **Reachable at home and away**. On a headless computer, run `zuse serve --lan`.
   </Step>
-  <Step title="Choose the Mac on iPhone">
-    In the mobile app, open **Settings → Computers → Connect to a nearby Mac**. Nearby Macs appear automatically. If exactly one is found, Zuse begins securing the connection for you.
+  <Step title="Show a code">
+    Choose **Connect device**. The **Pair a device** dialog opens on the **Phone** tab with a QR code and a countdown. On a headless computer, run `zuse pair --app` to print the QR code in the terminal.
   </Step>
-  <Step title="Match the safety phrase">
-    The phone shows **Approve on your Mac** with a short phrase and waits. The Mac opens **Is this you trying to connect?** with the phone label, device identifier, and the same phrase. Confirm the words match exactly.
+  <Step title="Scan it">
+    In the Zuse app, tap **Add computer** and point the camera at the code. If the phone cannot scan, choose **Copy link** in the dialog and paste it under **Or paste a link** on the phone.
   </Step>
-  <Step title="Allow the phone">
-    Choose **Allow** on the Mac. The phone stores the approved connection and opens the inbox.
+  <Step title="Confirm">
+    The dialog shows that the device is connected, and the phone appears under **Devices**.
   </Step>
 </Workflow>
 
-Choose **Not now** to deny only this request. Choose **Block device** when you do not recognize the phone; blocked devices cannot silently repeat the same pairing attempt.
+A code works once and expires after ten minutes. Choose **New code** for another one; an unused code is discarded when you replace it.
 
-## Pair with a QR code
+## Pair over SSH
 
-QR pairing is the fallback when discovery is unavailable:
+If the computer is not set up yet, or only listens on loopback, the phone can do it over SSH. In the app, choose **Add computer → Connect with SSH** and enter `user@host` (`user@host:2222` and `ssh://user@host` also work). The phone creates its own SSH key. Add that key to the computer, or enter your password once so Zuse can add it to `~/.ssh/authorized_keys`; the password is not saved.
 
-1. On the Mac, open **Settings → Remote access**, choose **Create link** under **Connect another device**, then choose **Show QR**.
-2. On iPhone, open the scanner with the pairing button in the inbox header, **Scan QR Code** on an empty inbox, or **Use QR Code** on the nearby screen.
-3. Allow camera access and scan the QR code.
+The phone then runs `zuse pair` on the computer. If Zuse is not running there, it offers to start `zuse serve`, and **Keep running after restart** installs it with `zuse daemon install --serve`. The computer must already have the `zuse` command. The SSH host key is trusted the first time, and a changed key is refused. When the computer only accepts local connections, the phone reaches it through the SSH session.
 
-Pairing codes are one-time credentials and expire after five minutes. Generate a new code instead of sharing an expired screenshot.
+## Revoke a phone
 
-## When discovery finds nothing
+On the computer, open **Settings → Remote access**, find the phone under **Devices**, and choose **Revoke**. This ends its access at once. Removing the computer on the phone (**Forget computer**) only deletes the phone's copy.
 
-- Keep Zuse open on the Mac and make sure Wi-Fi is enabled on both devices.
-- In iPhone Settings, allow **Local Network** access for Zuse.
-- After a few seconds without results, choose **Use QR Code**.
-- On networks that isolate clients, use peer-to-peer discovery when available or move both devices to a trusted network.
-
-<SecurityNote title="Match both screens">
-The phone checks the nearby service's encrypted transport identity before requesting access. The matching safety phrase gives you a human-verifiable check on both screens. Do not approve when the phrase or device identity differs.
-</SecurityNote>
-
-## Revoke the phone
-
-On the Mac, open **Settings → Remote access**, find the phone under **Connected devices**, and choose **Revoke**. To remove only the phone's local copy, open **Settings → Computers** on iPhone, choose the computer, then choose **Remove Computer**. Revoking on the Mac is the authoritative way to end access.
-
-<NextStep href="/mobile/" label="Use Zuse on iPhone" />
+<NextStep href="/remote/local-browser/" label="Open the computer in a browser" />

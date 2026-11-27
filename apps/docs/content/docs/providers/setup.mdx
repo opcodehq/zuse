@@ -2,55 +2,71 @@
 title: Install, sign in, and update providers
 icon: Wrench
 navTitle: "Setup and updates"
-description: Make provider CLIs available and resolve common readiness problems.
+description: Install agent CLIs from Zuse, sign in, pick accounts, manage models, and keep providers up to date.
 section: providers
 order: 31
 platforms: [desktop]
-providers: [claude, codex, grok, cursor, opencode, opencode2, kiro, pi]
+providers: [claude, codex, cursor, devin, grok, hermes, kiro, muse, opencode, pi, omp, antigravity]
 prerequisites: [/providers]
 related: [/start/install, /reference/settings, /reference/diagnostics]
-next: /composer
-lastVerified: latest
+next: /providers/zuse-agent
+lastVerified: "2026-11-27"
 ---
 
+Open **Settings → Providers & accounts** for the authoritative status of each agent on this computer: what's installed, which account it signs in with, and which models it offers. Each built-in agent has one row with its status, version, and an on/off switch. [ACP agents](/providers/acp) you add appear on the same page.
 
-Open **Settings → Providers** for the authoritative status of each integration on this computer. The **Agent providers** list has one row per built-in provider with its status, version, and an on/off switch; expand a row for setup, models, and keys. [ACP agents](/providers/acp) are listed below it.
+## Install an agent
+
+When an agent isn't installed, its row offers **Install**. Zuse runs the vendor's documented installer on the selected computer, as your user:
+
+| Agent | macOS and Linux | Windows |
+| --- | --- | --- |
+| Claude Code | `curl -fsSL https://claude.ai/install.sh \| bash` | `irm https://claude.ai/install.ps1 \| iex` |
+| Codex | `curl -fsSL https://chatgpt.com/codex/install.sh \| sh` | `irm https://chatgpt.com/codex/install.ps1 \| iex` |
+| Cursor | `curl https://cursor.com/install -fsS \| bash` | `irm 'https://cursor.com/install?win32=true' \| iex` |
+| Devin | `brew install --cask devin-cli`, or `curl -fsSL https://cli.devin.ai/install.sh \| bash` | `irm https://static.devin.ai/cli/setup.ps1 \| iex` |
+| Grok | `curl -fsSL https://x.ai/cli/install.sh \| bash` | `npm install -g @xai-official/grok` |
+| Hermes | `curl -fsSL https://hermes-agent.nousresearch.com/install.sh \| bash` | `irm https://hermes-agent.nousresearch.com/install.ps1 \| iex` |
+| OpenCode | `curl -fsSL https://opencode.ai/install \| bash` | `npm install -g @opencode/cli` |
+| Pi | `curl -fsSL https://pi.dev/install.sh \| sh` | `npm install -g --ignore-scripts @earendil-works/pi-coding-agent` |
+| Antigravity | Zuse downloads and verifies Google's ACP server | Same |
+
+When a shell installer's prerequisites are missing, Zuse falls back to the documented npm package if npm is available. Installs run without a terminal, so an installer that needs `sudo` or an interactive prompt can fail; run it yourself in a terminal instead. Installs time out after 15 minutes, and cancelling doesn't undo files the installer already wrote.
+
+Kiro CLI, Muse Code, and Oh My Pi are installed outside Zuse; see their pages. After any install, Zuse checks for the agent again. If the command works in a terminal but Zuse can't find it, fully restart Zuse so it picks up your updated PATH.
 
 ## Read the status
 
-- **Ready** means the provider is installed, authenticated, and passes required compatibility checks.
-- A warning can mean an update is available or an account check could not be completed.
-- An error identifies a confirmed blocker such as missing authentication or an incompatible CLI.
-- Disabled providers remain installed but are hidden from normal selection.
-
-For CLI-backed providers, Zuse detects commands through the desktop service environment and known installation locations. If a command works in an interactive shell but Zuse cannot find it, fully restart the app after changing your shell path or installation. Cursor uses Zuse's bundled SDK and does not require a separate Cursor CLI.
+- **Ready** means the agent is installed, signed in where it needs to be, and passes its compatibility checks.
+- **Update available** means a newer version was found.
+- An error names a confirmed blocker, such as a missing login or an unsupported version.
+- A switched-off agent stays installed but is hidden from the model picker.
 
 ## Sign in
 
-Use the sign-in action shown for the provider. Depending on the integration, Zuse opens an inline flow, launches the provider's official login command, or accepts an API key. Complete browser authorization before returning to the app. Cursor authentication is API-key only. Other providers accept an optional API key in their row.
+Use the sign-in action in the agent's row. Depending on the agent, Zuse opens a browser sign-in, shows a device code to copy with a link to the sign-in page, asks you to paste an authorization code, or accepts an API key. Each row also shows the terminal command if you prefer to sign in yourself, for example `claude /login` or `codex login`.
 
-Zuse keeps API keys in an encrypted credential store whose key is held by your system keychain. They never go into `settings.json`.
+Some rows offer more than one sign-in: OpenCode can sign in with ChatGPT or GitHub Copilot, Pi with ChatGPT, and Hermes with ChatGPT or Nous Portal.
+
+Provider sign-in is separate from signing in to Zuse itself.
 
 ### Multiple accounts
 
-Claude Code and Codex rows have an **Accounts** section. Choose **Connect another account** to add one, and **Use for new chats** to pick the default. When a chat hits a usage limit, you can switch it to another account from the composer.
-
-Provider login is separate from signing in to Zuse for hosted remote access.
+Provider rows have an **Accounts** list. Choose **Add account** to sign in another subscription, and **Switch to this account** to choose the one new sessions use. The account in use is marked **In use**, and its session and weekly usage appear when the provider reports them. When a chat hits a usage limit, you can switch it to another account from the composer.
 
 ## Update
 
-When Zuse knows the installed and current versions, settings can offer an update. Required minimum versions block new sessions because their protocol is incompatible; ordinary newer-version notices do not.
+Each row reports the installed version and, when Zuse can find one, the latest version. The **Update policy** controls what happens next:
 
-After updating a provider, create or restart its session so the process uses the new installation. Existing live sessions do not replace their running process in place.
+- **Notify**: install only when you choose **Update**.
+- **Auto when idle**: install automatically after active runs finish.
 
-## Models and provider settings
+An update waits for the agent to be idle, then downloads, installs, and verifies the new version. If Zuse can't update an agent itself, the row shows the command to run instead, such as `claude update`, `grok update`, `hermes update`, `pi update --self`, `omp update`, or `opencode upgrade`. Codex installed from npm is updated with its original package manager.
 
-The model picker reflects the models each provider reports. Some models expose additional controls such as reasoning effort.
+## Models
 
-In a provider's row you can hide models from the picker (at least one stays visible) and add a custom model ID that the provider accepts but doesn't list. To choose which model and permission mode new chats start with, open **Settings → Default models**.
+The model picker lists the models each provider reports, grouped by provider in a rail with search and favorites. Hover a model to set its reasoning level, fast mode, and other options the model advertises, add it to favorites, or make it the default. A context switch such as **200K | 1M** appears only for models that support it.
 
-OpenCode and OpenCode 2 manage their own connected providers and models instead; see [OpenCode](/providers/opencode).
+In a provider's settings you can hide models from the picker and add a custom model ID that the provider accepts but doesn't list. To choose the model and permission mode new chats start with, open **Settings → Default models**.
 
-## Pi
-
-Install `@earendil-works/pi-coding-agent`, then run `pi` and `/login` in a terminal. Set an optional absolute binary path in Pi provider settings. Pi uses native permissions and its existing project trust configuration. See [Pi setup and capabilities](/providers/pi).
+OpenCode manages its own connected providers and models; see [OpenCode](/providers/opencode).

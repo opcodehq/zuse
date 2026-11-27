@@ -21,10 +21,11 @@
 		"remote-recover-connection",
 		"---Cloud---",
 		"cloud-start-chat",
+		"cloud-plans-billing",
 		"choose-cloud-provider",
+		"cloud-repository-setup",
 		"cloud-share-chat",
 		"cloud-agent-local-commands",
-		"custom-boxd-snapshot",
 		"slack-start-task"
 	]
 }

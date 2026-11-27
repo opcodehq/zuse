@@ -1,43 +1,44 @@
 ---
-title: Subagents and delegated tasks
+title: Subagents and delegated chats
 icon: Network
 navTitle: "Subagents"
 description: Split bounded work across agents without losing ownership, visibility, or review.
 section: composer
-order: 53
+order: 54
 platforms: [desktop, browser, mobile]
-providers: [claude, codex, grok]
+providers: [claude, codex, cursor, devin, opencode, zuse]
 prerequisites: [/composer/modes-permissions]
 related: [/composer/orchestration, /composer/parallel-agents, /composer/monitor-delegated-work]
 next: /composer/orchestration
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
-
 
 Zuse supports two related ways to divide work. They solve different problems and have different isolation boundaries.
 
 ## In-conversation subagents
 
-A provider can delegate a bounded investigation or implementation step inside the current conversation. Zuse groups that activity into an agent row and, when the provider supplies it, shows the delegated prompt, progress, summary, model, duration, and turn count. Detached work also appears in the **Subagents** panel as **Active** or **Done**.
+An agent can delegate a bounded investigation or implementation step inside the current conversation. Zuse shows that work as its own subagent activity instead of mixing it into the parent's stream, with a chip you can open in the side pane to follow its prompt, tools, and result.
 
-These subagents use the parent session's environment. They are useful for focused research, test analysis, or a second opinion, but they are not a substitute for a separate worktree when several agents will edit concurrently.
+Where the subagents come from depends on the agent:
 
-Provider support determines which controls and progress details are available. Global presets can enable supported subagents for new sessions and give them narrower instructions or tool access.
+- **Claude Code**: Task subagents, including background subagents that keep running after the parent turn ends.
+- **Codex**: child agent threads.
+- **Cursor**: the full nested transcript of each subagent.
+- **Devin**: Devin Fusion's sidekick, shown as a **Sidekick** chip for each handoff.
+- **OpenCode**: child sessions.
+- **Zuse agent**: bounded child agents.
 
-## Native workflow boards
+Running subagents and background tasks also appear in a background work row in the tray, where **Open agent** jumps to one.
 
-When Claude Code starts a native workflow, Zuse shows its phases as a board in the conversation. Each phase lists its agents and completion count; narrow windows stack the phases vertically. The header shows the run status, elapsed time, and any reported agent failures.
+These subagents use the parent session's environment. They're useful for focused research, test analysis, or a second opinion, but they are not a substitute for a separate worktree when several agents will edit concurrently.
 
-Select an agent tile to inspect its prompt and result previews. Use **Show more** in long phases to reveal additional agents, or **View script** to inspect the workflow source when it is available. Progress depends on what the provider reports; a declared phase can appear before its agents start.
+## Claude Code workflow runs
 
-## Delegated tasks and session tabs
+When Claude Code runs a workflow, the transcript shows it as a compact summary and its agents open in the right pane. The board lists each phase with its agents and completion count. Select an agent to inspect its prompt and result, or use **View script** to read the workflow source when it's available. Progress depends on what Claude Code reports; a declared phase can appear before its agents start.
 
-An agent can also coordinate visible Zuse tasks:
+## Delegated chats
 
-- A **separate delegated task** appears as another sidebar chat and receives its own worktree and branch. Use this for independent implementation, a branch-sized experiment, or work that may become its own pull request.
-- An **additional session tab** stays inside an existing chat and shares that chat's checkout. Use this for review, continuation with another provider or model, or a second perspective on the same diff.
-
-When Zuse creates either one, the parent timeline shows a card with **Open chat**. The target keeps its own conversation history, status, and provider identity, while its connection to the parent makes follow-up and review easier.
+An agent can also start and steer other Zuse chats with Zuse's chat tools; see [Agent orchestration](/composer/orchestration). A delegated chat keeps its own conversation history, status, and agent, and records the chat that created it as its parent.
 
 ## Give bounded assignments
 
@@ -55,4 +56,4 @@ Do not assign overlapping write scopes unless one agent is explicitly responsibl
 
 A completed delegated task is evidence, not automatic acceptance. Open its chat or subagent transcript, inspect the files and commands it reports, then ask the coordinating agent to reconcile conflicts and run the cross-cutting checks. Review the combined diff in **Changes** before committing or opening a pull request.
 
-Delegation cannot bypass Plan mode, runtime permissions, or sensitive-path protection. Read [Agent orchestration](/composer/orchestration/) before allowing an agent to create or steer more work.
+Delegation cannot bypass Plan mode, access levels, or sensitive-path protection. Read [Agent orchestration](/composer/orchestration/) before allowing an agent to create or steer more work.

@@ -17,7 +17,6 @@ export function CleanSearchTrigger({
 		<button
 			type="button"
 			data-search-full=""
-			aria-label="Search documentation"
 			aria-keyshortcuts="Meta+K Control+K"
 			className={["clean-search-trigger", className].filter(Boolean).join(" ")}
 			{...props}
@@ -25,7 +24,7 @@ export function CleanSearchTrigger({
 		>
 			<Search aria-hidden="true" />
 			<span>Search</span>
-			<kbd>
+			<kbd aria-hidden="true">
 				{hotKey.map((key) => (
 					<Fragment key={typeof key.key === "string" ? key.key : "modifier"}>
 						{key.display}

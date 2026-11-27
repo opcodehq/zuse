@@ -2,51 +2,49 @@
 title: Add an MCP server
 icon: Plug
 navTitle: "Add an MCP server"
-description: Add a remote or local MCP server in Plugins so every Zuse agent can use its tools through the Zuse gateway.
+description: Add a remote or local MCP server in Plugins & MCP so every Zuse agent can use its tools through the Zuse plugin gateway.
 section: how-to
 order: 7
 platforms: [desktop]
 prerequisites: [/start/install, /providers/setup]
 related: [/composer/skills-mcp, /composer/modes-permissions, /reference/diagnostics]
 next: /composer/skills-mcp
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
 ## Goal
 
-Make an MCP server's tools available to Zuse agents, then verify them in a fresh session.
+Make an MCP server's tools available to Zuse agents, then verify them in a fresh chat.
 
 ## How agents get MCP tools
 
-Agents launched by Zuse receive MCP tools **only** through Zuse's own session gateway. The gateway serves the plugins connected to your workspace, so the same tools work with every supported provider.
+Zuse gives every agent it launches the same plugin gateway tools (`plugins_list`, `plugins_search`, `plugins_schema`, and `plugins_call`). The gateway serves the plugins connected to your workspace in **Settings → Plugins & MCP**, hosted and local alike, so the same tools work with every supported provider.
 
-Zuse does not read or pass through MCP servers configured in a provider's own files, such as `~/.claude.json`, `.mcp.json`, or `[mcp_servers]` in `~/.codex/config.toml`. Where a provider CLI offers a switch for it, Zuse also stops the CLI from loading those servers itself. Servers you configured there keep working when you use that CLI outside Zuse.
+Servers you already configured in an agent app on this computer are a separate source. Zuse can find them and copy them into Plugins with **Import from this computer**, so every agent gets them, not only the app where you set them up.
 
 ## Prerequisites
 
-- Sign in to Zuse. Plugins belong to your account or organization.
-- Have the server's remote HTTPS URL, or a local `stdio` command configuration. Local commands must be installed on the computer running Zuse.
+- Sign in to Zuse. Plugins belong to your personal workspace or an organization.
+- Have the server's HTTPS URL, or a local `stdio` command configuration. Local commands must be installed on the computer running Zuse.
 - Know how the server authenticates: sign-in (OAuth), no authentication, or a key sent as a bearer token or in a custom request header.
 - Read the server's tool list and trust boundary before connecting it.
 
-## 1. Add the server
+## 1. Add a remote server
 
-1. Switch to the workspace the server belongs to. The dialog confirms the target:
-   - **Adding to your personal workspace.** Only you can use it.
-   - **Adding to the _name_ organization.** Only organization admins can add or remove it; every member can use it once it is connected.
-2. Open **Plugins** (in the sidebar or Settings) and choose **Add MCP server**.
-3. Enter a **Name** and the **Server URL**.
+1. Open **Settings → Plugins & MCP** and pick the **Workspace** the server belongs to. **Personal** is only for you. An organization's plugins are available to its members.
+2. Choose **Add MCP server**. The dialog confirms the target: **Adding to your personal workspace.** or **Adding to your organization workspace.**
+3. Keep **Remote** selected, then enter a **Name** and the **Server URL**.
 4. Under **Authentication**, choose:
    - **Sign in or none**: Zuse detects whether the server needs you to sign in or is open to everyone.
    - **Bearer token**: enter the **Token**.
    - **Custom header**: enter the **Header name** and **Value**.
 5. Choose **Add server**. If the connection fails, the dialog stays open with the error so you can fix the URL or key and try again.
 
-Popular services may already be in the plugin catalog. Prefer the catalog entry when one exists.
+Keys are encrypted on Zuse servers and never reach agent machines. Popular services may already be in the plugin catalog under **Browse plugins**. Prefer the catalog entry when one exists.
 
-## Add a local command
+## 2. Add a local command
 
-In your personal workspace, choose **Add MCP server → Local command**, enter a name, and paste the server's MCP JSON. You can paste either one server object or a standard `mcpServers` object containing one server. Zuse checks that it starts before saving it.
+In your personal workspace, choose **Add MCP server**, switch to **Local command**, enter a **Name**, and paste the server's configuration into **MCP configuration (JSON)**. You can paste either one server object or a standard `mcpServers` object containing exactly one server. The name always comes from the **Name** field. Zuse starts the server and lists its tools before saving it.
 
 For example, Paper Desktop provides a configuration like:
 
@@ -62,25 +60,28 @@ For example, Paper Desktop provides a configuration like:
 }
 ```
 
-Use the actual command path supplied by your installation. Optional `env` values must be strings. Zuse runs the command directly, without a shell; pass each argument as a separate array entry.
+Use the actual command path supplied by your installation. `args` must be an array of strings and optional `env` values must be strings. Zuse runs the command directly, without a shell; pass each argument as a separate array entry.
 
-Local configurations belong to your signed-in account on this computer. They are not shared with organization members or copied into cloud workspaces. Agents running on this computer use them through the same gateway and permission controls as remote plugins. Turn a connection off or remove it in Plugins to stop its server process.
+Local servers belong to your signed-in account on this computer and appear only in your personal workspace. They are not shared with organization members or copied to cloud computers. Turn a connection off or remove it in **Plugins & MCP** to stop its server process.
 
-For Paper, keep Paper Desktop running with a file open when reading or changing a design. Paper documents local MCP transports; it does not document a hosted MCP endpoint. See [Paper's MCP guide](https://paper.design/docs/mcp).
+For Paper, keep Paper Desktop running with a file open when reading or changing a design. See [Paper's MCP guide](https://paper.design/docs/mcp).
+
+## 3. Import servers from this computer
+
+**Settings → Plugins & MCP → Import from this computer** lists MCP servers already set up in the agent apps on this computer. Choose the ones agents should get in every chat, then choose **Import**. Imported servers appear under **Connected**.
 
 ## Verify the server
 
 1. Start a new chat. A provider process that was already running may still have its old tool set.
-2. Ask the agent to list available plugins, then to use one known, harmless read-only tool from the server.
-3. Approve the call if the active permission mode requires it, and confirm that the result came from the intended server.
+2. Type `/mcp` in the composer to see the agent's MCP servers and your Zuse plugins, or ask the agent to list available plugins.
+3. Ask the agent to use one known, harmless read-only tool from the server.
+4. Approve the call if the chat's access mode requires it, and confirm that the result came from the intended server.
 
 ## Troubleshooting
 
-- **The URL is rejected:** the server must be reachable at a public HTTPS address.
-- **The key is rejected:** check the header name and key with the server's documentation, then try again.
+- **The key is rejected:** check the header name and key against the server's documentation, then try again.
 - **The server didn't offer sign-in:** it needs a key. Choose **Bearer token** or **Custom header**.
-- **The agent cannot see the tools:** confirm that the server is connected in **Plugins**, then start a new chat.
-- **A server you configured in a provider CLI is missing:** that is expected. Add it in **Plugins** instead.
-- **A tool request is denied:** plugin availability does not bypass [runtime modes and permissions](/composer/modes-permissions/).
-
-If status and provider behavior disagree, inspect **Settings → Diagnostics**.
+- **A plugin shows Needs authorization:** finish its sign-in from Plugins & MCP. Only one plugin sign-in can run at a time.
+- **The local configuration is rejected:** it must contain a non-empty `command`, `args` as an array of strings, and string `env` values.
+- **The agent cannot see the tools:** confirm that the server is listed under **Connected** in the workspace the chat uses, then start a new chat. A chat keeps the plugin workspace it first used.
+- **A tool request is denied:** plugin availability does not bypass [access modes and permissions](/composer/modes-permissions/).

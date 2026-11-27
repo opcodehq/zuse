@@ -2,15 +2,15 @@
 title: Add files and context to a task
 icon: Paperclip
 navTitle: "Add context"
-description: Point an agent at the right repository files, attachments, issue, or large pasted text.
+description: Point an agent at the right repository files, attachments, issue, or earlier session.
 section: how-to
 order: 2
 platforms: [desktop]
 providers: []
 prerequisites: [/start/first-chat, /composer/context-attachments]
-related: [/projects/file-includes, /how-to/local-parallel-worktrees, /workspace/files-editor]
+related: [/how-to/local-parallel-worktrees, /workspace/files-editor, /projects/worktrees]
 next: /how-to/local-review-changes
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
 ## Goal
@@ -19,40 +19,38 @@ Give a local task enough precise context to begin useful work without pasting an
 
 ## Applicability
 
-Use this workflow in the **desktop app**. File references are scoped to the active project or worktree. A provider's ability to interpret a particular attachment type can vary, so prefer repository files or plain text for critical instructions.
+Use this workflow in the **desktop app**. File references are scoped to the checkout the chat uses. A provider's ability to interpret a particular attachment type can vary, so prefer repository files or plain text for critical instructions.
 
 ## Prerequisites
 
-- Select the chat and worktree where the task should run.
+- Select the chat and checkout where the task should run.
 - Confirm that the files you want are inside that checkout or are available on your computer.
 - Keep secrets out of prompts and attachments unless the selected provider is permitted to receive them.
 
 ## Steps
 
 1. Check which checkout the chat uses before adding context. The top bar shows its branch. A file in the main checkout can differ from the same path in a worktree.
-2. Type `@` in the composer and search for a repository file or folder. Select the result to add a file chip.
-3. Add external files with **Add → Attach files**, by dragging them into the composer, or by pasting them. Images receive a preview; other formats appear as file chips.
-4. Paste long logs, specifications, or notes normally. Text longer than 10 lines or 2,000 characters is stored in the workspace under `.context/files/` and added as a file chip, keeping the composer readable.
-5. If the task starts from tracked work, use **Create from…** on the new-chat page before the first message, open **Issues**, and choose the issue. Zuse attaches the issue context to the new chat.
-6. To reuse work from another session, choose **Add context** and attach that session's **Transcript** or **Plan**.
-7. In the message, explain why each item matters and name the expected outcome. For example: “Use `@src/auth/session.ts` as the implementation source, compare the attached failure log, then add a regression test.”
-8. Send the message only after pending attachment chips have finished uploading.
+2. Type `@` in the composer and search for a repository file or folder. Select the result to add a file chip. You can also drag a file from the **Files** panel into the composer.
+3. Add external files with the composer's add menu (**Attach images or files**), by dragging them onto the chat, or by pasting them. Pasted screenshots and copied image data are attached as images. Each file can be up to 24 MB.
+4. If the task starts from tracked work, open **Create from…** in the composer before the first message, switch to **Issues**, and choose the issue. Zuse attaches the issue as `issue-<number>.md` to the first message.
+5. To reuse work from another session, drag its row from the sidebar onto the chat (**Drop to mention**). Zuse adds a mention of that chat to the composer.
+6. In the message, explain why each item matters and name the expected outcome. For example: “Use `@src/auth/session.ts` as the implementation source, compare the attached failure log, then add a regression test.”
+7. Send the message only after attachment chips have finished uploading.
 
-You can add up to 20 files at a time. Extra files in the same drop or paste are not attached, so confirm the chip count. Split larger evidence sets across focused messages or place the material in a repository folder and reference only its entry points.
+For a large evidence set, place the material in a repository folder and reference only its entry points, or split it across focused messages.
 
 ## Verify the context
 
 1. Before sending, confirm every intended file appears as a chip and no upload error was shown.
-2. After sending, inspect the user message in the timeline and confirm the file references are present.
+2. After sending, inspect your message in the timeline and confirm the file mentions and attachments appear as message chips.
 3. Ask the agent to identify the files it will use when ambiguity would be expensive.
-4. Check the file tree or terminal to ensure referenced repository paths belong to the active checkout.
+4. Check the **Files** panel or terminal to ensure referenced repository paths belong to the active checkout.
 
 ## Troubleshooting and recovery
 
-- **The `@` search cannot find a path:** confirm the active project and worktree. Search is intentionally scoped to that checkout. An ignored local file appears in a worktree only when a [worktree file include](/projects/file-includes/) links it there.
-- **An attachment disappears with Image upload failed:** attach it again. The failed chip is removed so an unresolved attachment is not sent accidentally.
-- **A large paste does not become a chip:** Zuse keeps the text inline when saving the context file fails in an active session. Review the composer before sending so no information is lost or duplicated.
-- **The wrong version of a file was attached:** remove it, switch to the intended worktree, and add it again. File chips should not be treated as branch-independent.
+- **The `@` search cannot find a path:** confirm the active project and checkout. Search is scoped to that checkout.
+- **A file is rejected as too large:** the limit is 24 MB per file. Attach an excerpt, a compressed export, or a text summary instead.
+- **The wrong version of a file was attached:** remove the chip, switch to the chat that uses the intended worktree, and add it again. File chips are not branch-independent.
 - **The provider cannot use a binary format:** export the relevant content as text, Markdown, or an image and attach that instead.
 
 Next, [review the files changed by the task](/how-to/local-review-changes/). For the complete attachment model, see [Context and attachments](/composer/context-attachments/).

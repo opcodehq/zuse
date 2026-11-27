@@ -1,8 +1,8 @@
 ---
-title: "Connect an iPhone to a nearby Mac"
+title: "Connect a phone to your computer"
 icon: Smartphone
-navTitle: "Connect an iPhone"
-description: "Pair Zuse for iPhone directly with a Mac, verify its identity, and confirm the connection."
+navTitle: "Connect a phone"
+description: "Pair the Zuse mobile app with your computer over Wi-Fi or Tailscale and confirm the connection."
 section: how-to
 order: 10
 platforms: [desktop, mobile]
@@ -10,68 +10,53 @@ providers: []
 prerequisites: [/remote/nearby-pairing]
 related: [/mobile/connect, /remote/security, /how-to/remote-recover-connection]
 next: /mobile/chats
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
-Connect an iPhone directly to the Mac that owns your projects. This path works on the local network and does not require a Zuse account.
+Pair the Zuse app on your phone with the computer that owns your projects. This does not need a Zuse account.
 
 ## Applicability
 
-Use this guide when the iPhone and Mac are nearby. For access away from the Mac's network, use [hosted remote access](/how-to/remote-hosted-access/). The Mac remains the execution environment in both cases.
+Use this guide when the phone can reach the computer over the same Wi-Fi or your tailnet. To reach it from anywhere with your account, see [Reach a computer away from its network](/how-to/remote-hosted-access/). The computer runs the agents in both cases.
 
 ## Prerequisites
 
-- Zuse is open on the Mac.
-- Zuse for iPhone is installed.
-- Wi-Fi is enabled on both devices.
-- You can approve a connection request on the Mac.
+- Zuse is open on the computer, or `zuse serve` is running there.
+- The Zuse app is on your phone.
+- Both devices are on the same network, or both are on your tailnet.
 
 ## Steps
 
-1. On the Mac, open **Settings → Remote access**.
+1. On the computer, open **Settings → Remote access**.
+2. Under **This computer**, turn on **Wi-Fi**, **Tailscale**, or both. The status changes to **Reachable on your Wi-Fi** or **Reachable at home and away**.
+3. Choose **Connect device**. The **Pair a device** dialog shows a QR code on the **Phone** tab.
+4. On the phone, tap **Add computer** and scan the code. If the camera is not available, choose **Copy link** on the computer and paste it under **Or paste a link**.
+5. Wait for the dialog to say the device is connected, then close it.
 
-2. Under **Connections**, find **Local network**. If it is not already available, choose **Turn on**, then confirm **Restart and turn on**.
-
-   Zuse restarts. Running agents stop during this restart, so finish or pause important work first.
-
-3. On iPhone, open **Settings → Connect to a nearby Mac**.
-
-4. Choose the Mac when it appears.
-
-   If Zuse finds exactly one Mac, it may start the connection automatically. The phone then shows **Approve on your Mac** and a short safety phrase.
-
-5. On the Mac, wait for **Is this you trying to connect?**.
-
-6. Compare the safety phrase and device identifier on both screens. Choose **Allow** only when they match.
-
-   Choose **Not now** to deny this attempt. Choose **Block device** when you do not recognize the phone.
+On a headless computer, run `zuse serve --lan`, then `zuse pair --app` to show the QR code in the terminal.
 
 ## Verification
 
-The phone returns to the inbox after approval. Confirm that:
-
-- the Mac's projects and chats appear;
-- the connection state changes to **Connected**; and
-- the phone appears under **Settings → Remote access → Connected devices** on the Mac.
-
-Open an existing chat to verify its latest messages load. You do not need to start an agent just to test the connection.
+- The computer's projects and chats appear on the phone.
+- The phone is listed under **Devices** in **Settings → Remote access**, with the date it paired.
+- An existing chat opens and shows its latest messages.
 
 ## Troubleshooting and recovery
 
-### The Mac does not appear
+### Connect device is unavailable
 
-Keep Zuse open, confirm **Local network** shows **Available on this network**, and allow **Local Network** access for Zuse in iPhone Settings. If discovery still fails, choose **Use QR Code** on iPhone. On the Mac, under **Connect another device**, choose **Create link**, then **Show QR**, and scan it.
+No connection is on. Turn on **Wi-Fi** or **Tailscale** first.
 
-### The request expires
+### The code expired
 
-Start a new attempt. Pairing codes and requests are intentionally short-lived; an expired code cannot be reused.
+Codes last ten minutes and work once. Choose **New code**.
 
-### The safety phrase or encrypted identity does not match
+### The phone cannot reach the computer
 
-Do not approve the request. Cancel it, move both devices to a trusted network, and start again.
+Guest and office Wi-Fi networks often block devices from talking to each other. Use Tailscale, or pair over SSH with **Add computer → Connect with SSH** ([details](/remote/nearby-pairing/#pair-over-ssh)).
 
-### The phone was previously revoked
+### The phone was revoked
 
-Create a new pairing request and approve it on the Mac. A revoked credential cannot reconnect by retrying alone.
+Retrying cannot restore a revoked pairing. Forget the computer on the phone and pair again with a new code.
 
-See [connection recovery](/how-to/remote-recover-connection/) for post-pairing disconnects and [nearby pairing security](/remote/nearby-pairing/) for the identity checks behind this flow.
+See [connection recovery](/how-to/remote-recover-connection/) for later disconnects.

@@ -2,92 +2,69 @@
 title: "Reach a computer away from its network"
 icon: Globe
 navTitle: "Reach a remote computer"
-description: "Link a Zuse environment to your account and open it from a hosted browser or iPhone."
+description: "Link a computer to your Zuse account, or use Tailscale, so your other devices can reach it from anywhere."
 section: how-to
 order: 30
-platforms: [desktop, browser, mobile, serve]
+platforms: [desktop, mobile, serve]
 providers: []
 prerequisites: [/remote/hosted-access]
-related: [/serve, /remote/security, /how-to/serve-operate-host, /how-to/remote-recover-connection]
+related: [/remote/tailscale, /serve, /remote/security, /how-to/serve-operate-host, /how-to/remote-recover-connection]
 next: /remote/hosted-access
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
-Link an existing environment to your Zuse account so an authenticated browser or iPhone can find and control it away from the local network.
+Make a computer reachable from your other devices when you are not on its network.
 
 ## Applicability
 
-Use this guide for the desktop app or an already-running Serve environment. Hosted access discovers and connects to a computer; it does not provision one, copy its repository, or install provider CLIs.
+There are two ways. **Account access** links the computer to your Zuse account; any device signed in to that account can find it. **Tailscale** offers the computer's tailnet address to devices you pair; it needs no Zuse account. Neither copies your repositories anywhere or installs agents.
 
 ## Prerequisites
 
-- The environment computer is online and can reach Zuse's identity and api services.
-- The desktop app or Zuse Serve is running on that computer.
-- You can sign in to the same Zuse account on the environment and remote client.
+- The desktop app or `zuse serve` is running on the computer.
+- For account access: a Zuse account, and a terminal on the computer.
+- For Tailscale: Tailscale (or a Headscale client) signed in on the computer and on your other devices.
 
 ## Steps
 
-### Link a desktop environment
+### With your account
 
-1. On the environment Mac, open **Settings → Remote access**.
+1. In a terminal on the computer, run:
 
-2. Under **Connections**, choose **Set up** beside **Zuse Serve**.
+   ```sh
+   zuse link --name studio-mac
+   ```
 
-3. Confirm **Set up Zuse Serve** and finish sign-in if prompted. Zuse Serve uses an encrypted outbound connection; no router ports are opened.
+2. If Zuse prints an address and a code, open the address on any device and confirm the code.
+3. Wait for `Available through your account as studio-mac at …`.
 
-4. Wait until the **Zuse Serve** row shows **Available anywhere** with your account.
+On a headless computer you can instead start Serve with `zuse serve --account`.
 
-For a headless Mac or Linux computer, run `npx @zusehq/serve` and complete the printed device authorization instead. See [operate a Serve host](/how-to/serve-operate-host/).
+To open the computer:
 
-### Connect from a browser
+- **Desktop app on another computer:** sign in, open **Settings → Remote access**, and choose **Connect** next to the computer under **Devices**.
+- **Mobile app:** open **Settings**, choose **Sign in to Zuse**, and sign in with the same account.
 
-1. Open [code.zuse.sh](https://code.zuse.sh).
-2. Sign in with the same account.
-3. Choose the linked computer from the computer picker.
+### With Tailscale
 
-An online computer has a recent heartbeat. An offline computer remains listed but cannot execute work until its environment reconnects.
-
-### Connect from iPhone
-
-1. Open **Settings → Remote access**.
-2. Choose **Sign in for remote access**.
-3. Sign in with the same account.
-4. Choose an online computer.
-
-The connected environment's chats then appear in the mobile inbox. Local pairing still works when you sign out of hosted access.
+1. On the computer, open **Settings → Remote access** and turn on **Tailscale**, or start `zuse serve --lan`.
+2. Pair each device once with **Connect device** (see [Connect a phone](/how-to/remote-connect-device/)). Paired devices keep using the tailnet when they leave your network.
 
 ## Verification
 
-From the remote client, confirm that:
-
-- the intended computer is marked **Online**;
-- its projects and chats load; and
-- opening an existing chat shows its current environment state.
-
-On a Serve host, also run the installless status command:
-
-```sh
-npx @zusehq/serve status --json
-```
-
-Verify `reachable` is `true`, `environmentId` is not `null`, and `tunnel` is `configured`.
+- `zuse status` on the computer shows the signed-in account and `Computer: <name> at <address>` for account access, or a Tailscale route.
+- From the other device, the computer's projects and chats load and an existing chat opens.
 
 ## Troubleshooting and recovery
 
-### No computers are listed
+### The computer does not appear on the other device
 
-Confirm the environment finished linking and both clients use the same account. For Serve, check that you used the same data directory that was linked originally.
+Confirm both use the same account and that `zuse status` shows the computer as linked. Run `zuse link` again if it was unlinked.
 
-### The computer is offline
+### The computer shows "Update Zuse on this computer to connect."
 
-Wake the computer and start the desktop app or Serve service. Hosted access resumes when the environment's heartbeat returns.
+Update Zuse on the linked computer, then connect again.
 
-### The account reached its computer limit
+### You no longer want account access
 
-Unlink an unused environment, then retry.
-
-### The client reports an incompatible version
-
-Update the desktop app or Serve runtime on the environment before reconnecting.
-
-To remove hosted access from a desktop environment, choose **Turn off** beside **Zuse Serve**, then confirm **Turn off Zuse Serve**. On Serve, run `zuse serve logout`; it revokes the registration, stops the service, and preserves workspaces.
+Run `zuse unlink` on the computer. Local chats stay, and devices paired over Wi-Fi or Tailscale keep working.

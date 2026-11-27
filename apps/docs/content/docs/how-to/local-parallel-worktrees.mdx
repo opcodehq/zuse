@@ -8,9 +8,9 @@ order: 1
 platforms: [desktop]
 providers: []
 prerequisites: [/start/first-chat, /projects/worktrees]
-related: [/projects/repository-settings, /projects/scripts, /how-to/local-add-context]
+related: [/projects/scripts, /projects/repository-settings, /how-to/local-add-context]
 next: /how-to/local-add-context
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
 ## Goal
@@ -19,29 +19,31 @@ Run two or more local tasks at the same time without mixing their files, termina
 
 ## Applicability
 
-Use this workflow in the **desktop app** with a Git repository. Worktree creation applies to any provider that can run in the selected project.
+Use this workflow in the **desktop app** with a Git repository on this computer. The **Worktree** and **Local** choice appears only for Git projects and only for chats that run on this computer. Cloud chats always get a fresh branch on their cloud computer.
 
 ## Prerequisites
 
 - Open a project backed by a Git repository.
 - Commit or stash important changes in the checkout you will use as the base.
-- If the repository needs dependencies or generated files, configure its [setup script](/projects/scripts/).
+- If new checkouts need dependencies or generated files, add a [project action](/projects/scripts/) that runs automatically on worktree creation.
 
 ## Steps
 
 1. Start a new chat in the project.
-2. In the composer's **Workspace** picker, choose **Worktree** (a fresh isolated branch). If automatic worktrees are enabled, **Worktree** is already selected. Choose **Local** (the main checkout) only when isolation is unnecessary. To start from an existing branch or pull request instead, use **Create from…**.
-3. Send the first task. Zuse creates a checkout under `~/.zuse/<project-name>-<short-project-id>/<worktree-name>/` (or the repository's configured worktree directory), creates its branch, links configured local files, and runs repository setup.
-4. Watch the setup card while it shows **Creating worktree for _repository_…** and **Running environment setup**. Wait for **Environment setup complete** (or **No setup script needed.**) before relying on dependencies or generated files.
-5. Start another chat for the second task and repeat the process. Each chat should show a different worktree and branch.
-6. To explore an alternative from an existing conversation, open the fork menu on a message and choose **Fork into a new worktree**. The new chat gets an isolated checkout. **Fork in this chat** instead opens a session tab that shares the current worktree.
+2. In the composer, open the workspace chip and choose **Worktree** (*Fresh isolated branch*). Choose **Local** (*Use the main checkout*) only when isolation is unnecessary. Zuse remembers your choice for the project.
+3. To start from an existing pull request, branch, or issue instead, open **Create from…** (the GitHub button in the composer) and pick an entry from the **PRs**, **Branches**, or **Issues** tab.
+4. Send the first task. While Zuse prepares the checkout, a status pill above the composer shows **Fetching latest _branch_…** and then **Creating worktree from _branch_…**. If the remote cannot be reached, it shows **Couldn't reach the remote · using local _branch_** and creates the worktree from your local copy.
+5. Zuse creates the checkout under `~/.zuse/worktrees/<repository>/<name>` on a new `zuse/<name>` branch, unless you set a **Custom worktree location** in **Settings → General** or `ZUSE_WORKTREES_DIR` is set on the computer. The branch is renamed after the chat's title once the title is generated.
+6. If the project has an action set to run on worktree creation, it starts in a terminal tab named **_action_ (setup)**. Wait for it to finish before relying on dependencies or generated files.
+7. Start another chat for the second task and repeat the process. Each chat gets its own worktree and branch.
+8. To explore an alternative from an existing conversation, open the fork menu on a reply and choose **Fork into new thread**. The copy gets its own worktree off the source branch. **Fork in new tab** instead opens a conversation tab that shares the current checkout.
 
-All session tabs inside one chat share that chat's worktree. Create a separate chat—not merely another session tab—when the work needs a separate checkout.
+All conversation tabs and side chats inside one chat share that chat's checkout. Start a separate chat, or fork into a new thread, when the work needs its own checkout.
 
 ## Verify the isolation
 
-1. Open each chat and check the branch shown in the top bar. Each chat should show its own worktree branch.
-2. Open the terminal in each chat and run:
+1. Open the environment summary from the top bar (**Toggle environment summary**) in each chat and check the branch row. Each chat should show its own branch.
+2. Open a terminal in each chat and run:
 
 ```sh
 git branch --show-current
@@ -49,14 +51,14 @@ git status --short
 ```
 
 3. Confirm that the branch names and working directories differ.
-4. Make a small change in one chat and verify that it appears only in that chat's **Changes** view.
+4. Make a small change in one chat and verify that it appears only in that chat's **Diff** view.
 
 ## Troubleshooting and recovery
 
-- **Setup failed:** read the output in the setup card, fix the repository command or local dependency, then choose **Rerun setup**. The worktree remains available after setup failure.
-- **The chat is on the main checkout:** the first message was sent with **Local** selected. Start a new chat with a fresh worktree before asking two agents to edit the same repository concurrently.
-- **The wrong base was selected:** create another worktree from the intended branch. Zuse does not silently merge later updates from the original base.
-- **A branch or pull request already has a worktree:** use **Create from…** to select that branch or pull request. Branches already checked out are marked **In use**, and Zuse reuses that checkout instead of creating a conflicting copy.
-- **A worktree directory was removed outside Zuse:** recover the branch with Git or create a new worktree. Zuse cannot restore files that were never committed and whose checkout has been deleted.
+- **The setup action failed:** Zuse shows **Setup action failed** with the error, and the worktree stays available. Read the output in the action's terminal tab, fix the command or the local dependency, then choose the action in the environment summary's **Actions** section to run it again.
+- **The chat is on the main checkout:** the first message was sent with **Local** selected. Start a new chat with **Worktree** before asking two agents to edit the same repository concurrently.
+- **The wrong base was used:** start another chat and choose the intended branch with **Create from…**. Zuse does not merge later updates from the original base into an existing worktree.
+- **A branch already has a worktree:** in **Create from…**, branches already checked out are marked **In use**. Picking one reuses that checkout instead of creating a conflicting copy.
+- **A worktree directory was removed outside Zuse:** recover the branch with Git or start a new worktree. Zuse cannot restore files that were never committed and whose checkout has been deleted.
 
 Continue with [Add files and context](/how-to/local-add-context/), then [review the resulting changes](/how-to/local-review-changes/).

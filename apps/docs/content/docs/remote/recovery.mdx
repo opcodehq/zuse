@@ -2,66 +2,53 @@
 title: "Connection recovery"
 icon: RefreshCw
 navTitle: "Recovery"
-description: "Diagnose expired pairing links, offline environments, blocked authorization, and version mismatches."
+description: "Fix pairing links that do not work, computers that cannot be reached, revoked pairings, and version mismatches."
 section: "Remote access"
-order: 8
+order: 9
 platforms: [desktop, web, mobile, serve]
 providers: []
 prerequisites: [/remote]
-related: [/remote/local-browser, /remote/nearby-pairing, /remote/hosted-access, /serve/troubleshooting]
+related: [/remote/nearby-pairing, /remote/local-browser, /remote/web-client, /serve/troubleshooting]
 next: /serve/troubleshooting
-lastVerified: latest
+lastVerified: "2026-11-27"
 ---
 
+Paired devices reconnect on their own after sleep, a network change, or a dropped connection, and pick up where they stopped. Most problems come from the computer being unreachable or the pairing no longer being valid.
 
-Start with the state shown by the client. Zuse distinguishes **Connecting**, **Reconnecting**, **Offline**, **Connection error**, expired authorization, and incompatible versions because each needs a different recovery step.
+## Quick order
 
-## Quick recovery order
+1. Keep the computer awake and online, with the desktop app or `zuse serve` running.
+2. Check that a connection is on: **Settings → Remote access** should not read **Only this computer can use Zuse**. On a headless computer, run `zuse status` and look at its network routes.
+3. Let the device retry, or use its retry action.
+4. Pair again only if the computer no longer accepts the device.
 
-1. Keep the environment computer awake and connected to the network.
-2. Confirm the desktop app or Zuse Serve is running.
-3. Use **Retry** in the browser connection banner or the mobile recovery banner.
-4. For Serve, inspect `zuse serve status --json`.
-5. Update both sides when Zuse reports a version mismatch.
-6. Pair again only when authorization has expired or been revoked.
+## The link or code does not work
 
-## Browser errors
+- **Code expired:** codes last ten minutes. Choose **New code** in **Connect device**, or run `zuse pair` again.
+- **The code was created, but no address can reach this computer yet:** turn on **Wi-Fi** or **Tailscale** first.
+- **This link only works on this computer:** start `zuse serve` with `--lan` or `--account`.
+- A code works for one device. Make a new one for each device.
 
-| Message | What to do |
-| --- | --- |
-| **This pairing link expired** | Create a new link in **Settings → Remote access**, then enter its pairing code. |
-| **Pair this browser** | The browser has no valid credential. Enter a pairing code from **Settings → Remote access** or the Serve terminal. |
-| **Zuse versions do not match** | Update the environment, then reload the browser. |
-| **Could not reach Zuse Serve** | Start the environment, verify the network path, then choose **Try again**. |
-| **Browser authorization expired** | Revoke the stale browser entry if present, then pair again. |
-| **Too many attempts** | Wait a moment before entering another pairing code. |
+## The computer cannot be reached
 
-## Nearby pairing errors
+- On the same network, both devices must be allowed to talk to each other. Guest and office Wi-Fi often isolate devices; use Tailscale instead.
+- For Tailscale, the row must show an address, not **On · waiting for Tailscale**. Start Tailscale on both devices.
+- If **Settings → Remote access** shows **Network access could not start. Turn it on again from Devices.**, turn the connection off and on again.
 
-- **Local Network access is unavailable:** allow it for Zuse in iPhone Settings, return to Zuse, and retry discovery.
-- **The Mac did not allow this phone:** begin another attempt and choose **Allow** on the Mac after checking the phrase.
-- **The connection request expired:** make a new request. Do not reuse the old QR or phrase.
-- **Encrypted identity did not match:** stop. Do not approve the connection; retry on a trusted network and verify you selected the intended Mac.
-- **No Mac appears:** keep Zuse open, turn on **Local network** in **Settings → Remote access**, check Wi-Fi, then use **Use QR Code**.
+## The pairing is no longer accepted
 
-## Hosted access errors
+If the device was revoked, or its saved pairing is invalid, retrying cannot fix it. The web client says **This computer no longer accepts this pairing**. Pair the device again with a new link. In the web client, forget the old computer in **Settings → Remote access** first.
 
-- **Computer offline or reconnecting:** wake it and start the desktop app or Serve service.
-- **This computer is not linked to your account:** check that both sides use the same account; set up Zuse Serve again if it was removed.
-- **This account has reached its served-computer limit:** remove an unused computer with **Remove computer** in the web app's **Settings → Remote access**.
-- **This computer needs a Zuse Serve update:** update Zuse Serve or the desktop app on that computer.
+## The computer's identity changed
 
-## Mobile reconnect behavior
+If a saved computer now answers with a different identity, Zuse stops instead of connecting. Confirm it is the computer you expect, then add it again with a new link.
 
-Mobile keeps cached projects, chats, sessions, and messages available while the connection recovers. Messages composed while a session is offline are saved on the phone and handed to the server in order when the transport is online again. Do not reset the app while it contains unsent work unless you intend to discard it.
+## Versions do not match
 
-The recovery banner shows **Connection issue** or **Reconnecting** with a **Retry** action. When the saved credential no longer works, use its QR button to scan a new pairing code. If retries continue to fail, remove the stale computer in **Settings → Computers** and pair again.
+An account-linked computer on an older version shows **Update Zuse on this computer to connect.** Update Zuse on that computer, then connect again.
 
-## Serve diagnostics
+## An action may have completed
 
-```sh
-zuse serve status
-zuse serve status --json
-```
+If the connection drops while an action is in flight, Zuse does not send it again automatically. The web client says the change may have completed before the connection closed. Check the current state before you retry.
 
-The status report separates service installation, runtime reachability, tunnel configuration, detected agents, environment identity, and the data directory. Use [Serve troubleshooting](/serve/troubleshooting/) for field-by-field diagnosis.
+<NextStep href="/serve/troubleshooting/" label="Troubleshoot zuse serve" />
