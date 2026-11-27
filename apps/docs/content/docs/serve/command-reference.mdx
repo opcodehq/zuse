@@ -1,0 +1,92 @@
+---
+title: "Serve command reference"
+icon: SquareTerminal
+navTitle: "Commands"
+description: "Complete public command and option reference for zuse serve."
+section: "Serve CLI"
+order: 3
+platforms: [serve]
+providers: []
+prerequisites: [/serve]
+related: [/serve/operations, /serve/status-json, /serve/agent-cli, /serve/troubleshooting]
+next: /serve/status-json
+lastVerified: latest
+---
+
+
+```text
+zuse serve [start] [--foreground] [--ssh-managed] [--tailscale] [--no-account]
+           [--lan | --host <addr>] [--port <n>] [--data-dir <path>]
+zuse serve status [--json] [--data-dir <path>]
+zuse serve stop [--data-dir <path>]
+zuse serve update --force [--data-dir <path>]
+zuse serve logout [--data-dir <path>]
+zuse serve uninstall [--data-dir <path>]
+```
+
+## Commands
+
+| Command | Behavior |
+| --- | --- |
+| `start` | Start Serve; this is the default when no command is supplied. |
+| `status` | Report service, tunnel, agent, and reachability state. |
+| `stop` | Stop and disable the background service. |
+| `update` | Install the latest managed runtime and reinstall the service with the saved start options; requires `--force`. |
+| `logout` | Revoke the computer, stop Serve, and clear its account session. |
+| `uninstall` | Remove the service and managed runtime while preserving workspaces. |
+| `help` | Print command usage. Equivalent to `-h` or `--help`. |
+| `version` | Print the package version. Equivalent to `-V` or `--version`. |
+
+## Options
+
+| Option | Valid with | Meaning |
+| --- | --- | --- |
+| `--foreground` | `start` | Run in the current terminal instead of installing the background service. |
+| `--tailscale` | `start` | Also share privately over Tailscale Serve HTTPS. |
+| `--no-account` | `start` | Skip account sign-in and the managed tunnel. |
+| `--lan` | `start` | Listen on the local network; same as `--host 0.0.0.0`. |
+| `--host <addr>` | `start` | Listen on a specific address. Default `127.0.0.1`. |
+| `--port <n>` | `start` | Listen on a specific port from 1 to 65535. Default `4859`. |
+| `--ssh-managed` | `start` | Run loopback-only without account linking, for SSH tunnels. Uses a separate user service. |
+| `--json` | `status` | Emit a single `ServeStatusV1` JSON object. |
+| `--force` | `update` | Confirm that no agent or terminal work is active. |
+| `--data-dir <path>` | All actions | Use a specific Zuse data directory. |
+| `-h`, `--help` | Top level | Print help and exit. |
+| `-V`, `--version` | Top level | Print the package version and exit. |
+
+Invalid command and option combinations fail instead of being ignored. For example, `status --force`, `stop --json`, `stop --port 5000`, and `update` without `--force` do not perform the requested lifecycle action. `--lan` and `--host` are mutually exclusive, and `--ssh-managed` cannot be combined with `--tailscale`, `--lan`, or `--host`.
+
+`start` saves its access options (`--ssh-managed`, `--tailscale`, `--no-account`, `--lan`, `--host`, `--port`) in the data directory. Later `status`, `stop`, `update`, `logout`, and `uninstall` calls use them to find the right service and port.
+
+## Data directory
+
+By default, Serve uses:
+
+- macOS: `~/Library/Application Support/Zuse Alpha`
+- Linux: `$XDG_CONFIG_HOME/Zuse Alpha`, or `~/.config/Zuse Alpha` when `XDG_CONFIG_HOME` is unset
+
+This is the same directory the Zuse desktop app uses on that computer.
+
+`--data-dir` selects a different environment store for that invocation and the service definition it creates. Use the same value on later `status`, `stop`, `update`, `logout`, and `uninstall` calls for that environment. Each operating-system user has one regular Serve service (`sh.zuse.serve` on macOS, `zuse-serve.service` on Linux), so starting with another data directory repoints that service rather than adding a second one.
+
+The `ZUSE_USER_DATA` and `ZUSE_USER_DATA_DIR` environment variables can also select the directory when `--data-dir` is not passed. Prefer `--data-dir` in operator commands because it is explicit and visible in shell history.
+
+## Exit and output behavior
+
+Successful lifecycle commands print a short human-readable confirmation, such as `Zuse Serve is stopped.` `status --json` reserves standard output for one JSON value so automation can parse it. Errors print an actionable message to standard error and exit with code `1`.
+
+## Environment variables
+
+| Variable | Effect |
+| --- | --- |
+| `ZUSE_PORT` | Port for foreground mode and for `status` and readiness probes when no `--port` was passed. Default `4859`. The background service does not inherit it; use `--port` instead. |
+| `ZUSE_HOST` | Address for foreground mode to listen on when `--host` and `--lan` are not passed. |
+| `ZUSE_NO_OPEN` | Set to `1` to print the authorization link without opening a browser. |
+
+<Callout title="Public surface">
+Only the commands and options on this page are supported for operators. Internal server transport flags are not a second public Serve CLI.
+</Callout>
+
+Agent automation uses a separate JSON-only command surface on the same executable. See the [agent CLI reference](/serve/agent-cli/).
+
+<NextStep href="/serve/status-json/" label="Automate status checks" />

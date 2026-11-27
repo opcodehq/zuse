@@ -1,0 +1,75 @@
+---
+title: Diagnostics and troubleshooting
+icon: Stethoscope
+navTitle: "Diagnostics"
+description: Inspect provider, runtime, transport, and performance health without guessing.
+section: reference
+order: 94
+platforms: [desktop]
+providers: [claude, codex, grok, cursor, opencode, kiro, pi]
+prerequisites: []
+related: [/providers/setup, /concepts/local-first, /workspace/terminal-browser]
+next: /reference/bundled-skill
+lastVerified: latest
+---
+
+
+Open **Settings → Diagnostics** when a session, transport, or interface feels slow or stops behaving predictably. The pane reports bounded runtime health and recent technical events without requiring you to search raw application files first.
+
+## The Diagnostics pane
+
+The header shows live failure, CPU, and memory trends. Use **Pause live** to freeze the view, **Open logs** to open the local logs folder, and **Export support bundle** to package the current time range.
+
+In **Issues** and **Logs**, filter by text, severity, and source. Issues, logs, performance charts, and support bundles cover the selected time range: 15 minutes, 1 hour, 24 hours, or 7 days.
+
+| View | What it shows |
+| --- | --- |
+| **Issues** | Repeated failures grouped into an inbox. Select an issue to see its sanitized details, related occurrences, and correlation IDs for the run, trace, session, and provider. |
+| **Logs** | Structured local events. While live, the newest page refreshes every five seconds. |
+| **Performance** | Responsiveness, battery, thermal, CPU, and memory history, interface stalls of 100 ms or more, process hotspots, and slow operations. You can record five-second process samples for 5, 15, or 30 minutes and export the latest recording. |
+| **Processes** | Helper processes that Zuse started, with **Interrupt** and **Kill** actions. |
+| **Storage** | Retention, local disk usage, a temporary full trace for 5, 15, or 30 minutes, support bundle export, and **Clear performance history**. |
+
+Diagnostics stay on your computer unless you export them. Incidents and operation rollups are kept for 7 days.
+
+## Start with the boundary
+
+Identify which layer is failing:
+
+1. **Provider** — installation, authentication, version, rate limit, or provider process.
+2. **Project** — deleted path, Git state, setup command, or permissions.
+3. **Session** — start, resume, stream, approval, or interruption.
+4. **Workspace tool** — terminal, browser, editor, Git, or GitHub authentication.
+5. **Connection** — desktop IPC, browser pairing, hosted tunnel, or mobile reconnect.
+
+The visible error and the diagnostics timeline should agree on the failing boundary. Do not reinstall the app to solve a repository command failure.
+
+## Common recoveries
+
+### Provider will not start
+
+Open **Settings → Providers**, refresh status, verify the CLI from Terminal, complete sign-in, and apply a required update. Start a new session after changing the provider process.
+
+### Project is unavailable
+
+Confirm the folder or worktree still exists and is readable. If it was moved, reopen the project at its new path. A deleted worktree cannot provide files, Changes, or terminal context.
+
+### Setup failed
+
+Read the worktree setup output, run the same command in its terminal, fix dependencies or environment variables, then rerun setup. The checkout remains available after failure.
+
+### Git or pull-request action failed
+
+Inspect the remote and branch with `git status` and verify `gh auth status`. Resolve dirty files or conflicts before retrying a state-dependent workflow action.
+
+### Remote client stopped updating
+
+Confirm the desktop computer and Zuse service are awake and connected. Reopen the client, then repair or revoke the device from **Settings → Remote access** if its authorization is stale.
+
+## Sharing a report
+
+Reproduce the issue once, note the approximate time and active provider, then set the time range to the smallest window that covers it and choose **Export support bundle**. Zuse writes a ZIP file and shows it in your file manager.
+
+The bundle is sanitized. It excludes prompts, transcripts, files, terminal output, credentials, environment values, and URL query strings. Read the export before sharing it. For repository-specific failures, include the failing command and sanitized output separately.
+
+Each issue also has a diagnostic ID. Copy it from the issue details to reference a specific failure.

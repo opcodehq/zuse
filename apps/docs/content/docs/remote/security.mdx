@@ -1,0 +1,63 @@
+---
+title: "Remote access security"
+icon: Shield
+navTitle: "Security"
+description: "Understand environment authority, one-time pairing, device credentials, account linking, and revocation."
+section: "Remote access"
+order: 7
+platforms: [desktop, web, mobile, serve]
+providers: []
+prerequisites: [/remote]
+related: [/remote/local-browser, /remote/nearby-pairing, /remote/hosted-access, /remote/tailscale, /serve/security]
+next: /remote/recovery
+lastVerified: latest
+---
+
+
+Zuse's remote clients control an environment; they do not become the environment. Repositories, agent processes, terminals, provider CLIs, and their credentials remain on the computer running the desktop app or Zuse Serve.
+
+## Connections and pairing
+
+- Every connection in **Settings → Remote access → Connections** is off until you turn it on.
+- Turning the **Local network** connection on or off restarts the desktop app. Running agents stop during that restart.
+- **Tailscale** uses Tailscale Serve to reach only devices on your tailnet. It does not expose Zuse to the public internet.
+- Connect links and pairing codes are single-use and expire after five minutes.
+- A redeemed browser or phone receives its own revocable credential.
+- Nearby phone pairing checks the advertised encrypted transport identity and asks you to match a safety phrase on both devices.
+
+Do not paste a pairing link into an untrusted chat or open it on a shared browser. Treat a live link like a temporary password.
+
+## Hosted access
+
+- Hosted access through **Zuse Serve** is optional and account-scoped.
+- The environment registers to an account over an encrypted outbound connection; no router ports are opened. It remains the execution and data authority.
+- A browser or phone must authenticate to the same account before it can list or connect to linked computers.
+- Environment and client versions must be compatible.
+- Turning off **Zuse Serve**, removing the computer from your account, or running `zuse serve logout` revokes the environment's account registration.
+
+## Computers added over SSH
+
+When you [add a computer over SSH](/remote/other-computers/), Zuse runs a loopback-only runtime on that computer without account linking and reaches it through your SSH connection. Your SSH keys and configuration control who can open it. If the remote environment's identity changes, the desktop app refuses to connect until you remove and add the computer again.
+
+## Provider credentials
+
+Remote clients do not receive copies of provider credentials. Agent commands execute where the provider CLI is installed and authenticated. The model provider and any tools invoked by the agent still have their own network and data policies.
+
+## Device lifecycle
+
+Review **Connected devices** in **Settings → Remote access** periodically. Each identified browser or mobile device shows a label and last-connected time. Revoke devices you no longer use or recognize. Use **Revoke all** under **Older device access** for credentials from earlier versions that cannot be identified individually.
+
+On iPhone, **Settings → Storage → Clear downloaded data** removes cached projects, chats, and messages but keeps connections and unsent messages. **Reset app** additionally removes account state, connections, device keys, cache, and unsent messages from that phone. Neither action revokes the phone at the environment; do that from the Mac as well.
+
+<SecurityNote title="Permission prompts still matter">
+Approval prompts are security decisions. Read the requested operation and choose the narrowest option that permits the intended task. A remote connection does not weaken the agent's normal permission model.
+</SecurityNote>
+
+## If a device may be compromised
+
+1. Revoke it from **Settings → Remote access** on every environment it could access.
+2. Turn off the connections it could use while you review connected devices.
+3. Sign out the affected mobile or browser session.
+4. Rotate provider, repository, and service credentials if the device may have observed them through an active session.
+
+<NextStep href="/remote/recovery/" label="Recover a failed connection" />

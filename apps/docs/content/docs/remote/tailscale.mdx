@@ -1,0 +1,48 @@
+---
+title: "Tailscale access"
+icon: ShieldCheck
+navTitle: "Tailscale"
+description: "Share Zuse privately with devices on your tailnet through Tailscale Serve, without exposing it to the public internet."
+section: "Remote access"
+order: 5
+platforms: [desktop, web, serve]
+providers: []
+prerequisites: [/remote]
+related: [/remote/local-browser, /remote/hosted-access, /remote/other-computers, /remote/security]
+next: /remote/other-computers
+lastVerified: latest
+---
+
+
+Tailscale access makes Zuse available only to devices on your tailnet. Zuse uses Tailscale Serve to publish a private HTTPS address for the computer. It does not expose Zuse to the public internet and does not require a Zuse account.
+
+Before you begin, install Tailscale on the computer that runs Zuse and sign in to it.
+
+## Turn it on
+
+1. In the desktop app, open **Settings → Remote access**.
+2. Under **Connections**, choose **Set up** next to **Tailscale**.
+3. Confirm **Enable Tailscale**. If Tailscale is not installed yet, the button reads **Install Tailscale** and opens the Tailscale download page instead.
+4. If Tailscale opens your browser to approve Serve, approve it once.
+
+When the row shows **Private access** with the computer's tailnet name, create a connect link under **Connect another device** and choose **Tailscale** in **Connect through**. See [Browser access](/remote/local-browser/) for the rest of the authorization flow.
+
+## Row states
+
+| Message | What to do |
+| --- | --- |
+| **Tailscale is off. Turn it on in the Tailscale app.** | Start Tailscale, then return to settings. |
+| **Open Tailscale and sign in to use private access.** | Sign in to Tailscale on this computer. |
+| **Tailscale Serve is used by another app** | Another app owns the Tailscale Serve route. Free it in Tailscale before enabling Zuse. |
+| **Tailscale Serve has an existing configuration Zuse doesn’t recognize.** | Review the existing Tailscale Serve configuration before enabling Zuse. |
+| **On · Managed by zuse serve.** | A `zuse serve` service on this computer owns the route. Run `zuse serve stop` on this computer before changing it here. |
+
+## Turn it off
+
+Choose **Turn off** next to **Tailscale**, then confirm **Turn off Tailscale**. Devices using the private tailnet address disconnect. Other enabled connections keep working.
+
+## Zuse Serve
+
+On a headless computer, run `zuse serve --tailscale` to share Serve privately over Tailscale Serve HTTPS in addition to its account connection. See the [Serve command reference](/serve/command-reference/).
+
+<NextStep href="/remote/other-computers/" label="Use other computers from the desktop app" />

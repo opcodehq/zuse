@@ -1,0 +1,68 @@
+---
+title: "Files and change review"
+icon: FileDiff
+navTitle: "Files and review"
+description: "Browse project files, review diffs by scope, and commit, push, merge, or restore checkpoints from a mobile session."
+section: "Mobile"
+order: 4
+platforms: [mobile]
+providers: []
+prerequisites: [/mobile/chats]
+related: [/mobile/offline-notifications, /remote/recovery]
+next: /mobile/offline-notifications
+lastVerified: latest
+---
+
+
+An agent's final message is a summary. The mobile review surfaces let you inspect the actual repository changes on the environment before deciding what to do next.
+
+## Open files
+
+From a session, open the chat actions menu and choose **Files**. Switch between **Modified**, which lists changed files, and **All Files**, which shows the project tree with **Search files**. Choose a file to open its preview. Text files render with source-oriented formatting; images open in a zoomable view; other binary files show **Preview unavailable** with options to use the native document preview or share the file.
+
+File browsing reads from the connected environment. Previously fetched session and message data may be cached offline, but arbitrary project files are not a complete offline checkout.
+
+## Review changes
+
+Choose the review changes pill in the session or **Changes** in the chat actions menu. Use the filter menu to switch the review scope:
+
+- **Unstaged** covers working-tree changes not yet staged.
+- **Staged** covers changes staged for the next commit.
+- **Branch**, the default, compares the current branch with its base.
+- **Last turn** narrows the view to changes associated with the latest agent turn.
+
+The header shows the current branch, the number of changed files, and how far the branch is ahead of or behind its upstream. Expand files to inspect diff rows; binary changes are identified rather than rendered as misleading text.
+
+## Commit, push, and merge
+
+The review screen can change the repository on the environment:
+
+- Select files, choose **Commit**, and enter a message to commit only the selected files.
+- **Push** and, when the computer supports it, **Pull** sync the branch.
+- Use the branch menu to switch branches.
+- For an open pull request, **Mark ready** publishes a draft, and **Merge PR** squash-merges it. When required checks are still running, the action becomes **Auto-merge**.
+- When files have merge conflicts, choose **Resolve** for each file.
+
+The **•••** menu has **Revert selected file** and **Revert all…**, and, when the computer supports them, **Stash changes**, **Stash pop**, and **Reset to remote…**. Destructive actions ask for confirmation: reverting everything requires typing `REVERT`, and resetting to the remote requires typing the branch name.
+
+## Review tool results
+
+When a tool call contains file changes, open its detail screen to inspect the associated patches. This ties a change to the action that produced it and helps distinguish current work from older workspace edits.
+
+## Restore a checkpoint
+
+Choose **Checkpoints** in the chat actions menu to restore files and conversation to a saved turn. Choose **Review rollback** to preview the files that will be restored, then **Restore checkpoint**. All agent work must be idle, and later conversation messages are removed. Checkpoints require a Git repository.
+
+## A practical review loop
+
+1. Read the agent's latest explanation.
+2. Open the review screen and check the intended scope.
+3. Expand every changed file that affects behavior or security.
+4. Return to the chat with a specific correction, or commit the changes you accept.
+5. Run or request appropriate checks on the environment before shipping.
+
+<Warning title="A clean explanation is not verification">
+Mobile renders repository evidence supplied by the environment. It does not prove a build, test, deployment, or device run happened unless that evidence exists in the session.
+</Warning>
+
+<NextStep href="/mobile/offline-notifications/" label="Understand offline work and notifications" />

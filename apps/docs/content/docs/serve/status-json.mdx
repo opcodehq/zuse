@@ -1,0 +1,74 @@
+---
+title: "Serve status JSON"
+icon: Braces
+navTitle: "Status JSON"
+description: "Parse the stable ServeStatusV1 output for diagnostics, scripts, and readiness checks."
+section: "Serve CLI"
+order: 4
+platforms: [serve]
+providers: []
+prerequisites: [/serve]
+related: [/serve/command-reference, /serve/troubleshooting, /serve/operations]
+next: /serve/security
+lastVerified: latest
+---
+
+
+Use `status --json` when a script needs a stable, machine-readable report:
+
+<Command>zuse serve status --json</Command>
+
+The command writes one `ServeStatusV1` object to standard output.
+
+```json
+{
+  "schemaVersion": 1,
+  "computer": "build-host",
+  "service": "running",
+  "tunnel": "configured",
+  "runtimeVersion": "0.1.6",
+  "agents": ["Claude Code", "Codex"],
+  "reachable": true,
+  "environmentId": "env_123",
+  "durable": true,
+  "dataDir": "/home/alex/.config/Zuse Alpha",
+  "appUrl": "https://code.zuse.sh"
+}
+```
+
+Values above are illustrative; do not copy the identifiers or paths into configuration.
+
+## Fields
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `schemaVersion` | `1` | Version of this JSON contract. |
+| `computer` | string | Current operating-system hostname. |
+| `service` | `running \| stopped \| missing` | `missing` when no service definition exists; otherwise whether the service manager reports it running. |
+| `tunnel` | `configured \| unavailable` | Whether a hosted tunnel hostname is saved in the local database. |
+| `runtimeVersion` | string | Version reported by the running server; otherwise the active managed runtime version; otherwise `0.0.0`. |
+| `agents` | string[] | Display names of supported agent CLIs whose `--version` command exited successfully within 2 seconds. |
+| `reachable` | boolean | Whether the server answered on `127.0.0.1` at the saved or default port within 2 seconds. |
+| `environmentId` | string \| null | Account-linked environment identity, or `null` when the computer is not linked. |
+| `durable` | boolean | Whether the service is managed by a durable service manager. Always `true` in current releases; on a platform without a supported service manager, `status` fails instead. |
+| `dataDir` | string | Effective data directory inspected by the command. |
+| `appUrl` | string | Hosted app entry point, `https://code.zuse.sh`. The readable report links directly to this computer's environment. |
+
+## Read combinations, not one field
+
+- `service: "running"` with `reachable: false` means the manager sees a process, but the local server did not answer. Inspect logs and retry after a short startup window.
+- `service: "missing"` means no Serve service definition is installed for this operating-system user.
+- `tunnel: "unavailable"` and `environmentId: null` means hosted registration has not been persisted there.
+- An empty `agents` array means no supported CLI completed its version probe; it does not mean the service itself is unhealthy.
+- `reachable: true` is the strongest local readiness signal. Hosted reachability also requires account link and tunnel state.
+
+## Compatibility
+
+Branch on `schemaVersion` before consuming fields. Additive fields may appear within version 1; consumers should ignore properties they do not understand. A future incompatible wire shape will use another schema version.
+
+```sh
+status="$(zuse serve status --json)" || exit 1
+node -e 'const s=JSON.parse(process.argv[1]); process.exit(s.schemaVersion===1 && s.reachable ? 0 : 1)' "$status"
+```
+
+<NextStep href="/serve/security/" label="Secure a Serve host" />

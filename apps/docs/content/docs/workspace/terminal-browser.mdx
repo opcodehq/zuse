@@ -1,0 +1,40 @@
+---
+title: Terminal
+icon: SquareTerminal
+navTitle: "Terminal"
+description: Run project commands in the active checkout and manage long-running development processes.
+section: workspace
+order: 62
+platforms: [desktop]
+providers: []
+prerequisites: [/workspace]
+related: [/projects/scripts, /workspace/browser, /reference/diagnostics]
+next: /workspace/browser
+lastVerified: latest
+---
+
+
+The integrated terminal opens in the active chat's checkout. Terminal sessions are scoped to the chat, so switching between tasks does not silently move one shell into another worktree. Shells keep running while you switch chats.
+
+## Open a terminal
+
+- Press `⌘J` or choose **Terminal** from **Add panel** (**+**) to open a terminal tab in the workspace pane. `⌘J` switches to an existing terminal tab instead of opening another.
+- Click **Toggle bottom terminal** in the top bar for a terminal dock below the conversation. Use **+** (**New bottom terminal**) to add a tab and the chevron to hide the dock.
+
+The workspace pane and the bottom dock keep separate shells. Each holds up to four running terminals per chat; when the limit is reached, the add button shows **Limit 4** until you close one.
+
+In a cloud workspace, **Add panel** offers **Cloud terminal**, which runs in the cloud environment, and **Local terminal**, which opens in the synced local checkout. Typing in a cloud terminal whose workspace is paused resumes it.
+
+## Manage a terminal
+
+Click the status dot on a terminal tab to open its controls: rename it under **Terminal name**, or choose **Clear screen** or **Restart process**. The dot is green while the process runs, red after a failure, and grey after it exits.
+
+Use the terminal to run development servers, focused tests, builds, migrations, and repository tools. When **Auto-run after setup** (`auto_run_after_setup`) is enabled for the repository, Zuse starts its run script in a terminal named **Run** after a new worktree's setup finishes. See [Repository scripts](/projects/scripts).
+
+Closing a terminal ends that shell process, and archiving or deleting a chat closes its terminals. Stop long-running commands cleanly before archiving a chat.
+
+## Continue in the browser
+
+The browser has a dedicated guide. Start with [In-app browser](/workspace/browser), then use the focused pages for [debugging](/workspace/browser-debugging), [visual evidence](/workspace/browser-evidence), [sessions and privacy](/workspace/browser-sessions-privacy), and [recovery](/workspace/browser-troubleshooting).
+
+The in-app browser is a desktop workspace surface. It is different from opening the Zuse interface itself in a normal browser through [remote access](/remote/local-browser).

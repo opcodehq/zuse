@@ -1,0 +1,1993 @@
+{
+	"openapi": "3.1.0",
+	"info": {
+		"title": "Zuse API",
+		"version": "1",
+		"description": "Create cloud workspaces, talk to their agents, and get notified when they finish."
+	},
+	"servers": [
+		{
+			"url": "https://api.zuse.sh"
+		}
+	],
+	"security": [
+		{
+			"apiKey": []
+		}
+	],
+	"tags": [
+		{
+			"name": "Workspaces",
+			"description": "Start cloud workspaces and check on them."
+		},
+		{
+			"name": "Messages",
+			"description": "Talk to a workspace's agent."
+		},
+		{
+			"name": "Attachments",
+			"description": "Upload files to attach to messages."
+		},
+		{
+			"name": "Projects",
+			"description": "Repositories you can create workspaces from."
+		},
+		{
+			"name": "Providers",
+			"description": "Agents and cloud machines available to you."
+		},
+		{
+			"name": "Webhooks",
+			"description": "Get notified when agents finish."
+		}
+	],
+	"paths": {
+		"/v1/api/workspaces": {
+			"post": {
+				"operationId": "create-workspace",
+				"tags": [
+					"Workspaces"
+				],
+				"summary": "Create workspace",
+				"description": "Starts a cloud workspace on a fresh branch and, if you pass a `prompt`, sends it to the agent. The machine starts right away; poll [Get workspace](/api-reference/workspaces/get-workspace) or subscribe to [webhooks](/api-reference/webhook-signatures) to follow progress.",
+				"parameters": [
+					{
+						"name": "Idempotency-Key",
+						"in": "header",
+						"required": false,
+						"description": "Retrying with the same key returns the original result instead of repeating the action. Up to 200 characters.",
+						"schema": {
+							"type": "string",
+							"maxLength": 200
+						}
+					}
+				],
+				"requestBody": {
+					"required": false,
+					"content": {
+						"application/json": {
+							"schema": {
+								"$ref": "#/components/schemas/ApiWorkspaceCreateRequest"
+							}
+						}
+					}
+				},
+				"responses": {
+					"201": {
+						"description": "Workspace created. Replaying a request with the same `Idempotency-Key` returns `200` with the same workspace.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"properties": {
+										"workspace": {
+											"$ref": "#/components/schemas/ApiWorkspaceStatus"
+										}
+									},
+									"required": [
+										"workspace"
+									]
+								}
+							}
+						}
+					},
+					"400": {
+						"description": "`invalid_json`, `invalid_request`, `invalid_prompt`, `cloud_project_required`, `agent_and_model_required`, `invalid_git_ref`, `invalid_idempotency_key`, `idempotency_key_mismatch`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"401": {
+						"description": "`missing_api_key`, `invalid_api_key`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"403": {
+						"description": "`cloud_entitlement_required`, `cloud_billing_hold`, `cloud_billing_period_missing`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "`cloud_project_not_found`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"409": {
+						"description": "`cloud_project_not_ready`, `cloud_snapshot_unavailable`, `cloud_branch_in_use:<workspaceId>`, `idempotency_key_reused_with_different_request`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"503": {
+						"description": "`cloud_provider_unavailable`, `cloud_provider_required`, `api_content_encryption_not_configured`, `api_content_seal_failed`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					}
+				}
+			},
+			"get": {
+				"operationId": "list-workspaces",
+				"tags": [
+					"Workspaces"
+				],
+				"summary": "List workspaces",
+				"description": "Lists every workspace on your account that hasn't been deleted, including ones started from the app or Slack.",
+				"responses": {
+					"200": {
+						"description": "Your workspaces.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ApiWorkspaceList"
+								}
+							}
+						}
+					},
+					"401": {
+						"description": "`missing_api_key`, `invalid_api_key`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"403": {
+						"description": "`cloud_entitlement_required`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/v1/api/workspaces/{workspaceId}": {
+			"get": {
+				"operationId": "get-workspace",
+				"tags": [
+					"Workspaces"
+				],
+				"summary": "Get workspace",
+				"description": "Returns the state of a workspace and whether its agent is working.",
+				"parameters": [
+					{
+						"name": "workspaceId",
+						"in": "path",
+						"required": true,
+						"description": "Workspace ID.",
+						"schema": {
+							"type": "string",
+							"examples": [
+								"workspace_Q2x8mN4pR7sT1vWz"
+							]
+						}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "The workspace.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"properties": {
+										"workspace": {
+											"$ref": "#/components/schemas/ApiWorkspaceStatus"
+										}
+									},
+									"required": [
+										"workspace"
+									]
+								}
+							}
+						}
+					},
+					"401": {
+						"description": "`missing_api_key`, `invalid_api_key`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"403": {
+						"description": "`cloud_entitlement_required`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "`cloud_workspace_not_found`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/v1/api/workspaces/{workspaceId}/messages": {
+			"post": {
+				"operationId": "send-message",
+				"tags": [
+					"Messages"
+				],
+				"summary": "Send message",
+				"description": "Sends a message to the workspace's agent. A paused workspace resumes automatically. Messages are queued while the agent is busy and handled in order.",
+				"parameters": [
+					{
+						"name": "workspaceId",
+						"in": "path",
+						"required": true,
+						"description": "Workspace ID.",
+						"schema": {
+							"type": "string",
+							"examples": [
+								"workspace_Q2x8mN4pR7sT1vWz"
+							]
+						}
+					},
+					{
+						"name": "Idempotency-Key",
+						"in": "header",
+						"required": false,
+						"description": "Retrying with the same key returns the original result instead of repeating the action. Up to 200 characters.",
+						"schema": {
+							"type": "string",
+							"maxLength": 200
+						}
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"$ref": "#/components/schemas/ApiSendMessageRequest"
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "Message accepted.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ApiSendMessageReceipt"
+								}
+							}
+						}
+					},
+					"400": {
+						"description": "`invalid_json`, `invalid_request`, `invalid_message`, `invalid_asset_id`, `invalid_idempotency_key`, `idempotency_key_mismatch`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"401": {
+						"description": "`missing_api_key`, `invalid_api_key`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"403": {
+						"description": "`cloud_entitlement_required`, `cloud_billing_hold`, `cloud_billing_period_missing`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "`cloud_workspace_not_found`, `api_asset_not_found`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"409": {
+						"description": "`workspace_not_accepting_messages`, `message_not_deliverable`, `idempotency_key_reused_with_different_request`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"503": {
+						"description": "`cloud_workspace_state_contended`, `api_content_encryption_not_configured`, `api_content_seal_failed`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					}
+				}
+			},
+			"get": {
+				"operationId": "list-messages",
+				"tags": [
+					"Messages"
+				],
+				"summary": "List messages",
+				"description": "Returns the conversation, oldest first. To follow a running workspace, keep passing the previous `latestSeq` as `afterSeq`. A page shorter than `limit` means you've caught up.",
+				"parameters": [
+					{
+						"name": "workspaceId",
+						"in": "path",
+						"required": true,
+						"description": "Workspace ID.",
+						"schema": {
+							"type": "string",
+							"examples": [
+								"workspace_Q2x8mN4pR7sT1vWz"
+							]
+						}
+					},
+					{
+						"name": "afterSeq",
+						"in": "query",
+						"required": false,
+						"description": "Return messages with a sequence number greater than this.",
+						"schema": {
+							"type": "integer",
+							"minimum": 0,
+							"default": 0
+						}
+					},
+					{
+						"name": "limit",
+						"in": "query",
+						"required": false,
+						"description": "Maximum messages to return. Larger values are capped at 200.",
+						"schema": {
+							"type": "integer",
+							"minimum": 1,
+							"maximum": 200,
+							"default": 200
+						}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "A page of messages.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ApiMessageList"
+								}
+							}
+						}
+					},
+					"400": {
+						"description": "`invalid_message_query`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"401": {
+						"description": "`missing_api_key`, `invalid_api_key`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"403": {
+						"description": "`cloud_entitlement_required`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "`cloud_workspace_not_found`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/v1/api/workspaces/{workspaceId}/attachments": {
+			"post": {
+				"operationId": "upload-attachment",
+				"tags": [
+					"Attachments"
+				],
+				"summary": "Upload attachment",
+				"description": "Uploads a file to a workspace so you can attach it to a message. Send the raw file as the body with its media type in `Content-Type`. Files can be up to 20 MiB.",
+				"parameters": [
+					{
+						"name": "workspaceId",
+						"in": "path",
+						"required": true,
+						"description": "Workspace ID.",
+						"schema": {
+							"type": "string",
+							"examples": [
+								"workspace_Q2x8mN4pR7sT1vWz"
+							]
+						}
+					},
+					{
+						"name": "X-Zuse-File-Name",
+						"in": "header",
+						"required": false,
+						"description": "Original file name, up to 255 characters. Defaults to `attachment`.",
+						"schema": {
+							"type": "string",
+							"examples": [
+								"error.png"
+							]
+						}
+					},
+					{
+						"name": "Idempotency-Key",
+						"in": "header",
+						"required": false,
+						"description": "Retrying with the same key returns the original result instead of repeating the action. Up to 200 characters.",
+						"schema": {
+							"type": "string",
+							"maxLength": 200
+						}
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"description": "The file's bytes.",
+					"content": {
+						"image/png": {
+							"schema": {
+								"type": "string",
+								"format": "binary"
+							}
+						},
+						"image/jpeg": {
+							"schema": {
+								"type": "string",
+								"format": "binary"
+							}
+						},
+						"image/gif": {
+							"schema": {
+								"type": "string",
+								"format": "binary"
+							}
+						},
+						"image/webp": {
+							"schema": {
+								"type": "string",
+								"format": "binary"
+							}
+						},
+						"image/avif": {
+							"schema": {
+								"type": "string",
+								"format": "binary"
+							}
+						},
+						"application/pdf": {
+							"schema": {
+								"type": "string",
+								"format": "binary"
+							}
+						},
+						"text/plain": {
+							"schema": {
+								"type": "string",
+								"format": "binary"
+							}
+						},
+						"text/markdown": {
+							"schema": {
+								"type": "string",
+								"format": "binary"
+							}
+						},
+						"application/json": {
+							"schema": {
+								"type": "string",
+								"format": "binary"
+							}
+						},
+						"application/zip": {
+							"schema": {
+								"type": "string",
+								"format": "binary"
+							}
+						}
+					}
+				},
+				"responses": {
+					"201": {
+						"description": "File uploaded.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ApiAssetCreated"
+								}
+							}
+						}
+					},
+					"400": {
+						"description": "`unsupported_asset_type`, `invalid_asset_size`, `invalid_asset_body`, `invalid_idempotency_key`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"401": {
+						"description": "`missing_api_key`, `invalid_api_key`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"403": {
+						"description": "`cloud_entitlement_required`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "`cloud_workspace_not_found`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"409": {
+						"description": "`workspace_not_accepting_messages`, `idempotency_key_reused_with_different_asset`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"503": {
+						"description": "`api_asset_store_unavailable`, `api_content_encryption_not_configured`, `api_content_seal_failed`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/v1/api/projects": {
+			"get": {
+				"operationId": "list-projects",
+				"tags": [
+					"Projects"
+				],
+				"summary": "List projects",
+				"description": "Lists the repositories connected to Zuse Cloud. Create workspaces from `ready` projects.",
+				"responses": {
+					"200": {
+						"description": "Your projects.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ApiProjectList"
+								}
+							}
+						}
+					},
+					"401": {
+						"description": "`missing_api_key`, `invalid_api_key`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"403": {
+						"description": "`cloud_entitlement_required`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/v1/api/agents": {
+			"get": {
+				"operationId": "list-agents",
+				"tags": [
+					"Providers"
+				],
+				"summary": "List agents",
+				"description": "Lists the agents connected for cloud use. Connect agents in the Zuse app under Cloud workspace settings.",
+				"responses": {
+					"200": {
+						"description": "Connected agents.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ApiAgentList"
+								}
+							}
+						}
+					},
+					"401": {
+						"description": "`missing_api_key`, `invalid_api_key`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"403": {
+						"description": "`cloud_entitlement_required`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/v1/api/providers": {
+			"get": {
+				"operationId": "list-providers",
+				"tags": [
+					"Providers"
+				],
+				"summary": "List providers",
+				"description": "Lists the cloud machine providers and sizes available to your account.",
+				"responses": {
+					"200": {
+						"description": "Available providers.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/CloudProviderList"
+								}
+							}
+						}
+					},
+					"401": {
+						"description": "`missing_api_key`, `invalid_api_key`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"403": {
+						"description": "`cloud_entitlement_required`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/v1/api/webhooks": {
+			"post": {
+				"operationId": "create-webhook",
+				"tags": [
+					"Webhooks"
+				],
+				"summary": "Create webhook",
+				"description": "Registers an endpoint that receives an event whenever an agent finishes a turn in any of your workspaces. The response includes the signing secret, which is shown only once. You can register up to 20 endpoints.",
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"$ref": "#/components/schemas/ApiWebhookCreateRequest"
+							}
+						}
+					}
+				},
+				"responses": {
+					"201": {
+						"description": "Endpoint registered.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ApiWebhookCreated"
+								}
+							}
+						}
+					},
+					"400": {
+						"description": "`invalid_json`, `invalid_request`, `invalid_webhook_url`, `invalid_webhook_description`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"401": {
+						"description": "`missing_api_key`, `invalid_api_key`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"403": {
+						"description": "`cloud_entitlement_required`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"409": {
+						"description": "`webhook_limit_reached`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"503": {
+						"description": "`api_content_encryption_not_configured`, `api_content_seal_failed`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					}
+				}
+			},
+			"get": {
+				"operationId": "list-webhooks",
+				"tags": [
+					"Webhooks"
+				],
+				"summary": "List webhooks",
+				"description": "Lists your webhook endpoints. Signing secrets aren't returned.",
+				"responses": {
+					"200": {
+						"description": "Your endpoints.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ApiWebhookList"
+								}
+							}
+						}
+					},
+					"401": {
+						"description": "`missing_api_key`, `invalid_api_key`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"403": {
+						"description": "`cloud_entitlement_required`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/v1/api/webhooks/{webhookId}": {
+			"delete": {
+				"operationId": "delete-webhook",
+				"tags": [
+					"Webhooks"
+				],
+				"summary": "Delete webhook",
+				"description": "Removes an endpoint and cancels its pending deliveries.",
+				"parameters": [
+					{
+						"name": "webhookId",
+						"in": "path",
+						"required": true,
+						"description": "Webhook ID.",
+						"schema": {
+							"type": "string",
+							"examples": [
+								"wh_7Hn2kQ9xLm4"
+							]
+						}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "Endpoint removed.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"properties": {
+										"ok": {
+											"type": "boolean",
+											"const": true
+										}
+									},
+									"required": [
+										"ok"
+									]
+								}
+							}
+						}
+					},
+					"401": {
+						"description": "`missing_api_key`, `invalid_api_key`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "`webhook_not_found`",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Error"
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	},
+	"webhooks": {
+		"workspace.turn.completed": {
+			"post": {
+				"operationId": "workspace-turn-completed",
+				"tags": [
+					"Webhooks"
+				],
+				"summary": "Turn completed event",
+				"description": "Zuse sends this `POST` to every registered endpoint when an agent finishes a turn. Verify the `zuse-signature` header before trusting the body, and use `zuse-event-id` to ignore duplicates. See [Verify webhooks](/api-reference/webhook-signatures).",
+				"parameters": [
+					{
+						"name": "zuse-signature",
+						"in": "header",
+						"required": true,
+						"description": "`t=<unix seconds>,v1=<hex>`, where `v1` is the HMAC-SHA256 of `<t>.<raw body>` keyed with your full `whsec_` secret.",
+						"schema": {
+							"type": "string"
+						}
+					},
+					{
+						"name": "zuse-event-id",
+						"in": "header",
+						"required": true,
+						"description": "Same as `eventId` in the body.",
+						"schema": {
+							"type": "string"
+						}
+					},
+					{
+						"name": "zuse-delivery-attempt",
+						"in": "header",
+						"required": true,
+						"description": "Attempt number, starting at 1.",
+						"schema": {
+							"type": "integer",
+							"minimum": 1
+						}
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"$ref": "#/components/schemas/ApiWebhookTurnCompletedEvent"
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "Return any 2xx status to acknowledge the event. Anything else is retried."
+					}
+				}
+			}
+		}
+	},
+	"components": {
+		"securitySchemes": {
+			"apiKey": {
+				"type": "http",
+				"scheme": "bearer",
+				"description": "An API key that starts with `zk_`. Create one in the Zuse app."
+			}
+		},
+		"schemas": {
+			"ApiAgentList": {
+				"type": "object",
+				"description": "Agents connected for cloud use.",
+				"properties": {
+					"agents": {
+						"type": "array",
+						"items": {
+							"type": "string",
+							"enum": [
+								"claude",
+								"codex",
+								"cursor",
+								"grok"
+							]
+						},
+						"description": "Agents you can pass as `agent` when creating a workspace.",
+						"examples": [
+							[
+								"claude",
+								"codex"
+							]
+						]
+					}
+				},
+				"required": [
+					"agents"
+				]
+			},
+			"ApiAsset": {
+				"type": "object",
+				"properties": {
+					"assetId": {
+						"type": "string",
+						"description": "Pass this in a message's `attachments` array.",
+						"examples": [
+							"asset_4kQ9mZr2Lp8vTx1nWc6bYs0d"
+						]
+					},
+					"mimeType": {
+						"type": "string",
+						"description": "Media type of the file.",
+						"examples": [
+							"image/png"
+						]
+					},
+					"originalName": {
+						"type": "string",
+						"description": "File name from `X-Zuse-File-Name`.",
+						"examples": [
+							"error.png"
+						]
+					},
+					"sizeBytes": {
+						"type": "number",
+						"description": "Size in bytes.",
+						"examples": [
+							48213
+						]
+					}
+				},
+				"required": [
+					"assetId",
+					"mimeType",
+					"originalName",
+					"sizeBytes"
+				],
+				"description": "A file uploaded to a workspace."
+			},
+			"ApiAssetCreated": {
+				"type": "object",
+				"properties": {
+					"asset": {
+						"$ref": "#/components/schemas/ApiAsset",
+						"description": "The new attachment."
+					}
+				},
+				"required": [
+					"asset"
+				],
+				"description": "The uploaded file."
+			},
+			"ApiMessage": {
+				"type": "object",
+				"properties": {
+					"messageId": {
+						"type": "string",
+						"description": "Message ID.",
+						"examples": [
+							"msg_k3Jd9sLq2Pz8xVb1Nm4Tr7"
+						]
+					},
+					"seq": {
+						"type": "number",
+						"description": "Increases by one for each message in the workspace.",
+						"examples": [
+							5
+						]
+					},
+					"role": {
+						"type": "string",
+						"enum": [
+							"user",
+							"assistant"
+						],
+						"description": "Who wrote the message."
+					},
+					"text": {
+						"type": "string",
+						"description": "Message text. Agent replies are capped at 16,384 characters."
+					},
+					"status": {
+						"type": "string",
+						"enum": [
+							"pending",
+							"delivered",
+							"settled",
+							"failed",
+							"expired"
+						],
+						"description": "Your messages go `pending` → `delivered` → `settled` once the agent replies. A message that isn't delivered within 24 hours becomes `expired`; one that's delivered but never answered becomes `failed`. Agent messages are always `settled`."
+					},
+					"turnId": {
+						"type": "string",
+						"description": "Agent turn the message belongs to.",
+						"examples": [
+							"turn_7a2c9e"
+						]
+					},
+					"outcome": {
+						"type": "string",
+						"enum": [
+							"completed",
+							"interrupted",
+							"error"
+						],
+						"description": "How the agent turn ended. Set on agent messages."
+					},
+					"createdAt": {
+						"type": "number",
+						"description": "When the message was created, in Unix epoch milliseconds.",
+						"examples": [
+							1760697600000
+						]
+					},
+					"deliveredAt": {
+						"type": "number",
+						"description": "When the workspace acknowledged the message, in Unix epoch milliseconds.",
+						"examples": [
+							1760697600000
+						]
+					},
+					"attachments": {
+						"type": "array",
+						"items": {
+							"$ref": "#/components/schemas/ApiAsset"
+						},
+						"description": "Files attached to your message."
+					}
+				},
+				"required": [
+					"messageId",
+					"seq",
+					"role",
+					"text",
+					"status",
+					"createdAt"
+				],
+				"description": "A message in a workspace conversation."
+			},
+			"ApiMessageList": {
+				"type": "object",
+				"properties": {
+					"messages": {
+						"type": "array",
+						"items": {
+							"$ref": "#/components/schemas/ApiMessage"
+						},
+						"description": "Messages after `afterSeq`, oldest first."
+					},
+					"latestSeq": {
+						"type": "number",
+						"description": "Sequence number of the last message on this page. Pass it as `afterSeq` on the next request."
+					},
+					"turnFailure": {
+						"$ref": "#/components/schemas/ApiTurnFailure",
+						"description": "Present when the latest turn on this page failed."
+					}
+				},
+				"required": [
+					"messages",
+					"latestSeq"
+				],
+				"description": "A page of messages."
+			},
+			"ApiProject": {
+				"type": "object",
+				"properties": {
+					"projectId": {
+						"type": "string",
+						"description": "Project ID.",
+						"examples": [
+							"proj_8f2c1a"
+						]
+					},
+					"repository": {
+						"type": "string",
+						"description": "Repository the project tracks.",
+						"examples": [
+							"acme/api"
+						]
+					},
+					"displayName": {
+						"type": "string",
+						"description": "Name shown in Zuse.",
+						"examples": [
+							"acme-api"
+						]
+					},
+					"defaultBranch": {
+						"type": "string",
+						"description": "Default branch of the repository.",
+						"examples": [
+							"main"
+						]
+					},
+					"state": {
+						"type": "string",
+						"enum": [
+							"connected",
+							"preparing",
+							"ready",
+							"failed"
+						],
+						"description": "Workspaces can only be created from `ready` projects."
+					}
+				},
+				"required": [
+					"projectId",
+					"repository",
+					"displayName",
+					"defaultBranch",
+					"state"
+				],
+				"description": "A repository connected to Zuse Cloud."
+			},
+			"ApiProjectList": {
+				"type": "object",
+				"properties": {
+					"projects": {
+						"type": "array",
+						"items": {
+							"$ref": "#/components/schemas/ApiProject"
+						},
+						"description": "Connected repositories."
+					}
+				},
+				"required": [
+					"projects"
+				],
+				"description": "Projects on your account."
+			},
+			"ApiSendMessageReceipt": {
+				"type": "object",
+				"properties": {
+					"messageId": {
+						"type": "string",
+						"description": "Message ID.",
+						"examples": [
+							"msg_k3Jd9sLq2Pz8xVb1Nm4Tr7"
+						]
+					},
+					"seq": {
+						"type": "number",
+						"description": "Sequence number of the message in the conversation.",
+						"examples": [
+							5
+						]
+					},
+					"status": {
+						"type": "string",
+						"enum": [
+							"queued",
+							"delivered"
+						],
+						"description": "`queued` until the workspace runtime picks it up, then `delivered`."
+					},
+					"resumeTriggered": {
+						"type": "boolean",
+						"description": "`true` when this message woke a paused workspace."
+					}
+				},
+				"required": [
+					"messageId",
+					"seq",
+					"status",
+					"resumeTriggered"
+				],
+				"description": "Confirms the message was accepted."
+			},
+			"ApiSendMessageRequest": {
+				"type": "object",
+				"properties": {
+					"text": {
+						"type": "string",
+						"description": "Message text, up to 65,536 characters. Can be empty only when `attachments` is set.",
+						"maxLength": 65536,
+						"examples": [
+							"Also add a test for the 400 response."
+						]
+					},
+					"attachments": {
+						"type": "array",
+						"items": {
+							"type": "string"
+						},
+						"description": "Up to 8 asset IDs uploaded to this workspace.",
+						"maxItems": 8,
+						"examples": [
+							[
+								"asset_4kQ9mZr2Lp8vTx1nWc6bYs0d"
+							]
+						]
+					},
+					"idempotencyKey": {
+						"type": "string",
+						"description": "Makes retries safe, up to 200 characters. You can send the `Idempotency-Key` header instead; if you send both they must match.",
+						"maxLength": 200
+					}
+				},
+				"required": [
+					"text"
+				],
+				"description": "A message for the workspace's agent."
+			},
+			"ApiTurnFailure": {
+				"type": "object",
+				"description": "Why the latest agent turn on this page failed.",
+				"properties": {
+					"turnId": {
+						"type": "string",
+						"description": "Turn ID."
+					},
+					"agent": {
+						"type": "string",
+						"enum": [
+							"claude",
+							"codex",
+							"cursor",
+							"grok"
+						],
+						"description": "Agent that failed."
+					},
+					"code": {
+						"type": "string",
+						"enum": [
+							"agent_not_installed",
+							"agent_error"
+						],
+						"description": "`agent_not_installed` when the agent isn't set up in the workspace image."
+					},
+					"message": {
+						"type": "string",
+						"description": "Error from the agent, up to 1,200 characters."
+					}
+				},
+				"required": [
+					"turnId",
+					"agent",
+					"code",
+					"message"
+				]
+			},
+			"ApiWebhookCreated": {
+				"type": "object",
+				"properties": {
+					"webhook": {
+						"$ref": "#/components/schemas/ApiWebhookEndpoint",
+						"description": "The registered endpoint."
+					},
+					"secret": {
+						"type": "string",
+						"description": "Signing secret for verifying deliveries. It's shown only once, so store it now.",
+						"examples": [
+							"whsec_9a8b7c6d5e4f3g2h1i0jKLMNOPQRSTUVWXYZabcdefg"
+						]
+					}
+				},
+				"required": [
+					"webhook",
+					"secret"
+				],
+				"description": "The new endpoint and its signing secret."
+			},
+			"ApiWebhookCreateRequest": {
+				"type": "object",
+				"properties": {
+					"url": {
+						"type": "string",
+						"description": "Public `https` URL, up to 2,048 characters. Local, private-network, and IP-literal hosts are rejected.",
+						"maxLength": 2048,
+						"examples": [
+							"https://example.com/zuse/webhooks"
+						]
+					},
+					"description": {
+						"type": "string",
+						"description": "Label for the endpoint, up to 200 characters.",
+						"maxLength": 200,
+						"examples": [
+							"Production notifier"
+						]
+					}
+				},
+				"required": [
+					"url"
+				],
+				"description": "A webhook endpoint to register."
+			},
+			"ApiWebhookEndpoint": {
+				"type": "object",
+				"properties": {
+					"webhookId": {
+						"type": "string",
+						"description": "Webhook ID.",
+						"examples": [
+							"wh_7Hn2kQ9xLm4"
+						]
+					},
+					"url": {
+						"type": "string",
+						"description": "Where deliveries are sent.",
+						"examples": [
+							"https://example.com/zuse/webhooks"
+						]
+					},
+					"description": {
+						"type": "string",
+						"description": "Label for the endpoint.",
+						"examples": [
+							"Production notifier"
+						]
+					},
+					"createdAt": {
+						"type": "number",
+						"description": "When the endpoint was registered, in Unix epoch milliseconds.",
+						"examples": [
+							1760697600000
+						]
+					}
+				},
+				"required": [
+					"webhookId",
+					"url",
+					"createdAt"
+				],
+				"description": "A registered webhook endpoint."
+			},
+			"ApiWebhookList": {
+				"type": "object",
+				"properties": {
+					"webhooks": {
+						"type": "array",
+						"items": {
+							"$ref": "#/components/schemas/ApiWebhookEndpoint"
+						},
+						"description": "Endpoints in the order they were registered. Secrets are never returned."
+					}
+				},
+				"required": [
+					"webhooks"
+				],
+				"description": "Your webhook endpoints."
+			},
+			"ApiWebhookTurnCompletedEvent": {
+				"type": "object",
+				"properties": {
+					"eventId": {
+						"type": "string",
+						"description": "Event ID. It's the same for every retry, so use it to ignore duplicates.",
+						"examples": [
+							"evt_3f1c9a7e5b2d8046c1e9f7a3b5d2c8e0f4a6b1c3"
+						]
+					},
+					"type": {
+						"type": "string",
+						"enum": [
+							"workspace.turn.completed"
+						],
+						"description": "Event type."
+					},
+					"createdAt": {
+						"type": "number",
+						"description": "When the turn finished, in Unix epoch milliseconds.",
+						"examples": [
+							1760697600000
+						]
+					},
+					"workspaceId": {
+						"type": "string",
+						"description": "Workspace ID.",
+						"examples": [
+							"workspace_Q2x8mN4pR7sT1vWz"
+						]
+					},
+					"branch": {
+						"type": "string",
+						"description": "Branch the agent works on.",
+						"examples": [
+							"fix-order-validation"
+						]
+					},
+					"turnId": {
+						"type": "string",
+						"description": "Turn ID.",
+						"examples": [
+							"turn_7a2c9e"
+						]
+					},
+					"outcome": {
+						"type": "string",
+						"enum": [
+							"completed",
+							"interrupted",
+							"error"
+						],
+						"description": "How the turn ended."
+					},
+					"reply": {
+						"type": "object",
+						"properties": {
+							"text": {
+								"type": "string"
+							},
+							"truncated": {
+								"type": "boolean"
+							}
+						},
+						"required": [
+							"text",
+							"truncated"
+						],
+						"description": "The agent's reply, capped at 16,384 characters."
+					},
+					"messageId": {
+						"type": "string",
+						"description": "ID of the agent's message in the workspace conversation.",
+						"examples": [
+							"msg_turn_5d0b8c1e9f2a7b3c6d4e1f0a9b8c7d6e5f4a3b2c"
+						]
+					}
+				},
+				"required": [
+					"eventId",
+					"type",
+					"createdAt",
+					"workspaceId",
+					"branch",
+					"turnId",
+					"outcome",
+					"reply",
+					"messageId"
+				],
+				"description": "Sent when an agent finishes a turn in any workspace on your account."
+			},
+			"ApiWorkspaceCreateRequest": {
+				"type": "object",
+				"properties": {
+					"prompt": {
+						"type": "string",
+						"description": "First message for the agent, up to 65,536 characters. Omit it to create an idle workspace, for example to upload attachments first.",
+						"maxLength": 65536,
+						"examples": [
+							"Return a 400 with the validation issues when POST /orders gets an invalid body."
+						]
+					},
+					"projectId": {
+						"type": "string",
+						"description": "Project to work in. Defaults to your only ready project; required when you have more than one.",
+						"examples": [
+							"proj_8f2c1a"
+						]
+					},
+					"providerId": {
+						"type": "string",
+						"description": "Cloud machine provider, from [List providers](/api-reference/providers/list-providers). Defaults to your connected provider or the Zuse default.",
+						"examples": [
+							"box"
+						]
+					},
+					"agent": {
+						"type": "string",
+						"description": "Agent to run, from [List agents](/api-reference/providers/list-agents). Defaults to the agent of your most recent workspace.",
+						"examples": [
+							"codex"
+						]
+					},
+					"model": {
+						"type": "string",
+						"description": "Model ID for the agent. Defaults to the model of your most recent workspace.",
+						"examples": [
+							"gpt-5.6-sol"
+						]
+					},
+					"runtimeMode": {
+						"type": "string",
+						"enum": [
+							"auto",
+							"approval-required",
+							"auto-accept-edits",
+							"auto-accept-edits-and-bash",
+							"full-access"
+						],
+						"description": "Permission mode for the agent. API-created workspaces default to `full-access`.",
+						"default": "full-access"
+					},
+					"baseRef": {
+						"type": "string",
+						"description": "Branch, tag, or commit to start from. Defaults to the project's default branch. Allowed characters: letters, digits, `.`, `_`, `/`, `#`, `-`.",
+						"examples": [
+							"main"
+						]
+					},
+					"branch": {
+						"type": "string",
+						"description": "Name of the branch to create. Defaults to a generated name. Allowed characters: letters, digits, `.`, `_`, `/`, `-`.",
+						"examples": [
+							"fix-order-validation"
+						]
+					},
+					"idempotencyKey": {
+						"type": "string",
+						"description": "Makes retries safe, up to 200 characters. You can send the `Idempotency-Key` header instead; if you send both they must match.",
+						"maxLength": 200
+					}
+				},
+				"description": "Options for a new cloud workspace. Every field is optional when your account has one ready project and an earlier workspace to copy the agent and model from."
+			},
+			"ApiWorkspaceLastTurn": {
+				"type": "object",
+				"properties": {
+					"turnId": {
+						"type": "string",
+						"description": "Turn ID.",
+						"examples": [
+							"turn_7a2c9e"
+						]
+					},
+					"outcome": {
+						"type": "string",
+						"enum": [
+							"completed",
+							"interrupted",
+							"error"
+						],
+						"description": "How the turn ended."
+					},
+					"completedAt": {
+						"type": "number",
+						"description": "When the turn finished, in Unix epoch milliseconds.",
+						"examples": [
+							1760697600000
+						]
+					}
+				},
+				"required": [
+					"turnId",
+					"outcome",
+					"completedAt"
+				],
+				"description": "The most recent finished agent turn."
+			},
+			"ApiWorkspaceList": {
+				"type": "object",
+				"properties": {
+					"workspaces": {
+						"type": "array",
+						"items": {
+							"$ref": "#/components/schemas/ApiWorkspaceStatus"
+						},
+						"description": "Every workspace that hasn't been deleted, including ones created from the app or Slack."
+					}
+				},
+				"required": [
+					"workspaces"
+				],
+				"description": "Workspaces on your account."
+			},
+			"ApiWorkspaceStatus": {
+				"type": "object",
+				"properties": {
+					"workspaceId": {
+						"type": "string",
+						"description": "Workspace ID.",
+						"examples": [
+							"workspace_Q2x8mN4pR7sT1vWz"
+						]
+					},
+					"providerId": {
+						"type": "string",
+						"description": "Cloud machine provider the workspace runs on.",
+						"examples": [
+							"box"
+						]
+					},
+					"projectId": {
+						"type": "string",
+						"description": "Project the workspace was created from.",
+						"examples": [
+							"proj_8f2c1a"
+						]
+					},
+					"branch": {
+						"type": "string",
+						"description": "Git branch the agent works on.",
+						"examples": [
+							"fix-order-validation"
+						]
+					},
+					"baseRef": {
+						"type": "string",
+						"description": "Ref the branch was created from.",
+						"examples": [
+							"main"
+						]
+					},
+					"state": {
+						"type": "string",
+						"enum": [
+							"queued",
+							"provisioning",
+							"setup",
+							"ready",
+							"pausing",
+							"paused",
+							"resuming",
+							"archiving",
+							"archived",
+							"deleting",
+							"deleted",
+							"failed"
+						],
+						"description": "Lifecycle state of the workspace machine."
+					},
+					"statusCode": {
+						"type": "string",
+						"description": "Detailed status for display. Treat as opaque; it can change between releases.",
+						"examples": [
+							"agent-running"
+						]
+					},
+					"startupPhase": {
+						"type": "string",
+						"enum": [
+							"allocating",
+							"booting",
+							"authenticating-runtime",
+							"syncing-repository",
+							"starting-agent",
+							"running",
+							"failed"
+						],
+						"description": "Where the workspace is in its startup sequence."
+					},
+					"runtimeState": {
+						"type": "string",
+						"enum": [
+							"offline",
+							"connecting",
+							"online"
+						],
+						"description": "Whether the workspace runtime is connected."
+					},
+					"agentStatus": {
+						"type": "string",
+						"enum": [
+							"working",
+							"idle",
+							"unknown"
+						],
+						"description": "`working` while a message is being handled, `idle` once the agent has replied, otherwise `unknown`."
+					},
+					"latestSeq": {
+						"type": "number",
+						"description": "Highest message sequence number. Pass it as `afterSeq` to fetch only newer messages.",
+						"examples": [
+							4
+						]
+					},
+					"lastTurn": {
+						"$ref": "#/components/schemas/ApiWorkspaceLastTurn",
+						"description": "The most recent finished agent turn, or `null` if none has finished."
+					},
+					"createdAt": {
+						"type": "number",
+						"description": "When the workspace was created, in Unix epoch milliseconds.",
+						"examples": [
+							1760697600000
+						]
+					},
+					"updatedAt": {
+						"type": "number",
+						"description": "When the workspace last changed, in Unix epoch milliseconds.",
+						"examples": [
+							1760697600000
+						]
+					}
+				},
+				"required": [
+					"workspaceId",
+					"projectId",
+					"branch",
+					"baseRef",
+					"state",
+					"statusCode",
+					"startupPhase",
+					"runtimeState",
+					"agentStatus",
+					"latestSeq",
+					"lastTurn",
+					"createdAt",
+					"updatedAt"
+				],
+				"description": "A cloud workspace and the state of its agent."
+			},
+			"CloudProviderList": {
+				"type": "object",
+				"properties": {
+					"providers": {
+						"type": "array",
+						"items": {
+							"$ref": "#/components/schemas/CloudProviderOption"
+						},
+						"description": "Providers you can pass as `providerId` when creating a workspace."
+					},
+					"entitled": {
+						"type": "boolean",
+						"description": "Whether your account can create cloud workspaces."
+					}
+				},
+				"required": [
+					"providers"
+				],
+				"description": "Cloud machine providers available to your account."
+			},
+			"CloudProviderOption": {
+				"type": "object",
+				"properties": {
+					"providerId": {
+						"type": "string",
+						"description": "Provider ID.",
+						"examples": [
+							"box"
+						]
+					},
+					"displayName": {
+						"type": "string",
+						"description": "Name shown in Zuse.",
+						"examples": [
+							"Boat"
+						]
+					},
+					"sizes": {
+						"type": "array",
+						"items": {
+							"$ref": "#/components/schemas/CloudProviderSize"
+						},
+						"description": "Machine sizes the provider offers."
+					},
+					"billingSource": {
+						"type": "string",
+						"enum": [
+							"zuse",
+							"provider"
+						],
+						"description": "`zuse` when Zuse bills for usage, `provider` when it runs on your own provider account."
+					}
+				},
+				"required": [
+					"providerId",
+					"displayName"
+				],
+				"description": "A cloud machine provider."
+			},
+			"CloudProviderSize": {
+				"type": "object",
+				"properties": {
+					"sizeId": {
+						"type": "string",
+						"description": "Size ID.",
+						"examples": [
+							"standard"
+						]
+					},
+					"displayName": {
+						"type": "string",
+						"description": "Name shown in Zuse.",
+						"examples": [
+							"Standard"
+						]
+					},
+					"vcpuCount": {
+						"type": "number",
+						"description": "Virtual CPUs.",
+						"examples": [
+							4
+						]
+					},
+					"memoryMib": {
+						"type": "number",
+						"description": "Memory in MiB.",
+						"examples": [
+							8192
+						]
+					}
+				},
+				"required": [
+					"sizeId",
+					"displayName",
+					"vcpuCount",
+					"memoryMib"
+				],
+				"description": "A machine size."
+			},
+			"Error": {
+				"type": "object",
+				"description": "Every error response has this shape.",
+				"properties": {
+					"error": {
+						"type": "string",
+						"description": "Machine-readable error code.",
+						"examples": [
+							"invalid_api_key"
+						]
+					},
+					"detail": {
+						"type": "string",
+						"description": "Extra context, when available."
+					}
+				},
+				"required": [
+					"error"
+				]
+			}
+		}
+	}
+}

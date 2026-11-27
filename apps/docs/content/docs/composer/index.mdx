@@ -1,0 +1,37 @@
+---
+title: Composer and agent control
+icon: MessageSquareText
+description: Give agents context, choose execution modes, and steer work in progress.
+section: composer
+order: 50
+platforms: [desktop, browser, mobile]
+providers: [claude, codex, grok, cursor, opencode, kiro, pi]
+prerequisites: [/start/first-chat]
+related: [/composer/modes-permissions, /composer/context-attachments, /composer/subagents, /composer/orchestration]
+next: /composer/modes-permissions
+lastVerified: latest
+---
+
+
+The composer is more than a text box. It binds a prompt to the active provider session, project environment, permission posture, attached context, and submission mode.
+
+Use it to:
+
+- write and edit a request;
+- `@`-mention project files;
+- attach images, PDFs, and other files from the **+** menu, by drag-and-drop, or by paste;
+- switch the model, or move the session to another provider, from the model picker;
+- choose Plan mode or normal execution;
+- control runtime permissions;
+- set a goal for supported Codex and Grok sessions;
+- queue, reorder, or steer messages while the current turn runs;
+- invoke built-in and provider-specific slash commands with `/`, and skills with `$`;
+- dictate a prompt with **Dictate**.
+
+Model changes apply to the next message. If a turn is running or messages are queued, the switch waits until that work finishes. When you move a session to a different provider, Zuse hands the earlier conversation to the new provider as a transcript and records the switch in the timeline; very long histories are shortened to fit, while the complete transcript stays in Zuse.
+
+Dictation uses the ChatGPT account signed in to Codex on that computer. A single recording can be up to 150 seconds.
+
+Start with [Modes and permissions](/composer/modes-permissions), then learn [Context and attachments](/composer/context-attachments), [Skills, commands, and MCP servers](/composer/skills-mcp), and [Agent orchestration](/composer/orchestration/).
+
+When work can proceed independently, use [Subagents and delegated tasks](/composer/subagents/) to choose the right boundary, then [Run agents in parallel](/composer/parallel-agents/) without creating overlapping write scopes.

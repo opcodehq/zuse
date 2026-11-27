@@ -1,0 +1,63 @@
+---
+title: Changes and pull requests
+icon: GitPullRequest
+navTitle: "Changes and PRs"
+description: Review diffs, commit selected files, push, and complete the pull-request workflow.
+section: workspace
+order: 63
+platforms: [desktop, browser]
+providers: []
+prerequisites: [/start/first-chat]
+related: [/projects/worktrees, /workspace/files-editor, /composer/subagents]
+next: /reference
+lastVerified: latest
+---
+
+
+Use **Changes** as the acceptance boundary between an agent saying the task is done and you deciding the branch is ready. The **Changes** tab shows a count of uncommitted files.
+
+## Review the diff
+
+Changed, added, deleted, and renamed files appear in the active checkout's diff. Use **Filter files** and switch between **Show as tree** and **Show as list** to navigate a large change. Click **Open review** to read every patch in one place:
+
+- Switch between **Use split view** and **Use unified view**.
+- Mark each file viewed to collapse it, then use **Next unviewed** to continue.
+- Open **Display settings** for **Line numbers**, **Word wrap**, and change **Indicators**.
+- Choose **Edit file** from a file's actions to fix it in place.
+
+Check generated and dependency files as carefully as source code.
+
+When files have merge conflicts, they appear under **Files with merge conflicts**. Open one and choose **Keep current**, **Keep incoming**, or **Keep both** for each conflict.
+
+Discard actions are destructive. **Discard all** reverts every uncommitted change and deletes untracked files after confirmation; single-file reverts and deletions are confirmed the same way. There is no application-level undo after Git performs the cleanup.
+
+## Annotate a change
+
+Select lines in the review and add a note. Choose **AI** to save it under **Annotations for AI** for the current chat; the notes are attached to your next message. Choose **GitHub** to post the note as a pull-request review comment instead. The **Comments** tab lists your annotations and the pull request's feedback.
+
+## Commit and push
+
+The file checkboxes control what **Commit** stages, so you can leave unrelated edits out of a commit without hiding them from review. Use **Select all** or **Deselect all**, enter a **Commit message**, and click **Commit** or press `⌘Enter`. **Push** sends local commits to `origin` and shows how many commits are ahead. Both run directly in Git without involving the agent.
+
+## Create a pull request
+
+Click **Toggle environment summary** in the top bar to see the branch, checks, and pull-request state. When the branch has no pull request, **Create PR** asks the active agent to create one.
+
+## Pull-request lifecycle
+
+The **PR** tab shows the pull request's description, checks, reviews, feedback, branch, and conflicts with the base branch. Its badge marks merge conflicts, failing checks, or the number of comments and reviews.
+
+After a pull request exists, the environment summary offers one next step: **Resolve** for conflicts, **Mark ready** for a draft, **Fix** for failing checks, or **Merge** when the pull request is ready. Its menu also includes:
+
+- **View PR** and **Open in GitHub**;
+- **Repair** → **Comments**, **Failing checks**, **Merge conflicts**, or **Everything**, which adds a repair request to the composer for you to send;
+- **Auto Fix**, which watches CI while Zuse is open and asks the agent to fix, verify, and push new failures when it is idle; it pauses after three repairs;
+- **Merge** → **Merge**, or **Enable auto-merge** while checks are still running;
+- **Add to chat**, which adds the pull request's context to the composer;
+- **Status** → **Draft**, **Ready for review**, **Close**, or **Reopen**.
+
+In the **PR** tab, use **Add to chat** on a review or comment, or **Add all**, to give the agent specific feedback. Merging is blocked while there are conflicts, failing or running checks, or GitHub has not marked the pull request mergeable.
+
+Repository access and host authentication are still required. If an action fails, verify `git` remotes and your `gh` authentication in the integrated terminal.
+
+To inspect diffs from your phone, see [Files and change review](/mobile/review).

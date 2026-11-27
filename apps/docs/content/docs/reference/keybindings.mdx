@@ -1,0 +1,89 @@
+---
+title: Keybindings
+icon: Keyboard
+navTitle: "Keybindings"
+description: Customize application, navigation, pane, composer, and editor commands.
+section: reference
+order: 92
+platforms: [desktop]
+providers: []
+prerequisites: []
+related: [/desktop/navigation, /reference/settings, /reference/schemas]
+next: /reference/schemas
+lastVerified: latest
+---
+
+
+Open **Settings → Keyboard shortcuts** to record a new shortcut, add another binding for a command, or reset a command to its default. The editor warns when two commands share a shortcut. Overrides are stored in:
+
+```text
+~/.zuse/keybindings.json
+```
+
+The file holds only your overrides. Defaults are built into the app, so updates can change them without rewriting your file.
+
+## Default shortcuts
+
+`mod` is Command on macOS and Ctrl on other platforms.
+
+| Command ID | Action | Default |
+| --- | --- | --- |
+| `new-chat` | New chat | `mod+n` |
+| `new-chat-without-project` | New chat without a project | `mod+alt+n` |
+| `open-project` | Open project | `mod+o` |
+| `settings` | Open or close Settings | `mod+,` |
+| `close-tab` | Close tab | `mod+w` |
+| `toggle-left-sidebar` | Toggle projects panel | `mod+b` |
+| `toggle-right-sidebar` | Toggle files panel | `mod+alt+b` |
+| `toggle-terminal` | Toggle terminal | `mod+j` |
+| `focus-composer` | Focus composer | `mod+l` |
+| `search-files` | Search files | `mod+p` |
+| `open-chat-switcher` | Switch chat | `mod+k` |
+| `next-tab` / `prev-tab` | Next or previous tab | `mod+shift+]` / `mod+shift+[` |
+| `select-tab-1` … `select-tab-8` | Go to tab 1–8 | `mod+1` … `mod+8` |
+| `select-last-tab` | Go to last tab | `mod+9` |
+| `new-tab` | New tab | `mod+t` |
+| `next-chat` / `prev-chat` | Next or previous chat | `ctrl+tab` / `ctrl+shift+tab` |
+| `next-panel` / `prev-panel` | Next or previous right-pane panel | `mod+alt+]` / `mod+alt+[` |
+| `focus-next-pane` / `focus-prev-pane` | Move focus to the next or previous region | ``ctrl+` `` / ``ctrl+shift+` `` |
+| `composer.submit` | Submit message | `enter` |
+| `composer.newline` | Insert newline | `shift+enter` |
+| `composer.forceSubmit` | Send now or steer the running agent | `mod+enter` |
+| `composer.queueSubmit` | Queue instead of steering | `alt+enter` |
+| `composer.previousMessage` | Recall an earlier message at the start of the composer | `up` |
+| `composer.nextMessage` | Recall a newer message or restore the draft at the end of the composer | `down` |
+| `composer.deleteToStart` | Delete to line start | `ctrl+u` |
+| `composer.deleteToEnd` | Delete to line end | `ctrl+k` |
+| `composer.deleteWord` | Delete previous word | `ctrl+backspace` or `alt+backspace` |
+| `composer.interrupt` | Stop the response and keep the draft | `escape` twice |
+| `composer.togglePlanMode` | Toggle Plan mode | `shift+tab` |
+| `editor.save` | Save file | `mod+s` |
+| `editor.annotate` | Annotate selection | `mod+shift+a` |
+
+Enable **Settings → General → Composer → Direct steer** to make Enter steer a running agent by default. It is off by default. Alt+Enter keeps messages queued. Offline messages stay queued until delivery is available. History recall pauses while an attachment is uploading. It preserves saved annotations and attachments and returns to the unsent draft with Down. Typing in a recalled message starts a new draft. Press Escape twice within half a second to stop a response; a single Escape can dismiss menus. New-chat text, image files, and pasted context stay with the composer when you change projects on the same computer.
+
+`composer.*` commands work only while the composer has focus, and `editor.*` commands work only in the file editor. All other commands are global. Shortcuts for new chat, open project, settings, close tab, the sidebar and terminal toggles, and focus composer also appear in the menu bar.
+
+## File format
+
+```json
+{
+  "schemaVersion": 1,
+  "rules": [
+    { "key": "mod+shift+k", "command": "open-chat-switcher" },
+    { "key": "mod+alt+t", "command": "toggle-terminal" }
+  ]
+}
+```
+
+A rule for a command replaces that command's default shortcut. To bind several keys to one command, add one rule per key. When two rules use the same key, the later rule wins.
+
+Keys combine modifiers with one base key, joined by `+`. Modifiers are `mod`, `cmd` (or `meta`), `ctrl`, `alt` (or `option`), and `shift`. Use `cmd` or `ctrl` to target one physical modifier on every platform.
+
+Zuse reads at most 256 rules and skips rules with an unknown command. A rule whose key has no base key, such as `shift` alone, has no effect. Zuse applies saved edits while it is running. Leave out the optional `when` field. Zuse does not define any context names for it, so a global shortcut whose `when` names one never fires.
+
+For validation and completion, configure your editor with:
+
+```text
+https://zuse.sh/schemas/keybindings.schema.json
+```
