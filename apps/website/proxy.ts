@@ -104,7 +104,7 @@ export function proxy(request: NextRequest) {
 		const locale = resolveWebsiteLanguage(
 			request.cookies.get(LANGUAGE_COOKIE)?.value,
 			request.headers.get("accept-language"),
-			request.headers.get("x-vercel-ip-country"),
+			request.headers.get("cf-ipcountry"),
 		);
 		const url = request.nextUrl.clone();
 		url.pathname = websitePath(locale);
@@ -113,7 +113,7 @@ export function proxy(request: NextRequest) {
 		);
 
 		response.headers.set("Cache-Control", "private, no-store");
-		for (const header of ["Accept-Language", "Cookie", "X-Vercel-IP-Country"]) {
+		for (const header of ["Accept-Language", "Cookie", "CF-IPCountry"]) {
 			response.headers.set(
 				"Vary",
 				appendVary(response.headers.get("Vary"), header),

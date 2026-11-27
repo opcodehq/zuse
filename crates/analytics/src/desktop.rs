@@ -100,6 +100,7 @@ catalog!(SettingsPage {
     CloudEnvironments,
     CloudMachine,
     CloudAgents,
+    CloudComputers,
     Usage,
     Billing,
     Devices,

@@ -215,6 +215,10 @@ impl Composer {
     pub(crate) fn is_native_cloud(&self) -> bool {
         self.cloud.native.is_some()
     }
+    /// The cloud chat this composer is bound to, if any.
+    pub(super) fn native_cloud_target(&self) -> Option<&crate::state::CloudTarget> {
+        self.cloud.native.as_ref().map(|task| &task.target)
+    }
     /// Hold sends while the server records this new conversation.
     pub(crate) fn set_cloud_registering(&mut self, registering: bool, cx: &mut Context<Self>) {
         self.cloud.registering = registering;
@@ -779,6 +783,7 @@ impl Composer {
             return;
         };
         let staged = self.cloud.native_staged.clone();
+        let primary = self.primary_claim(&request, cx);
         self.failure = None;
         self.cloud.task = Some(cx.spawn(async move |this, cx| {
             if !staged.is_empty() && !computer_files_delivered(&request, staged.len()) {
@@ -807,6 +812,22 @@ impl Composer {
                 json!({"workspaceId":target.workspace,"expectedAccountId":target.subject,
                     "expectedOrganizationId":target.organization,"request":request,
                     (zuse_protocol::cloud_runtime_updates::QUEUE_WHILE_WAITING):true})).await;
+            // Only an admitted message moves the chat's default computer to
+            // the one it was sent from. The claim names that message, so the
+            // server keeps whichever message was admitted last; it never
+            // holds up or changes the send.
+            let admitted = matches!(&result, Ok(value) if value["accountId"]==target.subject
+                && value["organizationId"].as_str()==target.organization.as_deref()
+                && value["data"]["commandId"]==request["commandId"]
+                && value["data"]["durablyAdmitted"]==true);
+            if admitted && let Some((claim, chat)) = primary {
+                let command = request["commandId"].as_str().map(str::to_owned);
+                let executor = cx.background_executor().clone();
+                cx.spawn(async move |_| {
+                    super::computers::claim_primary(claim, chat, command, executor).await
+                })
+                .detach();
+            }
             let _ = this.update(cx, |this, cx| {
                 this.cloud.task = None;
                 match result {
@@ -1646,6 +1667,21 @@ impl Composer {
                 });
                 return;
             }
+            // The computer a chat is started from is its primary. Only a
+            // created chat claims it; the launch never waits long for it.
+            super::computers::claim_primary(
+                crate::state::CloudTarget {
+                    controller: controller.clone(),
+                    subject: subject.clone(),
+                    organization: organization.clone(),
+                    workspace: id.clone(),
+                    initial_session: initial.clone(),
+                },
+                initial.clone(),
+                None,
+                cx.background_executor().clone(),
+            )
+            .await;
             if workspace["commandDeliveryMode"] == "server-admitted-v2"
                 && workspace["commandAdmissionVersion"] == 2
             {
@@ -2342,6 +2378,9 @@ mod cached_tests {
             method: &str,
             params: Value,
         ) -> Result<zuse_rpc::RpcReply, zuse_rpc::RpcError> {
+            if method == "ClaimComputerPrimary" {
+                return Ok(zuse_rpc::RpcReply::Value(json!({"deviceId":null})));
+            }
             assert_eq!(method, methods::CLOUD_TASK_COMMAND);
             assert_eq!(params["request"]["commandId"], "sent-once");
             Ok(zuse_rpc::RpcReply::Value(

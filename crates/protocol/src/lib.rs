@@ -106,3 +106,5 @@ pub mod keybindings;
 pub mod list_delta;
 pub mod simulators;
 pub mod slack;
+
+pub mod computer_tasks;

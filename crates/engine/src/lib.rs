@@ -503,6 +503,12 @@ impl EngineCore {
             !profile.durable_command_commits(),
         )
         .map_err(|e| EngineError::Other(e.to_string()))?;
+        {
+            // A connector this computer enabled earlier comes back with the
+            // engine, still bound to the account that enabled it.
+            let plugins = plugins.clone();
+            tokio::spawn(async move { plugins.resume_computer_bridge().await });
+        }
         let browser_access =
             browser_access::Owner::new(profile.store_root(), device_id.clone(), pairings.clone())
                 .with_managed_authority(Arc::new(managed_host.control()));
@@ -825,6 +831,9 @@ impl EngineCore {
         // not release another queued command while credentials are draining.
         self.doc_host.pause_all_queues();
         self.simulators.shutdown();
+        // Stop cloud-chat commands while the account can still report how
+        // they ended; the connector resumes on the next start.
+        self.plugins.shutdown_computer_bridge().await;
         self.account.retire();
         self.slack_links.shutdown().await;
         self.project_creation.shutdown().await;
@@ -1857,3 +1866,4 @@ fn replace_empty_device_id(temp_path: &Path, path: &Path) -> std::io::Result<()>
 
 pub mod cloud;
 pub mod cloud_ssh;
+pub mod computer_bridge;

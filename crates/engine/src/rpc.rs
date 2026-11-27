@@ -1852,6 +1852,7 @@ fn forwardable(method: &str) -> bool {
             | methods::DELETE_CUSTOM_ACP_AGENT
             | methods::GET_TITLE_SETTINGS
             | methods::GET_CHAT_ARCHIVE_STATUS
+            | methods::GET_THREAD_CONVERSATION
             | methods::SET_TITLE_SETTINGS
             | methods::SET_HARNESS_ENABLED
             | methods::LIST_MODELS
@@ -3773,6 +3774,83 @@ impl EngineRpc {
                 })?;
                 RpcReply::value(&response)
             }
+            "ClaimComputerPrimary" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct P {
+                    expected_account_id: String,
+                    workspace_id: String,
+                    chat_id: String,
+                    #[serde(default)]
+                    command_id: Option<String>,
+                }
+                let p: P = parse_params(params)?;
+                let gateway = self
+                    .plugins
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("Computer connector unavailable".into()))?;
+                let claimed = gateway
+                    .claim_computer_primary(
+                        &p.expected_account_id,
+                        &p.workspace_id,
+                        &p.chat_id,
+                        p.command_id.as_deref(),
+                    )
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({"deviceId": claimed}))
+            }
+            "StartComputerBridge" | "StopComputerBridge" | "ComputerBridgeStatus" => {
+                let gateway = self
+                    .plugins
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("Computer connector unavailable".into()))?;
+                match method {
+                    "StopComputerBridge" => {
+                        gateway
+                            .stop_computer_bridge()
+                            .await
+                            .map_err(|e| RpcError::Failed(e.to_string()))?;
+                        RpcReply::value(&gateway.computer_bridge_status())
+                    }
+                    "ComputerBridgeStatus" => RpcReply::value(&gateway.computer_bridge_status()),
+                    _ => {
+                        // Without a name the computer is enrolled under its
+                        // OS host name; the owner can rename it later.
+                        let label = match params["label"].as_str() {
+                            Some(label) => label.to_owned(),
+                            None => gethostname::gethostname()
+                                .into_string()
+                                .ok()
+                                .filter(|name| !name.trim().is_empty())
+                                .unwrap_or_else(|| "Computer".into()),
+                        };
+                        let id = gateway
+                            .start_computer_bridge(&label)
+                            .await
+                            .map_err(|e| RpcError::Failed(e.to_string()))?;
+                        RpcReply::value(&serde_json::json!({"deviceId": id}))
+                    }
+                }
+            }
+            zuse_protocol::computer_tasks::METHOD => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct P {
+                    chat_id: String,
+                    request: zuse_protocol::computer_tasks::Request,
+                }
+                let p: P = parse_params(params)?;
+                let gateway = self
+                    .plugins
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("Computer tasks unavailable".into()))?;
+                let value = gateway
+                    .computer_tasks(&p.chat_id, &p.request)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&value)
+            }
             methods::PLUGIN_TOOLS => {
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -3868,6 +3946,19 @@ impl EngineRpc {
                 "checkpoint":record.as_ref().map(|record|&record.checkpoint),
                 "changedPaths":record.as_ref().map(|record|&record.changed_paths).cloned().unwrap_or_default()}),
                 )
+            }
+            methods::GET_THREAD_CONVERSATION => {
+                let request: ChatParams = parse_params(params)?;
+                let chat = self.workspace.chat(&request.chat_id).map_err(failed)?;
+                if chat
+                    .as_ref()
+                    .is_some_and(|chat| chat.device_id != self.doc_host.device_id())
+                {
+                    return Err(RpcError::Failed(
+                        "Conversation belongs to another computer.".into(),
+                    ));
+                }
+                RpcReply::value(&serde_json::json!({ "chat": chat }))
             }
             zuse_protocol::custom_acp::catalog::GET => {
                 #[derive(Deserialize)]

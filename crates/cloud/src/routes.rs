@@ -2,6 +2,12 @@ mod account_events;
 #[cfg(test)]
 mod account_events_test;
 pub(crate) mod body_deadline;
+mod bridge_approvals;
+mod bridge_computers;
+mod bridge_proof;
+mod bridge_tasks;
+#[cfg(test)]
+mod bridge_tests;
 #[cfg(test)]
 mod github_browser_policy_test;
 mod github_organizations;
@@ -254,6 +260,68 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         .route(
             "/v1/client/dpop-token",
             post(device_access_token).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
+            "/v1/cloud/workspaces/{workspace}/chats/{chat}/computer-results/{request}",
+            axum::routing::delete(bridge_tasks::cancel),
+        )
+        .route(
+            "/v1/cloud/workspaces/{workspace}/runtime/computer-tasks",
+            post(bridge_tasks::runtime_tasks).layer(DefaultBodyLimit::max(24 * 1024)),
+        )
+        .route(
+            "/v1/cloud/bridge/host-task",
+            post(bridge_tasks::host).layer(DefaultBodyLimit::max(524288)),
+        )
+        .route(
+            "/v1/cloud/workspaces/{workspace}/chats/{chat}/computer-tasks",
+            get(bridge_tasks::list)
+                .post(bridge_tasks::request)
+                .layer(DefaultBodyLimit::max(24 * 1024)),
+        )
+        .route(
+            "/v1/cloud/workspaces/{workspace}/chats/{chat}/computer-results",
+            get(bridge_tasks::results),
+        )
+        .route(
+            "/v1/cloud/bridge/computers",
+            get(bridge_computers::list)
+                .post(bridge_computers::enroll)
+                .layer(DefaultBodyLimit::max(2048)),
+        )
+        .route(
+            "/v1/cloud/bridge/computers/{device}",
+            axum::routing::delete(bridge_computers::forget)
+                .patch(bridge_computers::rename)
+                .layer(DefaultBodyLimit::max(1024)),
+        )
+        .route(
+            "/v1/cloud/workspaces/{workspace}/chats/{chat}/attached-computers",
+            get(bridge_computers::attached),
+        )
+        .route(
+            "/v1/cloud/workspaces/{workspace}/chats/{chat}/device-approvals",
+            get(bridge_approvals::pending),
+        )
+        .route(
+            "/v1/cloud/workspaces/{workspace}/chats/{chat}/device-approvals/{request}",
+            post(bridge_approvals::decide).layer(DefaultBodyLimit::max(1024)),
+        )
+        .route(
+            "/v1/cloud/workspaces/{workspace}/chats/{chat}/attached-computers/{device}",
+            axum::routing::put(bridge_computers::attach).delete(bridge_approvals::detach),
+        )
+        .route(
+            "/v1/cloud/bridge/primary",
+            post(bridge_computers::claim_primary).layer(DefaultBodyLimit::max(1024)),
+        )
+        .route(
+            "/v1/cloud/workspaces/{workspace}/chats/{chat}/primary-computer",
+            get(bridge_computers::primary).delete(bridge_computers::clear_primary),
+        )
+        .route(
+            "/v1/cloud/bridge/computers/{device}/always-allow",
+            axum::routing::delete(bridge_approvals::revoke_always),
         )
         .route("/v1/cloud/context", get(context))
         .route("/v1/cloud/capabilities", get(computer_capabilities))

@@ -22,6 +22,7 @@ mod analytics;
 pub mod appearance;
 pub mod archived;
 pub mod cloud_billing;
+pub mod cloud_chat_computers;
 mod command_labels;
 pub mod composer;
 pub mod defaults;

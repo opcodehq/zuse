@@ -40,6 +40,13 @@ impl PluginCredentials for Account {
 /// Runtime credentials are supplied by the enrolled guest, independently of WorkOS.
 #[async_trait]
 pub trait RuntimePlugins: Send + Sync {
+    async fn computer_tasks(
+        &self,
+        _chat: &str,
+        _request: &zuse_protocol::computer_tasks::Request,
+    ) -> anyhow::Result<serde_json::Value> {
+        anyhow::bail!("Computer tasks are unavailable on this host.")
+    }
     async fn tools(&self, request: &PluginToolRequest) -> anyhow::Result<serde_json::Value>;
 }
 
@@ -53,6 +60,7 @@ pub struct Plugins {
     client: Arc<tokio::sync::Mutex<Option<(String, PluginClient)>>>,
     /// `None` where launching local commands is not allowed, such as hosted runtimes.
     local_root: Option<PathBuf>,
+    computer_bridge: Arc<crate::computer_bridge::Connector>,
     local: Arc<tokio::sync::Mutex<Option<(String, Arc<LocalServers>)>>>,
 }
 impl Plugins {
@@ -70,6 +78,7 @@ impl Plugins {
             bindings: Arc::new(Mutex::new(db)),
             callback: Arc::new(tokio::sync::Mutex::new(None)),
             client: Arc::new(tokio::sync::Mutex::new(None)),
+            computer_bridge: Arc::default(),
             local_root: local_servers.then(|| root.to_path_buf()),
             local: Arc::new(tokio::sync::Mutex::new(None)),
         })
@@ -144,6 +153,84 @@ impl Plugins {
             _ => return Ok(None),
         }))
     }
+    pub async fn start_computer_bridge(&self, label: &str) -> anyhow::Result<String> {
+        let root = self
+            .local_root
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Start this connector on a native computer"))?;
+        self.computer_bridge
+            .start(root, self.account.clone(), label)
+            .await
+    }
+    pub async fn stop_computer_bridge(&self) -> anyhow::Result<()> {
+        match &self.local_root {
+            Some(root) => self.computer_bridge.stop(root).await,
+            None => Ok(()),
+        }
+    }
+    /// Engine shutdown: stop running commands; the connector resumes next start.
+    pub async fn shutdown_computer_bridge(&self) {
+        self.computer_bridge.shutdown().await;
+    }
+    /// Resume the connector this computer enabled before the engine restarted.
+    pub async fn resume_computer_bridge(&self) {
+        if let Some(root) = &self.local_root {
+            self.computer_bridge
+                .resume(root, self.account.clone())
+                .await;
+        }
+    }
+    /// Make this computer the chat's primary when it is enabled for the
+    /// account; `None` otherwise.
+    pub async fn claim_computer_primary(
+        &self,
+        account_id: &str,
+        workspace: &str,
+        chat: &str,
+        command: Option<&str>,
+    ) -> anyhow::Result<Option<String>> {
+        let Some(root) = &self.local_root else {
+            return Ok(None);
+        };
+        self.computer_bridge
+            .claim_primary(root, &self.account, account_id, workspace, chat, command)
+            .await
+    }
+    pub fn computer_bridge_status(&self) -> crate::computer_bridge::BridgeStatus {
+        self.computer_bridge.status()
+    }
+    pub async fn computer_tasks(
+        &self,
+        chat_id: &str,
+        request: &zuse_protocol::computer_tasks::Request,
+    ) -> anyhow::Result<serde_json::Value> {
+        let chat = self
+            .workspace
+            .chat(chat_id)?
+            .ok_or_else(|| anyhow::anyhow!("Unknown chat"))?;
+        anyhow::ensure!(
+            self.workspace.is_host(chat_id) && !chat.archived,
+            "Chat is unavailable"
+        );
+        if matches!(
+            request,
+            zuse_protocol::computer_tasks::Request::Run { .. }
+                | zuse_protocol::computer_tasks::Request::Command { .. }
+        ) {
+            anyhow::ensure!(
+                chat.config.as_ref().is_some_and(|c| !c.plan),
+                "Leave plan mode to run computer tasks"
+            );
+        }
+        let runtime = self
+            .runtime
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Computer tasks require a cloud chat"))?;
+        runtime.computer_tasks(chat_id, request).await
+    }
+
     pub fn set_runtime(&self, runtime: Arc<dyn RuntimePlugins>) {
         *self.runtime.write().unwrap_or_else(|e| e.into_inner()) = Some(runtime);
     }

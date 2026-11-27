@@ -611,6 +611,11 @@ impl Composer {
         rows.extend(self.cloud_unknown_row(&theme, cx).map(TrayRow::Pill));
         rows.extend(self.cloud_runtime_update_row(&theme, cx).map(TrayRow::Pill));
         rows.extend(self.live_cloud_row(&theme, cx).map(TrayRow::Pill));
+        rows.extend(
+            self.computer_tray_rows(&theme, cx)
+                .into_iter()
+                .map(TrayRow::Pill),
+        );
         rows.extend(self.connection_row(cx).map(TrayRow::Pill));
         rows.extend(self.project_creation_row(&theme, cx).map(TrayRow::Pill));
         rows.extend(

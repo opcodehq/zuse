@@ -12,6 +12,8 @@ import { copyText } from "./clipboard";
 import { frameThrottled } from "./frame";
 import { buildItems, foldsTurn, type Item } from "./layout";
 import { Markdown } from "./Markdown";
+import { ReferenceMarkdown } from "./ReferenceMarkdown";
+import type { ReferenceCatalog } from "./references";
 import { type AgentIdentity, assistantCopyText, formatElapsed, formatTimestamp, parseAttachments, userNeedsCollapse, userRawText, } from "./model";
 import { AgentSwitch, Attachments, ErrorChip, ForkMarker, GeneratedImage, InputChip, UiBlockNotice } from "./parts";
 import { isOpen, toggleOpen } from "./resources";
@@ -29,6 +31,7 @@ export interface EntryContext {
   harness: () => string | undefined;
   /** True for the newest entry of the transcript. */
   last: () => boolean;
+  references?: () => ReferenceCatalog;
 }
 
 export function Entry(props: { entry: SessionMessageEntry; ctx: EntryContext }) {
@@ -123,7 +126,7 @@ function ItemView(props: { item: Item; entry: SessionMessageEntry; ctx: EntryCon
     <div class="t-item" data-kind={props.item.kind}>
       <Switch>
         <Match when={props.item.kind === "text" && props.item}>
-          {(it) => <TextItem part={it().part} live={streaming()} />}
+          {(it) => <TextItem part={it().part} live={streaming()} ctx={props.ctx} />}
         </Match>
         <Match when={props.item.kind === "group" && props.item}>
           {(it) => <ToolGroup id={it().key} tools={it().tools} live={it().live} ctx={group} />}
@@ -161,10 +164,14 @@ function ItemView(props: { item: Item; entry: SessionMessageEntry; ctx: EntryCon
   );
 }
 
-function TextItem(props: { part: Extract<MessagePart, { kind: "text" }>; live: boolean }) {
+function TextItem(props: { part: Extract<MessagePart, { kind: "text" }>; live: boolean; ctx: EntryContext }) {
   // Tokens land in the store as they arrive; the DOM sees at most one update per frame.
   const text = frameThrottled(() => props.part.text, () => props.live);
-  return <Markdown text={text()} live={props.live} />;
+  return (
+    <Show when={props.ctx.references} fallback={<Markdown text={text()} live={props.live} />}>
+      {(references) => <ReferenceMarkdown text={text()} live={props.live} chatId={props.ctx.chatId} references={references()()} />}
+    </Show>
+  );
 }
 
 // ---------------------------------------------------------------------------

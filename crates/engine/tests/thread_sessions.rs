@@ -47,6 +47,22 @@ async fn thread_conversations_persist_and_archive_with_their_checkout() {
         .await
         .unwrap();
     assert_eq!(first.thread_id(), "thread");
+    let present = client
+        .call(
+            methods::GET_THREAD_CONVERSATION,
+            json!({"chatId":"conversation-a"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(present["chat"]["id"], "conversation-a");
+    let missing = client
+        .call(
+            methods::GET_THREAD_CONVERSATION,
+            json!({"chatId":"missing"}),
+        )
+        .await
+        .unwrap();
+    assert!(missing["chat"].is_null());
     assert_eq!(first.cwd, second.cwd);
     assert_eq!(first.cwd.as_deref(), checkout.to_str());
     assert!(first.parent_chat_id.is_none());

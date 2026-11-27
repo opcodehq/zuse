@@ -48,6 +48,7 @@ import Animated, {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useUniwind } from "uniwind";
 import { CloudChatStatus } from "~/components/cloud-chat-status";
+import { DeviceCommandApprovals } from "~/components/device-command-approvals";
 import { CloudDeviceAccess } from "~/components/cloud-device-access";
 import { CloudLifecycleBar } from "~/components/cloud-lifecycle-bar";
 import { Composer } from "~/components/composer";
@@ -1289,7 +1290,14 @@ function ThreadScreen() {
 							/>
 						)}
 						{options?.cloudWorkspaceId && (
-							<CloudDeviceAccess workspaceId={options.cloudWorkspaceId} />
+							<>
+								<CloudDeviceAccess workspaceId={options.cloudWorkspaceId} />
+								<DeviceCommandApprovals
+									key={JSON.stringify([connKey, options.cloudWorkspaceId, normalizedSessionId])}
+									workspaceId={options.cloudWorkspaceId}
+									chatId={normalizedSessionId}
+								/>
+							</>
 						)}
 						{workingActive || cloudSendWaiting ? (
 							<WorkingIndicator since={workingSince} label={workingLabel} />
