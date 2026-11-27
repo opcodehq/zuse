@@ -144,6 +144,7 @@ fn sample_zapper() -> Zapper {
                 &[RUNNING.0],
             ),
         ],
+        folders: vec![],
     }
 }
 

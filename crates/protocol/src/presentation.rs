@@ -8,6 +8,7 @@ pub use cloud_projects::{
 pub mod git_history;
 mod model_config;
 pub mod motion;
+pub mod zapper_files;
 pub mod zapper_mascots;
 pub mod zapper_panel;
 pub use model_config::RememberedModelConfig;

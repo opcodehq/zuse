@@ -261,14 +261,44 @@ pub struct Zapper {
     pub decisions: Vec<ZapperDecision>,
     #[serde(default)]
     pub issues: Vec<ZapperIssue>,
+    /// Folders created in the Zapper's files, empty ones included, sorted.
+    /// A folder also exists while any file sits under it. The engine derives
+    /// this when it reports the Zapper and ignores it on commands.
+    #[serde(default)]
+    pub folders: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ZapperFile {
     pub path: String,
     pub version: u32,
     pub content: String,
+    /// This version deleted the file. Only file histories list deletions;
+    /// restoring an earlier version brings the file back.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub deleted: bool,
+}
+
+/// Root files with a fixed meaning: the coordinator's purpose doc, the user's
+/// rules for it, its notes and digest, and the rules every thread gets. They
+/// can be edited and restored, never moved, deleted or replaced by a folder.
+pub const RESERVED_FILES: [&str; 5] = [
+    "AGENTS.md",
+    "DIGEST.md",
+    "INSTRUCTIONS.md",
+    "NOTES.md",
+    "WORKERS.md",
+];
+
+/// A file at the version the caller saw, for folder moves and deletes: the
+/// engine refuses them unless these are exactly the folder's current files.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ZapperFileVersion {
+    pub path: String,
+    pub version: u32,
 }
 
 /// IDs are caller-minted and reused verbatim after a transport failure.
@@ -382,6 +412,33 @@ pub enum ZapperAction {
         path: String,
         version: u32,
         expected_version: u32,
+    },
+    /// Delete a file as a new version; restoring an earlier one undoes it.
+    DeleteFile {
+        path: String,
+        expected_version: u32,
+    },
+    /// Rename or move a file. Its history stays under the old path.
+    MoveFile {
+        path: String,
+        to: String,
+        expected_version: u32,
+    },
+    CreateFolder {
+        path: String,
+    },
+    /// Move a folder with everything in it. `files` lists every file under
+    /// it at the version the caller saw.
+    MoveFolder {
+        path: String,
+        to: String,
+        files: Vec<ZapperFileVersion>,
+    },
+    /// Delete a folder with everything in it. `files` lists every file
+    /// under it at the version the caller saw.
+    DeleteFolder {
+        path: String,
+        files: Vec<ZapperFileVersion>,
     },
     CreateIssue {
         issue_id: String,
@@ -537,7 +594,12 @@ impl ZapperAction {
             | Self::ArchiveWorker { .. }
             | Self::ReleaseWorker { .. }
             | Self::WriteFile { .. }
-            | Self::RestoreFile { .. } => Targets(vec![]),
+            | Self::RestoreFile { .. }
+            | Self::DeleteFile { .. }
+            | Self::MoveFile { .. }
+            | Self::CreateFolder { .. }
+            | Self::MoveFolder { .. }
+            | Self::DeleteFolder { .. } => Targets(vec![]),
         }
     }
 }
@@ -770,6 +832,18 @@ pub fn command_summary(command: &ZapperCommand, result: Option<&Zapper>) -> serd
             let version = expected_version + 1;
             out["file"] = serde_json::json!({"path": path, "version": version});
             format!("Wrote {path} at version {version}")
+        }
+        ZapperAction::DeleteFile { path, .. } => format!("Deleted {path}"),
+        ZapperAction::MoveFile { path, to, .. } => {
+            out["file"] = serde_json::json!({"path": to});
+            format!("Moved {path} to {to}")
+        }
+        ZapperAction::CreateFolder { path } => format!("Created folder {path}"),
+        ZapperAction::MoveFolder { path, to, files } => {
+            format!("Moved folder {path} to {to} ({} files)", files.len())
+        }
+        ZapperAction::DeleteFolder { path, files } => {
+            format!("Deleted folder {path} ({} files)", files.len())
         }
         ZapperAction::Create { .. }
         | ZapperAction::Configure { .. }
@@ -1076,6 +1150,11 @@ mod tests {
                 | ZapperAction::Decide { .. }
                 | ZapperAction::WriteFile { .. }
                 | ZapperAction::RestoreFile { .. }
+                | ZapperAction::DeleteFile { .. }
+                | ZapperAction::MoveFile { .. }
+                | ZapperAction::CreateFolder { .. }
+                | ZapperAction::MoveFolder { .. }
+                | ZapperAction::DeleteFolder { .. }
                 | ZapperAction::CreateIssue { .. }
                 | ZapperAction::EditIssue { .. }
                 | ZapperAction::LinkIssueThread { .. }
@@ -1200,6 +1279,7 @@ mod tests {
                 pull_requests: vec![],
                 activity: vec![],
             }],
+            folders: vec![],
         };
         let command = ZapperCommand {
             command_id: "c".into(),

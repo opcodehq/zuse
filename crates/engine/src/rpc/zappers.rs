@@ -537,7 +537,7 @@ mod tests {
             serde_json::json!({"token":token,"method":"ZapperFiles","params":{"zapperId":"release"}}),
         )
         .await;
-        assert_eq!(files.as_array().unwrap().len(), 4);
+        assert_eq!(files.as_array().unwrap().len(), 5);
         value(&service,"ZapperCommand",serde_json::json!({"commandId":"issue","zapperId":"release","action":{"type":"createIssue","issueId":"fix","details":{"title":"Fix it","description":"d","doneCriteria":"c","outOfScope":"","status":"todo","priority":"normal","owner":{"type":"zapper"},"assigned":true,"parent":null,"dueDate":null,"labels":[],"relations":[]}}})).await;
         // Later coordinator turns carry deltas; the board is a read away.
         let board = value(
