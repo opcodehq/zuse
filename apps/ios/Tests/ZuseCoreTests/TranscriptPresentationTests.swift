@@ -25,6 +25,10 @@ private func reply(_ items: [TimelineItem]) -> TimelineReply? {
   for item in items { if case .reply(let value) = item { return value } }
   return nil
 }
+private func footer(_ items: [TimelineItem]) -> TimelineFooter? {
+  for item in items { if case .footer(let value) = item { return value } }
+  return nil
+}
 private func users(_ items: [TimelineItem]) -> [TimelineUser] {
   items.compactMap { if case .user(let value) = $0 { value } else { nil } }
 }
@@ -38,7 +42,7 @@ private func users(_ items: [TimelineItem]) -> [TimelineUser] {
     legacy("answer", "assistant", text: "All good."),
     legacy("usage", "usage"),
   ])
-  #expect(items.map(\.id) == ["ask", "ask:activity", "ask:reply"])
+  #expect(items.map(\.id) == ["ask", "ask:activity", "ask:reply", "ask:footer"])
   let work = activity(items)
   #expect(work?.steps.map(\.id) == ["intro", "read", "run"])
   #expect(work?.steps.map(\.kind) == [.narration, .tool, .tool])
@@ -143,11 +147,15 @@ private func project(_ entries: [JSONValue], running: Bool = false) throws -> [T
         part("t2", "text", ["text": .string("Done.\n\n| File | Change |\n|---|---|\n| a | b |")]),
       ], duration: 13_229),
   ])
-  #expect(items.map(\.id) == ["u1:t0", "u1:t0:activity", "u1:t0:reply"])
+  #expect(items.map(\.id) == ["u1:t0", "u1:t0:activity", "u1:t0:reply", "u1:t0:footer"])
   #expect(users(items).first?.text == "List the files and add a line to README.md.")
   let work = try #require(activity(items))
   #expect(!work.live)
-  #expect(work.title == "Worked for 13s · Ran 2 commands")
+  #expect(work.title == "Ran 2 commands")
+  let end = try #require(footer(items))
+  #expect(end.worked == "Worked for 13s")
+  #expect(end.text.hasPrefix("Done."))
+  #expect(end.changes.isEmpty)
   #expect(work.steps.map(\.tool.label) == ["Ran", "Ran"])
   #expect(work.steps[0].outputRef == "chat/tool-1")
   #expect(work.steps[0].outputBytes == 440)
@@ -182,13 +190,18 @@ private func project(_ entries: [JSONValue], running: Bool = false) throws -> [T
   let work = try #require(activity(items))
   #expect(work.steps.map(\.kind) == [.thinking, .narration, .tool])
   #expect(work.steps[2].additions == 3 && work.steps[2].deletions == 1)
-  #expect(work.title == "Worked for 1m 5s · Edited 1 file")
+  #expect(work.title == "Edited a.rs")
   #expect(reply(items)?.text == "Fixed the parser.")
-  guard case .notice(let notice) = items.last else {
+  guard case .notice(let notice) = items[items.count - 2] else {
     Issue.record("Expected the error after the reply")
     return
   }
   #expect(notice.kind == .error && notice.title == "Rate limited")
+  // The turn closes with its timing and the files it changed.
+  let end = try #require(footer(items))
+  #expect(items.last?.id == end.id)
+  #expect(end.worked == "Worked for 1m 5s")
+  #expect(end.changes == [TimelineDiffStat(path: "src/a.rs", additions: 3, deletions: 1)])
 }
 
 @Test func runningTurnStreamsTheReplyAndNamesTheCurrentStep() throws {
@@ -211,7 +224,7 @@ private func project(_ entries: [JSONValue], running: Bool = false) throws -> [T
   #expect(work.title == "Running swift test")
   #expect(work.steps.last?.running == true)
   #expect(work.steps.last?.tool.label == "Running")
-  #expect(work.worked == nil)
+  #expect(footer(items) == nil)
 
   let streaming = try project(
     [
@@ -311,8 +324,9 @@ private func project(_ entries: [JSONValue], running: Bool = false) throws -> [T
     entry("u1", "user", [part("t", "text", ["text": .string("Hi")])]),
     entry("a1", "assistant", [part("t", "text", ["text": .string("Hello")])], duration: 900),
   ])
-  #expect(activity(items)?.title == "Worked for 1s")
-  #expect(activity(items)?.steps.isEmpty == true)
+  #expect(activity(items) == nil)
+  #expect(footer(items)?.worked == "Worked for 1s")
+  #expect(footer(items)?.text == "Hello")
 }
 
 @Test func textDiffShowsChangesWithContext() {

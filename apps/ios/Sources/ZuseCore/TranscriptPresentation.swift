@@ -230,28 +230,65 @@ public struct TimelineActivity: Equatable, Sendable {
   public let durationMs: Int?
   /// When the turn began, for "Working for 12s".
   public let startedAt: Date?
+  /// The running turn has moved on to writing its reply.
+  public var replying = false
   public var failedCount: Int { steps.filter(\.failed).count }
   public var toolCount: Int { steps.filter { $0.kind == .tool }.count }
-  public var summary: String { ToolPresentation.summary(steps) }
-  public var liveTitle: String { ToolPresentation.liveTitle(steps) }
-  /// "Worked for 32s", when the host timed the turn.
-  public var worked: String? {
-    guard !live, let durationMs, durationMs > 0 else { return nil }
-    return "Worked for " + ToolPresentation.duration(milliseconds: durationMs)
+  public var liveTitle: String {
+    replying && !steps.contains(where: \.running) ? "Writing…" : ToolPresentation.liveTitle(steps)
   }
-  /// The settled line as a phone shows it: timing, the first two kinds of work, no failures
-  /// (the view adds those so they never truncate).
-  public var headline: String {
-    if live { return liveTitle }
-    let work = steps.isEmpty ? nil : ToolPresentation.summary(steps, limit: 2, failures: false)
-    let parts = [worked, work].compactMap { $0 }
-    return parts.isEmpty ? "Worked" : parts.joined(separator: " · ")
-  }
-  /// The settled line: timing first, then what was done.
+  /// The settled line: what was done ("Read 2 files · edited calc.py · ran 2 commands"), without
+  /// failures, which the view adds so they never truncate away. How long it took closes the turn.
   public var title: String {
     if live { return liveTitle }
-    let parts = [worked, steps.isEmpty ? nil : summary].compactMap { $0 }
-    return parts.isEmpty ? "Worked" : parts.joined(separator: " · ")
+    return ToolPresentation.summary(steps, limit: 3, failures: false, names: true)
+  }
+}
+
+/// What closes a settled turn: how long it took, the files it changed and the reply to copy.
+public struct TimelineFooter: Equatable, Sendable {
+  public let id: String
+  /// The reply, for copy and share; empty when the turn only worked.
+  public let text: String
+  public let durationMs: Int?
+  public let finishedAt: Date?
+  /// Files the turn changed, merged per path in the order they were first touched.
+  public let changes: [TimelineDiffStat]
+  public var additions: Int { changes.reduce(0) { $0 + $1.additions } }
+  public var deletions: Int { changes.reduce(0) { $0 + $1.deletions } }
+  /// "Worked for 32s", when the host timed the turn.
+  public var worked: String? {
+    guard let durationMs, durationMs > 0 else { return nil }
+    return "Worked for " + ToolPresentation.duration(milliseconds: durationMs)
+  }
+
+  /// Sums each settled edit's line counts per file. Hosts that send no stats still count an
+  /// inline before-and-after.
+  static func changes(_ steps: [TimelineStep]) -> [TimelineDiffStat] {
+    var order: [String] = []
+    var totals: [String: (added: Int, removed: Int)] = [:]
+    func add(_ path: String, _ added: Int, _ removed: Int) {
+      guard !path.isEmpty else { return }
+      if totals[path] == nil { order.append(path) }
+      let current = totals[path] ?? (0, 0)
+      totals[path] = (current.added + added, current.removed + removed)
+    }
+    for step in steps where step.kind == .tool && !step.failed && !step.running {
+      let stats = step.diffStats
+      if !stats.isEmpty {
+        for stat in stats { add(stat.path, stat.additions, stat.deletions) }
+      } else if [.edit, .write].contains(step.tool.category), let diff = step.diff {
+        let lines = diff.lines(context: 0)
+        add(
+          diff.path, lines.filter { $0.kind == .addition }.count,
+          lines.filter { $0.kind == .deletion }.count)
+      }
+    }
+    return order.compactMap { path in
+      totals[path].map {
+        TimelineDiffStat(path: path, additions: $0.added, deletions: $0.removed)
+      }
+    }
   }
 }
 
@@ -286,6 +323,8 @@ public enum TimelineItem: Identifiable, Equatable, Sendable {
   case detail(ChatMessage)
   /// The agent hasn't produced anything for the running turn yet.
   case waiting(id: String, since: Date?)
+  /// The end of a settled turn: its timing, the files it changed and actions on the reply.
+  case footer(TimelineFooter)
 
   public var id: String {
     switch self {
@@ -296,6 +335,7 @@ public enum TimelineItem: Identifiable, Equatable, Sendable {
     case .images(let id, _, _): id
     case .detail(let message): message.id
     case .waiting(let id, _): id
+    case .footer(let value): value.id
     }
   }
 }
@@ -413,20 +453,18 @@ public enum ChatTimeline {
     }
     var items: [TimelineItem] = []
     let duration = durationMs(parts)
-    if !steps.isEmpty || (live && replies.isEmpty) || (!live && duration != nil) {
+    if !steps.isEmpty || (live && replies.isEmpty) {
       items.append(
         .activity(
           TimelineActivity(
             id: key + ":activity", steps: steps, live: live, durationMs: duration,
-            startedAt: start)))
+            startedAt: start, replying: live && !replies.isEmpty)))
     }
+    let replyText = replies.map(\.text).joined(separator: "\n\n")
     if !replies.isEmpty {
       items.append(
         .reply(
-          TimelineReply(
-            id: key + ":reply",
-            text: replies.map(\.text).joined(separator: "\n\n"),
-            streaming: live, messages: replies)))
+          TimelineReply(id: key + ":reply", text: replyText, streaming: live, messages: replies)))
     }
     if !images.isEmpty {
       items.append(
@@ -434,7 +472,21 @@ public enum ChatTimeline {
           id: key + ":images", attachments: images.compactMap(attachment),
           sessionID: images[0].sessionId))
     }
-    return items + extras
+    items += extras
+    // A settled turn closes with how long it took, what it changed and actions on the reply.
+    let changes = TimelineFooter.changes(steps)
+    if !live, !replies.isEmpty || duration != nil || !changes.isEmpty {
+      let last = parts.compactMap { date($0.message) }.max()
+      let finished = last.map { last in
+        duration.map { last.addingTimeInterval(Double($0) / 1000) } ?? last
+      }
+      items.append(
+        .footer(
+          TimelineFooter(
+            id: key + ":footer", text: replyText, durationMs: duration, finishedAt: finished,
+            changes: changes)))
+    }
+    return items
   }
 
   /// Sum of the turn's timed entries; the desktop shows the same total.

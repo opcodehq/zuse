@@ -54,10 +54,14 @@ public enum ToolPresentation {
     case "search":
       let pattern = text("pattern")
       return step(
-        "Search", call["path"].string.map { "\(pattern) in \($0)" } ?? pattern, search, .search)
-    case "glob": return step("Find files", text("pattern"), search, .search)
-    case "webFetch": return step("Fetch", text("url"), web, .fetch)
-    case "webSearch": return step("Search web", text("query"), web, .webSearch)
+        running ? "Searching" : "Searched",
+        call["path"].string.map { "\(pattern) in \($0)" } ?? pattern, search, .search)
+    case "glob":
+      return step(running ? "Finding files" : "Found files", text("pattern"), search, .search)
+    case "webFetch": return step(running ? "Fetching" : "Fetched", text("url"), web, .fetch)
+    case "webSearch":
+      return step(
+        running ? "Searching the web" : "Searched the web", text("query"), web, .webSearch)
     case "todo":
       let items = call["items"].array
       return step(
@@ -84,10 +88,13 @@ public enum ToolPresentation {
     case "Read": return step(running ? "Reading" : "Read", path, read, .read)
     case "Write": return step(running ? "Writing" : "Wrote", path, edit, .write)
     case "Edit", "MultiEdit": return step(running ? "Editing" : "Edited", path, edit, .edit)
-    case "Grep": return step("Search", text("pattern"), search, .search)
-    case "Glob": return step("Find files", text("pattern"), search, .search)
-    case "WebFetch": return step("Fetch", text("url"), web, .fetch)
-    case "WebSearch": return step("Search web", text("query"), web, .webSearch)
+    case "Grep": return step(running ? "Searching" : "Searched", text("pattern"), search, .search)
+    case "Glob":
+      return step(running ? "Finding files" : "Found files", text("pattern"), search, .search)
+    case "WebFetch": return step(running ? "Fetching" : "Fetched", text("url"), web, .fetch)
+    case "WebSearch":
+      return step(
+        running ? "Searching the web" : "Searched the web", text("query"), web, .webSearch)
     case "TodoWrite": return step("Plan", "", "checklist", .plan)
     case "ExitPlanMode": return step("Plan", "", "checklist", .plan)
     case "Task": return step("Agent", text("description"), agent, .agent)
@@ -99,10 +106,17 @@ public enum ToolPresentation {
     "\(count) \(count == 1 ? one : many)"
   }
 
-  /// "Ran 3 commands · edited 2 files · 1 failed": categories in order of first use.
-  public static func summary(_ steps: [TimelineStep], limit: Int = 4, failures: Bool = true)
-    -> String
-  {
+  /// A path's file name, for lines that name what was touched.
+  public static func fileName(_ path: String) -> String {
+    let name = (path as NSString).lastPathComponent
+    return name.isEmpty ? path : name
+  }
+
+  /// "Ran 3 commands · edited 2 files · 1 failed": categories in order of first use. With
+  /// `names`, a category that touched one file names it ("edited calc.py").
+  public static func summary(
+    _ steps: [TimelineStep], limit: Int = 4, failures: Bool = true, names: Bool = false
+  ) -> String {
     let tools = steps.filter { $0.kind == .tool }
     if tools.isEmpty {
       return steps.contains { $0.kind == .thinking } ? "Thought" : "Worked"
@@ -128,15 +142,22 @@ public enum ToolPresentation {
     func count(_ category: ToolCategory) -> Int {
       (counts[category] ?? 0) + (paths[category]?.count ?? 0)
     }
+    func files(_ category: ToolCategory) -> String {
+      if names, let only = paths[category], only.count == 1, let path = only.first {
+        return fileName(path)
+      }
+      return plural(count(category), "file", "files")
+    }
     var segments = order.map { category -> String in
       let n = count(category)
       switch category {
       case .command: return "ran \(plural(n, "command", "commands"))"
+      // Reads stay a count; the files a turn changed are what you look for.
       case .read: return "read \(plural(n, "file", "files"))"
-      case .write: return "wrote \(plural(n, "file", "files"))"
-      case .edit: return "edited \(plural(n, "file", "files"))"
-      case .search: return "ran \(plural(n, "search", "searches"))"
-      case .webSearch: return "ran \(plural(n, "web search", "web searches"))"
+      case .write: return "wrote \(files(.write))"
+      case .edit: return "edited \(files(.edit))"
+      case .search: return n == 1 ? "searched once" : "searched \(n) times"
+      case .webSearch: return n == 1 ? "searched the web" : "searched the web \(n) times"
       case .fetch: return "fetched \(plural(n, "page", "pages"))"
       case .plan: return "updated the plan"
       case .agent: return "started \(plural(n, "agent", "agents"))"
@@ -163,9 +184,10 @@ public enum ToolPresentation {
       let tool = current.tool
       switch tool.category {
       case .command: return tool.detail.isEmpty ? "Running command…" : "Running \(tool.detail)"
-      case .read: return "Reading files…"
-      case .write: return "Writing files…"
-      case .edit: return "Editing files…"
+      case .read: return tool.detail.isEmpty ? "Reading files…" : "Reading \(fileName(tool.detail))"
+      case .write:
+        return tool.detail.isEmpty ? "Writing files…" : "Writing \(fileName(tool.detail))"
+      case .edit: return tool.detail.isEmpty ? "Editing files…" : "Editing \(fileName(tool.detail))"
       case .search: return "Searching files…"
       case .webSearch: return "Searching the web…"
       case .fetch: return "Fetching page…"

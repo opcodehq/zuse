@@ -31,7 +31,7 @@ private func exec(_ command: String = "cargo test") -> [String: JSONValue] {
   #expect(step(exec()).detail == "cargo test")
   #expect(step(["kind": .string("readFile"), "path": .string("a.rs")]).label == "Read")
   #expect(step(["kind": .string("writeFile"), "path": .string("a.rs")]).label == "Wrote")
-  #expect(step(["kind": .string("glob"), "pattern": .string("*.rs")]).label == "Find files")
+  #expect(step(["kind": .string("glob"), "pattern": .string("*.rs")]).label == "Found files")
   #expect(
     step(["kind": .string("search"), "pattern": .string("foo"), "path": .string("src")]).detail
       == "foo in src")
@@ -86,7 +86,7 @@ private func exec(_ command: String = "cargo test") -> [String: JSONValue] {
   ]
   #expect(
     ToolPresentation.summary(steps(calls.map { tool($0) }))
-      == "Ran 1 command · read 1 file · ran 1 search · fetched 1 page · +1")
+      == "Ran 1 command · read 1 file · searched once · fetched 1 page · +1")
   let failedEdit = tool(["kind": .string("editFile"), "path": .string("a")], error: true)
   #expect(ToolPresentation.summary(steps([failedEdit])) == "Used 1 tool · 1 failed")
 }
@@ -96,7 +96,7 @@ private func exec(_ command: String = "cargo test") -> [String: JSONValue] {
   let live = steps([tool(read), tool(exec(), resolved: false)], live: true)
   #expect(ToolPresentation.liveTitle(live) == "Running cargo test")
   let reading = steps([tool(read, resolved: false)], live: true)
-  #expect(ToolPresentation.liveTitle(reading) == "Reading files…")
+  #expect(ToolPresentation.liveTitle(reading) == "Reading a.rs")
   #expect(ToolPresentation.liveTitle([]) == "Thinking…")
 }
 
