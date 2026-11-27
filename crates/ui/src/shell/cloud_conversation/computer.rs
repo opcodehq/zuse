@@ -214,6 +214,8 @@ pub(super) struct State {
     sync_change: Option<Task<()>>,
     sync_folder: Option<Task<()>>,
     sync_error: Option<String>,
+    /// This chat's files in the user's own checkout here.
+    pub(super) checkout: super::checkout_sync::Checkout,
     /// Which page of the menu shows.
     page: Page,
     /// SSH access: the host once prepared, the preparation, its failure.
@@ -445,7 +447,7 @@ fn request(mut scope: Value, action: Action, key: &str, row: &Value, check: bool
 }
 /// A bordered, monospace field with a main action and a chevron for more,
 /// like the previous Zuse summary card's SSH and synced-folder controls.
-fn split_field(theme: &Theme) -> gpui::Div {
+pub(super) fn split_field(theme: &Theme) -> gpui::Div {
     div()
         .mx(px(8.))
         .my(px(6.))
@@ -459,7 +461,7 @@ fn split_field(theme: &Theme) -> gpui::Div {
         .overflow_hidden()
         .font_family("Geist Mono")
 }
-fn split_main(theme: &Theme, id: &'static str) -> gpui::Stateful<gpui::Div> {
+pub(super) fn split_main(theme: &Theme, id: &'static str) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
         .flex_1()
@@ -1882,6 +1884,11 @@ impl CloudConversation {
                     .child(error),
             );
         }
+
+        // This chat in the user's own checkout here.
+        menu = menu
+            .child(popover::menu_separator())
+            .children(self.render_checkout_rows(&theme, cx));
 
         // Repair and removal.
         let mut repair = Vec::new();

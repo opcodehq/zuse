@@ -314,6 +314,13 @@ pub const CLOUD_LOCAL_TERMINAL: &str = "CloudLocalTerminal";
 pub const CLOUD_SYNC_STATUS: &str = "CloudSyncStatus";
 pub const CLOUD_SYNC_CONFIGURE: &str = "CloudSyncConfigure";
 pub const CLOUD_SYNC_RETRY: &str = "CloudSyncRetry";
+/// One cloud chat's tracked files in the user's own local checkout of the
+/// same repository (one-way, restorable). Status is a read; Configure turns
+/// it on or off (restoring the checkout); Resume continues after local edits
+/// paused it, keeping those edits in the checkout's stash list.
+pub const CLOUD_CHECKOUT_SYNC_STATUS: &str = "CloudCheckoutSyncStatus";
+pub const CLOUD_CHECKOUT_SYNC_CONFIGURE: &str = "CloudCheckoutSyncConfigure";
+pub const CLOUD_CHECKOUT_SYNC_RESUME: &str = "CloudCheckoutSyncResume";
 pub const CLOUD_PAUSE: &str = "CloudPause";
 /// Explicit supervised repair; start and resolve retain uncertain delivery.
 pub const CLOUD_RUNTIME_REPAIR: &str = "CloudRuntimeRepair";
@@ -384,6 +391,7 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | CLOUD_HISTORY
         | CLOUD_WORKSPACE
         | CLOUD_SYNC_STATUS
+        | CLOUD_CHECKOUT_SYNC_STATUS
         | MACHINE_RESOURCES
         | AUTH_STATUS
         | LOCAL_DEVICE
@@ -482,6 +490,8 @@ mod retry_tests {
             CLOUD_LOCAL_TERMINAL,
             CLOUD_SYNC_CONFIGURE,
             CLOUD_SYNC_RETRY,
+            CLOUD_CHECKOUT_SYNC_CONFIGURE,
+            CLOUD_CHECKOUT_SYNC_RESUME,
             CLOUD_DELETE,
             CLOUD_CLEANUP_MIRROR,
             CLOUD_CREATE,

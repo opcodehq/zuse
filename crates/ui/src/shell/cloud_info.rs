@@ -220,8 +220,23 @@ impl Shell {
             self.ensure_open_targets(cx);
             let targets = self.open_in.targets.clone();
             let ssh_targets = self.open_in.ssh_targets.clone();
+            // Checkouts on this computer, so the chat can be synced into the
+            // one of its repository.
+            let checkouts = {
+                let state = self.state.read(cx);
+                let device = state.local_device_id.clone();
+                state
+                    .spaces
+                    .iter()
+                    .filter(|space| Some(&space.device_id) == device.as_ref())
+                    .filter_map(|space| {
+                        Some((space.path.clone(), space.remote_repository.clone()?))
+                    })
+                    .collect::<Vec<_>>()
+            };
             return Some(conversation.update(cx, |view, cx| {
                 view.set_open_targets(targets, ssh_targets);
+                view.set_local_checkouts(checkouts);
                 view.render_header_control(cx)
             }));
         }

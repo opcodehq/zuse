@@ -3078,6 +3078,29 @@ impl EngineRpc {
                 .map_err(crate::cloud::rpc_error)?;
             return RpcReply::value(&value);
         }
+        #[cfg(unix)]
+        if matches!(
+            method,
+            methods::CLOUD_CHECKOUT_SYNC_STATUS
+                | methods::CLOUD_CHECKOUT_SYNC_CONFIGURE
+                | methods::CLOUD_CHECKOUT_SYNC_RESUME
+        ) {
+            if !crate::cloud::beta_enabled() {
+                return Err(RpcError::Failed(crate::cloud::BETA_MESSAGE.into()));
+            }
+            let identity = crate::cloud::identity::CloudIdentity::workspace(self.auth()?.clone())
+                .with_account(self.account.clone());
+            let method = method.to_owned();
+            let value = tokio::spawn(async move {
+                crate::cloud::checkout_sync::handle(identity, &method, params).await
+            })
+            .await
+            .map_err(|_| {
+                RpcError::Failed("The sync request was interrupted. Check its status.".into())
+            })?
+            .map_err(|error| RpcError::Failed(error.to_string()))?;
+            return RpcReply::value(&value);
+        }
         if AuthRpc::handles(method) {
             return AuthRpc::new(self.auth()?.clone())
                 .with_account(self.account.clone())
@@ -3811,6 +3834,9 @@ impl EngineRpc {
                             .stop_computer_bridge()
                             .await
                             .map_err(|e| RpcError::Failed(e.to_string()))?;
+                        // Chats synced into checkouts here go back now.
+                        #[cfg(unix)]
+                        crate::cloud::checkout_sync::nudge();
                         RpcReply::value(&gateway.computer_bridge_status())
                     }
                     "ComputerBridgeStatus" => RpcReply::value(&gateway.computer_bridge_status()),

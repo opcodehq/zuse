@@ -278,12 +278,16 @@ pub(super) async fn computers_for(
 ) -> Result<Vec<Value>, ApiError> {
     Ok(sqlx::query_scalar(&format!(
         "SELECT jsonb_build_object('deviceId',c.enrollment_id,'name',c.label,'platform',c.platform,
-            'role',{ROLE},'online',t.task_id IS NOT NULL,'shell',t.command,'user',t.os_user,'cwd',t.cwd,
+            'role',{ROLE},'online',t.task_id IS NOT NULL,'shell',t.command,'user',t.os_user,
+            'cwd',CASE WHEN t.task_id IS NOT NULL THEN coalesce(a.synced_cwd,t.cwd) END,
+            'syncedCheckout',a.synced_cwd,
             'defaultTimeoutSeconds',$4::int,'maxTimeoutSeconds',$5::int)
          FROM api_bridge_computers c
          LEFT JOIN LATERAL (SELECT task_id,command,os_user,cwd FROM api_bridge_tasks t
              WHERE t.owner_id=c.owner_id AND t.enrollment_id=c.enrollment_id AND t.dynamic AND t.expires_at>now()
              ORDER BY t.expires_at DESC LIMIT 1) t ON true
+         LEFT JOIN api_bridge_attachments a ON a.owner_id=c.owner_id AND a.workspace_id=$2
+             AND a.chat_id=$3 AND a.enrollment_id=c.enrollment_id
          WHERE c.owner_id=$1 AND {OWNED_CHAT}
          ORDER BY {ROLE} <> 'primary', lower(c.label), c.enrollment_id"
     ))
@@ -420,7 +424,8 @@ pub(super) async fn request_for(
         "INSERT INTO api_bridge_requests(request_id,owner_id,workspace_id,chat_id,enrollment_id,computer_name,
             os_user,shell,cwd,command,timeout_ms,decision,role)
          SELECT $4::text::uuid,owner_id,workspace_id,chat_id,enrollment_id,label,os_user,
-            CASE WHEN dynamic THEN t.command ELSE 'direct executable' END,coalesce($7,t.cwd),coalesce($6,t.command),$8,
+            CASE WHEN dynamic THEN t.command ELSE 'direct executable' END,
+            coalesce($7,CASE WHEN dynamic THEN a.synced_cwd END,t.cwd),coalesce($6,t.command),$8,
             CASE WHEN EXISTS(SELECT FROM api_bridge_always_grants g WHERE g.owner_id=a.owner_id AND g.enrollment_id=a.enrollment_id) THEN 'always'
                  WHEN EXISTS(SELECT FROM api_bridge_session_grants g
                      WHERE (g.owner_id,g.workspace_id,g.chat_id,g.enrollment_id)=(a.owner_id,a.workspace_id,a.chat_id,a.enrollment_id)) THEN 'session' END,
@@ -458,7 +463,7 @@ pub(super) async fn request_for(
         .execute(&mut *tx)
         .await?;
     let created: Value = sqlx::query_scalar(
-        "SELECT jsonb_build_object('id',request_id,'deviceId',enrollment_id,'computer',computer_name,'role',role)
+        "SELECT jsonb_build_object('id',request_id,'deviceId',enrollment_id,'computer',computer_name,'role',role,'cwd',cwd)
          FROM api_bridge_requests WHERE request_id=$1::text::uuid",
     )
     .bind(&id)
@@ -492,7 +497,7 @@ async fn existing_request(
         Some(false) => Err(ApiError::conflict("computer_request_id_reused")),
         Some(true) => {
             let summary: Option<Value> = sqlx::query_scalar(
-                "SELECT jsonb_build_object('id',request_id,'deviceId',enrollment_id,'computer',computer_name,'role',role)
+                "SELECT jsonb_build_object('id',request_id,'deviceId',enrollment_id,'computer',computer_name,'role',role,'cwd',cwd)
                  FROM api_bridge_requests WHERE request_id=$1::text::uuid",
             )
             .bind(id)

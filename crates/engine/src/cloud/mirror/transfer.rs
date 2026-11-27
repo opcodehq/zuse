@@ -599,10 +599,25 @@ async fn receive(
 async fn receive_controlled(
     root: PathBuf,
     workspace: String,
-    mut stream: BoxStream<'static, serde_json::Value>,
+    stream: BoxStream<'static, serde_json::Value>,
     objects: Arc<unix::Dir>,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<SnapshotResult> {
+    let (result, files) = receive_files(&workspace, stream, &objects, &cancel).await?;
+    // Once publication begins, finish it under the caller's gate. Disable/archive
+    // waits for this future; dropping a waiter must never release that gate early.
+    tokio::task::spawn_blocking(move || publish(&root, &workspace, files, &objects)).await??;
+    Ok(result)
+}
+/// Receive and verify a complete snapshot: every file's bytes end up in
+/// `objects` under their SHA-256, nothing is published anywhere.
+async fn receive_files(
+    workspace: &str,
+    mut stream: BoxStream<'static, serde_json::Value>,
+    objects: &Arc<unix::Dir>,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<(SnapshotResult, Vec<Entry>)> {
+    let workspace = workspace.to_owned();
     let mut checkout = None;
     let mut files = vec![];
     let mut seen = HashSet::new();
@@ -755,10 +770,69 @@ async fn receive_controlled(
         transferred_bytes: bytes,
     };
     ensure!(!cancel.is_cancelled(), "Sync stopped.");
-    // Once publication begins, finish it under the caller's gate. Disable/archive
-    // waits for this future; dropping a waiter must never release that gate early.
-    tokio::task::spawn_blocking(move || publish(&root, &workspace, files, &objects)).await??;
-    Ok(result)
+    Ok((result, files))
+}
+/// One file of a received snapshot. Its bytes (for a regular file) are in
+/// the objects folder under `hash`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReceivedFile {
+    pub path: String,
+    /// SHA-256 of the contents (of the target, for a symlink).
+    pub hash: String,
+    /// Permission bits.
+    pub mode: u32,
+    pub size: u64,
+    /// The target, for a symlink.
+    pub link: Option<String>,
+}
+impl From<Entry> for ReceivedFile {
+    fn from(entry: Entry) -> Self {
+        Self {
+            path: entry.path,
+            hash: entry.hash,
+            mode: entry.mode,
+            size: entry.size,
+            link: entry.link,
+        }
+    }
+}
+/// Receive one verified snapshot of `target` into `objects` (files named by
+/// their SHA-256) without publishing it. `have` lists hashes the caller
+/// already holds, whose bytes are not sent again. Never wakes compute.
+pub async fn receive_snapshot(
+    client: &zuse_rpc::RpcClient,
+    target: WorkspaceTarget,
+    workspace: &str,
+    objects: &Path,
+    have: Vec<String>,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<Vec<ReceivedFile>> {
+    ensure!(!cancel.is_cancelled(), "Sync stopped.");
+    ensure!(
+        have.len() <= MAX_FILES,
+        "Snapshot cache exceeds the file limit."
+    );
+    let mut params = serde_json::to_value(target)?;
+    params["have"] = serde_json::to_value(have)?;
+    let stream = client
+        .subscribe(zuse_protocol::methods::WORKSPACE_SYNC_SNAPSHOT, params)
+        .await?;
+    let stream = futures::stream::unfold(stream, |mut stream| async move {
+        stream.recv().await.map(|v| (v, stream))
+    })
+    .boxed();
+    receive_stream(workspace, stream, objects, cancel).await
+}
+/// Receive a snapshot stream into `objects` without publishing it.
+pub(crate) async fn receive_stream(
+    workspace: &str,
+    stream: BoxStream<'static, serde_json::Value>,
+    objects: &Path,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<Vec<ReceivedFile>> {
+    let objects = Arc::new(ensure_dir(objects)?);
+    let (_, files) = receive_files(workspace, stream, &objects, &cancel).await?;
+    Ok(files.into_iter().map(ReceivedFile::from).collect())
 }
 /// One complete transfer on an already connected execution client. This never
 /// acquires a gateway or resumes compute. The caller serializes sync and cleanup.

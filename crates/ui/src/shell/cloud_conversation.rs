@@ -4,6 +4,7 @@ use super::*;
 use crate::state::CloudTarget;
 use serde_json::{Value, json};
 mod activity;
+mod checkout_sync;
 mod computer;
 mod environment_card;
 mod monitor;
@@ -653,7 +654,16 @@ impl CloudConversation {
                 self.computer.menu.closing_since(),
             ));
         }
-        button.into_any_element()
+        match self.render_checkout_badge(cx) {
+            Some(badge) => div()
+                .flex()
+                .items_center()
+                .gap(px(2.))
+                .child(badge)
+                .child(button)
+                .into_any_element(),
+            None => button.into_any_element(),
+        }
     }
     /// The workspace's thread: every conversation on this computer belongs
     /// to it, as every conversation tab of a local thread does.

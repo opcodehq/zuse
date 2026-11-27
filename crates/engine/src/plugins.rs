@@ -196,6 +196,20 @@ impl Plugins {
             .claim_primary(root, &self.account, account_id, workspace, chat, command)
             .await
     }
+    /// Report the folder a chat is synced into on this computer.
+    pub async fn report_synced_checkout(
+        &self,
+        account_id: &str,
+        workspace: &str,
+        chat: &str,
+    ) -> anyhow::Result<()> {
+        let Some(root) = &self.local_root else {
+            return Ok(());
+        };
+        self.computer_bridge
+            .report_synced_checkout(root, &self.account, account_id, workspace, chat)
+            .await
+    }
     pub fn computer_bridge_status(&self) -> crate::computer_bridge::BridgeStatus {
         self.computer_bridge.status()
     }

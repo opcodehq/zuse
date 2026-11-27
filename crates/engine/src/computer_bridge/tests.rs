@@ -625,6 +625,24 @@ async fn sending_claims_primary_with_this_computers_key_or_clears_it() {
     .await
     .unwrap();
     assert_eq!(claimed.as_deref(), Some("this-mac"));
+    // Synced into a checkout here: the claim carries that folder, so the
+    // chat's commands on this computer start there.
+    crate::cloud::checkout_sync::record_synced_for_test(
+        profile.path(),
+        "user_a",
+        "w1",
+        "s_2",
+        Path::new("/Users/me/code/app"),
+    );
+    claim_primary_at(
+        &origin,
+        profile.path(),
+        &account,
+        "user_a",
+        ("w1", "s_2", None),
+    )
+    .await
+    .unwrap();
     // A different signed-in account than the chat's owner is refused outright.
     assert!(
         claim_primary_at(
@@ -657,6 +675,11 @@ async fn sending_claims_primary_with_this_computers_key_or_clears_it() {
                 "claim".to_owned(),
                 json!({"body":{"workspaceId":"w1","chatId":"s_1","commandId":"cmd-1"},"htm":"POST",
                     "path":"/cloud/bridge/primary","bound":true})
+            ),
+            (
+                "claim".to_owned(),
+                json!({"body":{"workspaceId":"w1","chatId":"s_2","syncedCwd":"/Users/me/code/app"},
+                    "htm":"POST","path":"/cloud/bridge/primary","bound":true})
             ),
         ]
     );

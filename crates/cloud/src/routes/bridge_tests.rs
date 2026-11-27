@@ -1,7 +1,7 @@
 //! Cloud-chat computer requests against a real PostgreSQL: approval scopes,
 //! deadlines, stop, unknown outcomes and attachment boundaries.
 use super::bridge_approvals::{Decision, decide_for, pending_for};
-use super::bridge_computers::{attached_for, primary_for};
+use super::bridge_computers::{attached_for, claim_for, primary_for};
 use super::bridge_tasks::{Action, cancel_for, host_action, results_for, runtime_request};
 use serde_json::{Value, json};
 use sqlx::{PgPool, postgres::PgPoolOptions};
@@ -57,6 +57,12 @@ async fn database() -> Option<PgPool> {
         .unwrap();
     sqlx::raw_sql(computers).execute(&pool).await.unwrap();
     sqlx::raw_sql(migration).execute(&pool).await.unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../migrations/0056_bridge_synced_checkout.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::raw_sql(&format!(
         "INSERT INTO api_bridge_computers{}",
         STUBS
@@ -569,9 +575,9 @@ async fn attached_computers_list_offline_ones_with_their_limits() {
         rows,
         json!([
             {"deviceId":"linux","name":"Build box","platform":"linux","role":"secondary","online":false,"shell":null,
-             "user":null,"cwd":null,"defaultTimeoutSeconds":600,"maxTimeoutSeconds":3600},
+             "user":null,"cwd":null,"syncedCheckout":null,"defaultTimeoutSeconds":600,"maxTimeoutSeconds":3600},
             {"deviceId":"mac","name":"Mac","platform":"macos","role":"secondary","online":true,"shell":"/bin/sh",
-             "user":"me","cwd":"/home/me","defaultTimeoutSeconds":600,"maxTimeoutSeconds":3600}
+             "user":"me","cwd":"/home/me","syncedCheckout":null,"defaultTimeoutSeconds":600,"maxTimeoutSeconds":3600}
         ])
     );
 }
@@ -1010,4 +1016,140 @@ async fn a_late_claim_for_an_earlier_message_never_replaces_a_newer_default() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
+async fn a_synced_checkout_is_the_default_folder_for_that_chat_on_that_computer() {
+    let Some(pool) = database().await else { return };
+    let folder = "/Users/me/code/zuse";
+    let (mac, linux) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+    offer(&pool, "mac", mac).await;
+    offer(&pool, "linux", linux).await;
+    // The Mac proves the message came from it and reports the folder the
+    // chat is synced into there.
+    claim_for(
+        &pool,
+        "owner",
+        "w",
+        "chat",
+        "mac",
+        Some("cmd-1"),
+        Some(folder),
+    )
+    .await
+    .unwrap();
+    let computers = |pool: PgPool, chat: &'static str| async move {
+        let rows = runtime_request(&pool, "owner", "w", chat, Request::Computers)
+            .await
+            .unwrap();
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                (
+                    row["deviceId"].as_str().unwrap().to_owned(),
+                    (row["cwd"].clone(), row["syncedCheckout"].clone()),
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>()
+    };
+    let listed = computers(pool.clone(), "chat").await;
+    assert_eq!(listed["mac"], (json!(folder), json!(folder)));
+    assert_eq!(listed["linux"], (json!("/home/me"), Value::Null));
+    // Another chat on the same computer isn't synced.
+    assert_eq!(
+        computers(pool.clone(), "chat2").await["mac"],
+        (json!("/home/me"), Value::Null)
+    );
+
+    // Without a device or folder, a command goes to the Mac and starts in
+    // the synced folder; the agent and the approval both see that folder.
+    let id = uuid::Uuid::new_v4();
+    let created = runtime_request(
+        &pool,
+        "owner",
+        "w",
+        "chat",
+        Request::Command {
+            device_id: None,
+            command: "npm run dev".into(),
+            cwd: None,
+            request_id: id,
+            timeout_seconds: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(created["deviceId"], "mac");
+    assert_eq!(created["cwd"], folder);
+    let pending = pending_for(&pool, "owner", "w", "chat").await.unwrap();
+    assert_eq!(pending[0]["cwd"], folder);
+    // A directory the agent names still wins, and other computers keep
+    // their own default.
+    let named = runtime_request(
+        &pool,
+        "owner",
+        "w",
+        "chat",
+        Request::Command {
+            device_id: None,
+            command: "ls".into(),
+            cwd: Some("/tmp".into()),
+            request_id: uuid::Uuid::new_v4(),
+            timeout_seconds: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(named["cwd"], "/tmp");
+    let elsewhere = command(&pool, "w", "chat", "linux", "ls", None)
+        .await
+        .unwrap();
+    let rows = results_for(&pool, "owner", "w", "chat").await.unwrap();
+    let row = rows
+        .iter()
+        .find(|r| r["id"] == elsewhere.to_string())
+        .unwrap();
+    assert_eq!(row["cwd"], "/home/me");
+
+    // A claim without a folder (sync turned off) clears it, even when that
+    // claim doesn't move the chat's default computer.
+    claim_for(&pool, "owner", "w", "chat", "linux", Some("cmd-2"), None)
+        .await
+        .unwrap();
+    claim_for(&pool, "owner", "w", "chat", "mac", None, Some(folder))
+        .await
+        .unwrap();
+    assert_eq!(
+        computers(pool.clone(), "chat").await["mac"],
+        (json!(folder), json!(folder))
+    );
+    claim_for(&pool, "owner", "w", "chat", "mac", None, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        computers(pool.clone(), "chat").await["mac"],
+        (json!("/home/me"), Value::Null)
+    );
+    // Only an absolute, bounded folder is accepted.
+    for bad in ["relative/path", "", "/tmp/a\nb"] {
+        assert!(
+            claim_for(&pool, "owner", "w", "chat", "mac", None, Some(bad))
+                .await
+                .is_err(),
+            "{bad:?}"
+        );
+    }
+    claim_for(
+        &pool,
+        "owner",
+        "w",
+        "chat",
+        "mac",
+        None,
+        Some("C:\\Users\\me\\zuse"),
+    )
+    .await
+    .unwrap();
 }
