@@ -1,0 +1,120 @@
+name: Solid web client (Cloudflare)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - apps/web-solid/**
+      - packages/analytics/**
+      - crates/web-link/**
+      - crates/remote/**
+      - crates/ui/assets/**
+      - Cargo.lock
+      - Cargo.toml
+      - .github/workflows/web-solid-cloudflare.yml
+  pull_request:
+    paths:
+      - apps/web-solid/**
+      - packages/analytics/**
+      - crates/web-link/**
+      - crates/remote/**
+      - crates/ui/assets/**
+      - Cargo.lock
+      - Cargo.toml
+      - .github/workflows/web-solid-cloudflare.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-solid-cloudflare-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/web-solid
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      VITE_POSTHOG_KEY: ${{ vars.ZUSE_POSTHOG_KEY }}
+      VITE_POSTHOG_HOST: ${{ vars.ZUSE_POSTHOG_HOST }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      # The paired transport is crates/web-link compiled to WebAssembly.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: web-solid-link
+          cache-on-failure: true
+      - name: Install wasm-bindgen and wasm-opt
+        working-directory: ${{ runner.temp }}
+        run: |
+          version=$(grep -A1 '^name = "wasm-bindgen"$' "$GITHUB_WORKSPACE/Cargo.lock" | sed -n 's/^version = "\(.*\)"/\1/p')
+          curl -fsSL "https://github.com/rustwasm/wasm-bindgen/releases/download/$version/wasm-bindgen-$version-x86_64-unknown-linux-musl.tar.gz" | tar xz
+          curl -fsSL https://github.com/WebAssembly/binaryen/releases/download/version_123/binaryen-version_123-x86_64-linux.tar.gz | tar xz
+          echo "ZUSE_WASM_BINDGEN=$RUNNER_TEMP/wasm-bindgen-$version-x86_64-unknown-linux-musl/wasm-bindgen" >> "$GITHUB_ENV"
+          echo "ZUSE_WASM_OPT=$RUNNER_TEMP/binaryen-version_123/bin/wasm-opt" >> "$GITHUB_ENV"
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run lint
+      - run: bun run test
+      - run: bun run build:cloudflare
+      - name: Require the paired transport in the bundle
+        run: ls ../../dist/web-solid/assets/*.wasm
+      - name: Check the Worker configuration
+        run: bunx wrangler deploy --dry-run --outdir "$RUNNER_TEMP/worker"
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        with:
+          name: web-solid-cloudflare
+          path: dist/web-solid
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 2
+
+  # Credentials reach only this job, which runs nothing from a pull request.
+  deploy:
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: web-solid-cloudflare-deploy
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: apps/web-solid
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Skip deploy without Cloudflare credentials
+        if: env.CLOUDFLARE_API_TOKEN == '' || env.CLOUDFLARE_ACCOUNT_ID == ''
+        working-directory: .
+        run: echo "::notice::CLOUDFLARE_API_TOKEN or CLOUDFLARE_ACCOUNT_ID is not set; skipping the Cloudflare deploy."
+      - uses: actions/checkout@v4
+        if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
+      - uses: actions/download-artifact@v4
+        if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
+        with:
+          name: web-solid-cloudflare
+          path: dist/web-solid
+      - uses: oven-sh/setup-bun@v2
+        if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
+        with:
+          bun-version: 1.4.4
+      - if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
+        run: bun install --frozen-lockfile
+      - name: Deploy to Cloudflare
+        if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
+        run: bunx wrangler deploy
