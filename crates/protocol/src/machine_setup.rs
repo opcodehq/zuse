@@ -209,14 +209,17 @@ pub fn secret_in_script(script: &str) -> bool {
         "_AUTHTOKEN",
     ];
     script.lines().any(|line| {
-        let words = line.split(|c: char| {
-            c.is_whitespace() || matches!(c, '"' | '\'' | '=' | ':' | '`' | '(' | ')')
+        // A known token prefix anywhere a token can start (after a quote,
+        // `=`, `//`, `user:` in a URL…), followed by a token's length.
+        let token = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+        let prefixed = PREFIXES.iter().any(|p| {
+            line.match_indices(p).any(|(at, _)| {
+                let boundary = line[..at].chars().next_back().is_none_or(|c| !token(c));
+                let length = line[at..].chars().take_while(|c| token(*c)).count();
+                boundary && length >= p.len() + 16
+            })
         });
-        if words.clone().any(|word| {
-            PREFIXES
-                .iter()
-                .any(|p| word.starts_with(p) && word.len() >= p.len() + 16)
-        }) {
+        if prefixed {
             return true;
         }
         // `export NPM_TOKEN=abc123…` but not `NPM_TOKEN="$NPM_TOKEN"` or `${X}`.
@@ -310,6 +313,13 @@ mod tests {
             "set -euo pipefail\ncommand -v cargo || curl -fsSL https://sh.rustup.rs | sh -s -- -y"
         ));
         assert!(!secret_in_script("NPM_TOKEN=\"${NPM_TOKEN:-}\""));
+        assert!(secret_in_script(
+            "git clone https://ghp_abcdefghijklmnopqrstuvwxyz@github.com/a/b"
+        ));
+        assert!(secret_in_script(
+            "git clone https://x-access-token:ghs_abcdefghijklmnopqrstuvwxyz@github.com/a/b"
+        ));
+        assert!(!secret_in_script("pip install mask-ghp_tools"));
         assert_eq!(
             validate_proposal("export API_KEY=abcdefghijklmnop", &[], None),
             Err("machine_setup_script_contains_secret")

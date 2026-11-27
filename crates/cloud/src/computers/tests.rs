@@ -1102,6 +1102,62 @@ async fn setup_chat_proposals_apply_through_the_normal_recipe_and_rebuild() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["proposal"]["state"], "discarded");
+
+    // A build that can't be queued (no compute entitlement) leaves the
+    // proposal to retry; the retry does not treat its own saved script as
+    // someone else's edit and saves nothing twice.
+    let dave = store
+        .machine_setup_propose(
+            &pool,
+            "user-dave",
+            "workspace-dave",
+            "chat-dave",
+            "sudo apt-get install -y tree".into(),
+            vec![],
+            None,
+            now,
+        )
+        .await
+        .unwrap();
+    let (status, body) = call(
+        &app,
+        "POST",
+        &path(&dave.proposal_id, "/apply"),
+        "dave",
+        false,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], "cloud_entitlement_required");
+    let (_, body) = call(
+        &app,
+        "GET",
+        &path(&dave.proposal_id, ""),
+        "dave",
+        false,
+        json!({}),
+    )
+    .await;
+    assert_eq!(body["proposal"]["state"], "proposed");
+    assert_eq!(body["machine"]["revision"], 1);
+    sqlx::query("INSERT INTO api_entitlements VALUES('ent-dave','user-dave','cloud-workspace','cloud-workspace-standard-v1','stripe','sub-dave','active',9999999999999,NULL,1,1)")
+        .execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO api_cloud_billing_periods VALUES('period-dave','user-dave','active','USD',0,9999999999999,1000000,0,0)")
+        .execute(&pool).await.unwrap();
+    let (status, body) = call(
+        &app,
+        "POST",
+        &path(&dave.proposal_id, "/apply"),
+        "dave",
+        false,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["proposal"]["state"], "applied");
+    assert_eq!(body["machine"]["revision"], 1);
+    assert_eq!(body["machine"]["image"]["reason"], "manual");
     pool.close().await;
     sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
         .execute(&admin)

@@ -445,6 +445,9 @@ impl RepositoryPanel {
                 self.error = Some(e);
                 self.queue.clear();
                 self.adding.clear();
+                // A failed add doesn't start a setup chat later on its own.
+                self.machine.setup_after_add = false;
+                self.machine.setup_repository = None;
                 cx.notify();
                 return;
             }
@@ -543,10 +546,19 @@ impl RepositoryPanel {
                         self.adding.remove(&identity);
                         self.projects.retain(|p| p.project_id != project.project_id);
                         self.notice = Some("Repository added.".into());
-                        let start = machine::StartSetupChat::on(&project);
+                        if self.machine.setup_after_add && self.machine.setup_repository.is_none() {
+                            // The first one picked is added first.
+                            self.machine.setup_repository =
+                                Some(machine::StartSetupChat::on(&project));
+                        }
                         self.projects.push(project);
                         self.connect_next(cx);
-                        if self.machine.setup_after_add && self.queue.is_empty() {
+                        // Start once every picked repository is in.
+                        if self.machine.setup_after_add
+                            && self.queue.is_empty()
+                            && !self.pending.values().any(|p| p.kind == "connect")
+                            && let Some(start) = self.machine.setup_repository.take()
+                        {
                             self.machine.setup_after_add = false;
                             cx.emit(start);
                         }
@@ -679,6 +691,24 @@ mod owner_reset_tests {
         cx.run_until_parked();
         assert_eq!(*opened.borrow(), 1);
         assert_eq!(*started.borrow(), ["project_1"]);
+
+        // With no repository, the chat starts on the first one picked, once
+        // every picked repository has been added.
+        let project = |id: &str, n: i64| json!({"accountId":"account-a","organizationId":null,"data":{"projectId":id,"repositoryIdentity":format!("github.com/a/{id}"),"repositoryUrl":"https://github.com/a/x.git","displayName":id,"defaultBranch":"main","visibility":"private","state":"connected","activeBuilds":{},"latestBuilds":{},"createdAt":n,"updatedAt":n}});
+        window
+            .update(cx, |panel, _, cx| {
+                panel.projects.clear();
+                panel.machine.setup_after_add = true;
+                panel.call("connect", methods::CLOUD_PROJECT_CONNECT, json!({}), cx);
+                let first = panel.next;
+                panel.call("connect", methods::CLOUD_PROJECT_CONNECT, json!({}), cx);
+                let second = panel.next;
+                panel.receive(first, Ok(project("picked_first", 3)), cx);
+                panel.receive(second, Ok(project("picked_second", 4)), cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(*started.borrow(), ["project_1", "picked_first"]);
     }
     #[test]
     fn fallback_reads_back_off_to_a_minute() {

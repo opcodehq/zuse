@@ -770,7 +770,9 @@ impl RuntimeControl {
             .ok_or_else(|| ApiError::conflict("cloud_project_not_ready"))?;
         // A cache is optional and usable only after its separate runtime/provider
         // certification. Candidate or mutable-ref requests retain managed-base boot.
+        // A setup chat edits the account's image, so it boots that image.
         let project_cache = if managed
+            && !setup
             && workload_bindings.is_empty()
             && project["visibility"] == "public"
             && build["settings"]["managedCandidateSha256"].is_null()

@@ -17,6 +17,8 @@ pub(super) struct MachineView {
     /// "Configure with an agent" opened the repository picker because the
     /// account had no repository: start the setup chat once one is added.
     pub(super) setup_after_add: bool,
+    /// The first repository added for it, which the chat starts on.
+    pub(super) setup_repository: Option<StartSetupChat>,
 }
 
 /// Asks the host to open a setup chat: a cloud chat on `repository` whose
@@ -69,6 +71,7 @@ impl MachineView {
             poll: None,
             polls: 0,
             setup_after_add: false,
+            setup_repository: None,
         }
     }
     pub(super) fn stop_polling(&mut self) {
@@ -224,6 +227,7 @@ impl RepositoryPanel {
             return;
         }
         self.machine.setup_after_add = true;
+        self.machine.setup_repository = None;
         self.open_palette(window, cx);
     }
     /// The button: dithered, like every primary action here.

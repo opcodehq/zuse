@@ -295,7 +295,15 @@ impl UiBlockView {
         }
         // Setup script.
         let diff = line_diff(&proposal.current_setup_script, &proposal.setup_script);
-        let shown = hunks(&diff);
+        // Changed lines with context; "Show full script" lists every line
+        // so the owner can read all of it before applying.
+        let full = self.machine_setup_full.contains(path);
+        let shown: Vec<Option<&DiffLine>> = if full {
+            diff.iter().map(Some).collect()
+        } else {
+            hunks(&diff)
+        };
+        let limit = if full { usize::MAX } else { MAX_DIFF_LINES };
         let mut script = div()
             .flex()
             .flex_col()
@@ -309,7 +317,7 @@ impl UiBlockView {
         if shown.is_empty() {
             script = script.child(muted("Setup script unchanged".into()));
         }
-        for line in shown.iter().take(MAX_DIFF_LINES) {
+        for line in shown.iter().take(limit) {
             let (mark, text, color, bg) = match line {
                 None => ("", "⋯".to_owned(), p.muted_foreground, None),
                 Some(DiffLine::Same(t)) => (" ", t.clone(), p.muted_foreground, None),
@@ -329,22 +337,40 @@ impl UiBlockView {
                     .when_some(bg, |d, bg| d.bg(bg))
                     .text_color(color)
                     .child(div().w(px(8.)).flex_none().child(mark))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .child(text),
-                    ),
+                    // Long commands wrap rather than hide their end.
+                    .child(div().flex_1().min_w_0().child(text)),
             );
         }
-        if shown.len() > MAX_DIFF_LINES {
-            script = script.child(muted(format!(
-                "{} more lines",
-                shown.len() - MAX_DIFF_LINES
-            )));
-        }
-        body = body.child(label(&p, "Setup script")).child(script);
+        let hidden = shown.len().saturating_sub(limit);
+        let toggle = (full || hidden > 0 || shown.len() < diff.len()).then(|| {
+            let fg = p.foreground;
+            let key = path.to_owned();
+            div()
+                .id(eid(path, "full-script"))
+                .role(Role::Button)
+                .tab_index(0)
+                .text_size(px(12.))
+                .text_color(p.muted_foreground)
+                .cursor_pointer()
+                .hover(move |s| s.text_color(fg))
+                .child(if full {
+                    "Show changes only".to_owned()
+                } else if hidden > 0 {
+                    format!("Show full script · {hidden} more changed lines")
+                } else {
+                    "Show full script".to_owned()
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if !this.machine_setup_full.remove(&key) {
+                        this.machine_setup_full.insert(key.clone());
+                    }
+                    cx.notify();
+                }))
+        });
+        body = body
+            .child(label(&p, "Setup script"))
+            .child(script)
+            .children(toggle);
         // Repositories.
         let (added, removed) = proposal.repository_changes();
         let mut repos = div().flex().flex_col().gap(px(4.));

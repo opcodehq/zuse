@@ -8787,11 +8787,21 @@ impl Transcript {
         if self.machine_setup_watch.is_none() {
             self.machine_setup_watch = Some(cx.observe(&cards, |this, cards, cx| {
                 let directory = std::rc::Rc::new(cards.read(cx).directory());
-                let views: Vec<_> = this.ui_blocks.values().cloned().collect();
-                for view in views {
+                let views: Vec<_> = this
+                    .ui_blocks
+                    .iter()
+                    .map(|(row, view)| (row.clone(), view.clone()))
+                    .collect();
+                let mut rows = Vec::new();
+                for (row, view) in views {
                     if !view.read(cx).machine_setup_proposals().is_empty() {
                         view.update(cx, |view, cx| view.set_machine_setup(directory.clone(), cx));
+                        rows.push(row);
                     }
+                }
+                // A loaded or rebuilt card changes height: remeasure its row.
+                if !rows.is_empty() {
+                    this.diagram_layout_changed(&rows, cx);
                 }
             }));
         }

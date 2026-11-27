@@ -22,6 +22,8 @@ pub struct MachineSetupCards {
     requested: HashSet<String>,
     poll: Option<Task<()>>,
     tasks: Vec<Task<()>>,
+    /// The account the cards were read for; another account starts over.
+    owner: Option<(String, Option<String>)>,
 }
 
 struct Shared(Entity<MachineSetupCards>);
@@ -90,6 +92,7 @@ impl MachineSetupCards {
             requested: HashSet::new(),
             poll: None,
             tasks: Vec::new(),
+            owner: None,
         });
         cx.set_global(Shared(cards.clone()));
         cards
@@ -120,8 +123,20 @@ impl MachineSetupCards {
         }
     }
 
+    /// Cards belong to one account: switching drops them and any poll.
+    fn follow_owner(&mut self, cx: &App) {
+        let current = owner(self.state.read(cx));
+        if current != self.owner {
+            self.owner = current;
+            self.cards.clear();
+            self.requested.clear();
+            self.poll = None;
+        }
+    }
+
     /// Read each of `ids` once; later changes arrive by action or poll.
     pub fn ensure(&mut self, ids: &[String], cx: &mut Context<Self>) {
+        self.follow_owner(cx);
         for id in ids {
             if self.requested.insert(id.clone()) {
                 self.call(id, methods::CLOUD_MACHINE_SETUP_PROPOSAL, cx);
@@ -145,6 +160,7 @@ impl MachineSetupCards {
     }
 
     fn call(&mut self, id: &str, method: &'static str, cx: &mut Context<Self>) {
+        self.follow_owner(cx);
         let card = self.cards.entry(id.to_owned()).or_default();
         card.busy = true;
         card.error = None;
@@ -219,6 +235,7 @@ impl MachineSetupCards {
             .iter()
             .filter(|(_, card)| {
                 !card.busy
+                    && card.error.is_none()
                     && card.view.as_ref().is_some_and(|v| {
                         v.proposal.state == "applied"
                             && matches!(v.machine.image_state.as_str(), "queued" | "building")

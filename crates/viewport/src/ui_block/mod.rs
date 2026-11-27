@@ -98,6 +98,8 @@ pub struct UiBlockView {
     plugin_actions: bool,
     /// Proposals for live `MachineImageProposal` cards.
     machine_setup: Rc<MachineSetupDirectory>,
+    /// Proposal cards showing their whole script, by path.
+    machine_setup_full: std::collections::HashSet<String>,
 }
 
 impl EventEmitter<UiBlockEvent> for UiBlockView {}
@@ -155,6 +157,7 @@ impl UiBlockView {
             plugins: Rc::new(PluginDirectory::default()),
             plugin_actions: true,
             machine_setup: Rc::new(MachineSetupDirectory::default()),
+            machine_setup_full: Default::default(),
         }
     }
 

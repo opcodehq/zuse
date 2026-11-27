@@ -7,6 +7,7 @@
 
 use std::time::Duration;
 
+use anyhow::Context as _;
 use serde_json::{Value, json};
 use zuse_protocol::machine_setup::{DEFAULT_TEST_TIMEOUT_SECS, MAX_TEST_TIMEOUT_SECS};
 
@@ -116,6 +117,27 @@ fn tail(text: &str) -> (String, bool) {
     (text[start..].to_owned(), true)
 }
 
+/// Stops a test run's process group and removes its script when dropped.
+struct Cleanup {
+    path: std::path::PathBuf,
+    group: Option<u32>,
+}
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(group) = self.group {
+            // Harmless when the group already exited.
+            let _ = std::process::Command::new("kill")
+                .arg("-KILL")
+                .arg(format!("-{group}"))
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 /// Run `script` here and report how it went.
 pub async fn test_script(script: &str, timeout_seconds: Option<u64>) -> anyhow::Result<Value> {
     anyhow::ensure!(!script.trim().is_empty(), "setup_script is empty");
@@ -146,30 +168,49 @@ pub async fn test_script(script: &str, timeout_seconds: Option<u64>) -> anyhow::
         .kill_on_drop(true);
     #[cfg(unix)]
     command.process_group(0);
-    let child = command.spawn()?;
-    #[cfg(unix)]
-    let group = child.id();
-    let outcome =
-        tokio::time::timeout(Duration::from_secs(seconds), child.wait_with_output()).await;
-    let _ = tokio::fs::remove_file(&path).await;
-    let (output, exit_code, timed_out) = match outcome {
-        Ok(output) => {
-            let output = output?;
-            (output.stdout, output.status.code(), false)
-        }
-        Err(_) => {
-            // The script's own children too, not only bash.
-            #[cfg(unix)]
-            if let Some(group) = group {
-                let _ = std::process::Command::new("kill")
-                    .arg("-KILL")
-                    .arg(format!("-{group}"))
-                    .status();
-            }
-            (Vec::new(), None, true)
-        }
+    // From here on, a cancelled call (the agent stopped) or a deadline
+    // still stops the script's whole process group and removes the file.
+    let mut cleanup = Cleanup {
+        path: path.clone(),
+        group: None,
     };
-    let (output, truncated) = tail(&redact(&String::from_utf8_lossy(&output)));
+    let mut child = command.spawn()?;
+    cleanup.group = child.id();
+    let mut stdout = child.stdout.take().context("script output unavailable")?;
+    // Only the end is kept, so a chatty script can't fill memory.
+    let mut kept: Vec<u8> = Vec::new();
+    let mut dropped = false;
+    let run = async {
+        use tokio::io::AsyncReadExt;
+        let mut chunk = [0u8; 8192];
+        loop {
+            let n = stdout.read(&mut chunk).await?;
+            if n == 0 {
+                break;
+            }
+            kept.extend_from_slice(&chunk[..n]);
+            if kept.len() > 2 * OUTPUT_TAIL {
+                kept.drain(..kept.len() - OUTPUT_TAIL);
+                dropped = true;
+            }
+        }
+        child.wait().await
+    };
+    let outcome = tokio::time::timeout(Duration::from_secs(seconds), run).await;
+    let (exit_code, timed_out) = match outcome {
+        Ok(status) => (status?.code(), false),
+        Err(_) => (None, true),
+    };
+    drop(cleanup);
+    let mut output = String::from_utf8_lossy(&kept).into_owned();
+    if dropped {
+        // The first kept line may be cut; start at a whole line.
+        if let Some(at) = output.find('\n') {
+            output.drain(..=at);
+        }
+    }
+    let (output, cut) = tail(&redact(&output));
+    let truncated = cut || dropped;
     Ok(json!({
         "exitCode": exit_code,
         "succeeded": exit_code == Some(0),
@@ -207,11 +248,41 @@ mod tests {
 
     #[tokio::test]
     async fn a_test_run_stops_at_its_deadline() {
-        let slow = test_script("sleep 30", Some(1)).await.unwrap();
+        let slow = test_script("echo installing\nsleep 30", Some(1))
+            .await
+            .unwrap();
         assert_eq!(slow["timedOut"], true);
+        assert_eq!(
+            slow["output"], "installing",
+            "what it printed before the deadline"
+        );
         assert!(slow["seconds"].as_u64().unwrap() < 10);
         assert!(test_script("true", Some(0)).await.is_err());
         assert!(test_script("  ", None).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_chatty_script_keeps_only_its_end() {
+        let chatty = test_script("seq 1 1500000 | sed s/.*/x/\necho done", Some(60))
+            .await
+            .unwrap();
+        assert_eq!(chatty["succeeded"], true);
+        assert_eq!(chatty["outputTruncated"], true);
+        let output = chatty["output"].as_str().unwrap();
+        assert!(output.len() <= OUTPUT_TAIL && output.ends_with("x\ndone"));
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_run_stops_the_scripts_children() {
+        let marker =
+            std::env::temp_dir().join(format!("zuse-late-{}", uuid::Uuid::new_v4().simple()));
+        let script = format!("(sleep 2; touch {}) &\nsleep 30", marker.display());
+        let run = tokio::spawn(async move { test_script(&script, Some(60)).await });
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        run.abort();
+        let _ = run.await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        assert!(!marker.exists(), "the background child was stopped");
     }
 
     #[test]

@@ -143,6 +143,12 @@ impl Store {
             .map(|r| r.identity.clone())
             .collect();
         let mut tx = pool.begin().await?;
+        // One proposer at a time per setup computer, so the newest always
+        // supersedes the one before it.
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+            .bind(format!("machine-setup:{owner}:{workspace}"))
+            .execute(&mut *tx)
+            .await?;
         sqlx::query("UPDATE cloud_machine_setup_proposals SET state='superseded',decided_at=$3 WHERE owner_id=$1 AND workspace_id=$2 AND state='proposed'")
             .bind(owner)
             .bind(workspace)
@@ -272,16 +278,23 @@ impl Store {
             _ => return Err(ApiError::conflict("machine_setup_proposal_discarded")),
         }
         let machine = self.machine(owner).await?;
-        if machine.recipe.setup_script.trim() != proposal.current_setup_script.trim() {
+        // Stale after someone else's edit; an earlier attempt of this same
+        // apply may already have saved the proposed script.
+        let live = machine.recipe.setup_script.trim();
+        let saved = live == proposal.setup_script.trim();
+        if !saved && live != proposal.current_setup_script.trim() {
             return Err(ApiError::conflict("machine_setup_proposal_stale"));
         }
         let current = {
             let mut connection = self.pool.acquire().await?;
             repositories(&mut connection, owner).await?
         };
-        let (added, _) = proposal.repository_changes();
-        let added: Vec<&str> = added
-            .into_iter()
+        // Against the live list: a repository removed in Settings since the
+        // proposal, but still proposed, is added back.
+        let added: Vec<&str> = proposal
+            .repositories
+            .iter()
+            .map(String::as_str)
             .filter(|identity| !current.iter().any(|r| r.identity == *identity))
             .collect();
         let removed: Vec<&Repository> = current
@@ -328,7 +341,7 @@ impl Store {
                 .await?;
         }
         let mut revision = machine.revision;
-        if proposal.script_changed() {
+        if !saved {
             let mut recipe = machine.recipe.clone();
             recipe.setup_script = proposal.setup_script.clone();
             revision = self
@@ -343,15 +356,17 @@ impl Store {
                 .await?
                 .revision;
         }
-        self.decide(owner, id, "applied", Some(revision), now)
-            .await?;
         // The normal "Rebuild now": a fresh build even when nothing changed.
+        // Only a queued build makes the proposal applied, so a failed queue
+        // (e.g. no compute left on the plan) can be retried with Apply.
         match self.rebuild_machine_scoped(access, now).await {
             Err(error) if error.code == "machine_setup_script_required" => {}
             other => {
                 other?;
             }
         }
+        self.decide(owner, id, "applied", Some(revision), now)
+            .await?;
         self.machine_setup_proposal(owner, id).await
     }
 }
