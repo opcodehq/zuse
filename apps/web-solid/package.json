@@ -6,6 +6,7 @@
     "dev": "vite",
     "build": "node scripts/build-link.mjs && vite build",
     "build:link": "node scripts/build-link.mjs",
+    "build:workers": "bash scripts/cloudflare-build.sh",
     "build:cloudflare": "ZUSE_WEB_BASE=/ ZUSE_WEB_OUT=../../dist/web-solid bun run build && cp cloudflare/_headers ../../dist/web-solid/_headers",
     "preview:cloudflare": "wrangler dev",
     "deploy:cloudflare": "wrangler deploy",
