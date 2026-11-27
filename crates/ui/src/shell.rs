@@ -10721,41 +10721,38 @@ impl Shell {
                         sidebar_diff_stat(additions, deletions, 0.75, theme)
                     }))
                     // Keep the icon columns reserved when hover reveals row actions.
-                    .when(
-                        harness.is_some() || meta_cloud.is_some(),
-                        |el| {
-                            el.child(
-                                div()
-                                    .ml_auto()
-                                    .w(px(SIDEBAR_CARD_MARK_SIZE * 2.0 + 6.0))
-                                    .when(row_hovered, |el| el.opacity(0.0))
-                                    .flex_none()
-                                    .flex()
-                                    .items_center()
-                                    .justify_start()
-                                    .gap(px(6.0))
-                                    .children(meta_cloud)
-                                    .children(harness.map(|harness| {
-                                        let name = crate::pickers::harness_display_name(harness);
-                                        let (path, _) = crate::pickers::harness_brand_icon(harness);
-                                        div()
-                                            .id(SharedString::from(format!("{row_id}-agent")))
-                                            .debug_selector({
-                                                let id = id.clone();
-                                                move || format!("chat-agent-{id}")
-                                            })
-                                            .aria_label(name)
-                                            .tip_above(name)
-                                            .flex_none()
-                                            .child(
-                                                icon(path)
-                                                    .size(px(SIDEBAR_CARD_MARK_SIZE))
-                                                    .text_color(faint),
-                                            )
-                                    })),
-                            )
-                        },
-                    );
+                    .when(harness.is_some() || meta_cloud.is_some(), |el| {
+                        el.child(
+                            div()
+                                .ml_auto()
+                                .w(px(SIDEBAR_CARD_MARK_SIZE * 2.0 + 6.0))
+                                .when(row_hovered, |el| el.opacity(0.0))
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .justify_start()
+                                .gap(px(6.0))
+                                .children(meta_cloud)
+                                .children(harness.map(|harness| {
+                                    let name = crate::pickers::harness_display_name(harness);
+                                    let (path, _) = crate::pickers::harness_brand_icon(harness);
+                                    div()
+                                        .id(SharedString::from(format!("{row_id}-agent")))
+                                        .debug_selector({
+                                            let id = id.clone();
+                                            move || format!("chat-agent-{id}")
+                                        })
+                                        .aria_label(name)
+                                        .tip_above(name)
+                                        .flex_none()
+                                        .child(
+                                            icon(path)
+                                                .size(px(SIDEBAR_CARD_MARK_SIZE))
+                                                .text_color(faint),
+                                        )
+                                })),
+                        )
+                    });
                 div()
                     .flex_1()
                     .min_w_0()
@@ -10782,11 +10779,7 @@ impl Shell {
                     // Grouped cards share the project name's text column.
                     // Compact rows occupy this same slot with their lead glyph.
                     .when(nested && two_line, |el| {
-                        el.child(
-                            div()
-                                .w(px(spaces::SIDEBAR_PROJECT_AVATAR_SIZE))
-                                .flex_none(),
-                        )
+                        el.child(div().w(px(spaces::SIDEBAR_PROJECT_AVATAR_SIZE)).flex_none())
                     })
                     .children(lead)
                     .children(title_avatar)
