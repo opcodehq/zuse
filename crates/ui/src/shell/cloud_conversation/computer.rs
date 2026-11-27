@@ -554,6 +554,7 @@ impl CloudConversation {
                     Ok(_) => this.revoke(cx),
                     Err(error) => this.computer.error = Some(error.to_string()),
                 }
+                this.publish_computer_online(cx);
                 if std::mem::take(&mut this.computer.refresh_again)
                     && this.computer.open
                     && this.authorized

@@ -633,13 +633,7 @@ impl FilesSurface {
             | ComposerInputEvent::ListDelete
             | ComposerInputEvent::ViewportChanged => {}
         });
-        let observe = cx.observe(&state, |this: &mut Self, _, cx| {
-            if this.sync_target(cx) {
-                this.ensure_loaded(cx);
-            }
-            this.observe_computer_wake(cx);
-            this.sync_active_markdown_comments(cx);
-        });
+        let observe = cx.observe(&state, |this: &mut Self, _, cx| this.state_changed(cx));
         // The list state exposes no scroll handle, so the floating rail
         // bridges scroll activity through the scroll handler (the
         // transcript's pattern) and reads its geometry from the state's own
@@ -1171,6 +1165,33 @@ impl FilesSurface {
 
     pub fn chat_id(&self) -> &str {
         &self.chat_id
+    }
+
+    /// The chat state this surface reads and saves through.
+    pub(crate) fn state(&self) -> &Entity<AppState> {
+        &self.state
+    }
+
+    fn state_changed(&mut self, cx: &mut Context<Self>) {
+        if self.sync_target(cx) {
+            self.ensure_loaded(cx);
+        }
+        self.observe_computer_wake(cx);
+        self.sync_active_markdown_comments(cx);
+    }
+
+    /// Follow a chat whose state was replaced. A cloud chat reopened after
+    /// its conversation closed has a new state; a tab still bound to the old
+    /// one would wait on a connection nothing will ever attach.
+    pub(crate) fn rebind_state(&mut self, state: Entity<AppState>, cx: &mut Context<Self>) {
+        if self.state == state {
+            return;
+        }
+        self.state = state.clone();
+        self._observe = cx.observe(&state, |this: &mut Self, _, cx| this.state_changed(cx));
+        self.computer_wake = Default::default();
+        self.ensure_loaded(cx);
+        cx.notify();
     }
 
     fn sync_target(&mut self, cx: &mut Context<Self>) -> bool {

@@ -260,7 +260,9 @@ impl CloudConversation {
                     this.title = zuse_protocol::file_mentions::mention_display_text(title);
                     this.title_is_placeholder = false;
                 }
-                // A file tab opened while the computer sleeps asks for it.
+                this.publish_computer_online(cx);
+                // A file tab that cannot read its file yet asks for the
+                // computer.
                 let requests = state.read(cx).cloud_wake_requests;
                 if requests != this.answered_wake_requests {
                     this.answered_wake_requests = requests;
@@ -334,6 +336,7 @@ impl CloudConversation {
             _subscriptions: subscriptions,
         };
         this.computer.metadata = initial_metadata;
+        this.publish_computer_online(cx);
         this.watch_account(cx);
         // Paint the saved copy now; the fresh read follows the account check.
         this.read_provisional_history(cx);
@@ -928,6 +931,7 @@ impl CloudConversation {
         self.computer = computer::State::default();
         self.state
             .update(cx, |state, cx| state.prepare_runtime_replacement(cx));
+        self.publish_computer_online(cx);
         self.composer
             .update(cx, |composer, cx| composer.clear_cloud_task(cx));
         self.title = "Cloud chat".into();
@@ -1138,6 +1142,7 @@ impl CloudConversation {
         }
         let refresh_logs = self.computer.observe_metadata(row.clone());
         // The header's status glyph follows the new state.
+        self.publish_computer_online(cx);
         cx.notify();
         let sleeping = self.domain_sleeping();
         self.composer
@@ -1175,12 +1180,23 @@ impl CloudConversation {
         self.environment = None;
         self.watch_environment(true, cx);
     }
-    /// Wake the computer for a file tab opened while it sleeps, the same
-    /// way a message's files wake it. A wake that cannot start, or fails on
-    /// the way, says so on the shared state so the tab offers a retry
-    /// instead of waiting on a computer that is not coming.
+    /// Bring the computer's tools up for a file tab that cannot read its
+    /// file yet. A running computer whose connection is ready only needs
+    /// the connection attached; anything else takes the same wake a
+    /// message's files take (it resumes nothing on a running computer and
+    /// reopens a retired or dropped connection). A request that cannot
+    /// start, or fails on the way, says so on the shared state so the tab
+    /// offers a retry instead of waiting on a computer that is not coming.
     fn wake_for_file(&mut self, cx: &mut Context<Self>) {
         if self.state.read(cx).engine().is_some() {
+            return;
+        }
+        if self.authorized
+            && self.operation.is_none()
+            && !self.domain_sleeping()
+            && self.status["state"] == "ready"
+        {
+            self.connect_execution(cx);
             return;
         }
         if self.access_revoked {
@@ -1201,6 +1217,18 @@ impl CloudConversation {
         }
         self.environment = None;
         self.watch_environment(true, cx);
+    }
+    /// Tell this chat's views whether the computer is up, as the header's
+    /// glyph shows it, so a file tab waiting on its connection says it is
+    /// loading rather than waking a computer that is already awake.
+    pub(super) fn publish_computer_online(&mut self, cx: &mut Context<Self>) {
+        let online = self.computer_online();
+        if self.state.read(cx).cloud_computer_online != online {
+            self.state.update(cx, |state, cx| {
+                state.cloud_computer_online = online;
+                cx.notify();
+            });
+        }
     }
     fn report_wake_failure(&mut self, message: &str, cx: &mut Context<Self>) {
         let message = gpui::SharedString::from(message.to_owned());
@@ -1246,10 +1274,26 @@ impl CloudConversation {
                         this.composer
                             .update(cx, |composer, _| composer.set_cloud_task_sleeping(sleeping));
                     }
-                    if interactive && matches!(status["state"].as_str(), Some("failed" | "error")) {
-                        this.report_wake_failure("The computer couldn't start.", cx);
+                    // A wait for the computer ends at a status that will not
+                    // become ready on its own: a failed start, or a blocked
+                    // connection (retired, refused, or out of retries).
+                    if interactive {
+                        match status["state"].as_str() {
+                            Some("failed" | "error") => {
+                                this.report_wake_failure("The computer couldn't start.", cx)
+                            }
+                            Some("blocked") => this.report_wake_failure(
+                                status["message"]
+                                    .as_str()
+                                    .filter(|message| !message.is_empty())
+                                    .unwrap_or("Couldn't reach the computer."),
+                                cx,
+                            ),
+                            _ => {}
+                        }
                     }
                     this.status = status;
+                    this.publish_computer_online(cx);
                     if ready && !this.domain_sleeping() {
                         this.connect_execution(cx);
                     }
@@ -1506,6 +1550,11 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.mark_cloud_conversation_seen(view, cx);
+        let (session, state) = {
+            let view = view.read(cx);
+            (view.target.initial_session.clone(), view.state.clone())
+        };
+        self.rebind_cloud_file_tabs(&session, &state, cx);
         self.cloud_conversation_events =
             Some(cx.subscribe(view, |this, _, event, cx| match event {
                 CloudConversationEvent::Desktop => this.open_desktop_panel(cx),
@@ -3384,6 +3433,10 @@ mod tests {
     /// interactive wake the way an unreachable computer does.
     struct FileWakeController {
         fail: bool,
+        /// The wake's connection is refused for good (it stays blocked).
+        blocked: bool,
+        /// The computer is running and its connection is ready.
+        awake: bool,
         environment_calls: std::sync::Mutex<Vec<Value>>,
     }
     #[async_trait::async_trait]
@@ -3403,12 +3456,23 @@ mod tests {
                 methods::CLOUD_ACCOUNT_STATUS => {
                     Ok(pending(json!({"user":{"id":"owner"},"orgId":null})))
                 }
-                methods::CLOUD_HISTORY => Ok(zuse_rpc::RpcReply::Value(retained_history(false))),
+                methods::CLOUD_HISTORY => {
+                    Ok(zuse_rpc::RpcReply::Value(retained_history(self.awake)))
+                }
                 methods::CLOUD_ENVIRONMENT => {
                     let interactive = params["interactiveResume"] == true;
+                    if self.awake {
+                        self.environment_calls.lock().unwrap().push(params);
+                        return Ok(pending(json!({"state":"ready","epoch":1})));
+                    }
                     self.environment_calls.lock().unwrap().push(params);
                     if interactive && self.fail {
                         return Err(zuse_rpc::RpcError::Failed("unreachable".into()));
+                    }
+                    if interactive && self.blocked {
+                        return Ok(pending(
+                            json!({"state":"blocked","epoch":1,"message":"Connection refused."}),
+                        ));
                     }
                     Ok(pending(json!({"state":"paused","epoch":1})))
                 }
@@ -3439,9 +3503,11 @@ mod tests {
                 runtime.block_on(async { tokio::task::yield_now().await });
             }
         };
-        for fail in [false, true] {
+        for (fail, blocked) in [(false, false), (true, false), (false, true)] {
             let service = std::sync::Arc::new(FileWakeController {
                 fail,
+                blocked,
+                awake: false,
                 environment_calls: Default::default(),
             });
             let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
@@ -3491,6 +3557,13 @@ mod tests {
                         state.cloud_wake_failure.as_deref(),
                         Some("Couldn't reach the computer.")
                     );
+                } else if blocked {
+                    // A connection that stays blocked ends the wait with
+                    // its reason instead of leaving the tab waking.
+                    assert_eq!(
+                        state.cloud_wake_failure.as_deref(),
+                        Some("Connection refused.")
+                    );
                 } else {
                     assert!(state.cloud_wake_failure.is_none());
                 }
@@ -3498,6 +3571,198 @@ mod tests {
             view.update(cx, |view, cx| view.revoke(cx));
             pump(cx);
         }
+    }
+    /// A file tab on a running computer whose tools are not connected yet
+    /// is answered with the connection alone: the computer reads as online
+    /// on the shared state, and nothing asks to resume it.
+    #[gpui::test]
+    fn a_file_request_on_a_running_computer_connects_without_waking(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        cx.update(|cx| {
+            initialize(cx);
+            gpui_tokio::init_from_handle(cx, runtime.handle().clone());
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let pump = |cx: &mut TestAppContext| {
+            for _ in 0..12 {
+                cx.run_until_parked();
+                runtime.block_on(async { tokio::task::yield_now().await });
+            }
+        };
+        let service = std::sync::Arc::new(FileWakeController {
+            fail: false,
+            blocked: false,
+            awake: true,
+            environment_calls: Default::default(),
+        });
+        let controller =
+            crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(service.clone()));
+        let view = cx.new(|cx| {
+            CloudConversation::new(
+                CloudTarget {
+                    controller,
+                    subject: "owner".into(),
+                    organization: None,
+                    workspace: "task".into(),
+                    initial_session: "session".into(),
+                },
+                json!({"workspaceId":"task","state":"ready","desiredState":"ready"}),
+                Value::Null,
+                boot(directory.path()),
+                cx,
+            )
+        });
+        pump(cx);
+        let state = view.read_with(cx, |view, _| view.state.clone());
+        state.read_with(cx, |state, _| {
+            assert!(state.cloud_computer_online, "the header shows it running");
+            assert!(
+                state.cloud_computer_asleep(),
+                "its tools are still connecting"
+            );
+        });
+        state.update(cx, |state, cx| state.request_cloud_wake(cx));
+        pump(cx);
+        view.read_with(cx, |view, _| assert_eq!(view.answered_wake_requests, 1));
+        assert!(
+            service
+                .environment_calls
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|call| call["interactiveResume"] == false),
+            "a running computer is never asked to resume"
+        );
+        state.read_with(cx, |state, _| assert!(state.cloud_wake_failure.is_none()));
+        view.update(cx, |view, cx| view.revoke(cx));
+        pump(cx);
+        state.read_with(cx, |state, _| assert!(!state.cloud_computer_online));
+    }
+    /// A cloud chat closed while it is not in front and opened again gets a
+    /// new conversation and state. Its file tab, still open beside it,
+    /// follows the new state, so the file loads once that state's tools
+    /// connect instead of waiting on the old state forever.
+    #[gpui::test]
+    fn a_reopened_cloud_chats_file_tab_follows_its_new_state(cx: &mut TestAppContext) {
+        use crate::markdown::render::{LinkAction, LinkActivation, LinkOutcome, LinkTarget};
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        cx.executor().allow_parking();
+        let directory = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            initialize(cx);
+            settings::init(UiSettings::default(), directory.path(), cx);
+            crate::history::init(
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                cx,
+            );
+        });
+        let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
+            std::sync::Arc::new(PendingController),
+        ));
+        let target = |workspace: &str, session: &str| CloudTarget {
+            controller: controller.clone(),
+            subject: "owner".into(),
+            organization: None,
+            workspace: workspace.into(),
+            initial_session: session.into(),
+        };
+        let (host, cx) = cx.add_window_view(|_, cx| {
+            let shell = cx.new(|cx| {
+                let state = cx.new(|_| {
+                    let mut state = AppState::new();
+                    account(&mut state);
+                    state
+                });
+                let mut shell = Shell::new(state, boot(directory.path()), cx);
+                shell.reduced_motion = true;
+                shell
+            });
+            CloudChromeHost {
+                shell,
+                _directory: directory,
+            }
+        });
+        let shell = host.read_with(cx, |host, _| host.shell.clone());
+        let open = |workspace: &str, session: &str, cx: &mut gpui::VisualTestContext| {
+            let target = target(workspace, session);
+            shell.update(cx, |shell, cx| {
+                shell.open_cloud_conversation(
+                    target,
+                    json!({"workspaceId":workspace,"initialSessionId":session}),
+                    Value::Null,
+                    cx,
+                );
+                let view = shell.cloud_conversation.clone().unwrap();
+                let state = view.read(cx).state.clone();
+                state.update(cx, |state, cx| {
+                    state.local_device_id = Some("cloud-computer".into());
+                    state.apply_chats(vec![
+                        serde_json::from_value(json!({
+                            "id": session, "deviceId": "cloud-computer", "archived": false,
+                            "cwd": "/home/zuse/workspace", "spaceId": "space",
+                            "checkoutId": "checkout", "createdAt": "2026-11-27T00:00:00Z",
+                        }))
+                        .unwrap(),
+                    ]);
+                    cx.notify();
+                });
+                (view, state)
+            })
+        };
+        let (view, old_state) = open("task", "session", cx);
+        let link = view
+            .read_with(cx, |view, _| view.transcript_for_test().clone())
+            .update(cx, |transcript, cx| transcript.link_ui(cx))
+            .expect("a cloud chat's links are routed");
+        let activation = LinkActivation {
+            target: LinkTarget::new("chart", "/home/zuse/workspace/chart.png"),
+            action: LinkAction::Primary,
+            source_session: Some("session".into()),
+        };
+        let outcome = cx.update(|window, cx| (link.handler)(&activation, window, cx));
+        assert_eq!(outcome, LinkOutcome::Internal);
+        cx.run_until_parked();
+        let file = shell.read_with(cx, |shell, cx| match shell.active_main_tab(cx) {
+            Some(main_tabs::MainTab::File(id)) => shell.file_surfaces[&id].clone(),
+            other => panic!("expected a file tab, got {other:?}"),
+        });
+        file.read_with(cx, |file, cx| {
+            assert_eq!(file.state(), &old_state);
+            assert!(file.wake_view(cx).is_some(), "waiting for the computer");
+        });
+
+        // Another chat comes to the front, then this one is opened again.
+        open("other", "other-session", cx);
+        drop(view);
+        let (reopened, state) = open("task", "session", cx);
+        cx.run_until_parked();
+        assert_ne!(state, old_state, "the chat was opened afresh");
+        file.read_with(cx, |file, _| assert_eq!(file.state(), &state));
+        reopened.read_with(cx, |view, _| {
+            assert_eq!(view.state, state);
+        });
+
+        // The new state's tools connect: the tab opens its file.
+        state.update(cx, |state, cx| {
+            state.set_test_engine(crate::state::EngineHandle::from_test_client(
+                zuse_rpc::memory_client(std::sync::Arc::new(PendingController)),
+            ));
+            cx.notify();
+        });
+        cx.run_until_parked();
+        file.read_with(cx, |file, cx| assert_eq!(file.wake_view(cx), None));
     }
     #[gpui::test]
     fn cloud_only_chat_paints_header_logo_and_opens_right_sidebar(cx: &mut TestAppContext) {

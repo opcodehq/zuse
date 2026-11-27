@@ -1047,6 +1047,10 @@ pub struct AppState {
     /// Why the last wake did not bring the computer up; the next request
     /// clears it.
     pub(crate) cloud_wake_failure: Option<gpui::SharedString>,
+    /// The conversation that owns this cloud computer reports it running.
+    /// Its tools may still be unconnected (the connection is opening, or
+    /// closed meanwhile): a file waiting on it is loading, never waking.
+    pub(crate) cloud_computer_online: bool,
     initial_cloud_chat: Option<String>,
     pub(crate) pending_cloud_resume: Option<(String, String, bool)>,
     pub selected_chat: Option<String>,
@@ -1270,6 +1274,7 @@ impl AppState {
             hosted_on_cloud_computer: false,
             cloud_wake_requests: 0,
             cloud_wake_failure: None,
+            cloud_computer_online: false,
             initial_cloud_chat: None,
             selected_chat: None,
             pending_cloud_resume: None,
