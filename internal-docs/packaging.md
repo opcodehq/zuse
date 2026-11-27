@@ -302,7 +302,10 @@ writes the release's notes:
    `crates/ui/src/shell/whats_new.rs`, icon names `named_icon`; when no
    existing scene fits the headline, add one there. Check it with
    `ZUSE_SIDEBAR_WHATS_NEW=0` on the `sidebar-fixture` example, at full size,
-   in a narrow window and on the sidebar card.
+   in a narrow window and on the sidebar card (0.27.10:
+   [dialog](images/whats-new/dialog-dark.png),
+   [narrow](images/whats-new/dialog-narrow.png),
+   [sidebar card](images/whats-new/sidebar-card.png)).
 
 The `zuse-ui` test
 `the_release_being_built_has_whats_new_notes_with_a_scene` fails CI when the
