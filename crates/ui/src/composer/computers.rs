@@ -10,7 +10,8 @@ use gpui::AnyElement;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-/// Requests refresh this often while one is waiting or running.
+/// Requests refresh this often while one is waiting or running, or the
+/// chat's agent is working.
 const FAST_POLL: Duration = Duration::from_millis(2500);
 /// Otherwise every fourth round (about every 10 s).
 const IDLE_EVERY: u32 = 4;
@@ -233,8 +234,10 @@ impl Composer {
             let mut tick = 0u32;
             loop {
                 let slow = tick.is_multiple_of(SLOW_EVERY);
+                // While the agent works it may be waiting on a command here:
+                // its approval must replace the composer right away.
                 let busy = this
-                    .read_with(cx, |c, _| c.computers.busy())
+                    .read_with(cx, |c, cx| c.computers.busy() || c.run_live(cx))
                     .unwrap_or(false);
                 let requests = busy || tick.is_multiple_of(IDLE_EVERY);
                 if slow || requests {

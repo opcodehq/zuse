@@ -345,7 +345,7 @@ fn catalog() -> Vec<ToolDef> {
         ),
         (
             "run_on_computer",
-            "Run a command on the user's computer. Omit device_id to use the primary computer (the one the user is typing on). Pass another computer's device_id only when the user asked for that computer or the task can only be done there; never as a default or fallback. The owner approves each command unless they already allowed this chat or that computer. Returns a request ID; poll computer_task_results for output and completion. Long builds and tests can ask for up to 3600 seconds (default 600). Never resubmit a request whose outcome is unknown.",
+            "Run a command on the user's computer and wait for it, like a normal shell command. Omit device_id to use the primary computer (the one the user is typing on). Pass another computer's device_id only when the user asked for that computer or the task can only be done there; never as a default or fallback. The owner approves each command unless they already allowed this chat or that computer: this call waits for their decision and for the command to finish, then returns its output and exit status (or that it was denied or stopped). Long builds and tests can ask for up to 3600 seconds (default 600). If it returns while still waiting, call computer_task_results with its request_id. Never resubmit a request whose outcome is unknown.",
             json!({"device_id":{"type":"string"},"command":{"type":"string"},"cwd":{"type":"string"},
                 "timeout_seconds":{"type":"integer","minimum":1,"maximum":zuse_protocol::computer_tasks::MAX_TIMEOUT_SECS}}),
             json!(["command"]),
@@ -358,15 +358,15 @@ fn catalog() -> Vec<ToolDef> {
         ),
         (
             "run_computer_task",
-            "Request an offered task by UUID. The owner approves it in Computers. Returns the request ID. Never automatically retry a submission after disconnect.",
+            "Request an offered task by UUID and wait for it. The owner approves it first; returns its output and status. Never automatically retry a submission after disconnect.",
             json!({"task":{"type":"string","format":"uuid"},
                 "timeout_seconds":{"type":"integer","minimum":1,"maximum":zuse_protocol::computer_tasks::MAX_TIMEOUT_SECS}}),
             json!(["task"]),
         ),
         (
             "computer_task_results",
-            "Read this chat's recent computer requests, newest first. state is pending (waiting for the owner), approved, running (output so far), finished, denied, cancelled or unknown (it may have run; never resubmit it).",
-            json!({}),
+            "Read this chat's recent computer requests, newest first. state is pending (waiting for the owner), approved, running (output so far), finished, denied, cancelled or unknown (it may have run; never resubmit it). Pass request_id to wait for that request to finish and get its output.",
+            json!({"request_id":{"type":"string","format":"uuid"}}),
             json!([]),
         ),
     ] {
@@ -1027,13 +1027,7 @@ impl Tools {
                     .chat_id
                     .as_deref()
                     .ok_or_else(|| "Computer tasks require an originating chat".to_owned())?;
-                let request = computer_request(name, &args, uuid::Uuid::new_v4())?;
-                self.zuse
-                    .call_once(
-                        zuse_protocol::computer_tasks::METHOD,
-                        json!({"chatId":chat,"request":request}),
-                    )
-                    .await
+                self.computer_tool(chat, name, args).await
             }
             "plugins_list" | "plugins_search" | "plugins_schema" | "plugins_call" => {
                 self.plugin_tool(name, args).await
@@ -1061,6 +1055,59 @@ impl Tools {
             other => return Err(format!("unknown tool: {other}")),
         };
         result.map_err(|e| format!("{e:#}"))
+    }
+
+    /// Computer tools. A command waits, like any tool call, until the owner
+    /// decided and it finished, so its output returns in this same call.
+    async fn computer_tool(&self, chat: &str, name: &str, args: Value) -> anyhow::Result<Value> {
+        use crate::computer_wait;
+        let call = |request: Value| async move {
+            self.zuse
+                .call_once(
+                    zuse_protocol::computer_tasks::METHOD,
+                    json!({"chatId":chat,"request":request}),
+                )
+                .await
+                .map_err(computer_wait::explain)
+        };
+        let results = || call(json!({"action":"results"}));
+        if name == "computer_task_results"
+            && let Some(id) = args["request_id"].as_str().filter(|id| !id.is_empty())
+        {
+            return computer_wait::wait(
+                id,
+                results,
+                computer_wait::POLL,
+                computer_wait::budget(None),
+            )
+            .await;
+        }
+        let request =
+            computer_request(name, &args, uuid::Uuid::new_v4()).map_err(|e| anyhow::anyhow!(e))?;
+        let created = call(request).await?;
+        match name {
+            "run_on_computer" | "run_computer_task" => {
+                let id = created["id"]
+                    .as_str()
+                    .context("computer request without an id")?
+                    .to_owned();
+                computer_wait::wait(
+                    &id,
+                    results,
+                    computer_wait::POLL,
+                    computer_wait::budget(args["timeout_seconds"].as_u64()),
+                )
+                .await
+            }
+            "list_attached_computers"
+                if created
+                    .as_array()
+                    .is_some_and(|computers| !computers.iter().any(|c| c["online"] == true)) =>
+            {
+                Ok(json!({"computers":created,"note":computer_wait::NOT_CONNECTED}))
+            }
+            _ => Ok(created),
+        }
     }
 
     /// Agents get a compact result (new revision, the changed entity and a

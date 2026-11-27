@@ -3,7 +3,6 @@
 //! come only from each computer's enrollment, and every command asks first.
 use crate::composer::computers::{BridgeStatus, Computer};
 use crate::composer::{ComposerInput, ComposerInputEvent};
-use crate::popover;
 use crate::settings::widgets;
 use crate::state::AppState;
 use crate::theme::Theme;
@@ -13,6 +12,8 @@ use gpui::{
     div, prelude::*, px,
 };
 use std::time::Duration;
+use zuse_viewport::cloud_settings::kit;
+use zuse_viewport::settings_style as s;
 
 pub struct CloudChatComputers {
     state: Entity<AppState>,
@@ -34,6 +35,8 @@ pub struct CloudChatComputers {
     rename: Option<(String, Entity<ComposerInput>, Subscription)>,
     /// The new name the next rename action sends.
     new_name: Option<String>,
+    /// The computer whose "…" menu is open.
+    menu: Option<String>,
     /// Background refreshes, only while Settings shows this page.
     poll: Option<Task<()>>,
     _observe: Subscription,
@@ -55,6 +58,7 @@ impl CloudChatComputers {
             refreshing: false,
             rename: None,
             new_name: None,
+            menu: None,
             _observe: observe,
             poll: None,
         }
@@ -242,109 +246,107 @@ impl CloudChatComputers {
         self.bridge_action("rename", Some(device), true, cx);
     }
 
-    fn render_card(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let status = self.status.clone().unwrap_or_default();
-        let on = !matches!(status.state.as_str(), "" | "off");
-        let (label, tone) = match status.state.as_str() {
-            "online" if status.running > 0 => (
-                format!("Online · {} running", status.running),
-                theme.success_muted,
-            ),
-            "online" => ("Online".to_owned(), theme.success_muted),
-            "starting" => ("Connecting…".to_owned(), theme.text_muted),
-            "reconnecting" => ("Reconnecting…".to_owned(), theme.warning),
-            "paused" => ("Paused".to_owned(), theme.warning),
-            _ => ("Off".to_owned(), theme.text_muted),
-        };
-        let mut meta = vec![div().text_color(tone).child(label).into_any_element()];
-        if let Some(error) = status.error.clone().filter(|_| on) {
-            meta.push(div().child(error).into_any_element());
-        }
-        if self.stale {
-            meta.push(
-                div()
-                    .text_color(theme.warning)
-                    .child("Couldn't refresh")
-                    .into_any_element(),
-            );
-        }
-        let busy = self.busy;
-        let action = if on {
-            widgets::text_action(theme, widgets::ActionTone::Quiet, "Stop")
-                .id("bridge-stop")
-                .when(busy, |el| el.opacity(0.5))
-                .role(gpui::Role::Button)
-                .tab_index(0)
-                .on_click(cx.listener(|page, _, _, cx| page.bridge_action("stop", None, true, cx)))
-                .into_any_element()
-        } else {
-            popover::btn_primary(theme, if busy { "Allowing…" } else { "Allow" })
-                .id("bridge-start")
-                .role(gpui::Role::Button)
-                .tab_index(0)
-                .text_size(crate::typography::text_xs())
-                .on_click(cx.listener(move |page, _, _, cx| {
-                    if !page.busy {
-                        page.bridge_action("start", None, true, cx)
-                    }
-                }))
-                .into_any_element()
-        };
-        let mut card = widgets::section_card(theme).mt_0().child(
-            widgets::card_row(theme, true)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(160.0))
-                        .child(widgets::row_title(
-                            theme,
-                            "Use this computer from cloud chats",
-                        ))
-                        .child(widgets::meta_line(theme, meta)),
-                )
-                .child(
-                    div()
-                        .id("bridge-help")
-                        .flex_none()
-                        .tip("Your cloud chats can run commands here. Each one asks you first.")
-                        .child(action),
-                ),
+    /// The trailing "…" button of a row and, while open, its menu.
+    fn row_menu(
+        &self,
+        device: &str,
+        name: &str,
+        always_allowed: bool,
+        local: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let open = self.menu.as_deref() == Some(device);
+        let toggle = device.to_owned();
+        let mut trigger = div().relative().child(
+            kit::icon_button(
+                SharedString::from(format!("bridge-more-{device}")),
+                "more-horizontal",
+                "More actions",
+                self.busy,
+            )
+            .on_click(cx.listener(move |page, _, _, cx| {
+                page.menu = if page.menu.as_deref() == Some(toggle.as_str()) {
+                    None
+                } else {
+                    Some(toggle.clone())
+                };
+                cx.notify();
+            })),
         );
-        let local = status.device_id.clone();
-        let mut computers = self.computers.clone();
-        computers.sort_by_key(|c| (Some(&c.device_id) != local.as_ref(), c.name.to_lowercase()));
-        for (index, computer) in computers.into_iter().enumerate() {
-            let this_computer = Some(&computer.device_id) == local.as_ref();
-            let mut meta: Vec<AnyElement> = Vec::new();
-            if this_computer {
-                meta.push(div().child("This computer").into_any_element());
-            }
-            meta.push(
-                div()
-                    .child(platform_name(&computer.platform).to_owned())
-                    .into_any_element(),
+        if !open {
+            return trigger.into_any_element();
+        }
+        let rename = (device.to_owned(), name.to_owned());
+        let mut menu = kit::menu_surface()
+            .id(SharedString::from(format!("bridge-menu-{device}")))
+            .role(gpui::Role::Menu)
+            .on_mouse_down_out(cx.listener(|page, _, _, cx| {
+                page.menu = None;
+                cx.notify();
+            }))
+            .child(
+                kit::menu_item(
+                    SharedString::from(format!("bridge-rename-{device}")),
+                    "pen",
+                    "Rename",
+                    false,
+                )
+                .on_click(cx.listener(move |page, _, window, cx| {
+                    page.menu = None;
+                    page.open_rename(rename.0.clone(), rename.1.clone(), window, cx);
+                })),
             );
-            meta.push(if computer.connected {
+        if always_allowed {
+            let revoke = device.to_owned();
+            menu = menu.child(
+                kit::menu_item(
+                    SharedString::from(format!("bridge-revoke-{device}")),
+                    "restart",
+                    "Ask before every command",
+                    false,
+                )
+                .on_click(cx.listener(move |page, _, _, cx| {
+                    page.menu = None;
+                    page.bridge_action("revoke", Some(revoke.clone()), true, cx);
+                })),
+            );
+        }
+        if !local {
+            let forget = device.to_owned();
+            menu = menu.child(
+                kit::menu_item(
+                    SharedString::from(format!("bridge-forget-{device}")),
+                    "trash-bin-minimalistic",
+                    "Remove",
+                    true,
+                )
+                .on_click(cx.listener(move |page, _, _, cx| {
+                    page.menu = None;
+                    page.bridge_action("forget", Some(forget.clone()), true, cx);
+                })),
+            );
+        }
+        trigger = trigger.child(
+            div()
+                .absolute()
+                .right(px(0.))
+                .top(gpui::relative(1.))
+                .child(gpui::deferred(
+                    gpui::anchored()
+                        .anchor(gpui::Anchor::TopRight)
+                        .offset(gpui::point(px(0.), px(4.)))
+                        .snap_to_window_with_margin(px(8.))
+                        .child(menu),
+                )),
+        );
+        trigger.into_any_element()
+    }
+
+    /// A row's title, or its name field while it is being renamed.
+    fn row_title(&self, device: &str, name: &str, theme: &Theme) -> (AnyElement, bool) {
+        match self.rename.as_ref().filter(|(id, _, _)| id == device) {
+            Some((_, input, _)) => (
                 div()
-                    .text_color(theme.success_muted)
-                    .child("Online")
-                    .into_any_element()
-            } else {
-                div().child("Offline").into_any_element()
-            });
-            if computer.always_allowed {
-                meta.push(div().child("Always allowed").into_any_element());
-            }
-            let revoke = computer.device_id.clone();
-            let forget = computer.device_id.clone();
-            let rename = (computer.device_id.clone(), computer.name.clone());
-            let editing = self
-                .rename
-                .as_ref()
-                .filter(|(device, _, _)| *device == computer.device_id)
-                .map(|(_, input, _)| input.clone());
-            let title = match &editing {
-                Some(input) => div()
                     .h(px(28.0))
                     .px(px(8.0))
                     .flex()
@@ -352,117 +354,258 @@ impl CloudChatComputers {
                     .rounded(px(6.0))
                     .border_1()
                     .border_color(theme.accent.opacity(0.6))
-                    .bg(theme.muted_fill().opacity(0.4))
-                    .text_size(crate::typography::text_sm())
+                    .text_size(px(s::TITLE_SIZE))
                     .child(input.clone())
                     .into_any_element(),
-                None => widgets::row_title(theme, computer.name.clone()).into_any_element(),
-            };
-            card = card.child(
-                widgets::card_row(theme, false)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(160.0))
-                            .child(title)
-                            .child(widgets::meta_line(theme, meta)),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .gap(px(4.0))
-                            .when(editing.is_some(), |row| {
-                                row.child(
-                                    widgets::text_action(
-                                        theme,
-                                        widgets::ActionTone::Quiet,
-                                        "Cancel",
-                                    )
-                                    .id(("bridge-rename-cancel", index))
-                                    .tab_index(0)
-                                    .role(gpui::Role::Button)
-                                    .on_click(cx.listener(
-                                        |page, _, _, cx| {
-                                            page.rename = None;
-                                            cx.notify();
-                                        },
-                                    )),
-                                )
-                                .child(
-                                    widgets::text_action(
-                                        theme,
-                                        widgets::ActionTone::Filled,
-                                        "Save",
-                                    )
-                                    .id(("bridge-rename-save", index))
-                                    .tab_index(0)
-                                    .role(gpui::Role::Button)
-                                    .when(busy, |el| el.opacity(0.5))
-                                    .on_click(cx.listener(|page, _, _, cx| page.submit_rename(cx))),
-                                )
-                            })
-                            .when(editing.is_none(), |row| {
-                                row.child(
-                                    widgets::text_action(
-                                        theme,
-                                        widgets::ActionTone::Quiet,
-                                        "Rename",
-                                    )
-                                    .id(("bridge-rename", index))
-                                    .tab_index(0)
-                                    .role(gpui::Role::Button)
-                                    .on_click(cx.listener(
-                                        move |page, _, window, cx| {
-                                            page.open_rename(
-                                                rename.0.clone(),
-                                                rename.1.clone(),
-                                                window,
-                                                cx,
-                                            )
-                                        },
-                                    )),
-                                )
-                            })
-                            .when(computer.always_allowed, |row| {
-                                row.child(
-                                    widgets::text_action(
-                                        theme,
-                                        widgets::ActionTone::Quiet,
-                                        "Revoke always",
-                                    )
-                                    .id(("bridge-revoke", index))
-                                    .tab_index(0)
-                                    .when(busy, |el| el.opacity(0.5))
-                                    .role(gpui::Role::Button)
-                                    .on_click(cx.listener(
-                                        move |page, _, _, cx| {
-                                            page.bridge_action(
-                                                "revoke",
-                                                Some(revoke.clone()),
-                                                true,
-                                                cx,
-                                            )
-                                        },
-                                    )),
-                                )
-                            })
-                            .child(
-                                widgets::text_action(theme, widgets::ActionTone::Quiet, "Remove")
-                                    .id(("bridge-forget", index))
-                                    .tab_index(0)
-                                    .when(busy, |el| el.opacity(0.5))
-                                    .role(gpui::Role::Button)
-                                    .on_click(cx.listener(move |page, _, _, cx| {
-                                        page.bridge_action("forget", Some(forget.clone()), true, cx)
-                                    })),
-                            ),
-                    ),
+                true,
+            ),
+            None => (
+                s::title_text(name.to_owned()).truncate().into_any_element(),
+                false,
+            ),
+        }
+    }
+
+    /// Save and Cancel for the name field.
+    fn rename_actions(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(4.0))
+            .child(
+                widgets::text_action(theme, widgets::ActionTone::Quiet, "Cancel")
+                    .id("bridge-rename-cancel")
+                    .tab_index(0)
+                    .role(gpui::Role::Button)
+                    .on_click(cx.listener(|page, _, _, cx| {
+                        page.rename = None;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                widgets::text_action(theme, widgets::ActionTone::Filled, "Save")
+                    .id("bridge-rename-save")
+                    .tab_index(0)
+                    .role(gpui::Role::Button)
+                    .when(self.busy, |el| el.opacity(0.5))
+                    .on_click(cx.listener(|page, _, _, cx| page.submit_rename(cx))),
+            )
+            .into_any_element()
+    }
+
+    /// One row: platform tile, name over a muted line, then trailing controls.
+    fn computer_row(
+        first: bool,
+        platform: &str,
+        title: AnyElement,
+        subtitle: AnyElement,
+        trailing: Vec<AnyElement>,
+    ) -> gpui::Div {
+        s::row(first)
+            .flex_nowrap()
+            .child(kit::icon_tile(
+                crate::composer::computers::platform_icon(platform),
+                28.,
+            ))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(2.))
+                    .child(title)
+                    .child(subtitle),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .children(trailing),
+            )
+    }
+
+    /// "This computer": the switch that lets cloud chats use it, and its state.
+    fn this_computer(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
+        let status = self.status.clone().unwrap_or_default();
+        let on = !matches!(status.state.as_str(), "" | "off");
+        let (label, online) = match status.state.as_str() {
+            "online" if status.running > 0 => {
+                (format!("Online · {} running", status.running), true)
+            }
+            "online" => ("Online".to_owned(), true),
+            "starting" => ("Connecting…".to_owned(), false),
+            "reconnecting" => ("Reconnecting…".to_owned(), false),
+            "paused" => (
+                "Paused while another account is signed in".to_owned(),
+                false,
+            ),
+            _ if self.busy => ("Turning on…".to_owned(), false),
+            _ => (
+                "Off · cloud chats can't use this computer".to_owned(),
+                false,
+            ),
+        };
+        let mut line: Vec<AnyElement> = vec![div().child(label).into_any_element()];
+        if let Some(error) = status.error.clone().filter(|_| on && !online) {
+            line.push(
+                div()
+                    .id("bridge-error")
+                    .text_color(theme.warning)
+                    .child("Couldn't connect")
+                    .tip(error)
+                    .into_any_element(),
             );
         }
-        card.into_any_element()
+        if self.stale {
+            line.push(
+                div()
+                    .text_color(theme.warning)
+                    .child("Couldn't refresh")
+                    .into_any_element(),
+            );
+        }
+        let local = status.device_id.clone();
+        let entry = local
+            .as_ref()
+            .and_then(|id| self.computers.iter().find(|c| &c.device_id == id));
+        let name = entry
+            .map(|c| c.name.clone())
+            .or_else(|| status.name.clone())
+            .unwrap_or_else(|| "This computer".to_owned());
+        let platform = entry
+            .map(|c| c.platform.clone())
+            .unwrap_or_else(|| std::env::consts::OS.to_owned());
+        if entry.is_some_and(|c| c.always_allowed) {
+            line.push(div().child("Runs without asking").into_any_element());
+        }
+        let busy = self.busy;
+        let switch = s::toggle("bridge-switch", on, "Use this computer from cloud chats")
+            .tab_index(0)
+            .when(busy, |el| el.opacity(0.5))
+            .on_click(cx.listener(move |page, _, _, cx| {
+                if !page.busy {
+                    page.bridge_action(if on { "stop" } else { "start" }, None, true, cx)
+                }
+            }))
+            .into_any_element();
+        let (title, editing) = match &local {
+            Some(id) => self.row_title(id, &name, theme),
+            None => (
+                s::title_text(name.clone()).truncate().into_any_element(),
+                false,
+            ),
+        };
+        let mut trailing = Vec::new();
+        if editing {
+            trailing.push(self.rename_actions(theme, cx));
+        } else if let Some(id) = &local {
+            let always = entry.is_some_and(|c| c.always_allowed);
+            trailing.push(self.row_menu(id, &name, always, true, cx));
+        }
+        trailing.push(switch);
+        kit::section(
+            "This computer",
+            "Cloud chats can run commands here while this is on. Each command asks you first, in the chat.",
+            None,
+            Self::computer_row(
+                true,
+                &platform,
+                title,
+                meta(theme, on.then_some(online), line),
+                trailing,
+            ),
+        )
     }
+
+    /// The account's other enrolled computers.
+    fn other_computers(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
+        let local = self.status.as_ref().and_then(|s| s.device_id.clone());
+        let mut others: Vec<Computer> = self
+            .computers
+            .iter()
+            .filter(|c| Some(&c.device_id) != local.as_ref())
+            .cloned()
+            .collect();
+        others.sort_by_key(|c| c.name.to_lowercase());
+        let mut body = div().flex().flex_col();
+        if others.is_empty() {
+            body = body.child(s::row(true).child(s::description_text(
+                "Turn this on in Zuse on your other computers to use them too.",
+            )));
+        }
+        for (index, computer) in others.iter().enumerate() {
+            let (title, editing) = self.row_title(&computer.device_id, &computer.name, theme);
+            let mut line = vec![
+                div()
+                    .child(if computer.connected {
+                        "Online"
+                    } else {
+                        "Offline"
+                    })
+                    .into_any_element(),
+                div()
+                    .child(platform_name(&computer.platform).to_owned())
+                    .into_any_element(),
+            ];
+            if computer.always_allowed {
+                line.push(div().child("Runs without asking").into_any_element());
+            }
+            let trailing = vec![if editing {
+                self.rename_actions(theme, cx)
+            } else {
+                self.row_menu(
+                    &computer.device_id,
+                    &computer.name,
+                    computer.always_allowed,
+                    false,
+                    cx,
+                )
+            }];
+            body = body.child(Self::computer_row(
+                index == 0,
+                &computer.platform,
+                title,
+                meta(theme, Some(computer.connected), line),
+                trailing,
+            ));
+        }
+        kit::section(
+            "Other computers",
+            "Your other computers that allowed cloud chats. The agent uses one only when you ask for it by name.",
+            None,
+            body,
+        )
+    }
+}
+
+/// A small online/offline dot.
+fn status_dot(theme: &Theme, online: bool) -> gpui::Div {
+    div().flex_none().size(px(6.)).rounded_full().bg(if online {
+        theme.success_muted
+    } else {
+        theme.text_muted.opacity(0.5)
+    })
+}
+
+/// A row's muted second line: an optional status dot, then fragments split
+/// by middle dots.
+fn meta(theme: &Theme, dot: Option<bool>, fragments: Vec<AnyElement>) -> AnyElement {
+    let mut line = s::description_text(SharedString::default())
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(6.))
+        .when_some(dot, |line, online| line.child(status_dot(theme, online)));
+    for (index, fragment) in fragments.into_iter().enumerate() {
+        if index > 0 {
+            line = line.child(div().child("·"));
+        }
+        line = line.child(fragment);
+    }
+    line.into_any_element()
 }
 
 fn platform_name(platform: &str) -> &str {
@@ -482,7 +625,13 @@ impl Render for CloudChatComputers {
             self.computers.clear();
             self.owner = None;
         }
-        div().w_full().child(self.render_card(&theme, cx))
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(kit::SECTION_GAP))
+            .child(self.this_computer(&theme, cx))
+            .child(self.other_computers(&theme, cx))
     }
 }
 
