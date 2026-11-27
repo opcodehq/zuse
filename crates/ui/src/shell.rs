@@ -87,6 +87,8 @@ mod main_tabs;
 mod navigation_focus;
 #[cfg(test)]
 mod navigation_tests;
+#[cfg(test)]
+mod new_chat_destination_tests;
 pub(crate) mod open_in;
 mod panel_layout;
 mod panel_menu;

@@ -6263,22 +6263,11 @@ impl Shell {
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
-                        // A project backed by a Cloud repository starts its
-                        // chats on Cloud; the checkout stays the Local pick.
-                        let subscribed = this.state.read(cx).cloud_access().subscribed();
-                        match crate::cloud_destination::new_chat(
-                            cloud_project.as_ref(),
-                            group_space.as_deref(),
-                            subscribed,
-                        ) {
-                            crate::cloud_destination::NewChat::Cloud {
-                                project,
-                                local_space,
-                            } => this.open_new_cloud_session_in(project, local_space, cx),
-                            crate::cloud_destination::NewChat::Local(space) => {
-                                this.open_new_session(space, cx)
-                            }
-                        }
+                        this.open_new_chat_in_project(
+                            cloud_project.clone(),
+                            group_space.clone(),
+                            cx,
+                        );
                     }))
                     .into_any_element(),
                 );
