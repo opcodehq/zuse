@@ -391,12 +391,12 @@ pub(super) fn apply(
                 issue.details.assigned,
                 "assign the issue to this Zapper before starting work"
             );
+            let (before_owner, before_status) =
+                (issue.details.current_owner(), issue.details.status);
             issue.threads.push(worker.chat_id.clone());
             issue.details.owner = Some(ZapperIssueOwner::Thread {
                 chat_id: worker.chat_id.clone(),
             });
-            let (before_owner, before_status) =
-                (issue.details.current_owner(), issue.details.status);
             issue.details.status = ZapperIssueStatus::InProgress;
             issue.details.normalize(true);
             changes.push(change("thread", None, Some(worker.chat_id.clone())));
@@ -1618,6 +1618,53 @@ mod tests {
         assert_eq!(parent.details.status, ZapperIssueStatus::InProgress);
     }
     #[test]
+    fn delegating_records_the_owner_it_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
+        create(&store, "release");
+        let mut todo = details();
+        todo.status = ZapperIssueStatus::Todo;
+        todo.done_criteria = "It ships".into();
+        as_zapper(
+            &store,
+            "fix",
+            ZapperAction::CreateIssue {
+                issue_id: "fix".into(),
+                details: todo,
+            },
+        )
+        .unwrap();
+        as_zapper(
+            &store,
+            "zapper-worker-start",
+            ZapperAction::Delegate {
+                issue_id: Some("fix".into()),
+                worker: ZapperWorker {
+                    chat_id: "zapper-worker-start".into(),
+                    ..worker()
+                },
+                model: config().coordinator_model,
+                base: "origin/main".into(),
+            },
+        )
+        .unwrap();
+        let zapper = store.get("release").unwrap();
+        let started = zapper.issues[0]
+            .activity
+            .iter()
+            .find(|a| a.id == "zapper-worker-start")
+            .unwrap();
+        assert!(
+            started.changes.contains(&change(
+                "owner",
+                Some("zapper".into()),
+                Some("zapper-worker-start".into())
+            )),
+            "{:?}",
+            started.changes
+        );
+    }
+    #[test]
     fn unknown_relations_and_parents_say_to_create_them_first() {
         let dir = tempfile::tempdir().unwrap();
         let store = Zappers::open(dir.path(), "local").unwrap();
@@ -2164,7 +2211,7 @@ mod routing_tests {
         };
         assert!(!automatic);
         assert!(
-            text.contains("B") && text.contains("other: A or B?"),
+            text.ends_with(":\n\nB\n\nIn reply to: Worker update\nother: A or B?"),
             "{text}"
         );
         // The Zapper hears the comment; where it went stays in the board's

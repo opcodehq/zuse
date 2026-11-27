@@ -3229,11 +3229,17 @@ impl Shell {
             // with its threads menu, folded events or a failed write shown.
             step if step.starts_with("issue-") => {
                 self.show_zapper_page(ZapperPage::Section(ZapperTab::Issues), cx);
+                let first = zapper.issues.first().map(|i| i.id.clone());
                 if let Some(page) = issue {
                     self.show_zapper_page(page, cx);
                 }
                 if let Some(panel) = self.zapper_ui.issues.clone() {
-                    panel.update(cx, |p, cx| p.fixture_show(&step["issue-".len()..], cx));
+                    panel.update(cx, |p, cx| {
+                        if let Some(id) = first {
+                            p.show_issue(id, cx);
+                        }
+                        p.fixture_show(&step["issue-".len()..], cx)
+                    });
                 }
             }
             "drive" => self.show_zapper_page(ZapperPage::Section(ZapperTab::Drive), cx),

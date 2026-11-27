@@ -8,7 +8,8 @@ import type { IssueActivity, Zapper, ZapperIssue } from "@/core/zapper-types";
 import { Avatar, avatarOf } from "./Avatar";
 import { command, commandState, threadTitle } from "./state";
 import "./conversation.css";
-import { deliveryNote, indicator, indicatorText, phrase, runState, summary, timeline, type Item } from "./timeline";
+import { now } from "@/features/sidebar/util";
+import { deliveryNote, indicator, indicatorText, itemKey, phrase, runState, summary, timeline, type Item } from "./timeline";
 
 type Props = { zapper: Zapper; issue: ZapperIssue; onOpenPr?: (url: string, chatId: string) => void };
 
@@ -35,13 +36,13 @@ export function Conversation(props: Props) {
   });
   const [open, setOpen] = createSignal<Set<string>>(new Set());
   const toggle = (key: string) => setOpen(s => { const next = new Set(s); if (!next.delete(key)) next.add(key); return next; });
-  const status = () => indicator(props.zapper, props.issue, chat => runState(state.sessions[chat] as never), name);
+  const status = () => { const at = now(); return indicator(props.zapper, props.issue, chat => runState(state.sessions[chat] as never, at), name); };
   return (
     <section class="zp-discussion" aria-label="Issue conversation">
-      <For each={timeline(props.issue.activity)}>
-        {(item: Item) => (
-          <Show when={item.kind === "card"} fallback={
-            <Show when={item.kind === "group" && item} fallback={item.kind === "event" && <EventRow event={item.event} name={name} pr={pr} issue={props.issue} isThread={isThread} coordinators={coordinators()} zapper={props.zapper} onOpenPr={props.onOpenPr} />}>
+      <For each={timeline(props.issue.activity)} keyed={itemKey}>
+        {(item: () => Item) => (
+          <Show when={item().kind === "card"} fallback={
+            <Show when={item().kind === "group" && item()} fallback={item().kind === "event" && <EventRow event={(item() as { event: IssueActivity }).event} name={name} pr={pr} issue={props.issue} isThread={isThread} coordinators={coordinators()} zapper={props.zapper} onOpenPr={props.onOpenPr} />}>
               {group => {
                 const events = () => (group() as { events: IssueActivity[] }).events;
                 const key = () => events()[0]!.id;
@@ -58,7 +59,7 @@ export function Conversation(props: Props) {
               }}
             </Show>
           }>
-            <Card event={(item as { event: IssueActivity }).event} replies={replies().get((item as { event: IssueActivity }).event.id) ?? []} name={name} isThread={isThread} coordinators={coordinators()} zapper={props.zapper} issue={props.issue} />
+            <Card event={(item() as { event: IssueActivity }).event} replies={replies().get((item() as { event: IssueActivity }).event.id) ?? []} name={name} isThread={isThread} coordinators={coordinators()} zapper={props.zapper} issue={props.issue} />
           </Show>
         )}
       </For>
@@ -158,10 +159,13 @@ function Composer(props: { zapper: Zapper; issue: ZapperIssue; replyTo?: string;
   const [error, setError] = createSignal<string | null>(null);
   const send = async (event: Event) => {
     event.preventDefault();
-    if (!text().trim() || commandState.busy) return;
+    const sent = text();
+    if (!sent.trim() || commandState.busy) return;
     setError(null);
     try {
-      await command(props.zapper.id, { type: "commentIssue", issueId: props.issue.id, text: text().trim(), replyTo: props.replyTo });
+      await command(props.zapper.id, { type: "commentIssue", issueId: props.issue.id, text: sent.trim(), replyTo: props.replyTo });
+      // Text typed while the comment was saving is a new draft: keep it.
+      if (text() !== sent) return;
       setText("");
       props.onDone?.();
     } catch {
@@ -193,7 +197,7 @@ export function ThreadsControl(props: { zapper: Zapper; issue: ZapperIssue }) {
   const chats = () => [props.zapper.coordinatorChatId, ...props.issue.threads];
   const owner = () => props.issue.details.owner?.type === "thread" ? props.issue.details.owner.chatId : props.issue.details.owner?.type === "zapper" || (!props.issue.details.owner && props.issue.details.assigned) ? props.zapper.coordinatorChatId : undefined;
   const label = (chat: string, index: number) => {
-    const run = runState(state.sessions[chat] as never);
+    const run = runState(state.sessions[chat] as never, now());
     const role = index === 0 ? (owner() === chat ? "Coordinator · owner" : "Coordinator") : owner() === chat ? "Owner" : "Linked";
     const live = run === "running" ? "Working" : run === "awaitingInput" ? "Needs input" : run === "failed" ? "Failed" : run === "unconfirmed" ? "Not confirmed" : index > 0 && !props.zapper.workers.some(w => w.chatId === chat) ? "Left the Zapper" : "";
     return live ? `${role} · ${live}` : role;

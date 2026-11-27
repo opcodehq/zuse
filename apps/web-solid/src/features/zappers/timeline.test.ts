@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { IssueActivity } from "@/core/zapper-types";
-import { deliveryNote, phrase, runState, summary, timeline } from "./timeline";
+import { deliveryNote, itemKey, phrase, runState, summary, timeline } from "./timeline";
 
 const event = (id: string, kind: string, changes?: IssueActivity["changes"]): IssueActivity => ({ id, kind, text: id, createdAt: 0, actor: null, changes });
 const status = (id: string, to: string) => event(id, "updated", [{ field: "status", before: "todo", after: to }]);
@@ -18,6 +18,14 @@ describe("issue timeline", () => {
       status("s3", "inProgress"),
     ]);
     assert.deepEqual(items.map(i => i.kind === "group" ? "group:" + i.events.length : i.kind + ":" + i.event.id), ["group:3", "card:c1", "event:s2", "event:blocked", "event:s3"]);
+  });
+  test("rows keep their identity when unrelated activity arrives", () => {
+    const before = [event("created", "created"), status("s1", "inProgress"), status("s2", "inReview"), event("c1", "comment"), event("c2", "comment")];
+    const after = [...before, status("s3", "inProgress"), event("c3", "comment")];
+    const keys = (activity: IssueActivity[]) => timeline(activity).map(itemKey);
+    assert.deepEqual(keys(before), ["group:created", "c1", "c2"]);
+    assert.deepEqual(keys(after).slice(0, 3), keys(before));
+    assert.equal(new Set(keys(after)).size, keys(after).length);
   });
   test("summaries count only recorded facts", () => {
     const text = summary([event("created", "created"), status("s", "inProgress"), event("pr", "pullRequest", [{ field: "pullRequest", after: "https://github.com/a/zuse/pull/12" }])], () => "zuse#12");

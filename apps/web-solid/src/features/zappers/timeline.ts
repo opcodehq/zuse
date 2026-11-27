@@ -28,6 +28,9 @@ function needsAttention(e: IssueActivity) {
   return e.changes.some(c => c.field === "status" && (c.after === "needsYou" || c.after === "blocked"));
 }
 
+/** A row's identity across re-evaluations: its event, or a group's first event. */
+export const itemKey = (item: Item) => item.kind === "group" ? `group:${item.events[0]!.id}` : item.event.id;
+
 /** Top-level activity in stored order, with quiet runs folded. */
 export function timeline(activity: IssueActivity[]): Item[] {
   const items: Item[] = [];

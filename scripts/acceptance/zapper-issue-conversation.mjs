@@ -66,23 +66,28 @@ try {
   assert.equal(secondReply.replyTo, 'answer-1', 'replies stay one level deep in the same card');
   assert.match(secondReply.text, /Will do: Ship the deploy PR first/);
 
-  // 4. A restart replays nothing: same receipt, no new worker turn.
+  // 4. A restart replays nothing: same receipt, and the next answer is the
+  // only new worker turn. Deliveries go out in order, so a replayed answer
+  // would reach the thread before this one is answered.
   await host.close();
   host = await engine('zapper-conversation', {binary, profileRoot: host.root});
   assert.deepEqual(await host.call('ZapperCommand', answer), first);
-  await sleep(3000);
-  const after = await until(() => true, 'after restart');
-  assert.equal(after.report.answers.length, 2, 'no answer was replayed after restart');
-  assert.equal(after.report.workerTurns, 3, 'one kickoff plus one turn per answer');
-  assert.equal((await userMessages()).filter(m => m.id.endsWith(':answer')).length, 2);
+  const restarted = await until(() => true, 'after restart');
+  await host.call('ZapperCommand', {commandId: 'answer-3', zapperId: 'release', expectedRevision: restarted.current.revision, action: {type: 'commentIssue', issueId: 'deploy', text: 'And the scope after that', replyTo: reply.id}});
+  const after = await until(i => i.activity.find(a => a.id === 'answer-3')?.delivery?.state === 'answered', 'answer after restart answered');
+  assert.deepEqual(after.report.answers.map(a => a.text), ['yeah basically b', 'Ship the deploy PR first', 'And the scope after that'], 'no answer was replayed after restart');
+  assert.equal(after.report.workerTurns, 4, 'one kickoff plus one turn per answer');
+  assert.equal((await userMessages()).filter(m => m.id.endsWith(':answer')).length, 3);
+  const thirdReply = after.issue.activity.find(a => a.id === after.issue.activity.find(x => x.id === 'answer-3').delivery.reply);
+  assert.equal(thirdReply.replyTo, 'answer-1');
   // The Zapper hears each answer as readable text; where it went rides the
   // board's delivery metadata, never the visible summary.
   const events = await host.call('ZapperEvents', {zapperId: 'release'});
-  for (const id of ['issue-answer-1', 'issue-answer-2']) {
+  for (const id of ['issue-answer-1', 'issue-answer-2', 'issue-answer-3']) {
     const summary = events.find(e => e.id === id)?.summary ?? '';
     assert.ok(summary && !summary.includes(':answer') && !summary.includes('relay'), id + ': ' + summary);
   }
-  assert.deepEqual(after.issue.activity.filter(a => a.delivery).map(a => [a.id, a.delivery.chatId, a.delivery.state]), [['answer-1', worker, 'answered'], ['answer-2', worker, 'answered']]);
-  artifact('zapper-issue-conversation-acceptance.json', {realEngine: true, paidModelCalls: 0, exactRecipient: worker, answersDelivered: after.report.answers.length, workerTurns: after.report.workerTurns, nestedReplies: 2, retryDuplicates: 0, restartReplays: 0, workerImpersonationRouted: false, profile: host.root});
+  assert.deepEqual(after.issue.activity.filter(a => a.delivery).map(a => [a.id, a.delivery.chatId, a.delivery.state]), [['answer-1', worker, 'answered'], ['answer-2', worker, 'answered'], ['answer-3', worker, 'answered']]);
+  artifact('zapper-issue-conversation-acceptance.json', {realEngine: true, paidModelCalls: 0, exactRecipient: worker, answersDelivered: after.report.answers.length, workerTurns: after.report.workerTurns, nestedReplies: 3, retryDuplicates: 0, restartReplays: 0, workerImpersonationRouted: false, profile: host.root});
   console.log('Zapper issue conversation accepted.');
 } catch (error) { console.error('Zapper issue conversation failed: ' + error.message); process.exitCode = 1; } finally { await host?.close(); }
