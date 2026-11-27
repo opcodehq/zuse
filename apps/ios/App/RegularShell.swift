@@ -210,14 +210,20 @@ struct RegularShell<Chat: View, ChatsDetail: View>: View {
             .tag(ShellSection.zapper(zapper.id))
             .accessibilityIdentifier("sidebar-zapper-\(zapper.id)")
         }
-        Button {
-          creatingZapper = true
-        } label: {
-          ShellRow(title: "New Zapper", symbol: "plus").foregroundStyle(.secondary)
+        if store.zappers.isEmpty && canCreateZapper && (store.loaded || store.preview) {
+          ZapperSidebarInvite { creatingZapper = true }
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+        } else {
+          Button {
+            creatingZapper = true
+          } label: {
+            ShellRow(title: "New Zapper", symbol: "plus").foregroundStyle(.secondary)
+          }
+          .buttonStyle(.plain)
+          .disabled(!canCreateZapper)
+          .accessibilityIdentifier("sidebar-new-zapper")
         }
-        .buttonStyle(.plain)
-        .disabled(!(store.preview || (store.available && workspace.connectionState == "Connected")))
-        .accessibilityIdentifier("sidebar-new-zapper")
       } header: {
         ShellSectionHeader(title: "Zappers")
       }
@@ -244,6 +250,7 @@ struct RegularShell<Chat: View, ChatsDetail: View>: View {
         .accessibilityIdentifier("sidebar-computers")
         ShellRow(title: "Settings", symbol: "gearshape").tag(ShellSection.settings)
           .accessibilityIdentifier("sidebar-settings")
+        accountRow
       }
     }
     .listStyle(.sidebar)
@@ -254,6 +261,30 @@ struct RegularShell<Chat: View, ChatsDetail: View>: View {
     .autocorrectionDisabled()
     .disabled(workspace.clearingAccount)
     .refreshable { await workspace.refreshSessionCatalog() }
+  }
+
+  private var canCreateZapper: Bool {
+    store.preview || (store.available && workspace.connectionState == "Connected")
+  }
+
+  /// You: your picture and name, opening your account in Settings.
+  private var accountRow: some View {
+    let account = workspace.account
+    return Button {
+      section = .settings
+      settingsPage = .account
+    } label: {
+      HStack(spacing: 10) {
+        AccountAvatar(account: account, size: 26)
+        Text(account.signedIn ? account.displayName ?? account.email ?? "Zuse account" : "Sign in")
+          .font(.body).foregroundStyle(.primary).lineLimit(1)
+        Spacer(minLength: 0)
+      }
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(account.signedIn ? "Account" : "Sign in")
+    .accessibilityIdentifier("sidebar-account")
   }
 
   /// Which computer the app is driving, and how the connection is.

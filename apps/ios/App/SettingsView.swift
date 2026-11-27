@@ -4,33 +4,6 @@ import ZuseCore
 /// Where Contact support writes to.
 let supportAddress = URL(string: "mailto:hi@zuse.sh")!
 
-/// Initials on the brand color when signed in, a person otherwise.
-struct AccountAvatar: View {
-  let account: Account
-  let size: CGFloat
-  private var initials: String? {
-    let words =
-      (account.displayName ?? account.email)?
-      .split(whereSeparator: { " .@".contains($0) }) ?? []
-    let value = words.prefix(2).compactMap { $0.first.map { String($0).uppercased() } }.joined()
-    return value.isEmpty ? nil : value
-  }
-  var body: some View {
-    ZStack {
-      if account.signedIn, let initials {
-        Circle().fill(AppTheme.accent)
-        Text(initials).font(.system(size: size * 0.38, weight: .semibold)).foregroundStyle(.white)
-      } else {
-        Circle().fill(Color.primary.opacity(0.09))
-        Image(systemName: "person.fill").font(.system(size: size * 0.42))
-          .foregroundStyle(.secondary)
-      }
-    }
-    .frame(width: size, height: size)
-    .accessibilityHidden(true)
-  }
-}
-
 /// The Zuse account: what signing in gives you, or the cloud settings and sign out.
 struct AccountSettingsView: View {
   @Bindable var workspace: WorkspaceModel

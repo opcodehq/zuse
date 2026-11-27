@@ -102,10 +102,12 @@ struct WorkspaceView: View {
     let id = UUID()
     let cloud: Bool
     var prompt = ""
+    /// Opened to write straight away, so the composer takes the keyboard.
+    var focus = false
   }
   /// New chat is a page in the Chats tab's detail column: pushed on iPhone, full width elsewhere.
-  private func openNewChat(cloud: Bool, prompt: String = "") {
-    newChat = NewChatRoute(cloud: cloud, prompt: prompt)
+  private func openNewChat(cloud: Bool, prompt: String = "", focus: Bool = false) {
+    newChat = NewChatRoute(cloud: cloud, prompt: prompt, focus: focus)
     tab = .chats
     section = .chats
     chatsColumn = .detail
@@ -515,7 +517,10 @@ struct WorkspaceView: View {
       chatsColumn = .detail
       if launchTab == nil { tab = .chats }
     }
-    if let launchTab { tab = launchTab }
+    if let launchTab {
+      tab = launchTab
+      opensRestoredChat = false
+    }
     #if DEBUG
       let arguments = ProcessInfo.processInfo.arguments
       if launchTab == nil && arguments.contains("--home-preview") { tab = .chats }
@@ -523,7 +528,9 @@ struct WorkspaceView: View {
         tab = .more
         section = .settings
       }
-      if arguments.contains("--new-chat-preview") { openNewChat(cloud: false) }
+      if arguments.contains("--new-chat-preview") {
+        openNewChat(cloud: false, focus: arguments.contains("--focus-composer"))
+      }
       if arguments.contains("--pairing-preview") { connectionMethod = .add }
       if arguments.contains("--chat-actions-preview"), let session = selection {
         try? await Task.sleep(for: .milliseconds(500))
@@ -680,13 +687,34 @@ struct WorkspaceView: View {
         Label {
           Text("More")
         } icon: {
-          Image(systemName: "ellipsis.circle")
+          moreTabIcon
         }
         .environment(\.symbolVariants, .none)
       }
       Tab(value: AppTab.search, role: .search) { searchTab }
     }
     .tabViewStyle(.sidebarAdaptable)
+    .nativeTabBar(
+      askEnabled: tab == .chats && selection == nil && newChat == nil,
+      ask: { openNewChat(cloud: false, focus: true) },
+      askCloud: workspace.account.signedIn ? { openNewChat(cloud: true) } : nil
+    )
+    .task(id: workspace.account.pictureURL) {
+      if workspace.account.signedIn, let url = workspace.account.pictureURL {
+        await AccountPictureStore.shared.load(url)
+      }
+    }
+  }
+
+  /// Your picture once signed in (drawn in its own colours), the usual More glyph otherwise.
+  @ViewBuilder private var moreTabIcon: some View {
+    if workspace.account.signedIn, let url = workspace.account.pictureURL,
+      let picture = AccountPictureStore.shared.circularImage(for: url, size: 26)
+    {
+      Image(nativeImage: picture)
+    } else {
+      Image(systemName: "ellipsis.circle")
+    }
   }
 
   private var zappersTab: some View {
@@ -720,7 +748,7 @@ struct WorkspaceView: View {
         workspace: workspace, selection: $selection, connect: { connectionMethod = .add },
         newChat: { prompt in openNewChat(cloud: false, prompt: prompt) },
         newCloudChat: { openNewChat(cloud: true) }, addProject: { showProject = true },
-        openComputers: { showComputers = true }
+        openComputers: { showComputers = true }, showsAsk: !NativeTabBar.hostsAsk
       )
       .disabled(workspace.clearingAccount)
       .navigationSplitViewColumnWidth(min: 260, ideal: 320, max: 380)
@@ -731,6 +759,7 @@ struct WorkspaceView: View {
           workspace: workspace, initialCloud: route.cloud, initialPrompt: route.prompt,
           showsClose: !isCompact, close: closeNewChat
         )
+        .environment(\.focusesNewChatComposer, route.focus)
         .id(route.id)
         .hidesTabBarWhenCompact()
       } else if let session = selection {
@@ -835,7 +864,18 @@ struct WorkspaceView: View {
         bottomInset: composerHeight + 20,
         respond: { message, text in try await workspace.respondToUI(message, text: text) },
         openChanges: workspace.rpc != nil && workspace.connectionState == "Connected"
-          && !workspace.zappers.keepsChat(session.id) ? { showDiff = true } : nil)
+          && !workspace.zappers.keepsChat(session.id) ? { showDiff = true } : nil
+      )
+      .overlay {
+        if workspace.transcript.messages.isEmpty && workspace.transcript.activeTurnID == nil {
+          ChatEmptyState(
+            zapper: coordinatedBy(session),
+            loading: !workspace.sessionReady && workspace.connectionState != "Preview · offline"
+          )
+          .padding(.bottom, composerHeight)
+          .allowsHitTesting(false)
+        }
+      }
       if !workspace.outbox.isEmpty {
         ScrollView(.horizontal) {
           HStack {
@@ -901,6 +941,28 @@ struct WorkspaceView: View {
     .onAppear {
       if workspace.selectedSession?.id != session.id { workspace.selectSession(session) }
     }
+    #if DEBUG
+      // `--draft=<text>` writes a draft and `--focus-composer` raises the keyboard, for
+      // screenshots of a chat mid-message.
+      .task {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard
+          arguments.contains("--focus-composer")
+            || arguments.contains(where: {
+              $0.hasPrefix("--draft=")
+            })
+        else { return }
+        try? await Task.sleep(for: .milliseconds(900))
+        if let draft = arguments.first(where: { $0.hasPrefix("--draft=") })?.dropFirst(8) {
+          workspace.draft = String(draft)
+        }
+        // The detail column may still be settling; ask again until the field takes it.
+        for _ in 0..<8 where arguments.contains("--focus-composer") && !composerFocused {
+          composerFocused = true
+          try? await Task.sleep(for: .milliseconds(400))
+        }
+      }
+    #endif
     .toolbar {
       if let zapper = coordinatedBy(session) {
         // A Zapper's conversation: its face and name lead to the overview.

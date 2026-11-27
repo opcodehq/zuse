@@ -152,6 +152,45 @@
         }
       }
       connectionState = "Preview · offline"
+      // `--empty-preview`: a computer with nothing on it yet; no chats, Zappers or pull requests.
+      if arguments.contains("--empty-preview") {
+        sessions = []
+        archivedSessions = []
+        selectedSession = nil
+        zappers.loadPreview(zappers: [], chats: [:], running: [:], files: [:], events: [:])
+        pullRequests.loadPreview(
+          repositories: [PullRequestRepository(slug: "acme/web", project: "web")], pages: [:],
+          details: [:], diffs: [:])
+      }
+      // `--loading-preview`: the same computer while its first lists are still arriving.
+      if arguments.contains("--loading-preview") {
+        sessions = []
+        archivedSessions = []
+        projects = []
+        selectedSession = nil
+        zappers.loadLoadingPreview()
+        pullRequests.loadLoadingPreview()
+        connectionState = "Synchronizing…"
+      }
+      // `--connection-preview=<connecting|reconnecting|attention>`: how a computer that is
+      // starting up, dropping out or unreachable looks.
+      if let state = arguments.first(where: { $0.hasPrefix("--connection-preview=") })?
+        .dropFirst(21)
+      {
+        switch state {
+        case "attention":
+          connectionProblem =
+            "Your computer didn’t answer. Check that it’s awake and Zuse is open."
+          connectionState = "Connection needs attention"
+        case "reconnecting":
+          connectionState = "Offline · reconnecting"
+        default:
+          sessions = []
+          projects = []
+          selectedSession = nil
+          connectionState = "Connecting…"
+        }
+      }
       if ProcessInfo.processInfo.arguments.contains("--model-picker-preview") {
         draft = "Review the changes"
       }

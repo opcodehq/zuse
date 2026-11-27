@@ -107,10 +107,10 @@ private struct UserMessageView: View {
             .buttonStyle(.plain)
           }
         }
-        .foregroundStyle(.white)
-        .tint(.white)
-        .padding(.horizontal, 15).padding(.vertical, 10)
-        .background(AppTheme.userBubble, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .foregroundStyle(AppTheme.userBubbleText)
+        .tint(AppTheme.accent)
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background { UserBubbleBackground() }
         .contextMenu {
           Button("Copy", systemImage: "doc.on.doc") { NativePlatform.copy(user.text) }
           ShareLink(item: user.text)
@@ -118,9 +118,33 @@ private struct UserMessageView: View {
       }
     }
     .frame(maxWidth: .infinity, alignment: .trailing)
-    .padding(.leading, 48)
-    .padding(.top, 22).padding(.bottom, 8)
+    .padding(.leading, 56)
+    .padding(.top, 24).padding(.bottom, 8)
     .accessibilityElement(children: .contain)
+  }
+}
+
+/// Your message's bubble: a soft lime wash that brightens towards the bottom, a faint neon
+/// edge, and a low glow in dark mode. Text stays 12:1 or better on both.
+struct UserBubbleBackground: View {
+  var radius: CGFloat = 18
+  @Environment(\.colorScheme) private var colorScheme
+  var body: some View {
+    let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+    let dark = colorScheme == .dark
+    let lime = AppTheme.lime
+    shape.fill(
+      LinearGradient(
+        colors: dark
+          ? [lime.opacity(0.24), lime.opacity(0.11)]
+          : [
+            Color(red: 236 / 255, green: 249 / 255, blue: 212 / 255),
+            Color(red: 216 / 255, green: 241 / 255, blue: 166 / 255),
+          ],
+        startPoint: .top, endPoint: .bottom)
+    )
+    .overlay { shape.strokeBorder(lime.opacity(dark ? 0.32 : 0.4), lineWidth: 1) }
+    .shadow(color: lime.opacity(dark ? 0.22 : 0), radius: 10)
   }
 }
 
@@ -226,10 +250,12 @@ private struct TurnFooterView: View {
       }
       HStack(spacing: 0) {
         if !footer.text.isEmpty {
-          CopyButton(label: "Copy reply") { NativePlatform.copy(footer.text) }
+          CopyButton(label: "Copy reply", size: 12, tone: .tertiary) {
+            NativePlatform.copy(footer.text)
+          }
           ShareLink(item: footer.text) {
             Image(systemName: "square.and.arrow.up")
-              .font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
+              .font(.system(size: 12, weight: .medium)).foregroundStyle(.tertiary)
               .frame(width: 30, height: 30).contentShape(Rectangle())
           }
           .buttonStyle(.plain)
@@ -274,13 +300,12 @@ private struct ChangesCard: View {
             .lineLimit(1).truncationMode(.middle)
           LineCounts(additions: footer.additions, deletions: footer.deletions)
           if open != nil {
-            Spacer(minLength: 6)
-            Text("Review").font(.system(size: 12.5, weight: .medium)).foregroundStyle(.secondary)
+            Spacer(minLength: 4)
             Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold))
               .foregroundStyle(.tertiary)
           }
         }
-        .padding(.horizontal, 12).frame(minHeight: 38)
+        .padding(.horizontal, 12).frame(minHeight: 34)
         if footer.changes.count > 1 {
           Rectangle().fill(AppTheme.hairline).frame(height: 1)
           VStack(alignment: .leading, spacing: 0) {
@@ -306,10 +331,8 @@ private struct ChangesCard: View {
       }
       .frame(maxWidth: footer.changes.count > 1 ? 420 : nil, alignment: .leading)
       .fixedSize(horizontal: footer.changes.count == 1, vertical: false)
-      .background(AppTheme.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-      .overlay(
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
-          .strokeBorder(AppTheme.hairline, lineWidth: 1)
+      .background(
+        Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12, style: .continuous)
       )
       .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }

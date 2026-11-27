@@ -88,8 +88,12 @@ import ZuseCore
   #endif
   /// Neutral fills: attachment tiles, pills.
   static let bubble = adaptive(light: rgb(234, 234, 230), dark: rgb(38, 38, 40))
-  /// Your messages in a chat: the brand green, deep enough for white text (4.5:1 or better).
+  /// The send control: the brand green, deep enough for a white arrow (4.5:1 or better).
   static let userBubble = adaptive(light: rgb(82, 131, 4), dark: rgb(72, 116, 8))
+  /// The brand lime everything neon is mixed from.
+  static let lime = Color(red: 140 / 255, green: 201 / 255, blue: 33 / 255)
+  /// Text on your messages: 13:1 on the light bubble, 13:1 on the dark one.
+  static let userBubbleText = adaptive(light: rgb(26, 41, 5), dark: rgb(234, 247, 211))
   /// Hairlines and quiet rules in the transcript.
   static let hairline = adaptive(
     light: rgb(23, 23, 22).withAlphaComponent(0.09),

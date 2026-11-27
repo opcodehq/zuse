@@ -138,6 +138,8 @@ private struct ChatBlockQuoteStyle: StructuredText.BlockQuoteStyle {
 /// A small icon button that confirms with a checkmark.
 struct CopyButton: View {
   var label = "Copy"
+  var size: CGFloat = 13
+  var tone: HierarchicalShapeStyle = .secondary
   let copy: () -> Void
   @State private var copied = false
   var body: some View {
@@ -150,8 +152,8 @@ struct CopyButton: View {
       }
     } label: {
       Image(systemName: copied ? "checkmark" : "square.on.square")
-        .font(.system(size: 13, weight: .medium))
-        .foregroundStyle(.secondary)
+        .font(.system(size: size, weight: .medium))
+        .foregroundStyle(tone)
         .frame(width: 30, height: 30).contentShape(Rectangle())
     }
     .buttonStyle(.plain)
