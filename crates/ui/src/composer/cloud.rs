@@ -1560,6 +1560,10 @@ impl Composer {
             self.cloud.request = Some(
                 json!({"runtimeMode":runtime_mode,"agentConnectionId":connection,"projectId":project["projectId"],"providerId":project["providerId"],"sizeId":size,"baseRef":base_ref,"branch":branch,"agent":agent,"model":model,"reasoning":config.reasoning,"modelOptions":config.model_options,"idempotencyKey":uuid::Uuid::new_v4().to_string(),"firstMessage":text,"expectedAccountId":subject,"expectedOrganizationId":organization,"attachmentTransfers":staged.iter().map(|a|json!({"uploadId":a.id,"fileName":a.name})).collect::<Vec<_>>()}),
             );
+            if project[crate::shell::SETUP_PROJECT_FLAG] == true {
+                self.cloud.request.as_mut().unwrap()["purpose"] =
+                    json!(zuse_protocol::machine_setup::PURPOSE);
+            }
             let provider = project["providerId"].as_str().unwrap_or("boxd");
             if self.pickers.read(cx).cloud_v2_available(provider) {
                 self.cloud.request.as_mut().unwrap()["initialMessageDelivery"] =

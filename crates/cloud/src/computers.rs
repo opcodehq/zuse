@@ -6,6 +6,7 @@ use sqlx::PgPool;
 use std::sync::Arc;
 use zuse_protocol::cloud_computers::*;
 pub(crate) mod machine;
+pub(crate) mod machine_setup;
 #[cfg(test)]
 mod tests;
 

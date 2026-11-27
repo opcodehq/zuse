@@ -50,6 +50,71 @@ fn turn(ix: usize, device: &str, title: &str, spec: &str) -> serde_json::Value {
     ])
 }
 
+const SETUP_PROPOSAL: &str = "msp_0f5c2a9e7d3b41c8a6e2f19b4d7c0a35";
+const SETUP_BEFORE: &str =
+    "set -euo pipefail\nsudo apt-get update\nsudo apt-get install -y ripgrep jq\nnpm i -g pnpm\n";
+const SETUP_AFTER: &str = "set -euo pipefail\nsudo apt-get update\nsudo apt-get install -y ripgrep jq build-essential pkg-config libssl-dev\nnpm i -g pnpm\n# Rust for the API service\ncommand -v cargo || curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal\necho 'export PATH=\"$HOME/.cargo/bin:$PATH\"' | sudo tee /etc/profile.d/cargo.sh\n# Bun for the web app\ncommand -v bun || curl -fsSL https://bun.sh/install | bash\n";
+
+/// A setup chat's turn: the agent reads the image configuration, tests a
+/// script on its computer and proposes the change as a live card.
+fn machine_setup_turn(device: &str) -> serde_json::Value {
+    let mcp = |tool: &str, input: serde_json::Value| ToolCall::Mcp {
+        server: "zuse".into(),
+        tool: tool.into(),
+        input: Some(input),
+    };
+    let spec = format!("root = MachineImageProposal(\"{SETUP_PROPOSAL}\")");
+    json!([
+        {"id": "u1", "role": "user", "createdAt": 1788900000000_i64, "deviceId": device,
+         "parts": [{"id": "t", "kind": "text", "text": "Install Rust and bun, and add acme/api to my image."}]},
+        {"id": "a1", "role": "assistant", "createdAt": 1788900001000_i64, "deviceId": device,
+         "status": "complete", "durationMs": 214_000,
+         "parts": [
+            tool("t1", mcp("get_machine_image_config", json!({})), "{\"revision\":4}"),
+            tool("t2", mcp("test_setup_script", json!({"setup_script": SETUP_AFTER})), "{\"succeeded\":true}"),
+            tool("t3", mcp("propose_machine_image_config", json!({"setup_script": SETUP_AFTER, "repositories": ["github.com/acme/web", "github.com/acme/api"]})), "{\"ok\":true}"),
+            {"id": "p1", "kind": "text", "text": "The script ran cleanly here in 3 min 12 s. It adds Rust and bun, and acme/api joins your image."},
+            {"id": "ui1", "kind": "uiBlock", "spec": spec},
+         ]},
+    ])
+}
+
+/// The proposal the setup card shows: `proposed`, `building` or `ready`.
+fn machine_setup_view(stage: &str) -> zuse_protocol::machine_setup::ProposalView {
+    let image = match stage {
+        "building" => {
+            json!({"state":"building","phase":"setup","reason":"manual","recipeRevision":5,"updatedAt":2})
+        }
+        "ready" => {
+            json!({"state":"ready","reason":"manual","recipeRevision":5,"builtAt":1788900400000_i64,"updatedAt":3,
+            "repositories":[{"repositoryIdentity":"github.com/acme/web","state":"baked","commit":"4be1c2d"},
+                            {"repositoryIdentity":"github.com/acme/api","state":"baked","commit":"9ad03f1"}]})
+        }
+        _ => {
+            json!({"state":"ready","reason":"recipe","recipeRevision":4,"builtAt":1788800000000_i64,"updatedAt":1})
+        }
+    };
+    let image_state = if stage == "building" {
+        "building"
+    } else {
+        "ready"
+    };
+    serde_json::from_value(json!({
+        "proposal": {
+            "proposalId": SETUP_PROPOSAL, "chatId": "ui-blocks", "baseRevision": 4,
+            "currentSetupScript": SETUP_BEFORE, "setupScript": SETUP_AFTER,
+            "currentRepositories": ["github.com/acme/web"],
+            "repositories": ["github.com/acme/web", "github.com/acme/api"],
+            "notes": "Adds Rust (rustup, minimal profile) and bun, with the build tools Rust crates need, and bakes acme/api.",
+            "state": if stage == "proposed" { "proposed" } else { "applied" },
+            "createdAt": 1788900001000_i64,
+        },
+        "machine": {"revision": if stage == "proposed" { 4 } else { 5 }, "recipe": {"setupScript": SETUP_BEFORE},
+            "createdAt": 1, "imageState": image_state, "image": image},
+    }))
+    .unwrap()
+}
+
 /// A user message carrying a pull request context item, an image and a file
 /// mention under a short instruction, after a context-only message.
 fn context_chips_turn(device: &str, image: &str) -> serde_json::Value {
@@ -137,8 +202,20 @@ fn capture(
 ) -> anyhow::Result<()> {
     window.update(cx, |_, w, cx| {
         w.draw(cx).clear();
-        if let Ok(image) = w.render_to_image() {
-            image.save(dir.join(format!("{name}.png"))).ok();
+        w.present_if_needed();
+        let path = dir.join(format!("{name}.png"));
+        match w.render_to_image() {
+            Ok(image) => {
+                image.save(&path).ok();
+            }
+            // Without offscreen rendering (e.g. Xvfb), read the X screen.
+            Err(_) => {
+                std::process::Command::new("import")
+                    .args(["-window", "root"])
+                    .arg(&path)
+                    .status()
+                    .ok();
+            }
         }
     })?;
     Ok(())
@@ -202,6 +279,10 @@ fn main() -> anyhow::Result<()> {
     // `--context-chips [--click x,y]`: the context/attachment chips above a
     // user bubble instead of the block gallery; the click opens a pill's card.
     let context_chips = std::env::args().any(|arg| arg == "--context-chips");
+    // `--machine-setup <proposed|building|ready>`: a setup chat's proposal card.
+    let machine_setup = std::env::args()
+        .skip_while(|arg| arg != "--machine-setup")
+        .nth(1);
     let click_at = std::env::args()
         .skip_while(|arg| arg != "--click")
         .nth(1)
@@ -278,7 +359,12 @@ fn main() -> anyhow::Result<()> {
             let window = cx
                 .open_window(
                     WindowOptions {
-                        window_background: theme::Theme::of(cx).window_background_appearance(),
+                        // Opaque for the setup card, which is read off an X screen.
+                        window_background: if machine_setup.is_some() {
+                            gpui::WindowBackgroundAppearance::Opaque
+                        } else {
+                            theme::Theme::of(cx).window_background_appearance()
+                        },
                         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                             gpui::point(px(40.), px(40.)),
                             size(px(1100.), px(1000.)),
@@ -296,6 +382,35 @@ fn main() -> anyhow::Result<()> {
             cx.activate(true);
             cx.spawn(async move |cx| {
                 pause(cx, 800).await;
+                if let Some(stage) = &machine_setup {
+                    let view = machine_setup_view(stage);
+                    cx.update(|cx| {
+                        machine_setup_cards::MachineSetupCards::fixture_seed(
+                            state.clone(),
+                            view,
+                            cx,
+                        )
+                    });
+                    let entries = machine_setup_turn(&device);
+                    state.update(cx, |s, cx| {
+                        s.receive_transcript_frame(
+                            zuse_doc::TranscriptFrame::Reset {
+                                reset: serde_json::from_value(entries).unwrap(),
+                            },
+                            cx,
+                        )
+                        .unwrap();
+                        cx.notify();
+                    });
+                    let Some(dir) = &capture_dir else {
+                        return;
+                    };
+                    std::fs::create_dir_all(dir).ok();
+                    pause(cx, 1500).await;
+                    capture(window.into(), cx, dir, &format!("setup-chat-{stage}")).ok();
+                    cx.update(|cx| cx.quit());
+                    return;
+                }
                 if context_chips {
                     let entries = context_chips_turn(&device, &chip_image);
                     state.update(cx, |s, cx| {

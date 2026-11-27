@@ -301,6 +301,14 @@ impl Authority {
                 "task_offline_or_detached",
                 "too_many_pending_computer_requests",
                 "computer_request_settled",
+                // Why a setup chat's proposal was refused; the agent fixes it.
+                "machine_setup_chat_required",
+                "machine_setup_script_contains_secret",
+                "machine_setup_repository_invalid",
+                "machine_setup_too_many_repositories",
+                "machine_setup_notes_too_long",
+                "machine_recipe_text_too_large",
+                "invalid_machine_recipe",
             ];
             let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
             let code = CODES

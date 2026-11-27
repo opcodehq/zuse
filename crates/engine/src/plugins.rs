@@ -47,6 +47,14 @@ pub trait RuntimePlugins: Send + Sync {
     ) -> anyhow::Result<serde_json::Value> {
         anyhow::bail!("Computer tasks are unavailable on this host.")
     }
+    /// A setup chat's image configuration tools.
+    async fn machine_setup(
+        &self,
+        _chat: &str,
+        _request: &zuse_protocol::machine_setup::Request,
+    ) -> anyhow::Result<serde_json::Value> {
+        anyhow::bail!("Machine image setup is unavailable on this host.")
+    }
     async fn tools(&self, request: &PluginToolRequest) -> anyhow::Result<serde_json::Value>;
 }
 
@@ -243,6 +251,27 @@ impl Plugins {
             .clone()
             .ok_or_else(|| anyhow::anyhow!("Computer tasks require a cloud chat"))?;
         runtime.computer_tasks(chat_id, request).await
+    }
+    pub async fn machine_setup(
+        &self,
+        chat_id: &str,
+        request: &zuse_protocol::machine_setup::Request,
+    ) -> anyhow::Result<serde_json::Value> {
+        let chat = self
+            .workspace
+            .chat(chat_id)?
+            .ok_or_else(|| anyhow::anyhow!("Unknown chat"))?;
+        anyhow::ensure!(
+            self.workspace.is_host(chat_id) && !chat.archived,
+            "Chat is unavailable"
+        );
+        let runtime = self
+            .runtime
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Machine image setup requires a cloud setup chat"))?;
+        runtime.machine_setup(chat_id, request).await
     }
 
     pub fn set_runtime(&self, runtime: Arc<dyn RuntimePlugins>) {

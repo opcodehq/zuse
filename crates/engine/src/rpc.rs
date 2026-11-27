@@ -3887,6 +3887,24 @@ impl EngineRpc {
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&value)
             }
+            zuse_protocol::machine_setup::METHOD => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct P {
+                    chat_id: String,
+                    request: zuse_protocol::machine_setup::Request,
+                }
+                let p: P = parse_params(params)?;
+                let gateway = self
+                    .plugins
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("Machine image setup unavailable".into()))?;
+                let value = gateway
+                    .machine_setup(&p.chat_id, &p.request)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&value)
+            }
             methods::PLUGIN_TOOLS => {
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase", deny_unknown_fields)]
