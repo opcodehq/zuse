@@ -2172,6 +2172,9 @@ struct OrgGateUi {
 /// read-only transcript entity whose drop tears the view down.
 struct SubagentTab {
     doc_id: String,
+    /// The state that feeds the tab: a cloud conversation's own, whose
+    /// engine reaches the cloud computer holding the doc, or the shell's.
+    state: Entity<AppState>,
     harness: Option<zuse_protocol::HarnessId>,
     title: SharedString,
     transcript: Entity<Transcript>,
@@ -2256,6 +2259,8 @@ pub struct Shell {
     state: Entity<AppState>,
     cloud_conversation: Option<Entity<cloud_conversation::CloudConversation>>,
     cloud_conversation_events: Option<Subscription>,
+    /// The cloud conversation's transcript events (spawn chips).
+    cloud_transcript_events: Option<Subscription>,
     desktop_panel: desktop_panel::DesktopPanel,
     cloud_tabs: cloud_tabs::CloudTabs,
     /// Live status reports from every open cloud conversation.
@@ -3014,6 +3019,7 @@ impl Shell {
             state: state.clone(),
             cloud_conversation: None,
             cloud_conversation_events: None,
+            cloud_transcript_events: None,
             desktop_panel: Default::default(),
             cloud_tabs: Default::default(),
             cloud_activity: Default::default(),
@@ -4420,9 +4426,8 @@ impl Shell {
             if let RightSurface::Subagent(id) = surface
                 && let Some(tab) = self.subagent_tabs.get(&id)
             {
-                let doc_id = tab.doc_id.clone();
-                self.state
-                    .update(cx, |state, cx| state.focus_subagent_sync(&doc_id, cx));
+                let (doc_id, state) = (tab.doc_id.clone(), tab.state.clone());
+                state.update(cx, |state, cx| state.focus_subagent_sync(&doc_id, cx));
             }
             self.show_in_zapper_panel(page, cx);
             return;
@@ -4441,7 +4446,7 @@ impl Shell {
                 if !self.right_tabs.values().any(|tabs| tabs.contains(&surface))
                     && let Some(tab) = self.subagent_tabs.remove(&id)
                 {
-                    self.state
+                    tab.state
                         .update(cx, |s, _| s.unwatch_subagent_doc(&tab.doc_id));
                 }
             }
@@ -4457,9 +4462,8 @@ impl Shell {
         if let RightSurface::Subagent(id) = surface
             && let Some(tab) = self.subagent_tabs.get(&id)
         {
-            let doc_id = tab.doc_id.clone();
-            self.state
-                .update(cx, |state, cx| state.focus_subagent_sync(&doc_id, cx));
+            let (doc_id, state) = (tab.doc_id.clone(), tab.state.clone());
+            state.update(cx, |state, cx| state.focus_subagent_sync(&doc_id, cx));
         }
         if self.resolved_right_active(cx) != surface {
             use zuse_analytics::desktop::{Event, Surface};
@@ -5264,7 +5268,9 @@ impl Shell {
                 title,
                 frozen,
             } => {
-                self.add_subagent_surface(
+                let state = transcript.read(cx).state_entity().clone();
+                self.add_subagent_surface_in(
+                    state,
                     chat_id.clone(),
                     doc_id.clone(),
                     title.clone(),
@@ -5358,24 +5364,21 @@ impl Shell {
         let Some(snapshot) = transcript.read(cx).workflow_agent(&row_id, index) else {
             return;
         };
-        let device = self
-            .state
-            .read(cx)
-            .local_device_id
-            .clone()
-            .unwrap_or_default();
+        // The tab reads from the board's own state (a cloud conversation's).
+        let state = transcript.read(cx).state_entity().clone();
+        let device = state.read(cx).local_device_id.clone().unwrap_or_default();
         let entries = crate::workflow_board::agent_entries(&snapshot, &device);
         let live = matches!(
             snapshot.agent.status,
             crate::workflow_board::AgentStatus::Working
                 | crate::workflow_board::AgentStatus::Queued
         );
-        self.state.update(cx, |state, cx| {
+        state.update(cx, |state, cx| {
             state.set_subagent_snapshot(doc_id.clone(), entries.clone());
             cx.notify();
         });
         let last = std::cell::RefCell::new(entries);
-        let state = self.state.clone();
+        let tab_state = state.clone();
         let feed_doc = doc_id.clone();
         let feed = cx.observe(&transcript, move |_, source, cx| {
             let Some(snapshot) = source.read(cx).workflow_agent(&row_id, index) else {
@@ -5393,7 +5396,7 @@ impl Shell {
         });
         self.subagent_seq += 1;
         let id = self.subagent_seq;
-        let view = cx.new(|cx| Transcript::for_doc(self.state.clone(), doc_id.clone(), live, cx));
+        let view = cx.new(|cx| Transcript::for_doc(tab_state.clone(), doc_id.clone(), live, cx));
         let links = Self::session_links(Some(self.active_chat.clone()), cx);
         view.update(cx, |view, _| view.set_workspace_link_handler(links));
         let events = cx.subscribe(&view, Self::on_transcript_event);
@@ -5401,6 +5404,7 @@ impl Shell {
             id,
             SubagentTab {
                 doc_id,
+                state: tab_state,
                 // Workflows are a Claude Code feature.
                 harness: Some(zuse_protocol::HarnessId::ClaudeCode),
                 title: title.into(),
@@ -5459,13 +5463,28 @@ impl Shell {
         frozen: bool,
         cx: &mut Context<Self>,
     ) {
+        let state = self.state.clone();
+        self.add_subagent_surface_in(state, chat_id, doc_id, title, frozen, cx);
+    }
+
+    /// [`Self::add_subagent_surface`] fed from `state`: a cloud conversation
+    /// passes its own, since only its engine reaches the computer that holds
+    /// the subagent's doc.
+    pub(super) fn add_subagent_surface_in(
+        &mut self,
+        state: Entity<AppState>,
+        chat_id: String,
+        doc_id: String,
+        title: String,
+        frozen: bool,
+        cx: &mut Context<Self>,
+    ) {
         if self.focus_open_subagent_tab(&doc_id, cx) {
             return;
         }
         self.subagent_seq += 1;
         let id = self.subagent_seq;
-        let harness = self
-            .state
+        let harness = state
             .read(cx)
             .chats
             .iter()
@@ -5490,23 +5509,23 @@ impl Shell {
         // A live subagent follows its streaming end (main-transcript feel);
         // a frozen one reads top-down.
         let transcript =
-            cx.new(|cx| Transcript::for_doc(self.state.clone(), doc_id.clone(), !frozen, cx));
+            cx.new(|cx| Transcript::for_doc(state.clone(), doc_id.clone(), !frozen, cx));
         let links = Self::session_links(Some(self.active_chat.clone()), cx);
         transcript.update(cx, |transcript, _| {
             transcript.set_workspace_link_handler(links)
         });
         let events = cx.subscribe(&transcript, Self::on_transcript_event);
         let fetch = if frozen {
-            self.spawn_subagent_snapshot_fetch(&chat_id, &doc_id, cx)
+            Self::spawn_subagent_snapshot_fetch(&state, &chat_id, &doc_id, cx)
         } else {
-            self.state
-                .update(cx, |s, cx| s.watch_subagent_doc(doc_id.clone(), cx));
+            state.update(cx, |s, cx| s.watch_subagent_doc(doc_id.clone(), cx));
             None
         };
         self.subagent_tabs.insert(
             id,
             SubagentTab {
                 doc_id,
+                state,
                 harness,
                 title: title.into(),
                 transcript,
@@ -5522,14 +5541,13 @@ impl Shell {
     /// (`{chat_id}/{doc_id}`); on ANY failure fall back to watching the doc
     /// — the blob upload is best-effort engine-side.
     fn spawn_subagent_snapshot_fetch(
-        &self,
+        state: &Entity<AppState>,
         chat_id: &str,
         doc_id: &str,
         cx: &mut Context<Self>,
     ) -> Option<Task<()>> {
-        let Some(engine) = self.state.read(cx).engine().cloned() else {
-            self.state
-                .update(cx, |s, cx| s.watch_subagent_doc(doc_id.to_string(), cx));
+        let Some(engine) = state.read(cx).engine().cloned() else {
+            state.update(cx, |s, cx| s.watch_subagent_doc(doc_id.to_string(), cx));
             return None;
         };
         // Copied spawn chips retain their original subagent doc namespace.
@@ -5538,14 +5556,13 @@ impl Shell {
             .map(|(source, _)| source)
             .unwrap_or(chat_id);
         let blob_ref = format!("{source_chat}/{doc_id}");
-        let target = self
-            .state
+        let target = state
             .read(cx)
             .chats
             .iter()
             .find(|chat| chat.id == source_chat)
             .map(|chat| chat.device_id.clone());
-        let state = self.state.clone();
+        let state = state.clone();
         let doc_id = doc_id.to_string();
         Some(cx.spawn(async move |_, cx| {
             let reply = crate::attachments::call_with_timeout(
@@ -5684,7 +5701,7 @@ impl Shell {
                 // Unwatch drops the watch task — that cancels the engine-side
                 // watch and unpins the subagent doc from the engine LRU.
                 if let Some(tab) = self.subagent_tabs.remove(&id) {
-                    self.state
+                    tab.state
                         .update(cx, |s, _| s.unwatch_subagent_doc(&tab.doc_id));
                 }
             }

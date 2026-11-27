@@ -23,6 +23,12 @@ pub(super) enum CloudConversationEvent {
     OpenPathIn(super::open_in::OpenTarget, String),
     /// Detect this computer's apps again (the Computer menu opened).
     RefreshOpenTargets,
+    /// The composer's background-work tray asked for a running subagent.
+    OpenSubagent {
+        chat_id: String,
+        doc_id: String,
+        title: String,
+    },
 }
 /// The header cloud glyph's color: the theme's success green while the
 /// computer is online, muted grey otherwise.
@@ -251,6 +257,15 @@ impl CloudConversation {
                 ComposerEvent::OpenFile(path) => {
                     cx.emit(CloudConversationEvent::OpenFile(path.to_string()))
                 }
+                ComposerEvent::OpenSubagent {
+                    chat_id,
+                    doc_id,
+                    title,
+                } => cx.emit(CloudConversationEvent::OpenSubagent {
+                    chat_id: chat_id.clone(),
+                    doc_id: doc_id.clone(),
+                    title: title.clone(),
+                }),
                 _ => {}
             }),
             cx.observe(&composer, |_: &mut Self, _, cx| cx.notify()),
@@ -1606,13 +1621,29 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.mark_cloud_conversation_seen(view, cx);
-        let (session, state) = {
+        let (session, state, transcript) = {
             let view = view.read(cx);
-            (view.target.initial_session.clone(), view.state.clone())
+            (
+                view.target.initial_session.clone(),
+                view.state.clone(),
+                view.transcript.clone(),
+            )
         };
         self.rebind_cloud_file_tabs(&session, &state, cx);
+        // Spawn chips and workflow rows open their agents in the right pane,
+        // fed by this conversation's state: its engine reaches the computer.
+        self.cloud_transcript_events =
+            Some(cx.subscribe(&transcript, |this, transcript, event, cx| {
+                if matches!(
+                    event,
+                    TranscriptEvent::OpenSubagent { .. }
+                        | TranscriptEvent::OpenWorkflowAgent { .. }
+                ) {
+                    this.on_transcript_event(transcript, event, cx);
+                }
+            }));
         self.cloud_conversation_events =
-            Some(cx.subscribe(view, |this, _, event, cx| match event {
+            Some(cx.subscribe(view, move |this, _, event, cx| match event {
                 CloudConversationEvent::Desktop => this.open_desktop_panel(cx),
                 CloudConversationEvent::Terminal => this.add_terminal_surface(cx),
                 CloudConversationEvent::Files => {
@@ -1627,6 +1658,18 @@ impl Shell {
                     this.open_path_in(target.clone(), path.clone(), cx);
                 }
                 CloudConversationEvent::RefreshOpenTargets => this.refresh_open_targets(cx),
+                CloudConversationEvent::OpenSubagent {
+                    chat_id,
+                    doc_id,
+                    title,
+                } => this.add_subagent_surface_in(
+                    state.clone(),
+                    chat_id.clone(),
+                    doc_id.clone(),
+                    title.clone(),
+                    false,
+                    cx,
+                ),
             }));
     }
     pub(super) fn open_cloud_conversation(
@@ -3370,6 +3413,88 @@ mod tests {
             assert_eq!(
                 shell.activate_session_link(&web, window, cx),
                 LinkOutcome::External("https://example.com/docs".into())
+            );
+        });
+    }
+    #[gpui::test]
+    fn a_cloud_chats_spawn_chip_opens_its_subagent_in_the_right_pane(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let directory = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            initialize(cx);
+            settings::init(UiSettings::default(), directory.path(), cx);
+            crate::history::init(
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                cx,
+            );
+        });
+        let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
+            std::sync::Arc::new(PendingController),
+        ));
+        let (host, cx) = cx.add_window_view(|_, cx| {
+            let shell = cx.new(|cx| {
+                let state = cx.new(|_| {
+                    let mut state = AppState::new();
+                    account(&mut state);
+                    state
+                });
+                let mut shell = Shell::new(state, boot(directory.path()), cx);
+                shell.reduced_motion = true;
+                shell.open_cloud_conversation(
+                    CloudTarget {
+                        controller,
+                        subject: "owner".into(),
+                        organization: None,
+                        workspace: "task".into(),
+                        initial_session: "session".into(),
+                    },
+                    json!({"workspaceId":"task","initialSessionId":"session"}),
+                    Value::Null,
+                    cx,
+                );
+                shell
+            });
+            CloudChromeHost {
+                shell,
+                _directory: directory,
+            }
+        });
+        let shell = host.read_with(cx, |host, _| host.shell.clone());
+        let (transcript, state) = shell.read_with(cx, |shell, cx| {
+            let view = shell.cloud_conversation.clone().unwrap();
+            let view = view.read(cx);
+            (view.transcript_for_test().clone(), view.state.clone())
+        });
+        // Before the fix nothing listened to the cloud transcript, so the
+        // click was dropped.
+        transcript.update(cx, |_, cx| {
+            cx.emit(TranscriptEvent::OpenSubagent {
+                chat_id: "session".into(),
+                doc_id: "session--sub--toolu_1".into(),
+                title: "Explore".into(),
+                frozen: false,
+            })
+        });
+        cx.run_until_parked();
+        shell.read_with(cx, |shell, _| {
+            assert_eq!(shell.subagent_tabs.len(), 1);
+            let (&id, tab) = shell.subagent_tabs.iter().next().unwrap();
+            assert_eq!(tab.doc_id, "session--sub--toolu_1");
+            // Fed by the conversation's own state, whose engine reaches the
+            // computer holding the doc.
+            assert_eq!(tab.state.entity_id(), state.entity_id());
+            assert!(
+                shell
+                    .right_tabs
+                    .values()
+                    .any(|tabs| tabs.contains(&RightSurface::Subagent(id)))
             );
         });
     }
