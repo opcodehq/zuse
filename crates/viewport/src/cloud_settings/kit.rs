@@ -243,6 +243,16 @@ pub fn title_with_tip(title: impl Into<SharedString>, tip: impl Into<SharedStrin
         .when(!tip.is_empty(), |v| v.child(info_tip(title, tip)))
 }
 
+/// A square 28px icon button, like a section's "…" trigger.
+pub fn icon_button(
+    id: impl Into<ElementId>,
+    glyph: &'static str,
+    label: impl Into<SharedString>,
+    disabled: bool,
+) -> Stateful<Div> {
+    super::style::icon_button(id, glyph, label, disabled, false)
+}
+
 /// The floating surface of an overflow ("…") menu.
 pub fn menu_surface() -> Div {
     div()

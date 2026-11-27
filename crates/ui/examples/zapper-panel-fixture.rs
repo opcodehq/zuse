@@ -314,6 +314,11 @@ fn sample_zapper(device: &str) -> Zapper {
                 issue(7, "Zapper panel: closable tabs", ZapperIssueStatus::Todo),
             ]
         },
+        folders: vec![
+            "handoffs".into(),
+            "handoffs/design-references".into(),
+            "reports".into(),
+        ],
     }
 }
 
@@ -322,8 +327,23 @@ fn files() -> Vec<ZapperFile> {
         path: path.into(),
         version,
         content: content.into(),
+        deleted: false,
     };
     vec![
+        file(
+            "AGENTS.md",
+            2,
+            "# Rules\n\n- Ask before opening pull requests that touch billing.\n- Keep threads to one issue each.",
+        ),
+        file(
+            "handoffs/conversational-pr-research.md",
+            1,
+            "# Research\n\nNotes from the conversational review study.",
+        ),
+        file("handoffs/design-references/composer.md", 2, "# Composer"),
+        file("handoffs/design-references/sidebar.md", 1, "# Sidebar"),
+        file("reports/2026-11-26.md", 1, "# Weekly report"),
+        file("INSTRUCTIONS.md", 2, "I keep the release train moving."),
         file(
             "DIGEST.md",
             2,
@@ -401,7 +421,8 @@ fn main() -> anyhow::Result<()> {
             );
             theme_library::init(data.clone(), cx);
             appearance::init(
-                if std::env::var("ZAPPER_FIXTURE_LIGHT").is_ok() {
+                // ZAPPER_FIXTURE_LIGHT captures the light theme.
+                if std::env::var_os("ZAPPER_FIXTURE_LIGHT").is_some() {
                     appearance::AppearanceMode::Light
                 } else {
                     appearance::AppearanceMode::Dark
@@ -451,6 +472,7 @@ fn main() -> anyhow::Result<()> {
                         window_background: theme::Theme::of(cx).window_background_appearance(),
                         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                             gpui::point(px(20.), px(40.)),
+                            // ZAPPER_FIXTURE_WIDTH captures a narrower window.
                             size(
                                 px(std::env::var("ZAPPER_FIXTURE_WIDTH")
                                     .ok()
@@ -477,6 +499,26 @@ fn main() -> anyhow::Result<()> {
                         window.update(cx, |s, _, cx| s.fixture_zapper_panel(files(), step, cx))?;
                         pause(cx, 900).await;
                         window.update(cx, |s, _, cx| s.fixture_zapper_settle(step, cx))?;
+                        if step == "drive-keyboard" {
+                            // Out of a nested file, close its folder, up to
+                            // handoffs, then F2 to rename or move it.
+                            window.update(cx, |s, window, cx| s.fixture_zapper_tree_focus(window, cx))?;
+                            pause(cx, 200).await;
+                            let any: gpui::AnyWindowHandle = window.into();
+                            for key in ["left", "left", "up", "f2"] {
+                                any.update(cx, |_, window, cx| {
+                                    window.dispatch_event(
+                                        gpui::PlatformInput::KeyDown(gpui::KeyDownEvent {
+                                            keystroke: gpui::Keystroke::parse(key).unwrap(),
+                                            is_held: false,
+                                            prefer_character_input: false,
+                                        }),
+                                        cx,
+                                    );
+                                })?;
+                                pause(cx, 150).await;
+                            }
+                        }
                         pause(cx, 300).await;
                         capture(window.into(), cx, &output, step).await?;
                     }

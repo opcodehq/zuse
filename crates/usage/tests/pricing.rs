@@ -158,3 +158,34 @@ fn bundled_catalogue_supplies_offline_rates_for_common_models() {
     );
     assert_eq!(table.estimate("unpublished-xyz", &input(100), false), None);
 }
+
+#[test]
+fn kimi_and_glm_agent_models_use_vendor_rates_in_any_catalogue() {
+    let tokens = TokenCounts {
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+        cache_read_tokens: 1_000_000,
+        ..Default::default()
+    };
+    let remote = catalogue(r#"{"gpt-5.4":{"input_cost_per_token":0.0000025}}"#);
+    for table in [Catalogue::bundled(), Arc::new(remote)] {
+        for (model, expected) in [
+            ("api/kimi/kimi-k3.1-pro", 12.2),
+            ("kimi-k3.1-pro", 12.2),
+            ("api/kimi/kimi-k3.1-pro-highspeed", 24.2),
+            ("api/kimi/kimi-k3", 18.3),
+            ("api/kimi-code/k3.1-pro", 12.2),
+            ("api/kimi-code/k3", 18.3),
+            ("api/glm/glm-5.3", 6.06),
+            ("glm-5.3", 6.06),
+            ("api/glm/glm-5.3-flash", 0.68),
+        ] {
+            close(table.estimate(model, &tokens, false), expected);
+        }
+    }
+    let upstream = catalogue(r#"{"moonshot/kimi-k3.1-pro":{"input_cost_per_token":0.000001}}"#);
+    close(
+        upstream.estimate("kimi-k3.1-pro", &input(1_000_000), false),
+        1.,
+    );
+}

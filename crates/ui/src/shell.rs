@@ -87,6 +87,8 @@ mod main_tabs;
 mod navigation_focus;
 #[cfg(test)]
 mod navigation_tests;
+#[cfg(test)]
+mod new_chat_destination_tests;
 pub(crate) mod open_in;
 mod panel_layout;
 mod panel_menu;
@@ -1227,7 +1229,7 @@ const SIDEBAR_SETTLED_PAD_X: f32 = 10.0;
 /// The project badge on a Settled row.
 const SIDEBAR_SETTLED_AVATAR_SIZE: f32 = 16.0;
 /// Horizontal inset of Threads cards; headings above them share it.
-const SIDEBAR_CARD_PAD_X: f32 = 6.0;
+const SIDEBAR_CARD_PAD_X: f32 = Theme::SPACE_SM;
 /// Sidebar session rows round like the reference list rows.
 const SIDEBAR_ROW_RADIUS: f32 = 7.0;
 
@@ -4887,6 +4889,30 @@ impl Shell {
         self.add_file_surface_at(owner, path, None, window, cx);
     }
 
+    /// Point a cloud chat's open file tabs at its current state. Reopening
+    /// a cloud chat whose conversation was closed builds a new state; tabs
+    /// left on the old one would wait on a connection that never attaches.
+    pub(super) fn rebind_cloud_file_tabs(
+        &mut self,
+        chat: &str,
+        state: &Entity<AppState>,
+        cx: &mut Context<Self>,
+    ) {
+        let stale = self
+            .file_surface_keys
+            .iter()
+            .filter(|((panel, _, _), _)| panel == chat)
+            .filter_map(|(_, id)| self.file_surfaces.get(id).cloned())
+            .filter(|file| {
+                let current = file.read(cx).state();
+                current != state && current.read(cx).hosted_on_cloud_computer
+            })
+            .collect::<Vec<_>>();
+        for file in stale {
+            file.update(cx, |file, cx| file.rebind_state(state.clone(), cx));
+        }
+    }
+
     /// The chat and state a transcript link resolves in: the main chat's, or
     /// an open side chat's own (its chat row may not reach the main list yet).
     fn link_owner(&self, chat_id: &str, cx: &App) -> Option<(String, Entity<AppState>)> {
@@ -4918,6 +4944,12 @@ impl Shell {
         let panel_key = self.panel_key(cx);
         let lookup = (panel_key.clone(), owner_chat.clone(), path.clone());
         if let Some(id) = self.file_surface_keys.get(&lookup).copied() {
+            // A cloud chat reopened since this tab opened has a new state.
+            if owner_state.read(cx).hosted_on_cloud_computer
+                && let Some(file) = self.file_surfaces.get(&id).cloned()
+            {
+                file.update(cx, |file, cx| file.rebind_state(owner_state.clone(), cx));
+            }
             self.push_main_file_tab(&panel_key, id, cx);
             if let Some((line, column)) = location
                 && let Some(file) = self.file_surfaces.get(&id).cloned()
@@ -4990,7 +5022,10 @@ impl Shell {
                     }
                     // Navigation from an editor stays in its own chat.
                     FilesEvent::OpenFile(path) => {
-                        let owner = (source.read(cx).chat_id().to_owned(), owner_state.clone());
+                        let owner = (
+                            source.read(cx).chat_id().to_owned(),
+                            source.read(cx).state().clone(),
+                        );
                         this.add_file_surface_at(owner, path.clone(), None, window, cx)
                     }
                     FilesEvent::RevealFile(path) => {
@@ -9987,9 +10022,19 @@ impl Shell {
         } else {
             theme.text_muted
         };
+        // Rows under a project heading paint their wash on the heading's
+        // grid: left edge on the avatar, right edge on the heading actions.
+        let surface_inset = sidebar && nested && !single_line;
+        let surface_bg = if menu_target {
+            hover_bg
+        } else {
+            motion::hover_blend(&fade_key, rest_bg, hover_bg)
+        };
         let row = div()
             .id(SharedString::from(row_id.clone()))
             .group("sidebar-session-row")
+            .relative()
+            .w_full()
             .debug_selector({
                 let row_id = row_id.clone();
                 move || row_id.clone()
@@ -10016,6 +10061,10 @@ impl Shell {
             } else {
                 Theme::SPACE_SM
             }))
+            // Keep the trailing column clear of the inset wash's edge.
+            .when(surface_inset, |el| {
+                el.pr(px(SIDEBAR_CARD_PAD_X + spaces::SIDEBAR_HEADER_PAD_X))
+            })
             .when(sidebar, |el| el.justify_center())
             .when(!sidebar, |el| el.py(px(6.0)))
             .text_color(if menu_target {
@@ -10023,11 +10072,19 @@ impl Shell {
             } else {
                 motion::hover_blend(&fade_key, rest_text, theme.text_strong)
             })
-            .bg(if menu_target {
-                hover_bg
-            } else {
-                motion::hover_blend(&fade_key, rest_bg, hover_bg)
+            .when(surface_inset, |el| {
+                el.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .left(px(spaces::SIDEBAR_HEADER_PAD_X))
+                        .right(px(spaces::SIDEBAR_HEADER_PAD_X))
+                        .rounded(px(SIDEBAR_ROW_RADIUS))
+                        .bg(surface_bg),
+                )
             })
+            .when(!surface_inset, |el| el.bg(surface_bg))
             // No selection ring (user request) — the wash alone marks the
             // active row.
             // Row hover drives BOTH the wash blend and the corner's
@@ -10347,10 +10404,10 @@ impl Shell {
                 sidebar_diff_stat(additions, deletions, 1.0, theme).into_any_element()
             } else if let (false, true, Some(label)) = (show_legend, two_line, status_label) {
                 let mark: AnyElement = match label {
-                    "Working" => loaders::working_mark(
+                    "Working" => loaders::retro_loader(
                         format!("{row_id}-working-corner"),
-                        14.0,
-                        theme.accent,
+                        SIDEBAR_WORKING_LOADER,
+                        theme.loader_glyph(),
                     )
                     .into_any_element(),
                     "Done" => icon(icons::CHECK_CIRCLE)
@@ -10404,10 +10461,17 @@ impl Shell {
                 })
                 // Holds "17m" so swapping in the archive glyph never moves it.
                 .when(!text_hint, |el| {
-                    // Row actions hug each other; only the age needs a column.
-                    el.min_w(px(if hover_actions || show_archive {
+                    // Reserve the hovered actions' width even at rest so the
+                    // title's available space never changes on card hover.
+                    el.min_w(px(if two_line {
+                        if has_settle_slot {
+                            SIDEBAR_ROW_ACTION_SIZE * 2.0 + SIDEBAR_ROW_ACTION_GAP
+                        } else {
+                            30.0
+                        }
+                    } else if hover_actions || show_archive {
                         0.0
-                    } else if cloud && !has_settle_slot {
+                    } else if cloud && !has_settle_slot && !two_line {
                         22.0
                     } else {
                         30.0
@@ -10455,8 +10519,7 @@ impl Shell {
             let lead: Option<AnyElement> = if nested && !two_line {
                 Some(
                     div()
-                        .size(px(20.0))
-                        .ml(px(6.0))
+                        .size(px(spaces::SIDEBAR_PROJECT_AVATAR_SIZE))
                         .flex_none()
                         .flex()
                         .items_center()
@@ -10550,22 +10613,15 @@ impl Shell {
                     format!("chat-title-{content_id}").into(),
                     true,
                     div()
-                        .text_size(if two_line {
-                            crate::typography::text_md()
-                        } else {
-                            crate::typography::text_sm()
-                        })
-                        .line_height(crate::typography::ui_rems(if two_line {
-                            20.0
-                        } else {
-                            18.0
-                        }))
+                        .text_size(crate::typography::text_sm())
+                        .line_height(crate::typography::ui_rems(18.0))
                         .when(unread, |el| {
                             el.font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(theme.text_strong)
                         })
                         .child(title),
-                    (!preview).then_some(row_hovered),
+                    // Keep the title anchored when hover reveals row actions.
+                    None,
                 )
                 .into_any_element(),
             };
@@ -10639,6 +10695,7 @@ impl Shell {
                     .text_color(faint)
                     .child(
                         div()
+                            .flex_1()
                             .min_w_0()
                             .flex()
                             .items_center()
@@ -10646,7 +10703,7 @@ impl Shell {
                             .children(repo_avatar)
                             .child(sidebar_faded_label(
                                 format!("chat-device-{content_id}").into(),
-                                false,
+                                true,
                                 div().child(space_name),
                             )),
                     )
@@ -10663,45 +10720,45 @@ impl Shell {
                     .children(diff_stat.map(|(additions, deletions)| {
                         sidebar_diff_stat(additions, deletions, 0.75, theme)
                     }))
-                    // Hover clears the marks so the row actions stand alone.
-                    .when(
-                        !row_hovered && (harness.is_some() || meta_cloud.is_some()),
-                        |el| {
-                            el.child(
-                                div()
-                                    .ml_auto()
-                                    .flex_none()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(6.0))
-                                    .children(meta_cloud)
-                                    .children(harness.map(|harness| {
-                                        let name = crate::pickers::harness_display_name(harness);
-                                        let (path, _) = crate::pickers::harness_brand_icon(harness);
-                                        div()
-                                            .id(SharedString::from(format!("{row_id}-agent")))
-                                            .debug_selector({
-                                                let id = id.clone();
-                                                move || format!("chat-agent-{id}")
-                                            })
-                                            .aria_label(name)
-                                            .tip_above(name)
-                                            .flex_none()
-                                            .child(
-                                                icon(path)
-                                                    .size(px(SIDEBAR_CARD_MARK_SIZE))
-                                                    .text_color(faint),
-                                            )
-                                    })),
-                            )
-                        },
-                    );
+                    // Keep the icon columns reserved when hover reveals row actions.
+                    .when(harness.is_some() || meta_cloud.is_some(), |el| {
+                        el.child(
+                            div()
+                                .ml_auto()
+                                .w(px(SIDEBAR_CARD_MARK_SIZE * 2.0 + 6.0))
+                                .when(row_hovered, |el| el.opacity(0.0))
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .justify_start()
+                                .gap(px(6.0))
+                                .children(meta_cloud)
+                                .children(harness.map(|harness| {
+                                    let name = crate::pickers::harness_display_name(harness);
+                                    let (path, _) = crate::pickers::harness_brand_icon(harness);
+                                    div()
+                                        .id(SharedString::from(format!("{row_id}-agent")))
+                                        .debug_selector({
+                                            let id = id.clone();
+                                            move || format!("chat-agent-{id}")
+                                        })
+                                        .aria_label(name)
+                                        .tip_above(name)
+                                        .flex_none()
+                                        .child(
+                                            icon(path)
+                                                .size(px(SIDEBAR_CARD_MARK_SIZE))
+                                                .text_color(faint),
+                                        )
+                                })),
+                        )
+                    });
                 div()
                     .flex_1()
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .gap(px(1.0))
+                    .gap(px(2.0))
                     .child(title_line)
                     .child(meta)
                     .into_any_element()
@@ -10719,6 +10776,11 @@ impl Shell {
                     .flex_row()
                     .items_center()
                     .gap(px(8.0))
+                    // Grouped cards share the project name's text column.
+                    // Compact rows occupy this same slot with their lead glyph.
+                    .when(nested && two_line, |el| {
+                        el.child(div().w(px(spaces::SIDEBAR_PROJECT_AVATAR_SIZE)).flex_none())
+                    })
                     .children(lead)
                     .children(title_avatar)
                     .child(body),

@@ -34,6 +34,9 @@ impl RpcService for Controller {
         if let Some(reply) = computers_reply(method, &_params) {
             return reply;
         }
+        if let Some(reply) = checkout_reply(method, &_params) {
+            return reply;
+        }
         // Review captures (`FIXTURE_REVIEW=1`): an opened cloud chat's
         // computer is awake, and nothing is asserted about the call order.
         if review() && method == methods::CLOUD_BILLING_ENTITLEMENTS {
@@ -178,6 +181,14 @@ impl RpcService for Controller {
             methods::CLOUD_HISTORY if self.new_chat => RpcReply::value(
                 &json!({"accountId":"fixture-owner","apiOrigin":"https://fixture-api.example.test","workspace":admitted_workspace()}),
             ),
+            // Review captures of an opened chat can open its computer menu,
+            // which reads the workspace for this account.
+            methods::CLOUD_WORKSPACE
+                if review() && self.mixed && _params["workspaceId"] == "fixture-computer" =>
+            {
+                RpcReply::value(&json!({"accountId":"fixture-owner","organizationId":null,
+                    "workspace":computer_seed()["workspace"]}))
+            }
             methods::CLOUD_WORKSPACE if self.new_chat => {
                 RpcReply::value(&json!({"workspace":admitted_workspace()}))
             }
@@ -510,6 +521,10 @@ fn computer_seed() -> Value {
         workspace["state"] = json!(state);
         workspace["desiredState"] = json!(desired);
         workspace["statusCode"] = json!(code);
+    }
+    // `FIXTURE_CHECKOUT`: the chat's repository has a checkout on this Mac.
+    if checkout_mode().is_some() {
+        workspace["repositoryIdentity"] = json!("github.com/example/cloud-only");
     }
     let chat = json!({"id":"fixture-session","threadId":"fixture-thread","deviceId":"cloud:fixture-computer","title":"Improve cloud startup","archived":false,"cwd":".","branch":"cloud/startup","createdAt":"2026-10-30T12:00:00Z","config":{"harness":"codex","model":"gpt-5.5","sandbox":"workspace-write"}});
     let messages = json!([
@@ -859,4 +874,50 @@ fn computers_reply(method: &str, params: &Value) -> Option<Result<RpcReply, RpcE
         _ => return None,
     };
     Some(RpcReply::value(&value))
+}
+
+fn checkout_mode() -> Option<String> {
+    std::env::var("FIXTURE_CHECKOUT").ok()
+}
+
+/// `FIXTURE_CHECKOUT=off|synced|paused|behind`: this chat in the user's own
+/// checkout of its repository on this Mac.
+fn checkout_reply(method: &str, params: &Value) -> Option<Result<RpcReply, RpcError>> {
+    let mode = checkout_mode()?;
+    if !matches!(
+        method,
+        methods::CLOUD_CHECKOUT_SYNC_STATUS
+            | methods::CLOUD_CHECKOUT_SYNC_CONFIGURE
+            | methods::CLOUD_CHECKOUT_SYNC_RESUME
+    ) {
+        return None;
+    }
+    let base = json!({"workspaceId":params["workspaceId"],"chatId":params["chatId"],
+        "lastSyncedAt":1793361700000_i64,"files":1284,"error":null,"notice":null});
+    let mut status = base.clone();
+    let (enabled, state, error) = match mode.as_str() {
+        "synced" => (true, "synced", None),
+        "paused" => (
+            true,
+            "paused",
+            Some("Files in this folder were edited here, so sync paused to keep them."),
+        ),
+        "behind" => (
+            true,
+            "behind",
+            Some("The cloud computer is asleep. Its changes arrive when it wakes."),
+        ),
+        _ => (false, "off", None),
+    };
+    status["enabled"] = json!(enabled);
+    status["state"] = json!(state);
+    status["error"] = json!(error);
+    status["localPath"] = if enabled {
+        json!("/Users/alex/code/web")
+    } else {
+        Value::Null
+    };
+    Some(RpcReply::value(
+        &json!({"accountId":"fixture-owner","status":status}),
+    ))
 }

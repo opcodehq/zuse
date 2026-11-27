@@ -600,6 +600,7 @@ async fn run() -> Result<()> {
     core.plugins.set_runtime(Arc::new(
         zuse_cloud_runtime::plugins::RuntimePluginClient::new(authority.clone(), updates.clone()),
     ));
+    core.sessions.set_cloud_computers();
     core.sessions.set_ipc_port(ipc.local_addr()?.port());
     core.registry.set_secret_filter(secret_filter.clone());
     core.sessions.set_secret_filter(secret_filter.clone());

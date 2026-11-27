@@ -1,0 +1,48 @@
+name: Docs
+
+# Builds the documentation site (apps/docs, docs.zuse.sh) as a static export and
+# checks the Worker config. Deploys run in Cloudflare Workers Builds, not here.
+on:
+  push:
+    branches: [main]
+    paths:
+      - apps/docs/**
+      - apps/website/packages/analytics/**
+      - .github/workflows/docs.yml
+  pull_request:
+    paths:
+      - apps/docs/**
+      - apps/website/packages/analytics/**
+      - .github/workflows/docs.yml
+  workflow_dispatch:
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/docs
+    env:
+      NEXT_TELEMETRY_DISABLED: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      - run: bun run check-types
+      - run: bun run test
+      - run: bun run build
+      - name: Check the Worker bundle
+        run: bunx wrangler deploy --dry-run --outdir .wrangler/dry-run

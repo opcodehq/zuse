@@ -2275,6 +2275,9 @@ pub(super) const SIDEBAR_DISCLOSURE_HEADER_HEIGHT: f32 = 28.0;
 const SIDEBAR_PROJECT_GAP: f32 = 2.0;
 /// Repository avatars on project headings and one-list session rows.
 pub(super) const SIDEBAR_PROJECT_AVATAR_SIZE: f32 = 20.0;
+/// Horizontal inset of a project heading's avatar and actions; session
+/// washes under the heading start and end on these same edges.
+pub(super) const SIDEBAR_HEADER_PAD_X: f32 = Theme::SPACE_SM;
 pub(super) const SIDEBAR_DISCLOSURE_BODY_INSET: f32 = 4.0;
 
 /// The organization a View choice selects.
@@ -2442,12 +2445,13 @@ pub(super) fn sidebar_project_header(
         ),
     };
     div()
+        .w_full()
         .flex()
         .flex_row()
         .items_center()
         .gap(px(8.0))
         .h(px(SIDEBAR_DISCLOSURE_HEADER_HEIGHT))
-        .px(px(Theme::SPACE_SM))
+        .px(px(SIDEBAR_HEADER_PAD_X))
         .rounded(px(7.0))
         .cursor_pointer()
         .hover(|el| el.bg(theme.glass_hover()))
@@ -6263,22 +6267,11 @@ impl Shell {
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
-                        // A project backed by a Cloud repository starts its
-                        // chats on Cloud; the checkout stays the Local pick.
-                        let subscribed = this.state.read(cx).cloud_access().subscribed();
-                        match crate::cloud_destination::new_chat(
-                            cloud_project.as_ref(),
-                            group_space.as_deref(),
-                            subscribed,
-                        ) {
-                            crate::cloud_destination::NewChat::Cloud {
-                                project,
-                                local_space,
-                            } => this.open_new_cloud_session_in(project, local_space, cx),
-                            crate::cloud_destination::NewChat::Local(space) => {
-                                this.open_new_session(space, cx)
-                            }
-                        }
+                        this.open_new_chat_in_project(
+                            cloud_project.clone(),
+                            group_space.clone(),
+                            cx,
+                        );
                     }))
                     .into_any_element(),
                 );

@@ -118,7 +118,8 @@ final class Account: NSObject, ASWebAuthenticationPresentationContextProviding {
   }
   var archiveIdentity: String? {
     guard let claims = credentials?.claims, let subject = claims["sub"].string else { return nil }
-    return "\(apiURL.absoluteString)|\(subject)|\(claims["org_id"].string ?? "personal")"
+    // Cloud requests act in the personal workspace, so its cache is the personal one too.
+    return "\(apiURL.absoluteString)|\(subject)|personal"
   }
   // Public configuration is copied from the shared deployment contract at project generation.
   private var clientID: String {
@@ -132,6 +133,11 @@ final class Account: NSObject, ASWebAuthenticationPresentationContextProviding {
   override init() {
     super.init()
     #if DEBUG
+      if CloudPreview.enabled {
+        credentials = try? JSONDecoder().decode(Credentials.self, from: CloudPreview.credentials)
+        signedIn = credentials != nil
+        return
+      }
       if ProcessInfo.processInfo.arguments.contains("--native-preview")
         || ProcessInfo.processInfo.arguments.contains("--rpc-fixture")
       {

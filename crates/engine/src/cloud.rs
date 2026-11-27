@@ -1,5 +1,7 @@
 //! Host-authorized control plane access. No access token crosses the viewport RPC boundary.
 mod allocation_retry;
+#[cfg(unix)]
+pub mod checkout_sync;
 pub mod environment;
 pub mod events;
 pub mod hosted;
@@ -384,6 +386,8 @@ pub struct CloudApi {
     #[cfg(unix)]
     syncs: sync::Manager,
     #[cfg(unix)]
+    checkouts: checkout_sync::Manager,
+    #[cfg(unix)]
     local_terminals: Arc<local_terminal::Manager>,
 }
 impl CloudApi {
@@ -409,6 +413,8 @@ impl CloudApi {
             environments: environment::Manager::default(),
             #[cfg(unix)]
             syncs: sync::Manager::default(),
+            #[cfg(unix)]
+            checkouts: checkout_sync::Manager::default(),
             #[cfg(unix)]
             local_terminals: Arc::default(),
             #[cfg(unix)]
@@ -2515,6 +2521,10 @@ impl Drop for MirrorReconciler {
     }
 }
 pub fn start_mirror_reconciliation(auth: Auth) -> MirrorReconciler {
+    // Synced checkouts are restored or resumed whether or not anyone is
+    // signed in (a restart may need to finish putting one back).
+    #[cfg(unix)]
+    checkout_sync::supervise(auth.clone());
     MirrorReconciler(tokio::spawn(async move {
         use futures::StreamExt;
         let mut changes = auth.watch_state();

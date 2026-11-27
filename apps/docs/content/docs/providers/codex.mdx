@@ -1,0 +1,52 @@
+---
+title: Codex
+icon: logo:openai
+description: Connect Codex and use native threads, steering, subagents, and review workflows in Zuse.
+section: providers
+order: 34
+platforms: [desktop, browser, mobile]
+providers: [codex]
+prerequisites: [/start/install, /providers/setup]
+related: [/composer/modes-permissions, /composer/skills-mcp, /composer/subagents, /workspace/changes-pull-requests]
+next: /providers/cursor
+lastVerified: "2026-11-27"
+---
+
+Zuse runs your installed `codex` CLI as `codex app-server` and speaks its JSON-RPC protocol over stdio. Zuse keeps the Codex thread for resume and renders its turns, tools, approvals, and child agents in the shared interface.
+
+## Install and sign in
+
+Choose **Install** in **Settings → Providers & accounts**, or install it yourself:
+
+```bash
+curl -fsSL https://chatgpt.com/codex/install.sh | sh
+codex login
+```
+
+`npm install -g @openai/codex` also works. Codex runs on your ChatGPT plan; add several accounts under **Accounts** and switch whenever one runs low. Codex's browser sign-in listens on local port 1455, so close anything else using that port if sign-in fails.
+
+## Workflows in Zuse
+
+- Start and resume native Codex threads in any project or worktree.
+- Stream reasoning, responses, commands, file changes, approvals, questions, and usage into the durable timeline.
+- Steer a running turn; a steer that arrives just as the turn ends is sent as the next turn instead of being lost.
+- Use Plan mode and all three permission modes. **Approve for me** uses Codex's native automatic reviewer.
+- Discover skills from `.codex/skills` and `.agents/skills`.
+- Show Codex child agents as subagents in the timeline.
+- MCP: Zuse adds its own server on top of the `mcp_servers` you've configured for Codex.
+- Dictate prompts with the ChatGPT account Codex is signed in to.
+
+When Codex loses its connection to the model and retries, the chat shows a quiet "Reconnecting to the model" status that clears once Codex streams again. A turn that goes silent for 15 minutes with no command or question open ends with "Codex stopped responding" and a Retry.
+
+## Recovery
+
+If a thread can't resume, keep the existing chat for its durable context and start a new session. If controls are missing, update Codex, refresh the provider status, and start a fresh session.
+
+For sign-in or startup failures:
+
+```bash
+codex --version
+codex login
+```
+
+Then return to **Settings → Providers & accounts**, refresh, and restart the session. Update Codex with the installer or package manager you originally used.

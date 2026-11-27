@@ -1,0 +1,43 @@
+---
+title: "Scripting and agent tools"
+icon: Terminal
+navTitle: "Scripting"
+description: "Use zuse commands with JSON output and exit codes in scripts, and give agents Zuse tools over MCP."
+section: "Serve CLI"
+order: 6
+platforms: [serve, desktop]
+providers: []
+prerequisites: [/serve]
+related: [/serve/command-reference, /composer/orchestration]
+next: /composer/orchestration
+lastVerified: "2026-11-27"
+---
+
+The `zuse` command manages the engine, remote access, and services. It does not have commands for creating or controlling chats from a shell. Agents reach Zuse's chat and orchestration tools through MCP instead.
+
+## Pairing from scripts
+
+`zuse pair --json` prints one line of JSON:
+
+```json
+{"app":"http://192.168.1.20:27657/#pair=…","browser":"https://192.168.1.20:27659/#pair=…","selfSigned":true,"localOnly":false}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `app` | Link for the Zuse desktop or mobile app. |
+| `browser` | Link for a web browser, or `null` when no browser route exists. |
+| `selfSigned` | The browser link uses this computer's generated certificate, so browsers warn once. |
+| `localOnly` | Only this computer can use the link. |
+
+Values above are illustrative. Each link is a one-time credential that expires after ten minutes; do not log it.
+
+## Health checks
+
+`zuse status` exits with code `1` when the saved sign-in needs attention and `0` otherwise, including a healthy local-only setup. `zuse daemon status` reports the background service. Commands that need a running engine fail with "No Zuse server is running on agent port …" when none answers.
+
+## Agent tools over MCP
+
+`zuse mcp` is a Model Context Protocol server on stdin and stdout. It forwards every tool call to the running engine on the loopback port (`ZUSE_IPC_PORT`, default `27654`) and keeps no state of its own. When the engine adds it to an agent it starts, messages that agent sends are attributed to its own chat, and a chat cannot message itself. See [Agent orchestration](/composer/orchestration/) for what agents can do with these tools.
+
+<NextStep href="/composer/orchestration/" label="Agent orchestration" />

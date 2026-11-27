@@ -9,6 +9,29 @@ import Testing
   import Crypto
 #endif
 
+@Test func pairingDeepLinksCarryANativeInvitation() throws {
+  let invitation =
+    "http://192.168.1.4:27657/#pair=eyJ2IjoxLCJpZCI6IjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmIiwic2VjcmV0IjoiYWJjIn0"
+  var components = URLComponents(string: "zuse://pair")!
+  components.queryItems = [URLQueryItem(name: "link", value: invitation)]
+  #expect(PairingDeepLink.invitation(from: try #require(components.url)) == invitation)
+  #expect(PairingDeepLink.destination(invitation) == "192.168.1.4:27657")
+  #expect(
+    PairingDeepLink.invitation(from: try #require(URL(string: "zuse://pair?link=nope"))) == nil)
+  #expect(PairingDeepLink.invitation(from: try #require(URL(string: "zuse://other"))) == nil)
+}
+
+@Test func tailnetAddressesCountAsPrivate() throws {
+  #expect(PairingLink.isPrivateHost("100.64.0.1"))
+  #expect(PairingLink.isPrivateHost("100.101.102.103"))
+  #expect(PairingLink.isPrivateHost("100.127.255.254"))
+  #expect(!PairingLink.isPrivateHost("100.63.0.1"))
+  #expect(!PairingLink.isPrivateHost("100.128.0.1"))
+  #expect(PairingLink.isPrivateHost("[fd7a:115c:a1e0::1]"))
+  try PairingLink.validate(
+    #require(URL(string: "ws://100.101.102.103:27657/api/paired-rpc/x")), webSocket: true)
+}
+
 @Test func pairingLinksRequireSecurePublicTransport() throws {
   let link = try PairingLink.parse("https://computer.example/#pair=ABCD-1234")
   #expect(link.webSocketURL.absoluteString == "wss://computer.example/rpc")

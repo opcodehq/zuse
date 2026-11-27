@@ -49,9 +49,9 @@ class DatabaseBootstrapTest(unittest.TestCase):
         self.url = f"postgresql://zuse_test@127.0.0.1:{self.port}/{name}?sslmode=disable"
 
     def test_release_manifest_contains_command_and_recreation_after_admission(self):
-        expected=("0036_harness_bundles.sql","0037_user_images.sql","0038_app_role_grants.sql","0041_user_image_repositories.sql","0042_machine_versions_grants.sql","0043_work_wakeups.sql","0044_worker_due_index.sql","0045_auth_wakeups.sql","0046_plugin_wakeups.sql","0048_executor_wakeups.sql","0049_change_hints.sql","0050_archive_machine_deletion.sql","0051_archive_machine_due_cap.sql","0052_one_environment_credential.sql","0053_provider_machine_reconciliation.sql","0054_machine_minute_plans.sql","0055_device_command_approvals.sql")
+        expected=("0036_harness_bundles.sql","0037_user_images.sql","0038_app_role_grants.sql","0041_user_image_repositories.sql","0042_machine_versions_grants.sql","0043_work_wakeups.sql","0044_worker_due_index.sql","0045_auth_wakeups.sql","0046_plugin_wakeups.sql","0048_executor_wakeups.sql","0049_change_hints.sql","0050_archive_machine_deletion.sql","0051_archive_machine_due_cap.sql","0052_one_environment_credential.sql","0053_provider_machine_reconciliation.sql","0054_machine_minute_plans.sql","0055_device_command_approvals.sql","0056_bridge_synced_checkout.sql","0057_computer_request_hints.sql")
         self.assertEqual(database.FILES[-len(expected):],expected)
-        self.assertEqual(len(database.FILES),50)
+        self.assertEqual(len(database.FILES),52)
         self.assertIn("0026_task_command_admission.sql",database.FILES)
         self.assertNotIn("0022_computer_recreations.sql",database.FILES)
         self.assertNotIn("0022_recreation.sql",database.FILES)
@@ -93,6 +93,21 @@ class DatabaseBootstrapTest(unittest.TestCase):
                 'detachedPending',EXISTS(SELECT FROM api_bridge_requests WHERE owner_id='a' AND enrollment_id='mac'));
         """)
         self.assertEqual(rows[-1], {"requests": 2, "sessions": 2, "always": 1, "detachedPending": False})
+
+        # 0056 is additive: existing attachments have no synced folder, and
+        # the column only takes a bounded path.
+        synced = database.execute(self.url, """
+            SET search_path TO zuse_staging;
+            SELECT json_build_object(
+                'nullable',(SELECT is_nullable FROM information_schema.columns
+                    WHERE table_schema='zuse_staging' AND table_name='api_bridge_attachments' AND column_name='synced_cwd'),
+                'unset',(SELECT count(*) FROM api_bridge_attachments WHERE synced_cwd IS NULL),
+                'all',(SELECT count(*) FROM api_bridge_attachments));
+        """)
+        self.assertEqual(synced[-1]["nullable"], "YES")
+        self.assertEqual(synced[-1]["unset"], synced[-1]["all"])
+        with self.assertRaises(ValueError):
+            database.execute(self.url, "SET search_path TO zuse_staging; UPDATE api_bridge_attachments SET synced_cwd='';")
 
         after_archive = database.execute(self.url, """
             SET search_path TO zuse_staging;
@@ -258,8 +273,9 @@ SELECT kind||':'||resource_id||':'||payload::text FROM zuse_rust_account_event_o
             self.assertEqual(result, {"schema": f"zuse_{environment}", "otherUsage": False, "ledgerWrite": False, "workspaceWrite": True, "baseWrite": False, "baseLockExecutable": True})
             rights = database.execute(url, """SELECT json_build_object(
                 'editCommand',has_column_privilege(current_user,'api_bridge_requests','command','UPDATE'),
-                'decide',has_column_privilege(current_user,'api_bridge_requests','decision','UPDATE'));""")[-1]
-            self.assertEqual(rights, {"editCommand": False, "decide": True})
+                'decide',has_column_privilege(current_user,'api_bridge_requests','decision','UPDATE'),
+                'syncedFolder',has_column_privilege(current_user,'api_bridge_attachments','synced_cwd','UPDATE'));""")[-1]
+            self.assertEqual(rights, {"editCommand": False, "decide": True, "syncedFolder": True})
         key = json.loads(provision.signing_key())
         self.assertEqual(key["crv"], "Ed25519")
         self.assertEqual(len(key["d"]), 43)

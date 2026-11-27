@@ -1,0 +1,9 @@
+{
+	"title": "Projects",
+	"pages": [
+		"index",
+		"worktrees",
+		"scripts",
+		"repository-settings"
+	]
+}

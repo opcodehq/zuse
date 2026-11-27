@@ -1,0 +1,62 @@
+---
+title: Test a local app in the browser
+icon: Globe
+navTitle: "Test in the browser"
+description: Start a local server, check the running app beside the chat, and hand the agent precise evidence.
+section: how-to
+order: 9
+platforms: [desktop]
+providers: []
+prerequisites: [/workspace/browser, /workspace/terminal-browser]
+related: [/workspace/browser-debugging, /workspace/browser-evidence, /workspace/browser-troubleshooting]
+next: /how-to/local-review-changes
+lastVerified: "2026-11-27"
+---
+
+Use this workflow after an implementation changes a page or user flow. The goal is to verify the running product in the same chat that owns the code, not merely confirm that a build command exited successfully.
+
+## Start the correct environment
+
+1. Open a terminal in the chat that contains the change, or run the project's dev-server action from the **Actions** section of the environment summary.
+2. Start the repository's normal development command and wait for the server to print its address and port.
+3. Open the **Browser** panel from the right pane's **+** menu.
+4. On the browser's home page (**Preview your work**), choose the server under **Running locally**, or type the full local URL in the address bar (**Search or enter a website**).
+
+Confirm the branch and port when several chats are running. A healthy page on the wrong worktree is not evidence for the change you intend to review.
+
+## Check behavior and layout
+
+1. Reproduce the primary path once at the panel's current size, then widen or narrow the panel to check responsive layouts.
+2. Open **Developer tools** from the browser toolbar to read console messages and inspect requests when the visible behavior is incorrect.
+3. Use zoom from **Browser options** when you need to check text at a different scale.
+4. When the page should be checked in your regular browser, choose **Open in default browser**.
+
+Use a seeded development or staging account for authenticated paths. Cookies and cache belong to the browser profile; **Browser options → Clear cookies** signs you out of websites in all of its tabs.
+
+## Hand the agent precise evidence
+
+- To request a change to a specific element, choose **Annotate page**, select the element, and write the intended outcome. The annotation is added to the composer as context for your next message.
+- To capture a visual state, choose **Browser options → Take screenshot** after fonts, images, and loading indicators settle. Mark it up with **Pen**, **Box**, or **Arrow**, crop with **Select region**, then **Save** it or copy the image and attach it to the message.
+- Paste relevant console errors or failed request details into the message as text.
+
+Describe the path, state, and expected result in the message. For example:
+
+> The annotated button on the settings page overlaps the form at narrow widths. Fix the layout, keep the desktop layout unchanged, and tell me which file you changed.
+
+Evidence can contain user data, console values, or request details. Review it before sending or sharing it.
+
+## Success check
+
+The browser is showing the intended chat's server, the critical path behaves correctly at the required sizes, relevant console and network output is understood, and the evidence refers to the final page state.
+
+Return to [Review and commit local changes](/how-to/local-review-changes/) only after the browser result and code diff agree.
+
+## Recovery
+
+- **The local server is not listed:** read the terminal output and enter its address directly. Discovery lists dev servers started in this project.
+- **Couldn’t load this page:** check the address and make sure your server is running, then choose **Retry page**.
+- **The page stopped responding:** choose **Reload page** to continue.
+- **The page is stale:** wait for the server to finish rebuilding, verify the URL and port, then reload.
+- **Developer tools do not open inside the panel:** make the browser panel wider or taller.
+
+See [Troubleshoot the in-app browser](/workspace/browser-troubleshooting/) for the complete recovery guide.

@@ -1,0 +1,14 @@
+{
+	"title": "Remote access",
+	"pages": [
+		"index",
+		"nearby-pairing",
+		"local-browser",
+		"web-client",
+		"tailscale",
+		"hosted-access",
+		"other-computers",
+		"security",
+		"recovery"
+	]
+}

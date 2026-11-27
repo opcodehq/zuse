@@ -1,0 +1,50 @@
+---
+title: "Remote access security"
+icon: Shield
+navTitle: "Security"
+description: "How pairing, encryption, account linking, and revocation protect a computer you reach remotely."
+section: "Remote access"
+order: 8
+platforms: [desktop, web, mobile, serve]
+providers: []
+prerequisites: [/remote]
+related: [/remote/nearby-pairing, /remote/local-browser, /remote/hosted-access, /serve/security]
+next: /remote/recovery
+lastVerified: "2026-11-27"
+---
+
+Remote devices control a computer; they do not become it. Repositories, agent processes, terminals, agent CLIs, and their credentials stay on the computer that runs Zuse.
+
+## Pairing
+
+- Every way to connect is off until you turn it on.
+- A pairing link or QR code contains a random identifier and secret. It works for one device and expires after ten minutes if unused. Treat a live link like a password.
+- A paired device has full control of the computer's workspace. There is no read-only pairing.
+- One computer can have up to 32 paired devices.
+- Revoking a device in **Settings → Remote access** ends its active connections immediately.
+
+## Encryption
+
+Every paired connection is end-to-end encrypted between the device and the computer, whichever route it takes: Wi-Fi, Tailscale, your account, or a relay. A route is only a pipe. If an old address now leads to a different machine, the connection fails instead of talking to it. There is no unencrypted fallback.
+
+Direct connections on the local network accept only peers in private address space.
+
+## Browsers on the local network
+
+Browsers need HTTPS, so on the local network Zuse serves the web client with a certificate generated for the computer. Chat traffic stays end-to-end encrypted, but because of the certificate warning the browser cannot prove the page came from your computer, and someone who can intercept that network could serve a modified page. On networks you do not trust, use [Tailscale HTTPS](/remote/tailscale/#tailscale-https) or [account access](/remote/hosted-access/).
+
+## Account access
+
+Account access is optional. A device must be signed in to the same account to find and open a linked computer. `zuse unlink` removes the computer from your account.
+
+## Agent credentials
+
+Remote devices never receive copies of agent credentials. Agents run where their CLI is installed and signed in. Permission prompts still apply: approve only what you intend, from any device.
+
+## If a device may be compromised
+
+1. Revoke it under **Devices** in **Settings → Remote access** on every computer it could reach.
+2. Turn off the connections it could use while you review the list.
+3. Rotate agent, repository, and service credentials it could have seen during a session.
+
+<NextStep href="/remote/recovery/" label="Recover a failed connection" />

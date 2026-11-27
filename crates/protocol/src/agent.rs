@@ -504,6 +504,27 @@ pub enum ProxyHealth {
     Rejected,
 }
 
+/// One built-in API-key connection of the Zuse agent (`GetModelApiKeys` /
+/// `SetModelApiKey` reply rows). The key itself never leaves the engine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelApiKey {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    /// A key is saved in Zuse for this connection.
+    #[serde(default)]
+    pub has_key: bool,
+    /// Variable read when no key is saved.
+    pub environment_variable: String,
+    /// No key is saved, but the variable is set in the engine's environment.
+    #[serde(default)]
+    pub from_environment: bool,
+    #[serde(default)]
+    pub models: Vec<String>,
+    pub console_url: String,
+}
+
 /// `GetClaudeConnection` / `SetClaudeConnection` reply. The access key never
 /// leaves the engine; `has_key` says whether one is saved.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

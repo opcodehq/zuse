@@ -2,7 +2,7 @@
 import type { MessagePart } from "@/core/protocol";
 import { state } from "@/core/store";
 import { Icon } from "@/ui/Icon";
-import { DitherRing } from "@/ui/loaders";
+import { GlyphSpinner } from "@/ui/loaders";
 import { Dialog } from "@/ui/primitives";
 import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { copyText } from "./clipboard";
@@ -206,7 +206,23 @@ const now = (() => {
   };
 })();
 
-/** "<Agent> is working" with the turn's elapsed time, or the subagents the turn waits on. */
+const animePhrases = [
+  "Gathering chakra…",
+  "Entering focus arc…",
+  "Channeling nen…",
+  "Going plus ultra…",
+  "Preparing the next jutsu…",
+  "Unlocking bankai…",
+];
+
+function AnimeWorkingWord() {
+  const since = Date.now();
+  now.acquire();
+  onCleanup(now.release);
+  return <span class="t-working-word" aria-hidden="true">{animePhrases[Math.floor(Math.max(0, now.read() - since) / 6000) % animePhrases.length]}</span>;
+}
+
+/** Anime status with the turn's elapsed time, or the subagents the turn waits on. */
 export function WorkingTrailer(props: { chatId: string }) {
   const session = () => state.sessions[props.chatId];
   const working = () => session()?.status === "working";
@@ -215,14 +231,13 @@ export function WorkingTrailer(props: { chatId: string }) {
     const at = session()?.startedAt;
     return typeof at === "string" ? Date.parse(at) : NaN;
   };
-  const agent = () => harnessName(state.chats[props.chatId]?.config?.harness);
-  const label = () =>
-    waiting() > 0 ? (waiting() === 1 ? "Waiting for 1 agent" : `Waiting for ${waiting()} agents`) : `${agent()} is working`;
   return (
     <Show when={working() || waiting() > 0}>
       <div class="t-working">
-        <DitherRing size={14} decorative />
-        <span class="t-working-word">{label()}</span>
+        <GlyphSpinner cell={2.5} box={14} tone="glyph" decorative />
+        <Show when={working()} fallback={<span class="t-working-word">{waiting() === 1 ? "Waiting for 1 agent" : `Waiting for ${waiting()} agents`}</span>}>
+          <AnimeWorkingWord />
+        </Show>
         <Show when={working() && Number.isFinite(started())}>
           <Elapsed since={started()} />
         </Show>

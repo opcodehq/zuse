@@ -1,0 +1,45 @@
+---
+title: Grok
+icon: logo:grok
+navTitle: "Grok"
+description: Install Grok, sign in, and run Grok Build sessions over ACP in Zuse.
+section: providers
+order: 37
+platforms: [desktop, browser, mobile]
+providers: [grok]
+prerequisites: [/start/install, /providers/setup]
+related: [/composer/modes-permissions, /composer/subagents, /reference/diagnostics]
+next: /providers/hermes
+lastVerified: "2026-11-27"
+---
+
+Zuse runs xAI's Grok Build agent through your installed `grok` CLI over ACP (`grok agent stdio`). Zuse launches it without the CLI's automatic updates and without a shared leader process, so a stale background process can't wedge new sessions.
+
+## Install and sign in
+
+Choose **Install** in **Settings → Providers & accounts**, or install it yourself:
+
+```bash
+curl -fsSL https://x.ai/cli/install.sh | bash
+grok login
+```
+
+`npm install -g @xai-official/grok` also works. Grok runs on your SuperGrok or X account; you can add several under **Accounts**. Set `GROK_EXECUTABLE` to use an installation Zuse doesn't find on its own.
+
+## Workflows in Zuse
+
+- Stream responses, thinking, file and shell tools, diffs, approvals, and errors.
+- Choose Low, Medium, or High reasoning.
+- Steer a running turn; your message is delivered at the agent's next step.
+- Discover skills from `.grok/skills`, `.claude/skills`, and `.agents/skills`.
+- Use Plan mode, **Ask for approval**, and **Full access**.
+
+## Updates and recovery
+
+Update with `grok update`, or let Zuse update it from the Grok row. If startup fails:
+
+1. Run `grok version` to confirm the CLI works.
+2. Run `grok login` again if your account or plan changed.
+3. Refresh **Settings → Providers & accounts** and start a new session.
+
+If a stored Grok session can't be resumed, Zuse starts a replacement session and keeps the existing timeline.

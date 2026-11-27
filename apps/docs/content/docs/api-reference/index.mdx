@@ -1,0 +1,106 @@
+---
+title: Control API
+icon: Code
+navTitle: "Overview"
+description: Control a running Zuse engine from your own scripts, tools, and agents with the versioned application control API.
+section: api
+order: 1
+platforms: [desktop, serve]
+providers: []
+prerequisites: []
+related: [/api-reference/quickstart, /api-reference/cli, /api-reference/sdk, /api-reference/operations]
+next: /api-reference/quickstart
+lastVerified: "2026-11-27"
+---
+
+The control API lets your own programs drive a running Zuse engine: the same engine the app uses. You read and change Zappers (persistent coordinators), watch devices, environments, and chats, queue messages, work with repositories, files, terminals, and diffs, and check for updates. The app, the `zuse-control` CLI, the `@zuse/sdk` package, and the CLI's MCP server all call the same engine operations.
+
+The control API never starts an engine. Zuse must already be running, locally or as Zuse Serve.
+
+## Ways to call it
+
+| Client | Use it for |
+| --- | --- |
+| [`zuse-control`](/api-reference/cli) | Shell scripts and one-off calls: `info`, `call`, `watch` |
+| [`zuse-control mcp`](/api-reference/cli#use-it-as-an-mcp-server) | Giving an agent the operations as MCP tools over stdin and stdout |
+| [`@zuse/sdk`](/api-reference/sdk) | Typed TypeScript client for Node.js 22 or newer |
+
+## Transport
+
+Every client opens one WebSocket to the engine and multiplexes calls over it.
+
+- A local engine listens on loopback. Its endpoint looks like `ws://127.0.0.1:<port>`.
+- Zuse Serve exposes the control endpoint at `/api/control`, for example `wss://<host>/api/control`. That endpoint accepts only authenticated control calls. Browser cookies grant no access, and raw engine operations are rejected.
+
+Plain `ws://` is accepted only for `localhost`, `127.0.0.1`, and `::1`. Any other host must use `wss://`. Endpoints can't contain a username, password, query string, or fragment, so a token never goes in the URL.
+
+## Discovery file
+
+When a local engine starts, it writes a discovery file at `<profile>/zappers/control.json`:
+
+```json title="control.json"
+{
+  "endpoint": "ws://127.0.0.1:<port>",
+  "token": "<control token>",
+  "apiVersion": 1,
+  "deviceId": "<this device's id>"
+}
+```
+
+For the default local profile, `<profile>` is `~/.zuse-native/profiles/local` on macOS and Linux. If you set `ZUSE_DATA_DIR`, the profile lives under that directory instead.
+
+`zuse-control` looks for the file in `~/.zuse/profiles/local/zappers/` and `~/.zuse-native/profiles/local/zappers/`. For any other profile, pass `--discovery <path>` or set `ZUSE_CONTROL_FILE`.
+
+<SecurityNote title="Keep the discovery file private">
+The token in `control.json` is an installation-owner credential. The engine creates the `zappers` folder readable only by you, and `zuse-control` refuses a discovery file that group or other users can read. Don't copy the token into URLs, logs, or shared files.
+</SecurityNote>
+
+## Authentication
+
+Every call carries the token inside its request envelope, not in a header or URL. A call with a missing or wrong token fails with `control.unauthorized`.
+
+For a remote engine, use an explicit discovery file whose `endpoint` is a `wss://.../api/control` URL, or pass the endpoint and token to the SDK directly. `--endpoint` overrides only the address; the token still comes from the discovery file.
+
+## Versioning
+
+The API version is `1`. Call `ControlInfo` to check it. It returns:
+
+| Field | Meaning |
+| --- | --- |
+| `apiVersion` | Control API version. Clients refuse to continue when it doesn't match theirs. |
+| `appVersion` | Version of the engine you connected to |
+| `capabilities` | Optional features the engine supports, such as `zappers.v1` when Zappers are available |
+| `methods` | The operation catalog. See [Operations](/api-reference/operations). |
+| `schemas` | JSON Schemas, currently `ZapperCommand` |
+
+`zuse-control` and the SDK both call `ControlInfo` and check `apiVersion` before they do anything else.
+
+## Calls and subscriptions
+
+Most operations return one result. Operations whose names start with `Watch`, plus `SubscribeTerminal` and `UpdateStatus`, are subscriptions: they keep sending values until you cancel them. Use `watch` for those and `call` for everything else.
+
+## Errors
+
+A failed operation returns an error message. The SDK sorts errors into stable codes; see [Errors in the SDK](/api-reference/sdk#errors). `zuse-control` prints the message and exits with a non-zero status.
+
+A dropped connection fails every request still in flight. No client replays a request on its own, because a mutation may already have taken effect. Check the current state, then retry if you still need to.
+
+## Retrying Zapper commands safely
+
+Every `ZapperCommand` carries a `commandId` that you choose (letters, digits, `-`, and `_`, up to 160 characters). The engine stores each command's input and result together:
+
+- Sending the same `commandId` with identical input returns the original result, even if later commands changed the Zapper.
+- Sending the same `commandId` with different input fails with `command ID was already used with different input`.
+
+So when a command's outcome is uncertain, reuse its `commandId` and input. Use a new ID for every new command.
+
+## Updates to the CLI and SDK
+
+Packaged Zuse apps include the `zuse-control` binary and the SDK. At startup the app verifies them and installs the binary under `~/.zuse/control/<version>`, linked from `~/.zuse/bin/zuse-control`; the previous version stays available. If you installed `@zuse/sdk` globally with npm, the app updates it too. It never edits project manifests or lockfiles.
+
+Call `ControlUpdateStatus` to see the installed version and update state, and `RetryControlUpdate` to retry a failed update. A source build without a bundle reports `unmanaged`.
+
+<Cards>
+  <Card title="Quickstart" href="/api-reference/quickstart" description="Make your first call with the CLI and the SDK." />
+  <Card title="Operations" href="/api-reference/operations" description="Every operation in the catalog, and Zapper command actions." />
+</Cards>

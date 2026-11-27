@@ -1,0 +1,73 @@
+---
+title: Build with Zuse
+icon: Rocket
+navTitle: "Welcome"
+description: Run coding agents in parallel against your real repositories, locally or in the cloud, and review everything they ship in one place.
+section: start
+order: 1
+full: true
+platforms: [desktop]
+providers: [claude, codex, grok, cursor, opencode, kiro, pi]
+prerequisites: []
+related: []
+next: /start/install
+lastVerified: "2026-11-27"
+---
+
+import {
+	BookBookmark,
+	Boxes,
+	GitBranch,
+	GitPullRequest,
+	Globe,
+	ListChecks,
+	MessageSquarePlus,
+	Monitor,
+	Network,
+	PanelsTopLeft,
+	Plug,
+	Server,
+	ShieldHalf,
+	Smartphone,
+	SlidersHorizontal,
+} from "lucide-react";
+
+## Use Zuse from anywhere
+
+<Cards className="cards-4">
+	<Card icon={<Monitor />} title="Desktop" description="The full app for macOS, Windows, and Linux" href="/desktop" />
+	<Card icon={<Globe />} title="Browser" description="Reach your computer from any browser" href="/remote/local-browser" />
+	<Card icon={<Smartphone />} title="Phone" description="Follow and steer agents on the go" href="/mobile" />
+	<Card icon={<Server />} title="Serve" description="Turn a Mac or Linux box into a host" href="/serve" />
+</Cards>
+
+## What Zuse handles
+
+<Cards>
+	<Card icon={<GitBranch />} title="Parallel worktrees" description="Give each task its own Git checkout so agents never edit over each other" href="/projects/worktrees" />
+	<Card icon={<SlidersHorizontal />} title="Composer" description="Choose the agent, model, reasoning, and access for every chat" href="/composer" />
+	<Card icon={<GitPullRequest />} title="Changes and pull requests" description="Review the diff, commit, push, and follow checks without leaving the chat" href="/workspace/changes-pull-requests" />
+	<Card icon={<PanelsTopLeft />} title="Files, terminal, and browser" description="Browse, edit, and run the checkout the agent is working in" href="/workspace" />
+	<Card icon={<Plug />} title="Every major agent" description="See which agents are installed and signed in, and switch between them" href="/providers/setup" />
+	<Card icon={<Network />} title="Subagents" description="Split bounded work across agents" href="/composer/subagents" />
+</Cards>
+
+## The shortest path
+
+1. [Install Zuse](/start/install) and open it.
+2. Connect at least one supported agent.
+3. Open a Git repository as a project.
+4. Start a chat, choose its workspace and access, then describe the outcome you want.
+5. Review the agent's edits in the **Diff** panel, run the project, and commit or open a pull request when the work is ready.
+
+Zuse keeps your projects, chats, and their full history on your computer. Closing the window does not turn a finished conversation into disposable terminal output.
+
+## Keep going
+
+<Cards>
+	<Card icon={<MessageSquarePlus />} title="Create your first chat" description="Start a task and follow the agent's work" href="/start/first-chat" />
+	<Card icon={<Boxes />} title="Core concepts" description="Projects, threads, conversations, and worktrees" href="/concepts/project-chat-session" />
+	<Card icon={<ShieldHalf />} title="Modes and permissions" description="Choose how much an agent can do on its own" href="/composer/modes-permissions" />
+	<Card icon={<ListChecks />} title="How-to guides" description="Step-by-step recipes for common tasks" href="/how-to" />
+	<Card icon={<BookBookmark />} title="Reference" description="Settings, keyboard shortcuts, and troubleshooting" href="/reference" />
+</Cards>

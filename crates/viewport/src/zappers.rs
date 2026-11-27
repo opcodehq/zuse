@@ -1200,6 +1200,7 @@ impl WorkspaceView {
                                 path: String::new(),
                                 version: 0,
                                 content: String::new(),
+                                deleted: false,
                             };
                             this.open_zapper_form(
                                 Some(doc.clone()),

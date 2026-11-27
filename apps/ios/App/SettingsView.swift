@@ -1,181 +1,8 @@
 import SwiftUI
 import ZuseCore
 
-/// Pages pushed from the Settings home.
-enum SettingsPage: Hashable {
-  case account, help, computers, appearance
-}
-
-private let supportAddress = URL(string: "mailto:hi@zuse.sh")!
-
-/// Settings home: who is signed in, the computers you use and what this app is.
-struct SettingsView: View {
-  @Bindable var workspace: WorkspaceModel
-  @Environment(\.dismiss) private var dismiss
-  @Environment(\.openURL) private var openURL
-  @AppStorage("native.appearance") private var appearance = "system"
-  @State private var path: [SettingsPage] = []
-  @State private var signingIn = false
-  private var version: String {
-    let info = Bundle.main.infoDictionary
-    let short = info?["CFBundleShortVersionString"] as? String ?? "1.0"
-    let build = info?["CFBundleVersion"] as? String ?? ""
-    return build.isEmpty ? short : "\(short) (\(build))"
-  }
-  private var computers: [SettingsComputer] {
-    workspace.savedConnections.map { connection in
-      SettingsComputer(
-        reference: .saved(connection.id), name: connection.displayName,
-        status: workspace.statusLine(for: connection), state: workspace.state(for: connection),
-        tag: connection.ssh == nil ? nil : "SSH", symbol: "laptopcomputer")
-    }
-      + workspace.environments.map { environment in
-        let state = workspace.state(forEnvironment: environment.id)
-        return SettingsComputer(
-          reference: .account(environment.id), name: environment.label ?? "Computer",
-          status: ComputerStatusText.line(state, route: state == .connected ? "Zuse account" : nil),
-          state: state, tag: "Account", symbol: "desktopcomputer")
-      }
-  }
-  var body: some View {
-    NavigationStack(path: $path) {
-      List {
-        Section { profileCard }
-        computersSection
-        Section("About") {
-          NavigationLink(value: SettingsPage.appearance) {
-            SettingsRow(
-              title: "Appearance", icon: "circle.lefthalf.filled", value: appearance.capitalized)
-          }
-          NavigationLink(value: SettingsPage.help) {
-            SettingsRow(
-              title: "Help", subtitle: "Connecting computers, Tailscale and SSH",
-              icon: "questionmark.circle")
-          }
-          Button {
-            openURL(supportAddress)
-          } label: {
-            SettingsRow(title: "Contact support", icon: "envelope")
-          }
-          SettingsRow(title: "Version", icon: "info.circle", value: version)
-            .accessibilityElement(children: .combine)
-        }
-      }
-      .settingsList()
-      .navigationTitle("Settings").compactNavigationTitle()
-      .toolbar {
-        ToolbarItem(placement: .sheetClose) { SheetCloseButton { dismiss() } }
-      }
-      .navigationDestination(for: SettingsPage.self) { page in
-        switch page {
-        case .account: AccountSettingsView(workspace: workspace)
-        case .help: HelpSettingsView { path.append(.computers) }
-        case .computers: ComputersView(workspace: workspace)
-        case .appearance: appearancePage
-        }
-      }
-      .disabled(workspace.clearingAccount)
-    }.nativeSheetSize(width: 440, height: 600).tint(.primary)
-  }
-
-  @ViewBuilder private var profileCard: some View {
-    let account = workspace.account
-    if account.signedIn {
-      NavigationLink(value: SettingsPage.account) {
-        HStack(spacing: 14) {
-          AccountAvatar(account: account, size: 48)
-          VStack(alignment: .leading, spacing: 2) {
-            Text(account.displayName ?? account.email ?? "Zuse account")
-              .font(.headline).lineLimit(1)
-            Text(
-              account.reauthenticationRequired
-                ? "Session expired · sign in again"
-                : account.displayName != nil
-                  ? account.email ?? "Zuse Cloud and linked computers"
-                  : "Zuse Cloud and linked computers"
-            ).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
-          }
-        }.padding(.vertical, 6)
-      }
-    } else {
-      HStack(spacing: 14) {
-        AccountAvatar(account: account, size: 48)
-        VStack(alignment: .leading, spacing: 2) {
-          Text("Not signed in").font(.headline).lineLimit(1)
-          Text("Sign in for Zuse Cloud and computers linked to your account")
-            .font(.footnote).foregroundStyle(.secondary).lineLimit(2)
-        }
-        Spacer(minLength: 8)
-        Button {
-          signIn()
-        } label: {
-          Text(signingIn ? "Signing In…" : "Sign in").font(.subheadline.weight(.semibold))
-        }
-        .buttonStyle(.borderedProminent).tint(AppTheme.accent).foregroundStyle(.white)
-        .buttonBorderShape(.capsule).disabled(signingIn)
-        .accessibilityLabel("Sign in to Zuse")
-      }
-      .padding(.vertical, 6)
-      .contentShape(Rectangle())
-      .onTapGesture { path.append(.account) }
-      .accessibilityAction(named: "Account") { path.append(.account) }
-    }
-  }
-
-  private var computersSection: some View {
-    let all = computers
-    return Section("Computers") {
-      ForEach(all.prefix(3)) { computer in
-        NavigationLink {
-          ComputerDetailView(workspace: workspace, reference: computer.reference)
-        } label: {
-          ComputerRow(
-            name: computer.name, status: computer.status, state: computer.state,
-            tag: computer.tag, symbol: computer.symbol)
-        }
-      }
-      NavigationLink(value: SettingsPage.computers) {
-        SettingsRow(
-          title: all.isEmpty ? "Add computer" : "Manage computers",
-          subtitle: all.isEmpty
-            ? "Scan a code, paste a link or use SSH"
-            : all.count > 3 ? "\(all.count) computers" : nil,
-          icon: all.isEmpty ? "plus" : "desktopcomputer")
-      }.accessibilityIdentifier("settings-computers")
-    }
-  }
-
-  private var appearancePage: some View {
-    List {
-      Picker("Theme", selection: $appearance) {
-        Text("System").tag("system")
-        Text("Light").tag("light")
-        Text("Dark").tag("dark")
-      }.pickerStyle(.inline).labelsHidden()
-    }.settingsList().navigationTitle("Appearance").compactNavigationTitle()
-  }
-
-  private func signIn() {
-    guard !signingIn else { return }
-    signingIn = true
-    Task {
-      defer { signingIn = false }
-      do { try await workspace.signIn() } catch {
-        workspace.error = error.localizedDescription
-      }
-    }
-  }
-}
-
-private struct SettingsComputer: Identifiable {
-  let reference: ComputerReference
-  let name: String
-  let status: String
-  let state: ComputerState
-  let tag: String?
-  let symbol: String
-  var id: ComputerReference { reference }
-}
+/// Where Contact support writes to.
+let supportAddress = URL(string: "mailto:hi@zuse.sh")!
 
 /// Initials on the brand color when signed in, a person otherwise.
 struct AccountAvatar: View {
@@ -210,8 +37,6 @@ struct AccountSettingsView: View {
   @State private var signingIn = false
   @State private var refreshing = false
   @State private var confirmSignOut = false
-  @State private var showCloud = false
-  @State private var showCloudPreferences = false
   var body: some View {
     let account = workspace.account
     List {
@@ -268,36 +93,12 @@ struct AccountSettingsView: View {
         }
         Section {
           Button {
-            showCloud = true
-          } label: {
-            SettingsRow(
-              title: "Zuse Cloud and agents", subtitle: "Workspaces and agent connections",
-              icon: "cloud")
-          }
-          Button {
             refresh()
           } label: {
             SettingsRow(
               title: refreshing ? "Refreshing…" : "Refresh account",
               subtitle: "Linked computers and cloud chats", icon: "arrow.clockwise")
           }.disabled(refreshing)
-        }
-        Section {
-          Button {
-            showCloudPreferences = true
-          } label: {
-            SettingsRow(title: "Cloud preferences", icon: "slider.horizontal.3")
-          }
-          NavigationLink {
-            CloudInfrastructureView(workspace: workspace)
-          } label: {
-            SettingsRow(title: "Cloud providers", icon: "server.rack")
-          }
-          NavigationLink {
-            RegisteredDevicesView(workspace: workspace)
-          } label: {
-            SettingsRow(title: "Registered devices", icon: "iphone.gen3")
-          }
         }
         Section {
           Button {
@@ -319,10 +120,6 @@ struct AccountSettingsView: View {
       Text(
         "Cloud chats and linked computers disappear from this device until you sign in again. Paired computers stay."
       )
-    }
-    .sheet(isPresented: $showCloud) { CloudSettingsView(workspace: workspace).nativeSheetSize() }
-    .sheet(isPresented: $showCloudPreferences) {
-      RuntimeSettingsView(cloud: workspace.cloud).nativeSheetSize()
     }
   }
   private func signIn() {

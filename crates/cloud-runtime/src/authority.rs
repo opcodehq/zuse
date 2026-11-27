@@ -294,6 +294,13 @@ impl Authority {
                 "launch_intent_receipt_rejected",
                 "github_runtime_update_required",
                 "project_cache_runtime_update_required",
+                // Why a computer command can't be taken; the agent relays it.
+                "no_primary_computer",
+                "computer_offline",
+                "computer_not_found",
+                "task_offline_or_detached",
+                "too_many_pending_computer_requests",
+                "computer_request_settled",
             ];
             let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
             let code = CODES

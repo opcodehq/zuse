@@ -10,7 +10,8 @@ use gpui::AnyElement;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-/// Requests refresh this often while one is waiting or running.
+/// Requests refresh this often while one is waiting or running, or the
+/// chat's agent is working.
 const FAST_POLL: Duration = Duration::from_millis(2500);
 /// Otherwise every fourth round (about every 10 s).
 const IDLE_EVERY: u32 = 4;
@@ -191,6 +192,26 @@ async fn fetch(scope: Scope, slow: bool, requests: bool) -> Fetched {
     out
 }
 
+/// Whether an account feed frame for `account` may have changed the
+/// computer requests of chats on cloud computer `workspace`: a
+/// `computer-request` hint for it, or a reconnect or reset after which hints
+/// may have been missed.
+pub(super) fn requests_changed(frame: &Value, account: &str, workspace: &str) -> bool {
+    if frame["accountId"].as_str() != Some(account) || !frame["organizationId"].is_null() {
+        return false;
+    }
+    let data = &frame["data"];
+    matches!(data["type"].as_str(), Some("connected" | "reset"))
+        || data["events"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|event| {
+                event["kind"] == "computer-request"
+                    && event["workspaceId"].as_str() == Some(workspace)
+            })
+}
+
 impl Composer {
     /// The cloud chat in front, when this composer belongs to one.
     fn computers_scope(&self, cx: &App) -> Option<Scope> {
@@ -231,12 +252,30 @@ impl Composer {
         self.computers.scope = Some(scope.clone());
         self.computers.poll = Some(cx.spawn(async move |this, cx| {
             let mut tick = 0u32;
+            // The account feed says when this chat's requests change, so an
+            // approval replaces the composer as soon as it exists; polling
+            // stays as the fallback while the feed is down.
+            let mut events: Option<zuse_rpc::RpcSubscription> = None;
+            let mut changed = false;
             loop {
                 let slow = tick.is_multiple_of(SLOW_EVERY);
+                if events.is_none() && slow {
+                    events = scope
+                        .controller
+                        .client()
+                        .subscribe_scoped(
+                            methods::CLOUD_EVENTS,
+                            json!({"expectedAccountId":scope.subject,"expectedOrganizationId":null}),
+                        )
+                        .await
+                        .ok();
+                }
+                // While the agent works it may be waiting on a command here:
+                // its approval must replace the composer right away.
                 let busy = this
-                    .read_with(cx, |c, _| c.computers.busy())
+                    .read_with(cx, |c, cx| c.computers.busy() || c.run_live(cx))
                     .unwrap_or(false);
-                let requests = busy || tick.is_multiple_of(IDLE_EVERY);
+                let requests = std::mem::take(&mut changed) || busy || tick.is_multiple_of(IDLE_EVERY);
                 if slow || requests {
                     let fetched = fetch(scope.clone(), slow, requests).await;
                     if this
@@ -247,7 +286,24 @@ impl Composer {
                     }
                 }
                 tick = tick.wrapping_add(1);
-                cx.background_executor().timer(FAST_POLL).await;
+                let mut timer = std::pin::pin!(cx.background_executor().timer(FAST_POLL));
+                loop {
+                    let Some(feed) = events.as_mut() else {
+                        timer.as_mut().await;
+                        break;
+                    };
+                    tokio::select! {
+                        _ = timer.as_mut() => break,
+                        frame = feed.recv() => match frame {
+                            Some(frame) if requests_changed(&frame, &scope.subject, &scope.workspace) => {
+                                changed = true;
+                                break;
+                            }
+                            Some(_) => {}
+                            None => events = None,
+                        },
+                    }
+                }
             }
         }));
     }

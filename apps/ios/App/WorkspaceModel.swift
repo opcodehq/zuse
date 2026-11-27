@@ -5,6 +5,9 @@ import ZuseCore
 
 @MainActor @Observable final class WorkspaceModel {
   let account = Account()
+  /// Zappers hosted by the open computer, live from `WatchZappers`.
+  let zappers = ZapperStore()
+  let pullRequests = PullRequestStore()
   var cloudChats: [CloudChat] = []
   private(set) var cloudRequestsBusy = Set<String>()
   private(set) var pendingCloudActions: [String: CloudWorkspaceAction] = [:]
@@ -253,8 +256,14 @@ import ZuseCore
     #endif
   }
   var cloud: CloudClient {
+    #if DEBUG
+      if CloudPreview.enabled { return CloudPreview.client() }
+    #endif
     let generation = account.generation
-    return CloudClient(baseURL: account.apiURL) { [account] in
+    // Personal workspace, as on desktop and the server's default: a token's org_id claim is
+    // not a choice to work in that organization, and organization workspaces are opt-in.
+    return CloudClient(baseURL: account.apiURL, organizationID: nil) {
+      [account] in
       try await account.token(expectedGeneration: generation)
     }
   }
@@ -705,6 +714,8 @@ import ZuseCore
         }
         rpc = client
         healthySince = .now
+        zappers.attach(client)
+        pullRequests.attach(client)
         if !ProcessInfo.processInfo.arguments.contains("--rpc-fixture") {
           try rememberWorkspace(self.source ?? source)
         }
@@ -881,6 +892,38 @@ import ZuseCore
       guard current == selection else { return false }
       archivedSessions.removeAll { $0.id == session.id }
       if !sessions.contains(where: { $0.id == session.id }) { sessions.append(session) }
+      await refreshSessionCatalog()
+      return current == selection
+    } catch {
+      if current == selection { self.error = error.localizedDescription }
+      return false
+    }
+  }
+  /// Archives a computer chat where it lives; it moves to Archived, ready to restore.
+  @discardableResult func archiveChat(_ session: SessionRow) async -> Bool {
+    #if DEBUG
+      if ProcessInfo.processInfo.arguments.contains("--native-preview") {
+        sessions.removeAll { $0.id == session.id }
+        if !archivedSessions.contains(where: { $0.id == session.id }) {
+          archivedSessions.append(session)
+        }
+        return true
+      }
+    #endif
+    guard let rpc, connectionState == "Connected", await rpc.canonical else {
+      error = "Connect to \(connectedComputer ?? "this computer") to archive this chat."
+      return false
+    }
+    guard restoringChats.insert(session.id).inserted else { return false }
+    let current = selection
+    defer { if current == selection { restoringChats.remove(session.id) } }
+    do {
+      try await CanonicalWorkspace(rpc).setArchived(chatID: session.id, archived: true)
+      guard current == selection else { return false }
+      sessions.removeAll { $0.id == session.id }
+      if !archivedSessions.contains(where: { $0.id == session.id }) {
+        archivedSessions.append(session)
+      }
       await refreshSessionCatalog()
       return current == selection
     } catch {
@@ -1336,6 +1379,8 @@ import ZuseCore
     if connectionState == "Connected" { recordActiveComputer() }
     if let rpc { Task { await rpc.close() } }
     rpc = nil
+    zappers.detach()
+    pullRequests.detach()
     if let lease = sshLease {
       let port = sshForwardPort
       Task {

@@ -632,6 +632,7 @@ mod tests {
                     issue
                 })
                 .collect(),
+            folders: vec![],
         }
     }
 

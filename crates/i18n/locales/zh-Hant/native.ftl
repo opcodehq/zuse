@@ -1247,6 +1247,9 @@ native-whats_new_got_it = 知道了
 # Context: "What's new" dialog footer link to the website changelog with every release.
 native-whats_new_all_releases = 所有版本
 
+# Context: "What's new" dialog footer button; opens this release's full notes on the website changelog.
+native-whats_new_full_release = 完整版本說明
+
 # Context: "What's new" dialog footer, shows the next newer release.
 native-whats_new_next = 下一個
 

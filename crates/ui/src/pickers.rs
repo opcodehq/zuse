@@ -75,7 +75,7 @@ const MAX_REF_ROWS: usize = 300;
 use crate::composer::{ComposerInput, ComposerInputEvent};
 use crate::motion;
 use crate::popover::{self, Loadable, MenuKey};
-use crate::settings::composer::ComposerDefaults;
+use crate::settings::composer::{ComposerDefaults, NewChatDestination};
 use crate::state::{AppState, EngineHandle};
 use crate::theme::Theme;
 
@@ -1825,6 +1825,7 @@ impl Pickers {
             self.effort_dragging = false;
             self.compact_keyboard = false;
             self.compact_motion = compact::CompactMotion::default();
+            self.model_menu.reset_card_side();
         }
         if matches!(kind, PickerKind::Device | PickerKind::Space) {
             self.cloud.refresh();
@@ -3132,6 +3133,8 @@ impl Pickers {
             self.defaults.project = state.selected_space.clone();
             self.defaults.no_project = state.no_project;
         }
+        // A project or device pick heads the chat to a computer.
+        self.defaults.destination = Some(NewChatDestination::Computer);
         if let Some(dir) = &self.data_dir {
             if let Err(err) = self.defaults.save(dir) {
                 tracing::warn!(error = %err, "composer-defaults save failed");

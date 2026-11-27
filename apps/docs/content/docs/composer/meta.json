@@ -1,0 +1,14 @@
+{
+	"title": "Composer",
+	"pages": [
+		"index",
+		"modes-permissions",
+		"context-attachments",
+		"skills-mcp",
+		"subagents",
+		"orchestration",
+		"parallel-agents",
+		"monitor-delegated-work",
+		"zappers"
+	]
+}

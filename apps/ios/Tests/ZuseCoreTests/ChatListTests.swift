@@ -92,3 +92,24 @@ private func row(
     for x in cell.x..<(cell.x + cell.width) { #expect(covered.insert([x, cell.y]).inserted) }
   }
 }
+
+@Test func recentListsKnownActivityFirstThenCatalogOrder() {
+  let now = Date()
+  func dated(_ id: String, _ minutesAgo: Double?, name: String? = "Zuse", archived: Bool = false)
+    -> ChatListRow
+  {
+    ChatListRow(
+      id: "computer|" + id, chatID: id, placeKey: "computer", placeLabel: "Computer",
+      projectKey: "p", projectName: name, title: id, archived: archived,
+      lastActivity: minutesAgo.map { now.addingTimeInterval(-$0 * 60) })
+  }
+  let rows = [
+    dated("unknown-a", nil), dated("old", 600), dated("new", 5),
+    dated("unknown-b", nil, name: "Docs"), dated("gone", 1, archived: true),
+  ]
+  #expect(ChatList.recent(rows).map(\.chatID) == ["new", "old", "unknown-a", "unknown-b"])
+  #expect(ChatList.recent(rows, archive: .archived).map(\.chatID) == ["gone"])
+  #expect(ChatList.recent(rows, project: "docs").map(\.chatID) == ["unknown-b"])
+  #expect(ChatList.recent(rows, query: "unknown").map(\.chatID) == ["unknown-a", "unknown-b"])
+  #expect(ChatList.projectNames(rows + [row("cloud", name: "zuse")]) == ["Zuse", "Docs"])
+}

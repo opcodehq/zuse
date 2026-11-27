@@ -49,6 +49,10 @@ pub(super) struct Launch {
     /// The conversation's computer needs attention: its status line offers
     /// Retry and Delete.
     status_actions: bool,
+    /// The conversation that owns this composer has its agent mid-turn (see
+    /// `CloudConversation::turn_running`): the composer offers Stop and
+    /// queues a message instead of starting a new turn.
+    turn_running: bool,
     /// Why a parked launch failed, shown when its tab is in front again.
     pub(super) failure: Option<SharedString>,
     /// When the new chat's first message was sent.
@@ -204,6 +208,7 @@ impl Composer {
         self.cloud.pending_native = None;
         self.cloud.pending_native_text = None;
         self.cloud.admitted_native = None;
+        self.cloud.turn_running = false;
         self.cloud.native_staged.clear();
         self.pickers
             .update(cx, |pickers, cx| pickers.clear_cloud_task_binding(cx));
@@ -954,6 +959,17 @@ impl Composer {
             self.cloud.status_actions = actions;
             cx.notify();
         }
+    }
+    /// The owning cloud conversation's agent started or finished a turn.
+    pub(crate) fn set_cloud_turn_running(&mut self, running: bool, cx: &mut Context<Self>) {
+        if self.cloud.turn_running != running {
+            self.cloud.turn_running = running;
+            cx.notify();
+        }
+    }
+    /// Whether the owning cloud conversation's agent is mid-turn.
+    pub(crate) fn cloud_turn_running(&self) -> bool {
+        self.cloud.turn_running
     }
     /// The one status line above the composer while a cloud computer starts:
     /// a new chat's launch, then the conversation's computer stage. A spinner

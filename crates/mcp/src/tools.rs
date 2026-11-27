@@ -40,6 +40,8 @@ pub struct ToolDef {
 
 pub struct Tools {
     zuse: Arc<Zuse>,
+    /// See [`crate::McpConfig::cloud_computers`].
+    cloud_computers: bool,
     // Remember successful sends on this MCP connection so wait_for_turn after
     // wait:false also waits for a newly created chat with no session row yet.
     pending_turns: tokio::sync::Mutex<HashMap<String, Arc<PendingTurn>>>,
@@ -131,6 +133,38 @@ fn device_schema() -> Value {
     json!({ "type": "string", "description": "Host device id or exact name. Omit for the local engine." })
 }
 
+/// The device ID of the user's computer called `wanted` (any case), from
+/// the cloud's `computers` list.
+fn computer_named(computers: &Value, wanted: &str) -> anyhow::Result<String> {
+    let all = computers.as_array().map(Vec::as_slice).unwrap_or_default();
+    let wanted = wanted.trim();
+    let matches: Vec<&Value> = all
+        .iter()
+        .filter(|c| {
+            c["name"]
+                .as_str()
+                .is_some_and(|name| name.trim().eq_ignore_ascii_case(wanted))
+        })
+        .collect();
+    match matches.as_slice() {
+        [one] => one["deviceId"]
+            .as_str()
+            .map(str::to_owned)
+            .context("computer without an id"),
+        [] if all.is_empty() => Err(anyhow::anyhow!(crate::computer_wait::NOT_CONNECTED)),
+        [] => {
+            let names: Vec<&str> = all.iter().filter_map(|c| c["name"].as_str()).collect();
+            Err(anyhow::anyhow!(
+                "The user has no computer named \"{wanted}\". Their computers: {}.",
+                names.join(", ")
+            ))
+        }
+        _ => Err(anyhow::anyhow!(
+            "More than one computer is named \"{wanted}\"; pass device_id from list_attached_computers."
+        )),
+    }
+}
+
 /// The engine request for a computer tool call. Each call gets a new request
 /// ID, so a retried delivery is recognized instead of running twice.
 fn computer_request(name: &str, args: &Value, request_id: uuid::Uuid) -> Result<Value, String> {
@@ -183,7 +217,7 @@ fn catalog() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "list_devices",
-            description: "Devices in this workspace (the local engine's device is flagged). Chats and projects are hosted on a device.",
+            description: "Devices in this workspace (the local engine's device is flagged). Chats and projects are hosted on a device. Not the user's own computers in a cloud chat: use list_attached_computers for those.",
             input_schema: json!({ "type": "object", "properties": {} }),
         },
         ToolDef {
@@ -339,14 +373,16 @@ fn catalog() -> Vec<ToolDef> {
     for (name, description, properties, required) in [
         (
             "list_attached_computers",
-            "List the user's own computers this chat can run commands on. role is primary for the computer the user is typing on (the default target) and secondary for their other computers. Includes deviceId, name (refer to computers by this name), platform, whether it is online, shell, OS user and default working directory.",
+            "List the user's own computers (their laptop or desktop) this chat can run commands on: role is primary for the computer the user is typing on (the default target) and secondary for their other computers. Includes deviceId, name (refer to computers by this name), platform, whether it is online, shell, OS user and default working directory (cwd). When the user syncs this chat into their local checkout of the repository on a computer, syncedCheckout is that folder and is its default working directory: it holds this chat's tracked files (one way, updated as you edit), so commands there (dev servers, containers, builds, tests) run against your changes. Edit files in this chat's own workspace, not in syncedCheckout. Not needed before run_on_computer, which takes a computer's name.",
             json!({}),
             json!([]),
         ),
         (
             "run_on_computer",
-            "Run a command on the user's computer. Omit device_id to use the primary computer (the one the user is typing on). Pass another computer's device_id only when the user asked for that computer or the task can only be done there; never as a default or fallback. The owner approves each command unless they already allowed this chat or that computer. Returns a request ID; poll computer_task_results for output and completion. Long builds and tests can ask for up to 3600 seconds (default 600). Never resubmit a request whose outcome is unknown.",
-            json!({"device_id":{"type":"string"},"command":{"type":"string"},"cwd":{"type":"string"},
+            "Run a command on the user's computer and wait for it, like a normal shell command. Omit computer to use the primary computer (the one the user is typing on). When the user names one of their computers (\"my Mac\", \"the build box\"), pass that name as computer; no need to list them first. Use another computer only when the user asked for it or the task can only be done there; never as a default or fallback. Without cwd, the command starts in the computer's default working directory: the chat's synced checkout when there is one (see list_attached_computers), else the user's home. The owner approves each command unless they already allowed this chat or that computer: this call waits for their decision and for the command to finish, then returns its output and exit status (or that it was denied or stopped). Long builds and tests can ask for up to 3600 seconds (default 600). If it returns while still waiting, call computer_task_results with its request_id. Never resubmit a request whose outcome is unknown.",
+            json!({"computer":{"type":"string","description":"The computer's name as the user calls it (or as list_attached_computers shows it)"},
+                "device_id":{"type":"string","description":"A deviceId from list_attached_computers, instead of computer"},
+                "command":{"type":"string"},"cwd":{"type":"string"},
                 "timeout_seconds":{"type":"integer","minimum":1,"maximum":zuse_protocol::computer_tasks::MAX_TIMEOUT_SECS}}),
             json!(["command"]),
         ),
@@ -358,15 +394,15 @@ fn catalog() -> Vec<ToolDef> {
         ),
         (
             "run_computer_task",
-            "Request an offered task by UUID. The owner approves it in Computers. Returns the request ID. Never automatically retry a submission after disconnect.",
+            "Request an offered task by UUID and wait for it. The owner approves it first; returns its output and status. Never automatically retry a submission after disconnect.",
             json!({"task":{"type":"string","format":"uuid"},
                 "timeout_seconds":{"type":"integer","minimum":1,"maximum":zuse_protocol::computer_tasks::MAX_TIMEOUT_SECS}}),
             json!(["task"]),
         ),
         (
             "computer_task_results",
-            "Read this chat's recent computer requests, newest first. state is pending (waiting for the owner), approved, running (output so far), finished, denied, cancelled or unknown (it may have run; never resubmit it).",
-            json!({}),
+            "Read this chat's recent computer requests, newest first. state is pending (waiting for the owner), approved, running (output so far), finished, denied, cancelled or unknown (it may have run; never resubmit it). Pass request_id to wait for that request to finish and get its output.",
+            json!({"request_id":{"type":"string","format":"uuid"}}),
             json!([]),
         ),
     ] {
@@ -925,8 +961,32 @@ impl Tools {
     pub fn new(zuse: Arc<Zuse>) -> Self {
         Self {
             zuse,
+            cloud_computers: false,
             pending_turns: Default::default(),
         }
+    }
+
+    pub fn with_cloud_computers(mut self, cloud_computers: bool) -> Self {
+        self.cloud_computers = cloud_computers;
+        self
+    }
+
+    /// The `tools/list` entries. In a cloud chat the computer tools are
+    /// marked to load up front, so "run this on my Mac" is one tool call
+    /// rather than a tool search first.
+    pub fn listing(&self) -> Vec<Value> {
+        self.list()
+            .into_iter()
+            .map(|tool| {
+                let up_front = self.cloud_computers
+                    && matches!(tool.name, "run_on_computer" | "list_attached_computers");
+                let mut entry = serde_json::to_value(&tool).unwrap_or_default();
+                if up_front {
+                    entry["_meta"] = json!({"anthropic/alwaysLoad": true});
+                }
+                entry
+            })
+            .collect()
     }
 
     pub fn list(&self) -> Vec<ToolDef> {
@@ -1027,13 +1087,7 @@ impl Tools {
                     .chat_id
                     .as_deref()
                     .ok_or_else(|| "Computer tasks require an originating chat".to_owned())?;
-                let request = computer_request(name, &args, uuid::Uuid::new_v4())?;
-                self.zuse
-                    .call_once(
-                        zuse_protocol::computer_tasks::METHOD,
-                        json!({"chatId":chat,"request":request}),
-                    )
-                    .await
+                self.computer_tool(chat, name, args).await
             }
             "plugins_list" | "plugins_search" | "plugins_schema" | "plugins_call" => {
                 self.plugin_tool(name, args).await
@@ -1061,6 +1115,88 @@ impl Tools {
             other => return Err(format!("unknown tool: {other}")),
         };
         result.map_err(|e| format!("{e:#}"))
+    }
+
+    /// Computer tools. A command waits, like any tool call, until the owner
+    /// decided and it finished, so its output returns in this same call.
+    async fn computer_tool(&self, chat: &str, name: &str, args: Value) -> anyhow::Result<Value> {
+        use crate::computer_wait;
+        let call = |request: Value| async move {
+            self.zuse
+                .call_once(
+                    zuse_protocol::computer_tasks::METHOD,
+                    json!({"chatId":chat,"request":request}),
+                )
+                .await
+                .map_err(computer_wait::explain)
+        };
+        // Reads may reconnect; only submissions must never be replayed. A
+        // held read is answered once `id` settles (see `computer_wait::wait`).
+        let results = |id: String| {
+            move |hold: Option<std::time::Duration>| {
+                let request = match hold {
+                    Some(hold) => json!({"action":"wait","request_id":id,
+                        "wait_ms":u32::try_from(hold.as_millis()).unwrap_or(u32::MAX)}),
+                    None => json!({"action":"results"}),
+                };
+                async move {
+                    self.zuse
+                        .call(
+                            zuse_protocol::computer_tasks::METHOD,
+                            json!({"chatId":chat,"request":request}),
+                        )
+                        .await
+                        .map_err(computer_wait::explain)
+                }
+            }
+        };
+        if name == "computer_task_results"
+            && let Some(id) = args["request_id"].as_str().filter(|id| !id.is_empty())
+        {
+            return computer_wait::wait(
+                id,
+                results(id.to_owned()),
+                computer_wait::POLL,
+                computer_wait::budget(None),
+            )
+            .await;
+        }
+        let mut args = args;
+        if name == "run_on_computer"
+            && args["device_id"]
+                .as_str()
+                .is_none_or(|id| id.trim().is_empty())
+            && let Some(wanted) = args["computer"].as_str().filter(|n| !n.trim().is_empty())
+        {
+            let computers = call(json!({"action":"computers"})).await?;
+            args["device_id"] = json!(computer_named(&computers, wanted)?);
+        }
+        let request =
+            computer_request(name, &args, uuid::Uuid::new_v4()).map_err(|e| anyhow::anyhow!(e))?;
+        let created = call(request).await?;
+        match name {
+            "run_on_computer" | "run_computer_task" => {
+                let id = created["id"]
+                    .as_str()
+                    .context("computer request without an id")?
+                    .to_owned();
+                computer_wait::wait(
+                    &id,
+                    results(id.clone()),
+                    computer_wait::POLL,
+                    computer_wait::budget(args["timeout_seconds"].as_u64()),
+                )
+                .await
+            }
+            "list_attached_computers"
+                if created
+                    .as_array()
+                    .is_some_and(|computers| !computers.iter().any(|c| c["online"] == true)) =>
+            {
+                Ok(json!({"computers":created,"note":computer_wait::NOT_CONNECTED}))
+            }
+            _ => Ok(created),
+        }
     }
 
     /// Agents get a compact result (new revision, the changed entity and a
@@ -2060,6 +2196,76 @@ mod tests {
         ));
     }
 
+    /// "Run it on my build box" needs no list call first.
+    #[test]
+    fn a_named_computer_resolves_to_its_device() {
+        use serde_json::json;
+        let computers = json!([
+            {"deviceId":"mac","name":"Swaraj's MacBook","online":true},
+            {"deviceId":"box","name":"Build box","online":false},
+            {"deviceId":"a","name":"Twin","online":true},{"deviceId":"b","name":"twin","online":true}]);
+        assert_eq!(
+            super::computer_named(&computers, " build BOX ").unwrap(),
+            "box"
+        );
+        assert_eq!(
+            super::computer_named(&computers, "Swaraj's MacBook").unwrap(),
+            "mac"
+        );
+        let missing = super::computer_named(&computers, "Laptop")
+            .unwrap_err()
+            .to_string();
+        assert!(missing.contains("no computer named \"Laptop\"") && missing.contains("Build box"));
+        let twins = super::computer_named(&computers, "TWIN")
+            .unwrap_err()
+            .to_string();
+        assert!(twins.contains("device_id"), "{twins}");
+        let none = super::computer_named(&json!([]), "Mac")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            none.contains("Use this computer from cloud chats"),
+            "{none}"
+        );
+    }
+
+    /// Only cloud chats load the computer tools up front.
+    #[test]
+    fn cloud_chats_list_the_computer_tools_up_front() {
+        let tools = |cloud| {
+            let zuse = crate::Zuse::new(
+                "ws://127.0.0.1:1".into(),
+                crate::Origin {
+                    chat_id: Some("chat".into()),
+                    device_id: Some("local".into()),
+                },
+            );
+            super::Tools::new(std::sync::Arc::new(zuse))
+                .with_cloud_computers(cloud)
+                .listing()
+        };
+        let up_front = |listing: &[serde_json::Value]| {
+            let mut names: Vec<String> = listing
+                .iter()
+                .filter(|t| t["_meta"]["anthropic/alwaysLoad"] == true)
+                .map(|t| t["name"].as_str().unwrap().to_owned())
+                .collect();
+            names.sort();
+            names
+        };
+        let cloud = tools(true);
+        assert_eq!(
+            up_front(&cloud),
+            ["list_attached_computers", "run_on_computer"]
+        );
+        let run = cloud
+            .iter()
+            .find(|t| t["name"] == "run_on_computer")
+            .unwrap();
+        assert!(run["inputSchema"]["properties"]["computer"].is_object());
+        assert!(up_front(&tools(false)).is_empty());
+    }
+
     #[test]
     fn workers_get_issue_reporting_without_coordinator_management_tools() {
         let zuse = crate::Zuse::new(
@@ -2163,6 +2369,7 @@ mod tests {
                 pull_requests: vec![],
                 activity: vec![],
             }],
+            folders: vec![],
         };
         let full = serde_json::to_value(Some(&zapper)).unwrap();
         let args = json!({

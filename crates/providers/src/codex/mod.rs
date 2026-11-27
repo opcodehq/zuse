@@ -121,8 +121,15 @@ fn codex_mcp_overrides(mcp: &zuse_protocol::McpServer) -> Vec<(String, Value)> {
         (key("command"), mcp.command.clone().into()),
         (key("args"), json!(mcp.args)),
         (key("env"), json!(mcp.env)),
+        // Its tools block for as long as their work takes (a chat's turn, a
+        // command on the user's computer up to its one-hour deadline plus
+        // approval), far past the default per-call limit.
+        (key("tool_timeout_sec"), json!(MCP_TOOL_TIMEOUT_SECS)),
     ]
 }
+
+/// Covers the longest blocking tool: approval, then a one-hour command.
+const MCP_TOOL_TIMEOUT_SECS: f64 = 5400.0;
 
 /// A ready-to-spawn `codex login` command for the engine's account flow.
 ///
@@ -3004,6 +3011,10 @@ mod mcp_injection_tests {
         assert_eq!(
             overrides["mcp_servers.zuse.env"],
             json!({ "ZUSE_CHAT_ID": "chat-1" })
+        );
+        assert_eq!(
+            overrides["mcp_servers.zuse.tool_timeout_sec"],
+            json!(5400.0)
         );
     }
 }

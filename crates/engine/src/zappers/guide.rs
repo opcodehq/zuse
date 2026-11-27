@@ -63,6 +63,7 @@ pub(super) fn file(path: &str) -> Option<ZapperFile> {
             path: g.path.to_owned(),
             version: 0,
             content: g.body,
+            deleted: false,
         })
 }
 

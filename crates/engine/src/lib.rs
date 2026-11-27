@@ -77,6 +77,7 @@ mod acp_catalog;
 mod harness_api;
 mod harness_local;
 pub mod harness_models;
+pub(crate) mod harness_vendors;
 mod model_catalogs;
 pub mod model_connections;
 #[cfg(unix)]
@@ -509,6 +510,25 @@ impl EngineCore {
             let plugins = plugins.clone();
             tokio::spawn(async move { plugins.resume_computer_bridge().await });
         }
+        #[cfg(unix)]
+        {
+            // A chat synced into a checkout here tells the cloud where its
+            // commands on this computer start.
+            let plugins = plugins.clone();
+            cloud::checkout_sync::set_reporter(move |account, workspace, chat| {
+                let plugins = plugins.clone();
+                tokio::spawn(async move {
+                    let report = plugins.report_synced_checkout(&account, &workspace, &chat);
+                    match tokio::time::timeout(std::time::Duration::from_secs(10), report).await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => {
+                            tracing::info!(%error, "checkout sync: folder not reported")
+                        }
+                        Err(_) => tracing::info!("checkout sync: folder report timed out"),
+                    }
+                });
+            });
+        }
         let browser_access =
             browser_access::Owner::new(profile.store_root(), device_id.clone(), pairings.clone())
                 .with_managed_authority(Arc::new(managed_host.control()));
@@ -783,6 +803,7 @@ impl EngineCore {
         .with_direct_access(self.direct_access.control())
         .with_zappers(self.zappers.clone())
         .with_model_connections(self.model_connections.clone())
+        .with_model_api_keys(self.harness_models.api_keys())
         .with_account(self.account.clone(), self.plugins.clone())
         .with_managed_access(self.managed_access.clone())
         .with_managed_host(self.managed_host.control())

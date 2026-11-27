@@ -214,6 +214,8 @@ pub(super) struct State {
     sync_change: Option<Task<()>>,
     sync_folder: Option<Task<()>>,
     sync_error: Option<String>,
+    /// This chat's files in the user's own checkout here.
+    pub(super) checkout: super::checkout_sync::Checkout,
     /// Which page of the menu shows.
     page: Page,
     /// SSH access: the host once prepared, the preparation, its failure.
@@ -445,7 +447,7 @@ fn request(mut scope: Value, action: Action, key: &str, row: &Value, check: bool
 }
 /// A bordered, monospace field with a main action and a chevron for more,
 /// like the previous Zuse summary card's SSH and synced-folder controls.
-fn split_field(theme: &Theme) -> gpui::Div {
+pub(super) fn split_field(theme: &Theme) -> gpui::Div {
     div()
         .mx(px(8.))
         .my(px(6.))
@@ -459,7 +461,7 @@ fn split_field(theme: &Theme) -> gpui::Div {
         .overflow_hidden()
         .font_family("Geist Mono")
 }
-fn split_main(theme: &Theme, id: &'static str) -> gpui::Stateful<gpui::Div> {
+pub(super) fn split_main(theme: &Theme, id: &'static str) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
         .flex_1()
@@ -554,6 +556,7 @@ impl CloudConversation {
                     Ok(_) => this.revoke(cx),
                     Err(error) => this.computer.error = Some(error.to_string()),
                 }
+                this.publish_computer_online(cx);
                 if std::mem::take(&mut this.computer.refresh_again)
                     && this.computer.open
                     && this.authorized
@@ -1738,149 +1741,10 @@ impl CloudConversation {
             );
         }
 
-        // Local sync: the switch, its state, then the folder.
-        let sync = &self.computer.sync;
-        let loaded = sync["enabled"].is_boolean();
-        let enabled = sync["enabled"] == true;
-        let sync_busy = self.computer.sync_change.is_some() || self.computer.sync_folder.is_some();
-        let phase = match sync["state"].as_str() {
-            Some("synced") => ("In sync", Tone::Running),
-            Some("syncing") => ("Syncing…", Tone::Busy),
-            Some("waiting") => ("Waiting for the computer", Tone::Idle),
-            Some("error") => ("Sync failed", Tone::Failed),
-            Some("pending") => ("Preparing sync…", Tone::Busy),
-            Some("stopping") => ("Stopping sync…", Tone::Busy),
-            _ => ("Sync off", Tone::Idle),
-        };
-        menu = menu.child(popover::menu_separator()).child(
-            div()
-                .id("cloud-sync-toggle")
-                .mt(px(4.))
-                .px(px(8.))
-                .h(px(28.))
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .cursor_pointer()
-                .role(gpui::Role::Switch)
-                .aria_label("Sync to a local directory")
-                .aria_toggled(if enabled {
-                    gpui::Toggled::True
-                } else {
-                    gpui::Toggled::False
-                })
-                .opacity(if sync_busy || !loaded { 0.5 } else { 1. })
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .child("Sync to a local directory"),
-                )
-                .child(crate::settings::widgets::toggle_switch(
-                    &theme,
-                    enabled,
-                    "cloud-sync",
-                ))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if !sync_busy && loaded {
-                        this.change_sync(methods::CLOUD_SYNC_CONFIGURE, !enabled, None, cx);
-                    }
-                })),
-        );
-        if enabled {
-            menu = menu.child(
-                div()
-                    .px(px(8.))
-                    .h(px(24.))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .text_color(theme.text_muted)
-                    .child(dot(phase.1))
-                    .child(if sync_busy {
-                        "Updating sync…"
-                    } else {
-                        phase.0
-                    }),
-            );
-            if let Some(path) = sync["localPath"].as_str().map(str::to_owned) {
-                let reveal = path.clone();
-                menu = menu.child(
-                    split_field(&theme)
-                        .child(
-                            split_main(&theme, "cloud-sync-reveal")
-                                .tip("Open folder")
-                                .child(
-                                    icon(icons::FOLDER)
-                                        .size(px(14.))
-                                        .flex_none()
-                                        .text_color(theme.text_muted),
-                                )
-                                .child(div().min_w_0().truncate().child(path))
-                                .on_click(cx.listener(move |_, _, _, cx| {
-                                    cx.reveal_path(std::path::Path::new(&reveal))
-                                })),
-                        )
-                        .child(
-                            split_chevron(&theme, "cloud-sync-open-in")
-                                .aria_label("Open synced folder in")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.computer.page = Page::OpenIn;
-                                    cx.notify();
-                                })),
-                        ),
-                );
-            } else {
-                menu = menu.child(
-                    popover::menu_row(&theme, false, "cloud-sync-folder")
-                        .id("cloud-sync-folder")
-                        .opacity(if sync_busy { 0.5 } else { 1. })
-                        .text_size(crate::typography::text_xs())
-                        .child(
-                            icon(icons::FOLDER)
-                                .size(px(14.))
-                                .text_color(theme.text_muted),
-                        )
-                        .child("Choose folder…")
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if !sync_busy {
-                                this.choose_sync_folder(cx);
-                            }
-                        })),
-                );
-            }
-            if sync["state"] == "error" {
-                menu = menu.child(
-                    popover::menu_row(&theme, false, "cloud-sync-retry")
-                        .id("cloud-sync-retry")
-                        .text_size(crate::typography::text_xs())
-                        .child(
-                            icon(icons::REFRESH)
-                                .size(px(14.))
-                                .text_color(theme.text_muted),
-                        )
-                        .child("Retry sync")
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.change_sync(methods::CLOUD_SYNC_RETRY, true, None, cx)
-                        })),
-                );
-            }
-        }
-        if let Some(error) = self
-            .computer
-            .sync_error
-            .clone()
-            .or_else(|| sync["error"].as_str().map(str::to_owned))
-        {
-            menu = menu.child(
-                div()
-                    .px(px(8.))
-                    .py(px(4.))
-                    .text_color(theme.danger)
-                    .child(error),
-            );
-        }
+        // This chat in the user's own checkout here.
+        menu = menu
+            .child(popover::menu_separator())
+            .children(self.render_checkout_rows(&theme, cx));
 
         // Repair and removal.
         let mut repair = Vec::new();

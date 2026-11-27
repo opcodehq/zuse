@@ -1,6 +1,7 @@
 // Daily usage plot: dithered series on 2px cells, the reference plot's margins, axes and hover/day selection
 // (crates/viewport/src/usage_dashboard/chart.rs). The raster redraws only when data, size or theme change.
 import { resolvedTheme } from "@/shell/theme";
+import { paintDitherAreas } from "@/ui/dither-chart";
 import { createEffect, createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { money, tokens } from "./format";
 import type { UsageGroup } from "./state";
@@ -17,7 +18,6 @@ const LEFT = 72;
 const TOP = 10;
 const RIGHT = 12;
 const PLOT_H = 224;
-const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
 
 function tickStep(extent: number, count: number) {
   const raw = extent / count;
@@ -85,7 +85,7 @@ export function Chart(props: { groups: UsageGroup[]; cost: boolean; hovered: num
     const canvas = base;
     if (!canvas || width() <= 0) return;
     resolvedTheme();
-    const { w, cols, rows, cw, ch } = geometry();
+    const { w } = geometry();
     const dpr = window.devicePixelRatio || 1;
     canvas.width = Math.round(w * dpr);
     canvas.height = Math.round(PLOT_H * dpr);
@@ -109,33 +109,7 @@ export function Chart(props: { groups: UsageGroup[]; cost: boolean; hovered: num
     const n = data.length;
     if (!n) return;
     const colors = props.cost ? COST_SERIES : SERIES;
-    for (let series = 0;series < (data[0]?.length ?? 0);series++) {
-      const dotted = !props.cost && series % 2 === 1;
-      const [r, g, b] = colors[series]!.rgb;
-      for (let x = 0;x < cols;x++) {
-        const position = cols > 1 ? (x / (cols - 1)) * Math.max(0, n - 1) : 0;
-        const a = Math.min(Math.floor(position), n - 1);
-        const bIndex = Math.min(a + 1, n - 1);
-        const t = position - a;
-        const value = data[a]![series]! * (1 - t) + data[bIndex]![series]! * t;
-        const start = Math.min(rows, Math.max(0, Math.round((1 - value / max) * rows)));
-        const depth = rows - start;
-        for (let y = start;y < rows;y++) {
-          let alpha: number;
-          if (y === start) alpha = 0.72;
-          else if (y === start + 1) alpha = 0.36;
-          else {
-            const density = (y - start) / Math.max(1, depth);
-            const bias = (dotted ? 0.12 : 0) - series * 0.14;
-            const lit = density > (BAYER[(y & 3) * 4 + (x & 3)]! + 0.5) / 16 - bias;
-            if (dotted && !lit) continue;
-            alpha = (0.3 + density * 0.7) * (lit ? 1 : 0.4);
-          }
-          ctx.fillStyle = `rgba(${r},${g},${b},${alpha})`;
-          ctx.fillRect(x * cw, y * ch, cw + 0.01, ch + 0.01);
-        }
-      }
-    }
+    paintDitherAreas(ctx, w, PLOT_H, max, data, colors.map(series => series.rgb), !props.cost);
   });
 
   // The hover marker: a tinted column and a dot per series at the hovered day.

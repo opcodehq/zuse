@@ -1,0 +1,85 @@
+---
+title: "Operate zuse serve"
+icon: Cog
+navTitle: "Operations"
+description: "Run zuse serve as a background service, check its status, update it, and manage account linking."
+section: "Serve CLI"
+order: 2
+platforms: [serve]
+providers: []
+prerequisites: [/serve]
+related: [/serve/command-reference, /serve/troubleshooting, /serve/security]
+next: /serve/command-reference
+lastVerified: "2026-11-27"
+---
+
+## Run it as a background service
+
+`zuse daemon` installs Zuse as a user service: a systemd user unit (`zuse.service`) on Linux, or a launchd agent (`sh.zuse.app`) on macOS. Other platforms are not supported.
+
+```sh
+zuse daemon install --serve --lan
+```
+
+Everything after `--serve` is passed to `zuse serve`. The flags are checked when you install and written into the service as given. Without `--serve`, the service runs `zuse headless`, the engine without the browser server.
+
+The service runs the current `zuse` executable with `PATH` and any `ZUSE_*` variables captured at install time, so agent CLIs on your `PATH` can start. If you install an agent somewhere new, reinstall the service.
+
+| Command | Effect |
+| --- | --- |
+| `zuse daemon install` | Install, enable, and start the service. |
+| `zuse daemon status` | Show the service status. |
+| `zuse daemon start` | Start the installed service. |
+| `zuse daemon stop` | Stop the service. |
+| `zuse daemon restart` | Restart the service. |
+| `zuse daemon uninstall` | Stop and remove the service. Projects and the data directory stay. |
+
+On macOS the service writes `daemon.log` in the data directory. On Linux, read its output with `journalctl --user -u zuse.service`.
+
+## Check status
+
+```sh
+zuse status
+```
+
+`status` prints the data directory, sign-in mode, and whether an engine is running. When an engine answers on the loopback port, it adds a **Remote access** section with the signed-in account, the linked computer, the network routes it offers (or `Network: this computer only`), and its browser address. It exits with code `1` when the saved sign-in needs attention.
+
+Pass `--ipc-port` if the engine does not use the default port `27654`.
+
+## Pair another device
+
+With a server running, create a private link for one more device:
+
+```sh
+zuse pair
+zuse pair --app
+zuse pair --json
+```
+
+`pair` prints a **Browser** link and, when it differs, a **Zuse app** link, plus a QR code in an interactive terminal. `--app` shows the QR code for the Zuse app instead of the browser. `--json` prints `{"app", "browser", "selfSigned", "localOnly"}` on one line for scripts. Unused links expire after ten minutes.
+
+## Link to your account
+
+```sh
+zuse link --name build-box
+zuse unlink
+```
+
+`link` signs in with a device code when needed and makes this computer available to your other signed-in devices from any network. `unlink` stops that; local chats stay on the computer. `zuse serve --account` does the same as `link` when the server starts.
+
+`zuse login` and `zuse logout` are separate: they turn workspace sync on or off for the next engine start and do not affect remote access.
+
+## Update
+
+```sh
+zuse update --check
+zuse update
+```
+
+`update` downloads a checksummed release of the standalone command and installs the command and browser app together. Restart `zuse serve` to use it; a service installed with `zuse daemon install --serve` picks up the new version on its next restart (`zuse daemon restart`). Previous versions and profiles are kept. Updating needs Python 3.11 or newer and `tar`.
+
+## Uninstall
+
+Stop the service first with `zuse daemon stop` or `zuse daemon uninstall`. Then remove the launchers with `sh install.sh --cli --uninstall`. Installed packages and your data directory are preserved.
+
+<NextStep href="/serve/command-reference/" label="See every command and option" />

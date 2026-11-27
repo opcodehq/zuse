@@ -4493,6 +4493,11 @@ impl Transcript {
 
     /// Show `label` in the working line until cleared. The chat's own live
     /// turn, when there is one, still takes precedence.
+    #[cfg(test)]
+    pub(crate) fn external_activity_for_test(&self) -> Option<SharedString> {
+        self.external_activity.clone()
+    }
+
     pub(crate) fn set_external_activity(
         &mut self,
         label: Option<SharedString>,

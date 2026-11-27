@@ -1,0 +1,41 @@
+---
+title: "Secure a Serve host"
+icon: ShieldCheck
+navTitle: "Security"
+description: "Run zuse serve with a dedicated user, the narrowest network exposure, private credentials, and regular device reviews."
+section: "Serve CLI"
+order: 4
+platforms: [serve]
+providers: []
+prerequisites: [/serve]
+related: [/remote/security, /serve/operations, /serve/troubleshooting]
+next: /serve/troubleshooting
+lastVerified: "2026-11-27"
+---
+
+A Serve host is a real developer environment. Anyone you pair with it can ask agents to read files, run commands, and use the credentials available to that operating-system user. A pairing grants full control; there is no read-only device.
+
+## Use a dedicated user
+
+Run `zuse serve` as an unprivileged user that can read only the repositories and tools it needs. Do not run it as root. Keep production secrets and unrelated personal files out of that user's reach. `zuse daemon` installs a user service, not a system service.
+
+## Expose as little as possible
+
+- Plain `zuse serve` listens on `127.0.0.1` only.
+- `--lan` accepts paired devices on private networks and your tailnet. Its connections are end-to-end encrypted, and peers outside private address space are refused.
+- Browsers on the local network open a separate HTTPS listener with a certificate generated for this computer. The first visit shows a certificate warning. Chats stay encrypted, but on a network you do not trust someone could serve a modified page. Use Tailscale HTTPS (`--tailscale-serve`) or account access there instead.
+- A non-loopback `--listen` address requires your own certificate (`--tls-cert`, `--tls-key`) or an HTTPS reverse proxy (`--public-origin`). Do not put an unauthenticated proxy in front of Serve.
+
+## Keep credentials private
+
+The `Open …/#token=…` link and every pairing link are credentials. Do not paste them into shared chats, tickets, or screenshots. Pairing links expire after ten minutes if unused, and each one works for one device. Relay credential files and the data directory (`~/.zuse-native` by default) must stay readable only by the Serve user.
+
+## Review devices
+
+Up to 32 devices can be paired with one profile. Review them in the desktop app's **Settings → Remote access → Devices**, or in the web client's **Settings → Remote access**, and choose **Revoke** for any you no longer use. Revoking ends that device's active connections at once. Run `zuse unlink` before you retire or hand over an account-linked computer.
+
+## Treat agents separately
+
+Serve does not manage agent credentials. Follow each agent's own sign-in and organization policy, and keep using permission modes: a phone or browser connection does not make broad command access safer.
+
+<NextStep href="/serve/troubleshooting/" label="Troubleshoot Serve" />

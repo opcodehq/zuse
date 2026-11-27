@@ -6869,8 +6869,6 @@ pub struct Composer {
     dictation_activation: Option<Subscription>,
     dictation_blur: Option<Subscription>,
     dictation_focus: FocusHandle,
-    /// The game above the card while an agent works.
-    runner: Entity<crate::arcade::Runner>,
     /// The last live frame of the voice pill, kept so it can settle away
     /// after the transcript lands instead of vanishing.
     voice_last: Option<VoiceFrame>,
@@ -7384,11 +7382,6 @@ impl Composer {
             input
         });
         let pickers = cx.new(|cx| Pickers::new(state.clone(), cx));
-        let runner = {
-            let owner = cx.weak_entity();
-            let input_focus = input.read(cx).focus_handle.clone();
-            cx.new(|cx| crate::arcade::Runner::new(owner, input_focus, cx))
-        };
         let account_usage = cx.new(|cx| crate::account_usage::AccountUsage::new(state.clone(), cx));
         // The footer toolbar (checkout kind + ref picker) is rendered INLINE
         // by the composer from picker state — a pickers-side notify (refs
@@ -7640,7 +7633,6 @@ impl Composer {
             dictation_activation: None,
             dictation_blur: None,
             dictation_focus: cx.focus_handle(),
-            runner,
             dictation_ready: Default::default(),
             dictation_ready_task: None,
             dictation_button_focus: cx.focus_handle(),
@@ -10105,6 +10097,11 @@ impl Composer {
     }
 
     pub(crate) fn run_live(&self, cx: &App) -> bool {
+        // A cloud chat's turn: its conversation's one answer, which also
+        // knows the server's command record, not just a live session.
+        if self.cloud_turn_running() {
+            return true;
+        }
         let s = self.state.read(cx);
         let Some(chat_id) = s.selected_chat.as_deref() else {
             return false;
@@ -13526,14 +13523,6 @@ impl Render for Composer {
             .cloned();
         self.sync_computers(cx);
         if let Some(chat) = archived {
-            // This early return skips the mounted call below; with the
-            // setting off a game in play must still release here, or it
-            // would resume after re-enabling.
-            if !crate::settings::runner_game_enabled(cx) {
-                self.runner.update(cx, |runner, cx| {
-                    runner.mounted(false, false, window, cx);
-                });
-            }
             return self.render_archived_footer(&chat, cx);
         }
         if self.dictation_blur.is_none() {
@@ -13601,11 +13590,6 @@ impl Render for Composer {
             self.reset_slash(None, cx);
         }
         let mode = self.button_mode(cx);
-        let agent_working = mode == SendButtonMode::Stop;
-        let runner_enabled = crate::settings::runner_game_enabled(cx);
-        let runner_mounted = self.runner.update(cx, |runner, cx| {
-            runner.mounted(agent_working, runner_enabled, window, cx)
-        });
         // Shape the current draft before sizing the pill. Waiting for the child
         // layout leaves the parent using the previous edit's height.
         self.input.update(cx, |input, cx| {
@@ -14341,18 +14325,6 @@ impl Render for Composer {
             .children(self.render_emoji_popup(&theme, cx))
             .children(self.render_composer_list(&theme, cx))
             .children(self.render_flash(&theme, cx))
-            // While the agent works, a little runner plays itself in the
-            // reserved status strip until the user clicks to take over.
-            .when(runner_mounted, |el| {
-                el.child(
-                    div()
-                        .absolute()
-                        .top(px(-crate::arcade::RUNNER_HEIGHT - 1.0))
-                        .left(px(surface_radius))
-                        .right(px(surface_radius))
-                        .child(crate::arcade::runner_strip(&self.runner)),
-                )
-            })
             .children(self.render_worktree_progress(&theme, cx));
         // The context tray: a tonal tab tucked behind the card's top edge,
         // one step narrower than the card (`w-14/15`), carrying the
@@ -14521,23 +14493,6 @@ mod tests {
                 composer
                     .input
                     .update(cx, |input, cx| test(input, window, cx));
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn runner_game_setting_unmounts_a_game_in_play(cx: &mut gpui::TestAppContext) {
-        let (_dir, window) = composer_focus_window(cx);
-        window
-            .update(cx, |composer, window, cx| {
-                composer.runner.update(cx, |runner, cx| {
-                    runner.take_over_for_test();
-                    // With the setting on, a run in progress keeps the strip up past the turn.
-                    assert!(runner.mounted(false, true, window, cx));
-                    // Off unmounts it mid-game and releases the run.
-                    assert!(!runner.mounted(true, false, window, cx));
-                    assert!(!runner.mounted(false, true, window, cx));
-                });
             })
             .unwrap();
     }

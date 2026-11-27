@@ -1,0 +1,70 @@
+---
+title: Zappers
+icon: Bot
+description: Set up a standing coordinator that keeps issues, documents, and worker threads moving across your repositories.
+section: composer
+order: 58
+platforms: [desktop, browser]
+providers: []
+prerequisites: [/composer/orchestration]
+related: [/composer/orchestration, /composer/subagents, /composer/monitor-delegated-work]
+next: /workspace/changes-pull-requests
+lastVerified: "2026-11-27"
+---
+
+A Zapper is a persistent coordinator. It has a purpose, a set of repositories, its own instructions and notes, and a backlog of issues. It works by starting and messaging ordinary worker threads: each thread keeps its own computer, agent, model, checkout, and history, while the Zapper keeps the plan, the decisions, and the reports.
+
+Zappers are listed under their own **Zappers** heading in the sidebar.
+
+## Create a Zapper
+
+Choose **New Zapper** and fill in:
+
+- **Name** and **What should it do?**: its purpose. Leave the purpose blank and the Zapper asks you after it starts.
+- **Repositories**: the projects its threads work in. Search by name or path.
+- **Runs on**: where the Zapper itself lives.
+- **Threads run on**: the default computer for new threads.
+- **Model**: the agent and model the coordinator uses.
+- A **Character** avatar, or your own picture with **Upload image**.
+
+Under **Advanced**, **Threads at once** limits how many threads it runs in parallel, and **Follow-ups per thread** limits how many times it can message a thread on its own before stopping to ask you.
+
+On its first run, the Zapper interviews you and writes its own `INSTRUCTIONS.md`.
+
+## Documents
+
+Each Zapper keeps versioned documents: `INSTRUCTIONS.md` for its rules, `NOTES.md`, and `DIGEST.md`, its running summary. They're stored privately with the Zapper, not in your repositories. Every edit is kept in **Document versions**, and you can restore an earlier version. You can also add your own documents.
+
+## Issues
+
+A Zapper owns a backlog of issues in its home profile. Each issue has a title, description, status, priority, labels, an optional due date, relations to other issues, **Done when** criteria, and **Out of scope** notes. Every issue has at most one owner: the Zapper, one of its threads, or you.
+
+- When the Zapper delegates an issue, it starts a thread, links it, and moves the issue to in progress.
+- When it needs a decision, it hands the issue to you with a question, and the issue shows **Needs you**. Your comment hands it back.
+- It closes an issue only explicitly, as merged (which needs a linked pull request) or dropped. A finished thread never marks an issue done by itself.
+
+You can add issues with **New issue**, comment, link a thread or a pull request, and edit any field yourself. Issues are local Zuse records, not copies of an external tracker.
+
+## Overview, threads, and Needs you
+
+The Zapper's overview groups issues by status, followed by its threads, pull requests, and documents. **Needs you** lists only real questions and decisions waiting on you; answer them in place.
+
+Threads the Zapper starts or adopts appear in its **Threads** list with their status, and stay out of the project's chat list. Its messages appear in those threads as compact "Sent from Zapper" turns with its name and avatar. Pull requests, diffs, and subagents open as tabs in the Zapper panel, and the pull request tab can merge or open the PR on GitHub.
+
+Worker reports, questions, and failures wake an idle Zapper once each, so it can react without being polled.
+
+## Control a Zapper
+
+- **Pause** stops new automatic work; **Resume** continues it.
+- **Stop Zapper** cancels pending deliveries and interrupts its threads.
+- **Release from Zapper** detaches a thread so it continues as an ordinary chat.
+- **Start a fresh conversation** gives the coordinator a new conversation while keeping its threads, documents, and decisions.
+- **Archive** also archives its threads. **Delete Zapper** removes the coordinator; its threads and documents are kept.
+
+To post a Zapper's updates in Slack, right-click it and link it to a Slack channel. It then posts under its own name and avatar, and its threads get their own Slack threads in the same channel. This needs Slack connected in Settings.
+
+## Permissions
+
+The coordinator works in its own private folder and delegates repository edits to threads through Zapper-scoped tools. Threads use the normal conversation queue, worktrees, and access levels, and a report from a model never grants new authority. Plan mode is not available in a Zapper coordinator chat.
+
+Threads can only comment on, and link pull requests to, the issues linked to their own thread; they can't reassign, close, or create unrelated issues.

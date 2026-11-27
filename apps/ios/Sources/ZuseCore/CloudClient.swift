@@ -24,11 +24,15 @@ public struct CloudClient: Sendable {
     configuration: .ephemeral, delegate: PairingHTTPDelegate(), delegateQueue: nil)
   let session: URLSession
   public let baseURL: URL
+  /// The organization whose workspace cloud requests act in; nil means the personal workspace.
+  public let organizationID: String?
   private let token: @Sendable () async throws -> String
   public init(
-    baseURL: URL, session: URLSession? = nil, token: @escaping @Sendable () async throws -> String
+    baseURL: URL, organizationID: String? = nil, session: URLSession? = nil,
+    token: @escaping @Sendable () async throws -> String
   ) {
     self.baseURL = baseURL
+    self.organizationID = organizationID.flatMap { $0.isEmpty ? nil : $0 }
     self.session = session ?? Self.defaultSession
     self.token = token
   }
@@ -50,6 +54,11 @@ public struct CloudClient: Sendable {
       request.setValue("DPoP \(deviceToken)", forHTTPHeaderField: "Authorization")
     } else {
       request.setValue("Bearer \(try await token())", forHTTPHeaderField: "Authorization")
+    }
+    // Cloud routes act in the scope header's workspace (personal when absent); personal
+    // computer and device routes refuse an organization scope.
+    if let organizationID, deviceToken == nil, url.path.hasPrefix("/v1/cloud/") {
+      request.setValue("organization:" + organizationID, forHTTPHeaderField: "x-zuse-workspace")
     }
     if let proof {
       request.setValue(
@@ -73,7 +82,7 @@ public struct CloudClient: Sendable {
       let code = detail?["error"].string ?? detail?["code"].string
       let reason =
         detail?["message"].string ?? detail?["error"]["message"].string
-        ?? detail?["reason"].string ?? code?.replacingOccurrences(of: "_", with: " ").capitalized
+        ?? detail?["reason"].string ?? code.map(CloudErrorText.message(for:))
       throw ClientError(
         reason.map { String($0.prefix(500)) } ?? "Cloud request failed (\(response.statusCode)).",
         code: response.statusCode == 403 || response.statusCode == 404 ? "access-unavailable" : code
@@ -118,8 +127,9 @@ public struct CloudClient: Sendable {
   }
   public func connect(workspaceID: String, wakeIfPaused: Bool = true) async throws -> RPCClient {
     let id = workspaceID.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
-    let workspace = try await prepareConnection(
-      workspaceID: workspaceID, wakeIfPaused: wakeIfPaused)
+    let workspace = try await waitForRuntime(
+      workspaceID: workspaceID,
+      prepared: prepareConnection(workspaceID: workspaceID, wakeIfPaused: wakeIfPaused))
     let protocolName = try CloudGateway.protocolName(workspace)
     let ticket = try await request(
       "/v1/cloud/workspaces/\(id)/gateway/ticket", method: "POST",
@@ -129,7 +139,7 @@ public struct CloudClient: Sendable {
           protocolName == CloudGateway.rust ? CloudGateway.rpc : CloudGateway.effect),
       ]))
     let url = try CloudGateway.validate(
-      ticket, workspaceID: workspaceID, protocolName: protocolName)
+      ticket, workspaceID: workspaceID, protocolName: protocolName, origin: baseURL)
     guard let credential = ticket["credential"].string
     else { throw ClientError("Invalid cloud connection ticket.") }
     let rpc = try RPCClient(
@@ -140,6 +150,43 @@ public struct CloudClient: Sendable {
     } catch {
       await rpc.close()
       throw error
+    }
+  }
+  /// Waits until the workspace can take a gateway connection, as the desktop app does: ready,
+  /// or its runtime ingress already up. Archived, deleted and failed workspaces stop here.
+  func waitForRuntime(
+    workspaceID: String, prepared: JSONValue, interval: Duration = .seconds(2),
+    timeout: Duration = .seconds(600)
+  ) async throws -> JSONValue {
+    let id = workspaceID.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
+    let clock = ContinuousClock()
+    let deadline = clock.now + timeout
+    var workspace = prepared
+    var delay = interval
+    while true {
+      let row =
+        workspace["workspace"]["workspaceId"].string == nil ? workspace : workspace["workspace"]
+      let state = row["state"].string ?? ""
+      if ["archived", "archiving", "deleted", "deleting"].contains(state)
+        || ["archived", "deleted"].contains(row["desiredState"].string ?? "")
+      {
+        throw ClientError(
+          "This cloud workspace is archived. Restore it from Cloud to continue.",
+          code: "cloud_workspace_unavailable")
+      }
+      if state == "failed" {
+        let status = row["statusCode"].string.map { " (\(CloudErrorText.humanize($0)))" } ?? ""
+        throw ClientError(
+          "This cloud computer failed to start\(status). Wake it from Cloud to retry.",
+          code: "cloud_workspace_unavailable")
+      }
+      if state == "ready" || row["runtimeIngressReady"] == .bool(true) { return row }
+      guard clock.now < deadline else {
+        throw ClientError("The cloud computer is still starting. Zuse will keep trying.")
+      }
+      try await Task.sleep(for: delay)
+      delay = min(delay * 2, .seconds(5))
+      workspace = try await request("/v1/cloud/workspaces/\(id)")
     }
   }
 }

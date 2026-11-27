@@ -1,0 +1,39 @@
+---
+title: Composer and agent control
+icon: MessageSquareText
+description: Give agents context, choose models and access, and steer work in progress.
+section: composer
+order: 50
+platforms: [desktop, browser, mobile]
+providers: [zuse, claude, codex, cursor, devin, grok, hermes, kiro, muse, opencode, pi, omp, antigravity]
+prerequisites: [/start/first-chat]
+related: [/composer/modes-permissions, /composer/context-attachments, /composer/subagents, /composer/orchestration]
+next: /composer/modes-permissions
+lastVerified: "2026-11-27"
+---
+
+The composer binds a prompt to the active provider session, project environment, access level, attached context, and queue.
+
+Use it to:
+
+- write and edit a request, with saved drafts, a stash, and a searchable history of messages you've sent;
+- `@`-mention project files;
+- attach images and files from the **+** menu, by drag-and-drop, or by paste;
+- pick the agent, model, and reasoning level from the model chip;
+- turn Plan mode on or off from the **+** menu;
+- choose how much the agent may do without asking from the access control;
+- queue, steer, or send messages while the current turn runs;
+- run Zuse and provider commands with `/`, and skills with `$`;
+- dictate a prompt with the ChatGPT account Codex is signed in to.
+
+## Model picker
+
+One composer chip shows the model and its reasoning level. Open it to browse agents in a provider rail, search, and keep favorites. Hover a model to set its reasoning level with a slider, toggle fast mode and other options the model advertises, add it to favorites, or make it the default. A **200K | 1M** context switch appears only for models that support it.
+
+Model changes apply to the next message. If a turn is running or messages are queued, the switch waits until that work finishes. When you move a session to a different agent, Zuse hands the earlier conversation to the new agent and records the switch in the timeline.
+
+## Sending while an agent works
+
+Messages you send during a turn join the queue, and agents that support it take them in mid-turn. In **Settings → Keyboard shortcuts**, **Direct steer** makes Enter send to a running agent right away; Alt+Enter always queues. See [Context and attachments](/composer/context-attachments#queue-a-follow-up) for the queue controls.
+
+Start with [Modes and permissions](/composer/modes-permissions), then learn [Context and attachments](/composer/context-attachments), [Skills, commands, and MCP servers](/composer/skills-mcp), and [Agent orchestration](/composer/orchestration/). For long-running coordinated work, see [Zappers](/composer/zappers).
