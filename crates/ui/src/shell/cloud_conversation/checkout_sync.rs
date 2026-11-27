@@ -45,6 +45,13 @@ fn matching_checkout(checkouts: &[(String, String)], repository: &str) -> Option
         .map(|(path, _)| path.clone())
 }
 
+/// Whether the status's reason reads as plain information (muted) rather
+/// than a failure (red): waiting for the cloud computer, or paused by edits
+/// made here, unless a request of ours failed.
+fn quiet(state: &str, request_failed: bool) -> bool {
+    matches!(state, "behind" | "paused") && !request_failed
+}
+
 /// The last part of a folder path, as the header shows it.
 fn folder_name(path: &str) -> String {
     std::path::Path::new(path)
@@ -425,11 +432,16 @@ impl CloudConversation {
                 div()
                     .px(px(8.))
                     .py(px(4.))
-                    .text_color(if state == "behind" {
-                        theme.text_muted
-                    } else {
-                        theme.danger
-                    })
+                    .text_color(
+                        if quiet(
+                            state,
+                            checkout.error.is_some() || checkout.read_error.is_some(),
+                        ) {
+                            theme.text_muted
+                        } else {
+                            theme.danger
+                        },
+                    )
                     .child(problem)
                     .into_any_element(),
             );
@@ -489,6 +501,14 @@ mod tests {
             matching_checkout(&checkouts, "github.com/example/other"),
             None
         );
+    }
+
+    #[test]
+    fn only_failures_read_in_red() {
+        assert!(quiet("paused", false));
+        assert!(quiet("behind", false));
+        assert!(!quiet("error", false));
+        assert!(!quiet("paused", true));
     }
 
     #[test]
