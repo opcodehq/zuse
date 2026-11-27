@@ -14,7 +14,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "278186805316D7449E8AA1E5E77082E7"
+               BlueprintIdentifier = "2DA78F5AEDA737AD09F04B679C9C927B"
                BuildableName = "Zuse Native.app"
                BlueprintName = "Zuse"
                ReferencedContainer = "container:Zuse.xcodeproj">
@@ -30,7 +30,7 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "278186805316D7449E8AA1E5E77082E7"
+            BlueprintIdentifier = "2DA78F5AEDA737AD09F04B679C9C927B"
             BuildableName = "Zuse Native.app"
             BlueprintName = "Zuse"
             ReferencedContainer = "container:Zuse.xcodeproj">
@@ -63,7 +63,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "278186805316D7449E8AA1E5E77082E7"
+            BlueprintIdentifier = "2DA78F5AEDA737AD09F04B679C9C927B"
             BuildableName = "Zuse Native.app"
             BlueprintName = "Zuse"
             ReferencedContainer = "container:Zuse.xcodeproj">
@@ -80,7 +80,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "278186805316D7449E8AA1E5E77082E7"
+            BlueprintIdentifier = "2DA78F5AEDA737AD09F04B679C9C927B"
             BuildableName = "Zuse Native.app"
             BlueprintName = "Zuse"
             ReferencedContainer = "container:Zuse.xcodeproj">

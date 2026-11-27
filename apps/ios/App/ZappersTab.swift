@@ -10,10 +10,6 @@ struct ZappersListView: View {
   /// The wide list: each Zapper's threads fold out under it, with their issues and pull
   /// requests. Picking a thread opens it inside its Zapper.
   var openThread: ((String, ZapperWorker?) -> Void)? = nil
-  /// The Zapper open beside the list, highlighted in it.
-  var selectedZapper: String? = nil
-  /// The thread open beside the list, highlighted in place of its Zapper.
-  var selectedThread: String? = nil
   @State private var filter: ArchiveFilter = .active
   /// Zappers folded or unfolded by hand, against their default (open while active).
   @State private var toggled: Set<String> = []
@@ -56,11 +52,12 @@ struct ZappersListView: View {
     .background(AppTheme.surface)
     .navigationTitle("Zappers")
     .compactNavigationTitle()
-    .toolbar {
-      ToolbarItemGroup(placement: .primaryAction) {
+    .modifier(
+      PrimaryActions(separate: openThread != nil) {
         Button("New Zapper", systemImage: "plus") { creating = NewZapperRequest() }
           .disabled(!canCreate)
           .accessibilityIdentifier("new-zapper")
+      } trailing: {
         Menu {
           Picker("Show", selection: $filter) {
             Label("Active", image: AppIcon.zapper).tag(ArchiveFilter.active)
@@ -72,7 +69,7 @@ struct ZappersListView: View {
         }
         .accessibilityIdentifier("zappers-filter")
       }
-    }
+    )
     .tint(.primary)
     .sheet(item: $creating) { request in
       NewZapperSheet(workspace: workspace, starter: request.starter) { id in
@@ -131,10 +128,7 @@ struct ZappersListView: View {
       }
     }
     .buttonStyle(.plain)
-    .zappersRow(
-      selected: selectedZapper == zapper.id
-        && !(expanded && threads.contains { $0.chatId == selectedThread })
-    )
+    .outlineRow()
     .contextMenu { rowActions(zapper) }
     .accessibilityIdentifier("zapper-row-\(zapper.id)")
     if expanded {
@@ -149,7 +143,7 @@ struct ZappersListView: View {
             known: workspace.pullRequests.known)
         }
         .buttonStyle(.plain)
-        .zappersRow(selected: selectedZapper == zapper.id && worker.chatId == selectedThread)
+        .outlineRow()
       }
       if threads.count > Self.threadLimit {
         Button {
@@ -157,10 +151,10 @@ struct ZappersListView: View {
         } label: {
           Text("See all \(threads.count) threads").font(.system(size: 14, weight: .medium))
             .foregroundStyle(.secondary)
-            .padding(.leading, 56).frame(minHeight: 32)
+            .padding(.leading, ZapperOutlineRow.textInset).frame(minHeight: 32)
         }
         .buttonStyle(.plain)
-        .zappersRow()
+        .outlineRow()
       }
     }
   }

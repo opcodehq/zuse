@@ -1,9 +1,14 @@
 import SwiftUI
 import ZuseCore
 
-/// A Zapper in the wide Zappers list: face, name with a fold chevron when it has threads, its
-/// latest line and the time. Its threads list under it while it is unfolded.
+/// A Zapper in the iPad's full-width Zappers list: face, name with a fold chevron when it has
+/// threads, its latest line and the time at the far edge. Its threads list under it while it
+/// is unfolded.
 struct ZapperOutlineRow: View {
+  static let tile: CGFloat = 40
+  static let spacing: CGFloat = 12
+  /// Where a row's text starts, past the face.
+  static let textInset = tile + spacing
   let zapper: Zapper
   let working: Int
   let busy: Bool
@@ -15,18 +20,18 @@ struct ZapperOutlineRow: View {
 
   var body: some View {
     let detail = ZapperListRow.detail(zapper: zapper, preview: preview, working: working)
-    HStack(alignment: .top, spacing: 12) {
-      ZapperTile(zapper: zapper, size: 44)
-      VStack(alignment: .leading, spacing: 3) {
+    HStack(alignment: .top, spacing: Self.spacing) {
+      ZapperTile(zapper: zapper, size: Self.tile)
+      VStack(alignment: .leading, spacing: 4) {
         HStack(alignment: .firstTextBaseline, spacing: 2) {
-          Text(zapper.config.name).font(.system(size: 17, weight: .medium)).lineLimit(1)
+          Text(zapper.config.name).font(.system(size: 17)).lineLimit(1)
             .foregroundStyle(.primary)
           if threadCount > 0 {
             Button(action: toggle) {
-              Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold))
+              Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.tertiary)
                 .rotationEffect(.degrees(expanded ? 90 : 0))
-                .frame(width: 26, height: 22).contentShape(Rectangle())
+                .frame(width: 28, height: 22).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityHidden(true)
@@ -41,6 +46,7 @@ struct ZapperOutlineRow: View {
           Text(detail).font(.system(size: 15)).lineLimit(1)
             // What the Zapper is asking of you reads in the accent colour, like an unread line.
             .foregroundStyle(asks ? AnyShapeStyle(AppTheme.accent) : AnyShapeStyle(.secondary))
+            .frame(maxWidth: TabletMeasure.line, alignment: .leading)
           Spacer(minLength: 8)
           if busy {
             ProgressView().controlSize(.mini)
@@ -49,9 +55,8 @@ struct ZapperOutlineRow: View {
           }
         }
       }
-      .padding(.top, 1)
     }
-    .padding(.vertical, 8).contentShape(Rectangle())
+    .padding(.vertical, 9).contentShape(Rectangle())
     .accessibilityElement(children: .combine)
     .accessibilityLabel(accessibilityLabel(detail))
     .accessibilityHint("Opens this Zapper’s conversation")
@@ -88,14 +93,16 @@ struct ZapperThreadOutlineRow: View {
 
   var body: some View {
     let issue = zapper.issue(forThread: worker.chatId)
-    HStack(alignment: .top, spacing: 12) {
-      leading.frame(width: 44, height: 20, alignment: .trailing)
-      VStack(alignment: .leading, spacing: 3) {
-        Text(title).font(.system(size: 16)).foregroundStyle(.primary.opacity(0.92)).lineLimit(1)
+    HStack(alignment: .top, spacing: ZapperOutlineRow.spacing) {
+      leading.frame(width: ZapperOutlineRow.tile - 4, height: 22, alignment: .trailing)
+        .padding(.trailing, 4)
+      VStack(alignment: .leading, spacing: 4) {
+        Text(title).font(.system(size: 17)).foregroundStyle(.primary.opacity(0.9)).lineLimit(1)
+          .frame(maxWidth: TabletMeasure.line, alignment: .leading)
         HStack(spacing: 6) {
           ZapperTile(zapper: zapper, size: 16)
           if let issue {
-            Text(issue.code).font(.system(size: 13, weight: .medium)).monospacedDigit()
+            Text(issue.code).font(.system(size: 13, design: .monospaced))
               .foregroundStyle(.secondary)
             if let pull = issue.pullRequests.last, let link = PullRequestLink(pull.url) {
               chip(link, issue: issue)
@@ -112,7 +119,7 @@ struct ZapperThreadOutlineRow: View {
       }
       Spacer(minLength: 0)
     }
-    .padding(.vertical, 6).contentShape(Rectangle())
+    .padding(.vertical, 8).contentShape(Rectangle())
     .accessibilityElement(children: .combine)
     .accessibilityLabel(accessibilityLabel(issue))
     .accessibilityHint(
@@ -168,5 +175,13 @@ struct ZapperThreadOutlineRow: View {
       }
     }
     return parts.joined(separator: ", ")
+  }
+}
+
+extension View {
+  /// Row metrics for the iPad's full-width Zappers list.
+  func outlineRow() -> some View {
+    listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
+      .listRowSeparator(.hidden).listRowBackground(Color.clear)
   }
 }
