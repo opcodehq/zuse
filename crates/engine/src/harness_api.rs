@@ -307,7 +307,12 @@ mod tests {
         let mut missing = connection();
         missing["apiKeyEnv"] = json!("ZUSE_TEST_NONEXISTENT_EVALUATION_CREDENTIAL");
         let models = load(json!({"connections":[missing]})).unwrap();
-        assert!(models.models().is_empty());
+        assert!(
+            !models
+                .models()
+                .iter()
+                .any(|m| m.id.starts_with("api/fixture/"))
+        );
         assert!(matches!(
             models.credential("api/fixture/org/model"),
             Err(Error::AccountsUnavailable)

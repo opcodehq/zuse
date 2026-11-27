@@ -1200,8 +1200,17 @@ mod local_tests {
             .models(true, &CancellationToken::new())
             .await
             .unwrap();
+        let builtin = |id: &str| {
+            id.strip_prefix("api/")
+                .and_then(|rest| rest.split('/').next())
+                .is_some_and(|c| crate::harness_vendors::vendor(c).is_some())
+        };
         assert_eq!(
-            inventory.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            inventory
+                .iter()
+                .map(|m| m.id.as_str())
+                .filter(|id| !builtin(id))
+                .collect::<Vec<_>>(),
             vec!["api/fixture/api-first", "local/codex/test-model"]
         );
         let count = || calls.load(std::sync::atomic::Ordering::SeqCst);
@@ -1213,8 +1222,9 @@ mod local_tests {
         assert_eq!(count(), 2, "explicit refresh bypasses the cache");
         tokio::time::advance(Duration::from_secs(61)).await;
         let (a, b) = tokio::join!(models.models(false, &cancel), models.models(false, &cancel));
-        assert_eq!(a.unwrap().len(), 2);
-        assert_eq!(b.unwrap().len(), 2);
+        for listed in [a.unwrap(), b.unwrap()] {
+            assert_eq!(listed.iter().filter(|m| !builtin(&m.id)).count(), 2);
+        }
         assert_eq!(count(), 3, "expired concurrent callers share one probe");
         let output = models
             .request(ModelInput {
@@ -1247,7 +1257,16 @@ mod local_tests {
             "a changed login invalidates the inventory immediately"
         );
         std::fs::remove_file(config.codex_home.join("auth.json")).unwrap();
-        assert_eq!(models.models(false, &cancel).await.unwrap().len(), 1);
+        assert_eq!(
+            models
+                .models(false, &cancel)
+                .await
+                .unwrap()
+                .iter()
+                .filter(|m| !builtin(&m.id))
+                .count(),
+            1
+        );
         assert_eq!(
             count(),
             4,
@@ -1259,6 +1278,15 @@ mod local_tests {
             weak.upgrade().is_none(),
             "local models must not retain their owning registry"
         );
-        assert_eq!(models.models(false, &cancel).await.unwrap().len(), 1);
+        assert_eq!(
+            models
+                .models(false, &cancel)
+                .await
+                .unwrap()
+                .iter()
+                .filter(|m| !builtin(&m.id))
+                .count(),
+            1
+        );
     }
 }

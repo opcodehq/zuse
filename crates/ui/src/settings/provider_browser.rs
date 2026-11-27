@@ -472,6 +472,10 @@ impl HarnessesPage {
     }
 
     fn edit_api_key(&mut self, id: Option<String>, cx: &mut Context<Self>) {
+        // A pending save owns the editor until it lands.
+        if self.browser.api_key_busy {
+            return;
+        }
         self.browser.api_key_editing = id;
         self.browser.api_key_error = None;
         self.browser
@@ -1197,9 +1201,21 @@ impl HarnessesPage {
                 return block
                     .child(
                         div()
-                            .text_size(px(11.5))
-                            .text_color(theme.danger_muted)
-                            .child(SharedString::from(error.clone())),
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_size(px(11.5))
+                                    .text_color(theme.danger_muted)
+                                    .child(SharedString::from(error.clone())),
+                            )
+                            .child(
+                                widgets::text_action(theme, widgets::ActionTone::Outlined, "Retry")
+                                    .id("api-keys-retry")
+                                    .on_click(cx.listener(|page, _, _, cx| page.load_api_keys(cx))),
+                            ),
                     )
                     .into_any_element();
             }
