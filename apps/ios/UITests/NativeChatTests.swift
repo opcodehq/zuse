@@ -33,7 +33,7 @@ final class NativeChatTests: XCTestCase {
     sonnet.tap()
     app.buttons["Close"].tap()
     XCTAssertTrue(app.buttons["Current model: sample-sonnet"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.buttons["3 tool calls"].exists)
+    XCTAssertTrue(app.buttons["tool-group-turn-2:t0:activity"].exists)
     XCTAssertFalse(app.buttons["Send message"].isEnabled)
   }
 
@@ -43,29 +43,21 @@ final class NativeChatTests: XCTestCase {
     app.launch()
     let transcript = app.collectionViews["chat-transcript"]
     XCTAssertTrue(transcript.waitForExistence(timeout: 15))
-    let heading = app.buttons["3 tool calls"]
+    // The latest turn folds its work behind one line: timing, then what it did.
+    let heading = app.buttons["tool-group-turn-2:t0:activity"]
     XCTAssertTrue(heading.waitForExistence(timeout: 10))
+    XCTAssertTrue(heading.label.hasPrefix("Worked for 21s · Ran 2 commands"))
+    XCTAssertFalse(app.buttons["activity-reply-2:x2"].exists)
     heading.tap()
-    XCTAssertFalse(app.buttons["activity-conversation-7"].exists)
-    heading.tap()
-    let run = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "swift test"))
-      .firstMatch
-    if !run.exists { transcript.swipeDown() }
+    let run = app.buttons["activity-reply-2:x2"]
     XCTAssertTrue(run.waitForExistence(timeout: 5))
     XCTAssertLessThanOrEqual(run.frame.height, 36)
     run.tap()
     XCTAssertTrue(
       app.descendants(matching: .any).matching(
-        NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "command", "command")
-      )
-      .firstMatch
-      .waitForExistence(timeout: 5))
-    XCTAssertFalse(app.buttons["Completed"].exists)
-    XCTAssertTrue(
-      app.descendants(matching: .any).matching(
         NSPredicate(
-          format: "label CONTAINS %@ OR value CONTAINS %@", "Sample test output",
-          "Sample test output")
+          format: "label CONTAINS %@ OR value CONTAINS %@", "Executed 214 tests",
+          "Executed 214 tests")
       ).firstMatch.waitForExistence(timeout: 5))
     let screenshot = XCTAttachment(screenshot: app.screenshot())
     screenshot.name = "Expanded tool call and composer"

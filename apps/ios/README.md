@@ -68,3 +68,13 @@ Cloud chats take their repositories, agents and models from the cloud API's
 `/v1/cloud/context`, so nothing about cloud launch is bundled. Agent sign-in for cloud
 chats happens in the desktop app. Run with `--native-preview --new-chat-preview --cloud-preview`
 to see cloud launch against built-in fixtures.
+
+## Chat previews
+
+`--native-preview --conversation-preview` opens a sample chat written as Rust transcript
+entries (`App/PreviewConversation.swift`), so it renders through the same
+`CanonicalTranscript` and `ChatTimeline` path as a connected computer. Add
+`--running-preview` for a turn in progress, `--expand-activity` and `--expand-steps` to open
+the work behind each turn, and `--transcript-top` to start at the first message.
+`--large-transcript` loads 10,000 messages in the older record shape. With a paired computer
+(`SIMCTL_CHILD_ZUSE_PAIR_LINK`), `--open-chat=<id>` opens one of its chats.

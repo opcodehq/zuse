@@ -330,7 +330,10 @@ struct ModelPickerButton: View {
       HStack(spacing: 5) {
         ProviderMark(providerID: providerID, size: 15)
         Text(
-          catalog.first { $0.id == providerID }?.models.first { $0.id == modelID }?.label ?? modelID
+          catalog.first { $0.id == providerID }?.models.first { $0.id == modelID }?.label
+            // Until the catalog loads, name the model as the transcript does ("Sonnet 4.5").
+            ?? AgentLabel.label(
+              .object(["harness": .string(providerID), "model": .string(modelID)]))
         )
         .lineLimit(1).truncationMode(.middle)
       }.font(.system(size: 15, weight: .medium)).foregroundStyle(.secondary)

@@ -374,10 +374,6 @@ struct ActivityView: View {
     }
     .padding(.top, 2).padding(.bottom, 2)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .onChange(of: activity.live) { _, live in
-      // A settled turn folds again unless you opened it yourself.
-      if !live, choice == nil { change { choice = nil } }
-    }
   }
   private var header: some View {
     Button {
@@ -467,7 +463,7 @@ private struct StepView: View {
             symbol: tool.symbol, label: tool.detail.isEmpty ? "Agent" : tool.detail,
             detail: subagent.tail ?? status(subagent.status), mono: false)
         } else {
-          row(symbol: tool.symbol, label: tool.label, detail: tool.detail, mono: true)
+          row(symbol: tool.symbol, label: tool.label, detail: shortPath(tool), mono: true)
         }
         if expanded {
           ToolDetailView(step: step, rpc: rpc, resize: resize)
@@ -479,6 +475,14 @@ private struct StepView: View {
   private var preview: String {
     step.redacted
       ? "" : ToolPresentation.oneLineSummary(step.text)
+  }
+  /// Absolute paths keep their last two parts in the row; the full path shows when expanded.
+  private func shortPath(_ tool: ToolStep) -> String {
+    guard [.read, .write, .edit].contains(tool.category), tool.detail.hasPrefix("/") else {
+      return tool.detail
+    }
+    let parts = tool.detail.split(separator: "/")
+    return parts.count > 2 ? parts.suffix(2).joined(separator: "/") : tool.detail
   }
   private func status(_ status: TimelineSubagent.Status) -> String {
     switch status {
@@ -552,12 +556,8 @@ private struct ToolDetailView: View {
   private let outputLines = 24
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      // The row already names the subject; commands repeat in full, unclipped.
-      let invocation = step.invocation
-      if !invocation.isEmpty,
-        step.tool.category == .command
-          || (step.tool.category != .plan && invocation != step.tool.detail)
-      {
+      if showsInvocation {
+        let invocation = step.invocation
         Text(step.tool.category == .command ? "$ " + invocation : invocation)
           .font(.system(size: 12, design: .monospaced))
           .foregroundStyle(.primary.opacity(0.85))
@@ -590,21 +590,23 @@ private struct ToolDetailView: View {
       if let subagent = step.subagent, let tail = subagent.tail {
         Text(tail).font(.system(size: 13)).foregroundStyle(.secondary).padding(10)
       }
-      ForEach(Array(diffs.enumerated()), id: \.offset) { _, diff in
-        divider
+      ForEach(Array(diffs.enumerated()), id: \.offset) { index, diff in
+        if hasHeader || index > 0 { divider }
         DiffPreview(diff: diff)
       }
-      if let result = step.result {
-        divider
+      if !diffs.isEmpty || (step.diffRef != nil && fetchedDiffs == nil && rpc != nil) {
+        // An edit's diff says more than its "file updated" output.
+      } else if let result = step.result {
+        if hasHeader { divider }
         ToolOutput(value: result.content["output"]).padding(10)
       } else if let text = output ?? step.output?.string, !text.isEmpty {
-        divider
+        if hasHeader { divider }
         outputText(text)
       } else if let outputError {
-        divider
+        if hasHeader { divider }
         Text(outputError).font(.system(size: 12)).foregroundStyle(.secondary).padding(10)
       } else if step.outputRef != nil, rpc != nil {
-        divider
+        if hasHeader { divider }
         ProgressView().controlSize(.small).padding(10)
       }
     }
@@ -615,6 +617,17 @@ private struct ToolDetailView: View {
         .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1)
     )
     .task(id: step.id) { await load() }
+  }
+  /// The row already names the subject; commands and absolute paths repeat in full, unclipped.
+  private var showsInvocation: Bool {
+    let invocation = step.invocation
+    guard !invocation.isEmpty, step.tool.category != .plan else { return false }
+    return step.tool.category == .command || invocation.hasPrefix("/")
+      || invocation != step.tool.detail
+  }
+  /// Something sits above the output, so a rule separates them.
+  private var hasHeader: Bool {
+    showsInvocation || step.plan != nil || !step.todos.isEmpty || step.subagent?.tail != nil
   }
   private var diffs: [TimelineDiff] {
     if let diff = step.diff { return [diff] }
@@ -656,7 +669,8 @@ private struct ToolDetailView: View {
         change { fetchedDiffs = decoded }
       }
     }
-    guard step.result == nil, output == nil, let reference = step.outputRef else { return }
+    guard step.result == nil, output == nil, diffs.isEmpty, let reference = step.outputRef
+    else { return }
     do {
       let page = try await Attachments.toolOutput(reference, rpc: rpc)
       change {

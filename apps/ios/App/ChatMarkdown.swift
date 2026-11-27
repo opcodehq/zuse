@@ -31,9 +31,9 @@ struct ChatMarkdown: View {
             .textual.inlineStyle(
               InlineStyle()
                 .code(
-                  .monospaced, .fontScale(0.88),
+                  .monospaced, .fontScale(0.85),
                   .backgroundColor(
-                    DynamicColor(light: .black.opacity(0.06), dark: .white.opacity(0.1)))
+                    DynamicColor(light: .black.opacity(0.05), dark: .white.opacity(0.09)))
                 )
                 .link(.foregroundColor(AppTheme.link))
             )

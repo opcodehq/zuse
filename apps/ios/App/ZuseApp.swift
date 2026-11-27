@@ -284,9 +284,18 @@ struct WorkspaceView: View {
     private func openZapperPreview(_ arguments: [String]) async {
       if let link = ProcessInfo.processInfo.environment["ZUSE_PAIR_LINK"], !link.isEmpty {
         do { try await workspace.pair(link) } catch { workspace.error = error.localizedDescription }
-        for _ in 0..<80 where workspace.zappers.zappers.isEmpty {
+        for _ in 0..<80
+        where workspace.zappers.zappers.isEmpty && arguments.contains("--zapper-detail-preview") {
           try? await Task.sleep(for: .milliseconds(250))
         }
+      }
+      // `--open-chat=<id>` opens one chat on the paired computer.
+      if let id = arguments.first(where: { $0.hasPrefix("--open-chat=") })?.dropFirst(12) {
+        for _ in 0..<80 where !workspace.sessions.contains(where: { $0.id == id }) {
+          try? await Task.sleep(for: .milliseconds(250))
+        }
+        if let session = workspace.sessions.first(where: { $0.id == id }) { openChat(session) }
+        return
       }
       guard arguments.contains("--zapper-detail-preview"),
         let first = workspace.zappers.zappers.first
@@ -812,7 +821,9 @@ struct WorkspaceView: View {
       }
       TranscriptView(
         messages: workspace.transcript.messages, sessionID: session.id, rpc: workspace.rpc,
-        running: workspace.transcript.activeTurnID != nil, bottomInset: composerHeight,
+        running: workspace.transcript.activeTurnID != nil,
+        // Clear of the fade above the composer, so the latest line reads at full strength.
+        bottomInset: composerHeight + 20,
         respond: { message, text in try await workspace.respondToUI(message, text: text) })
       if !workspace.outbox.isEmpty {
         ScrollView(.horizontal) {
@@ -991,7 +1002,7 @@ struct WorkspaceView: View {
           .focused($composerFocused).accessibilityIdentifier("chat-composer")
           .font(.system(size: 17)).lineLimit(1...(composerExpanded ? 6 : 1))
           .padding(.leading, composerExpanded ? 14 : 46)
-          .padding(.trailing, composerExpanded ? 14 : 160)
+          .padding(.trailing, composerExpanded ? 14 : 186)
           .padding(.top, composerExpanded ? 12 : 12).padding(.bottom, composerExpanded ? 2 : 12)
         if composerExpanded {
           HStack(spacing: 4) {
@@ -1006,7 +1017,7 @@ struct WorkspaceView: View {
       .overlay(alignment: .trailing) {
         if !composerExpanded {
           HStack(spacing: 4) {
-            modelMenu.frame(maxWidth: 94)
+            modelMenu.frame(maxWidth: 128)
             sendControl
           }.padding(.trailing, 3)
         }

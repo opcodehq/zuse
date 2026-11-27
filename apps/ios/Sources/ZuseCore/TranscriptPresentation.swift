@@ -601,8 +601,14 @@ public enum AgentLabel {
 /// A line diff between two texts, trimmed to the changes and a little context.
 public enum TextDiff {
   public static func lines(old: String, new: String, context: Int = 2) -> [DiffLine] {
-    let before = old.isEmpty ? [] : old.components(separatedBy: "\n")
-    let after = new.components(separatedBy: "\n")
+    // A final newline ends the last line rather than starting an empty one.
+    func split(_ text: String) -> [String] {
+      var lines = text.components(separatedBy: "\n")
+      if lines.last == "" { lines.removeLast() }
+      return lines
+    }
+    let before = split(old)
+    let after = split(new)
     // Edits from agents are small; very large texts fall back to "all removed, all added".
     var rows: [(DiffLine.Kind, String)] = []
     if before.count * after.count > 4_000_000 {
