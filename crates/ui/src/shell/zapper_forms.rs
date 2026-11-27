@@ -1931,6 +1931,7 @@ mod tests {
             path: "NOTES.md".into(),
             version,
             content: "kept".into(),
+            deleted: false,
         };
         assert_eq!(fields(&Kind::File(file(0)), None).len(), 2);
         let existing = fields(&Kind::File(file(2)), None);

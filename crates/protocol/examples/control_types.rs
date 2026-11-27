@@ -43,6 +43,7 @@ fn main() {
         ZapperIssue,
         Zapper,
         ZapperFile,
+        ZapperFileVersion,
         ZapperAction,
         ZapperCommand,
         ZapperEvent,

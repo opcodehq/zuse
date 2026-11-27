@@ -150,6 +150,7 @@ mod tests {
             }],
             decisions: vec![],
             issues: vec![],
+            folders: vec![],
         }
     }
 
@@ -301,7 +302,14 @@ mod tests {
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap();
-        assert_eq!(tables.len(), super::TABLES.len());
+        let file_tree = ["zapper_folders", "zapper_file_deletions"];
+        assert_eq!(
+            tables
+                .iter()
+                .filter(|t| !file_tree.contains(&t.as_str()))
+                .count(),
+            super::TABLES.len()
+        );
         for (old, new) in super::TABLES {
             assert!(!tables.iter().any(|t| t == old), "{old} survived");
             assert!(tables.iter().any(|t| t == new), "{new} missing");

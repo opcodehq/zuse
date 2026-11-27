@@ -1291,6 +1291,7 @@ impl Shell {
                                     path: String::new(),
                                     version: 0,
                                     content: String::new(),
+                                    deleted: false,
                                 };
                                 this.open_zapper_dialog(new_doc.clone(), Kind::File(file), cx)
                             })),
@@ -2741,6 +2742,7 @@ mod tests {
             path: path.into(),
             version,
             content: content.into(),
+            deleted: false,
         }
     }
 

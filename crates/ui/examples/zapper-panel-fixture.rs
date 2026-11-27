@@ -116,6 +116,7 @@ fn sample_zapper(device: &str) -> Zapper {
             },
             issue(7, "Zapper panel: closable tabs", ZapperIssueStatus::Todo),
         ],
+        folders: vec![],
     }
 }
 
@@ -124,6 +125,7 @@ fn files() -> Vec<ZapperFile> {
         path: path.into(),
         version,
         content: content.into(),
+        deleted: false,
     };
     vec![
         file(

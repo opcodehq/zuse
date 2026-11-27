@@ -132,6 +132,7 @@ fn sample_zapper(issues: Vec<ZapperIssue>, workers: usize) -> Zapper {
             .collect(),
         decisions: vec![],
         issues,
+        folders: vec![],
     }
 }
 
