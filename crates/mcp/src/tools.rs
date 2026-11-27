@@ -183,7 +183,7 @@ fn catalog() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "list_devices",
-            description: "Devices in this workspace (the local engine's device is flagged). Chats and projects are hosted on a device.",
+            description: "Devices in this workspace (the local engine's device is flagged). Chats and projects are hosted on a device. Not the user's own computers in a cloud chat: use list_attached_computers for those.",
             input_schema: json!({ "type": "object", "properties": {} }),
         },
         ToolDef {
@@ -339,7 +339,7 @@ fn catalog() -> Vec<ToolDef> {
     for (name, description, properties, required) in [
         (
             "list_attached_computers",
-            "List the user's own computers this chat can run commands on. role is primary for the computer the user is typing on (the default target) and secondary for their other computers. Includes deviceId, name (refer to computers by this name), platform, whether it is online, shell, OS user and default working directory.",
+            "List the user's own computers (their laptop or desktop) this chat can run commands on. Use it when the user says \"my computer\", \"my Mac\" or names a computer. role is primary for the computer the user is typing on (the default target) and secondary for their other computers. Includes deviceId, name (refer to computers by this name), platform, whether it is online, shell, OS user and default working directory.",
             json!({}),
             json!([]),
         ),
