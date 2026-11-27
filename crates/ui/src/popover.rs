@@ -633,9 +633,23 @@ pub fn anchored_menu_right(
         .into_any_element()
 }
 
+/// Horizontal space between a nested menu and the edge of its trigger.
+pub const NESTED_MENU_GAP: f32 = CARD_INSET + 6.0;
+
 /// A nested menu beside its trigger. Callers choose the side that has room;
 /// vertical placement still stays within the window's eight-pixel gutter.
 pub fn nested_menu(id: impl Into<SharedString>, content: AnyElement, left: bool) -> AnyElement {
+    nested_menu_with_gutter(id, content, left, 8.0)
+}
+
+/// [`nested_menu`] kept `gutter` px inside the window edges instead of
+/// eight, for callers whose side choice budgets a tighter gutter.
+pub fn nested_menu_with_gutter(
+    id: impl Into<SharedString>,
+    content: AnyElement,
+    left: bool,
+    gutter: f32,
+) -> AnyElement {
     // A nested menu shares the parent's interaction surface. Its outside
     // clicks must reach sibling controls and its trigger; the top-level menu
     // still consumes dismissal clicks before they reach the app underneath.
@@ -645,8 +659,8 @@ pub fn nested_menu(id: impl Into<SharedString>, content: AnyElement, left: bool)
         .absolute()
         .top_0()
         .size_0()
-        .when(left, |el| el.left(px(-(CARD_INSET + 6.0))))
-        .when(!left, |el| el.right(px(-(CARD_INSET + 6.0))))
+        .when(left, |el| el.left(px(-NESTED_MENU_GAP)))
+        .when(!left, |el| el.right(px(-NESTED_MENU_GAP)))
         .child(
             gpui::deferred(
                 gpui::anchored()
@@ -655,7 +669,7 @@ pub fn nested_menu(id: impl Into<SharedString>, content: AnyElement, left: bool)
                     } else {
                         Anchor::TopLeft
                     })
-                    .snap_to_window_with_margin(px(8.0))
+                    .snap_to_window_with_margin(px(gutter))
                     .child(menu_motion(id.into(), None, div().occlude().child(content))),
             )
             .priority(2),
