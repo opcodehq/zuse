@@ -1,8 +1,8 @@
 //! The same issue surface is embedded by the browser and native Zapper inspectors.
 use crate::tooltip::TooltipExt as _;
 use crate::zapper_avatar::{ZapperFace, known_face, person_avatar, unassigned_avatar, zapper_face};
-use crate::zapper_issue_timeline::{self as timeline, Item, Target};
 pub use crate::zapper_issue_timeline::RunState;
+use crate::zapper_issue_timeline::{self as timeline, Item, Target};
 use crate::{assets::icon, input::TextInput, palette::rgb};
 use gpui::{prelude::*, *};
 use std::collections::{HashMap, HashSet};
@@ -1715,9 +1715,13 @@ impl IssuePanel {
                                     .child(pixel_glyph(GLYPH_PENCIL, 0x8a8a8a))
                                     .child(summary)
                                     .child(
-                                        icon(if open { "alt-arrow-up" } else { "alt-arrow-down" })
-                                            .size(px(10.))
-                                            .text_color(rgb(MUTED)),
+                                        icon(if open {
+                                            "alt-arrow-up"
+                                        } else {
+                                            "alt-arrow-down"
+                                        })
+                                        .size(px(10.))
+                                        .text_color(rgb(MUTED)),
                                     )
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         if !this.expanded.remove(&key) {
@@ -1804,7 +1808,11 @@ impl IssuePanel {
             "user" => self.user_name.clone().unwrap_or_else(|| "you".into()),
             "zapper" => self.zapper.config.name.clone(),
             id if id == self.zapper.coordinator_chat_id
-                || self.zapper.previous_coordinator_chats.iter().any(|c| c == id) =>
+                || self
+                    .zapper
+                    .previous_coordinator_chats
+                    .iter()
+                    .any(|c| c == id) =>
             {
                 self.zapper.config.name.clone()
             }
@@ -1819,14 +1827,18 @@ impl IssuePanel {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let (actor, text) = self.activity_text(issue, event);
-        let phrase = timeline::phrase(event, |id| self.name_of(id), |url| {
-            issue
-                .pull_requests
-                .iter()
-                .find(|pr| pr.url == url)
-                .map(pr_label)
-                .unwrap_or_else(|| url.to_owned())
-        });
+        let phrase = timeline::phrase(
+            event,
+            |id| self.name_of(id),
+            |url| {
+                issue
+                    .pull_requests
+                    .iter()
+                    .find(|pr| pr.url == url)
+                    .map(pr_label)
+                    .unwrap_or_else(|| url.to_owned())
+            },
+        );
         let (glyph, color) = activity_glyph(event);
         let lead = match phrase.as_ref().and_then(|p| p.status) {
             Some(status) => status_icon(status).into_any_element(),
@@ -1836,7 +1848,10 @@ impl IssuePanel {
             .as_ref()
             .map(|p| p.action.clone())
             .unwrap_or_else(|| text.replace('\n', " · "));
-        let tail = phrase.as_ref().map(|p| p.tail.clone()).filter(|t| !t.is_empty());
+        let tail = phrase
+            .as_ref()
+            .map(|p| p.tail.clone())
+            .filter(|t| !t.is_empty());
         let target = phrase.and_then(|p| p.target).map(|(target, label)| {
             let key = format!("issue-event-target-{}", event.id);
             button(SharedString::from(key), label)
@@ -1864,7 +1879,13 @@ impl IssuePanel {
             )
             .when_some(target, |d, target| d.child(target.min_w_0().truncate()))
             .when_some(tail, |d, tail| {
-                d.child(div().min_w_0().truncate().text_color(rgb(MUTED)).child(tail))
+                d.child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(rgb(MUTED))
+                        .child(tail),
+                )
             })
             .child(div().flex_none().text_color(rgb(0x4a4a4a)).child("·"))
             .child(
@@ -2043,7 +2064,11 @@ impl IssuePanel {
                     Some(RunState::AwaitingInput) => "Needs input",
                     Some(RunState::Failed) => "Failed",
                     Some(RunState::Unconfirmed) => "Not confirmed",
-                    None if !coordinator && !self.zapper.workers.iter().any(|w| w.chat_id == *chat) => "Left the Zapper",
+                    None if !coordinator
+                        && !self.zapper.workers.iter().any(|w| w.chat_id == *chat) =>
+                    {
+                        "Left the Zapper"
+                    }
                     None => "",
                 };
                 let role = match (coordinator, owner.as_deref() == Some(chat.as_str())) {
@@ -2070,13 +2095,19 @@ impl IssuePanel {
                             column()
                                 .flex_1()
                                 .min_w_0()
-                                .child(div().truncate().text_size(px(12.5)).child(self.name_of(chat)))
                                 .child(
                                     div()
-                                        .text_size(px(11.))
-                                        .text_color(rgb(MUTED))
-                                        .child(if state.is_empty() { role } else { format!("{role} · {state}") }),
-                                ),
+                                        .truncate()
+                                        .text_size(px(12.5))
+                                        .child(self.name_of(chat)),
+                                )
+                                .child(div().text_size(px(11.)).text_color(rgb(MUTED)).child(
+                                    if state.is_empty() {
+                                        role
+                                    } else {
+                                        format!("{role} · {state}")
+                                    },
+                                )),
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.menu = None;
@@ -2136,7 +2167,12 @@ impl IssuePanel {
         let parent = thread
             .iter()
             .rev()
-            .find(|r| r.kind == "workerReport" || r.actor.as_ref().is_some_and(|a| self.zapper.workers.iter().any(|w| w.chat_id == *a)))
+            .find(|r| {
+                r.kind == "workerReport"
+                    || r.actor
+                        .as_ref()
+                        .is_some_and(|a| self.zapper.workers.iter().any(|w| w.chat_id == *a))
+            })
             .map_or_else(|| event.id.clone(), |r| r.id.clone());
         let issue_id = issue.id.clone();
         let replying = self.inline_input(|k| {
@@ -2291,7 +2327,9 @@ impl IssuePanel {
                             .text_color(rgb(TEXT))
                             .child(said.trim().to_owned()),
                     )
-                    .when_some(self.delivery_line(reply), |d, line| d.child(line.pl(px(20.)))),
+                    .when_some(self.delivery_line(reply), |d, line| {
+                        d.child(line.pl(px(20.)))
+                    }),
             );
         }
         if let Some(input) = replying {

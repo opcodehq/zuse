@@ -24,9 +24,10 @@ fn needs_attention(event: &ZapperIssueActivity) -> bool {
     if event.changes.is_empty() {
         return event.text.contains("Needs you") || event.text.contains("Blocked");
     }
-    event.changes.iter().any(|c| {
-        c.field == "status" && matches!(c.after.as_deref(), Some("needsYou" | "blocked"))
-    })
+    event
+        .changes
+        .iter()
+        .any(|c| c.field == "status" && matches!(c.after.as_deref(), Some("needsYou" | "blocked")))
 }
 
 fn flush<'a>(run: &mut Vec<&'a ZapperIssueActivity>, items: &mut Vec<Item<'a>>) {
@@ -73,7 +74,10 @@ pub fn summary(events: &[&ZapperIssueActivity], pull_request: impl Fn(&str) -> S
         .iter()
         .filter(|e| {
             e.kind == "thread"
-                && (e.changes.iter().any(|c| c.field == "thread" && c.after.is_some())
+                && (e
+                    .changes
+                    .iter()
+                    .any(|c| c.field == "thread" && c.after.is_some())
                     || (e.changes.is_empty() && !e.text.starts_with("Unlinked")))
         })
         .count();
@@ -170,7 +174,9 @@ pub fn phrase(
                     .map_or("unknown", |p| p.label())
             )),
             "owner" => actions.push(match (before, after) {
-                (Some(old), Some(new)) => format!("assigned {} and unassigned {}", name(new), name(old)),
+                (Some(old), Some(new)) => {
+                    format!("assigned {} and unassigned {}", name(new), name(old))
+                }
                 (None, Some(new)) => format!("assigned {}", name(new)),
                 (_, None) => "removed the owner".to_owned(),
             }),
@@ -189,7 +195,10 @@ pub fn phrase(
                     });
                 }
             }
-            "title" => actions.push(format!("renamed the issue to “{}”", after.unwrap_or_default())),
+            "title" => actions.push(format!(
+                "renamed the issue to “{}”",
+                after.unwrap_or_default()
+            )),
             "dueDate" => actions.push(match after {
                 Some(date) => format!("set the due date to {date}"),
                 None => "cleared the due date".into(),
@@ -208,7 +217,10 @@ pub fn phrase(
     let (action, tail) = match (&target, actions.split_first()) {
         (Some(_), Some((verb, rest))) => (
             verb.clone(),
-            rest.iter().map(|a| format!("and {a}")).collect::<Vec<_>>().join(" "),
+            rest.iter()
+                .map(|a| format!("and {a}"))
+                .collect::<Vec<_>>()
+                .join(" "),
         ),
         _ => (actions.join(" and "), String::new()),
     };
@@ -293,7 +305,11 @@ pub fn indicator(
         Some(ZapperIssueOwner::User) => return None,
         _ => zapper.coordinator_chat_id.clone(),
     };
-    if let Some(worker) = zapper.workers.iter().find(|w| w.chat_id == chat && w.queued()) {
+    if let Some(worker) = zapper
+        .workers
+        .iter()
+        .find(|w| w.chat_id == chat && w.queued())
+    {
         return Some(Indicator::Queued(name(&chat), worker.queue_position));
     }
     Some(match run(&chat)? {
@@ -340,7 +356,11 @@ mod tests {
         }
     }
     fn status(id: &str, to: &str) -> ZapperIssueActivity {
-        event(id, "updated", vec![change("status", Some("todo"), Some(to))])
+        event(
+            id,
+            "updated",
+            vec![change("status", Some("todo"), Some(to))],
+        )
     }
     #[test]
     fn quiet_runs_fold_but_discussion_and_attention_do_not() {
@@ -361,7 +381,16 @@ mod tests {
                 Item::Group(g) => format!("group:{}", g.len()),
             })
             .collect();
-        assert_eq!(ids, ["group:3", "card:c1", "event:s2", "event:blocked", "event:s3"]);
+        assert_eq!(
+            ids,
+            [
+                "group:3",
+                "card:c1",
+                "event:s2",
+                "event:blocked",
+                "event:s3"
+            ]
+        );
     }
     #[test]
     fn replies_never_appear_at_the_top_level() {
@@ -377,7 +406,11 @@ mod tests {
         let linked = event(
             "pr",
             "pullRequest",
-            vec![change("pullRequest", None, Some("https://github.com/a/zuse/pull/12"))],
+            vec![change(
+                "pullRequest",
+                None,
+                Some("https://github.com/a/zuse/pull/12"),
+            )],
         );
         let text = summary(&[&created, &moved, &linked], |_| "zuse#12".into());
         assert_eq!(text, "2 issue updates, linked zuse#12, now In progress");
@@ -389,7 +422,11 @@ mod tests {
             "worker-1" => "Deploy thread".to_owned(),
             other => other.to_owned(),
         };
-        let owner = event("e", "updated", vec![change("owner", Some("user"), Some("worker-1"))]);
+        let owner = event(
+            "e",
+            "updated",
+            vec![change("owner", Some("user"), Some("worker-1"))],
+        );
         let p = phrase(&owner, name, |u| u.to_owned()).unwrap();
         assert_eq!(p.action, "assigned Deploy thread and unassigned Swaraj");
         let delegate = event(
@@ -402,17 +439,41 @@ mod tests {
             ],
         );
         let p = phrase(&delegate, name, |u| u.to_owned()).unwrap();
-        assert_eq!((p.action.as_str(), p.tail.as_str()), ("linked", "and moved the issue to In progress"));
-        let link = event("l", "thread", vec![change("thread", None, Some("worker-1"))]);
+        assert_eq!(
+            (p.action.as_str(), p.tail.as_str()),
+            ("linked", "and moved the issue to In progress")
+        );
+        let link = event(
+            "l",
+            "thread",
+            vec![change("thread", None, Some("worker-1"))],
+        );
         let p = phrase(&link, name, |u| u.to_owned()).unwrap();
         assert_eq!(p.action, "linked");
-        assert_eq!(p.target, Some((Target::Thread("worker-1".into()), "Deploy thread".into())));
-        let due = event("d", "updated", vec![change("dueDate", None, Some("2026-12-05"))]);
-        assert_eq!(phrase(&due, name, |u| u.to_owned()).unwrap().action, "set the due date to 2026-12-05");
+        assert_eq!(
+            p.target,
+            Some((Target::Thread("worker-1".into()), "Deploy thread".into()))
+        );
+        let due = event(
+            "d",
+            "updated",
+            vec![change("dueDate", None, Some("2026-12-05"))],
+        );
+        assert_eq!(
+            phrase(&due, name, |u| u.to_owned()).unwrap().action,
+            "set the due date to 2026-12-05"
+        );
         // Entries from before typed changes keep their own text.
-        assert_eq!(phrase(&event("old", "updated", vec![]), name, |u| u.to_owned()), None);
+        assert_eq!(
+            phrase(&event("old", "updated", vec![]), name, |u| u.to_owned()),
+            None
+        );
         // An unknown stored value reads as unknown, never as markup or a guess.
-        let odd = event("o", "updated", vec![change("status", None, Some("<b>x</b>"))]);
+        let odd = event(
+            "o",
+            "updated",
+            vec![change("status", None, Some("<b>x</b>"))],
+        );
         assert_eq!(
             phrase(&odd, name, |u| u.to_owned()).unwrap().action,
             "moved the issue to an unknown status"
@@ -458,7 +519,9 @@ mod tests {
     }
     #[test]
     fn the_indicator_shows_only_confirmed_execution() {
-        let thread = Some(ZapperIssueOwner::Thread { chat_id: "w".into() });
+        let thread = Some(ZapperIssueOwner::Thread {
+            chat_id: "w".into(),
+        });
         let name = |id: &str| id.to_uppercase();
         let (z, i) = fixture(thread.clone(), None);
         assert_eq!(
@@ -467,7 +530,9 @@ mod tests {
         );
         assert_eq!(indicator(&z, &i, |_| None, name), None);
         assert_eq!(
-            indicator(&z, &i, |_| Some(RunState::Unconfirmed), name).unwrap().text(),
+            indicator(&z, &i, |_| Some(RunState::Unconfirmed), name)
+                .unwrap()
+                .text(),
             "Can't confirm W is running"
         );
         let (z, i) = fixture(thread, Some(ZapperIssueDeliveryState::Retrying));
@@ -477,7 +542,12 @@ mod tests {
         );
         let (z, i) = fixture(Some(ZapperIssueOwner::Zapper), None);
         assert_eq!(
-            indicator(&z, &i, |c| (c == "coord").then_some(RunState::Running), name),
+            indicator(
+                &z,
+                &i,
+                |c| (c == "coord").then_some(RunState::Running),
+                name
+            ),
             Some(Indicator::Working("COORD".into()))
         );
     }

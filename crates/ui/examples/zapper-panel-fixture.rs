@@ -57,14 +57,15 @@ fn conversation(now: i64, mode: &str) -> ZapperIssue {
         before: before.map(Into::into),
         after: after.map(Into::into),
     };
-    let entry = |id: &str, actor: Option<&str>, minutes: i64, kind: &str, text: &str| ZapperIssueActivity {
-        actor: actor.map(Into::into),
-        id: id.into(),
-        created_at: at(minutes),
-        kind: kind.into(),
-        text: text.into(),
-        ..Default::default()
-    };
+    let entry =
+        |id: &str, actor: Option<&str>, minutes: i64, kind: &str, text: &str| ZapperIssueActivity {
+            actor: actor.map(Into::into),
+            id: id.into(),
+            created_at: at(minutes),
+            kind: kind.into(),
+            text: text.into(),
+            ..Default::default()
+        };
     let delivered = |reply: &str| ZapperIssueDelivery {
         chat_id: WORKER.into(),
         state: ZapperIssueDeliveryState::Answered,
@@ -72,27 +73,70 @@ fn conversation(now: i64, mode: &str) -> ZapperIssue {
         reply: Some(reply.into()),
     };
     let mut activity = vec![
-        entry("created", Some(COORDINATOR), 50, "created", "Created the issue"),
+        entry(
+            "created",
+            Some(COORDINATOR),
+            50,
+            "created",
+            "Created the issue",
+        ),
         ZapperIssueActivity {
-            changes: vec![change("thread", None, Some(WORKER)), change("owner", Some("zapper"), Some(WORKER)), change("status", Some("todo"), Some("inProgress"))],
-            ..entry("delegate", Some(COORDINATOR), 49, "thread", &format!("Started thread {WORKER} · In progress"))
+            changes: vec![
+                change("thread", None, Some(WORKER)),
+                change("owner", Some("zapper"), Some(WORKER)),
+                change("status", Some("todo"), Some("inProgress")),
+            ],
+            ..entry(
+                "delegate",
+                Some(COORDINATOR),
+                49,
+                "thread",
+                &format!("Started thread {WORKER} · In progress"),
+            )
         },
         ZapperIssueActivity {
             changes: vec![change("priority", Some("normal"), Some("high"))],
-            ..entry("priority", Some(COORDINATOR), 48, "updated", "Priority changed to High")
+            ..entry(
+                "priority",
+                Some(COORDINATOR),
+                48,
+                "updated",
+                "Priority changed to High",
+            )
         },
         ZapperIssueActivity {
             thread: Some(WORKER.into()),
-            changes: vec![change("owner", Some(WORKER), Some("user")), change("status", Some("inProgress"), Some("needsYou"))],
-            ..entry("ask", Some(COORDINATOR), 30, "question", "Should code.zuse.sh connect to engines through the same-origin proxy (A) or with T3-style tokens (B)?\n\nRecommendation: B, so the app needs no proxy.")
+            changes: vec![
+                change("owner", Some(WORKER), Some("user")),
+                change("status", Some("inProgress"), Some("needsYou")),
+            ],
+            ..entry(
+                "ask",
+                Some(COORDINATOR),
+                30,
+                "question",
+                "Should code.zuse.sh connect to engines through the same-origin proxy (A) or with T3-style tokens (B)?\n\nRecommendation: B, so the app needs no proxy.",
+            )
         },
         ZapperIssueActivity {
             delivery: Some(delivered("report-1")),
-            ..entry("comment-1", None, 9, "comment", "btw both solid and main landing will be different dude, solid js will be code.zuse.sh and landing will be zuse.sh")
+            ..entry(
+                "comment-1",
+                None,
+                9,
+                "comment",
+                "btw both solid and main landing will be different dude, solid js will be code.zuse.sh and landing will be zuse.sh",
+            )
         },
         ZapperIssueActivity {
             reply_to: Some("comment-1".into()),
-            ..entry("report-1", Some(WORKER), 8, "workerReport", "Worker update\nGot it: code.zuse.sh for the Solid app, zuse.sh for the landing page. I'll build the Cloudflare deploy for code.zuse.sh now: a Worker with static assets, SPA fallback, caching, the current security headers, and a deploy workflow from main.")
+            ..entry(
+                "report-1",
+                Some(WORKER),
+                8,
+                "workerReport",
+                "Worker update\nGot it: code.zuse.sh for the Solid app, zuse.sh for the landing page. I'll build the Cloudflare deploy for code.zuse.sh now: a Worker with static assets, SPA fallback, caching, the current security headers, and a deploy workflow from main.",
+            )
         },
         ZapperIssueActivity {
             delivery: Some(delivered("report-2")),
@@ -100,17 +144,43 @@ fn conversation(now: i64, mode: &str) -> ZapperIssue {
         },
         ZapperIssueActivity {
             reply_to: Some("comment-2".into()),
-            ..entry("report-2", Some(WORKER), 3, "workerReport", "Worker update\nB it is. I'll split it in two:\n1. The Cloudflare deploy for code.zuse.sh, one PR with no app changes.\n2. A short scope for the token-based connection before anything gets built.\nBoth will be posted here.")
+            ..entry(
+                "report-2",
+                Some(WORKER),
+                3,
+                "workerReport",
+                "Worker update\nB it is. I'll split it in two:\n1. The Cloudflare deploy for code.zuse.sh, one PR with no app changes.\n2. A short scope for the token-based connection before anything gets built.\nBoth will be posted here.",
+            )
         },
         ZapperIssueActivity {
             changes: vec![change("status", Some("needsYou"), Some("inProgress"))],
-            ..entry("moved", Some(COORDINATOR), 2, "updated", "Status changed to In progress")
+            ..entry(
+                "moved",
+                Some(COORDINATOR),
+                2,
+                "updated",
+                "Status changed to In progress",
+            )
         },
         ZapperIssueActivity {
             changes: vec![change("owner", Some("user"), Some(WORKER))],
-            ..entry("assigned", Some(COORDINATOR), 2, "updated", &format!("Owner: {WORKER}"))
+            ..entry(
+                "assigned",
+                Some(COORDINATOR),
+                2,
+                "updated",
+                &format!("Owner: {WORKER}"),
+            )
         },
-        entry("summary", Some(COORDINATOR), 1, "comment", &format!("Swaraj picked B: a standalone app on code.zuse.sh that connects to engines with tokens. {WORKER} is building the Cloudflare deploy PR first, and will write the scope for the cross-origin connection work before building any of it.")),
+        entry(
+            "summary",
+            Some(COORDINATOR),
+            1,
+            "comment",
+            &format!(
+                "Swaraj picked B: a standalone app on code.zuse.sh that connects to engines with tokens. {WORKER} is building the Cloudflare deploy PR first, and will write the scope for the cross-origin connection work before building any of it."
+            ),
+        ),
     ];
     if mode == "error" || mode == "queued" {
         let (state, detail) = if mode == "error" {
@@ -129,7 +199,13 @@ fn conversation(now: i64, mode: &str) -> ZapperIssue {
                 reply: None,
             }),
             reply_to: Some("report-2".into()),
-            ..entry("comment-3", None, 0, "comment", "Also add a preview deploy for pull requests")
+            ..entry(
+                "comment-3",
+                None,
+                0,
+                "comment",
+                "Also add a preview deploy for pull requests",
+            )
         });
     }
     ZapperIssue {
@@ -223,19 +299,19 @@ fn sample_zapper(device: &str) -> Zapper {
             vec![conversation(chrono::Utc::now().timestamp_millis(), &mode)]
         } else {
             vec![
-            {
-                let mut asked = issue(6, "Improve Zappers", ZapperIssueStatus::NeedsYou);
-                asked.activity.push(ZapperIssueActivity {
-                    actor: Some("Release".into()),
-                    id: "question-1".into(),
-                    created_at: asked.created_at,
-                    kind: "question".into(),
-                    text: "Should the Overview list only what waits on you?".into(),
-                    ..Default::default()
-                });
-                asked
-            },
-            issue(7, "Zapper panel: closable tabs", ZapperIssueStatus::Todo),
+                {
+                    let mut asked = issue(6, "Improve Zappers", ZapperIssueStatus::NeedsYou);
+                    asked.activity.push(ZapperIssueActivity {
+                        actor: Some("Release".into()),
+                        id: "question-1".into(),
+                        created_at: asked.created_at,
+                        kind: "question".into(),
+                        text: "Should the Overview list only what waits on you?".into(),
+                        ..Default::default()
+                    });
+                    asked
+                },
+                issue(7, "Zapper panel: closable tabs", ZapperIssueStatus::Todo),
             ]
         },
     }
@@ -282,8 +358,10 @@ fn main() -> anyhow::Result<()> {
     core.workspace.rename_chat(COORDINATOR, "Release")?;
     core.workspace
         .create_chat(WORKER, None, Some(&core.device_id), None, None)?;
-    core.workspace
-        .rename_chat(WORKER, "Deploy Solid web client (apps/web-solid) on Cloudflare")?;
+    core.workspace.rename_chat(
+        WORKER,
+        "Deploy Solid web client (apps/web-solid) on Cloudflare",
+    )?;
     let ipc_port = port();
     let _ipc = runtime.block_on(zuse_engine::serve_ipc(ipc_port, core.rpc_service()))?;
     let data = temp.path().join("ui");

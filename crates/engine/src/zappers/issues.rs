@@ -91,26 +91,50 @@ pub(super) fn apply(
                 if before == Some(ZapperIssueOwner::User) {
                     summary.push("Decision received".to_owned());
                 }
-                changes.push(change("owner", before.as_ref().map(owner_value), after.as_ref().map(owner_value)));
+                changes.push(change(
+                    "owner",
+                    before.as_ref().map(owner_value),
+                    after.as_ref().map(owner_value),
+                ));
             }
             if issue.details.status != details.status {
                 summary.push(format!("Status changed to {}", details.status.label()));
-                changes.push(change("status", Some(wire(&issue.details.status)), Some(wire(&details.status))));
+                changes.push(change(
+                    "status",
+                    Some(wire(&issue.details.status)),
+                    Some(wire(&details.status)),
+                ));
             }
             if issue.details.priority != details.priority {
                 summary.push(format!("Priority changed to {}", details.priority.label()));
-                changes.push(change("priority", Some(wire(&issue.details.priority)), Some(wire(&details.priority))));
+                changes.push(change(
+                    "priority",
+                    Some(wire(&issue.details.priority)),
+                    Some(wire(&details.priority)),
+                ));
             }
             let old = &issue.details;
             if old.title != details.title {
-                changes.push(change("title", Some(old.title.clone()), Some(details.title.clone())));
+                changes.push(change(
+                    "title",
+                    Some(old.title.clone()),
+                    Some(details.title.clone()),
+                ));
             }
             if old.due_date != details.due_date {
-                changes.push(change("dueDate", old.due_date.clone(), details.due_date.clone()));
+                changes.push(change(
+                    "dueDate",
+                    old.due_date.clone(),
+                    details.due_date.clone(),
+                ));
             }
             if old.labels != details.labels {
                 let joined = |labels: &[String]| (!labels.is_empty()).then(|| labels.join(", "));
-                changes.push(change("labels", joined(&old.labels), joined(&details.labels)));
+                changes.push(change(
+                    "labels",
+                    joined(&old.labels),
+                    joined(&details.labels),
+                ));
             }
             for (field, before, after) in [
                 ("description", &old.description, &details.description),
@@ -185,7 +209,11 @@ pub(super) fn apply(
             }
             issue.pull_requests.retain(|pr| pr.url != url);
             changes.push(change("pullRequest", Some(url.clone()), None));
-            (issue_id, "pullRequest", format!("Unlinked pull request {url}"))
+            (
+                issue_id,
+                "pullRequest",
+                format!("Unlinked pull request {url}"),
+            )
         }
         ZapperAction::CommentIssue {
             issue_id,
@@ -251,7 +279,9 @@ pub(super) fn apply(
             if !coordinator && waiting {
                 let routed = delivery
                     .as_ref()
-                    .filter(|d| d.state == ZapperIssueDeliveryState::Queued && d.chat_id != coordinator_chat)
+                    .filter(|d| {
+                        d.state == ZapperIssueDeliveryState::Queued && d.chat_id != coordinator_chat
+                    })
                     .map(|d| d.chat_id.as_str());
                 hand_back(issue, &zapper_workers, routed);
             }
@@ -291,7 +321,11 @@ pub(super) fn apply(
                 ));
             }
             if before_status != issue.details.status {
-                changes.push(change("status", Some(wire(&before_status)), Some(wire(&issue.details.status))));
+                changes.push(change(
+                    "status",
+                    Some(wire(&before_status)),
+                    Some(wire(&issue.details.status)),
+                ));
             }
             notify = !coordinator;
             let text = match recommendation.as_deref().map(str::trim) {
@@ -323,7 +357,11 @@ pub(super) fn apply(
                 ZapperIssueOutcome::Dropped => (ZapperIssueStatus::Canceled, "Dropped"),
             };
             if issue.details.status != status {
-                changes.push(change("status", Some(wire(&issue.details.status)), Some(wire(&status))));
+                changes.push(change(
+                    "status",
+                    Some(wire(&issue.details.status)),
+                    Some(wire(&status)),
+                ));
             }
             issue.details.status = status;
             notify = !coordinator;
@@ -358,7 +396,11 @@ pub(super) fn apply(
                 Some(worker.chat_id.clone()),
             ));
             if before_status != ZapperIssueStatus::InProgress {
-                changes.push(change("status", Some(wire(&before_status)), Some(wire(&issue.details.status))));
+                changes.push(change(
+                    "status",
+                    Some(wire(&before_status)),
+                    Some(wire(&issue.details.status)),
+                ));
             }
             (
                 issue_id,
@@ -633,14 +675,20 @@ fn recipient(
             return Recipient::None;
         }
         if newest.map(|n| &n.id) != Some(&q.id) {
-            return Recipient::Zapper("A newer question replaced this one, so the Zapper routes your answer");
+            return Recipient::Zapper(
+                "A newer question replaced this one, so the Zapper routes your answer",
+            );
         }
         match &q.thread {
             Some(chat) if expected.is_some_and(|e| changed.is_none_or(|c| e >= c)) => {
                 Recipient::Thread(chat.clone())
             }
-            Some(_) => Recipient::Zapper("The issue changed after you opened it, so the Zapper routes your answer"),
-            None => Recipient::Zapper("No single thread is tied to this question, so the Zapper routes your answer"),
+            Some(_) => Recipient::Zapper(
+                "The issue changed after you opened it, so the Zapper routes your answer",
+            ),
+            None => Recipient::Zapper(
+                "No single thread is tied to this question, so the Zapper routes your answer",
+            ),
         }
     };
     match target {
@@ -658,7 +706,9 @@ fn recipient(
         },
         None if waiting => match issue.activity.iter().rev().find(|a| a.kind == "question") {
             Some(q) => question(q),
-            None => Recipient::Zapper("No single thread is tied to this question, so the Zapper routes your answer"),
+            None => Recipient::Zapper(
+                "No single thread is tied to this question, so the Zapper routes your answer",
+            ),
         },
         None => Recipient::None,
     }
@@ -827,7 +877,11 @@ pub(super) fn mark_deliveries(db: &Connection, zapper: &mut Zapper) -> Result<()
 }
 /// Recheck a routed comment just before it goes out: the issue, Zapper or
 /// thread may have changed since it was queued.
-pub(super) fn answer_hold(db: &Connection, zapper: &Zapper, outbox: &str) -> Result<Option<String>> {
+pub(super) fn answer_hold(
+    db: &Connection,
+    zapper: &Zapper,
+    outbox: &str,
+) -> Result<Option<String>> {
     let Some(comment) = outbox.strip_suffix(ANSWER) else {
         return Ok(None);
     };
@@ -840,8 +894,10 @@ pub(super) fn answer_hold(db: &Connection, zapper: &Zapper, outbox: &str) -> Res
             .and_then(|a| a.delivery.as_ref())
             .map(|d| d.chat_id.clone())
         {
-            return Ok(hold_reason(db, &zapper.id, zapper.status, issue, &workers, &chat)?
-                .map(str::to_owned));
+            return Ok(
+                hold_reason(db, &zapper.id, zapper.status, issue, &workers, &chat)?
+                    .map(str::to_owned),
+            );
         }
     }
     Ok(Some("The comment is no longer on the issue".into()))
@@ -891,7 +947,9 @@ impl Zappers {
             return Ok(None);
         }
         let state: Option<String> = db
-            .query_row("SELECT state FROM zappers WHERE id=?1", [zapper], |r| r.get(0))
+            .query_row("SELECT state FROM zappers WHERE id=?1", [zapper], |r| {
+                r.get(0)
+            })
             .optional()?;
         let comment = message.trim_end_matches(ANSWER);
         let answered = state
@@ -914,7 +972,9 @@ impl Zappers {
         report: &str,
         message: &str,
     ) -> Result<()> {
-        let comment = message.strip_suffix(ANSWER).context("not a routed comment")?;
+        let comment = message
+            .strip_suffix(ANSWER)
+            .context("not a routed comment")?;
         let mut db = self
             .inner
             .db
@@ -931,7 +991,9 @@ impl Zappers {
             .is_some();
         ensure!(delivered, "that comment was not delivered to this thread");
         let state: String =
-            tx.query_row("SELECT state FROM zappers WHERE id=?1", [zapper_id], |r| r.get(0))?;
+            tx.query_row("SELECT state FROM zappers WHERE id=?1", [zapper_id], |r| {
+                r.get(0)
+            })?;
         let mut zapper: Zapper = serde_json::from_str(&state)?;
         let before = zapper.clone();
         for issue in &mut zapper.issues {
@@ -975,7 +1037,9 @@ impl Zappers {
 /// reread every pass. Memory only: after a restart a turn is checked once more.
 static CHECKED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 pub(super) fn checked_turn(report: &str) -> bool {
-    CHECKED.lock().is_ok_and(|seen| seen.iter().any(|r| r == report))
+    CHECKED
+        .lock()
+        .is_ok_and(|seen| seen.iter().any(|r| r == report))
 }
 pub(super) fn remember_turn(report: &str) {
     if let Ok(mut seen) = CHECKED.lock() {
@@ -1118,7 +1182,8 @@ pub(super) fn report(tx: &rusqlite::Transaction<'_>, event: &ZapperEvent) -> Res
             .iter()
             .find(|a| {
                 a.delivery.as_ref().is_some_and(|d| {
-                    d.chat_id == event.worker_chat_id && d.reply.as_deref() == Some(event.id.as_str())
+                    d.chat_id == event.worker_chat_id
+                        && d.reply.as_deref() == Some(event.id.as_str())
                 })
             })
             .map(|a| a.reply_to.clone().unwrap_or_else(|| a.id.clone()));
@@ -1935,13 +2000,20 @@ mod routing_tests {
         (dir, store)
     }
     fn run(store: &Zappers, id: &str, action: ZapperAction) -> Zapper {
-        store.command(command("release", id, action)).unwrap().unwrap()
+        store
+            .command(command("release", id, action))
+            .unwrap()
+            .unwrap()
     }
     fn issue(store: &Zappers) -> ZapperIssue {
         store.get("release").unwrap().issues[0].clone()
     }
     fn entry(store: &Zappers, id: &str) -> ZapperIssueActivity {
-        issue(store).activity.into_iter().find(|a| a.id == id).unwrap()
+        issue(store)
+            .activity
+            .into_iter()
+            .find(|a| a.id == id)
+            .unwrap()
     }
     /// An issue with two linked threads, each of which has reported once.
     fn board(store: &Zappers) {
@@ -2022,17 +2094,26 @@ mod routing_tests {
         let answer = reply("answer", "report-other");
         store.command(answer.clone()).unwrap();
         store.command(answer.clone()).unwrap();
-        assert_eq!(answers(&store), vec![("answer:answer".into(), "other".into())]);
+        assert_eq!(
+            answers(&store),
+            vec![("answer:answer".into(), "other".into())]
+        );
         let routed = delivery(&store, "answer");
         assert_eq!(routed.chat_id, "other");
         assert_eq!(routed.state, ZapperIssueDeliveryState::Queued);
         // The thread reads what it was asked and the answer.
         let (_, _, _, action, _) = store.outbox().unwrap().pop().unwrap();
-        let ZapperAction::MessageWorker { text, automatic, .. } = action else {
+        let ZapperAction::MessageWorker {
+            text, automatic, ..
+        } = action
+        else {
             panic!("not a message");
         };
         assert!(!automatic);
-        assert!(text.contains("B") && text.contains("other: A or B?"), "{text}");
+        assert!(
+            text.contains("B") && text.contains("other: A or B?"),
+            "{text}"
+        );
         // The Zapper is told, and told not to relay it.
         let event = store
             .events("release")
@@ -2047,7 +2128,10 @@ mod routing_tests {
         store.command(answer).unwrap();
         assert_eq!(answers(&store).len(), 1);
         // The worker's objective is untouched by an answer.
-        assert_eq!(store.get("release").unwrap().workers[1].objective, worker().objective);
+        assert_eq!(
+            store.get("release").unwrap().workers[1].objective,
+            worker().objective
+        );
     }
 
     #[test]
@@ -2080,7 +2164,13 @@ mod routing_tests {
         );
         assert!(answers(&store).is_empty());
         assert!(entry(&store, "note").delivery.is_none());
-        assert!(store.events("release").unwrap().iter().any(|e| e.id == "issue-note"));
+        assert!(
+            store
+                .events("release")
+                .unwrap()
+                .iter()
+                .any(|e| e.id == "issue-note")
+        );
     }
 
     fn ask(store: &Zappers, owner: Option<&str>) {
@@ -2136,7 +2226,10 @@ mod routing_tests {
         assert_eq!(entry(&store, "ask").thread.as_deref(), Some("worker"));
         let revision = store.get("release").unwrap().revision;
         answer(&store, "answer", Some(revision));
-        assert_eq!(answers(&store), vec![("answer:answer".into(), "worker".into())]);
+        assert_eq!(
+            answers(&store),
+            vec![("answer:answer".into(), "worker".into())]
+        );
         assert_eq!(
             issue(&store).details.current_owner(),
             Some(ZapperIssueOwner::Thread {
@@ -2163,7 +2256,11 @@ mod routing_tests {
             );
             assert!(answers(&store).is_empty(), "{case}");
             let routed = delivery(&store, "answer");
-            assert_eq!(routed.chat_id, store.get("release").unwrap().coordinator_chat_id, "{case}");
+            assert_eq!(
+                routed.chat_id,
+                store.get("release").unwrap().coordinator_chat_id,
+                "{case}"
+            );
             assert!(routed.detail.unwrap().contains("Zapper routes"), "{case}");
         }
     }
@@ -2175,7 +2272,13 @@ mod routing_tests {
             (
                 "user stopped",
                 |s| {
-                    run(s, "stop", ZapperAction::StopWorker { chat_id: "other".into() });
+                    run(
+                        s,
+                        "stop",
+                        ZapperAction::StopWorker {
+                            chat_id: "other".into(),
+                        },
+                    );
                 },
                 "You stopped this thread",
             ),
@@ -2184,21 +2287,40 @@ mod routing_tests {
                 |s| {
                     let mut details = issue(s).details;
                     details.status = ZapperIssueStatus::Done;
-                    run(s, "close", ZapperAction::EditIssue { issue_id: "fix".into(), details });
+                    run(
+                        s,
+                        "close",
+                        ZapperAction::EditIssue {
+                            issue_id: "fix".into(),
+                            details,
+                        },
+                    );
                 },
                 "closed",
             ),
             (
                 "released",
                 |s| {
-                    run(s, "release", ZapperAction::ReleaseWorker { chat_id: "other".into() });
+                    run(
+                        s,
+                        "release",
+                        ZapperAction::ReleaseWorker {
+                            chat_id: "other".into(),
+                        },
+                    );
                 },
                 "no longer works",
             ),
             (
                 "zapper stopped",
                 |s| {
-                    run(s, "halt", ZapperAction::SetStatus { status: ZapperStatus::Stopped });
+                    run(
+                        s,
+                        "halt",
+                        ZapperAction::SetStatus {
+                            status: ZapperStatus::Stopped,
+                        },
+                    );
                 },
                 "Zapper is stopped",
             ),
@@ -2226,11 +2348,20 @@ mod routing_tests {
     fn queued_answers_wait_while_paused_and_are_rechecked_before_sending() {
         let (_dir, store) = store();
         board(&store);
-        run(&store, "pause", ZapperAction::SetStatus { status: ZapperStatus::Paused });
+        run(
+            &store,
+            "pause",
+            ZapperAction::SetStatus {
+                status: ZapperStatus::Paused,
+            },
+        );
         store.command(reply("answer", "report-other")).unwrap();
         let queued = delivery(&store, "answer");
         assert_eq!(queued.state, ZapperIssueDeliveryState::Queued);
-        assert_eq!(queued.detail.as_deref(), Some("Waiting for the Zapper to resume"));
+        assert_eq!(
+            queued.detail.as_deref(),
+            Some("Waiting for the Zapper to resume")
+        );
         let zapper = store.get("release").unwrap();
         let db = store.inner.db.lock().unwrap();
         assert_eq!(answer_hold(&db, &zapper, "answer:answer").unwrap(), None);
@@ -2238,15 +2369,26 @@ mod routing_tests {
         // Closing the issue after it was queued stops it at dispatch.
         let mut details = issue(&store).details;
         details.status = ZapperIssueStatus::Canceled;
-        run(&store, "drop", ZapperAction::EditIssue { issue_id: "fix".into(), details });
+        run(
+            &store,
+            "drop",
+            ZapperAction::EditIssue {
+                issue_id: "fix".into(),
+                details,
+            },
+        );
         let zapper = store.get("release").unwrap();
         let db = store.inner.db.lock().unwrap();
         assert_eq!(
-            answer_hold(&db, &zapper, "answer:answer").unwrap().as_deref(),
+            answer_hold(&db, &zapper, "answer:answer")
+                .unwrap()
+                .as_deref(),
             Some("This issue is closed")
         );
         drop(db);
-        store.outbox_phase("answer:answer", "cancelled", Some("This issue is closed")).unwrap();
+        store
+            .outbox_phase("answer:answer", "cancelled", Some("This issue is closed"))
+            .unwrap();
         let cancelled = delivery(&store, "answer");
         assert_eq!(cancelled.state, ZapperIssueDeliveryState::Cancelled);
         assert_eq!(cancelled.detail.as_deref(), Some("This issue is closed"));
@@ -2285,23 +2427,45 @@ mod routing_tests {
         store.command(reply("answer", "report-other")).unwrap();
         // Accepted by the thread's queue: sent, not answered.
         sent(&store, "answer:answer", "turn-0");
-        assert_eq!(delivery(&store, "answer").state, ZapperIssueDeliveryState::Sent);
+        assert_eq!(
+            delivery(&store, "answer").state,
+            ZapperIssueDeliveryState::Sent
+        );
         // No turn finished since it was sent: nothing to check.
-        assert_eq!(store.awaiting_answer("release", "other", "turn-0").unwrap(), None);
+        assert_eq!(
+            store.awaiting_answer("release", "other", "turn-0").unwrap(),
+            None
+        );
         let message = store.awaiting_answer("release", "other", "turn-1").unwrap();
         assert_eq!(message.as_deref(), Some("answer:answer"));
         // Linked before the report is recorded, as reconcile does.
-        store.link_answer("release", "other", "report-2", "answer:answer").unwrap();
+        store
+            .link_answer("release", "other", "report-2", "answer:answer")
+            .unwrap();
         report(&store, "report-2");
         // Replies stay one level deep: it joins the card the comment is in.
-        assert_eq!(entry(&store, "report-2").reply_to.as_deref(), Some("report-other"));
-        assert_eq!(delivery(&store, "answer").state, ZapperIssueDeliveryState::Answered);
+        assert_eq!(
+            entry(&store, "report-2").reply_to.as_deref(),
+            Some("report-other")
+        );
+        assert_eq!(
+            delivery(&store, "answer").state,
+            ZapperIssueDeliveryState::Answered
+        );
         // A replayed link or a later report never moves the reply.
-        store.link_answer("release", "other", "report-3", "answer:answer").unwrap();
+        store
+            .link_answer("release", "other", "report-3", "answer:answer")
+            .unwrap();
         report(&store, "report-3");
         assert_eq!(entry(&store, "report-3").reply_to, None);
-        assert_eq!(delivery(&store, "answer").reply.as_deref(), Some("report-2"));
-        assert_eq!(store.awaiting_answer("release", "other", "turn-2").unwrap(), None);
+        assert_eq!(
+            delivery(&store, "answer").reply.as_deref(),
+            Some("report-2")
+        );
+        assert_eq!(
+            store.awaiting_answer("release", "other", "turn-2").unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -2316,11 +2480,23 @@ mod routing_tests {
         assert_eq!(entry(&store, "report-2").reply_to, None);
         drop(store);
         let store = Zappers::open(dir.path(), "local").unwrap();
-        let message = store.awaiting_answer("release", "other", "turn-1").unwrap().unwrap();
-        store.link_answer("release", "other", "report-2", &message).unwrap();
-        assert_eq!(entry(&store, "report-2").reply_to.as_deref(), Some("report-other"));
+        let message = store
+            .awaiting_answer("release", "other", "turn-1")
+            .unwrap()
+            .unwrap();
+        store
+            .link_answer("release", "other", "report-2", &message)
+            .unwrap();
+        assert_eq!(
+            entry(&store, "report-2").reply_to.as_deref(),
+            Some("report-other")
+        );
         // Only the thread it went to can answer it.
-        assert!(store.link_answer("release", "worker", "report-x", &message).is_err());
+        assert!(
+            store
+                .link_answer("release", "worker", "report-x", &message)
+                .is_err()
+        );
     }
 
     fn message(id: &str, role: MessageRole) -> SessionMessageEntry {
@@ -2352,8 +2528,14 @@ mod routing_tests {
             message("typed in chat", User),
             message("turn-3", Assistant),
         ];
-        assert_eq!(answered_message(&transcript, "turn-1"), Some(Some("a:answer".into())));
-        assert_eq!(answered_message(&transcript, "turn-2"), Some(Some("b:answer".into())));
+        assert_eq!(
+            answered_message(&transcript, "turn-1"),
+            Some(Some("a:answer".into()))
+        );
+        assert_eq!(
+            answered_message(&transcript, "turn-2"),
+            Some(Some("b:answer".into()))
+        );
         assert_eq!(answered_message(&transcript, "turn-3"), Some(None));
         assert_eq!(answered_message(&transcript, "turn-0"), Some(None));
         // A transcript that hasn't caught up decides nothing yet.
@@ -2369,7 +2551,14 @@ mod routing_tests {
         details.owner = Some(ZapperIssueOwner::Thread {
             chat_id: "worker".into(),
         });
-        run(&store, "edit", ZapperAction::EditIssue { issue_id: "fix".into(), details });
+        run(
+            &store,
+            "edit",
+            ZapperAction::EditIssue {
+                issue_id: "fix".into(),
+                details,
+            },
+        );
         let edit = entry(&store, "edit");
         assert!(edit.text.contains("Owner: worker"), "{}", edit.text);
         assert_eq!(
@@ -2382,7 +2571,14 @@ mod routing_tests {
         let mut details = issue(&store).details;
         details.labels = vec!["web".into()];
         details.due_date = Some("2026-12-05".into());
-        run(&store, "details", ZapperAction::EditIssue { issue_id: "fix".into(), details });
+        run(
+            &store,
+            "details",
+            ZapperAction::EditIssue {
+                issue_id: "fix".into(),
+                details,
+            },
+        );
         assert_eq!(
             entry(&store, "details").changes,
             vec![
@@ -2396,4 +2592,3 @@ mod routing_tests {
         );
     }
 }
-
