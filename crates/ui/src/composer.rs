@@ -10097,6 +10097,11 @@ impl Composer {
     }
 
     pub(crate) fn run_live(&self, cx: &App) -> bool {
+        // A cloud chat's turn: its conversation's one answer, which also
+        // knows the server's command record, not just a live session.
+        if self.cloud_turn_running() {
+            return true;
+        }
         let s = self.state.read(cx);
         let Some(chat_id) = s.selected_chat.as_deref() else {
             return false;
