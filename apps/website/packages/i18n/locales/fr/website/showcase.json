@@ -1,5 +1,6 @@
 {
-	"book_a_call": "Réserver un appel",
+	"start_for_1": "Commencer pour 1 $",
+	"subscribe_in_the_app_after_you_download": "Abonnez-vous dans l'app après le téléchargement",
 	"review": "Revoir",
 	"parallel_work_without_branch_chaos": "Travail parallèle sans chaos de branche <part0/>.",
 	"continue_the_work_with_another_agent": "Continuer le travail avec un autre agent",
@@ -135,7 +136,7 @@
 	"request_access": "Demander l'accès",
 	"run_isolated_cloud_workspaces_even_after_your_computer_goes_offline": "Exécutez des espaces de travail cloud isolés même après la mise hors ligne de votre ordinateur.",
 	"register_your_interest_as_we_open_beta_capacity_to_more_developers": "Enregistrez votre intérêt alors que nous ouvrons la capacité bêta à davantage de développeurs.",
-	"interested_in_a_hosted_workspace": "Intéressé par un espace de travail hébergé ?",
+	"try_a_hosted_workspace_first_week_1": "Essayez un espace de travail hébergé : 1 $ la première semaine",
 	"zuse_desktop_workspace": "Zuse espace de travail de bureau",
 	"cloud_beta": "Bêta du cloud",
 	"interest_registered_we_ll_email_you_about_beta_access": "Intérêts enregistrés. Nous vous enverrons un e-mail concernant l'accès à la version bêta.",
