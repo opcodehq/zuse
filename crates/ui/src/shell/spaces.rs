@@ -6201,6 +6201,7 @@ impl Shell {
                     change_request,
                     harness,
                     status,
+                    self.state.read(cx).background_work_for(&chat.id, now),
                     is_selected,
                     false,
                     is_moving,
