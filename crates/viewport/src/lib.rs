@@ -609,8 +609,7 @@ impl WorkspaceView {
         });
         let input_text =
             cx.new(|cx| input::TextInput::multiline("Type your own answer…", window, cx));
-        let secret_text =
-            cx.new(|cx| input::TextInput::password("Enter bearer token…", window, cx));
+        let secret_text = cx.new(|cx| input::TextInput::password("Enter secret…", window, cx));
         cx.subscribe_in(
             &input_text,
             window,
