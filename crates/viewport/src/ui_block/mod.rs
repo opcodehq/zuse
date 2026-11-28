@@ -375,9 +375,11 @@ impl UiBlockView {
             | Component::RadioGroup { .. }
             | Component::Checkbox { .. }
             | Component::Slider { .. } => self.field(node, path, form, window, cx),
-            Component::Connect { plugin, reason } => {
-                self.connect_card(plugin, reason.as_deref(), path, cx)
-            }
+            Component::Connect {
+                plugin,
+                reason,
+                reconnect,
+            } => self.connect_card(plugin, reason.as_deref(), *reconnect, path, cx),
             Component::McpServer {
                 name,
                 status,

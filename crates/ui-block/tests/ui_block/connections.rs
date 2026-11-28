@@ -10,6 +10,7 @@ fn connect_takes_a_plugin_and_an_optional_reason() {
         Component::Connect {
             plugin: "linear".into(),
             reason: Some("To file the bug you described".into()),
+            reconnect: false,
         }
     );
     assert_eq!(
@@ -17,6 +18,15 @@ fn connect_takes_a_plugin_and_an_optional_reason() {
         Component::Connect {
             plugin: "vidiq".into(),
             reason: None,
+            reconnect: false,
+        }
+    );
+    assert_eq!(
+        root(r#"root = Connect("posthog", null, true)"#),
+        Component::Connect {
+            plugin: "posthog".into(),
+            reason: None,
+            reconnect: true,
         }
     );
     rejects(r#"root = Connect("")"#, "Connect");

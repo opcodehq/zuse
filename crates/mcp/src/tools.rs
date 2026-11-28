@@ -479,6 +479,10 @@ fn catalog() -> Vec<ToolDef> {
                     "type": "string",
                     "maxLength": 300,
                     "description": "One short sentence shown under the card: what connecting lets you do for the user. Optional."
+                },
+                "reconnect": {
+                    "type": "boolean",
+                    "description": "Ask the user to sign in again: the plugin is connected but your calls fail for lack of access. Optional."
                 }
             },
             "required": ["plugin"],
@@ -514,10 +518,12 @@ const PLUGINS_CONNECT_DESCRIPTION: &str = "\
 Show a connection card for a Zuse plugin in this chat, below your reply. Use it when the user asks you \
 to connect, reconnect or sign in to an app or MCP server, when they want to see or manage a connection, \
 or when a plugin you need isn't connected (plugins_list doesn't have it, or a call fails for lack of \
-access). The card is live: Connect when it isn't connected; Add account and Manage when it is. The user \
-signs in from the card in their own browser or a private form, so never ask them for passwords or API \
-keys in chat; you never see credentials. Once they finish, the plugin's tools appear in plugins_list. \
-Reply with one short line about what connecting enables; don't describe the card.";
+access). The card is live: Connect when it isn't connected; Add account and Manage when it is. If it is \
+connected but its calls fail with an auth or permission error (expired or revoked access), pass \
+reconnect: true and the card asks the user to sign in again. The user signs in from the card in their \
+own browser or a private form, so never ask them for passwords or API keys in chat; you never see \
+credentials. Once they finish, the plugin's tools appear in plugins_list. Reply with one short line \
+about what connecting enables; don't describe the card.";
 
 /// The spec crate words the tool from its own catalogue, so the prompt and
 /// the validator never drift.
@@ -738,6 +744,8 @@ struct PluginsConnectArgs {
     plugin: String,
     #[serde(default)]
     reason: Option<String>,
+    #[serde(default)]
+    reconnect: bool,
 }
 
 /// The one-component spec a `plugins_connect` call shows. Strings are
@@ -748,11 +756,19 @@ fn connect_spec(args: &PluginsConnectArgs) -> anyhow::Result<String> {
         anyhow::bail!("plugin is required: pass its id or name, e.g. \"linear\".");
     }
     let quote = |text: &str| serde_json::to_string(text).expect("strings serialize");
-    Ok(match args.reason.as_deref().map(str::trim) {
-        Some(reason) if !reason.is_empty() => {
-            format!("root = Connect({}, {})", quote(plugin), quote(reason))
-        }
-        _ => format!("root = Connect({})", quote(plugin)),
+    let reason = args
+        .reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty());
+    Ok(match (reason, args.reconnect) {
+        (Some(reason), false) => format!("root = Connect({}, {})", quote(plugin), quote(reason)),
+        (reason, true) => format!(
+            "root = Connect({}, {}, true)",
+            quote(plugin),
+            reason.map_or_else(|| "null".to_owned(), quote)
+        ),
+        (None, false) => format!("root = Connect({})", quote(plugin)),
     })
 }
 
@@ -2922,6 +2938,13 @@ mod tests {
             )
             .await
             .unwrap();
+        inside
+            .call(
+                "plugins_connect",
+                json!({"plugin": "posthog", "reconnect": true}),
+            )
+            .await
+            .unwrap();
         let writes = world.writes.lock().unwrap();
         let specs: Vec<&str> = writes
             .iter()
@@ -2933,6 +2956,7 @@ mod tests {
             [
                 r#"root = Connect("Google \"Calendar\"", "So I can book the review.")"#,
                 r#"root = Connect("linear")"#,
+                r#"root = Connect("posthog", null, true)"#,
             ]
         );
         assert_eq!(writes[0].1["chatId"], "chat-alpha-1");

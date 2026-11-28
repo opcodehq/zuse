@@ -1872,12 +1872,14 @@ impl Shell {
         self.rebind_cloud_file_tabs(&session, &state, cx);
         // Spawn chips and workflow rows open their agents in the right pane,
         // fed by this conversation's state: its engine reaches the computer.
+        // Plugin cards' buttons (Connect, Manage…) act on the app's plugins.
         self.cloud_transcript_events =
             Some(cx.subscribe(&transcript, |this, transcript, event, cx| {
                 if matches!(
                     event,
                     TranscriptEvent::OpenSubagent { .. }
                         | TranscriptEvent::OpenWorkflowAgent { .. }
+                        | TranscriptEvent::UiBlockPlugin(_)
                 ) {
                     this.on_transcript_event(transcript, event, cx);
                 }
