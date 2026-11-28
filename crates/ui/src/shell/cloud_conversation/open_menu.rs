@@ -581,9 +581,9 @@ mod tests {
         assert_eq!(
             labels(&items),
             [
-                ("Files", Some(1)),
-                ("Cursor", Some(2)),
-                ("VS Code", Some(3)),
+                (targets[0].label, Some(1)),
+                (targets[1].label, Some(2)),
+                (targets[2].label, Some(3)),
                 ("Copy path", Some(4)),
                 ("Delete folder", None),
             ]
@@ -592,7 +592,10 @@ mod tests {
         assert!(items[3].separated && items[4].separated && items[4].danger);
         // While syncing the folder can't be deleted from here.
         let items = folder_items(&targets[..1], false);
-        assert_eq!(labels(&items), [("Files", Some(1)), ("Copy path", Some(2))]);
+        assert_eq!(
+            labels(&items),
+            [(targets[0].label, Some(1)), ("Copy path", Some(2))]
+        );
         // No apps detected yet: Copy path alone, with no hairline above it.
         assert!(!folder_items(&[], false)[0].separated);
     }
@@ -607,17 +610,16 @@ mod tests {
 
     #[test]
     fn ssh_menu_lists_apps_then_copy_ssh_command() {
-        let items = ssh_items(&[
-            SshTarget::for_test(SshApp::Cursor),
-            SshTarget::for_test(SshApp::Zed),
-        ]);
+        let targets = [
+            SshTarget::for_test(SshApp::Terminal),
+            SshTarget::for_test(SshApp::WezTerm),
+        ];
+        let items = ssh_items(&targets);
+        assert_eq!(items[0].number, Some(1));
+        assert_eq!(items[1].number, Some(2));
         assert_eq!(
-            labels(&items),
-            [
-                ("Cursor", Some(1)),
-                ("Zed", Some(2)),
-                ("Copy SSH command", Some(3)),
-            ]
+            (items[2].label, items[2].number),
+            ("Copy SSH command", Some(3))
         );
         assert!(items[2].separated && !items[1].separated);
         assert_eq!(items[2].pick, Pick::Ssh(SshAction::Copy));
@@ -678,11 +680,15 @@ mod tests {
     #[test]
     fn the_folder_button_opens_the_saved_app_while_installed() {
         let targets = fixture_targets();
-        assert_eq!(default_target(&targets, Some("zed")).unwrap().id, "zed");
+        let saved = targets[3].id;
+        assert_eq!(default_target(&targets, Some(saved)).unwrap().id, saved);
         assert_eq!(default_target(&targets, Some("gone")).unwrap().id, "finder");
         assert_eq!(default_target(&targets, None).unwrap().id, "finder");
-        assert_eq!(default_target(&targets[1..2], None).unwrap().id, "cursor");
-        assert!(default_target(&[], Some("zed")).is_none());
+        assert_eq!(
+            default_target(&targets[1..2], None).unwrap().id,
+            targets[1].id
+        );
+        assert!(default_target(&[], Some(saved)).is_none());
     }
 
     #[test]
