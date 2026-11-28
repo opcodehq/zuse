@@ -43,6 +43,17 @@ pub enum ChipKind {
     Link,
 }
 
+impl ChipKind {
+    pub(super) fn trailing_pad(self) -> &'static str {
+        if self == Self::Link {
+            // Inline links have no pill. Let the source text set the spacing.
+            ""
+        } else {
+            CHIP_TRAILING_PAD
+        }
+    }
+}
+
 /// What a chip's icon is painted from: a monochrome glyph tinted like the
 /// chip, or the file theme's own polychrome artwork, which tells formats and
 /// languages apart.
@@ -61,11 +72,11 @@ pub(crate) enum ChipIcon {
 /// The padding around the label in a chip's display `range`: the side
 /// bearing and icon slot before it, and the trailing room after it. Callers
 /// shape both in [`CHIP_PAD_FAMILY`].
-pub(crate) fn chip_pad_ranges(range: &Range<usize>) -> [Range<usize>; 2] {
+pub(crate) fn chip_pad_ranges(range: &Range<usize>, kind: ChipKind) -> [Range<usize>; 2] {
     let lead_end = (range.start + MENTION_SIDE_PAD.len() + CHIP_ICON_SLOT.len()).min(range.end);
     let trail_start = range
         .end
-        .saturating_sub(CHIP_TRAILING_PAD.len())
+        .saturating_sub(kind.trailing_pad().len())
         .max(lead_end);
     [range.start..lead_end, trail_start..range.end]
 }
@@ -172,7 +183,7 @@ pub(crate) fn text_chip_label_offset(
 pub(super) fn chip_pad_overrides(spans: &[SentMentionSpan]) -> Vec<Range<usize>> {
     spans
         .iter()
-        .flat_map(|span| chip_pad_ranges(&span.range))
+        .flat_map(|span| chip_pad_ranges(&span.range, span.kind))
         .filter(|range| !range.is_empty())
         .collect()
 }
@@ -425,7 +436,7 @@ pub(crate) fn chip_text(
         .collect();
     for span in &spans {
         if let Some((color, weight)) = chip_label_style(span.kind, theme) {
-            let [lead, trail] = chip_pad_ranges(&span.range);
+            let [lead, trail] = chip_pad_ranges(&span.range, span.kind);
             if lead.end < trail.start {
                 highlights.push((
                     lead.end..trail.start,
@@ -455,7 +466,7 @@ pub(crate) fn chip_text(
         |_, _, _| (),
         move |_, _, window, cx| {
             for (span, icon) in spans.iter().zip(&icons) {
-                let label = chip_pad_ranges(&span.range)[0].end;
+                let label = chip_pad_ranges(&span.range, span.kind)[0].end;
                 for (row, rect) in
                     crate::markdown::render::range_rects(&layout, &span.range, 0.0, 2.0)
                         .into_iter()
