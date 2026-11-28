@@ -81,7 +81,16 @@ struct ChatPanePager<Page: View>: View {
         withAnimation(.easeOut(duration: 0.3)) { showsHint = true }
       }
     }
-    .overlay(alignment: .trailing) { hint }
+    .overlay(alignment: .bottom) { hint }
+    #if DEBUG
+      .task {
+        // `--pane-hint` shows the one-time hint on every launch, for screenshots.
+        if ProcessInfo.processInfo.arguments.contains("--pane-hint") {
+          try? await Task.sleep(for: .milliseconds(600))
+          withAnimation(.easeOut(duration: 0.3)) { showsHint = true }
+        }
+      }
+    #endif
     .sensoryFeedback(.impact(weight: .medium), trigger: store.closedCount)
   }
 
@@ -256,21 +265,28 @@ struct ChatPanePager<Page: View>: View {
 
   // MARK: Hint
 
+  /// A small solid pill above the composer, so it never sits on the transcript's text.
   @ViewBuilder private var hint: some View {
     if showsHint {
-      Text("Swipe or pinch to see all panes")
-        .font(.system(size: 15, weight: .medium))
-        .multilineTextAlignment(.trailing)
-        .padding(.horizontal, 16).padding(.vertical, 12)
-        .floatingGlass(radius: 18)
-        .padding(.trailing, 12)
-        .transition(.move(edge: .trailing).combined(with: .opacity))
-        .task {
-          try? await Task.sleep(for: .seconds(3.5))
-          withAnimation(.easeIn(duration: 0.3)) { showsHint = false }
-        }
-        .onTapGesture { withAnimation { showsHint = false } }
-        .accessibilityAddTraits(.isStaticText)
+      HStack(spacing: 8) {
+        Image(systemName: "hand.draw").font(.system(size: 14, weight: .semibold))
+          .foregroundStyle(AppTheme.accent)
+        Text("Swipe for panes · pinch to see all")
+          .font(.system(size: 14, weight: .medium))
+      }
+      .padding(.horizontal, 14).frame(height: 36)
+      .background(.thickMaterial, in: Capsule())
+      .overlay(Capsule().strokeBorder(AppTheme.hairline, lineWidth: 1))
+      .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+      .padding(.bottom, 84)
+      .transition(.move(edge: .bottom).combined(with: .opacity))
+      .task {
+        try? await Task.sleep(for: .seconds(3.5))
+        withAnimation(.easeIn(duration: 0.25)) { showsHint = false }
+      }
+      .onTapGesture { withAnimation { showsHint = false } }
+      .accessibilityElement(children: .combine)
+      .accessibilityAddTraits(.isStaticText)
     }
   }
 }
