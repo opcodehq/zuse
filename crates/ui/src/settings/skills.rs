@@ -667,7 +667,7 @@ impl SkillsPage {
             ),
             None => (
                 "Install in",
-                format!("Adds the skill to {}", entry.install_path()),
+                "Adds it to the project’s .agents/skills folder".to_owned(),
             ),
         };
         let row = crate::frost::layered(
@@ -686,7 +686,7 @@ impl SkillsPage {
                 .child(
                     div()
                         .flex_1()
-                        .min_w(px(150.))
+                        .min_w(px(120.))
                         .flex()
                         .flex_col()
                         .gap(px(2.))
@@ -727,8 +727,8 @@ impl SkillsPage {
                     .relative()
                     .w_full()
                     .min_w_0()
-                    .px(px(28.))
-                    .py(px(26.))
+                    .px(px(20.))
+                    .py(px(22.))
                     .flex()
                     .flex_col()
                     .gap(px(14.))
@@ -960,7 +960,6 @@ impl SkillsPage {
                 "Installs to",
                 div()
                     .min_w_0()
-                    .truncate()
                     .text_size(px(12.))
                     .font_family(theme.font_mono.clone())
                     .text_color(theme.text)
@@ -1017,7 +1016,7 @@ impl SkillsPage {
                     .w_full()
                     .min_w_0()
                     .flex()
-                    .gap(px(40.))
+                    .gap(px(32.))
                     .items_start()
                     .when(!wide, |row| row.flex_col().gap(px(24.)))
                     .child(
@@ -1033,7 +1032,7 @@ impl SkillsPage {
                     )
                     .child(
                         about
-                            .when(wide, |col| col.w(px(200.)).flex_none().pt(px(4.)))
+                            .when(wide, |col| col.w(px(180.)).flex_none().pt(px(4.)))
                             .when(!wide, |col| col.w_full()),
                     ),
             )

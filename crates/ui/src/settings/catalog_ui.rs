@@ -310,7 +310,7 @@ pub fn title_block(
 
 /// Plugins and Skills share one column, so switching between them keeps the
 /// heading, toolbar and tabs exactly in place.
-pub const PAGE_MAX_WIDTH: f32 = 960.;
+pub const PAGE_MAX_WIDTH: f32 = 768.;
 
 /// Side gutter for the Plugins and Skills pages at a given content width.
 pub fn page_padding(content_width: f32) -> f32 {
