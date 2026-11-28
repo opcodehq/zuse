@@ -5,7 +5,9 @@ import { navigate, openChat, setView, view } from "@/core/view";
 import { zapperForChat } from "@/core/zappers";
 import { Icon } from "@/ui/Icon";
 import { Menu } from "@/ui/primitives";
-import { Avatar, avatarOf } from "./Avatar";
+import { Avatar, avatarOf, moodOf } from "./Avatar";
+import { moodLabel } from "./mascot-motion";
+import { now } from "@/features/sidebar/util";
 import {
   act,
   openZapper,
@@ -53,6 +55,7 @@ export function ZapperSidebar() {
           {(zapper) => {
             const waiting = () =>
               zapper.decisions.filter((d) => d.answer === null).length;
+            const mood = createMemo(() => moodOf(zapper, now()));
             const workers = createMemo(() =>
               zapper.workers.filter(
                 (w) => workerVisible(w.chatId) && (w.queuePosition !== undefined || threadActive(w.chatId)),
@@ -68,9 +71,12 @@ export function ZapperSidebar() {
                     type="button"
                     class="zp-sidebar-open"
                     aria-label={`Open Zapper ${zapper.config.name}`}
+                    aria-describedby={`zp-mood-${zapper.id}`}
+                    title={moodLabel[mood()]}
                     onClick={() => openZapper(zapper)}
                   >
-                    <Avatar avatar={avatarOf(zapper)} image={zapper.config.avatarImage} size={17} />
+                    <Avatar avatar={avatarOf(zapper)} image={zapper.config.avatarImage} size={17} mood={mood()} />
+                    <span id={`zp-mood-${zapper.id}`} hidden>{moodLabel[mood()]}</span>
                     <span>{zapper.config.name}</span>
                     <Show when={waiting()}>
                       <span class="zp-badge" title="Decisions waiting for you">
