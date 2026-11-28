@@ -39,10 +39,11 @@ import ZuseCore
   }
 
   @discardableResult func open(
-    _ chat: String, _ kind: ChatPaneKind, target: String? = nil, title: String
+    _ chat: String, _ kind: ChatPaneKind, target: String? = nil, title: String,
+    id: String = UUID().uuidString
   ) -> ChatPane {
     var opened: ChatPane?
-    update(chat) { opened = $0.open(kind, target: target, title: title) }
+    update(chat) { opened = $0.open(kind, target: target, title: title, id: id) }
     return opened ?? ChatPane(kind: kind, target: target, title: title)
   }
 
@@ -98,7 +99,10 @@ import ZuseCore
     func seedPreview(_ chat: String, kinds: [(ChatPaneKind, String?, String)]) {
       let arguments = ProcessInfo.processInfo.arguments
       guard arguments.contains("--panes-preview"), seeded.insert(chat).inserted else { return }
-      for (kind, target, title) in kinds { open(chat, kind, target: target, title: title) }
+      // Stable IDs, so UI tests can find each card.
+      for (kind, target, title) in kinds {
+        open(chat, kind, target: target, title: title, id: "preview-" + kind.rawValue)
+      }
       if let value = arguments.first(where: { $0.hasPrefix("--pane=") })?.dropFirst(7) {
         if value == "selection" {
           focus(chat, ChatPaneDeck.selectionID)

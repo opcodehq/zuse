@@ -125,7 +125,8 @@ struct ChatPanePager<Page: View>: View {
       }
       .modifier(
         CardAccessibility(
-          overview: overview, closable: page.isClosable,
+          // The picker's tiles stay their own buttons in the overview.
+          overview: overview && page != .selection, closable: page.isClosable,
           title: label(page)?.title ?? "Pane picker", id: page.id,
           open: { bringForward(page.id) }, close: { close(page.id) }))
   }
@@ -363,8 +364,13 @@ private struct CardLift: ViewModifier {
 struct ChatPageDots: View {
   let count: Int
   let index: Int
-  /// Solid ink: the navigation bar's vibrancy would otherwise wash the current dot out.
-  private static let ink = AppTheme.adaptive(light: .black, dark: .white)
+  /// Solid ink: the navigation bar's vibrancy would otherwise wash the current dot out. A
+  /// system colour, so it also resolves while SwiftUI renders off the main thread.
+  #if os(macOS)
+    private static let ink = Color(nsColor: .labelColor)
+  #else
+    private static let ink = Color(uiColor: .label)
+  #endif
   var body: some View {
     HStack(spacing: 5) {
       ForEach(0..<min(count, 9), id: \.self) { dot in
@@ -378,5 +384,6 @@ struct ChatPageDots: View {
     .animation(.snappy(duration: 0.25), value: count)
     .accessibilityElement()
     .accessibilityLabel("Page \(index + 1) of \(count)")
+    .accessibilityIdentifier("pane-dots")
   }
 }

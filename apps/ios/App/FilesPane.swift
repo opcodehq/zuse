@@ -230,7 +230,7 @@ struct FileIcon: View {
   let entry: WorkspaceFileEntry
   var body: some View {
     if entry.isDirectory {
-      Image(systemName: "folder.fill").font(.system(size: 17)).foregroundStyle(Color.accentBlue)
+      Image(systemName: "folder.fill").font(.system(size: 17)).foregroundStyle(Color.blue)
     } else {
       Image(systemName: Self.symbol(entry.name)).font(.system(size: 15))
         .foregroundStyle(.secondary)
@@ -253,13 +253,6 @@ struct FileIcon: View {
     default: return "doc"
     }
   }
-}
-
-@MainActor extension Color {
-  /// Folder blue, as Files and Finder draw folders.
-  static let accentBlue = AppTheme.adaptive(
-    light: .init(red: 0.2, green: 0.52, blue: 0.96, alpha: 1),
-    dark: .init(red: 0.39, green: 0.66, blue: 1, alpha: 1))
 }
 
 /// The rounded search field the list panes share.

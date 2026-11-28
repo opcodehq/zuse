@@ -30,7 +30,9 @@
 		23FBB553DD522F8C01931B6ED19DDF25 /* TabletShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 747590EB06A3325E41AFE9408C5266A7 /* TabletShell.swift */; };
 		24EF8242D1A81E18BF64F797F2463EAA /* FilesPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD136922AF663703F8992B423F9FE9D4 /* FilesPane.swift */; };
 		2632CD6517947819A547159328DC6987 /* ZapperDrive.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5E3C3BC1FA0C531A4BEDFACF143BA17 /* ZapperDrive.swift */; };
+		286563905EAB1C5D916FFEEB8633BDC6 /* ChatPanesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01BD9C2D8208B32B1836114361B6D4D4 /* ChatPanesTests.swift */; };
 		2A63AEE159894909C5ADF1FE6AEFC58B /* PreviewData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9451DCBB533D601531F644A66DEA91A7 /* PreviewData.swift */; };
+		2C367B96F76B5A29F1C81F4D030BBFE3 /* NativeChatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABA9808F4E2881DC0D622AC498323637 /* NativeChatTests.swift */; };
 		2E442543D4511B9B3B10E375DBEBC7C9 /* FileContentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6B96EE655EAD69ABF83CF01A45B75C7 /* FileContentsView.swift */; };
 		2E4467B8A8BA7A8BEB636892FF345135 /* QRScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E080A961C5C326AFDE483209C8B21B2 /* QRScanner.swift */; };
 		31335D6C67E30177AE24AE8CF6B26ABE /* ChatPanePager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5058527B787F6FD9804D9E0A26C0DFFE /* ChatPanePager.swift */; };
@@ -61,7 +63,6 @@
 		6209229B082C6335535D54537CD05A00 /* NativeMacTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58429BFDAA8F4862CCFFCB9A9030C587 /* NativeMacTests.swift */; };
 		634BCADAA0094C3DDFF480BE3DDF0E82 /* MessageDetails.swift in Sources */ = {isa = PBXBuildFile; fileRef = D90CCD4E4589597479AAA85C0670A1FE /* MessageDetails.swift */; };
 		641EA703E33F02CC1AB75C0DA9418185 /* PullRequestChecksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E44F5C37E5C920F0CBD8D3FAFEA1BD5F /* PullRequestChecksView.swift */; };
-		64E29DBEF58C3E6015EFE250D28A85DE /* NativeChatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F409D1C282008AEF947FEDD07ED9A921 /* NativeChatTests.swift */; };
 		666C9ED6DEF9028320DCF06845E8FC6A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 70FF16216F6868DED42588391B0158CD /* Assets.xcassets */; };
 		667764D4962F7C7F8F8C4830E8AA5888 /* PullRequestNavigator.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAA263E9B17BA7471290F1E6188C6C66 /* PullRequestNavigator.swift */; };
 		677567CD9804E69839D404FFB0099B6C /* ThirdPartyNotices.txt in Resources */ = {isa = PBXBuildFile; fileRef = 6008468E81C4A5D8CD6BE09A34861806 /* ThirdPartyNotices.txt */; };
@@ -161,7 +162,7 @@
 			remoteGlobalIDString = E30494ADE15F8F2A2CBAFDF0D9BB8ED5;
 			remoteInfo = ZuseMac;
 		};
-		D6D4C5FE396B3554AE44FB28B1B8DE9C /* PBXContainerItemProxy */ = {
+		F01EB40074C13A77BF28BCBB6932EB9B /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = DA8795FAF9DBE501F340039E98E6358D /* Project object */;
 			proxyType = 1;
@@ -171,6 +172,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		01BD9C2D8208B32B1836114361B6D4D4 /* ChatPanesTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ChatPanesTests.swift; sourceTree = "<group>"; };
 		08907FFDECA9C59F35D2EA6CD526BDDD /* ZapperViews.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ZapperViews.swift; sourceTree = "<group>"; };
 		0D77973ADE702ADF7F461F956F72D60F /* CloudPreview.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CloudPreview.swift; sourceTree = "<group>"; };
 		13D2BE645B92F44D03DB762433997029 /* ZapperFirstRun.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ZapperFirstRun.swift; sourceTree = "<group>"; };
@@ -223,6 +225,7 @@
 		A88444308F32CA8B4A7F4CC995821F04 /* Mermaid-LICENSE.txt */ = {isa = PBXFileReference; includeInIndex = 1; path = "Mermaid-LICENSE.txt"; sourceTree = "<group>"; };
 		A94F27C5D999BDF6DF7D69C4689B1B28 /* AccountPicture.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AccountPicture.swift; sourceTree = "<group>"; };
 		AA8DAEAF5C661F5A5D419D766B7FBBA0 /* UISpecView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = UISpecView.swift; sourceTree = "<group>"; };
+		ABA9808F4E2881DC0D622AC498323637 /* NativeChatTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NativeChatTests.swift; sourceTree = "<group>"; };
 		B52C5C3C1BFCED698F0DF773F6357CAA /* ChatMarkdown.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ChatMarkdown.swift; sourceTree = "<group>"; };
 		B60FDF33190F24E9CC60B1819A6AA210 /* PullRequestStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PullRequestStore.swift; sourceTree = "<group>"; };
 		B73578E421A7CB436FC086ACC0EF21C5 /* SSHConnectView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SSHConnectView.swift; sourceTree = "<group>"; };
@@ -243,12 +246,11 @@
 		E6B96EE655EAD69ABF83CF01A45B75C7 /* FileContentsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FileContentsView.swift; sourceTree = "<group>"; };
 		E75D1C7F773B0AD514D4A9A2A6AF38B7 /* ZuseUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ZuseUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F1161988B268BBC757AEFAC6399DDB44 /* MoreTab.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MoreTab.swift; sourceTree = "<group>"; };
-		F409D1C282008AEF947FEDD07ED9A921 /* NativeChatTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NativeChatTests.swift; sourceTree = "<group>"; };
 		F5E3C3BC1FA0C531A4BEDFACF143BA17 /* ZapperDrive.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ZapperDrive.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		7F5954B89C5E05714E6E9E2F1F1B9FD9 /* Frameworks */ = {
+		A2E0A6306E1CCF68599F16F8536E2DD4 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -290,7 +292,7 @@
 			children = (
 				7A7C0BE66BBA2756163AA28BB42B8CF8 /* Products */,
 				792508FD1029C93F0ED33CAC7171A457 /* App */,
-				5831ED92008AE6321EC2C652D4EACFB2 /* UITests */,
+				C0CEE7B44C520658D843B62A3172586D /* UITests */,
 				564FAFB367029ECEF1C97A5D4B804683 /* MacUITests */,
 			);
 			sourceTree = "<group>";
@@ -302,15 +304,6 @@
 			);
 			name = MacUITests;
 			path = MacUITests;
-			sourceTree = "<group>";
-		};
-		5831ED92008AE6321EC2C652D4EACFB2 /* UITests */ = {
-			isa = PBXGroup;
-			children = (
-				F409D1C282008AEF947FEDD07ED9A921 /* NativeChatTests.swift */,
-			);
-			name = UITests;
-			path = UITests;
 			sourceTree = "<group>";
 		};
 		792508FD1029C93F0ED33CAC7171A457 /* App */ = {
@@ -400,21 +393,31 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		C0CEE7B44C520658D843B62A3172586D /* UITests */ = {
+			isa = PBXGroup;
+			children = (
+				01BD9C2D8208B32B1836114361B6D4D4 /* ChatPanesTests.swift */,
+				ABA9808F4E2881DC0D622AC498323637 /* NativeChatTests.swift */,
+			);
+			name = UITests;
+			path = UITests;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		07F4D881B436C9C374CB5C90E948A477 /* ZuseUITests */ = {
+		ADD4D2D38DA7E156CBD9BF41FFADC41B /* ZuseUITests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = E82D1ECDE8BE8C96AB53A288934D1B8A /* Build configuration list for PBXNativeTarget "ZuseUITests" */;
+			buildConfigurationList = 43F4CEB214D62D5CC1791A98371259FD /* Build configuration list for PBXNativeTarget "ZuseUITests" */;
 			buildPhases = (
-				7D9AA3730EA9E20F79B391348D878D34 /* Sources */,
-				7F5954B89C5E05714E6E9E2F1F1B9FD9 /* Frameworks */,
-				C55076C49C57513385B7CB981D721F3D /* Resources */,
+				988B53866CDC941734139AA77B99074A /* Sources */,
+				A2E0A6306E1CCF68599F16F8536E2DD4 /* Frameworks */,
+				55AA89F9325C4C97D3EADC5CA246DE30 /* Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
-				D77B3D32D8AFA459622097873EB1A064 /* PBXTargetDependency */,
+				ED3C4DFB9D77CF236DEB7A37C975CDFE /* PBXTargetDependency */,
 			);
 			name = ZuseUITests;
 			productName = ZuseUITests;
@@ -514,7 +517,7 @@
 			targets = (
 				FC8E4C43C828858CD62A1CBC76145FEF /* Zuse */,
 				E30494ADE15F8F2A2CBAFDF0D9BB8ED5 /* ZuseMac */,
-				07F4D881B436C9C374CB5C90E948A477 /* ZuseUITests */,
+				ADD4D2D38DA7E156CBD9BF41FFADC41B /* ZuseUITests */,
 				B136CFC90AE933B003F833A0EFF0F0EE /* ZuseMacUITests */,
 			);
 		};
@@ -535,6 +538,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		55AA89F9325C4C97D3EADC5CA246DE30 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		AEB3CD15D5F0D246820ED84FA9F9A592 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -549,13 +559,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		C55076C49C57513385B7CB981D721F3D /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		D3C087220EE292B765ADF9C34454F374 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -566,14 +569,6 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		7D9AA3730EA9E20F79B391348D878D34 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				64E29DBEF58C3E6015EFE250D28A85DE /* NativeChatTests.swift in Sources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		90299B9B9FB932E2ADACB935352C046F /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -647,6 +642,15 @@
 				7992DF4443266D5D9B1E51A729E5412A /* ZapperViews.swift in Sources */,
 				7B5D29245251431BF3DE4C09936540D3 /* ZappersTab.swift in Sources */,
 				A69F68FDD2B9AAEA70E6E24368F46467 /* ZuseApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		988B53866CDC941734139AA77B99074A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				286563905EAB1C5D916FFEEB8633BDC6 /* ChatPanesTests.swift in Sources */,
+				2C367B96F76B5A29F1C81F4D030BBFE3 /* NativeChatTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -727,11 +731,11 @@
 			target = E30494ADE15F8F2A2CBAFDF0D9BB8ED5 /* ZuseMac */;
 			targetProxy = 742D5B1ABFA91488E03E721F133CC364 /* PBXContainerItemProxy */;
 		};
-		D77B3D32D8AFA459622097873EB1A064 /* PBXTargetDependency */ = {
+		ED3C4DFB9D77CF236DEB7A37C975CDFE /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			name = Zuse;
 			target = FC8E4C43C828858CD62A1CBC76145FEF /* Zuse */;
-			targetProxy = D6D4C5FE396B3554AE44FB28B1B8DE9C /* PBXContainerItemProxy */;
+			targetProxy = F01EB40074C13A77BF28BCBB6932EB9B /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -770,6 +774,22 @@
 				TEST_TARGET_NAME = ZuseMac;
 			};
 			name = Debug;
+		};
+		2728873C38BC26E35BEEDD63AA71EFE2 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				DEVELOPMENT_TEAM = HMCST4VV42;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zuse.sh.uitests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Zuse;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
 		};
 		34F19484287672BF14C8C34CC1DB20D3 /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -872,21 +892,6 @@
 			};
 			name = Release;
 		};
-		7572C88EB76540FEA96473D15BE9BA16 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CLANG_ENABLE_OBJC_WEAK = NO;
-				DEVELOPMENT_TEAM = HMCST4VV42;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.zuse.sh.uitests;
-				SDKROOT = iphoneos;
-				SWIFT_VERSION = 6.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = Zuse;
-			};
-			name = Debug;
-		};
 		78882E3E3DAF8CA88ED71FB4331D94A0 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -908,6 +913,21 @@
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		8753BF47026699A661EC79F457678AA0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				DEVELOPMENT_TEAM = HMCST4VV42;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zuse.sh.uitests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Zuse;
 			};
 			name = Debug;
 		};
@@ -985,22 +1005,6 @@
 			};
 			name = Debug;
 		};
-		EC666C3E3C173F99E546A3C6D39BB88F /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CLANG_ENABLE_OBJC_WEAK = NO;
-				DEVELOPMENT_TEAM = HMCST4VV42;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.zuse.sh.uitests;
-				SDKROOT = iphoneos;
-				SWIFT_VERSION = 6.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = Zuse;
-				VALIDATE_PRODUCT = YES;
-			};
-			name = Release;
-		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1031,20 +1035,20 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		43F4CEB214D62D5CC1791A98371259FD /* Build configuration list for PBXNativeTarget "ZuseUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2728873C38BC26E35BEEDD63AA71EFE2 /* Release */,
+				8753BF47026699A661EC79F457678AA0 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		A8B9B56F9A5C8A32268781ECBB65FB0A /* Build configuration list for PBXNativeTarget "ZuseMacUITests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A2F64DE6E0F526037A1D4EEC30151613 /* Release */,
 				14085C5C7EB67D53B7A3F84830B18DFA /* Debug */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		E82D1ECDE8BE8C96AB53A288934D1B8A /* Build configuration list for PBXNativeTarget "ZuseUITests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				EC666C3E3C173F99E546A3C6D39BB88F /* Release */,
-				7572C88EB76540FEA96473D15BE9BA16 /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

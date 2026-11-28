@@ -436,6 +436,7 @@ struct TerminalPaneView: View {
     .overlay { status }
     .accessibilityElement(children: .combine)
     .accessibilityLabel("Terminal")
+    .accessibilityIdentifier("terminal-output")
     .accessibilityValue(model.screen.text.split(separator: "\n").suffix(3).joined(separator: "\n"))
     .task(id: rpc.map { ObjectIdentifier($0) }) {
       if preview { model.loadPreview() } else { model.attach(rpc) }
