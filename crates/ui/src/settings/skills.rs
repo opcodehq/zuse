@@ -193,7 +193,10 @@ impl SkillsPage {
     }
 
     fn refresh_stars(&mut self, force: bool, cx: &mut Context<Self>) {
-        if self.stars_task.is_some()
+        // Tests keep the catalog's own counts: a live GitHub request finishes
+        // on a Tokio worker and trips the deterministic test scheduler.
+        if cfg!(test)
+            || self.stars_task.is_some()
             || (!force
                 && self
                     .fetched_stars
