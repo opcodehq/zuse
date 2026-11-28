@@ -5,7 +5,7 @@ import { view } from "@/core/view";
 import { Icon } from "@/ui/Icon";
 import { createEffect, createSignal, createStore, For, Show } from "solid-js";
 import { readableDraft } from "./completion";
-import { attachmentsFor, draftFor, fail, setDraft } from "./drafts";
+import { appendToDraft, attachmentsFor, draftFor, fail, setDraft } from "./drafts";
 
 export const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 export const stashKeys = mac ? "⌘S" : "Ctrl+S";
@@ -125,8 +125,7 @@ function restore(index: number, key: string) {
   const entry = stash.items[index];
   if (!entry) return;
   setList(null);
-  const current = draftFor(key).text;
-  setDraft(key, { text: current.trim() ? `${current.trimEnd()}\n\n${entry.text}` : entry.text });
+  appendToDraft(key, entry.text);
   saveStash(stash.items.filter((s) => s.id !== entry.id));
 }
 

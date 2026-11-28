@@ -125,6 +125,12 @@ export function holdPersistedDraft(key: string, draft: Draft | null) {
   flush();
 }
 
+/** Adds text after the draft as a new paragraph without sending it, so the user can edit it first. */
+export function appendToDraft(key: string, text: string) {
+  const current = draftFor(key).text;
+  setDraft(key, { text: current.trim() ? `${current.trimEnd()}\n\n${text}` : text });
+}
+
 export function clearDraft(key: string) {
   setComposer(draft => { draft["drafts"]![key] = emptyDraft(); });
   persist(key);
