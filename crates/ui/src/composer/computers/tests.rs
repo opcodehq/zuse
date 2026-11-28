@@ -623,3 +623,25 @@ fn failing_reads_back_off_to_a_cap() {
     }
     assert_eq!(last, BACKOFF_CAP);
 }
+
+/// While reads fail, the next poll reads everything again, so a slow read
+/// that keeps failing can't be hidden by the cheap reads succeeding.
+#[gpui::test]
+fn a_failing_poll_rereads_everything(cx: &mut gpui::TestAppContext) {
+    let runtime = runtime();
+    let _entered = runtime.enter();
+    let (composer, _, mut requests, replies) = cloud_composer(cx, true);
+    let list_down = |label: &str, params: &Value| match label {
+        "list" => Err(zuse_protocol::cloud::SESSION_RENEWAL_UNAVAILABLE),
+        _ => account(label, params),
+    };
+    serve(cx, &runtime, &mut requests, &replies, list_down);
+    composer.read_with(cx, |c, _| assert_eq!(c.computers.reads.failures, 1));
+    cx.executor().advance_clock(Duration::from_secs(31));
+    let asked = serve(cx, &runtime, &mut requests, &replies, list_down);
+    assert!(
+        asked.iter().any(|r| r["params"]["action"] == "list"),
+        "{asked:?}"
+    );
+    composer.read_with(cx, |c, _| assert_eq!(c.computers.reads.failures, 2));
+}

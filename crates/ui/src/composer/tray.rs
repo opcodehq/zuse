@@ -865,7 +865,9 @@ impl Composer {
                         crate::motion::COLLAPSE,
                         reduced,
                     );
-                    if progress > 0.0 && progress < 1.0 {
+                    // Includes the first frame after a flip, which still
+                    // reads its starting value.
+                    if progress != if open { 1.0 } else { 0.0 } {
                         window.request_animation_frame();
                     }
                     let toggle = {

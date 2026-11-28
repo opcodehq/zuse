@@ -385,7 +385,13 @@ impl Composer {
             let mut events: Option<zuse_rpc::RpcSubscription> = None;
             let mut changed = false;
             loop {
-                let slow = tick.is_multiple_of(SLOW_EVERY);
+                // While reads are failing, every (backed-off) tick reads
+                // everything: a retry is never skipped, and a success means
+                // every read recovered, not just the cheap ones.
+                let failing = this
+                    .read_with(cx, |c, _| c.computers.reads.failures > 0)
+                    .unwrap_or(false);
+                let slow = failing || tick.is_multiple_of(SLOW_EVERY);
                 if events.is_none() && slow {
                     events = scope
                         .controller
@@ -402,7 +408,10 @@ impl Composer {
                 let busy = this
                     .read_with(cx, |c, cx| c.computers.busy() || c.run_live(cx))
                     .unwrap_or(false);
-                let requests = std::mem::take(&mut changed) || busy || tick.is_multiple_of(IDLE_EVERY);
+                let requests = std::mem::take(&mut changed)
+                    || busy
+                    || failing
+                    || tick.is_multiple_of(IDLE_EVERY);
                 if slow || requests {
                     let fetched = fetch(scope.clone(), slow, requests).await;
                     if this
