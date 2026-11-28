@@ -61,7 +61,26 @@ outOfScope: string,
  */
 parent?: string, };
 export type ZapperIssuePullRequest = { url: string, title: string, };
-export type ZapperIssueActivity = { actor: string | null, id: string, createdAt: number, kind: string, text: string, replyTo?: string, };
+export type ZapperIssueDeliveryState = "queued" | "retrying" | "sent" | "answered" | "cancelled" | "held";
+export type ZapperIssueDelivery = { chatId: string, state: ZapperIssueDeliveryState, detail?: string,
+/**
+ * The thread's report whose turn this message started.
+ */
+reply?: string, };
+export type ZapperIssueChange = { field: string, before?: string, after?: string, };
+export type ZapperIssueActivity = { actor: string | null, id: string, createdAt: number, kind: string, text: string, replyTo?: string,
+/**
+ * A person's comment routed straight to one thread, and how far it got.
+ */
+delivery?: ZapperIssueDelivery,
+/**
+ * The live thread a question was asked for; its answer goes there.
+ */
+thread?: string,
+/**
+ * What an update changed, before and after. Older entries only have text.
+ */
+changes?: Array<ZapperIssueChange>, };
 export type ZapperIssue = { id: string, number: number, details: ZapperIssueDetails, createdAt: number, updatedAt: number, threads: Array<string>, pullRequests: Array<ZapperIssuePullRequest>, activity: Array<ZapperIssueActivity>, };
 export type Zapper = { id: string, revision: number, activityRevision: number, config: ZapperConfig, status: ZapperStatus, coordinatorChatId: string, previousCoordinatorChats: Array<string>, workers: Array<ZapperWorker>, decisions: Array<ZapperDecision>, issues: Array<ZapperIssue>,
 /**

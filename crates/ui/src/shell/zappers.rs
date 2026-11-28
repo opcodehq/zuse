@@ -1761,7 +1761,7 @@ impl Shell {
         overview: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        use zuse_viewport::zapper_issues::{IssueEvent, IssuePanel, ThreadState};
+        use zuse_viewport::zapper_issues::{IssueEvent, IssuePanel, RunState, ThreadState};
         if self.zapper_ui.issues.is_none() {
             let panel = cx.new(|_| IssuePanel::new(zapper.clone(), overview));
             cx.subscribe(&panel, |this, _, event, cx| match event {
@@ -1842,6 +1842,27 @@ impl Shell {
                 (w.chat_id.clone(), state)
             })
             .collect();
+        // Only a fresh session report confirms a run; a busy-looking row
+        // without one is shown as unconfirmed, never as working.
+        let runs: std::collections::HashMap<String, RunState> = zapper
+            .workers
+            .iter()
+            .map(|w| w.chat_id.clone())
+            .chain(std::iter::once(zapper.coordinator_chat_id.clone()))
+            .filter_map(|chat| {
+                use zuse_protocol::SessionStatus as S;
+                let run = match self.zapper_thread_status(&chat, cx) {
+                    Some(S::Working) => RunState::Running,
+                    Some(S::AwaitingInput) => RunState::AwaitingInput,
+                    Some(S::Errored) => RunState::Failed,
+                    _ if matches!(self.zapper_thread_phase(&chat, cx).0, ThreadPhase::Working) => {
+                        RunState::Unconfirmed
+                    }
+                    _ => return None,
+                };
+                Some((chat, run))
+            })
+            .collect();
         let user = self.state.read(cx).auth_user().map(|user| {
             user.name
                 .as_deref()
@@ -1852,6 +1873,7 @@ impl Shell {
         });
         panel.update(cx, |p, cx| {
             p.thread_states(states, cx);
+            p.run_states(runs, cx);
             p.user_name(user, cx);
             p.sync(zapper.clone(), overview, self.zapper_ui.pending, cx);
             p.files(self.zapper_ui.files.clone(), cx);
@@ -3202,6 +3224,23 @@ impl Shell {
                 self.show_zapper_page(ZapperPage::Section(ZapperTab::Issues), cx);
                 if let Some(page) = issue {
                     self.show_zapper_page(page, cx);
+                }
+            }
+            // `issue-threads`, `issue-events`, `issue-error`: the first issue
+            // with its threads menu, folded events or a failed write shown.
+            step if step.starts_with("issue-") => {
+                self.show_zapper_page(ZapperPage::Section(ZapperTab::Issues), cx);
+                let first = zapper.issues.first().map(|i| i.id.clone());
+                if let Some(page) = issue {
+                    self.show_zapper_page(page, cx);
+                }
+                if let Some(panel) = self.zapper_ui.issues.clone() {
+                    panel.update(cx, |p, cx| {
+                        if let Some(id) = first {
+                            p.show_issue(id, cx);
+                        }
+                        p.fixture_show(&step["issue-".len()..], cx)
+                    });
                 }
             }
             "drive" => self.show_zapper_page(ZapperPage::Section(ZapperTab::Drive), cx),
