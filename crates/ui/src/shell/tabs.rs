@@ -302,7 +302,7 @@ impl Shell {
         // The same list `render_active_rows` draws and the jump shortcuts
         // count — one function, so neither can drift from the screen.
         let order = self.sidebar_visible_order(cx);
-        let selected = self.state.read(cx).selected_chat.clone();
+        let selected = self.current_sidebar_thread(cx);
         if let Some(target) = cycle_target(&order, selected.as_deref(), forward) {
             self.open_chat(target, cx);
         }
@@ -334,6 +334,11 @@ impl Shell {
 
     /// Open a session from the sidebar: select it, the main area follows.
     pub(crate) fn open_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
+        // Keyboard navigation reaches cloud rows through the same order.
+        if chat_id.starts_with(CLOUD_ROW_PREFIX) {
+            self.open_cloud_sidebar_row(&chat_id, cx);
+            return;
+        }
         // Leaving the new-chat canvas notes it as it is, for New thread.
         self.track_current_cloud_canvas(cx);
         let same_thread = {
@@ -839,6 +844,11 @@ impl Shell {
         };
         let open: Vec<String> = open.into_iter().map(|chat| chat.id).collect();
         if open.len() <= 1 {
+            if open.first().is_some_and(|open| open == chat_id)
+                && self.can_close_sidebar_thread_tab(&root, cx)
+            {
+                self.close_sidebar_thread_tab(&root, cx);
+            }
             return;
         }
         let Some(neighbour) = close_neighbour(&open, chat_id) else {
@@ -1007,7 +1017,7 @@ impl Shell {
 
     pub(super) fn render_thread_conversations(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();
-        let Some((_, rows, closed_rows)) = self.thread_conversation_tabs(cx) else {
+        let Some((thread_id, rows, closed_rows)) = self.thread_conversation_tabs(cx) else {
             return Empty.into_any_element();
         };
         let state = self.state.read(cx);
@@ -1043,7 +1053,9 @@ impl Shell {
             && state.pending_echoes().is_empty()
             && state.queue.is_empty();
         let main_tab = self.active_main_tab(cx);
-        let closable = rows.len() > 1;
+        let close_sidebar_thread =
+            rows.len() == 1 && self.can_close_sidebar_thread_tab(&thread_id, cx);
+        let closable = rows.len() > 1 || close_sidebar_thread;
         let tab_spinner = |id: &str, cx: &mut Context<Self>| {
             div()
                 .size(px(14.))
@@ -1068,12 +1080,14 @@ impl Shell {
                 tab_close_button(id, label, active, group, &theme)
             };
         let main_chips = self.render_main_tab_chips(cx);
+        let thread_chips = self.sidebar_thread_tab_chips(&theme, cx);
         // A brand-new thread has only its empty initial conversation. Show
         // the strip as soon as a prompt is sent, or when another tab needs it.
         if rows.len() == 1
             && closed_rows.is_empty()
             && side_chats.is_empty()
             && main_chips.is_empty()
+            && thread_chips.is_empty()
             && empty_initial_conversation
             && working.is_empty()
             && self.review_surface(cx).is_none()
@@ -1202,6 +1216,7 @@ impl Shell {
                             tab: None,
                             position: event.position,
                             page: ChatMenuPage::Root,
+                            sidebar_actions: false,
                         });
                         cx.notify();
                     }),
@@ -1227,6 +1242,7 @@ impl Shell {
                     .min_w_0()
                     .overflow_x_scroll()
                     .gap(px(4.))
+                    .children(thread_chips)
                     .children(conversation_chips)
                     .children(side_chips)
                     .when(!archived, |d| {
@@ -1577,6 +1593,20 @@ impl Shell {
                 .items_center()
                 .gap(px(8.0))
                 .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                // Scrolls like the conversation strip, so chips past the
+                // title bar's width stay reachable.
+                .when(on_canvas, |row| {
+                    row.child(
+                        div()
+                            .id("canvas-thread-tabs")
+                            .flex()
+                            .items_center()
+                            .min_w_0()
+                            .overflow_x_scroll()
+                            .gap(px(8.0))
+                            .children(self.sidebar_thread_tab_chips(&theme, cx)),
+                    )
+                })
                 .when(!on_canvas && self.cloud_conversation.is_none(), |row| {
                     row.child(self.render_thread_conversations(cx))
                 })

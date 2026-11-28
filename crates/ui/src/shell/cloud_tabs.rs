@@ -692,7 +692,12 @@ impl Shell {
                 .or(siblings.last())
             {
                 Some(next) => self.select_cloud_tab(*next, cx),
-                None => self.open_new_session(None, cx),
+                None => {
+                    let id = format!("{CLOUD_ROW_PREFIX}{workspace}");
+                    if !self.close_sidebar_thread_tab(&id, cx) {
+                        self.open_new_session(None, cx);
+                    }
+                }
             }
         }
         cx.notify();
@@ -715,11 +720,22 @@ impl Shell {
         // a local chat: the chat tab stays listed but not selected.
         let main_tab_active = self.active_main_tab(cx).is_some();
         let main_chips = self.render_main_tab_chips(cx);
+        let thread_chips = self.sidebar_thread_tab_chips(&theme, cx);
         let tabs = indices
             .into_iter()
             .map(|index| {
                 let view = &self.cloud_tabs.views[index];
-                let title = view.read(cx).tab_title(cx);
+                let title = {
+                    let view = view.read(cx);
+                    let row = self
+                        .state
+                        .read(cx)
+                        .cloud_sidebar_workspace(&view.target.workspace);
+                    row.filter(|row| row["initialSessionId"] == view.target.initial_session)
+                        .and_then(|row| row["renamedTitle"].as_str())
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| view.tab_title(cx))
+                };
                 let harness = {
                     let view = view.read(cx);
                     view.harness(
@@ -810,6 +826,7 @@ impl Shell {
             .overflow_x_scroll()
             .items_center()
             .gap(px(4.))
+            .children(thread_chips)
             .children(tabs)
             .child(
                 div()

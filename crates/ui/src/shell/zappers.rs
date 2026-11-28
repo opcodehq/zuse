@@ -698,6 +698,7 @@ impl Shell {
                                     chat_id: chat.clone(),
                                     position: event.position,
                                     page: super::ChatMenuPage::Root,
+                                    sidebar_actions: false,
                                 });
                                 cx.stop_propagation();
                                 cx.notify();

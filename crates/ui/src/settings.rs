@@ -1185,10 +1185,6 @@ pub struct UiSettings {
     /// Device-local pins for local profiles; synced profiles use registry pins.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub sidebar_pinned_session_ids_by_profile: HashMap<String, Vec<String>>,
-    /// Device-local thread settlement choices. `false` keeps a reopened thread
-    /// active even if its linked pull request is already merged.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub sidebar_settlement_by_profile: HashMap<String, HashMap<String, bool>>,
     /// Legacy: per-space tab order, from when tabs were the selected space's
     /// non-archived sessions. Kept for file compatibility; no longer read.
     #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
@@ -1395,7 +1391,6 @@ impl Default for UiSettings {
             open_tabs: None,
             space_filter: None,
             sidebar_pinned_session_ids_by_profile: HashMap::new(),
-            sidebar_settlement_by_profile: HashMap::new(),
             sidebar_sections_by_profile: HashMap::new(),
             tab_order: std::collections::HashMap::new(),
             space_order: Vec::new(),
@@ -2315,7 +2310,6 @@ impl UiSettings {
             space_filter,
             sidebar_sections_by_profile,
             sidebar_pinned_session_ids_by_profile,
-            sidebar_settlement_by_profile,
             tab_order,
             space_order,
             sound_enabled,
@@ -3329,13 +3323,6 @@ mod tests {
                     vec!["synced-1".to_string()],
                 ),
             ]),
-            sidebar_settlement_by_profile: HashMap::from([(
-                "local".into(),
-                HashMap::from([
-                    ("settled-thread".into(), true),
-                    ("reopened-thread".into(), false),
-                ]),
-            )]),
             tab_order: std::collections::HashMap::from([(
                 "space-1".to_string(),
                 vec!["b".to_string(), "a".to_string()],
