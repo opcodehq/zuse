@@ -193,7 +193,8 @@ impl SkillsPage {
     }
 
     fn refresh_stars(&mut self, force: bool, cx: &mut Context<Self>) {
-        if self.stars_task.is_some()
+        if cfg!(test)
+            || self.stars_task.is_some()
             || (!force
                 && self
                     .fetched_stars
