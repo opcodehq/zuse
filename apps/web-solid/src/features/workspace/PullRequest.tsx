@@ -20,7 +20,8 @@ import { parsePatch } from "./diff";
 import { addPrompt, checksSummary, checksTone, checkTone, cleanBody, fixAllPrompt, fixPrompt, groupFeedback, sortChecks, statusLine, type CheckTone, type FeedbackItem } from "./feedback";
 import { DiffView } from "./DiffView";
 import { Banner, DiffStat, Empty, PrStateIcon } from "./parts";
-import { errorText, liveSubscribe, readErrorText, workspace, type Target } from "./store";
+import { errorText, linkRoute, liveSubscribe, readErrorText, setWorkspace, workspace, type Target } from "./store";
+import type { PullRequestEventAction, PullRequestPolicy } from "./types";
 import type { ChangeRequestCheck, ChangeRequestComment, ChangeRequestDetail, ChangeRequestListItem, ChangeRequestPage, ChangeRequestUpdate, SourceControlFrame } from "./types";
 import { copyText, plural, timeAgo } from "./util";
 
@@ -44,7 +45,12 @@ export function PullRequest(props: { target: Target; active: boolean; url?: stri
   const [picked, setPicked] = createSignal<string | null>(null);
   // The branch's pull request shows by default; the list is one step back.
   const [browsing, setBrowsing] = createSignal(false);
-  const url = () => props.url ?? picked() ?? (browsing() ? null : own()?.url ?? null);
+  const focus = () => workspace.pullRequestFocus[props.target.chatId] ?? null;
+  const url = () => props.url ?? picked() ?? focus() ?? (browsing() ? null : own()?.url ?? null);
+  const clearFocus = () => {
+    const chatId = props.target.chatId;
+    if (focus()) setWorkspace(draft => { draft["pullRequestFocus"]![chatId] = null; });
+  };
 
   return (
     <div class="ws-surface-col ws-pr">
@@ -71,6 +77,7 @@ export function PullRequest(props: { target: Target; active: boolean; url?: stri
             onBack={() => {
               if(props.url) {props.onBack?.();return;}
               setPicked(null);
+              clearFocus();
               setBrowsing(true);
             }}
           />
@@ -231,6 +238,87 @@ type DetailTab = "overview" | "activity" | "files";
 const drafts = new Map<string, string>();
 /** Pull requests whose last comment post lost its receipt. */
 const uncertain = new Set<string>();
+
+/** Kinds of pull request activity, grouped as the settings menu shows them; defaults match the engine's. */
+const POLICY_GROUPS: { label: string; kinds: string[]; fallback: PullRequestEventAction; bots?: boolean }[] = [
+  { label: "Comments and reviews", kinds: ["comment", "review", "review-comment"], fallback: "wake" },
+  { label: "Failed checks", kinds: ["checks-failed"], fallback: "wake" },
+  { label: "Checks passing again", kinds: ["checks-passed"], fallback: "wake" },
+  { label: "Merge conflicts", kinds: ["conflict"], fallback: "wake" },
+  { label: "Merged, closed or reopened", kinds: ["merged", "closed", "reopened"], fallback: "context" },
+  { label: "Bot comments", kinds: [], fallback: "ignore", bots: true },
+];
+const ACTION_LABELS: Record<PullRequestEventAction, string> = { wake: "Start a turn", context: "Note for next turn", ignore: "Ignore" };
+const NEXT_ACTION: Record<PullRequestEventAction, PullRequestEventAction> = { wake: "context", context: "ignore", ignore: "wake" };
+
+/** One row per group showing what it does now; choosing a row moves it to the next choice. */
+function policyItems(policy: PullRequestPolicy, save: (policy: PullRequestPolicy) => void): MenuItem[] {
+  return POLICY_GROUPS.map((group) => {
+    const current = group.bots ? policy.bots ?? group.fallback : policy.actions?.[group.kinds[0]!] ?? group.fallback;
+    const next = NEXT_ACTION[current];
+    return {
+      label: `${group.label}: ${ACTION_LABELS[current]}`,
+      onSelect: () => {
+        if (group.bots) return save({ ...policy, bots: next });
+        const actions = { ...(policy.actions ?? {}) };
+        for (const kind of group.kinds) actions[kind] = next;
+        save({ ...policy, actions });
+      },
+    };
+  });
+}
+
+/** Which chat this pull request is linked to: that chat hears its comments, reviews and check results. */
+function LinkRow(props: { target: Target; url: string }) {
+  const [busy, setBusy] = createSignal(false);
+  const [failed, setFailed] = createSignal<string | null>(null);
+  const owner = () => workspace.ownedPullRequests.find((pr) => pr.url === props.url) ?? null;
+  const mine = () => owner()?.chatKey === `chat:${props.target.chatId}`;
+  const otherTitle = () => {
+    const id = owner()?.chatKey.slice(5);
+    return id ? state.chats[id]?.title || "another chat" : null;
+  };
+  const act = (method: string, params: Record<string, unknown>) => {
+    setBusy(true);
+    setFailed(null);
+    rpc
+      .call(method, { chatId: props.target.chatId, url: props.url, ...linkRoute(props.target), ...params })
+      .catch((e) => setFailed(errorText(e)))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <div class="ws-pr-meta ws-small">
+      <Icon name="link" size={12} />
+      <Switch fallback={<span class="ws-muted">Not linked to a chat</span>}>
+        <Match when={mine()}>
+          <span title="Comments, reviews and check results on this pull request come to this chat.">Linked to this chat</span>
+        </Match>
+        <Match when={owner()}>
+          <span class="ws-muted ws-truncate">Linked to {otherTitle()}</span>
+        </Match>
+      </Switch>
+      <div class="ws-grow" />
+      <Show
+        when={mine()}
+        fallback={<Button size="sm" variant="ghost" disabled={busy()} onClick={() => act(M.CLAIM_PULL_REQUEST, { source: "manual" })}>{owner() ? "Link here instead" : "Link to this chat"}</Button>}
+      >
+        <Menu
+          placement="bottom-end"
+          trigger={(p) => (
+            <button {...p} type="button" class="icon-btn" data-size="sm" aria-label="What reaches this chat" title="What reaches this chat" disabled={busy()}>
+              <Icon name="settings" size={12} />
+            </button>
+          )}
+          items={policyItems(owner()?.policy ?? {}, (policy) => act(M.SET_PULL_REQUEST_POLICY, { policy }))}
+        />
+        <Button size="sm" variant="ghost" disabled={busy()} onClick={() => act(M.RELEASE_PULL_REQUEST, {})}>Unlink</Button>
+      </Show>
+      <Show when={failed()}>
+        <span class="ws-danger ws-truncate" title={failed() ?? undefined}>{failed()}</span>
+      </Show>
+    </div>
+  );
+}
 
 function PullRequestDetail(props: { target: Target; url: string; own: boolean; onBack: () => void }) {
   const [detail, setDetail] = createSignal<ChangeRequestDetail | null>(null);
@@ -492,6 +580,9 @@ function PullRequestDetail(props: { target: Target; url: string; own: boolean; o
                     </Property>
                     <Property icon="eye" label="Reviews">
                       <span class="ws-truncate">{reviewsText(d())}</span>
+                    </Property>
+                    <Property icon="link" label="Chat">
+                      <LinkRow target={props.target} url={props.url} />
                     </Property>
                     <Show when={d().statusCheckRollup.length}>
                       <Property icon="pr-checks" label="Checks">

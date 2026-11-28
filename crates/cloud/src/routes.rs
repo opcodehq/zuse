@@ -11,6 +11,7 @@ mod bridge_tests;
 #[cfg(test)]
 mod github_browser_policy_test;
 mod github_organizations;
+mod github_pull_request_links;
 mod machine_setup;
 mod recreations;
 mod task_commands;
@@ -454,6 +455,7 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
             "/v1/cloud/github/remove",
             post(github_remove).layer(DefaultBodyLimit::max(4096)),
         )
+        .merge(github_pull_request_links::routes())
         .route(
             "/v1/cloud/github/pull-requests",
             post(github_pull_request).layer(DefaultBodyLimit::max(70 * 1024)),
@@ -3178,6 +3180,8 @@ async fn github_browser_select(
     if let Some(joining) = state.store.github_organization_authority() {
         joining.notify_dispatch();
     }
+    // Conflict checks and cloud-chat deliveries the webhook may have queued.
+    crate::github::native::wake_pull_request_worker();
     Ok(github_browser_response(
         github_page(&state, &selection.state, &headers).await?,
     ))

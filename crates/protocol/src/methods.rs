@@ -389,6 +389,7 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | SLACK_CONNECTIONS
         | SLACK_CHANNELS
         | SLACK_CHAT_LINK
+        | WATCH_PULL_REQUEST_LINKS
         | CLOUD_PROJECTS
         | CLOUD_GITHUB
         | CLOUD_CAPABILITIES
@@ -620,6 +621,15 @@ pub const CLOUD_IMAGE_DELETE: &str = "CloudImageDelete";
 pub const OBSERVE_PR_WATCH: &str = "ObservePrWatch";
 pub const SET_PR_WATCH: &str = "SetPrWatch";
 pub const WATCH_PR_WATCHES: &str = "WatchPrWatches";
+/// Pull requests owned by chats on this engine (`{chatId?}`); streams updates.
+pub const WATCH_PULL_REQUEST_LINKS: &str = "WatchPullRequestLinks";
+/// Make a chat the owner of a pull request (`{chatId, url}` or
+/// `{chatId, repository, number|branch}`, optional `source`).
+pub const CLAIM_PULL_REQUEST: &str = "ClaimPullRequest";
+/// Stop a chat owning a pull request (`{chatId, url}`).
+pub const RELEASE_PULL_REQUEST: &str = "ReleasePullRequest";
+/// Change which pull request events wake an owning chat (`{chatId, url, policy}`).
+pub const SET_PULL_REQUEST_POLICY: &str = "SetPullRequestPolicy";
 /// Explicit controller admission; never a guest RPC fallback.
 pub const CLOUD_TASK_COMMAND: &str = "CloudTaskCommand";
 
