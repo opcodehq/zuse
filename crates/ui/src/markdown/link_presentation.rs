@@ -192,6 +192,11 @@ pub fn truncate(
             .map(|(r, url)| (shown(r), url.clone()))
             .collect(),
         code_ranges: flat.code_ranges.iter().map(shown).collect(),
+        user_literals: flat
+            .user_literals
+            .iter()
+            .map(|(index, range)| (*index, shown(range)))
+            .collect(),
         file_glyphs: flat
             .file_glyphs
             .iter()
@@ -375,6 +380,11 @@ fn with_file_link_glyphs(flat: &FlatText, opts: &RenderOptions) -> FlatText {
             .map(|(range, url)| (map_range(range), url.clone()))
             .collect(),
         code_ranges: flat.code_ranges.iter().map(&map_range).collect(),
+        user_literals: flat
+            .user_literals
+            .iter()
+            .map(|(index, range)| (*index, map_range(range)))
+            .collect(),
         file_glyphs: glyphs,
         favicons,
         original: Some(OriginalText {

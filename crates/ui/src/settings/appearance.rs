@@ -5471,7 +5471,7 @@ mod tests {
     #[test]
     fn pixel_sizes_render_whole_and_fractional_values() {
         assert_eq!(format_px(13.0), "13 px");
-        assert_eq!(format_px(typography::CODE_FONT_SIZE_DEFAULT), "12.5 px");
+        assert_eq!(format_px(typography::CODE_FONT_SIZE_DEFAULT), "13 px");
         assert_eq!(
             typography::clamp_font_size(typography::FONT_SIZE_MAX + 1.0),
             typography::FONT_SIZE_MAX

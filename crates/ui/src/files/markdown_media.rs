@@ -14,7 +14,13 @@ pub(super) fn image_sources(tree: &BlockTree) -> Vec<String> {
     fn block(b: &Block, out: &mut Vec<String>) {
         match b {
             Block::Paragraph { runs: r } | Block::Heading { runs: r, .. } => runs(r, out),
-            Block::BlockQuote { children } => children.iter().for_each(|b| block(b, out)),
+            Block::Details { summary, children } => {
+                runs(summary, out);
+                children.iter().for_each(|b| block(b, out));
+            }
+            Block::BlockQuote { children, .. } | Block::FootnoteDefinition { children, .. } => {
+                children.iter().for_each(|b| block(b, out));
+            }
             Block::List { items, .. } => items.iter().flatten().for_each(|b| block(b, out)),
             Block::Table { header, rows, .. } => header
                 .iter()
@@ -33,7 +39,7 @@ pub(super) fn image_sources(tree: &BlockTree) -> Vec<String> {
 pub(super) fn diagram_sources(tree: &BlockTree) -> Vec<String> {
     fn visit(block: &Block, out: &mut Vec<String>) {
         match block {
-            Block::CodeBlock { language, code }
+            Block::CodeBlock { language, code, .. }
                 if language
                     .as_deref()
                     .is_some_and(|l| l.eq_ignore_ascii_case("mermaid")) =>
@@ -42,7 +48,11 @@ pub(super) fn diagram_sources(tree: &BlockTree) -> Vec<String> {
                     out.push(code.clone());
                 }
             }
-            Block::BlockQuote { children } => children.iter().for_each(|b| visit(b, out)),
+            Block::BlockQuote { children, .. }
+            | Block::Details { children, .. }
+            | Block::FootnoteDefinition { children, .. } => {
+                children.iter().for_each(|b| visit(b, out));
+            }
             Block::List { items, .. } => items.iter().flatten().for_each(|b| visit(b, out)),
             _ => {}
         }

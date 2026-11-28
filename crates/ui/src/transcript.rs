@@ -38,8 +38,8 @@ use zuse_i18n::messages as msg;
 use gpui::{
     AnyElement, Bounds, ClipboardItem, ContentMask, Context, Entity, ListAlignment, ListOffset,
     ListScrollEvent, ListState, MouseButton, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels,
-    Point, SharedString, StyledImage as _, StyledText, Subscription, Task, TextAlign, TextRun,
-    Window, canvas, div, img, list, point, prelude::*, px, size,
+    Point, SharedString, StyledImage as _, Subscription, Task, TextAlign, TextRun, Window, canvas,
+    div, img, list, point, prelude::*, px, size,
 };
 
 use zuse_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry, SubagentStatus};
@@ -47,7 +47,7 @@ use zuse_protocol::ToolCall;
 
 use crate::markdown::mermaid_cache::{self, MermaidCache};
 use crate::markdown::parser::{
-    Block, BlockTree, IncrementalParser, InlineRun, InlineStyle, parse_full,
+    Block, BlockTree, IncrementalParser, InlineRun, InlineStyle, parse_full, parse_user,
 };
 use crate::markdown::render::{self, RenderCache, RenderOptions};
 use crate::markdown::veil::RowVeil;
@@ -166,19 +166,23 @@ const CHIPS_TOP_PAD: f32 = 2.0;
 /// spec's 200ms plus margin. Past this the fold renders statically — an armed
 /// tween replays on remount, i.e. on every scroll-back-into-view.
 const FOLD_TWEEN_WINDOW: std::time::Duration = std::time::Duration::from_millis(400);
-/// A user prompt renders at most this many wrapped lines until expanded. A
-/// pasted log or file drops into the transcript as one endless slab otherwise
-/// (user report) — past the cap the bubble clips and grows a chevron.
-pub const USER_COLLAPSED_LINES: usize = 5;
+/// A folded user prompt shows this many line boxes (176px at the default
+/// size). A pasted log or file drops into the transcript as one endless slab
+/// otherwise (user report). Only a message at least twice the fold folds, so
+/// opening one always at least doubles what was on screen.
+pub const USER_COLLAPSED_LINES: usize = 8;
 /// The user bubble's line box.
 pub const USER_LINE_HEIGHT: f32 = render::TRANSCRIPT_LINE_HEIGHT;
 /// Conservative first-frame soft-wrap proxy for the fixed-width long-prompt
 /// bubble. The final decision uses the wrapped `StyledText` layout, but this
 /// fallback lets clearly long prompts render their affordance immediately
 /// before that first layout has completed.
-pub const USER_COLLAPSE_CHARS: usize = 400;
+pub const USER_COLLAPSE_CHARS: usize = 2_000;
 /// Vertical separation before the plain expand/collapse link.
-const USER_TOGGLE_GAP: f32 = 8.0;
+const USER_TOGGLE_GAP: f32 = 6.0;
+/// The fade over the last stretch of a folded prompt, in place of an
+/// ellipsis line: the bubble fill rising out of transparent.
+const USER_FOLD_FADE: f32 = 28.0;
 
 // ---------------------------------------------------------------------------
 // Stick-to-bottom spring (mugen §1e — same constants as its DEFAULT_SPRING,
@@ -687,7 +691,28 @@ fn thought_block_lines(block: &Block, indent: usize, out: &mut Vec<Vec<InlineRun
                 }
             }
         }
-        Block::BlockQuote { children } => {
+        Block::Details { summary, children } => {
+            wrap_styled_runs(summary, indent, out);
+            for child in children {
+                thought_block_lines(child, indent + 2, out);
+            }
+        }
+        Block::FootnoteDefinition {
+            label, children, ..
+        } => {
+            wrap_styled_runs(
+                &[InlineRun {
+                    text: format!("[{label}]"),
+                    style: InlineStyle::default(),
+                }],
+                indent,
+                out,
+            );
+            for child in children {
+                thought_block_lines(child, indent + 2, out);
+            }
+        }
+        Block::BlockQuote { children, .. } => {
             let mark = out.len();
             for (ix, child) in children.iter().enumerate() {
                 if ix > 0 {
@@ -1395,7 +1420,146 @@ fn assistant_copy_text(entry: &SessionMessageEntry) -> Option<SharedString> {
 /// this proxy with the exact wrapped-line count, so glyph width and script no
 /// longer affect eligibility heuristically.
 pub fn user_message_needs_collapse(text: &str) -> bool {
-    text.lines().count() > USER_COLLAPSED_LINES || text.chars().count() > USER_COLLAPSE_CHARS
+    // Every typed newline is a line break, so this many lines is already
+    // twice the fold before any wrapping.
+    text.lines().count() >= 2 * USER_COLLAPSED_LINES || text.chars().count() > USER_COLLAPSE_CHARS
+}
+
+/// The user bubble expander's label.
+pub fn user_expander_label(expanded: bool) -> &'static str {
+    if expanded {
+        "Show less"
+    } else {
+        "Show full message"
+    }
+}
+
+// Replace projected chip labels with opaque tokens before parsing. A label can
+// contain Markdown punctuation, and two chips with the same label can refer
+// to different paths. Restore the literal text and token identity in the AST.
+fn parse_user_message(text: &str, mentions: &[crate::composer::SentMentionSpan]) -> BlockTree {
+    if mentions.is_empty() {
+        return parse_user(text);
+    }
+    let mut prefix = '\u{e000}'.to_string();
+    while text.contains(&prefix) {
+        prefix.push('\u{e000}');
+    }
+    let mut masked = String::with_capacity(text.len());
+    let mut at = 0;
+    for (index, mention) in mentions.iter().enumerate() {
+        let range = &mention.range;
+        if range.start >= at && text.get(range.clone()).is_some() {
+            masked.push_str(&text[at..range.start]);
+            masked.push_str(&format!("{prefix}{index}\u{e001}"));
+            at = range.end;
+        }
+    }
+    masked.push_str(&text[at..]);
+
+    fn restore<'a>(
+        value: &'a str,
+        text: &'a str,
+        prefix: &str,
+        mentions: &[crate::composer::SentMentionSpan],
+    ) -> Vec<(&'a str, Option<usize>)> {
+        let mut pieces = Vec::new();
+        let mut tail = value;
+        while let Some((before, token)) = tail.split_once(prefix) {
+            pieces.push((before, None));
+            if let Some((index, after)) = token.split_once('\u{e001}')
+                && let Ok(index) = index.parse::<usize>()
+                && let Some(literal) = mentions
+                    .get(index)
+                    .and_then(|span| text.get(span.range.clone()))
+            {
+                pieces.push((literal, Some(index)));
+                tail = after;
+            } else {
+                pieces.push((&tail[before.len()..], None));
+                return pieces;
+            }
+        }
+        pieces.push((tail, None));
+        pieces
+    }
+    let restore_runs = |runs: &mut Vec<InlineRun>| {
+        if runs.iter().any(|run| run.text.contains(&prefix)) {
+            *runs = std::mem::take(runs)
+                .into_iter()
+                .flat_map(|run| {
+                    restore(&run.text, text, &prefix, mentions)
+                        .into_iter()
+                        .filter(|(text, _)| !text.is_empty())
+                        .map(|(text, index)| InlineRun {
+                            text: text.to_owned(),
+                            style: match index {
+                                Some(index) => InlineStyle {
+                                    user_literal: Some(index),
+                                    ..InlineStyle::default()
+                                },
+                                None => run.style.clone(),
+                            },
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+        }
+    };
+    fn visit(
+        block: &mut Block,
+        runs: &impl Fn(&mut Vec<InlineRun>),
+        literal: &impl Fn(&str) -> String,
+    ) {
+        match block {
+            Block::Paragraph { runs: text } | Block::Heading { runs: text, .. } => runs(text),
+            Block::Details { summary, children } => {
+                runs(summary);
+                for child in children {
+                    visit(child, runs, literal);
+                }
+            }
+            Block::BlockQuote { children, .. } | Block::FootnoteDefinition { children, .. } => {
+                for child in children {
+                    visit(child, runs, literal);
+                }
+            }
+            Block::CodeBlock { code, title, .. } => {
+                *code = literal(code);
+                if let Some(title) = title {
+                    *title = literal(title);
+                }
+            }
+            Block::List { items, .. } => {
+                for child in items.iter_mut().flatten() {
+                    visit(child, runs, literal);
+                }
+            }
+            Block::Table { header, rows, .. } => {
+                for cell in header.iter_mut().chain(rows.iter_mut().flatten()) {
+                    runs(cell);
+                }
+            }
+            Block::Rule => {}
+        }
+    }
+
+    let mut tree = parse_user(&masked);
+    let literal = |value: &str| {
+        restore(value, text, &prefix, mentions)
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect()
+    };
+    for top in &mut tree.blocks {
+        visit(&mut Arc::make_mut(top).block, &restore_runs, &literal);
+    }
+    tree
+}
+
+/// Whether a measured prompt body folds: at least twice the folded height.
+pub fn user_message_folds(measured_h: f32, folded_h: f32) -> bool {
+    measured_h + 0.5 >= 2.0 * folded_h
 }
 
 /// Layout transitions need more time when they travel farther, otherwise a
@@ -2369,7 +2533,19 @@ pub fn top_gap_for(prev: Option<&Row>, row: &Row) -> f32 {
         )
     };
     if same_part_markdown {
-        render::TRANSCRIPT_BLOCK_GAP
+        // The same pairwise rhythm the unsplit tree paints between blocks.
+        fn block(k: &RowKind) -> Option<&Block> {
+            match k {
+                RowKind::Markdown { tree, block_ix } | RowKind::LiveMarkdown { tree, block_ix } => {
+                    tree.blocks.get(*block_ix).map(|top| &top.block)
+                }
+                _ => None,
+            }
+        }
+        match (prev.and_then(|p| block(&p.kind)), block(&row.kind)) {
+            (Some(prev), Some(next)) => render::block_gap(prev, next),
+            _ => render::TRANSCRIPT_GAP_DEFAULT,
+        }
     } else if prev.is_some_and(|p| fold_header(&p.kind)) && row.compact_fold.is_none() {
         // The fold header reads as the reply's caption.
         Theme::SPACE_XS
@@ -2979,18 +3155,36 @@ fn working_word(
 // Highlight store (background, time-sliced, paint-only)
 // ---------------------------------------------------------------------------
 
+/// Fence tokens by `(top-level block ix, element ix)`; `None` while pending.
+type HighlightsByElement = HashMap<(usize, usize), Option<Arc<zuse_syntax::HighlightedDocument>>>;
+
+/// The [`render::HighlightLookup`] for one top-level block's fences.
+fn element_highlight<'a>(
+    highlights: &'a HighlightsByElement,
+    block_ix: usize,
+) -> impl Fn(usize) -> render::CodeHighlight<'a> {
+    move |element| {
+        highlights
+            .get(&(block_ix, element))
+            .and_then(|document| document.as_deref())
+            .map(|document| document.lines.as_slice())
+    }
+}
+
 struct HighlightEntry {
     key: DocumentHighlightKey,
     document: Option<Weak<zuse_syntax::HighlightedDocument>>,
     _task: Option<Task<()>>,
 }
 
-/// Cache of tokenized code blocks keyed by `(row id, block ix)`. Tokenization
+/// Cache of tokenized code blocks keyed by `(row id, top-level block ix,
+/// element ix)` — nested fences in lists and quotes get slots of their own,
+/// and a settled fence keeps its tokens while a sibling streams. Tokenization
 /// runs on the background executor, time-sliced; results apply as paint-only
 /// run colors when they land.
 #[derive(Default)]
 struct HighlightStore {
-    entries: HashMap<(SharedString, usize), HighlightEntry>,
+    entries: HashMap<(SharedString, usize, usize), HighlightEntry>,
     cache: SyntaxHighlightCache,
 }
 
@@ -3000,11 +3194,12 @@ impl HighlightStore {
         &mut self,
         row_id: SharedString,
         block_ix: usize,
+        element_ix: usize,
         lang: Lang,
         code: &str,
         cx: &mut Context<Transcript>,
     ) -> Option<Arc<zuse_syntax::HighlightedDocument>> {
-        let slot_key = (row_id.clone(), block_ix);
+        let slot_key = (row_id.clone(), block_ix, element_ix);
         let document_key = DocumentHighlightKey::new(lang, code);
         if let Some(entry) = self.entries.get(&slot_key)
             && entry.key == document_key
@@ -3035,36 +3230,7 @@ impl HighlightStore {
                     zuse_syntax::highlight(zuse_syntax::HighlightRequest {
                         source: &code,
                         path: None,
-                        fence_tag: Some(match lang {
-                            Lang::Rust => "rust",
-                            Lang::JavaScript => "javascript",
-                            Lang::Jsx => "jsx",
-                            Lang::TypeScript => "typescript",
-                            Lang::Tsx => "tsx",
-                            Lang::Python => "python",
-                            Lang::Go => "go",
-                            Lang::Json => "json",
-                            Lang::Jsonc => "jsonc",
-                            Lang::Bash => "bash",
-                            Lang::Toml => "toml",
-                            Lang::Markdown => "markdown",
-                            Lang::Html => "html",
-                            Lang::Css => "css",
-                            Lang::Yaml => "yaml",
-                            Lang::C => "c",
-                            Lang::Cpp => "cpp",
-                            Lang::CSharp => "csharp",
-                            Lang::Java => "java",
-                            Lang::Kotlin => "kotlin",
-                            Lang::Swift => "swift",
-                            Lang::Ruby => "ruby",
-                            Lang::Php => "php",
-                            Lang::Sql => "sql",
-                            Lang::Lua => "lua",
-                            Lang::Dockerfile => "dockerfile",
-                            Lang::Nix => "nix",
-                            Lang::Make => "make",
-                        }),
+                        fence_tag: Some(lang.name()),
                     })
                     .ok()
                 })
@@ -3094,7 +3260,7 @@ impl HighlightStore {
             .ok();
         });
         self.entries.insert(
-            (row_id, block_ix),
+            (row_id, block_ix, element_ix),
             HighlightEntry {
                 key: document_key,
                 document: None,
@@ -3758,7 +3924,14 @@ pub struct Transcript {
     /// preserves smooth layout motion without a paint → notify feedback loop.
     user_heights: HashMap<SharedString, Rc<Cell<f32>>>,
     /// Parsed display text for visible user bubbles, reused across repaints.
-    user_markdown: HashMap<SharedString, (SharedString, Arc<BlockTree>)>,
+    user_markdown: HashMap<
+        SharedString,
+        (
+            SharedString,
+            Arc<BlockTree>,
+            Arc<Vec<crate::composer::SentMentionSpan>>,
+        ),
+    >,
     /// Pending long-press toggle. A single task is enough because only one
     /// pointer can own a hold gesture at a time; a token invalidates stale
     /// timers when the pointer is released or moves into a text selection.
@@ -4017,6 +4190,9 @@ pub enum TranscriptEvent {
     /// The not-sent line's Remove: the first message the server never took
     /// leaves the chat and goes back to the draft with its files.
     RemoveNotSent,
+    /// A settled shell fence's "Run in terminal": type `command` and Enter
+    /// into a fresh terminal tab for this chat.
+    RunInTerminal { command: String },
 }
 
 /// Where a reply's Fork menu sends the copy.
@@ -7861,21 +8037,33 @@ impl Transcript {
         ))
     }
 
+    /// A sent message's body through the Markdown renderer, parsed as typed
+    /// ([`parse_user`]): every newline breaks the line and indentation shows.
+    #[allow(clippy::too_many_arguments)]
     fn render_user_markdown(
         &mut self,
         row_id: &SharedString,
         text: &SharedString,
+        mentions: &Arc<Vec<crate::composer::SentMentionSpan>>,
+        overlays: Vec<ChipOverlay>,
         measured_h: Rc<Cell<f32>>,
         theme: &Theme,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let cached = self
-            .user_markdown
-            .entry(row_id.clone())
-            .or_insert_with(|| (text.clone(), Arc::new(parse_full(text))));
-        if cached.0 != *text {
-            *cached = (text.clone(), Arc::new(parse_full(text)));
+        let cached = self.user_markdown.entry(row_id.clone()).or_insert_with(|| {
+            (
+                text.clone(),
+                Arc::new(parse_user_message(text, mentions)),
+                mentions.clone(),
+            )
+        });
+        if cached.0 != *text || cached.2 != *mentions {
+            *cached = (
+                text.clone(),
+                Arc::new(parse_user_message(text, mentions)),
+                mentions.clone(),
+            );
             self.render_cache.borrow_mut().clear();
         }
         let tree = cached.1.clone();
@@ -7887,6 +8075,15 @@ impl Transcript {
                 code.extend(uis);
             }
         }
+        let user_chips = (!mentions.is_empty()).then(|| {
+            Rc::new(SentChips::new(
+                mentions.clone(),
+                overlays,
+                Rc::new(cx.listener(|this, path: &SharedString, window, cx| {
+                    this.open_chip_image(path, window, cx)
+                })),
+            ))
+        });
         let opts = RenderOptions {
             transcript: true,
             tasks: None,
@@ -7907,14 +8104,18 @@ impl Transcript {
                     .map(SharedString::from)
             },
             code: Some(code),
+            // The user's own message offers no Run.
+            run: None,
+            user: true,
+            user_chips,
         };
         let highlight = self.code_highlight_for(row_id, &tree, None, cx);
+        let lookup = |top, element| highlight.get(&(top, element)).cloned().flatten();
+        let content = render::render_tree(&tree, &opts, theme, window, &lookup);
         let entity_id = cx.entity_id();
         div()
             .min_w_0()
-            .child(render::render_tree(&tree, &opts, theme, window, &|ix| {
-                highlight.get(&ix).cloned().flatten()
-            }))
+            .child(content)
             // Measure the natural Markdown height even behind the collapsed
             // viewport. Paragraph gaps, headings and fences all affect it.
             .on_children_prepainted(move |bounds, _, cx| {
@@ -7929,16 +8130,17 @@ impl Transcript {
             .into_any_element()
     }
 
-    /// The inside of a user bubble: the prompt text, clipped to
-    /// [`USER_COLLAPSED_LINES`] until expanded, plus the expander chevron for
-    /// prompts past the cap. Returns the bubble's children in order.
+    /// The inside of a user bubble: the prompt, folded to
+    /// [`USER_COLLAPSED_LINES`] behind a fade until expanded, plus the
+    /// expander for prompts at least twice that tall.
     ///
-    /// The collapsed form clips a normally-laid-out text element at exactly
-    /// five line boxes. Do not use gpui's `line_clamp` here: on an auto-width
-    /// flex item it answers intrinsic-width probes with the truncated layout,
-    /// collapsing the bubble to min-content width (one character per line).
-    /// A plain height clip preserves the original bubble width calculation and
-    /// never feeds measured layout back into the virtualized list.
+    /// The folded form clips a normally-laid-out body at the fold height. Do
+    /// not use gpui's `line_clamp` here: on an auto-width flex item it answers
+    /// intrinsic-width probes with the truncated layout, collapsing the
+    /// bubble to min-content width (one character per line). A plain height
+    /// clip preserves the original bubble width calculation and never feeds
+    /// measured layout back into the virtualized list.
+    #[allow(clippy::too_many_arguments)]
     fn render_user_body(
         &mut self,
         row_id: &SharedString,
@@ -7954,10 +8156,7 @@ impl Transcript {
         let expanded = fold.open.unwrap_or(false);
         let line_height =
             f32::from(crate::typography::ui_rems(USER_LINE_HEIGHT).to_pixels(window.rem_size()));
-        let collapsed_text_h = USER_COLLAPSED_LINES as f32 * line_height;
-        // Include the continuation line in the resize endpoints so removing
-        // it on expansion does not make the bubble jump by a line.
-        let collapsed_h = collapsed_text_h + line_height;
+        let collapsed_h = USER_COLLAPSED_LINES as f32 * line_height;
         let measured_h = self
             .user_heights
             .entry(row_id.clone())
@@ -7965,11 +8164,11 @@ impl Transcript {
             .clone();
         let measured = measured_h.get();
         let collapsible = if measured > 0.0 {
-            measured > collapsed_text_h + 0.5
+            user_message_folds(measured, collapsed_h)
         } else {
             user_message_needs_collapse(&text)
         };
-        let full_h = measured_h.get().max(collapsed_h);
+        let full_h = measured.max(collapsed_h);
         if let Some(fold) = self.user_folds.get_mut(row_id) {
             // Wrapping can change with the window width while expanded.
             fold.user_expansion_height = (full_h - collapsed_h).max(0.0);
@@ -7978,25 +8177,16 @@ impl Transcript {
         let hold_key = row_id.clone();
         let hold_height = measured_h.clone();
         let hold_selection: Arc<str> = format!("{row_id}:u").into();
-        // Mention chips use source byte ranges for painting and interaction.
-        // Keep that path for chip-bearing prompts; ordinary user and forwarded
-        // messages share the assistant's Markdown renderer.
-        let content = if mentions.is_empty() {
-            self.render_user_markdown(row_id, &text, measured_h.clone(), theme, window, cx)
-        } else {
-            user_bubble_text(
-                row_id,
-                text,
-                mentions,
-                theme,
-                measured_h.clone(),
-                cx.entity_id(),
-                chip_overlays,
-                Rc::new(cx.listener(|this, path: &SharedString, window, cx| {
-                    this.open_chip_image(path, window, cx);
-                })),
-            )
-        };
+        let content = self.render_user_markdown(
+            row_id,
+            &text,
+            &mentions,
+            chip_overlays,
+            measured_h.clone(),
+            theme,
+            window,
+            cx,
+        );
         let body = div()
             .id(SharedString::from(format!("{row_id}-body")))
             // A long press toggles instead of double-click. A normal release
@@ -8049,24 +8239,43 @@ impl Transcript {
                 .toggled_at
                 .is_some_and(|at| at.elapsed() < Duration::from_millis(duration_ms + 200))
             && !motion::reduced_motion(cx);
-        let ellipsis = || div().h(px(line_height)).child("...");
+        // The bubble fill rising over the last lines says there is more.
+        let fill = crate::theme::flatten(theme.user_bubble_fill(), theme.bg);
+        let fade = move || {
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .h(px(USER_FOLD_FADE))
+                .bg(gpui::linear_gradient(
+                    180.0,
+                    gpui::linear_color_stop(fill.opacity(0.0), 0.0),
+                    gpui::linear_color_stop(fill, 1.0),
+                ))
+        };
         let body: AnyElement = if animating {
             let from = fold.from;
             let to = if expanded { full_h } else { collapsed_h };
             let resize = user_resize_spec(full_h - collapsed_h);
-            let ellipsis_h = if expanded { 0.0 } else { line_height };
             div()
-                .child(div().overflow_hidden().child(body).with_animation(
+                .relative()
+                .overflow_hidden()
+                .child(body)
+                .when(!expanded, |el| el.child(fade()))
+                .with_animation(
                     SharedString::from(format!("{row_id}-user-resize-{}", fold.epoch)),
                     resize.animation(),
-                    move |el, t| el.h(px((motion::lerp(from, to, t) - ellipsis_h).max(0.0))),
-                ))
-                .when(!expanded, |el| el.child(ellipsis()))
+                    move |el, t| el.h(px(motion::lerp(from, to, t).max(0.0))),
+                )
                 .into_any_element()
         } else if collapsible && !expanded {
             div()
-                .child(div().h(px(collapsed_text_h)).overflow_hidden().child(body))
-                .child(ellipsis())
+                .relative()
+                .h(px(collapsed_h))
+                .overflow_hidden()
+                .child(body)
+                .child(fade())
                 .into_any_element()
         } else {
             body.into_any_element()
@@ -8156,8 +8365,9 @@ impl Transcript {
             .into_any_element()
     }
 
-    /// A plain text link aligned with the message's left edge, following the
-    /// continuation ellipsis when collapsed. No pill, border, or button wash.
+    /// A plain text link at the message's right edge, under the fold. No
+    /// pill, border, or button wash.
+    #[allow(clippy::too_many_arguments)]
     fn render_user_expander(
         &mut self,
         row_id: &SharedString,
@@ -8169,15 +8379,8 @@ impl Transcript {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let toggle_key = row_id.clone();
-        let glyph = if expanded {
-            crate::icons::ALT_ARROW_UP
-        } else {
-            crate::icons::ALT_ARROW_DOWN
-        };
-        let label = if expanded { "Show less" } else { "Show more" };
         let button = div()
             .id(SharedString::from(format!("{row_id}-expander")))
-            .group("user-message-toggle")
             .role(gpui::Role::Button)
             .aria_label(if expanded {
                 "Collapse message"
@@ -8185,21 +8388,12 @@ impl Transcript {
                 "Expand message"
             })
             .aria_expanded(expanded)
-            .flex()
-            .items_center()
-            .gap(px(5.0))
             .text_size(crate::typography::ui_rems(render::TRANSCRIPT_TEXT_SIZE))
             .line_height(crate::typography::ui_rems(USER_LINE_HEIGHT))
             .text_color(theme.text_muted)
             .cursor_pointer()
             .hover(|s| s.text_color(theme.text))
-            .child(label)
-            .child(
-                crate::icons::icon(glyph)
-                    .size(px(12.0))
-                    .text_color(theme.text_muted)
-                    .group_hover("user-message-toggle", |s| s.text_color(theme.text)),
-            )
+            .child(user_expander_label(expanded))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.toggle_user_fold(
                     toggle_key.clone(),
@@ -8213,7 +8407,7 @@ impl Transcript {
         div()
             .mt(px(USER_TOGGLE_GAP))
             .flex()
-            .items_start()
+            .justify_end()
             .child(button)
             .into_any_element()
     }
@@ -8227,27 +8421,13 @@ impl Transcript {
         let image_owner = owner.clone();
         let media = self.diagram_media.get_or_insert_with(|| render::MediaUi {
             image: Some(Rc::new(move |image, id, theme| {
-                let source = image.source.clone();
-                let owner = image_owner.clone();
-                inline_image_link(image, id, theme)
-                    .on_click(move |_, window, cx| {
-                        let _ = owner.update(cx, |this, cx| {
-                            // Web images retain normal validated web navigation.
-                            // Local paths must be read on the chat's device, never
-                            // interpreted as paths on the desktop running the UI.
-                            if let Ok(url) = crate::browser::model::transcript_address(&source) {
-                                cx.open_url(&url);
-                                return;
-                            }
-                            let file = this.inline_image_file(&source, cx);
-                            let path = file.path().to_owned();
-                            let session = this.link_source_session();
-                            if !this.open_linked_file(file, session.clone(), window, cx) {
-                                this.open_in_file_tab(path, session, window, cx);
-                            }
-                        });
-                    })
-                    .into_any_element()
+                MarkdownImage {
+                    image: image.clone(),
+                    id,
+                    theme: theme.clone(),
+                    owner: image_owner.clone(),
+                }
+                .into_any_element()
             })),
             diagram: Some(Rc::new(move |code, id, _theme| {
                 let lookup = cache.borrow_mut().request(code, &id);
@@ -9711,8 +9891,7 @@ impl Transcript {
                                         .rounded(px(16.0))
                                         .when(sender.is_some(), |d| d.w_full())
                                         .when(sender.is_none(), |d| d.rounded_tr(px(6.0)))
-                                        .px(px(14.0))
-                                        .py(px(9.0))
+                                        .p(px(12.0))
                                         .text_size(crate::typography::ui_rems(render::TRANSCRIPT_TEXT_SIZE))
                                         .line_height(crate::typography::ui_rems(USER_LINE_HEIGHT))
                                         .when(sender.is_some(), |d| {
@@ -9779,6 +9958,9 @@ impl Transcript {
                     link,
                     workspace_root: workspace_root.clone(),
                     code,
+                    run: Some(self.run_ui(cx)),
+                    user: false,
+                    user_chips: None,
                 };
                 let highlight = self.code_highlight_for(&row.id, &tree, Some(*block_ix), cx);
                 render::render_block(
@@ -9788,10 +9970,7 @@ impl Transcript {
                     &opts,
                     &theme,
                     window,
-                    highlight
-                        .get(block_ix)
-                        .and_then(|o| o.as_deref())
-                        .map(|document| document.lines.as_slice()),
+                    &element_highlight(&highlight, *block_ix),
                 )
             }
             RowKind::LiveMarkdown { tree, block_ix } => {
@@ -9850,6 +10029,10 @@ impl Transcript {
                     link,
                     workspace_root: workspace_root.clone(),
                     code,
+                    // Only a block the reply has moved past is complete.
+                    run: settled.then(|| self.run_ui(cx)),
+                    user: false,
+                    user_chips: None,
                 };
                 if seed_history && let Some(veil) = &veil {
                     let historical = &self.historical_markdown[&row.id];
@@ -9861,12 +10044,19 @@ impl Transcript {
                         let seed_opts = RenderOptions {
                             cache: None,
                             link: None,
+                            run: None,
                             // Seed fences as source text, never request diagrams.
                             media: None,
                             ..opts.clone()
                         };
                         let _ = render::render_block(
-                            &top.block, *block_ix, *block_ix, &seed_opts, &theme, window, None,
+                            &top.block,
+                            *block_ix,
+                            *block_ix,
+                            &seed_opts,
+                            &theme,
+                            window,
+                            &render::no_highlight,
                         );
                         veil.borrow_mut().finish_seeding();
                     }
@@ -9880,10 +10070,7 @@ impl Transcript {
                     &opts,
                     &theme,
                     window,
-                    highlight
-                        .get(block_ix)
-                        .and_then(|o| o.as_deref())
-                        .map(|document| document.lines.as_slice()),
+                    &element_highlight(&highlight, *block_ix),
                 );
                 if let Some(start) = timer {
                     record_live_frame_us(start.elapsed().as_micros() as u64);
@@ -10272,6 +10459,23 @@ impl Transcript {
         cx.notify();
     }
 
+    /// "Run in terminal" wiring for settled shell fences: the shell owns the
+    /// terminal, so the click becomes a [`TranscriptEvent::RunInTerminal`].
+    fn run_ui(&self, cx: &mut Context<Self>) -> render::RunUi {
+        let entity = cx.weak_entity();
+        render::RunUi {
+            handler: Rc::new(move |command, _window, cx| {
+                entity
+                    .update(cx, |_, cx| {
+                        cx.emit(TranscriptEvent::RunInTerminal {
+                            command: command.to_string(),
+                        });
+                    })
+                    .ok();
+            }),
+        }
+    }
+
     /// Copy-button wiring for one row's code blocks ([`render::CopyUi`]):
     /// click writes the block's code to the clipboard and shows a transient
     /// "Copied" check on that block for ~1.2s (overlay — no layout shift).
@@ -10343,29 +10547,30 @@ impl Transcript {
         })
     }
 
-    /// Request highlights for the code blocks of a tree. `only` limits to one
-    /// block index (split rows); `None` covers the whole tree (live rows).
+    /// Request highlights for the code blocks of a tree, nested fences in
+    /// lists and quotes included, keyed by `(top-level ix, element ix)`.
+    /// `only` limits to one top-level block (split rows); `None` covers the
+    /// whole tree (live rows). Unchanged fences resolve from their slot
+    /// without re-tokenizing, so only a growing fence costs work per chunk.
     fn code_highlight_for(
         &mut self,
         row_id: &SharedString,
         tree: &Arc<BlockTree>,
         only: Option<usize>,
         cx: &mut Context<Self>,
-    ) -> HashMap<usize, Option<Arc<zuse_syntax::HighlightedDocument>>> {
+    ) -> HighlightsByElement {
         let mut out = HashMap::new();
         for (ix, top) in tree.blocks.iter().enumerate() {
             if only.is_some_and(|o| o != ix) {
                 continue;
             }
-            if let Block::CodeBlock { language, code } = &top.block
-                && let Some(lang) = language
-                    .as_deref()
-                    .and_then(zuse_syntax::language_for_alias)
-            {
-                out.insert(
-                    ix,
-                    self.highlights.request(row_id.clone(), ix, lang, code, cx),
-                );
+            for fence in render::code_blocks(&top.block, ix) {
+                if let Some(lang) = fence.language.and_then(zuse_syntax::language_for_alias) {
+                    let document =
+                        self.highlights
+                            .request(row_id.clone(), ix, fence.ix, lang, fence.code, cx);
+                    out.insert((ix, fence.ix), document);
+                }
             }
         }
         out
@@ -10393,7 +10598,7 @@ impl Transcript {
                 let lang = zuse_syntax::language_for_path(path)?;
                 Some(
                     self.highlights
-                        .request(cache_row.clone(), 0, lang, source, cx)?,
+                        .request(cache_row.clone(), 0, 0, lang, source, cx)?,
                 )
             }
             None => None,
@@ -10401,7 +10606,7 @@ impl Transcript {
         let new = match new_text {
             Some(source) => {
                 let lang = zuse_syntax::language_for_path(&file.path)?;
-                Some(self.highlights.request(cache_row, 1, lang, source, cx)?)
+                Some(self.highlights.request(cache_row, 1, 1, lang, source, cx)?)
             }
             None => None,
         };
@@ -11372,97 +11577,161 @@ fn user_bubble_runs(
     runs
 }
 
-fn user_bubble_text(
-    row_id: &SharedString,
-    text: SharedString,
-    mentions: Arc<Vec<crate::composer::SentMentionSpan>>,
-    theme: &Theme,
-    measured_h: Rc<Cell<f32>>,
-    entity_id: gpui::EntityId,
-    overlays: Vec<ChipOverlay>,
-    open_image: Rc<dyn Fn(&SharedString, &mut Window, &mut gpui::App)>,
-) -> AnyElement {
-    let runs = user_bubble_runs(&text, &mentions, theme);
-    let styled = StyledText::new(text.clone()).with_runs(runs);
-    let layout = styled.layout().clone();
-    let chip_layout = layout.clone();
-    // A chip showing a status paints it over its icon well instead.
-    let chip_icons: Vec<Option<crate::composer::ChipIcon>> = mentions
-        .iter()
-        .map(|span| {
-            (!overlays
+type OpenChip = Rc<dyn Fn(&SharedString, &mut Window, &mut gpui::App)>;
+
+pub(crate) struct SentChips {
+    spans: Arc<Vec<crate::composer::SentMentionSpan>>,
+    overlays: RefCell<Vec<ChipOverlay>>,
+    open_image: OpenChip,
+}
+
+impl SentChips {
+    fn new(
+        spans: Arc<Vec<crate::composer::SentMentionSpan>>,
+        overlays: Vec<ChipOverlay>,
+        open_image: OpenChip,
+    ) -> Self {
+        Self {
+            spans,
+            overlays: RefCell::new(overlays),
+            open_image,
+        }
+    }
+
+    pub(crate) fn for_ranges(&self, placements: &[(usize, Range<usize>)]) -> Option<SentChipRow> {
+        let mut spans = Vec::new();
+        let mut overlays = Vec::new();
+        let mut remaining = self.overlays.borrow_mut();
+        for (index, range) in placements {
+            let Some(span) = self.spans.get(*index) else {
+                continue;
+            };
+            let mut shown = span.clone();
+            shown.range = range.clone();
+            if let Some(index) = remaining
                 .iter()
-                .any(|overlay| overlay.status.is_some() && overlay.range == span.range))
-            .then(|| crate::composer::chip_icon(span.kind, &span.path, theme.appearance))
+                .position(|overlay| overlay.range == span.range)
+            {
+                let mut overlay = remaining.remove(index);
+                overlay.range = range.clone();
+                overlays.push(overlay);
+            }
+            spans.push(shown);
+        }
+        (!spans.is_empty()).then(|| SentChipRow {
+            spans,
+            overlays,
+            open_image: self.open_image.clone(),
         })
-        .collect();
-    let sel_key: std::sync::Arc<str> = format!("{row_id}:u").into();
-    let sel_theme = theme.clone();
-    let underlay = canvas(
-        |bounds, window, _| window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal),
-        move |_, hitbox, window, cx| {
-            for (span, icon) in mentions.iter().zip(&chip_icons) {
-                // Centered on the label like the composer's chips.
-                let label = crate::composer::chip_pad_ranges(&span.range)[0].end;
-                for (row, rect) in render::range_rects(&layout, &span.range, 0.0, 2.0)
-                    .into_iter()
-                    .enumerate()
-                {
-                    let row_top = rect.origin.y - px(2.0);
-                    let offset = crate::composer::text_chip_label_offset(
-                        &layout,
-                        label,
-                        row_top,
-                        px(2.0),
-                        window,
-                    );
-                    let rect = Bounds::new(rect.origin + point(px(0.0), offset), rect.size);
-                    let icon = icon.as_ref().filter(|_| row == 0);
-                    crate::composer::paint_chip(window, rect, span.kind, icon, &sel_theme, cx);
+    }
+}
+
+pub(crate) struct SentChipRow {
+    spans: Vec<crate::composer::SentMentionSpan>,
+    overlays: Vec<ChipOverlay>,
+    open_image: OpenChip,
+}
+
+impl SentChipRow {
+    pub(crate) fn style_runs(&self, text: &str, runs: Vec<TextRun>, theme: &Theme) -> Vec<TextRun> {
+        let mut styled = Vec::new();
+        let mut run_start = 0;
+        let mut covered = 0;
+        let mut spans = self.spans.iter().peekable();
+        for run in runs {
+            let end = run_start + run.len;
+            let mut at = run_start.max(covered);
+            while let Some(span) = spans.next_if(|span| span.range.start < end) {
+                if at < span.range.start {
+                    styled.push(TextRun {
+                        len: span.range.start - at,
+                        ..run.clone()
+                    });
                 }
+                let mut local = span.clone();
+                local.range = 0..span.range.len();
+                styled.extend(user_bubble_runs(&text[span.range.clone()], &[local], theme));
+                covered = span.range.end;
+                at = covered;
             }
-            render::paint_text_selection(window, hitbox, &sel_key, &text, &layout, &sel_theme);
-            // Passive geometry cache only: no entity update and no notify.
-            // `bounds().height` can be the collapsed clip height, so derive
-            // the full text height from the wrapped line layouts instead. The
-            // click handler reads this exact value as the RESIZE endpoint,
-            // while idle layout never feeds back into the transcript.
-            let line_count: usize = layout
-                .line_layouts()
-                .iter()
-                .map(|line| line.wrap_boundaries.len() + 1)
-                .sum();
-            let next_h = (line_count.max(1) as f32) * f32::from(layout.line_height());
-            if (measured_h.get() - next_h).abs() > 0.5 {
-                measured_h.set(next_h);
-                // The first layout is the source of truth for soft wrapping.
-                // Invalidate the transcript once so the expander and clip are
-                // present even when glyph widths make a short-looking string
-                // exceed five visual lines.
-                cx.notify(entity_id);
+            if at < end {
+                styled.push(TextRun {
+                    len: end - at,
+                    ..run
+                });
             }
-        },
-    )
-    .absolute()
-    .size_full();
-    // Same wrapper as the assistant markdown: user-bubble text is
-    // selectable (paint_text_selection above), so it gets the I-beam too.
-    let text = render::selectable_text_wrap()
-        .child(underlay)
-        .child(styled)
-        .into_any_element();
-    if overlays.is_empty() {
-        return text;
+            run_start = end;
+        }
+        styled
     }
-    ChipOverlays {
-        id: format!("{row_id}-chip-overlays").into(),
-        child: text,
-        layout: chip_layout,
-        overlays,
-        open: open_image,
-        well: crate::file_icons::well_bg(theme),
+
+    pub(crate) fn underlay(&self, layout: gpui::TextLayout, theme: Theme) -> AnyElement {
+        let spans: Vec<_> = self
+            .spans
+            .iter()
+            .map(|span| {
+                let icon = (!self
+                    .overlays
+                    .iter()
+                    .any(|overlay| overlay.status.is_some() && overlay.range == span.range))
+                .then(|| crate::composer::chip_icon(span.kind, &span.path, theme.appearance));
+                (span.clone(), icon)
+            })
+            .collect();
+        canvas(
+            |_, _, _| (),
+            move |_, _, window, cx| {
+                for (span, icon) in spans {
+                    let label = crate::composer::chip_pad_ranges(&span.range)[0].end;
+                    for (row, rect) in render::range_rects(&layout, &span.range, 0., 2.)
+                        .into_iter()
+                        .enumerate()
+                    {
+                        let offset = crate::composer::text_chip_label_offset(
+                            &layout,
+                            label,
+                            rect.origin.y - px(2.),
+                            px(2.),
+                            window,
+                        );
+                        let rect = Bounds::new(rect.origin + point(px(0.), offset), rect.size);
+                        crate::composer::paint_chip(
+                            window,
+                            rect,
+                            span.kind,
+                            icon.as_ref().filter(|_| row == 0),
+                            &theme,
+                            cx,
+                        );
+                    }
+                }
+            },
+        )
+        .absolute()
+        .size_full()
+        .into_any_element()
     }
-    .into_any_element()
+
+    pub(crate) fn wrap(
+        self,
+        id: SharedString,
+        child: AnyElement,
+        layout: gpui::TextLayout,
+        theme: &Theme,
+    ) -> AnyElement {
+        if self.overlays.is_empty() {
+            return child;
+        }
+        ChipOverlays {
+            id,
+            child,
+            layout,
+            overlays: self.overlays,
+            open: self.open_image,
+            well: crate::file_icons::well_bg(theme),
+        }
+        .into_any_element()
+    }
 }
 
 /// The upload status painted in a sent chip's icon well.
@@ -11671,6 +11940,85 @@ impl LinkedFile {
     fn path(&self) -> &str {
         match self {
             Self::Image { path, .. } | Self::Other(path) => path,
+        }
+    }
+}
+
+#[derive(gpui::IntoElement)]
+struct MarkdownImage {
+    image: crate::markdown::parser::InlineImage,
+    id: SharedString,
+    theme: Theme,
+    owner: gpui::WeakEntity<Transcript>,
+}
+
+impl gpui::RenderOnce for MarkdownImage {
+    fn render(self, _: &mut Window, cx: &mut gpui::App) -> impl IntoElement {
+        use crate::attachments::AttachmentSnapshot;
+        let Self {
+            image,
+            id,
+            theme,
+            owner,
+        } = self;
+        let source = image.source.clone();
+        let preview = owner
+            .update(cx, |this, cx| {
+                if !crate::attachments::is_image_path(&source)
+                    || crate::browser::model::transcript_address(&source).is_ok()
+                    || this.state.read(cx).cloud_computer_asleep()
+                {
+                    return None;
+                }
+                let LinkedFile::Image { path, chat } = this.inline_image_file(&source, cx) else {
+                    return None;
+                };
+                let device = this.linked_file_device(chat.as_deref(), cx)?;
+                match this.attachment_state(&[device], &path, None, cx) {
+                    AttachmentSnapshot::Loaded(loaded) => Some(loaded.image),
+                    _ => None,
+                }
+            })
+            .ok()
+            .flatten();
+
+        let click = move |_: &gpui::ClickEvent, window: &mut Window, cx: &mut gpui::App| {
+            let _ = owner.update(cx, |this, cx| {
+                if let Ok(url) = crate::browser::model::transcript_address(&source) {
+                    cx.open_url(&url);
+                    return;
+                }
+                let file = this.inline_image_file(&source, cx);
+                let path = file.path().to_owned();
+                let session = this.link_source_session();
+                if !this.open_linked_file(file, session.clone(), window, cx) {
+                    this.open_in_file_tab(path, session, window, cx);
+                }
+            });
+        };
+
+        if let Some(preview) = preview {
+            div()
+                .id(id)
+                .self_start()
+                .max_w_full()
+                .cursor_pointer()
+                .role(gpui::Role::Button)
+                .aria_label(format!("Preview {}", image.alt))
+                .tab_index(0)
+                .child(
+                    img(preview)
+                        .max_w_full()
+                        .max_h(px(480.))
+                        .rounded(px(8.))
+                        .object_fit(ObjectFit::Contain),
+                )
+                .on_click(click)
+                .into_any_element()
+        } else {
+            inline_image_link(&image, id, &theme)
+                .on_click(click)
+                .into_any_element()
         }
     }
 }
@@ -17231,7 +17579,7 @@ mod tests {
 
     #[test]
     fn split_sibling_gaps_match_live_internal_spacing() {
-        // The live row spaces its internal blocks by TRANSCRIPT_BLOCK_GAP; after the
+        // The live row spaces its internal blocks by `block_gap`; after the
         // live→split handoff the same boundaries are inter-row gaps. They must
         // be identical or the whole message jumps at completion.
         let done = assistant(
@@ -17246,21 +17594,54 @@ mod tests {
         let rows = rows_for_entry(&done, false, false, &mut parse);
         // Rows: t0.0, t0.1, t0.2 (three MD blocks), g0, t1.0.
         assert_eq!(rows.len(), 5);
-        // Sibling markdown blocks from the same part: md block gap.
+        // Sibling markdown blocks from the same part: the pairwise block gap
+        // the unsplit tree uses (heading → para, para → code).
+        let tree = parse("", MD);
+        for ix in 1..3 {
+            assert_eq!(
+                top_gap_for(Some(&rows[ix - 1]), &rows[ix]),
+                render::block_gap(&tree.blocks[ix - 1].block, &tree.blocks[ix].block)
+            );
+        }
         assert_eq!(
             top_gap_for(Some(&rows[0]), &rows[1]),
-            render::TRANSCRIPT_BLOCK_GAP
+            render::TRANSCRIPT_GAP_AFTER_HEADING
         );
-        assert_eq!(
-            top_gap_for(Some(&rows[1]), &rows[2]),
-            render::TRANSCRIPT_BLOCK_GAP
-        );
+        assert_eq!(top_gap_for(Some(&rows[1]), &rows[2]), 14.0);
         // Markdown → tool group and tool group → next part: a tight
         // boundary, since the group's summary row pads itself.
         assert_eq!(top_gap_for(Some(&rows[2]), &rows[3]), Theme::SPACE_XS);
         assert_eq!(top_gap_for(Some(&rows[3]), &rows[4]), Theme::SPACE_XS);
         // Turn starts get the turn gap regardless.
         assert_eq!(top_gap_for(None, &rows[0]), Theme::SPACE_LG);
+    }
+
+    #[test]
+    fn heading_rhythm_matches_between_live_and_split_rows() {
+        // Headings open a section with more room above than below. The live
+        // rows, the split rows and the unsplit tree must agree on every gap.
+        let text = "intro para\n\n## Section\n\nbody para\n\n### Detail\n\n---\n\n- item";
+        let tree = parse("", text);
+        let live = assistant("m1", MessageStatus::Streaming, vec![text_part("t0", text)]);
+        let done = assistant("m1", MessageStatus::Complete, vec![text_part("t0", text)]);
+        let live_rows = rows_for_entry(&live, false, false, &mut parse);
+        let done_rows = rows_for_entry(&done, false, false, &mut parse);
+        assert_eq!(live_rows.len(), tree.blocks.len());
+        assert_eq!(done_rows.len(), tree.blocks.len());
+        let gaps = |rows: &[Row]| -> Vec<f32> {
+            rows.windows(2)
+                .map(|pair| top_gap_for(Some(&pair[0]), &pair[1]))
+                .collect()
+        };
+        let expected: Vec<f32> = tree
+            .blocks
+            .windows(2)
+            .map(|pair| render::block_gap(&pair[0].block, &pair[1].block))
+            .collect();
+        assert_eq!(gaps(&live_rows), expected);
+        assert_eq!(gaps(&done_rows), expected);
+        // para → h2, h2 → para, para → h3, h3 → rule, rule → list.
+        assert_eq!(expected, [28.0, 8.0, 22.0, 8.0, 18.0]);
     }
 
     #[test]
@@ -19696,7 +20077,9 @@ mod tests {
     fn long_prompts_collapse_and_short_ones_do_not() {
         assert!(!user_message_needs_collapse("short message"));
         assert!(!user_message_needs_collapse("1\n2\n3\n4\n5"));
-        assert!(user_message_needs_collapse("1\n2\n3\n4\n5\n6"));
+        assert!(!user_message_needs_collapse("1\n2\n3\n4\n5\n6"));
+        let lines = vec!["x"; USER_COLLAPSED_LINES * 2];
+        assert!(user_message_needs_collapse(&lines.join("\n")));
         assert!(
             !user_message_needs_collapse(&"x".repeat(240)),
             "ordinary two- or three-line prose must not grow a toggle"
@@ -19746,6 +20129,34 @@ mod tests {
         assert_eq!(text.as_ref(), "");
         assert!(rows[0].copy_text.is_none());
         assert_eq!(attachments.len(), 1);
+    }
+
+    #[test]
+    fn sent_markdown_formats_prose_with_literal_chips() {
+        let label = zuse_protocol::chat_mentions::chat_mention_link("0fd51606", "A [literal] name")
+            .unwrap();
+        let raw = format!("**bold** {label} and `code`\nsecond line\n\n> {label}");
+        let (display, spans) = crate::composer::sent_mention_display(&raw).expect("chat chips");
+        let tree = parse_user_message(&display, &spans);
+        let Block::Paragraph { runs } = &tree.blocks[0].block else {
+            panic!("expected paragraph");
+        };
+        assert!(runs.iter().any(|run| run.style.bold && run.text == "bold"));
+        assert!(runs.iter().any(|run| run.style.code && run.text == "code"));
+        assert!(runs.iter().any(|run| run.text.contains("\nsecond line")));
+        let flat = render::flatten_runs(runs, &Theme::dark(), false);
+        let [(index, range)] = flat.user_literals.as_slice() else {
+            panic!("expected first chip placement");
+        };
+        assert_eq!(*index, 0);
+        assert_eq!(&flat.text[range.clone()], &display[spans[0].range.clone()]);
+        let Block::BlockQuote { children, .. } = &tree.blocks[1].block else {
+            panic!("expected quote");
+        };
+        let Block::Paragraph { runs } = &children[0] else {
+            panic!("expected quoted paragraph");
+        };
+        assert!(runs.iter().any(|run| run.style.user_literal == Some(1)));
     }
 
     /// A sent bubble shapes each chip's padding in Geist and its label, like

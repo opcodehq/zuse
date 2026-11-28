@@ -82,7 +82,8 @@ pub fn block_texts(block: &Block, out: &mut Vec<String>) {
     match block {
         Block::Paragraph { runs } | Block::Heading { runs, .. } => out.push(runs_text(runs)),
         Block::CodeBlock { code, .. } => out.extend(code.lines().map(str::to_owned)),
-        Block::BlockQuote { children } => {
+        Block::Details { summary, .. } => out.push(runs_text(summary)),
+        Block::BlockQuote { children, .. } | Block::FootnoteDefinition { children, .. } => {
             for child in children {
                 block_texts(child, out);
             }

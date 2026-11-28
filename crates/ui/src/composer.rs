@@ -153,6 +153,11 @@ fn composer_width_changed(previous: Option<f32>, current: f32) -> bool {
 
 /// Caret blink half-period (standard textarea cadence: ~500ms on / 500ms off).
 pub const CARET_BLINK_MS: u64 = 500;
+/// Fenced code blocks in the draft: the transcript code-block radius, with
+/// a little room around the text so glyphs are not flush with the block.
+const CODE_FENCE_RADIUS: f32 = 10.0;
+const CODE_FENCE_PAD_X: f32 = 6.0;
+const CODE_FENCE_PAD_Y: f32 = 3.0;
 
 /// Caret blink phase for a time since the last keystroke/caret move: solid
 /// through the first half-period (typing bursts never blink — each keystroke
@@ -2226,6 +2231,10 @@ pub struct ComposerInput {
     syntax_source: String,
     syntax_spans: Vec<zuse_syntax::HighlightSpan>,
     syntax_task: Option<Task<()>>,
+    /// Display ranges of fenced code blocks from the last layout pass, one per
+    /// block, each spanning whole lines from the opening fence through the
+    /// closing fence. Paint draws one rounded block behind each.
+    code_fences: Vec<Range<usize>>,
     /// Inline completion preview: painted in faint ink after the text while
     /// the caret sits at the end (palette tab-completion). Owned by the
     /// wrapper — it recomputes and re-sets this on every render pass, so the
@@ -2345,6 +2354,7 @@ impl ComposerInput {
             syntax_source: String::new(),
             syntax_spans: Vec::new(),
             syntax_task: None,
+            code_fences: Vec::new(),
             ghost: None,
             mentions_enabled: false,
             layout_epoch: 0,
@@ -4729,10 +4739,28 @@ impl ComposerInput {
             }),
             strikethrough: None,
         };
-        let raw_faces = if self.mentions_enabled && !is_placeholder {
-            composer_markdown::faces(&self.content)
+        let (raw_faces, raw_fences) = if self.mentions_enabled && !is_placeholder {
+            composer_markdown::faces_and_fences(&self.content)
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
+        };
+        let to_display = |range: &Range<usize>| {
+            self.projection.raw_to_display(range.start)..self.projection.raw_to_display(range.end)
+        };
+        // Fence bodies get one block behind their lines (see `paint`), not
+        // per-run washes; their info string is muted like a code header.
+        let fence_lines: Vec<_> = raw_fences
+            .iter()
+            .map(|fence| to_display(&fence.lines))
+            .collect();
+        let fence_infos: Vec<_> = raw_fences
+            .iter()
+            .filter_map(|fence| fence.info.as_ref().map(to_display))
+            .collect();
+        let within = |ranges: &[Range<usize>], at: usize| {
+            ranges
+                .get(ranges.partition_point(|range| range.end <= at))
+                .is_some_and(|range| range.contains(&at))
         };
         let faces = if self.mentions_enabled && !is_placeholder {
             raw_faces
@@ -4771,6 +4799,9 @@ impl ComposerInput {
             boundaries.extend([range.start, range.end]);
         }
         for (range, _) in &faces {
+            boundaries.extend([range.start, range.end]);
+        }
+        for range in fence_lines.iter().chain(&fence_infos) {
             boundaries.extend([range.start, range.end]);
         }
         for (_, range) in &self.projection.mentions {
@@ -4839,7 +4870,7 @@ impl ComposerInput {
                     if face_depth[composer_markdown::Face::Italic as usize] > 0 {
                         run.font.style = gpui::FontStyle::Italic;
                     }
-                    if code {
+                    if code && !within(&fence_lines, r[0]) {
                         run.background_color = Some(theme.code_wash);
                     }
                     if face_depth[composer_markdown::Face::Strikethrough as usize] > 0 {
@@ -4856,6 +4887,9 @@ impl ComposerInput {
                         .filter(|(range, _)| range.contains(&r[0]))
                     {
                         run.color = Theme::of(cx).syntax.color(*kind);
+                    }
+                    if within(&fence_infos, r[0]) {
+                        run.color = theme.text_muted;
                     }
                 }
                 run
@@ -4961,6 +4995,7 @@ impl ComposerInput {
             raw_at += raw_line.len() + 1;
         }
         self.line_indents = indents;
+        self.code_fences = fence_lines;
 
         // Logical line byte offsets (each shaped line covers one \n-split line).
         let mut line_starts = Vec::with_capacity(lines.len());
@@ -4996,6 +5031,35 @@ impl ComposerInput {
         self.needs_measure = false;
         self.layout_epoch += 1;
         self.content_height
+    }
+
+    /// Vertical extent of each fenced code block, as `(top, bottom)` offsets
+    /// from the top of the content, covering whole (wrapped) lines.
+    fn code_fence_spans(&self) -> Vec<(Pixels, Pixels)> {
+        if self.code_fences.is_empty() || self.last_lines.is_empty() {
+            return Vec::new();
+        }
+        let mut tops = Vec::with_capacity(self.last_lines.len() + 1);
+        let mut y = px(0.0);
+        for line in &self.last_lines {
+            tops.push(y);
+            y += line.size(self.line_height).height;
+        }
+        tops.push(y);
+        let line_of = |at: usize| {
+            self.line_starts
+                .partition_point(|start| *start <= at)
+                .saturating_sub(1)
+                .min(self.last_lines.len() - 1)
+        };
+        self.code_fences
+            .iter()
+            .map(|range| {
+                let first = line_of(range.start);
+                let last = line_of(range.end).max(first);
+                (tops[first], tops[last + 1])
+            })
+            .collect()
     }
 
     fn paint_bounds(&self, bounds: Bounds<Pixels>) -> Bounds<Pixels> {
@@ -5689,9 +5753,10 @@ impl gpui::Element for ComposerTextElement {
 
         // WrappedLine isn't Clone — temporarily take the shaped lines out of the
         // entity for painting, then put them back for mouse mapping.
-        let (lines, indents, line_height, scroll, scroll_left) =
+        let (fence_spans, lines, indents, line_height, scroll, scroll_left) =
             self.input.update(cx, |input, _| {
                 (
+                    input.code_fence_spans(),
                     std::mem::take(&mut input.last_lines),
                     input.line_indents.clone(),
                     input.line_height,
@@ -5707,6 +5772,48 @@ impl gpui::Element for ComposerTextElement {
             }),
             |window| {
                 let theme = Theme::of(cx).clone();
+                // Fenced code: one rounded block per fence, the transcript's
+                // code-block frame, beneath chips, selection and text. It
+                // bleeds a little past the text box so glyphs are not flush
+                // with its edge (the surrounding mask still clips it).
+                if !fence_spans.is_empty() {
+                    let mask = Bounds::new(
+                        point(
+                            paint_bounds.left() - px(CODE_FENCE_PAD_X),
+                            paint_bounds.top(),
+                        ),
+                        size(
+                            paint_bounds.size.width + px(2.0 * CODE_FENCE_PAD_X),
+                            paint_bounds.size.height,
+                        ),
+                    );
+                    window.with_content_mask(Some(gpui::ContentMask { bounds: mask }), |window| {
+                        let content_top = bounds.top() - px(scroll);
+                        for (top, bottom) in &fence_spans {
+                            let block = Bounds::new(
+                                point(
+                                    bounds.left() - px(CODE_FENCE_PAD_X),
+                                    content_top + *top - px(CODE_FENCE_PAD_Y),
+                                ),
+                                size(
+                                    bounds.size.width + px(2.0 * CODE_FENCE_PAD_X),
+                                    *bottom - *top + px(2.0 * CODE_FENCE_PAD_Y),
+                                ),
+                            );
+                            if block.bottom() < mask.top() || block.top() > mask.bottom() {
+                                continue;
+                            }
+                            window.paint_quad(gpui::quad(
+                                block,
+                                px(CODE_FENCE_RADIUS),
+                                theme.ink(0.035),
+                                px(1.0),
+                                theme.border,
+                                gpui::BorderStyle::Solid,
+                            ));
+                        }
+                    });
+                }
                 for (chip, kind, icon) in prepaint.mention_chips.drain(..) {
                     paint_chip(window, chip, kind, icon.as_ref(), &theme, cx);
                 }
@@ -18707,6 +18814,51 @@ mod tests {
                 }
             }
             assert_eq!(pinned, pads.iter().map(|pad| pad.len()).sum::<usize>());
+        });
+    }
+
+    /// Fenced code gets one block per fence (no per-run washes) and a muted
+    /// info string; inline code keeps its wash.
+    #[gpui::test]
+    fn composer_fences_paint_as_blocks_and_inline_code_keeps_its_wash(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        with_composer_input(cx, |input, window, cx| {
+            let raw = "say `hi`\n```rust\nfn x() {}\n```\nmid\n```py\nopen(";
+            input.set_text(raw, cx);
+            let style = window.text_style();
+            input.layout_text(px(600.0), &style, window, cx);
+            let theme = Theme::of(cx).clone();
+            let inline = input.projection.display.find("hi").unwrap();
+            let info = input.projection.display.find("rust").unwrap();
+            let first_fence = input.code_fences[0].start;
+            let mut at = 0;
+            let mut saw_info = false;
+            for run in &input.last_runs {
+                let range = at..at + run.len;
+                at = range.end;
+                if range.start >= first_fence {
+                    assert_eq!(run.background_color, None, "{range:?}");
+                } else if range.contains(&inline) {
+                    assert_eq!(run.background_color, Some(theme.code_wash), "{range:?}");
+                }
+                if range.contains(&info) {
+                    assert_eq!(run.color, theme.text_muted, "{range:?}");
+                    saw_info = true;
+                }
+            }
+            assert!(saw_info);
+            assert_eq!(input.code_fences.len(), 2);
+            assert_eq!(
+                input.code_fences[1].end,
+                input.projection.display.len(),
+                "unclosed runs to the end"
+            );
+            let line = input.line_height;
+            assert_eq!(
+                input.code_fence_spans(),
+                vec![(line * 1.0, line * 4.0), (line * 5.0, line * 7.0)]
+            );
         });
     }
 

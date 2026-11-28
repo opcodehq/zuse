@@ -588,7 +588,7 @@ pub(super) fn render_description(
                 &scoped,
                 theme,
                 window,
-                &|_| None,
+                &|_, _| None,
             );
             output = if is_table {
                 output.child(

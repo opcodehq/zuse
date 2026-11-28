@@ -11,25 +11,111 @@ pub enum Face {
 }
 
 pub fn faces(text: &str) -> Vec<(Range<usize>, Face)> {
+    faces_and_fences(text).0
+}
+
+/// A fenced code block as the composer paints it: one block behind every
+/// source line from the opening fence through the closing fence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CodeFence {
+    /// From the start of the opening fence's line to the end of the closing
+    /// fence's line (without its newline). An unclosed fence that runs to the
+    /// end of the draft reaches `text.len()`, so a trailing empty line the
+    /// caret sits on stays inside the block.
+    pub lines: Range<usize>,
+    /// The info string after the opening fence (usually the language).
+    pub info: Option<Range<usize>>,
+    pub closed: bool,
+}
+
+/// [`faces`] plus the fenced code blocks, from a single parse. Fence bodies
+/// still carry [`Face::Code`]; the fences tell the composer which of those
+/// ranges are blocks rather than inline code.
+pub fn faces_and_fences(text: &str) -> (Vec<(Range<usize>, Face)>, Vec<CodeFence>) {
     if text.len() > 128 * 1024 {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
-    Parser::new_ext(
+    let mut faces = Vec::new();
+    let mut fences = Vec::new();
+    let mut quote_depth = 0;
+    for (event, range) in Parser::new_ext(
         text,
         Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH,
     )
     .into_offset_iter()
-    .filter_map(|(event, range)| {
+    {
         let face = match event {
+            Event::Start(Tag::BlockQuote(_)) => {
+                quote_depth += 1;
+                continue;
+            }
+            Event::End(pulldown_cmark::TagEnd::BlockQuote(_)) => {
+                quote_depth -= 1;
+                continue;
+            }
             Event::Start(Tag::Strong | Tag::Heading { .. }) => Face::Bold,
             Event::Start(Tag::Strikethrough) => Face::Strikethrough,
             Event::Start(Tag::Emphasis) => Face::Italic,
-            Event::Start(Tag::CodeBlock(_)) | Event::Code(_) => Face::Code,
-            _ => return None,
+            Event::Start(Tag::CodeBlock(kind)) => {
+                if let pulldown_cmark::CodeBlockKind::Fenced(_) = kind {
+                    fences.push(code_fence(text, range.clone(), quote_depth));
+                }
+                Face::Code
+            }
+            Event::Code(_) => Face::Code,
+            _ => continue,
         };
-        Some((range, face))
+        faces.push((range, face));
+    }
+    (faces, fences)
+}
+
+fn code_fence(text: &str, range: Range<usize>, quote_depth: usize) -> CodeFence {
+    let source = &text[range.clone()];
+    let closed = fence_closed(source, quote_depth);
+    let line = source.split('\n').next().unwrap_or_default();
+    let opening = line.trim_start();
+    let indent = line.len() - opening.len();
+    let delimiter = opening.chars().next().unwrap_or('`');
+    let marker = indent + opening.len() - opening.trim_start_matches(delimiter).len();
+    let opening = line;
+    let info_text = &opening[marker..];
+    let lead = info_text.len() - info_text.trim_start().len();
+    let info_text = info_text.trim();
+    let info = (!info_text.is_empty()).then(|| {
+        let start = range.start + marker + lead;
+        start..start + info_text.len()
+    });
+    let start = text[..range.start].rfind('\n').map_or(0, |at| at + 1);
+    let end = if !closed && range.end == text.len() {
+        text.len()
+    } else {
+        range.start + source.trim_end_matches(['\n', '\r']).len()
+    };
+    CodeFence {
+        lines: start..end.max(start),
+        info,
+        closed,
+    }
+}
+
+/// Whether a fenced block's source (as pulldown's offset range reports it)
+/// ends with a closing fence. Offset ranges retain container prefixes on
+/// subsequent lines; only quote markers of enclosing containers are removed.
+fn fence_closed(source: &str, quote_depth: usize) -> bool {
+    let mut lines = source.lines();
+    let opening = lines.next().unwrap_or_default().trim_start();
+    let delimiter = opening.chars().next().unwrap_or('`');
+    let count = opening.chars().take_while(|c| *c == delimiter).count();
+    lines.last().is_some_and(|line| {
+        let mut line = line.trim();
+        for _ in 0..quote_depth {
+            if let Some(rest) = line.strip_prefix('>') {
+                line = rest.trim_start();
+            }
+        }
+        line.len() >= count && line.chars().all(|c| c == delimiter)
     })
-    .collect()
 }
 
 /// Highlight fenced code with its own grammar. Running the Markdown grammar
@@ -145,23 +231,7 @@ pub fn in_code(text: &str, cursor: usize) -> bool {
                     match kind {
                         pulldown_cmark::CodeBlockKind::Indented => return true,
                         pulldown_cmark::CodeBlockKind::Fenced(_) => {
-                            let source = &text[range.clone()];
-                            let mut lines = source.lines();
-                            let opening = lines.next().unwrap_or_default().trim_start();
-                            let delimiter = opening.chars().next().unwrap_or('`');
-                            let count = opening.chars().take_while(|c| *c == delimiter).count();
-                            let closed = lines.last().is_some_and(|line| {
-                                // Offset ranges retain container prefixes on
-                                // subsequent lines. Remove only quote markers
-                                // belonging to the parsed enclosing containers.
-                                let mut line = line.trim();
-                                for _ in 0..quote_depth {
-                                    if let Some(rest) = line.strip_prefix('>') {
-                                        line = rest.trim_start();
-                                    }
-                                }
-                                line.len() >= count && line.chars().all(|c| c == delimiter)
-                            });
+                            let closed = fence_closed(&text[range.clone()], quote_depth);
                             if !closed {
                                 return true;
                             }
@@ -518,6 +588,60 @@ mod tests {
         );
         assert_eq!(newline_edit("café", 4), None);
         assert_eq!(newline_edit("short", 100), None);
+    }
+
+    #[test]
+    fn code_fences_cover_closed_unclosed_multiple_and_listed_blocks() {
+        let fences = |text: &str| faces_and_fences(text).1;
+        let slice = |text: &'static str, range: &Range<usize>| &text[range.clone()];
+
+        let closed = "intro\n```rust title\nfn main() {}\n```\nafter";
+        let [fence] = fences(closed).try_into().unwrap();
+        assert!(fence.closed);
+        assert_eq!(
+            slice(closed, &fence.lines),
+            "```rust title\nfn main() {}\n```"
+        );
+        assert_eq!(slice(closed, fence.info.as_ref().unwrap()), "rust title");
+
+        let unclosed = "```py\nprint(1)\n";
+        let [fence] = fences(unclosed).try_into().unwrap();
+        assert!(!fence.closed);
+        assert_eq!(fence.lines, 0..unclosed.len());
+        assert_eq!(slice(unclosed, fence.info.as_ref().unwrap()), "py");
+
+        let bare = "```";
+        let [fence] = fences(bare).try_into().unwrap();
+        assert!(!fence.closed);
+        assert_eq!(fence.lines, 0..3);
+        assert_eq!(fence.info, None);
+
+        let multiple = "```\na\n```\ntext `inline`\n~~~~js\nb\n~~~~";
+        let found = fences(multiple);
+        assert_eq!(found.len(), 2, "inline code is not a fence");
+        assert_eq!(slice(multiple, &found[0].lines), "```\na\n```");
+        assert_eq!(found[0].info, None);
+        assert_eq!(slice(multiple, &found[1].lines), "~~~~js\nb\n~~~~");
+        assert_eq!(slice(multiple, found[1].info.as_ref().unwrap()), "js");
+        assert!(found.iter().all(|fence| fence.closed));
+
+        let listed = "- item\n  ```sh\n  ls\n  ```\n- next";
+        let [fence] = fences(listed).try_into().unwrap();
+        assert!(fence.closed);
+        assert_eq!(slice(listed, &fence.lines), "  ```sh\n  ls\n  ```");
+        assert_eq!(slice(listed, fence.info.as_ref().unwrap()), "sh");
+
+        let quoted = "> ```rust\n> x\n> ```";
+        let [fence] = fences(quoted).try_into().unwrap();
+        assert!(fence.closed);
+        assert_eq!(fence.lines, 0..quoted.len());
+        assert_eq!(slice(quoted, fence.info.as_ref().unwrap()), "rust");
+
+        let crlf = "```c\r\nint x;\r\n```\r\n";
+        let [fence] = fences(crlf).try_into().unwrap();
+        assert!(fence.closed);
+        assert_eq!(slice(crlf, &fence.lines), "```c\r\nint x;\r\n```");
+        assert_eq!(slice(crlf, fence.info.as_ref().unwrap()), "c");
     }
 
     #[test]

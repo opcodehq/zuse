@@ -337,6 +337,15 @@ fn language_asset(language: Option<LanguageId>) -> Option<&'static str> {
         LanguageId::Dockerfile => "dockerfile",
         LanguageId::Nix => "nix",
         LanguageId::Make => "makefile",
+        LanguageId::Diff => "diff",
+        LanguageId::Xml => "xml",
+        LanguageId::GraphQl => "graphql",
+        LanguageId::Proto => "proto",
+        LanguageId::Hcl => "hcl",
+        LanguageId::PowerShell => "powershell",
+        LanguageId::Ini => "ini",
+        LanguageId::Elixir => "elixir",
+        LanguageId::Zig => "zig",
     };
     MANIFEST
         .language_ids

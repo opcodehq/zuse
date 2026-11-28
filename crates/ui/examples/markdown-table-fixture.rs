@@ -46,7 +46,7 @@ impl Render for Fixture {
                 &markdown::render::RenderOptions::settled("table-fixture".into()),
                 theme,
                 window,
-                &|_| None,
+                &|_, _| None,
             ))
     }
 }
