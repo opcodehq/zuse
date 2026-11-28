@@ -40,6 +40,7 @@ pub mod presentation;
 pub mod preview;
 pub mod project_creation;
 pub mod projectless;
+pub mod pull_request_links;
 pub mod recovery;
 pub mod rpc_probe;
 pub mod session_commands;

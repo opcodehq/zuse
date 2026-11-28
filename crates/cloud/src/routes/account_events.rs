@@ -453,6 +453,9 @@ mod tests {
             &["machine-image", "billing"]
         ));
         assert!(delivered("computer-request", &["computer-request"]));
+        // Pull request hints likewise only reach apps that ask for them.
+        assert!(!delivered("pull-request", &["computer-request"]));
+        assert!(delivered("pull-request", &["pull-request"]));
         let legacy: TicketRequest =
             serde_json::from_value(json!({"deviceId":uuid::Uuid::nil(),"cursor":null})).unwrap();
         assert!(legacy.hint_kinds.is_empty());

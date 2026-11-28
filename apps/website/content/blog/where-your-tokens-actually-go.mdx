@@ -1,0 +1,86 @@
+---
+title: "Where your tokens actually go"
+description: "We took one real agent task apart, request by request, and sorted every token by what it costs. The code the agent writes is the smallest part of the bill."
+date: "2026-11-28"
+category: "Note"
+timeToRead: "8 min read"
+authorName: "Zuse (Beta) team"
+authorRole: "Product notes"
+authorAvatar: "/app-icon.png"
+labels:
+  [
+    { name: "Token maxing", hex: "#84CC16" },
+    { name: "Harness", hex: "#38BDF8" },
+  ]
+---
+
+import { XrayFigure } from "@/components/blogs/token-xray/xray-figure";
+import { FinalReport, PriceTag, PrefixShuffle, RequestStrip, RoundTrips } from "@/components/blogs/token-xray/widgets";
+
+Tokenmaxer tells you how many tokens you spent and roughly what they cost. It can't tell you what they were for. When we built the Zuse agent, our own harness, that was the question we kept running into: in a session that fixes one bug, which tokens are doing the work and which are just along for the ride?
+
+So we took one session apart. It comes from the benchmark suite we use to check changes to the harness: a small coding task with its own acceptance tests, run with Sonnet 5.5 at medium effort. The agent read the code, made the fix, ran the tests and reported back in five requests. The provider counted 32,671 tokens. We sorted every one of them by where it came from and what it cost.
+
+<XrayFigure />
+
+The figure is the session on a sorting bench. Each request drops into the hopper, and the chute sorts its tokens into five bins: the instructions and tool schemas, the output of the tools, the task and earlier turns, the model's own reasoning and edits, and the final report. Each bin fills to what its stream costs, not how many tokens it holds. The switches in front are the changes we made to the harness. With all of them on, the task costs 3.35¢. With none of them, it would cost 18.65¢.
+
+## What one task weighs
+
+An agent doesn't send your request once. It works in a loop, and every turn of the loop is a new request that carries everything before it: the instructions, the tool definitions, the task, every file it read and every command it ran.
+
+That's why the first bin is so full. Before the agent saw anything new, the first request read 4,455 tokens of instructions and tool schemas back from the provider's cache, and every later request read them again. Five requests, five copies: 22,275 tokens, or 68% of the session.
+
+<RequestStrip />
+
+Weigh the same five requests in dollars and the picture turns over. Cache reads are 87% of the tokens but only 25% of the bill, because the provider charges a tenth of the input price for them. The 786 tokens the model wrote, about 2% of the session, are 35% of the bill. Writing to the cache, which happens whenever something new enters the conversation, is the biggest line at 39%.
+
+So there are two different ways to waste tokens. One is to make the context bigger than it needs to be. The other is to make the provider process it fresh when it could have been cached. The second costs more, and it's easier to do by accident.
+
+## Keep the front of the prompt still
+
+A provider's prompt cache works on the prefix: the bytes at the start of a request that match a recent request exactly. The match stops at the first byte that differs, and everything after that point is processed again and written to the cache again, at a quarter more than the plain input price.
+
+So the order of the prompt matters more than its size. In the Zuse agent, the stable instructions come first and the tool schemas come next, in sorted order, so they are byte for byte the same on every request. The conversation comes last and only grows at the end. Tools that load in a different order each time look harmless, but they move the first difference to the front.
+
+<PrefixShuffle />
+
+On the second request of our session, that's the difference between 0.40¢ and 2.20¢. Across the whole task, it's the first switch on the bench and the biggest one: without a stable prefix the same task costs 13.1¢. We don't send warm-up requests to fill the cache ahead of time either. It fills with requests the agent was going to make anyway.
+
+The other way to keep the prefix cheap is to keep it short. An MCP server can bring a long list of tool schemas with it, so the Zuse agent doesn't put them in the prompt up front. It asks a server for its tools, one page at a time, when it needs them. Skills work the same way: the agent sees their names and loads one only when it uses it. On the same four tasks, the Zuse agent sent about 27,000 input tokens per task on Sonnet, where the widely used agent CLI we benchmark against sent about 77,000.
+
+That comparison has a catch we don't want to skip. We wrote about twice as much to the cache as that CLI did, and writes are the most expensive kind of input. A smaller prompt didn't make us cheaper on every line, and we haven't fixed that yet.
+
+## Every round trip re-reads everything
+
+Since each request carries the whole context, the most expensive thing an agent can do is take one more turn than it needs. In this session an average request read about 5,700 tokens, wrote about 700 and produced about 160. Each extra turn costs another 0.67¢, and the extra turns come from small habits.
+
+When we read captured runs, one pattern kept showing up. The agent read a file with a shell command, which gives no edit hash, then tried to write the file as if it were new. The write failed, so it spent another turn reading the file properly before it could make the edit. After the tests passed, it sometimes ran a cleanup command nobody asked for.
+
+<RoundTrips />
+
+We fixed both ends of that. The tool descriptions now tell the model to read named files directly and together, and to send its edits and the command that checks them in the same reply. Edits and commands run in the order listed, so the test sees the edit, and there's no round trip between writing and testing. Creating a file that already exists now fails straight away, before any work is done, and the error says how to get the hash. We didn't loosen the check itself: an edit still needs a fresh hash of the file it replaces.
+
+In our follow-up runs, one task went from four requests to three and another from six to four. Those were single runs set against earlier medians, so we read them as a direction, not a measurement. On the bench they are switches two and three, one request each.
+
+## Say less at the end
+
+The last message is the one people read, and models like to make it long. A good final report says what changed, what was verified and what is still open. That fits in five lines, so the Zuse agent's instructions now ask for that, unless you asked for an explanation.
+
+<FinalReport />
+
+On the probe where we tried it, the final message went from 302 tokens to 129. That's the smallest saving on the bench, about $2.60 per thousand tasks. The same probe also finished in 4.87 seconds instead of 13.36, but every request in it got faster, including the ones before the report, so we don't give the five-line rule credit for that.
+
+## Putting a price on it
+
+Every cent in this post is an estimate. We priced the session with the table of published rates Zuse bundles for Tokenmaxer, and that table doesn't list the model that actually ran this task yet. Tokenmaxer won't guess a rate for a model it can't find, so it would show this session's cost as unknown.
+
+<PriceTag />
+
+For the post, we used the newest listed rate from the same model family: $3 per million input tokens, $15 per million output tokens, $3.75 for cache writes and 30¢ for cache reads. The token counts are the provider's own and need no pricing at all. The "all switches off" total is something we built from those counts, not a run we made. It shows what each change is worth on this task, and the switches only add up the parts we measured.
+
+## The switch we left off
+
+There's a fifth switch on the bench, and it's pinned off. The Zuse agent can shrink old, large tool results to a short preview with a pointer to the full output, so a long log doesn't ride along in every later request. That would empty the tool-output bin faster than anything else here. It's built, but it's off by default, because it hasn't yet passed our quality checks on real tasks. An agent that saves tokens by forgetting what it saw isn't saving anything.
+
+The same rule covers everything above. None of these changes picks a cheaper model, lowers the reasoning effort or drops a safety check. They work because an agent's bill is mostly the same context sent again and again, so the order of the prompt, the number of turns and the length of the last message decide most of it. They apply to the Zuse agent. When you run another vendor's agent in Zuse, its own harness decides how it spends your tokens, and Tokenmaxer will still show you where they went.

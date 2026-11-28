@@ -1,0 +1,100 @@
+---
+title: "Why we rebuilt Zuse as a native app"
+description: "An agent app stays open all day and spends most of it waiting. We rebuilt Zuse in Rust on a GPU-rendered UI so that waiting costs almost nothing, and we measured what that bought us and what it cost."
+date: "2026-11-28"
+category: "Note"
+timeToRead: "8 min read"
+authorName: "Zuse (Beta) team"
+authorRole: "Engineering notes"
+authorAvatar: "/app-icon.png"
+labels:
+  [
+    { name: "Architecture", hex: "#84CC16" },
+    { name: "Performance", hex: "#F59E0B" },
+  ]
+---
+
+import { DynoBench } from "@/components/blogs/native-rust/dyno";
+import { IdleLoop, ScrollTest, KeystrokeLag } from "@/components/blogs/native-rust/widgets";
+
+Most desktop apps are built for the moments you use them. An agent app has a different day. You open it in the morning, start a few agents, and then mostly leave it alone while they read files, run tests and wait on models. The window sits beside your editor, your terminals and a browser full of docs for eight hours, and for most of those hours nothing in it is moving.
+
+So the question we kept asking was not how fast Zuse could be at its busiest. It was how little it could cost while it waits, and whether it could stay responsive when a chat grows to thousands of messages. Our answer was to rebuild it as a native Rust app: one process, a UI drawn on the GPU with GPUI, and the engine that runs your agents living in the same binary.
+
+This post is about why, what we measured, and what it cost us.
+
+---
+
+## Same load, two engines
+
+When you compare two cars, you don't drive them on different roads. You put them on a dynamometer, apply the same load and read the gauges. We did the closest thing we could for software.
+
+In November we ran Zuse and a typical Electron-based agent app on the same Mac, an M4 Pro with 48 GB of memory, with the same chat history seeded into both: identical text, roles and timestamps, read back message by message to make sure they matched. We launched each app five times per history and took the median. "Ready" means the moment a typed character first appears in the composer, read off the screen. Memory and CPU are the totals of every process the app runs, sampled twice a second for twenty seconds after it settles.
+
+<DynoBench />
+
+With two small chats, Zuse was ready to type in 0.60 s against 1.15 s. It held 375 MB at rest against 964 MB, and idled at 1.1% CPU against 8.3%. Switch the history on the bench and the gap barely moves. With a single 10,000-message chat, Zuse sits at 419 MB, and the other app stays close to a gigabyte.
+
+The cylinders aren't decoration. The comparison app ran as six processes, and Zuse runs as one. A browser-based shell brings its own runtime, renderer and helper processes, and each of them keeps some memory and wakes up now and then. That is a fine trade for many apps. For one that sits open all day next to everything else you run, we wanted the floor to be as low as we could make it.
+
+---
+
+## Idle is the real workload
+
+A native app doesn't idle well just because it's native. It idles well when nothing is asking it to draw. That sounds obvious, and it is exactly where we found our worst bug.
+
+The benchmark caught Zuse at 29.6% CPU, sitting idle with twenty chats open. The cause was small. While the window is in front, Zuse marks the chat you're looking at as seen, stamping it with the current time. A chat counts as unseen while its last message is newer than that stamp. If the last message is dated after your computer's clock, which happens with clock skew from another device or with imported history, the stamp can never catch up. So the chat stayed unseen, got marked again on the next frame, and every mark rebuilt the whole window, about 64 times a second.
+
+<IdleLoop />
+
+The fix was one rule: the seen stamp never lands before the last message. Idle CPU on the same twenty chats dropped to about 1%, with roughly two window rebuilds a second. The engine on its own, with no window, idles at 0.3%.
+
+What we took from this is that a lean runtime gives you a low floor, and then it's on you to stay near it. With one process and a renderer that draws only when state changes, a runaway loop shows up as one clear number instead of being lost in six processes' worth of background noise. It is also why we benchmark against something else at all. We'd rather find the 29.6% ourselves.
+
+---
+
+## Long chats are the stress test
+
+Agent chats get long. A day of work on one task can pass a thousand messages, with tool calls, diffs and logs between the replies. The obvious way to show a chat is to draw every message and let the window scroll. That holds up until the chat is long enough to make every layout pass expensive.
+
+Zuse's transcript is a list that lays out and paints only the rows near the viewport, and measures the rest as they come into view. The chat below works the same way, in your browser. Scroll it, then switch it to draw all 1,500 rows and run the test again.
+
+<ScrollTest />
+
+Your browser will probably handle both modes. Pages are good at this. The difference that matters in an app is what happens around the scroll: opening the chat, switching to it, and the worst frame when you fling it. In the app, opening a 1,500-message chat took 129 ms in Zuse against 181 ms, and the longest stall during a 120-step scroll was 150 ms against 500 ms.
+
+The other app had fewer slow frames in that scroll, though: about 11 frames over 33 ms against 18 for Zuse. Its scroll is evener, and ours has a shorter worst case. Both are true, and the first one is on our list.
+
+---
+
+## What native costs us
+
+Rebuilding in Rust was not free, and some of the costs show up for you, not only for us.
+
+**Typing is slower.** In the benchmark, a keystroke took 35 ms to reach the screen in Zuse at the median, and 25 ms in the other app. At p95 it was 51 ms against 37 ms. Browsers have spent decades on text input, and we are drawing our own. Most people won't feel 10 ms, but it's a real gap and we're working on it.
+
+<KeystrokeLag />
+
+**We own the whole UI.** A web app gets text editing, selection, accessibility hooks and a huge library of components from the platform. We build those in Rust on GPUI, and every one of them is our code to write, test and fix. When we found a chat-switching slowdown on 10,000-message chats, it was our transcript outline searching every row on each redraw, and nobody else was going to fix it for us.
+
+**The binary is big.** The macOS executable is about 150 MiB, or about 51 MiB compressed. Most of that is machine code and constant data, with everything compiled in. We expect to trim it, but a single native binary that contains the engine, the UI and the renderer is not small.
+
+**Some platform work never goes away.** The built-in browser panel uses each system's own web view: WebKit on macOS, WebKitGTK on Linux and WebView2 on Windows. Because the desktop app links the windowing and web view libraries, it can't start on a Linux server without a display. So we ship a separate command-line build for those machines.
+
+**And not everything is Rust.** JavaScript still runs where it's the right tool: the bridges to provider SDKs, our public npm client, the generated browser bindings and the small helper that lets you pick an element in the browser panel.
+
+---
+
+## One codebase, also in the browser
+
+Going native didn't mean giving up the browser. GPUI has a web target, and Zuse's browser client is the same Rust UI compiled to WebAssembly and drawn with WebGPU. The engine is the same one that runs inside the desktop app.
+
+That was the part of the decision we were least sure about, and it turned out to be one of the best. There is one transcript, one composer and one set of rendering rules. A fix to how a long chat lays out ships to the desktop and the browser together. The cost is a stricter toolchain for the web build and a browser that supports WebGPU.
+
+---
+
+## Why we'd do it again
+
+If Zuse were an app you opened for five minutes, none of this would matter much. It's an app you leave running all day while agents work, so its resting cost is a cost you pay all day. One process, about 375 MB and about 1% CPU while it waits is the bill we wanted.
+
+We gave up some things to get there: a little typing speed, a smoother average scroll, a smaller download, and the platform's free UI. We think that trade is right for an app whose main job is to wait well and keep up when the chat gets long. And where the numbers say we're behind, we'll keep measuring until they don't.

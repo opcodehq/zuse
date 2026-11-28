@@ -26,6 +26,20 @@ pub enum MessageSource {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         typed: bool,
     },
+    /// Activity on a pull request this chat owns: a comment, a review, a
+    /// check result or a state change, delivered from the GitHub webhook.
+    #[serde(rename = "github")]
+    GitHub {
+        text: String,
+        /// `owner/name`.
+        repository: String,
+        number: u64,
+        /// Where the activity is on GitHub (the comment, review or check).
+        url: String,
+        event: crate::pull_request_links::PullRequestEventKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        author: Option<String>,
+    },
 }
 impl MessageSource {
     /// A coordinator turn that only carries what the owner typed.
@@ -34,7 +48,9 @@ impl MessageSource {
     }
     pub fn text(&self) -> &str {
         match self {
-            Self::Slack { text, .. } | Self::Zapper { text, .. } => text,
+            Self::Slack { text, .. } | Self::Zapper { text, .. } | Self::GitHub { text, .. } => {
+                text
+            }
         }
     }
     /// The header shown above the short text.
@@ -42,6 +58,7 @@ impl MessageSource {
     pub fn label(&self) -> String {
         match self {
             Self::Zapper { .. } => Self::ZAPPER_LABEL.into(),
+            Self::GitHub { .. } => self.sender_name(),
             Self::Slack {
                 author, channel, ..
             } => match (author, channel) {
@@ -56,6 +73,15 @@ impl MessageSource {
     pub fn sender_name(&self) -> String {
         match self {
             Self::Zapper { sender, .. } => sender.name.clone(),
+            Self::GitHub {
+                repository,
+                number,
+                author,
+                ..
+            } => match author {
+                Some(author) => format!("{author} on {repository}#{number} · GitHub"),
+                None => format!("{repository}#{number} · GitHub"),
+            },
             Self::Slack {
                 author, channel, ..
             } => match (author, channel) {
@@ -73,7 +99,7 @@ impl MessageSource {
             return sender.clone();
         }
         crate::presentation::zapper_message::ZapperSender {
-            zapper_id: "slack".into(),
+            zapper_id: if self.is_github() { "github" } else { "slack" }.into(),
             chat_id: String::new(),
             name: self.sender_name(),
             avatar: None,
@@ -82,6 +108,9 @@ impl MessageSource {
     }
     pub fn is_slack(&self) -> bool {
         matches!(self, Self::Slack { .. })
+    }
+    pub fn is_github(&self) -> bool {
+        matches!(self, Self::GitHub { .. })
     }
 }
 

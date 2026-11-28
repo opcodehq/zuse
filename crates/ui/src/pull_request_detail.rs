@@ -351,6 +351,12 @@ fn review_context(
     )
 }
 
+/// A pull request state's glyph and colour (`OPEN`, `MERGED`, `CLOSED`).
+pub(crate) fn state_glyph(state: &str, draft: bool, theme: &Theme) -> (&'static str, gpui::Hsla) {
+    let (glyph, color, _) = summary::state_style(state, draft, theme);
+    (glyph, color)
+}
+
 pub fn open_on_device(url: &str, device: Option<String>, window: &mut Window, cx: &mut App) {
     // The native view reads github.com through `gh`; pull requests on other
     // hosts open in the browser.
@@ -679,6 +685,9 @@ const REOPEN_REFRESH: Duration = Duration::from_secs(30);
 pub struct PullRequestDetailPage {
     state: Entity<AppState>,
     watch_control: Option<Entity<crate::pr_watch::PrWatchControl>>,
+    /// Shown when the page is opened from a chat: whether this pull request
+    /// is linked to it.
+    link_control: Option<Entity<crate::pull_request_link::PullRequestLinkControl>>,
     pub url: String,
     target: Option<String>,
     detail: Option<ChangeRequestDetail>,
@@ -778,6 +787,7 @@ impl PullRequestDetailPage {
     ) -> Self {
         let mut page = Self {
             watch_control: None,
+            link_control: None,
             state,
             url,
             target,
@@ -1024,6 +1034,15 @@ impl PullRequestDetailPage {
     }
 
     pub(crate) fn watch_in_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
+        self.link_control = Some(cx.new(|cx| {
+            crate::pull_request_link::PullRequestLinkControl::new(
+                self.state.clone(),
+                chat_id.clone(),
+                self.url.clone(),
+                self.target.clone(),
+                cx,
+            )
+        }));
         self.watch_control = Some(cx.new(|cx| {
             crate::pr_watch::PrWatchControl::new(
                 self.state.clone(),
@@ -1099,6 +1118,7 @@ impl PullRequestDetailPage {
                             .child(format!("#{number}"))
                     })),
             )
+            .children(self.link_control.clone())
             .children(merge)
             .child(
                 action("pr-open-github", "Open on GitHub", &theme)

@@ -29,8 +29,11 @@ pub use oauth::{Callback, Selection};
 pub(crate) mod admission_fixture;
 #[cfg(test)]
 mod catalog_unlink_tests;
+mod pull_requests;
 mod repository_access;
 mod tests;
+pub use pull_requests::PullRequestWorker;
+pub use pull_requests::worker::wake as wake_pull_request_worker;
 pub(crate) use repository_access::{RepositoryAuthorization, mark_project_access};
 
 type ObservationGates = tokio::sync::Mutex<
@@ -92,6 +95,8 @@ struct Pending {
 /// seal the token to their generation-bound recipient before returning it.
 pub struct ScopedGitCredential {
     pub github_user_id: i64,
+    /// The App installation that covers the repository.
+    pub installation_id: i64,
     pub token: Zeroizing<String>,
     /// Local authority lease; does not change the GitHub bearer lifetime.
     pub authority_expires_at: i64,
@@ -625,6 +630,7 @@ impl NativeGithub {
                 .as_i64()
                 .filter(|id| *id > 0)
                 .ok_or_else(unavailable)?,
+            installation_id: installation,
             token: Zeroizing::new(token.to_owned()),
             authority_expires_at: expiry.authority_expires_at,
             provider_expires_at: expiry.provider_expires_at,
@@ -883,6 +889,10 @@ impl NativeGithub {
         // Webhooks deliberately never create memberships or installation links.
         let mut tx = self.pool.begin().await?;
         self.commit_membership_jobs(&mut tx, event, &value).await?;
+        // Pull request activity for the chats that own it, in the same
+        // transaction that marks the delivery complete.
+        self.route_pull_request_event(&mut tx, event, &value)
+            .await?;
         sqlx::query("UPDATE zuse_rust_github_deliveries SET completed=true WHERE delivery_id=$1 AND body_hash=$2").bind(delivery).bind(digest).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(())
