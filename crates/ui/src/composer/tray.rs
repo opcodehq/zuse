@@ -201,6 +201,83 @@ enum PillIcon {
 }
 
 type PillClick = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+type PillKey = Box<dyn Fn(&gpui::KeyDownEvent, &mut Window, &mut App) + 'static>;
+
+/// Height a notice's wrapped text is assumed to need on the first frame it
+/// opens, before its real height has been measured.
+const READABLE_GUESS: f32 = LINE_HEIGHT * 3.0;
+
+/// Which tray notices are open to show their whole message, and how tall
+/// each one's wrapped text measured last frame, so opening and closing ease
+/// between one line and exactly that.
+#[derive(Default)]
+pub(crate) struct ReadableNotices {
+    open: std::collections::HashSet<SharedString>,
+    heights: std::rc::Rc<std::cell::RefCell<HashMap<SharedString, f32>>>,
+}
+
+impl ReadableNotices {
+    pub(crate) fn is_open(&self, id: &str) -> bool {
+        self.open.contains(id)
+    }
+
+    /// Open a closed notice, close an open one.
+    pub(crate) fn toggle(&mut self, id: &SharedString) {
+        if !self.open.remove(id) {
+            self.open.insert(id.clone());
+        }
+    }
+
+    /// Close `id`; false when it was not open.
+    pub(crate) fn close(&mut self, id: &str) -> bool {
+        self.open.remove(id)
+    }
+
+    /// Forget notices that are gone, so one that comes back starts closed.
+    pub(crate) fn retain_shown(&mut self, shown: &[SharedString]) {
+        self.open.retain(|id| shown.contains(id));
+        self.heights.borrow_mut().retain(|id, _| shown.contains(id));
+    }
+}
+
+/// How an expandable notice is drawn this frame.
+pub(crate) struct Readable {
+    /// 0 = one truncated line, 1 = fully open.
+    progress: f32,
+    open: bool,
+    heights: std::rc::Rc<std::cell::RefCell<HashMap<SharedString, f32>>>,
+    toggle: PillClick,
+    key: PillKey,
+}
+
+impl Readable {
+    pub(crate) fn new(
+        progress: f32,
+        open: bool,
+        notices: &ReadableNotices,
+        toggle: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+        key: impl Fn(&gpui::KeyDownEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        Self {
+            progress,
+            open,
+            heights: notices.heights.clone(),
+            toggle: Box::new(toggle),
+            key: Box::new(key),
+        }
+    }
+}
+
+/// The clipped height of an opening notice: one line eased toward the
+/// measured height of its wrapped text. `None` once fully open, so text
+/// that rewraps later is never cut off.
+pub(crate) fn readable_height(progress: f32, natural: Option<f32>) -> Option<f32> {
+    if progress >= 1.0 {
+        return None;
+    }
+    let natural = natural.unwrap_or(READABLE_GUESS).max(LINE_HEIGHT);
+    Some(LINE_HEIGHT + (natural - LINE_HEIGHT) * progress.clamp(0.0, 1.0))
+}
 
 /// One tray row (`TrayPill flush`): icon, medium title and a muted, truncated
 /// subtitle, trailing actions, and an optional section expanded below a
@@ -215,6 +292,7 @@ pub(crate) struct TrayPill {
     expanded: Option<AnyElement>,
     on_click: Option<(PillClick, SharedString)>,
     fill: Option<(Hsla, Hsla)>,
+    readable: Option<Box<Readable>>,
 }
 
 impl TrayPill {
@@ -229,7 +307,33 @@ impl TrayPill {
             expanded: None,
             on_click: None,
             fill: None,
+            readable: None,
         }
+    }
+
+    pub(crate) fn id(&self) -> &SharedString {
+        &self.id
+    }
+
+    /// A one-line notice whose message may be cut off: it has no click of
+    /// its own and no section below, so clicking it can open it instead.
+    pub(crate) fn can_be_readable(&self) -> bool {
+        self.on_click.is_none() && self.expanded.is_none()
+    }
+
+    /// The whole message, for the tooltip and screen readers.
+    pub(crate) fn full_text(&self) -> SharedString {
+        match &self.subtitle {
+            Some(subtitle) => format!("{}: {subtitle}", self.title).into(),
+            None => self.title.clone(),
+        }
+    }
+
+    /// Clicking the message opens it to its whole text, wrapped; clicking
+    /// again or Escape closes it.
+    pub(crate) fn readable(mut self, readable: Readable) -> Self {
+        self.readable = Some(Box::new(readable));
+        self
     }
 
     pub(crate) fn glyph(mut self, path: &'static str) -> Self {
@@ -279,6 +383,7 @@ impl TrayPill {
     }
 
     pub(crate) fn render(self, theme: &Theme, first: bool) -> AnyElement {
+        let full_text = self.full_text();
         let tone = self.tone;
         let icon = self.icon.map(|glyph| {
             div()
@@ -295,54 +400,116 @@ impl TrayPill {
                     PillIcon::Element(element) => element,
                 })
         });
-        let titles = div()
-            .flex_1()
-            .min_w_0()
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .child(
-                div()
-                    .flex_none()
-                    .max_w(relative(0.7))
-                    .truncate()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(tone.title(theme))
-                    .child(self.title),
-            )
-            .children(self.subtitle.map(|subtitle| {
+        // Opening (or open): the text wraps inside a clip whose height eases
+        // from one line to the wrapped text's measured height.
+        let opening = self.readable.as_ref().filter(|r| r.progress > 0.0);
+        let wrap = opening.is_some();
+        let title = div()
+            .flex_none()
+            .max_w(relative(0.7))
+            .when(!wrap, |el| el.truncate())
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(tone.title(theme))
+            .child(self.title);
+        let subtitle = self.subtitle.map(|subtitle| {
+            div()
+                .flex_1()
+                .min_w_0()
+                .when(!wrap, |el| el.truncate())
+                .text_color(theme.text_muted)
+                .child(subtitle)
+        });
+        let titles = match opening {
+            None => div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .child(title)
+                .children(subtitle)
+                .into_any_element(),
+            Some(readable) => {
+                let id = self.id.clone();
+                let heights = readable.heights.clone();
+                let natural = heights.borrow().get(&id).copied();
                 div()
                     .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .text_color(theme.text_muted)
-                    .child(subtitle)
-            }));
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .when_some(readable_height(readable.progress, natural), |el, h| {
+                        el.h(px(h))
+                    })
+                    .on_children_prepainted(move |bounds, _, _| {
+                        if let Some(bounds) = bounds.first() {
+                            heights
+                                .borrow_mut()
+                                .insert(id.clone(), f32::from(bounds.size.height));
+                        }
+                    })
+                    .child(
+                        div()
+                            .w_full()
+                            .flex_none()
+                            .flex()
+                            .items_start()
+                            .gap(px(8.0))
+                            .child(title)
+                            .children(subtitle),
+                    )
+                    .into_any_element()
+            }
+        };
         let body = div()
             .id(SharedString::from(format!("{}-body", self.id)))
             .flex_1()
             .min_w_0()
             .flex()
-            .items_center()
+            .when(wrap, |el| el.items_start())
+            .when(!wrap, |el| el.items_center())
+            // Wrapped, the first line sits where the single line did: level
+            // with the 28px actions, 8px from the row's top and bottom.
+            .when(wrap, |el| el.py(px(6.0)))
             .gap(px(8.0))
             .children(icon)
             .child(titles);
-        let body = match self.on_click {
-            Some((handler, aria)) => body
+        let body = match (self.on_click, self.readable) {
+            (Some((handler, aria)), _) => body
                 .cursor_pointer()
                 .role(gpui::Role::Button)
                 .aria_label(aria)
                 .on_click(handler),
-            None => body,
+            (None, Some(readable)) => {
+                let readable = *readable;
+                let key = readable.key;
+                body.cursor_pointer()
+                    .role(gpui::Role::Button)
+                    .aria_label(full_text.clone())
+                    .aria_expanded(readable.open)
+                    .tab_index(0)
+                    .debug_selector({
+                        let id = self.id.clone();
+                        move || format!("{id}-body")
+                    })
+                    .on_click(readable.toggle)
+                    .on_key_down(move |event, window, cx| key(event, window, cx))
+                    // Open, the whole message is already on screen.
+                    .when(!readable.open, |el| el.tip(full_text))
+            }
+            (None, None) => body,
         };
         let row = div()
             .min_h(px(ROW_MIN_HEIGHT))
             .min_w_0()
             .flex()
-            .items_center()
+            // A wrapped message keeps its icon and actions on its first line.
+            .when(wrap, |el| el.items_start())
+            .when(!wrap, |el| el.items_center())
             .gap(px(8.0))
             .px(px(ROW_PAD_X))
-            .py(px(4.0))
+            .py(px(if wrap { 2.0 } else { 4.0 }))
             .child(body)
             .when(!self.actions.is_empty(), |row| {
                 row.child(
@@ -631,6 +798,7 @@ impl Composer {
             self.render_queue_panel(show_queue_latest_shortcut, window, cx)
                 .map(TrayRow::Element),
         );
+        let rows = self.make_notices_readable(rows, window, cx);
         if rows.is_empty() {
             return None;
         }
@@ -665,6 +833,65 @@ impl Composer {
         Some(
             crate::frost::frosted(TRAY_RADIUS, crate::frost::MENU_BLUR, surface).into_any_element(),
         )
+    }
+
+    /// Every one-line notice can be opened to read its whole message: a click
+    /// (or Enter/Space) eases it open with the text wrapped, and a second
+    /// click or Escape closes it. Closed, its tooltip carries the full text.
+    fn make_notices_readable(
+        &mut self,
+        rows: Vec<TrayRow>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<TrayRow> {
+        let shown: Vec<SharedString> = rows
+            .iter()
+            .filter_map(|row| match row {
+                TrayRow::Pill(pill) if pill.can_be_readable() => Some(pill.id().clone()),
+                _ => None,
+            })
+            .collect();
+        self.readable_notices.retain_shown(&shown);
+        let reduced = crate::motion::reduced_motion(cx);
+        let view = cx.entity_id();
+        rows.into_iter()
+            .map(|row| match row {
+                TrayRow::Pill(pill) if pill.can_be_readable() => {
+                    let id = pill.id().clone();
+                    let open = self.readable_notices.is_open(&id);
+                    let progress = crate::motion::state_t(
+                        &format!("tray-notice-{view}-{id}"),
+                        open,
+                        crate::motion::COLLAPSE,
+                        reduced,
+                    );
+                    if progress > 0.0 && progress < 1.0 {
+                        window.request_animation_frame();
+                    }
+                    let toggle = {
+                        let id = id.clone();
+                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.readable_notices.toggle(&id);
+                            cx.notify();
+                        })
+                    };
+                    let key = cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                        if event.keystroke.key == "escape" && this.readable_notices.close(&id) {
+                            cx.stop_propagation();
+                            cx.notify();
+                        }
+                    });
+                    TrayRow::Pill(pill.readable(Readable::new(
+                        progress,
+                        open,
+                        &self.readable_notices,
+                        toggle,
+                        key,
+                    )))
+                }
+                row => row,
+            })
+            .collect()
     }
 
     fn cloud_model_notice_row(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<TrayPill> {
@@ -2104,7 +2331,8 @@ fn annotation_file_chip(comment: &crate::comments::ReviewComment, theme: &Theme)
 impl Composer {
     /// Seed one tray state over the worked transcript: `offline`, `error`,
     /// `error-open`, `error-danger`, `signin`, `annotations`, `attachments`,
-    /// `todo`, `todo-open`, `queue`, or `stack` (several at once).
+    /// `todo`, `todo-open`, `queue`, `computers`, `computers-open`, or
+    /// `stack` (several at once).
     pub fn fixture_seed_trays(&mut self, kind: &str, cx: &mut Context<Self>) {
         let usage_limit = "You've hit your usage limit for this plan. Your limit resets at 4:00 PM.\n\nAPI Error: 429 {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"This request would exceed your account's rate limit. Please try again later.\"}}";
         let failed = "The agent exited unexpectedly (exit status 1).\nstderr: error: could not read config file ~/.config/agent/settings.json: permission denied";
@@ -2129,6 +2357,12 @@ impl Composer {
             "todo" => self.fixture_todo(false, cx),
             "todo-open" => self.fixture_todo(true, cx),
             "queue" => self.fixture_queue(cx),
+            // A lasting computer-request read failure, closed or opened.
+            "computers" => self.fixture_seed_computer_read_failure(true),
+            "computers-open" => {
+                self.fixture_seed_computer_read_failure(true);
+                self.readable_notices.toggle(&"computers-error".into());
+            }
             "stack" => {
                 self.fixture_offline(cx);
                 self.fixture_annotations(cx);
@@ -2150,6 +2384,8 @@ impl Composer {
         }
         self.tray = TrayState::default();
         self.todo_panels.clear();
+        self.fixture_seed_computer_read_failure(false);
+        self.readable_notices = ReadableNotices::default();
         self.attachments.remove(&self.current_key);
         let key = self.current_key.clone();
         self.state.update(cx, |state, cx| {
@@ -2531,5 +2767,120 @@ mod tests {
         ];
         assert_eq!(last_prompt_text(&entries).as_deref(), Some("second"));
         assert_eq!(last_prompt_text(&entries[1..2]), None);
+    }
+
+    #[test]
+    fn an_opening_notice_eases_from_one_line_to_its_measured_height() {
+        assert_eq!(readable_height(0.0, Some(64.0)), Some(LINE_HEIGHT));
+        assert_eq!(readable_height(0.5, Some(64.0)), Some(40.0));
+        // Fully open, nothing clips text that rewraps later.
+        assert_eq!(readable_height(1.0, Some(64.0)), None);
+        // Before the first measurement, a few lines are assumed.
+        assert_eq!(
+            readable_height(1.0 - f32::EPSILON, None).map(f32::round),
+            Some(READABLE_GUESS)
+        );
+        // A one-line message never shrinks below its line.
+        assert_eq!(readable_height(0.5, Some(4.0)), Some(LINE_HEIGHT));
+    }
+
+    #[test]
+    fn notices_open_close_and_start_closed_when_they_come_back() {
+        let mut notices = ReadableNotices::default();
+        let id = SharedString::from("computers-error");
+        notices.toggle(&id);
+        assert!(notices.is_open(&id));
+        notices.toggle(&id);
+        assert!(!notices.is_open(&id));
+        notices.toggle(&id);
+        assert!(notices.close(&id), "Escape closes an open notice");
+        assert!(!notices.close(&id), "and leaves a closed one alone");
+        notices.toggle(&id);
+        notices.heights.borrow_mut().insert(id.clone(), 48.0);
+        notices.retain_shown(&[]);
+        assert!(!notices.is_open(&id));
+        assert!(notices.heights.borrow().is_empty());
+    }
+
+    #[test]
+    fn only_plain_notices_open_and_their_tooltip_has_the_whole_message() {
+        let pill = TrayPill::new("n", "Computers").subtitle("A long message");
+        assert!(pill.can_be_readable());
+        assert_eq!(pill.full_text().as_ref(), "Computers: A long message");
+        assert_eq!(
+            TrayPill::new("t", "Title only").full_text().as_ref(),
+            "Title only"
+        );
+        // Rows that already open something keep their own click.
+        assert!(
+            !TrayPill::new("p", "Plan")
+                .on_click("Open", |_, _, _| {})
+                .can_be_readable()
+        );
+        assert!(
+            !TrayPill::new("r", "Running")
+                .expanded(Some(div().into_any_element()))
+                .can_be_readable()
+        );
+    }
+
+    /// The tray floats above the composer card, so the test window leaves
+    /// room over it and keeps it narrow enough for the message to wrap.
+    struct NoticeHost(Entity<Composer>);
+    impl gpui::Render for NoticeHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .pt(px(240.0))
+                .child(div().w(px(320.0)).child(self.0.clone()))
+        }
+    }
+
+    #[gpui::test]
+    fn clicking_a_notice_opens_it_wrapped_and_escape_closes_it(cx: &mut gpui::TestAppContext) {
+        // Shared globals (theme, settings, menus) for composers.
+        let (_dir, _) = super::super::tests::composer_focus_window(cx);
+        cx.update(|cx| crate::motion::set_reduced_motion(cx, true));
+        let window = cx.add_window(|_, cx| {
+            let state = cx.new(|_| {
+                let mut state = crate::state::AppState::new();
+                state.connectivity.state = zuse_protocol::ConnectivityState::Offline;
+                state
+            });
+            let composer = cx.new(|cx| Composer::new(state, cx));
+            composer.update(cx, |c, _| c.focus_pending = false);
+            NoticeHost(composer)
+        });
+        let composer = window.read_with(cx, |host, _| host.0.clone()).unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.update(|window, cx| window.draw(cx).clear());
+        let closed = visual
+            .debug_bounds("tray-no-connection-body")
+            .expect("notice drawn");
+        let open = |cx: &mut gpui::VisualTestContext| {
+            composer.read_with(cx, |c, _| c.readable_notices.is_open("tray-no-connection"))
+        };
+        visual.simulate_click(closed.center(), gpui::Modifiers::default());
+        assert!(open(&mut visual), "a click opens the notice");
+        visual.update(|window, cx| window.draw(cx).clear());
+        let opened = visual
+            .debug_bounds("tray-no-connection-body")
+            .expect("still drawn");
+        assert!(
+            opened.size.height > closed.size.height,
+            "the whole message wraps onto more lines: {opened:?} vs {closed:?}"
+        );
+        visual.simulate_keystrokes("escape");
+        assert!(!open(&mut visual), "Escape closes it");
+        visual.update(|window, cx| window.draw(cx).clear());
+        let reclosed = visual
+            .debug_bounds("tray-no-connection-body")
+            .expect("still drawn");
+        assert_eq!(reclosed.size.height, closed.size.height);
+        visual.simulate_click(closed.center(), gpui::Modifiers::default());
+        assert!(open(&mut visual));
+        visual.update(|window, cx| window.draw(cx).clear());
+        visual.simulate_click(closed.center(), gpui::Modifiers::default());
+        assert!(!open(&mut visual), "a second click closes it");
     }
 }
