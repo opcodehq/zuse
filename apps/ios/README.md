@@ -78,6 +78,7 @@ Debug builds read these to open a screen in a given state, for screenshots and m
 | `--model-sheet-preview` | Model and reasoning settings |
 | `--new-chat-preview`, `--setup-progress-preview`, `--cloud-preview` | New chat, its setup progress, cloud launch with a signed-in account |
 | `--pairing-preview`, `--connection-preview=<connecting\|reconnecting\|attention>` | Add computer, a computer connecting, dropping out or unreachable |
+| `--cloud-chats-preview` | Cloud chats loaded in the Chats list, independent of the computer (pair with `--connection-preview=connecting` to show them while a computer connects) |
 | `--empty-preview` | A computer with no chats, Zappers or pull requests |
 | `--loading-preview` | The same computer while its lists are still arriving |
 | `--new-zapper-preview`, `--new-zapper-starter=<0-2>` | New Zapper, blank or from a first-run idea |

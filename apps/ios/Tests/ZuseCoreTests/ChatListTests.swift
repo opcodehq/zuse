@@ -93,6 +93,60 @@ private func row(
   }
 }
 
+private func cloudChat(_ id: String, title: String = "", repo: String = "acme/web") -> CloudChat {
+  CloudChat(
+    workspaceId: "ws-" + id, projectId: "proj-" + id, chatId: id, initialSessionId: "s-" + id,
+    activeSessionId: nil, title: title, repositoryDisplayName: repo, state: "ready",
+    desiredState: "ready", runtimeState: "running")
+}
+
+@Test func previewCloudChatsJSONDecodes() throws {
+  let json =
+    #"[{"workspaceId":"ws-1","projectId":"proj_web","chatId":"c1","initialSessionId":"s1","activeSessionId":"s1","title":"Ship the pricing page","repositoryDisplayName":"acme/web","state":"ready","desiredState":"ready","runtimeState":"running"},{"workspaceId":"ws-2","projectId":"proj_api","chatId":"c2","initialSessionId":"s2","activeSessionId":null,"title":"Investigate the webhook retries","repositoryDisplayName":"acme/api","state":"paused","desiredState":"ready","runtimeState":"paused"}]"#
+  let chats = try JSONDecoder().decode([CloudChat].self, from: Data(json.utf8))
+  #expect(chats.count == 2)
+  #expect(chats.first?.title == "Ship the pricing page")
+  #expect(chats.last?.activeSessionId == nil)
+}
+
+@Test func homeRowsKeepCloudChatsWhileAComputerIsConnecting() {
+  let cloud = [cloudChat("c1", title: "Fix flake"), cloudChat("c2")]
+  // A computer that is connecting: no sessions have arrived yet, but cloud already loaded.
+  let connecting = ChatList.homeRows(
+    computerLabel: "Studio", includesComputerChats: true, cloudChats: cloud)
+  #expect(connecting.allSatisfy { $0.isCloud })
+  #expect(connecting.map(\.chatID) == ["c1", "c2"])
+  #expect(connecting.first?.title == "Fix flake")
+  #expect(connecting.last?.title == "Untitled chat")  // empty titles get a placeholder
+  // A cloud workspace is the active source: computer chats are omitted, cloud stays visible.
+  let cloudActive = ChatList.homeRows(
+    computerLabel: "Studio", sessions: [sessionRow("local")], includesComputerChats: false,
+    cloudChats: cloud)
+  #expect(cloudActive.map(\.chatID) == ["c1", "c2"])
+}
+
+@Test func homeRowsListComputerChatsThenCloudExcludingZapperChats() {
+  let rows = ChatList.homeRows(
+    computerLabel: "Studio", projectNames: ["p": "Zuse"],
+    sessions: [sessionRow("local", project: "p"), sessionRow("zapper", project: "p")],
+    archivedSessions: [sessionRow("old", project: "p", title: "Done")],
+    excludedChatIDs: ["zapper"], lastActivity: ["local": Date(timeIntervalSince1970: 1000)],
+    includesComputerChats: true, cloudChats: [cloudChat("c1")])
+  #expect(rows.map(\.chatID) == ["local", "old", "c1"])
+  #expect(rows.first?.placeKey == ChatList.computerPlace)
+  #expect(rows.first?.projectName == "Zuse")
+  #expect(rows.first?.lastActivity == Date(timeIntervalSince1970: 1000))
+  #expect(rows[1].archived)
+  #expect(rows.last?.isCloud == true)
+  // The composition flows into the ordered/flattened list the Chats tab renders.
+  #expect(ChatList.recent(rows, archive: .all).map(\.chatID) == ["local", "old", "c1"])
+}
+
+private func sessionRow(_ id: String, project: String = "p", title: String = "Chat") -> SessionRow {
+  SessionRow(
+    id: id, projectId: project, title: title, providerId: "codex", model: "m", worktreeId: nil)
+}
+
 @Test func recentListsKnownActivityFirstThenCatalogOrder() {
   let now = Date()
   func dated(_ id: String, _ minutesAgo: Double?, name: String? = "Zuse", archived: Bool = false)

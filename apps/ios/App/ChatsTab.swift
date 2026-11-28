@@ -40,40 +40,26 @@ struct ChatsListView: View {
     let chat: CloudChat
     let action: CloudWorkspaceAction
   }
-  private static let computerPlace = "computer"
+  private static let computerPlace = ChatList.computerPlace
   private static func key(_ session: SessionRow) -> String { computerPlace + "|" + session.id }
   private static func key(_ chat: CloudChat) -> String { ChatList.cloudPlace + "|" + chat.id }
 
   /// Every chat the list can show: the open computer's, active and archived, then Zuse Cloud's.
+  /// Cloud chats are always listed, so a computer that is connecting or unreachable never hides
+  /// them (`ChatList.homeRows`).
   private var chatRows: [ChatListRow] {
-    var rows: [ChatListRow] = []
-    if !workspace.isCloudActive {
-      let label = workspace.connectedComputer ?? "Computer"
-      let names = Dictionary(
-        workspace.projects.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
-      for (sessions, archived) in [(workspace.sessions, false), (workspace.archivedSessions, true)]
-      {
-        for session in sessions where !workspace.zappers.keepsChat(session.id) {
-          let name =
-            session.projectId == CanonicalWorkspace.projectless ? nil : names[session.projectId]
-          rows.append(
-            ChatListRow(
-              id: Self.key(session), chatID: session.id, placeKey: Self.computerPlace,
-              placeLabel: label, projectKey: session.projectId, projectName: name,
-              title: session.title.isEmpty ? "New chat" : session.title, archived: archived,
-              lastActivity: workspace.zappers.chats[session.id]?.lastMessageAt))
-        }
-      }
-    }
-    for chat in workspace.cloudChats {
-      rows.append(
-        ChatListRow(
-          id: Self.key(chat), chatID: chat.chatId, placeKey: ChatList.cloudPlace,
-          placeLabel: "Zuse Cloud", projectKey: chat.projectId,
-          projectName: chat.repositoryDisplayName,
-          title: chat.title.isEmpty ? "Untitled chat" : chat.title, archived: chat.isArchived))
-    }
-    return rows
+    let names = Dictionary(
+      workspace.projects.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+    let excluded = Set(
+      (workspace.sessions + workspace.archivedSessions).map(\.id).filter {
+        workspace.zappers.keepsChat($0)
+      })
+    let activity = workspace.zappers.chats.compactMapValues { $0.lastMessageAt }
+    return ChatList.homeRows(
+      computerLabel: workspace.connectedComputer ?? "Computer", projectNames: names,
+      sessions: workspace.sessions, archivedSessions: workspace.archivedSessions,
+      excludedChatIDs: excluded, lastActivity: activity,
+      includesComputerChats: !workspace.isCloudActive, cloudChats: workspace.cloudChats)
   }
 
   var body: some View {
@@ -180,7 +166,9 @@ struct ChatsListView: View {
           : "Active agent and terminal work may be interrupted. You can wake this workspace later.")
     }
     .refreshable {
-      await workspace.refreshCloud()
+      // Cloud refresh runs even with no computer connected; a failure stays as a retryable
+      // notice in the list rather than a one-shot alert.
+      await workspace.refreshCloud(reportErrors: false)
       await workspace.refreshSessionCatalog()
     }
   }
@@ -259,12 +247,13 @@ struct ChatsListView: View {
     }
   }
 
-  /// First connections show progress; later reconnects only surface once they become a problem.
+  /// The active source's connection progress, shown as its own row above the list so it never
+  /// hides the cloud chats below it. First connections show progress; later reconnects only
+  /// surface once they become a problem.
   private var showsConnectionBanner: Bool {
     workspace.connectionIssue
-      || (workspace.projects.isEmpty && workspace.cloudChats.isEmpty
-        && ["Connecting…", "Synchronizing…", "Offline · reconnecting"].contains(
-          workspace.connectionState))
+      || ["Connecting…", "Synchronizing…", "Offline · reconnecting"].contains(
+        workspace.connectionState)
   }
 
   // MARK: Ask

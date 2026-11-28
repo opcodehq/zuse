@@ -537,8 +537,13 @@ struct WorkspaceView: View {
     #if DEBUG && os(iOS)
       LaunchOrientation.apply()
     #endif
-    await workspace.refreshCloud()
+    // Cloud chats load independently of any computer: start the restore (which may begin a
+    // bounded computer connect) right away, and refresh the cloud catalog alongside it so a
+    // stuck computer connection can never hide the cloud chats. A cloud failure stays as a
+    // retryable notice in the Chats list rather than a one-shot alert.
+    async let cloud: Void = workspace.refreshCloud(reportErrors: false)
     workspace.restoreWorkspace()
+    await cloud
     let launchTab = AppTab.launchArgument
     if let session = workspace.selectedSession, !workspace.zappers.keepsChat(session.id) {
       opensRestoredChat = false

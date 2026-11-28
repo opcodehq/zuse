@@ -194,6 +194,27 @@
       if ProcessInfo.processInfo.arguments.contains("--model-picker-preview") {
         draft = "Review the changes"
       }
+      // `--cloud-chats-preview`: cloud chats loaded independently of any computer. Pair with
+      // `--connection-preview=connecting` to show them while a computer is still connecting;
+      // on its own it shows a cloud-only list with no computer connected.
+      if arguments.contains("--cloud-chats-preview") {
+        cloudChats = Self.previewCloudChats()
+        if !arguments.contains(where: { $0.hasPrefix("--connection-preview=") }) {
+          sessions = []
+          archivedSessions = []
+          projects = []
+          selectedSession = nil
+          connectionState = "Not connected"
+        }
+      }
+    }
+
+    /// Sample Zuse Cloud chats for `--cloud-chats-preview`, decoded through the same path as the
+    /// cloud API so they render exactly like live ones.
+    static func previewCloudChats() -> [CloudChat] {
+      let json =
+        #"[{"workspaceId":"ws-1","projectId":"proj_web","chatId":"c1","initialSessionId":"s1","activeSessionId":"s1","title":"Ship the pricing page","repositoryDisplayName":"acme/web","state":"ready","desiredState":"ready","runtimeState":"running"},{"workspaceId":"ws-2","projectId":"proj_api","chatId":"c2","initialSessionId":"s2","activeSessionId":null,"title":"Investigate the webhook retries","repositoryDisplayName":"acme/api","state":"paused","desiredState":"ready","runtimeState":"paused"}]"#
+      return (try? JSONDecoder().decode([CloudChat].self, from: Data(json.utf8))) ?? []
     }
 
     /// Sample Zappers for `--zapper-preview`: one busy release coordinator and one paused one.
