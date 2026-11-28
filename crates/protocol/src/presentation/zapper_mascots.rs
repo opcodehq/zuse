@@ -798,6 +798,11 @@ const ZOOM: f32 = 1.16;
 /// eyes are whole-cell boxes whose lids, worry and smile add or remove cells,
 /// so a face never smears between pixels.
 pub fn raster(mascot: &Mascot, grid: usize, pose: Pose) -> Vec<Option<Cell>> {
+    raster_eyes(mascot, grid, pose).0
+}
+
+/// [`raster`], with which eye (1, 2, ...) drew each cell, 0 for none.
+fn raster_eyes(mascot: &Mascot, grid: usize, pose: Pose) -> (Vec<Option<Cell>>, Vec<u8>) {
     let body = mascot.body;
     let (yaw, pitch) = (pose.yaw.to_radians(), pose.pitch.to_radians());
     let g = grid as f32;
@@ -880,7 +885,9 @@ pub fn raster(mascot: &Mascot, grid: usize, pose: Pose) -> Vec<Option<Cell>> {
         let y0 = (cy - hc as f32 / 2. + 0.5).floor() as isize;
         let mut put = |xx: isize, yy: isize| {
             let ring = [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)];
-            let apart = ring.iter().all(|(dx, dy)| {
+            // A full cell of body between eyes, diagonals included.
+            let around = (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (dx, dy)));
+            let apart = around.into_iter().all(|(dx, dy)| {
                 let (x, y) = (xx + dx, yy + dy);
                 !(0..grid as isize).contains(&x)
                     || !(0..grid as isize).contains(&y)
@@ -940,7 +947,7 @@ pub fn raster(mascot: &Mascot, grid: usize, pose: Pose) -> Vec<Option<Cell>> {
             }
         }
     }
-    out
+    (out, owner)
 }
 
 #[cfg(test)]
@@ -1199,6 +1206,42 @@ mod tests {
                         "{} at {grid}",
                         mascot.id
                     );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn eyes_never_touch_whatever_the_face() {
+        for mascot in MASCOTS {
+            for grid in [16, 26, 42] {
+                for mood in MOODS {
+                    let mut animator = Animator::new(Mood::Awake);
+                    animator.set(mascot, mood, 1_000, (0., 0.), (0., 0.));
+                    // Every 20 ms through the change of mood and six seconds
+                    // after, looking around.
+                    for ms in (1_000..7_000).step_by(20) {
+                        let look = ((ms as f32 / 700.).sin(), (ms as f32 / 900.).cos());
+                        let (_, owner) =
+                            raster_eyes(mascot, grid, animator.pose(mascot, ms, look, look));
+                        for (i, id) in owner.iter().enumerate().filter(|(_, id)| **id != 0) {
+                            let (x, y) = ((i % grid) as isize, (i / grid) as isize);
+                            for (dx, dy) in (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (dx, dy)))
+                            {
+                                let (nx, ny) = (x + dx, y + dy);
+                                if (0..grid as isize).contains(&nx)
+                                    && (0..grid as isize).contains(&ny)
+                                {
+                                    let other = owner[ny as usize * grid + nx as usize];
+                                    assert!(
+                                        other == 0 || other == *id,
+                                        "{} {mood:?} eyes touch at {grid}",
+                                        mascot.id
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

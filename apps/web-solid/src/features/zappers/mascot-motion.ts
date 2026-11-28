@@ -243,7 +243,8 @@ export function raster(mascot: Mascot, grid: number, p: Pose): Cell[] {
     const y0 = Math.floor(cy - hc / 2 + 0.5);
     const put = (xx: number, yy: number) => {
       const ring = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]] as const;
-      const apart = ring.every(([dx, dy]) => {
+      const around = [-1, 0, 1].flatMap(dy => [-1, 0, 1].map(dx => [dx, dy] as const));
+      const apart = around.every(([dx, dy]) => {
         const [x, y] = [xx + dx, yy + dy];
         return x < 0 || y < 0 || x >= grid || y >= grid || owner[y * grid + x] === 0 || owner[y * grid + x] === id;
       });
