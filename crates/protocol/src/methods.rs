@@ -50,6 +50,7 @@ pub const GET_MODEL_API_KEYS: &str = "GetModelApiKeys";
 /// `{id, apiKey}` → `[ModelApiKey]`. An empty `apiKey` removes the saved key.
 pub const SET_MODEL_API_KEY: &str = "SetModelApiKey";
 pub const LIST_SKILLS: &str = "ListSkills";
+pub const PROJECT_SKILL_CATALOG: &str = "ProjectSkillCatalog";
 pub const LIST_COMMANDS: &str = "ListCommands";
 /// Transient secret submission; never enqueue or persist its parameters.
 pub const REQUEST_PRIVATE_OPERATION: &str = "RequestPrivateOperation";
@@ -318,13 +319,15 @@ pub const CLOUD_LOCAL_TERMINAL: &str = "CloudLocalTerminal";
 pub const CLOUD_SYNC_STATUS: &str = "CloudSyncStatus";
 pub const CLOUD_SYNC_CONFIGURE: &str = "CloudSyncConfigure";
 pub const CLOUD_SYNC_RETRY: &str = "CloudSyncRetry";
-/// One cloud chat's tracked files in the user's own local checkout of the
-/// same repository (one-way, restorable). Status is a read; Configure turns
-/// it on or off (restoring the checkout); Resume continues after local edits
-/// paused it, keeping those edits in the checkout's stash list.
+/// One cloud chat's files in a dedicated folder on this computer, one way
+/// (a git worktree of the user's own clone, or a fresh clone). Status is a
+/// read; Configure turns it on or off (off keeps the folder); Resume
+/// discards edits made in the folder and continues; DeleteFolder stops sync
+/// and removes the folder.
 pub const CLOUD_CHECKOUT_SYNC_STATUS: &str = "CloudCheckoutSyncStatus";
 pub const CLOUD_CHECKOUT_SYNC_CONFIGURE: &str = "CloudCheckoutSyncConfigure";
 pub const CLOUD_CHECKOUT_SYNC_RESUME: &str = "CloudCheckoutSyncResume";
+pub const CLOUD_CHECKOUT_SYNC_DELETE_FOLDER: &str = "CloudCheckoutSyncDeleteFolder";
 pub const CLOUD_PAUSE: &str = "CloudPause";
 /// Explicit supervised repair; start and resolve retain uncertain delivery.
 pub const CLOUD_RUNTIME_REPAIR: &str = "CloudRuntimeRepair";
@@ -335,6 +338,7 @@ pub const CLOUD_COMPUTER_RECREATION: &str = "CloudComputerRecreation";
 /// ([`crate::cloud_runtime_updates::UpdateStatus`]) while a message waits on it.
 pub const CLOUD_RUNTIME_UPDATE_STATUS: &str = "CloudRuntimeUpdateStatus";
 pub const CLOUD_WORKSPACE: &str = "CloudWorkspace";
+pub const CLOUD_WORKSPACE_RENAME: &str = "CloudWorkspaceRename";
 pub const CLOUD_ACCOUNT_STATUS: &str = "CloudAccountStatus";
 pub const CLOUD_ACCOUNT_SIGN_IN: &str = "CloudAccountSignIn";
 pub const CLOUD_ACCOUNT_SIGN_OUT: &str = "CloudAccountSignOut";
@@ -360,6 +364,7 @@ pub const RESOLVE_RECOVERY: &str = "ResolveRecovery";
 /// Unknown methods and all actions keep their original delivery uncertainty.
 pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
     match method {
+        PROJECT_SKILL_CATALOG => params["action"] == "list",
         GET_ANALYTICS_SETTINGS
         | GET_GIT_WORKSPACE
         | WATCH_GIT_WORKSPACE
@@ -498,6 +503,7 @@ mod retry_tests {
             CLOUD_SYNC_RETRY,
             CLOUD_CHECKOUT_SYNC_CONFIGURE,
             CLOUD_CHECKOUT_SYNC_RESUME,
+            CLOUD_CHECKOUT_SYNC_DELETE_FOLDER,
             CLOUD_DELETE,
             CLOUD_CLEANUP_MIRROR,
             CLOUD_CREATE,

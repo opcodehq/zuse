@@ -63,6 +63,20 @@ export interface IssueDetails {
   outOfScope?: string;
   parent?: string;
 }
+export type IssueDeliveryState = "queued" | "retrying" | "sent" | "answered" | "cancelled" | "held";
+/** Where a person's comment went. "sent" is queue acceptance, not proof it was handled. */
+export interface IssueDelivery {
+  chatId: string;
+  state: IssueDeliveryState;
+  detail?: string;
+  reply?: string;
+}
+/** One typed before/after value; plain text, never markup. */
+export interface IssueChange {
+  field: string;
+  before?: string;
+  after?: string;
+}
 export interface IssueActivity {
   id: string;
   actor?: string | null;
@@ -70,6 +84,9 @@ export interface IssueActivity {
   kind: string;
   text: string;
   replyTo?: string | null;
+  delivery?: IssueDelivery;
+  thread?: string;
+  changes?: IssueChange[];
 }
 export interface ZapperIssue {
   id: string;

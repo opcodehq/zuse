@@ -49,7 +49,7 @@ pub struct State<'a> {
     pub error_target: Option<&'a str>,
 }
 
-fn status(row: &Workspace) -> (&'static str, &'static str, bool) {
+pub fn status(row: &Workspace) -> (&'static str, &'static str, bool) {
     if row.state == "deleted" {
         (
             "Cloud deleted",
@@ -123,7 +123,7 @@ fn recovery_title(status: &CloudArchiveStatus) -> &'static str {
         _ => "Backup not yet verified",
     }
 }
-fn recovery_details(row: &Workspace) -> Option<Div> {
+pub fn recovery_details(row: &Workspace) -> Option<Div> {
     let status = row.archive_status()?;
     let mut details = div()
         .flex()

@@ -1,5 +1,7 @@
-//! Git operations on the user's own checkout: save how it is, move it to a
-//! cloud chat's checkpoint, keep it there, and put it back exactly. Untracked
+//! Git operations on a synced folder: make a chat's folder (a worktree of
+//! the user's clone, or a clone), save how a folder is, move it to a cloud
+//! chat's checkpoint, keep it there, put an earlier version's sync of the
+//! user's own checkout back exactly, and remove a chat's folder. Untracked
 //! and ignored files are never written, moved or removed: every tree change
 //! goes through `git read-tree -m -u`, which refuses to overwrite them.
 use crate::cloud::mirror::ReceivedFile;
@@ -110,49 +112,6 @@ fn commit(dir: &Path, rev: &str) -> Result<Option<String>> {
 
 pub(crate) fn head(dir: &Path) -> Result<String> {
     commit(dir, "HEAD")?.context("This folder has no commits yet.")
-}
-
-/// The checkout's root, which `path` must be, with no merge, rebase or
-/// similar operation in progress.
-pub(crate) fn checkout_root(path: &Path) -> Result<PathBuf> {
-    ensure!(path.is_absolute(), "Choose an absolute folder.");
-    let canonical = path
-        .canonicalize()
-        .context("This folder doesn't exist on this computer.")?;
-    let top = git_ok(&canonical, &["rev-parse", "--show-toplevel"])
-        .map_err(|_| anyhow::anyhow!("This folder isn't a git checkout."))?;
-    let top = PathBuf::from(top)
-        .canonicalize()
-        .context("This folder isn't a git checkout.")?;
-    ensure!(
-        top == canonical,
-        "Choose the repository's top folder ({}).",
-        top.display()
-    );
-    ensure!(
-        git_ok(&top, &["rev-parse", "--is-bare-repository"])? == "false",
-        "This folder isn't a working checkout."
-    );
-    let git_dir = PathBuf::from(git_ok(
-        &top,
-        &["rev-parse", "--path-format=absolute", "--git-dir"],
-    )?);
-    for (marker, what) in [
-        ("MERGE_HEAD", "a merge"),
-        ("CHERRY_PICK_HEAD", "a cherry-pick"),
-        ("REVERT_HEAD", "a revert"),
-        ("rebase-merge", "a rebase"),
-        ("rebase-apply", "a rebase"),
-        ("BISECT_LOG", "a bisect"),
-    ] {
-        ensure!(
-            !git_dir.join(marker).exists(),
-            "Finish or abort {what} in {} first.",
-            top.display()
-        );
-    }
-    head(&top)?;
-    Ok(top)
 }
 
 /// The `host/owner/repo` of the checkout's `origin` (else its first remote).
@@ -742,4 +701,179 @@ pub(crate) fn restore(dir: &Path, saved: &Saved, keep_edits: bool) -> Result<Res
     }
     unpin(dir);
     Ok(restored)
+}
+
+/// How a chat's folder was made.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Made {
+    /// A worktree of the user's clone (shares its objects).
+    Worktree,
+    /// A shallow clone of the repository.
+    Clone,
+    /// An empty repository (the clone failed): every file arrives with the
+    /// first snapshot.
+    Empty,
+}
+
+/// Whether `path` is a chat folder that has been made: a git folder with a
+/// commit checked out.
+pub(crate) fn is_folder(path: &Path) -> bool {
+    path.join(".git").exists() && head(path).is_ok()
+}
+
+/// The top folder of a working clone `path` is in, if it is in one.
+pub(crate) fn clone_root(path: &Path) -> Option<PathBuf> {
+    let canonical = path.canonicalize().ok()?;
+    let top = PathBuf::from(git_ok(&canonical, &["rev-parse", "--show-toplevel"]).ok()?);
+    let top = top.canonicalize().ok()?;
+    (git_ok(&top, &["rev-parse", "--is-bare-repository"]).ok()? == "false" && head(&top).is_ok())
+        .then_some(top)
+}
+
+/// Options that keep a folder being made from running the repository's
+/// hooks or asking for credentials.
+const QUIET: [&str; 2] = ["-c", "core.hooksPath=/dev/null"];
+
+/// Make the chat's folder at `path` (absent, or an empty folder): a
+/// worktree of `source` at its current commit, detached, else a shallow
+/// clone of `url`, else an empty repository with `url` as its origin.
+pub(crate) fn create_folder(path: &Path, source: Option<&Path>, url: &str) -> Result<Made> {
+    ensure!(path.is_absolute(), "Choose an absolute folder.");
+    if path.exists() {
+        ensure!(
+            std::fs::read_dir(path)?.next().is_none(),
+            "{} already exists and isn't a folder Zuse made for this chat.",
+            path.display()
+        );
+        std::fs::remove_dir(path)?;
+    }
+    let parent = path.parent().context("Choose an absolute folder.")?;
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("Couldn't create {}.", parent.display()))?;
+    let target = path
+        .to_str()
+        .context("The folder's path isn't valid text.")?;
+    if let Some(source) = source {
+        let made = head(source).and_then(|base| {
+            let mut args = QUIET.to_vec();
+            args.extend(["worktree", "add", "--quiet", "--detach", target, &base]);
+            git_ok(source, &args)
+        });
+        match made {
+            Ok(_) if is_folder(path) => return Ok(Made::Worktree),
+            Ok(_) => tracing::info!("checkout sync: the worktree came out incomplete"),
+            Err(error) => tracing::info!(%error, "checkout sync: no worktree, cloning"),
+        }
+        let _ = remove_folder(path);
+    }
+    let mut args = QUIET.to_vec();
+    args.extend([
+        "clone",
+        "--quiet",
+        "--depth",
+        "1",
+        "--no-tags",
+        "--single-branch",
+        url,
+        target,
+    ]);
+    let mut clone = git(parent);
+    clone
+        .env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
+        .args(&args);
+    match run(clone) {
+        Ok(_) if is_folder(path) => return Ok(Made::Clone),
+        Ok(_) => tracing::info!("checkout sync: the clone came out empty"),
+        Err(error) => tracing::info!(%error, "checkout sync: clone failed, starting empty"),
+    }
+    if path.exists() {
+        std::fs::remove_dir_all(path)?;
+    }
+    git_ok(parent, &["init", "--quiet", target])?;
+    git_ok(path, &["remote", "add", "origin", url])?;
+    let tree = git_ok(path, &["write-tree"])?;
+    let mut commit_tree = git(path);
+    commit_tree
+        .env("GIT_AUTHOR_NAME", "Zuse")
+        .env("GIT_AUTHOR_EMAIL", "cloud-sync@zuse.invalid")
+        .env("GIT_COMMITTER_NAME", "Zuse")
+        .env("GIT_COMMITTER_EMAIL", "cloud-sync@zuse.invalid")
+        .args(["commit-tree", &tree, "-m", "Start of a cloud chat's folder"]);
+    let commit = run(commit_tree)?;
+    git_ok(
+        path,
+        &[
+            "update-ref",
+            "--no-deref",
+            "-m",
+            "Zuse: start a cloud chat's folder",
+            "HEAD",
+            &commit,
+        ],
+    )?;
+    Ok(Made::Empty)
+}
+
+/// Whether the folder holds nothing but the chat's files: on `checkpoint`,
+/// detached, with no tracked change and no file git would track. (Ignored
+/// files, such as build output, don't count.)
+pub(crate) fn untouched(dir: &Path, checkpoint: &str) -> bool {
+    holds(dir, checkpoint)
+        && has_tracked_changes(dir).is_ok_and(|changed| !changed)
+        && git_ok(
+            dir,
+            &[
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=normal",
+                "--ignore-submodules=all",
+            ],
+        )
+        .is_ok_and(|status| status.is_empty())
+}
+
+/// Remove a chat's folder: a worktree is removed from its clone too (the
+/// clone itself, its branches and its other worktrees stay). Refuses a
+/// folder that isn't a git folder (or empty).
+pub(crate) fn remove_folder(path: &Path) -> Result<()> {
+    if std::fs::symlink_metadata(path).is_err() {
+        return Ok(());
+    }
+    let dot_git = path.join(".git");
+    ensure!(
+        std::fs::symlink_metadata(path)?.is_dir()
+            && (dot_git.exists() || std::fs::read_dir(path)?.next().is_none()),
+        "{} isn't a folder Zuse made for a chat.",
+        path.display()
+    );
+    let common = dot_git
+        .is_file()
+        .then(|| {
+            git_ok(
+                path,
+                &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            )
+            .ok()
+        })
+        .flatten()
+        .map(PathBuf::from);
+    if let (Some(common), Some(target)) = (&common, path.to_str()) {
+        let _ = git_ok(
+            common,
+            &["worktree", "remove", "--force", "--force", target],
+        );
+    }
+    if path.exists() {
+        std::fs::remove_dir_all(path)
+            .with_context(|| format!("Couldn't delete {}.", path.display()))?;
+    }
+    if let Some(common) = &common {
+        let _ = git_ok(common, &["worktree", "prune"]);
+    }
+    // The repository's group folder goes with its last chat.
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::remove_dir(parent);
+    }
+    Ok(())
 }

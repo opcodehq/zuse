@@ -13,7 +13,6 @@
 
 - The desktop transcript keeps the live "Working for…" timer and loader below the reply for the whole turn instead of moving it above the reply; "Worked for…" still appears above the reply once the turn finishes.
 - The web app's working line rotates through a refreshed set of anime loading phrases.
-- Threads no longer move into the sidebar's Settled section on their own when their pull request merges; settling is always your choice.
 - Steering a running Devin turn sends your message straight into it instead of cancelling and re-prompting, and an idle Devin chat stays warm for 30 minutes so the next message skips a full conversation reload.
 
 ### Fixed

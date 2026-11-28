@@ -1784,6 +1784,9 @@ fn forward_deadline(method: &str) -> std::time::Duration {
             Duration::from_secs(15 * 60)
         }
         methods::REQUEST_PRIVATE_OPERATION => Duration::from_secs(11 * 60),
+        // The GitHub download may take its full 40 seconds, then the
+        // checkout's filesystem work and the relayed response follow.
+        methods::PROJECT_SKILL_CATALOG => Duration::from_secs(75),
         methods::INSTALL_HARNESS => Duration::from_secs(15 * 60),
         // A full fleet of enabled providers is checked two at a time; each
         // provider may need both a CLI probe and a network request.
@@ -1868,6 +1871,7 @@ fn forwardable(method: &str) -> bool {
             | methods::INSPECT_RECOVERY
             | methods::RESOLVE_RECOVERY
             | methods::LIST_SKILLS
+            | methods::PROJECT_SKILL_CATALOG
             | methods::LIST_COMMANDS
             | methods::QUEUE_COMMAND
             | methods::SUBMIT_PRIVATE_SECRET
@@ -3094,6 +3098,7 @@ impl EngineRpc {
             methods::CLOUD_CHECKOUT_SYNC_STATUS
                 | methods::CLOUD_CHECKOUT_SYNC_CONFIGURE
                 | methods::CLOUD_CHECKOUT_SYNC_RESUME
+                | methods::CLOUD_CHECKOUT_SYNC_DELETE_FOLDER
         ) {
             if !crate::cloud::beta_enabled() {
                 return Err(RpcError::Failed(crate::cloud::BETA_MESSAGE.into()));
@@ -4190,11 +4195,23 @@ impl EngineRpc {
                 .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&view)
             }
+            methods::PROJECT_SKILL_CATALOG => {
+                use zuse_protocol::skill_catalog::{CatalogAction, CatalogRequest};
+                let request: CatalogRequest = parse_params(params)?;
+                let _admission = if matches!(&request.action, CatalogAction::List) {
+                    None
+                } else {
+                    Some(self.sessions.filesystem_admission().await)
+                };
+                RpcReply::value(&self.workspace_files.project_skill_catalog(request).await?)
+            }
             methods::LIST_SKILLS => {
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase")]
                 struct Params {
                     harness: HarnessId,
+                    #[serde(default)]
+                    project_only: bool,
                     #[serde(default)]
                     chat_id: Option<String>,
                     #[serde(default)]
@@ -4203,6 +4220,9 @@ impl EngineRpc {
                     path: Option<String>,
                 }
                 let p: Params = parse_params(params)?;
+                if p.project_only && p.chat_id.is_none() && p.space_id.is_none() {
+                    return RpcReply::value(&Vec::<zuse_protocol::invocation::Skill>::new());
+                }
                 let root = self
                     .catalog_root(&FileSearchParams {
                         query: String::new(),
@@ -4211,11 +4231,16 @@ impl EngineRpc {
                         path: p.path,
                     })
                     .await?;
-                let skills = self
+                let mut skills = self
                     .registry
                     .discover_skills(p.harness, &root)
                     .await
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
+                if p.project_only
+                    && let Some(skills) = &mut skills
+                {
+                    skills.retain(|skill| std::path::Path::new(&skill.path).starts_with(&root));
+                }
                 RpcReply::value(&skills)
             }
             methods::LIST_COMMANDS => {

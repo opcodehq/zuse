@@ -14,8 +14,8 @@ mod transfer;
 #[cfg(test)]
 pub(crate) use transfer::receive_stream;
 pub use transfer::{
-    ReceivedFile, SnapshotRequest, SnapshotResult, receive_snapshot, snapshot_stream, sync_once,
-    sync_once_cancellable,
+    Interrupted, ReceivedFile, SnapshotRequest, SnapshotResult, UpdateRequired, receive_snapshot,
+    snapshot_stream, sync_once, sync_once_cancellable,
 };
 
 pub(super) fn prepare_target(path: &Path, workspace: &str) -> Result<()> {

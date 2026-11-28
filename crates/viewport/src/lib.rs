@@ -2236,4 +2236,5 @@ pub fn initialize(cx: &mut App) {
 }
 
 pub mod zapper_avatar;
+pub mod zapper_issue_timeline;
 pub mod zapper_issues;
