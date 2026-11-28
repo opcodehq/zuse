@@ -1,7 +1,7 @@
 // One animation loop for every mascot on the page. It only runs while a
 // mascot is on screen, the tab is visible and motion is allowed, and writes
-// an outline to the DOM only when it would draw differently.
-import { Animator, EYES_FOLLOW_MS, HEAD_FOLLOW_MS, lineFor, outline, stillPose, type Mood, type Point } from "./mascot-motion";
+// pixels to the DOM only when they would change.
+import { Animator, cellPath, EYES_FOLLOW_MS, gridFor, HEAD_FOLLOW_MS, raster, stillPose, type Mood, type Point } from "./mascot-motion";
 import type { Mascot } from "./mascots";
 
 export type Face = {
@@ -34,16 +34,12 @@ export const clock = () => (typeof performance === "undefined" ? Date.now() : pe
 export const running = () => frame !== null;
 export const liveCount = () => live.size;
 
-const px = (v: number, size: number) => Math.round(((v + 1) / 2) * size * 8) / 8;
-function path(points: Point[], size: number) {
-  return points.map(([x, y], i) => `${i ? "L" : "M"}${px(x, size)} ${px(y, size)}`).join("") + "Z";
-}
-
-/** Paint `face` at `ms`, touching the DOM only when the outline changed. */
+/** Paint `face` at `ms`, touching the DOM only when a pixel changed. */
 export function draw(face: Face, ms = clock()) {
   const pose = reducedMotion() ? stillPose(face.animator.mood) : face.animator.pose(face.mascot, ms, face.eyes, face.head);
-  const shape = outline(face.mascot, pose, lineFor(face.size));
-  const data = [path(shape.body, face.size), ...face.paths.slice(1).map((_, i) => (shape.eyes[i] ? path(shape.eyes[i]!, face.size) : ""))];
+  const grid = gridFor(face.size);
+  const cells = raster(face.mascot, grid, pose);
+  const data = [cellPath(cells, grid, "body"), cellPath(cells, grid, "eye")];
   const key = data.join("|");
   if (key === face.drawn) return false;
   face.drawn = key;

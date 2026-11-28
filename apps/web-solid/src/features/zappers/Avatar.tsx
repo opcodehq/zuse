@@ -4,7 +4,7 @@ import { state } from "@/core/store";
 import { deviceOnline } from "@/core/util";
 import { indicatorFor } from "@/features/sidebar/model";
 import { attach } from "./mascot-clock";
-import { hash, type Mood } from "./mascot-motion";
+import { gridFor, hash, type Mood } from "./mascot-motion";
 import { mascots, colors, EYE } from "./mascots";
 import { moodFor } from "./mood";
 
@@ -52,10 +52,9 @@ function Mascot(props: { avatar: ZapperAvatar; size: number; mood: Mood }) {
   });
   createEffect(() => [mascot(), props.size, props.mood] as const, ([next, size, mood]) => face?.update(next, size, mood));
   return (
-    <svg ref={svg} class="zp-avatar zp-mascot" data-mood={props.mood} viewBox={`0 0 ${props.size} ${props.size}`} width={props.size} height={props.size} aria-hidden="true">
+    <svg ref={svg} class="zp-avatar zp-mascot" data-mood={props.mood} viewBox={`0 0 ${gridFor(props.size)} ${gridFor(props.size)}`} width={props.size} height={props.size} shape-rendering="crispEdges" aria-hidden="true">
       <path ref={el => (paths[0] = el)} fill={color().body} />
       <path ref={el => (paths[1] = el)} fill={EYE} />
-      <path ref={el => (paths[2] = el)} fill={EYE} />
     </svg>
   );
 }
