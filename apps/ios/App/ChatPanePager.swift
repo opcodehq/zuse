@@ -106,8 +106,8 @@ struct ChatPanePager<Page: View>: View {
 
   /// Cards are about 60% of the page on a phone and nearer half on an iPad or a Mac window.
   static func overviewScale(_ size: CGSize) -> CGFloat {
-    guard size.width > 0 else { return 0.6 }
-    return min(0.62, max(0.36, 380 / size.width))
+    guard size.width > 0 else { return 0.72 }
+    return min(0.74, max(0.42, 460 / size.width))
   }
 
   // MARK: Cards
@@ -151,15 +151,19 @@ struct ChatPanePager<Page: View>: View {
     _ page: ChatPanePage, size: CGSize, scale: CGFloat, progress: CGFloat, overview: Bool
   ) -> some View {
     let picker = page == .selection
-    let shape = RoundedRectangle(cornerRadius: 34 * progress / scale, style: .continuous)
-    let border = Color.primary.opacity(picker ? 0 : 0.1 * progress)
+    let shape = RoundedRectangle(cornerRadius: 40 * progress / scale, style: .continuous)
+    let focused = page.id == store.deck(chatID).focus
+    let border =
+      picker
+      ? Color.clear
+      : focused ? AppTheme.accent.opacity(0.55 * progress) : Color.primary.opacity(0.08 * progress)
     let fill: AnyShapeStyle = picker ? AnyShapeStyle(.clear) : AnyShapeStyle(AppTheme.surface)
     let shadow = Color.black.opacity(picker ? 0 : 0.18 * progress)
     return self.page(page)
       .frame(width: size.width, height: size.height)
       .background(fill)
       .clipShape(shape)
-      .overlay { shape.strokeBorder(border, lineWidth: 1 / scale) }
+      .overlay { shape.strokeBorder(border, lineWidth: (focused ? 1.5 : 1) / scale) }
       // In the overview a card is a picture of its page; only the picker's tiles stay live.
       .allowsHitTesting(!overview || picker)
       .scaleEffect(scale)
@@ -172,12 +176,14 @@ struct ChatPanePager<Page: View>: View {
   ) -> some View {
     if let label = label(page), progress > 0.01 {
       let fade = progress * (1 - min(1, abs(lifted) / 200))
-      HStack(spacing: 6) {
-        AppIcon(name: label.symbol, size: 13, weight: .medium).foregroundStyle(.secondary)
-        Text(label.title).font(.system(size: 15, weight: .medium)).lineLimit(1)
+      HStack(spacing: 7) {
+        AppIcon(name: label.symbol, size: 12, weight: .semibold).foregroundStyle(AppTheme.accent)
+        Text(label.title).font(.system(size: 14, weight: .semibold)).lineLimit(1)
       }
+      .padding(.horizontal, 12).frame(height: 30)
+      .background(Color.primary.opacity(0.08), in: Capsule())
       .frame(maxWidth: size.width * scale)
-      .offset(y: size.height * scale / 2 + 22)
+      .offset(y: size.height * scale / 2 + 26)
       .opacity(fade)
       .allowsHitTesting(false)
     }

@@ -225,23 +225,34 @@ struct PaneTile: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       HStack(alignment: .top) {
-        AppIcon(name: symbol, size: 22, weight: .regular).foregroundStyle(.secondary)
+        AppIcon(name: symbol, size: 18, weight: .semibold).foregroundStyle(AppTheme.accent)
+          .frame(width: 40, height: 40)
+          .background(
+            AppTheme.accent.opacity(0.14),
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         Spacer(minLength: 4)
         if let count {
-          Text("\(count)").font(.system(size: 19)).monospacedDigit().foregroundStyle(.secondary)
+          Text("\(count)").font(.system(size: 13, weight: .semibold)).monospacedDigit()
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8).frame(minWidth: 24, minHeight: 22)
+            .background(Color.primary.opacity(0.08), in: Capsule())
         }
       }
-      Spacer(minLength: 24)
-      Text(title).font(.system(size: 21, weight: .medium)).foregroundStyle(.primary)
+      Spacer(minLength: 20)
+      Text(title).font(.system(size: 18, weight: .semibold)).foregroundStyle(.primary)
         .lineLimit(2).minimumScaleFactor(0.8).multilineTextAlignment(.leading)
     }
     .padding(18)
-    .frame(maxWidth: .infinity, minHeight: 170, alignment: .leading)
-    .aspectRatio(0.78, contentMode: .fit)
+    .frame(maxWidth: .infinity, minHeight: 140, alignment: .leading)
+    .aspectRatio(1, contentMode: .fit)
     .background(
-      Color.primary.opacity(0.075), in: RoundedRectangle(cornerRadius: 28, style: .continuous)
+      Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 24, style: .continuous)
     )
-    .contentShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+    .overlay(
+      RoundedRectangle(cornerRadius: 24, style: .continuous)
+        .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+    )
+    .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(count.map { "\(title), \($0)" } ?? title)
     .accessibilityAddTraits(.isButton)
@@ -285,8 +296,8 @@ struct PaneHeader<Actions: View>: View {
       .accessibilityLabel("Close \(pane.title)")
       .accessibilityIdentifier("pane-close")
     }
-    .padding(.leading, 18).padding(.trailing, 12)
-    .frame(height: 50)
+    .padding(.leading, 22).padding(.trailing, 16)
+    .frame(height: 56)
   }
 }
 
@@ -435,7 +446,7 @@ private struct PaneList<Row: View, Empty: View>: View {
   @ViewBuilder let empty: Empty
   var body: some View {
     VStack(spacing: 0) {
-      PaneSearchField(text: $query).padding(.horizontal, 16).padding(.bottom, 6)
+      PaneSearchField(text: $query).padding(.horizontal, 20).padding(.bottom, 10)
       if count == 0 {
         empty.frame(maxWidth: .infinity, maxHeight: .infinity)
       } else {
@@ -470,7 +481,7 @@ extension View {
   fileprivate func paneRow() -> some View {
     listRowBackground(Color.clear)
       .listRowSeparator(.hidden)
-      .listRowInsets(EdgeInsets(top: 2, leading: 18, bottom: 2, trailing: 18))
+      .listRowInsets(EdgeInsets(top: 4, leading: 22, bottom: 4, trailing: 22))
   }
 }
 

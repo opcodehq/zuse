@@ -123,7 +123,7 @@ struct FilesPaneView: View {
   var body: some View {
     VStack(spacing: 0) {
       PaneSearchField(text: $query, prompt: "Search files")
-        .padding(.horizontal, 16).padding(.bottom, 6)
+        .padding(.horizontal, 20).padding(.bottom, 10)
       Group {
         if let results = model.results {
           if results.isEmpty && !model.searching {
@@ -141,7 +141,7 @@ struct FilesPaneView: View {
               }
               .buttonStyle(.plain)
               .listRowBackground(Color.clear).listRowSeparator(.hidden)
-              .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+              .listRowInsets(EdgeInsets(top: 0, leading: 22, bottom: 0, trailing: 22))
             }
             .listStyle(.plain)
           }
@@ -169,7 +169,7 @@ struct FilesPaneView: View {
             }
             .buttonStyle(.plain)
             .listRowBackground(Color.clear).listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+            .listRowInsets(EdgeInsets(top: 0, leading: 22, bottom: 0, trailing: 22))
             .accessibilityIdentifier("file-row-\(row.entry.path)")
           }
           .listStyle(.plain)
@@ -218,7 +218,7 @@ private struct FileRowLabel: View {
       Spacer(minLength: 0)
     }
     .padding(.leading, CGFloat(depth) * 20)
-    .frame(minHeight: 40)
+    .frame(minHeight: 44)
     .contentShape(Rectangle())
     .accessibilityElement(children: .combine)
     .accessibilityValue(entry.isDirectory ? (expanded ? "Open" : "Closed") : "")
