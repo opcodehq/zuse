@@ -1,0 +1,96 @@
+---
+title: "Your subscription vs. API prices"
+description: "We priced a month of coding-agent work at the published per-token rates and set it next to the flat plans people already pay for. The gap is real, and it is the reason Zuse never sells you tokens."
+date: "2026-11-28"
+category: "Note"
+timeToRead: "8 min read"
+authorName: "Zuse (Beta) team"
+authorRole: "Product notes"
+authorAvatar: "/app-icon.png"
+labels:
+  [
+    { name: "Token maxing", hex: "#84CC16" },
+    { name: "Pricing", hex: "#F59E0B" },
+  ]
+---
+
+import { MetersFigure } from "@/components/blogs/subscription-vs-api/meters-figure";
+import { BreakEven, MachineClock, MonthCalculator, RateBoard, TokenHour } from "@/components/blogs/subscription-vs-api/widgets";
+
+We keep telling people the same thing: if you run coding agents all day, paying per token would cost you something like $7,000 a month, and the subscription you already have costs $200. It is a good line. We wanted to know whether it is true.
+
+So we did the arithmetic in the open. We took the per-token rates Zuse ships in its own usage dashboard, wrote down what an hour of agent work actually sends to a model, and priced a month of it. Then we set that next to the flat plans. Every assumption below is a control you can move, because ours are only one guess at how you work.
+
+<MetersFigure />
+
+The figure is the whole argument in one object. One bank of agents drives three meters. The taxi meter on the left clicks up with every token. The utility meter on the right is a flat rate: its needle is set when you subscribe and never moves. The small time clock in front stamps machine minutes, and only while a cloud computer is awake. That third meter is the only one we charge for.
+
+## What an hour of agent work weighs
+
+A coding agent doesn't send your question once. It works in a loop: read some files, call a tool, look at the result, decide what to do next. Every step is a new request, and every request carries the whole conversation so far, including the instructions, the files the agent has read and the output of every command it ran.
+
+That makes context the heavy part. An agent that makes 60 requests in an hour with 80,000 tokens of context each moves about 4.8 million tokens that hour, and writes only about 48,000 of its own.
+
+Most of those input tokens aren't new. Providers keep a cache of the prefix they saw a moment ago and bill a repeat read at a tenth of the input rate or less. In our own benchmark runs of coding agents on small tasks, between 87% and 97% of input tokens came back from that cache, depending on the agent. We use 96% everywhere below, and you can change it.
+
+<TokenHour />
+
+Here are our three paces, per agent. **Light** is an agent you check on now and then: 20 requests an hour with 50,000 tokens of context and 600 tokens out per request. **Steady** is an agent working through a task while you review: 60 requests, 80,000 context, 800 out. **Heavy** is a long autonomous run in a big repository: 120 requests, 120,000 context, 1,000 out.
+
+The breakdown surprised us. Even at a tenth of the price, cache reads are the largest single line in a steady hour on Opus 4.8: $2.30 of $4.58. Output, the part people usually worry about, is $1.20. Long context is what you pay for, and agents live in long context.
+
+## The taxi meter
+
+Per-token pricing is a taxi meter. It is fair in the sense that you pay for exactly what you use, and it punishes the way agents are meant to be used: long sessions, many of them, at the same time.
+
+Rates vary a lot from model to model, so the same hour of work costs very different amounts depending on who does it.
+
+<RateBoard />
+
+At the steady pace, an hour of Fable 5 is about $9, Opus 4.8 and GPT-5.5 are about $4.60 each, and the Kimi, GLM and Grok models come in under $2. These are the list prices in the price table Zuse bundles for its usage dashboard. If your agent runs a newer model than the table lists, its rate may be different.
+
+An hour is a small number. A month is not.
+
+## The flat-rate meter
+
+Now put the hours together. Pick the agents you run, how many of each, which model and which plan, then tell us how long they run.
+
+<MonthCalculator />
+
+With the defaults, two Opus agents at a steady pace for six hours a day, 22 days a month, come to about $1,210 at API rates. The Claude plan that covers them is $200.
+
+Then we checked the line we started with. **Load the heavy month** runs three Opus agents at the heavy pace for eight hours a day, 22 days. That comes to $6,944 at API rates, against the same $200 plan. So "about $7,000 against $200" holds, but only for that workload: three agents in parallel, all working day, on the most expensive pace. The same 528 agent-hours at the steady pace come to about $2,420. Most people's months sit somewhere between, and even the low end of that range is several times what the plan costs.
+
+## Where the flat rate stops paying
+
+A flat price is only a good deal if you use it. So the next question is how much agent work it takes before the subscription costs less than the tokens would.
+
+<BreakEven />
+
+The answer is "not much". At the steady pace, a $200 Claude plan pays for itself after about 44 agent-hours of Opus, roughly two hours a working day for one agent. At the heavy pace it takes about 15. A $20 plan breaks even after about four and a half hours of steady work. Past that point, every extra hour is work the subscription has already paid for.
+
+There is a catch, and we want to be plain about it. A subscription is not unlimited. Each plan has its own limits, often a five-hour window and a weekly allowance, and vendors usually describe those limits as multiples of a smaller plan, not as token counts. So we can't tell you how many of the dollars on the taxi meter a given plan will actually cover. A heavy month on one plan can hit its weekly limit. What we can say is that the meters are measuring the same work, and one of them stops at the price on the label.
+
+That catch is also why people end up with more than one subscription, and why Zuse runs agents from different vendors side by side in one workspace. When one plan's window runs out, another agent on another plan picks up the next task.
+
+## The time clock
+
+This is where Zuse comes in, and what we chose not to sell.
+
+We don't sell tokens. Agents in Zuse run on the accounts you connect: your Claude or ChatGPT plan, your Grok subscription, and now a Kimi Code membership or a GLM Coding Plan key through the Zuse agent. Their usage stays on those plans, and Zuse never charges for it. There is no token markup because there are no tokens on our bill.
+
+On your own computer, Zuse is free during the beta. What we charge for is the cloud, and only for the time a cloud computer is awake. That is the time clock in the figure.
+
+<MachineClock />
+
+We count it in machine minutes. A machine minute is one minute of a 1 vCPU, 4 GB computer, so the standard 4 vCPU, 16 GB cloud computer uses 4 machine minutes per awake minute, and the large 8 vCPU, 32 GB one uses 8. A computer sleeps after about ten quiet minutes and uses nothing while it sleeps. Every chat gets its own computer, or you can open more conversations on the same one.
+
+Cloud is $20 a month with 33,600 machine minutes, which is about 140 hours on a standard computer. Cloud Max is $50 with 84,000 minutes and large computers. Past the allowance, minutes cost the same as included ones, up to a cap you set, which starts at $25. The first week is $1, with a quarter of Cloud's minutes.
+
+Run the heavy month through it, with a ten-minute wind-down at the end of each day, and it stamps about 129,000 machine minutes across three computers, about $77. Put that next to the $200 plan and the month costs about $277 instead of $6,944.
+
+## What we built around it
+
+The meters explain the design. The taxi meter is the expensive one, so we built Zuse to stay off it: it runs the agents you already pay for, as many at once as your plans allow, each in its own worktree. The flat-rate meter is the one you already own, so the job is to use more of it. The time clock is ours, so it only runs while a computer is actually working for you.
+
+None of these numbers are exact. Your pace isn't our pace, models change, and vendors change their plans more often than we change ours. But the shape holds whichever way you move the sliders. An hour of agent work is millions of tokens, and a subscription is a fixed price for a lot of those hours. The cheapest way to run coding agents is the plan you already pay for, so we built Zuse around it.
