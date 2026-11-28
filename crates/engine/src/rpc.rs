@@ -3094,6 +3094,7 @@ impl EngineRpc {
             methods::CLOUD_CHECKOUT_SYNC_STATUS
                 | methods::CLOUD_CHECKOUT_SYNC_CONFIGURE
                 | methods::CLOUD_CHECKOUT_SYNC_RESUME
+                | methods::CLOUD_CHECKOUT_SYNC_DELETE_FOLDER
         ) {
             if !crate::cloud::beta_enabled() {
                 return Err(RpcError::Failed(crate::cloud::BETA_MESSAGE.into()));
