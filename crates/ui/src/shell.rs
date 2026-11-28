@@ -109,6 +109,8 @@ mod session_info;
 mod settings_cloud;
 pub(crate) use settings_cloud::SETUP_PROJECT_FLAG;
 mod side_chats;
+#[cfg(test)]
+mod sidebar_background_tests;
 mod sidebar_controls;
 mod sidebar_fit;
 mod sidebar_pins;
@@ -9690,6 +9692,9 @@ impl Shell {
         change_request: Option<zuse_protocol::ChangeRequestSummary>,
         harness: Option<zuse_protocol::HarnessId>,
         status: zuse_protocol::ChatIndicator,
+        // Background work the chat's agent left running beside its turn
+        // (subagents, shells, dev servers): a quieter mark than Working.
+        background: u32,
         selected: bool,
         archived: bool,
         preview: bool,
@@ -9833,6 +9838,28 @@ impl Shell {
         };
         let queued = queued && !undelivered;
         let working = status == zuse_protocol::ChatIndicator::Working && !queued && !undelivered;
+        // Background work the turn left running shows its own quieter mark
+        // once no turn runs or waits; a running turn's loader wins.
+        let background = (background > 0
+            && matches!(
+                status,
+                zuse_protocol::ChatIndicator::Idle | zuse_protocol::ChatIndicator::Completed
+            )
+            && !queued
+            && !undelivered)
+            .then_some(background);
+        let background_mark = |cx: &App| {
+            background.map(|count| {
+                crate::background_work::mark(
+                    format!("{row_id}-background"),
+                    SIDEBAR_WORKING_LOADER,
+                    SIDEBAR_WORKING_LOADER,
+                    count,
+                    theme,
+                    cx,
+                )
+            })
+        };
         let compact_status = (sidebar && !two_line).then(|| {
             let glyph = if working {
                 loaders::retro_loader(
@@ -9841,6 +9868,8 @@ impl Shell {
                     theme.loader_glyph(),
                 )
                 .into_any_element()
+            } else if let Some(mark) = background_mark(cx) {
+                mark
             } else if status == zuse_protocol::ChatIndicator::Completed && !queued && !undelivered {
                 icon(icons::CHECK)
                     .size(px(11.0))
@@ -9927,6 +9956,19 @@ impl Shell {
             } else {
                 div().into_any_element()
             }
+        } else if let Some(mark) = background_mark(cx) {
+            // Background work keeps the row's age and leads it with the
+            // quiet mark: activity, without claiming the turn still runs.
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(4.0))
+                .text_size(crate::typography::text_xs())
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .child(mark)
+                .child(time_ago.clone())
+                .into_any_element()
         } else {
             match status_label {
                 Some(label) => {
@@ -10407,6 +10449,9 @@ impl Shell {
                 (show_legend, two_line, diff_stat)
             {
                 sidebar_diff_stat(additions, deletions, 1.0, theme).into_any_element()
+            } else if let (false, true, Some(mark)) = (show_legend, two_line, background_mark(cx)) {
+                // Background work wears its quiet mark in the card's corner.
+                mark
             } else if let (false, true, Some(label)) = (show_legend, two_line, status_label) {
                 let mark: AnyElement = match label {
                     "Working" => loaders::retro_loader(
@@ -10489,7 +10534,12 @@ impl Shell {
             // place; idle rows under a project wear their branch, tinted by
             // the pull request's state.
             // Two-line cards show their only activity mark in the corner.
-            let status_mark = status_label.and(compact_status);
+            // Background work takes the same place, quieter.
+            let status_mark = if background.is_some() {
+                compact_status
+            } else {
+                status_label.and(compact_status)
+            };
             let (status_glyph, title_glyph) = if two_line || avatar_badge {
                 (None, None)
             } else if nested {
