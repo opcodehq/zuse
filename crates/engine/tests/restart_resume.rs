@@ -1589,6 +1589,7 @@ impl Harness for WarmUsageLimitedHarness {
                         AgentEvent::Steered {
                             assistant_message_id: None,
                             next_assistant_message_id: Some("warm-followup".into()),
+                            message_id: steer.message_id.clone(),
                         },
                         AgentEvent::UsageLimit { resets_at: None },
                         AgentEvent::Done {
