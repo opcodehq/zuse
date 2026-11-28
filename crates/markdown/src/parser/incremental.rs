@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use super::{Block, BlockTree, TopBlock, parse_at, parse_full};
+use super::{Block, BlockTree, TopBlock, options, parse_at, parse_at_with_refs, parse_full};
 
 /// Streaming parser: appends reparse only from the last stable top-level block
 /// boundary (snapped back to a line start so indentation context survives).
@@ -128,13 +128,12 @@ impl IncrementalParser {
             .map(|i| i + 1)
             .unwrap_or(0);
 
-        let tail = parse_at(&self.source[boundary..], boundary);
+        let mut tail = parse_at(&self.source[boundary..], boundary);
         self.last_parse_bytes = self.source.len() - boundary;
         self.tree.blocks.retain(|b| b.range.start < boundary);
         self.stable_prefix_blocks = self.tree.blocks.len();
-        for top in tail.blocks {
-            self.tree.blocks.push(top);
-        }
+        continue_footnotes(self.tree.blocks.last(), &mut tail.blocks);
+        self.tree.blocks.extend(tail.blocks);
         self.remend();
     }
 
@@ -164,7 +163,18 @@ impl IncrementalParser {
         // Count toward the O(tail) instrumentation — this is real parse work,
         // in the same bound as the reparse that produced the block.
         self.last_parse_bytes += mended.len();
-        let mut tail = parse_at(&mended, start).blocks;
+        let mut tail = if self.full_only {
+            // A reference in the display tail can resolve to an earlier definition.
+            self.last_parse_bytes += self.source.len();
+            let source = super::normalize_fence_tabs(&self.source);
+            let document = pulldown_cmark::Parser::new_ext(&source, options());
+            parse_at_with_refs(&mended, start, Some(document.reference_definitions()))
+        } else {
+            parse_at(&mended, start)
+        }
+        .blocks;
+        let previous = self.tree.blocks.iter().rev().nth(1);
+        continue_footnotes(previous, &mut tail);
         for top in &mut tail {
             let top = Arc::make_mut(top);
             // Display ranges point back into the unmended source; synthetic
@@ -175,11 +185,16 @@ impl IncrementalParser {
     }
 }
 
-/// Conservative detector for link-reference-definition lines
-/// (`[label]: destination`, up to 3 leading spaces).
+// Any definition contains this delimiter, including inside a quote or list.
 fn has_link_defs(text: &str) -> bool {
-    text.lines().any(|line| {
-        let trimmed = line.trim_start();
-        line.len() - trimmed.len() <= 3 && trimmed.starts_with('[') && trimmed.contains("]:")
-    })
+    text.contains("]:")
+}
+
+fn continue_footnotes(previous: Option<&Arc<TopBlock>>, tail: &mut [Arc<TopBlock>]) {
+    if previous.is_some_and(|top| matches!(top.block, Block::FootnoteDefinition { .. }))
+        && let Some(first) = tail.first_mut()
+        && let Block::FootnoteDefinition { section_start, .. } = &mut Arc::make_mut(first).block
+    {
+        *section_start = false;
+    }
 }

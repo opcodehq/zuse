@@ -1743,7 +1743,9 @@ impl Theme {
         theme.danger_strong = model_color(colors.danger);
         theme.code_text = theme.text_strong;
         theme.code_wash = theme.wash(0.10);
-        theme.syntax = SyntaxPalette::from_variant(variant, theme.syntax);
+        if !(is_curated_builtin && matches!(variant.id.as_str(), "zuse-dark" | "zuse-light")) {
+            theme.syntax = SyntaxPalette::from_variant(variant, theme.syntax);
+        }
         theme.diff_add = model_color(colors.diff_add);
         theme.diff_del = model_color(colors.diff_delete);
         theme.diff_hunk_bg = model_color(colors.diff_hunk);

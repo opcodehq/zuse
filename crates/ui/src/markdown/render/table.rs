@@ -6,10 +6,7 @@ use gpui::{AnyElement, FontWeight, Hsla, Pixels, SharedString, Window, div, prel
 use gpui_base::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow};
 
 use crate::{
-    markdown::{
-        link_presentation::slice_runs,
-        parser::{InlineRun, TableAlign},
-    },
+    markdown::parser::{InlineRun, TableAlign},
     theme::Theme,
 };
 
@@ -86,20 +83,38 @@ pub(super) fn table_columns_with_headings(
 /// the cell. GPUI uses ordinary spaces as word boundaries and keeps NBSP glued.
 fn heading_word_width(flat: &FlatText, font_size: Pixels, window: &Window) -> f32 {
     let text_system = window.text_system();
-    let mut at = 0;
-    flat.text
-        .split([' ', '\n', '\r'])
-        .filter_map(|word| {
-            let range = at..at + word.len();
-            at = range.end + 1;
-            (!word.is_empty()).then(|| {
-                let runs = slice_runs(&flat.runs, range);
-                let layout = text_system.shape_line(word.to_owned().into(), font_size, &runs, None);
-                (f32::from(layout.width()).ceil() + 1.0)
-                    .min(TABLE_MAX_HEADING_FLOOR - 2.0 * TABLE_CELL_PADDING)
-            })
-        })
-        .fold(0.0, f32::max)
+    let mut word_start = 0;
+    let mut run_start = 0;
+    let mut runs = flat.runs.iter().peekable();
+    let mut longest: f32 = 0.;
+    let mut word_runs = Vec::new();
+    for word in flat.text.split([' ', '\n', '\r']) {
+        let word_end = word_start + word.len();
+        if !word.is_empty() {
+            word_runs.clear();
+            while let Some(run) = runs.peek() {
+                let run_end = run_start + run.len;
+                let len = run_end
+                    .min(word_end)
+                    .saturating_sub(run_start.max(word_start));
+                if len > 0 {
+                    let mut run = (*run).clone();
+                    run.len = len;
+                    word_runs.push(run);
+                }
+                if run_end > word_end {
+                    break;
+                }
+                run_start = run_end;
+                runs.next();
+            }
+            let layout =
+                text_system.shape_line(word.to_owned().into(), font_size, &word_runs, None);
+            longest = longest.max(f32::from(layout.width()).ceil() + 1.0);
+        }
+        word_start = word_end + 1;
+    }
+    longest.min(TABLE_MAX_HEADING_FLOOR - 2.0 * TABLE_CELL_PADDING)
 }
 
 /// Element/cache discriminator for a table cell (row-major under the block ix).
@@ -311,10 +326,11 @@ pub(super) fn render_table(
 
     // The horizontal scroller — when the floors exceed the viewport the inner
     // block keeps `min_table_width` and this viewport scrolls it.
-    div()
+    let mut viewport = div()
         .id(table_id)
         .w_full()
         .overflow_x_scroll()
-        .child(inner.child(body))
-        .into_any_element()
+        .child(inner.child(body));
+    viewport.style().restrict_scroll_to_axis = Some(true);
+    viewport.into_any_element()
 }

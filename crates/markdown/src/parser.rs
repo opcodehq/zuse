@@ -12,15 +12,17 @@
 //! through both paths and assert equality.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 
 use pulldown_cmark::{
-    Alignment, BlockQuoteKind, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag,
+    Alignment, BlockQuoteKind, BrokenLink, CodeBlockKind, Event, HeadingLevel, Options, Parser,
+    RefDefs, Tag,
 };
 
 mod destinations;
+mod fences;
 mod html;
 mod incremental;
 mod user;
@@ -29,6 +31,7 @@ mod user;
 mod tests;
 
 use destinations::rewrite_absolute_destinations;
+use fences::{FenceTracker, normalize_fence_tabs};
 use html::{HtmlInline, HtmlToken, Sink, html_block_text, parse_html_tag};
 
 pub use incremental::IncrementalParser;
@@ -103,6 +106,8 @@ pub enum Block {
         /// `filename=...`), shown in place of the language label.
         title: Option<String>,
         code: String,
+        /// An explicit closing fence recognized by CommonMark.
+        fence_closed: bool,
     },
     BlockQuote {
         /// A GFM alert (`> [!NOTE]` …); `None` is an ordinary quote.
@@ -224,43 +229,70 @@ pub fn parse_full(source: &str) -> BlockTree {
 }
 
 fn parse_at(source: &str, offset: usize) -> BlockTree {
-    with_events(source, offset, |events| tree_from_events(&events, None))
+    parse_at_with_refs(source, offset, None)
+}
+
+fn parse_at_with_refs(source: &str, offset: usize, refs: Option<&RefDefs<'_>>) -> BlockTree {
+    with_events(source, offset, refs, |events, _, closed_fences| {
+        tree_from_events(&events, None, &closed_fences)
+    })
 }
 
 /// Run `build` over `source`'s pulldown events, with ranges in `source`.
 fn with_events<R>(
     source: &str,
     offset: usize,
-    build: impl FnOnce(Vec<(Event, Range<usize>)>) -> R,
+    refs: Option<&RefDefs<'_>>,
+    build: impl FnOnce(Vec<(Event, Range<usize>)>, &RefDefs<'_>, HashSet<usize>) -> R,
 ) -> R {
-    let (text, insertions) = match rewrite_absolute_destinations(source) {
+    let normalized = normalize_fence_tabs(source);
+    let (text, insertions) = match rewrite_absolute_destinations(&normalized) {
         Some((text, insertions)) => (Cow::Owned(text), Some(insertions)),
-        None => (Cow::Borrowed(source), None),
+        None => (normalized, None),
     };
-    let events: Vec<(Event, Range<usize>)> = Parser::new_ext(&text, options())
-        .into_offset_iter()
+    let lookup = |link: BrokenLink<'_>| {
+        let definition = refs?.get(&link.reference)?;
+        Some((
+            definition.dest.to_string().into(),
+            definition.title.as_deref().unwrap_or("").to_owned().into(),
+        ))
+    };
+    let mut parser =
+        Parser::new_with_broken_link_callback(&text, options(), Some(lookup)).into_offset_iter();
+    let mut closed_fences = HashSet::new();
+    let mut fences = FenceTracker::default();
+    let events: Vec<(Event, Range<usize>)> = parser
+        .by_ref()
         .map(|(event, range)| {
+            let closed = fences.closer(&text, &event, &range).is_some();
             // Inserted angle brackets shift every following offset; ranges
             // come from the rewritten text and must point into the original.
             let range = match &insertions {
                 Some(insertions) => insertions.original_range(range),
                 None => range,
             };
-            (event, range.start + offset..range.end + offset)
+            let range = range.start + offset..range.end + offset;
+            if closed {
+                closed_fences.insert(range.start);
+            }
+            (event, range)
         })
         .collect();
-    build(events)
+    build(events, parser.reference_definitions(), closed_fences)
 }
 
 fn tree_from_events(
     events: &[(Event, Range<usize>)],
     indents: Option<&HashMap<usize, String>>,
+    closed_fences: &HashSet<usize>,
 ) -> BlockTree {
     let mut cur = Cursor {
         events,
         ix: 0,
         indents,
+        closed_fences,
         details_closes: 0,
+        details_breaks: None,
     };
     let mut sink = Sink::default();
     while let Some((event, range)) = cur.peek() {
@@ -272,7 +304,10 @@ fn tree_from_events(
             }
             Event::Start(Tag::HtmlBlock) => {
                 let text = html_block_text(&mut cur);
-                sink.html(&text, range);
+                sink.html(&text);
+            }
+            Event::Start(Tag::Paragraph) if sink.in_details() => {
+                parse_disclosure_paragraph(&mut cur, &mut sink, range);
             }
             Event::Start(_) => {
                 let closes = cur.details_closes;
@@ -285,17 +320,13 @@ fn tree_from_events(
             _ => cur.bump(),
         }
     }
-    let mut blocks: Vec<Arc<TopBlock>> = Vec::new();
-    let mut in_footnotes = false;
-    for (mut block, range) in sink.finish() {
-        let footnote = matches!(block, Block::FootnoteDefinition { .. });
-        if let Block::FootnoteDefinition { section_start, .. } = &mut block {
-            *section_start = !in_footnotes;
-        }
-        in_footnotes = footnote;
-        blocks.push(Arc::new(TopBlock { range, block }));
+    BlockTree {
+        blocks: sink
+            .finish()
+            .into_iter()
+            .map(|(block, range)| Arc::new(TopBlock { range, block }))
+            .collect(),
     }
-    BlockTree { blocks }
 }
 
 struct Cursor<'a, 'e> {
@@ -304,9 +335,12 @@ struct Cursor<'a, 'e> {
     /// Display-only indentation shown before the inline event at an index
     /// ([`parse_user`] only).
     indents: Option<&'a HashMap<usize, String>>,
+    closed_fences: &'a HashSet<usize>,
     /// `</details>` tags seen in inline content so far; the enclosing
     /// [`Sink`] closes that many disclosures after the block.
     details_closes: usize,
+    /// Run positions and source spans of closes within a disclosure paragraph.
+    details_breaks: Option<Vec<(usize, Range<usize>)>>,
 }
 
 impl<'a, 'e> Cursor<'a, 'e> {
@@ -401,6 +435,7 @@ pub fn parse_fence_info(info: &str) -> (Option<String>, Option<String>) {
 /// Consume a `Start(tag)` and everything through its matching `End`, producing
 /// block(s). Unknown containers are transparent (children splice in).
 fn parse_started_block(cur: &mut Cursor) -> Vec<Block> {
+    let start = cur.peek().map_or(0, |(_, range)| range.start);
     let Some(Event::Start(tag)) = cur.next_event() else {
         return Vec::new();
     };
@@ -411,6 +446,7 @@ fn parse_started_block(cur: &mut Cursor) -> Vec<Block> {
                     language: Some("math".into()),
                     title: None,
                     code,
+                    fence_closed: false,
                 }];
             }
             vec![Block::Paragraph {
@@ -442,6 +478,7 @@ fn parse_started_block(cur: &mut Cursor) -> Vec<Block> {
                 language,
                 title,
                 code,
+                fence_closed: cur.closed_fences.contains(&start),
             }]
         }
         Tag::BlockQuote(kind) => vec![Block::BlockQuote {
@@ -490,7 +527,7 @@ fn parse_started_block(cur: &mut Cursor) -> Vec<Block> {
             cur.ix -= 1;
             let text = html_block_text(cur);
             let mut sink = Sink::default();
-            sink.html(&text, 0..0);
+            sink.html(&text);
             sink.finish().into_iter().map(|(block, _)| block).collect()
         }
         // Transparent containers.
@@ -541,7 +578,13 @@ fn parse_block_sequence(cur: &mut Cursor) -> Vec<Block> {
             Event::Start(Tag::HtmlBlock) => {
                 flush_paragraph(&mut sink, &mut inline_acc, cur, &mut closes);
                 let text = html_block_text(cur);
-                sink.html(&text, 0..0);
+                sink.html(&text);
+            }
+            Event::Start(Tag::Paragraph) if sink.in_details() => {
+                let range = cur.peek().unwrap().1.clone();
+                flush_paragraph(&mut sink, &mut inline_acc, cur, &mut closes);
+                parse_disclosure_paragraph(cur, &mut sink, range);
+                closes = cur.details_closes;
             }
             Event::Start(tag) if is_block_tag(tag) => {
                 flush_paragraph(&mut sink, &mut inline_acc, cur, &mut closes);
@@ -561,6 +604,63 @@ fn parse_block_sequence(cur: &mut Cursor) -> Vec<Block> {
     }
     flush_paragraph(&mut sink, &mut inline_acc, cur, &mut closes);
     sink.finish().into_iter().map(|(block, _)| block).collect()
+}
+
+/// An inline close ends the current disclosure before the remaining prose,
+/// including when it appears in the middle of an emphasized span.
+fn parse_disclosure_paragraph(cur: &mut Cursor, sink: &mut Sink, range: Range<usize>) {
+    cur.bump();
+    if let Some(code) = sole_display_math(cur) {
+        sink.block(
+            Block::CodeBlock {
+                language: Some("math".into()),
+                title: None,
+                code,
+                fence_closed: false,
+            },
+            range,
+        );
+        return;
+    }
+    cur.details_breaks = Some(Vec::new());
+    let mut runs = Vec::new();
+    parse_inline_runs(cur, &mut runs, &InlineStyle::default());
+    let breaks = cur.details_breaks.take().unwrap();
+    let mut runs = runs.into_iter();
+    let mut start = range.start;
+    let mut consumed = 0;
+    for (before, tag) in breaks {
+        if !sink.in_details() {
+            break;
+        }
+        let chunk = runs.by_ref().take(before - consumed).collect();
+        emit_disclosure_paragraph(
+            sink,
+            chunk,
+            start..tag.start,
+            consumed > 0 || start != range.start,
+        );
+        sink.close_inline(1, tag.end);
+        start = tag.end;
+        consumed = before;
+    }
+    emit_disclosure_paragraph(sink, runs.collect(), start..range.end, start != range.start);
+}
+
+fn emit_disclosure_paragraph(
+    sink: &mut Sink,
+    runs: Vec<InlineRun>,
+    range: Range<usize>,
+    after_close: bool,
+) {
+    let mut runs = autolink_runs(merge_runs(runs));
+    if after_close && let Some(first) = runs.first_mut() {
+        first.text = first.text.trim_start().to_owned();
+    }
+    runs.retain(|run| !run.text.is_empty());
+    if !runs.is_empty() {
+        sink.block(Block::Paragraph { runs }, range);
+    }
 }
 
 fn flush_paragraph(sink: &mut Sink, acc: &mut Vec<InlineRun>, cur: &Cursor, closes: &mut usize) {
@@ -624,18 +724,21 @@ fn parse_table_cells(cur: &mut Cursor) -> Vec<Vec<InlineRun>> {
 /// Parse inline events until the container's `End` (consumed).
 fn parse_inline_container(cur: &mut Cursor, style: &InlineStyle) -> Vec<InlineRun> {
     let mut runs = Vec::new();
+    parse_inline_runs(cur, &mut runs, style);
+    // Autolink after merging: pulldown can split the text of a URL into
+    // multiple events at characters that also act as Markdown delimiters.
+    autolink_runs(merge_runs(runs))
+}
+
+fn parse_inline_runs(cur: &mut Cursor, runs: &mut Vec<InlineRun>, style: &InlineStyle) {
     let mut html = HtmlInline::default();
     while let Some(event) = cur.peek_event() {
         if matches!(event, Event::End(_)) {
             cur.bump();
             break;
         }
-        parse_inline_event(cur, &mut runs, style, &mut html);
+        parse_inline_event(cur, runs, style, &mut html);
     }
-    // Autolink AFTER merging: pulldown splits Text events at would-be
-    // emphasis chars ("…/Foo_(bar)" arrives as three events), so scanning
-    // per-event would truncate URLs at every underscore.
-    autolink_runs(merge_runs(runs))
 }
 
 fn parse_inline_event(
@@ -679,6 +782,11 @@ fn parse_inline_event(
                 if matches!(&token, HtmlToken::Tag { name, closing: true, .. } if name == "details")
                 {
                     cur.details_closes += 1;
+                    if let Some(breaks) = &mut cur.details_breaks
+                        && let Some(range) = range
+                    {
+                        breaks.push((runs.len(), range));
+                    }
                 }
                 if let Some(text) = html.apply(&token, false) {
                     push(runs, text.into(), html.style(base));
@@ -717,10 +825,14 @@ fn parse_inline_event(
                 Tag::Image {
                     dest_url, title, ..
                 } => {
+                    let breaks = cur.details_breaks.take();
+                    let closes = cur.details_closes;
                     let alt: String = parse_inline_container(cur, style)
                         .iter()
                         .map(|run| run.text.as_str())
                         .collect();
+                    cur.details_breaks = breaks;
+                    cur.details_closes = closes;
                     inner.image = Some(InlineImage {
                         source: dest_url.to_string(),
                         alt: alt.clone(),
@@ -739,7 +851,7 @@ fn parse_inline_event(
                 }
                 _ => {}
             }
-            runs.extend(parse_inline_container(cur, &inner));
+            parse_inline_runs(cur, runs, &inner);
         }
         // `End` is consumed by the container loop; anything else is ignored.
         _ => {}

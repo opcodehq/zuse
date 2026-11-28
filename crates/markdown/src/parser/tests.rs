@@ -65,7 +65,8 @@ fn user_parse_never_makes_indented_code() {
         Block::CodeBlock {
             language: None,
             title: None,
-            code: "    fenced".into()
+            code: "    fenced".into(),
+            fence_closed: true,
         }
     );
     // The assistant still gets its indented code block.
@@ -641,6 +642,7 @@ fn code_block_keeps_fence_title() {
         language,
         title,
         code,
+        ..
     } = &tree.blocks[0].block
     else {
         panic!("expected code block");
@@ -717,4 +719,216 @@ mod image_model_tests {
         assert!(images[1].alt.is_empty());
         assert_eq!(runs.first().unwrap().text, "Before ");
     }
+}
+
+#[test]
+fn references_survive_sent_and_streaming_reparses() {
+    let sent = "[guide]: /tmp/guide.md\n\n    Read [guide] and [report](/tmp/My Folder/report.md)";
+    let tree = parse_user(sent);
+    let runs = paragraph(&tree.blocks[0].block);
+    assert!(
+        runs.iter()
+            .any(|run| run.style.link.as_deref() == Some("/tmp/guide.md"))
+    );
+    assert!(
+        runs.iter()
+            .any(|run| run.style.link.as_deref() == Some("/tmp/My Folder/report.md"))
+    );
+
+    let mut parser = IncrementalParser::new();
+    parser.set_text("[docs]: https://example.com\n\nRead [docs] and **open");
+    let tree = parser.display_tree();
+    let runs = paragraph(&tree.blocks[0].block);
+    assert!(
+        runs.iter()
+            .any(|run| run.style.link.as_deref() == Some("https://example.com"))
+    );
+    assert!(runs.iter().any(|run| run.style.bold && run.text == "open"));
+
+    parser.reset("See [docs].\n\nmiddle\n\nlast");
+    parser.append("\n\n> [docs]: https://example.com\n");
+    assert_eq!(*parser.tree(), parse_full(parser.source()));
+}
+
+#[test]
+fn details_preserve_code_and_original_marker_ranges() {
+    let source = "<details><summary>Example</summary>\n  - [ ] task\n  ~~~python\n  if True:\n      print('</details>')\n  ~~~\n</details>\nOutside\n";
+    let tree = parse_full(source);
+    assert_eq!(tree.len(), 2, "{tree:?}");
+    let Block::Details { children, .. } = &tree.blocks[0].block else {
+        panic!("expected disclosure: {tree:?}");
+    };
+    let Block::List { items, .. } = &children[0] else {
+        panic!("expected task list: {children:?}");
+    };
+    let marker = paragraph(&items[0][0])[0].style.task.as_ref().unwrap();
+    assert_eq!(marker.range.start, source.find("[ ]").unwrap());
+    assert_eq!(&source[marker.range.clone()], "[ ]");
+    let Block::CodeBlock { code, .. } = &children[1] else {
+        panic!("expected code: {children:?}");
+    };
+    assert_eq!(code, "if True:\n    print('</details>')");
+    assert_eq!(tree.blocks[1].range.start, source.find("Outside").unwrap());
+}
+
+#[test]
+fn disclosure_open_on_a_previous_block_closes_before_remaining_prose() {
+    let source = "<details><summary>Title</summary>\n\nBody </details> Outside\n";
+    let tree = parse_full(source);
+    assert_eq!(tree.len(), 2, "{tree:?}");
+    let Block::Details { children, .. } = &tree.blocks[0].block else {
+        panic!("expected disclosure");
+    };
+    assert_eq!(shown(paragraph(&children[0])).trim_end(), "Body");
+    assert_eq!(shown(paragraph(&tree.blocks[1].block)), "Outside");
+}
+
+#[test]
+fn html_anchor_uses_only_the_href_attribute() {
+    let tree = parse_full(
+        r#"<a data-href="https://wrong.test" title="href='https://wrong.test'" HREF='https://right.test'>Docs</a> <a data-href="https://wrong.test">Plain</a>"#,
+    );
+    let runs = paragraph(&tree.blocks[0].block);
+    assert!(
+        runs.iter().any(
+            |run| run.text == "Docs" && run.style.link.as_deref() == Some("https://right.test")
+        )
+    );
+    assert!(
+        runs.iter()
+            .any(|run| run.text.contains("Plain") && run.style.link.is_none())
+    );
+}
+
+#[test]
+fn destination_rewriting_preserves_literal_labels_and_container_code() {
+    let source = "\\[x](/tmp/a b.md) and ](/tmp/c d.md)\n\n> ~~~\n> [code](/tmp/a b.md)\n> ~~~\n>\n> [prose](/tmp/a b.md)\n";
+    let tree = parse_full(source);
+    assert_eq!(
+        shown(paragraph(&tree.blocks[0].block)),
+        "[x](/tmp/a b.md) and ](/tmp/c d.md)"
+    );
+    let Block::BlockQuote { children, .. } = &tree.blocks[1].block else {
+        panic!("expected quote");
+    };
+    assert!(matches!(&children[0], Block::CodeBlock { code, .. } if code == "[code](/tmp/a b.md)"));
+    assert_eq!(
+        paragraph(&children[1])[0].style.link.as_deref(),
+        Some("/tmp/a b.md")
+    );
+}
+
+#[test]
+fn nested_footnotes_share_a_section() {
+    let source = "<details>\n\n[^one]: First\n\n[^two]: Second\n\n</details>";
+    let tree = parse_full(source);
+    let Block::Details { children, .. } = &tree.blocks[0].block else {
+        panic!("expected disclosure");
+    };
+    assert!(matches!(
+        children[0],
+        Block::FootnoteDefinition {
+            section_start: true,
+            ..
+        }
+    ));
+    assert!(matches!(
+        children[1],
+        Block::FootnoteDefinition {
+            section_start: false,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn only_explicit_closers_mark_shell_fences_closed() {
+    let cases = [
+        ("~~~sh\npwd\n~~~", true),
+        ("~~~~sh\npwd\n~~~~~\t\n", true),
+        ("~~~~sh\npwd\n~~~", false),
+        ("~~~sh\npwd", false),
+        ("~~~sh\npwd\n    ~~~", false),
+        ("~~~sh\npwd\n```", false),
+        ("~~~sh", false),
+        ("~~~sh\n~~~", true),
+        ("> ~~~sh\n> pwd\n> ~~~", true),
+    ];
+    for (source, expected) in cases {
+        let tree = parse_full(source);
+        let mut block = &tree.blocks[0].block;
+        if let Block::BlockQuote { children, .. } = block {
+            block = &children[0];
+        }
+        let Block::CodeBlock { fence_closed, .. } = block else {
+            panic!("expected fence for {source:?}");
+        };
+        assert_eq!(*fence_closed, expected, "{source:?}");
+    }
+}
+
+#[test]
+fn tabs_in_non_closing_fence_lines_stay_literal() {
+    let tree = parse_full("~~~~sh\npwd\n~~~\t\n~~~~");
+    let Block::CodeBlock {
+        code, fence_closed, ..
+    } = &tree.blocks[0].block
+    else {
+        panic!("expected code");
+    };
+    assert_eq!(code, "pwd\n~~~\t");
+    assert!(*fence_closed);
+}
+
+#[test]
+fn raw_html_preserves_comment_context_link_values_and_code_spans() {
+    let tree = parse_full(
+        "<div><b>left<!-- note -->right</b> <a href=https://example.org/docs/>Docs</a> <a href='https://example.org/?x=1&amp;y=2'>Query</a></div>",
+    );
+    let runs = paragraph(&tree.blocks[0].block);
+    assert!(
+        runs.iter()
+            .any(|run| run.text == "leftright" && run.style.bold)
+    );
+    assert!(
+        runs.iter()
+            .any(|run| run.style.link.as_deref() == Some("https://example.org/docs/"))
+    );
+    assert!(
+        runs.iter()
+            .any(|run| run.style.link.as_deref() == Some("https://example.org/?x=1&y=2"))
+    );
+
+    let tree = parse_full("<details>\nUse `</details>` literally\n</details>\nOutside");
+    assert_eq!(tree.len(), 2, "{tree:?}");
+    let Block::Details { children, .. } = &tree.blocks[0].block else {
+        panic!("expected disclosure");
+    };
+    assert!(
+        paragraph(&children[0])
+            .iter()
+            .any(|run| run.text == "</details>" && run.style.code)
+    );
+    assert_eq!(shown(paragraph(&tree.blocks[1].block)), "Outside");
+}
+
+#[test]
+fn destination_rewrite_uses_markdown_fence_rules() {
+    let source = " ~~~\nexample\n~~~\t\n\n[x](/tmp/a b.md)\n\n```code``` [y](/tmp/c d.md)\n\n \t[code](/tmp/a b.md)\n\nsee ](note [z](/tmp/e f.md))";
+    let tree = parse_full(source);
+    let links: Vec<_> = tree
+        .blocks
+        .iter()
+        .filter_map(|top| {
+            if let Block::Paragraph { runs } = &top.block {
+                runs.iter().find_map(|run| run.style.link.as_deref())
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(links, ["/tmp/a b.md", "/tmp/c d.md", "/tmp/e f.md"]);
+    assert!(
+        matches!(&tree.blocks[3].block, Block::CodeBlock { code, .. } if code == "[code](/tmp/a b.md)")
+    );
 }

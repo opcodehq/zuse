@@ -707,6 +707,9 @@ impl TerminalPanel {
             ).await;
             let _ = this.update(cx, |panel, cx| {
                 panel.catalogs.remove(&chat);
+                let active = panel.chats.get(&chat)
+                    .filter(|tabs| !tabs.tabs.is_empty())
+                    .map(|tabs| tabs.active);
                 match result {
                     Ok(sessions) => {
                         for session in sessions {
@@ -721,7 +724,7 @@ impl TerminalPanel {
                             panel.attach_reserved_session(&chat, key, session, target.clone(), cx);
                         }
                         if panel.chats.get(&chat).is_none_or(|tabs| tabs.tabs.is_empty()) {
-                            panel.open_tab(chat, cx);
+                            panel.open_tab(chat.clone(), cx);
                         }
                     }
                     Err(error) => {
@@ -730,6 +733,11 @@ impl TerminalPanel {
                             "Could not load retained terminals: {error}. Close this tab and reopen the terminal panel to retry."
                         ), cx);
                     }
+                }
+                if let Some(active) = active
+                    && let Some(tabs) = panel.chats.get_mut(&chat)
+                {
+                    tabs.active = active;
                 }
                 cx.notify();
             });

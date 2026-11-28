@@ -239,6 +239,7 @@ fn context_menu_cancels_visible_and_pending_hover_tooltips() {
         cx.open_window(Default::default(), |_, cx| cx.new(|_| gpui::Empty))
             .unwrap();
         cx.spawn(async move |cx| {
+            let _settings_dir = dir;
             for visible in [true, false] {
                 for keyboard in [false, true] {
                     let activated = Rc::new(RefCell::new(Vec::new()));
@@ -533,6 +534,23 @@ fn rendered_truncation_resizes_and_selects_the_original_url() {
 #[cfg(unix)]
 #[gpui::test]
 fn file_link_menu_offers_local_rows_and_acts_on_the_absolute_path(cx: &mut gpui::TestAppContext) {
+    assert_local_file_link_menu("src/lib.rs", cx);
+}
+
+#[cfg(unix)]
+#[gpui::test]
+fn markdown_absolute_path_has_the_same_file_menu(cx: &mut gpui::TestAppContext) {
+    assert_local_file_link_menu("/repo dir/src/lib.rs", cx);
+}
+
+#[cfg(unix)]
+#[gpui::test]
+fn markdown_file_url_has_the_same_file_menu(cx: &mut gpui::TestAppContext) {
+    assert_local_file_link_menu("file:///repo dir/src/lib.rs", cx);
+}
+
+#[cfg(unix)]
+fn assert_local_file_link_menu(destination: &str, cx: &mut gpui::TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     cx.update(|cx| {
         cx.set_global(Theme::dark());
@@ -545,7 +563,7 @@ fn file_link_menu_offers_local_rows_and_acts_on_the_absolute_path(cx: &mut gpui:
     }]);
     let activated: Rc<RefCell<Vec<LinkActivation>>> = Rc::default();
     let (_view, cx) = cx.add_window_view(|_, _| Fixture {
-        markdown: "see [lib](src/lib.rs) here".into(),
+        markdown: format!("see [lib]({destination}) here").into(),
         width: 320.,
         activated: activated.clone(),
         source_local: false,
@@ -609,7 +627,7 @@ fn file_link_menu_offers_local_rows_and_acts_on_the_absolute_path(cx: &mut gpui:
     let activated = activated.borrow();
     let last = activated.last().expect("open in zuse activates the link");
     assert_eq!(last.action, LinkAction::Internal);
-    assert_eq!(last.target.original, "src/lib.rs");
+    assert_eq!(last.target.original, destination);
 }
 
 /// An absolute destination no root owns is still a file: its menu keeps

@@ -2017,6 +2017,33 @@ mod async_tests {
     use gpui::{AppContext, TestAppContext};
 
     #[gpui::test]
+    fn preview_loads_deeply_nested_markdown_disclosures(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_global(Theme::dark()));
+        let view = cx.new(|cx| MarkdownPreview::new("README.md".into(), Rc::new(|_, _| {}), cx));
+        let depth = 10_000;
+        let source = format!(
+            "{}\n~~~rust\nfn example() {{}}\n~~~\n{}",
+            "<details>".repeat(depth),
+            "</details>".repeat(depth)
+        );
+        view.update(cx, |view, cx| view.set_source(source, false, cx));
+        cx.run_until_parked();
+        cx.executor().advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.tree.len(), 1);
+            let mut block = &view.tree.blocks[0].block;
+            let mut rendered_depth = 0;
+            while let Block::Details { children, .. } = block {
+                rendered_depth += 1;
+                block = &children[0];
+            }
+            assert!((1..=32).contains(&rendered_depth));
+            assert_eq!(view.highlights.len(), 1);
+        });
+    }
+
+    #[gpui::test]
     fn edits_and_suspension_cancel_obsolete_preview_work(cx: &mut TestAppContext) {
         cx.update(|cx| cx.set_global(Theme::dark()));
         let view = cx.new(|cx| MarkdownPreview::new("README.md".into(), Rc::new(|_, _| {}), cx));

@@ -39,39 +39,75 @@ pub(super) fn rewrite_absolute_destinations(source: &str) -> Option<(String, Ins
     // it without copying, so the next splice stays contiguous.
     let mut copied = 0usize;
     let mut at = 0usize;
+    let mut protected_ranges = pulldown_cmark::Parser::new_ext(source, super::options())
+        .into_offset_iter()
+        .filter_map(|(event, range)| {
+            use pulldown_cmark::{Event, Tag};
+            matches!(
+                event,
+                Event::Start(
+                    Tag::CodeBlock(_) | Tag::HtmlBlock | Tag::Link { .. } | Tag::Image { .. }
+                ) | Event::Code(_)
+            )
+            .then_some((
+                range,
+                matches!(event, Event::Start(Tag::CodeBlock(_) | Tag::HtmlBlock)),
+            ))
+        })
+        .peekable();
+    let mut labels = 0;
     while at < bytes.len() {
-        if at == 0 || bytes[at - 1] == b'\n' {
-            if let Some(fence) = fence_open(&source[at..]) {
-                let end = skip_fenced_block(source, at, fence);
-                skip(&mut rewritten, source, &mut copied, end);
-                at = end;
-                continue;
+        while protected_ranges
+            .peek()
+            .is_some_and(|(range, _)| range.end <= at)
+        {
+            protected_ranges.next();
+        }
+        if protected_ranges
+            .peek()
+            .is_some_and(|(range, _)| range.start <= at)
+        {
+            let (range, block) = protected_ranges.next().unwrap();
+            let end = range.end;
+            if block {
+                labels = 0;
             }
-            if line_is_indented_code(&source[at..]) {
-                let end = line_end(source, at);
-                skip(&mut rewritten, source, &mut copied, end);
-                at = end;
-                continue;
-            }
+            skip(&mut rewritten, source, &mut copied, end);
+            at = end;
+            continue;
+        }
+        if bytes[at] == b'\n'
+            && bytes[..at]
+                .rsplit(|&b| b == b'\n')
+                .next()
+                .is_some_and(|line| line.iter().all(u8::is_ascii_whitespace))
+        {
+            labels = 0;
         }
         match bytes[at] {
-            b'`' if !is_escaped(bytes, at) => {
-                let run = backtick_run(bytes, at);
-                let end = match closing_backtick_run(bytes, at + run, run) {
-                    Some(close) => close + run,
-                    None => at + run,
-                };
-                skip(&mut rewritten, source, &mut copied, end);
-                at = end;
+            b'[' if !is_escaped(bytes, at) => {
+                labels += 1;
+                at += 1;
             }
-            b']' if bytes.get(at + 1) == Some(&b'(') && !is_escaped(bytes, at) => {
+            b']' if !is_escaped(bytes, at) => {
+                if labels == 0 {
+                    at += 1;
+                    continue;
+                }
+                labels -= 1;
+                if bytes.get(at + 1) != Some(&b'(') {
+                    at += 1;
+                    continue;
+                }
                 let open = at + 1;
                 let start = skip_destination_spaces(bytes, open + 1);
-                // Still pass over complete relative links so any literal link
-                // syntax in their titles is not rewritten as a workspace path.
-                // An immediate next candidate cannot be a path in our extension.
-                if unclosed.contains(&open) || bytes[start..].starts_with(b"](") {
-                    at += 2;
+                // Valid CommonMark links (including their titles and angle
+                // bracket destinations) are already protected by the parser.
+                let tail = &bytes[start..];
+                if !(tail.starts_with(b"/") || tail.starts_with(b"file://"))
+                    || unclosed.contains(&open)
+                {
+                    at += 1;
                     continue;
                 }
                 let Some((path_end, close)) = destination_ends(bytes, open, start, &mut unclosed)
@@ -99,8 +135,10 @@ pub(super) fn rewrite_absolute_destinations(source: &str) -> Option<(String, Ins
                     insertions.positions.push(out.len());
                     out.push('>');
                     copied = start + destination.len();
+                    at = close + 1;
+                } else {
+                    at += 1;
                 }
-                at = close + 1;
             }
             _ => at += 1,
         }
@@ -155,64 +193,8 @@ fn absolute_destination_with_spaces(destination: &str) -> bool {
     destination.starts_with("file://") || file_name.contains('.')
 }
 
-/// A fence opener: up to three leading spaces, then at least three backticks
-/// or tildes. Returns the fence byte and its run length.
-fn fence_open(line: &str) -> Option<(u8, usize)> {
-    let bytes = line.as_bytes();
-    let indent = bytes.iter().take_while(|&&byte| byte == b' ').count();
-    if indent > 3 {
-        return None;
-    }
-    let fence = *bytes.get(indent)?;
-    if !matches!(fence, b'`' | b'~') {
-        return None;
-    }
-    let len = bytes[indent..].iter().take_while(|&&b| b == fence).count();
-    (len >= 3).then_some((fence, len))
-}
-
-/// The byte after a fenced block's closing line (or the end of the source for
-/// a still-open fence, whose body is literal by definition).
-fn skip_fenced_block(source: &str, at: usize, (fence, len): (u8, usize)) -> usize {
-    let bytes = source.as_bytes();
-    let mut cursor = line_end(source, at);
-    while cursor < bytes.len() {
-        let end = line_end(source, cursor);
-        let line = &bytes[cursor..end];
-        let indent = line.iter().take_while(|&&byte| byte == b' ').count();
-        if indent <= 3 {
-            let run = line[indent..].iter().take_while(|&&b| b == fence).count();
-            let rest = line.get(indent + run..).unwrap_or_default();
-            if run >= len
-                && rest
-                    .iter()
-                    .all(|&byte| byte == b' ' || byte == b'\n' || byte == b'\r')
-            {
-                return end;
-            }
-        }
-        cursor = end;
-    }
-    bytes.len()
-}
-
-/// Whether a line opens indented code: four leading spaces or a tab. The
-/// rewrite only needs the conservative direction — a line it treats as code
-/// just keeps today's plain-text rendering.
-fn line_is_indented_code(line: &str) -> bool {
-    line.starts_with('\t') || line.as_bytes().iter().take_while(|&&b| b == b' ').count() >= 4
-}
-
-fn line_end(source: &str, at: usize) -> usize {
-    source.as_bytes()[at..]
-        .iter()
-        .position(|&byte| byte == b'\n')
-        .map(|run| at + run + 1)
-        .unwrap_or(source.len())
-}
-
 /// An odd number of backslashes before `at` escapes the byte there.
-fn is_escaped(bytes: &[u8], at: usize) -> bool {
+pub(super) fn is_escaped(bytes: &[u8], at: usize) -> bool {
     bytes[..at]
         .iter()
         .rev()
@@ -220,28 +202,6 @@ fn is_escaped(bytes: &[u8], at: usize) -> bool {
         .count()
         % 2
         == 1
-}
-
-fn backtick_run(bytes: &[u8], at: usize) -> usize {
-    bytes[at..].iter().take_while(|&&byte| byte == b'`').count()
-}
-
-/// The start of the next backtick run as long as `run`, if any: an inline
-/// code span either closes with its own run length or stays literal.
-fn closing_backtick_run(bytes: &[u8], from: usize, run: usize) -> Option<usize> {
-    let mut at = from;
-    while at < bytes.len() {
-        if bytes[at] == b'`' {
-            let len = backtick_run(bytes, at);
-            if len == run {
-                return Some(at);
-            }
-            at += len;
-        } else {
-            at += 1;
-        }
-    }
-    None
 }
 
 fn skip_destination_spaces(bytes: &[u8], at: usize) -> usize {
@@ -460,6 +420,8 @@ mod destination_rewrite_tests {
         let runs = paragraph("see [it](/tmp/Some Folder/it's here.txt) now");
         assert_eq!(text(&runs), "see it now");
         assert_eq!(link_of(&runs), Some("/tmp/Some Folder/it's here.txt"));
+        let nested = "[x](</tmp/a [y](/tmp/b c.md>)";
+        assert!(rewrite_absolute_destinations(nested).is_none());
     }
 
     #[test]

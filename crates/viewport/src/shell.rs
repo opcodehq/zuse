@@ -1635,11 +1635,12 @@ pub(super) fn markdown_block(block: &Block) -> AnyElement {
                     .child(code.clone()),
             )
             .into_any_element(),
-        Block::BlockQuote { children, .. } => column()
+        Block::BlockQuote { kind, children } => column()
             .border_l_2()
             .border_color(rgb(0x444444))
             .pl_3()
             .text_color(rgb(MUTED))
+            .when_some(*kind, |quote, kind| quote.child(label(kind.label())))
             .children(children.iter().map(markdown_block))
             .into_any_element(),
         Block::List {

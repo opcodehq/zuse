@@ -644,8 +644,17 @@ fn style_generation_change_invalidates_cached_runs() {
             favicons: Vec::new(),
         }),
     );
+    cache.code.insert(
+        ("row".into(), 0, 0),
+        Rc::new(super::CachedCode {
+            code_len: 6,
+            hl_key: (0, 0),
+            lines: vec![("cached".into(), Vec::new())],
+        }),
+    );
     cache.sync_generation(10);
     assert_eq!(cache.flats.len(), 1, "same style is idempotent");
+    assert_eq!(cache.code.len(), 1);
     cache.sync_generation(11);
     assert!(
         cache.flats.is_empty(),

@@ -1,10 +1,12 @@
 //! Decode and group the HTML constructs retained by the Markdown model.
 
-use std::{borrow::Cow, ops::Range, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, ops::Range, sync::Arc};
 
 use pulldown_cmark::Event;
 
-use super::{Block, Cursor, InlineRun, InlineStyle, autolink_runs, merge_runs, parse_at};
+use super::{
+    Block, Cursor, InlineRun, InlineStyle, autolink_runs, merge_runs, tree_from_events, with_events,
+};
 
 /// Collects a block sequence while grouping `<details>` regions. CommonMark
 /// splits `<details><summary>…</summary>` + markdown body + `</details>` into
@@ -16,6 +18,7 @@ use super::{Block, Cursor, InlineRun, InlineStyle, autolink_runs, merge_runs, pa
 pub(super) struct Sink {
     out: Vec<(Block, Range<usize>)>,
     frames: Vec<DetailsFrame>,
+    excess_depth: usize,
     end: usize,
 }
 
@@ -28,13 +31,24 @@ struct DetailsFrame {
 }
 
 impl Sink {
-    pub(super) fn block(&mut self, block: Block, range: Range<usize>) {
+    pub(super) fn block(&mut self, mut block: Block, range: Range<usize>) {
         self.end = self.end.max(range.end);
         self.finish_summary();
+        let previous = match self.frames.last() {
+            Some(frame) => frame.children.last(),
+            None => self.out.last().map(|(block, _)| block),
+        };
+        if let Block::FootnoteDefinition { section_start, .. } = &mut block {
+            *section_start = !matches!(previous, Some(Block::FootnoteDefinition { .. }));
+        }
         match self.frames.last_mut() {
             Some(frame) => frame.children.push(block),
             None => self.out.push((block, range)),
         }
+    }
+
+    pub(super) fn in_details(&self) -> bool {
+        !self.frames.is_empty()
     }
 
     fn finish_summary(&mut self) {
@@ -48,24 +62,47 @@ impl Sink {
     /// One raw HTML block: comments vanish, details/summary tags drive the
     /// frames, and everything else becomes styled text (or, inside a
     /// disclosure body, nested markdown).
-    pub(super) fn html(&mut self, text: &str, range: Range<usize>) {
-        self.end = self.end.max(range.end);
-        for segment in html_segments(text) {
+    pub(super) fn html(&mut self, html: &HtmlBlock) {
+        if !html.text.is_empty() {
+            self.end = self.end.max(html.original(0..html.text.len()).end);
+        }
+        for (segment, local) in html_segments(&html.text, self.frames.len() + self.excess_depth) {
+            let range = html.original(local.clone());
             match segment {
-                HtmlSegment::Raw(raw) => match self.frames.last_mut() {
-                    Some(frame) => match &mut frame.summary_raw {
-                        Some(summary) => summary.push_str(raw),
-                        None => frame.children.extend(parse_nested(raw)),
-                    },
-                    None => {
+                HtmlSegment::Raw => {
+                    let raw = &html.text[local.clone()];
+                    if let Some(summary) = self
+                        .frames
+                        .last_mut()
+                        .and_then(|frame| frame.summary_raw.as_mut())
+                    {
+                        summary.push_str(raw);
+                    } else if self.frames.is_empty() {
                         let runs = html_runs(raw);
                         if !runs.is_empty() {
-                            self.out.push((Block::Paragraph { runs }, range.clone()));
+                            let lead = raw.len() - raw.trim_start().len();
+                            self.block(
+                                Block::Paragraph { runs },
+                                html.original(local.start + lead..local.end),
+                            );
+                        }
+                    } else {
+                        for (block, range) in parse_nested(raw, |range| {
+                            html.original(local.start + range.start..local.start + range.end)
+                        }) {
+                            self.block(block, range);
                         }
                     }
-                },
+                }
                 HtmlSegment::DetailsOpen => {
                     self.finish_summary();
+                    // Keep rendering and drop recursion bounded even for a
+                    // document containing thousands of adjacent open tags.
+                    const MAX_DETAILS_DEPTH: usize = 32;
+                    if self.frames.len() >= MAX_DETAILS_DEPTH {
+                        self.excess_depth += 1;
+                        continue;
+                    }
                     self.frames.push(DetailsFrame {
                         start: range.start,
                         summary: None,
@@ -88,6 +125,10 @@ impl Sink {
     }
 
     fn close(&mut self, end: usize) {
+        if self.excess_depth > 0 {
+            self.excess_depth -= 1;
+            return;
+        }
         self.finish_summary();
         let Some(frame) = self.frames.pop() else {
             return;
@@ -111,6 +152,7 @@ impl Sink {
     }
 
     pub(super) fn finish(mut self) -> Vec<(Block, Range<usize>)> {
+        self.excess_depth = 0;
         let end = self.end;
         while !self.frames.is_empty() {
             self.close(end);
@@ -119,36 +161,91 @@ impl Sink {
     }
 }
 
-/// The raw text of an HTML block (consumes through its `End`).
-pub(super) fn html_block_text(cur: &mut Cursor) -> String {
-    cur.bump();
-    let mut text = String::new();
-    loop {
-        match cur.next_event() {
-            Some(Event::Html(t)) | Some(Event::Text(t)) => text.push_str(&t),
-            Some(Event::End(_)) | None => break,
-            Some(_) => {}
-        }
-    }
-    text
+/// Pulldown emits source slices. Container prefixes can leave gaps between
+/// consecutive slices in the original document.
+#[derive(Default)]
+pub(super) struct HtmlBlock {
+    text: String,
+    offsets: Vec<(usize, usize)>,
 }
 
-/// Markdown inside a disclosure body that arrived inside an HTML block.
-/// Lines are dedented first: HTML indentation is layout, never code.
-fn parse_nested(raw: &str) -> Vec<Block> {
-    if raw.trim().is_empty() {
-        return Vec::new();
+impl HtmlBlock {
+    fn original(&self, range: Range<usize>) -> Range<usize> {
+        let byte = |at| {
+            let ix = self.offsets.partition_point(|&(from, _)| from <= at) - 1;
+            let (from, original) = self.offsets[ix];
+            original + at - from
+        };
+        let start = byte(range.start);
+        let end = if range.is_empty() {
+            start
+        } else {
+            byte(range.end - 1) + 1
+        };
+        start..end
     }
-    let dedented: String = raw
+}
+
+pub(super) fn html_block_text(cur: &mut Cursor) -> HtmlBlock {
+    cur.bump();
+    let mut block = HtmlBlock::default();
+    while let Some((event, range)) = cur.peek() {
+        match event {
+            Event::Html(text) | Event::Text(text) if !text.is_empty() => {
+                block.offsets.push((block.text.len(), range.start));
+                block.text.push_str(text);
+            }
+            Event::End(_) => {
+                cur.bump();
+                break;
+            }
+            _ => {}
+        }
+        cur.bump();
+    }
+    block
+}
+
+/// Strip common layout indentation, preserving relative indentation and
+/// mapping nested events back into the original document.
+fn parse_nested(
+    raw: &str,
+    original: impl Fn(Range<usize>) -> Range<usize>,
+) -> Vec<(Block, Range<usize>)> {
+    let indent = |line: &str| line.len() - line.trim_start_matches([' ', '\t']).len();
+    let Some(common) = raw
         .lines()
-        .map(str::trim_start)
-        .collect::<Vec<_>>()
-        .join("\n");
-    parse_at(&dedented, 0)
-        .blocks
-        .into_iter()
-        .map(|top| Arc::try_unwrap(top).map_or_else(|top| top.block.clone(), |top| top.block))
-        .collect()
+        .filter(|line| !line.trim().is_empty())
+        .map(indent)
+        .min()
+    else {
+        return Vec::new();
+    };
+    let mut dedented = HtmlBlock::default();
+    let mut at = 0;
+    for line in raw.split_inclusive('\n') {
+        let skip = common.min(indent(line));
+        dedented.offsets.push((dedented.text.len(), at + skip));
+        dedented.text.push_str(&line[skip..]);
+        at += line.len();
+    }
+    with_events(&dedented.text, 0, None, |mut events, _, fences| {
+        for (_, range) in &mut events {
+            *range = original(dedented.original(range.clone()));
+        }
+        let fences = fences
+            .into_iter()
+            .map(|at| original(dedented.original(at..at)).start)
+            .collect();
+        tree_from_events(&events, None, &fences)
+            .blocks
+            .into_iter()
+            .map(|top| {
+                let top = Arc::unwrap_or_clone(top);
+                (top.block, top.range)
+            })
+            .collect()
+    })
 }
 
 /// A `<summary>`'s label: its text parsed as inline markdown (agents write
@@ -179,7 +276,7 @@ fn summary_runs(raw: &str) -> Vec<InlineRun> {
             Block::Table { .. } | Block::Rule => {}
         }
     }
-    for block in parse_nested(&raw.replace('\n', " ")) {
+    for (block, _) in parse_nested(&raw.replace('\n', " "), |range| range) {
         collect(&block, &mut runs);
     }
     // Hard breaks would stack the label; a summary is one line.
@@ -191,48 +288,125 @@ fn summary_runs(raw: &str) -> Vec<InlineRun> {
     merge_runs(runs)
 }
 
-enum HtmlSegment<'a> {
-    Raw(&'a str),
+enum HtmlSegment {
+    Raw,
     DetailsOpen,
     DetailsClose,
     SummaryOpen,
     SummaryClose,
 }
 
-/// Split an HTML block into disclosure tags and the raw text between them.
-/// Comments (closed or still streaming) are dropped here.
-fn html_segments(text: &str) -> Vec<HtmlSegment<'_>> {
+/// Index each backtick run's next equal-length run. HTML tags and fences
+/// take precedence when the scanner reaches their opening byte.
+fn code_span_ends(text: &str) -> HashMap<usize, usize> {
+    let bytes = text.as_bytes();
+    let mut previous = HashMap::new();
+    let mut ends = HashMap::new();
+    let mut at = 0;
+    while let Some(next) = bytes[at..].iter().position(|&byte| byte == b'`') {
+        let start = at + next;
+        let len = bytes[start..]
+            .iter()
+            .take_while(|&&byte| byte == b'`')
+            .count();
+        at = start + len;
+        if let Some(open) = previous.insert(len, start) {
+            ends.insert(open, at);
+        }
+    }
+    ends
+}
+
+/// Split raw HTML at disclosure tags, skipping comments and keeping tags
+/// inside Markdown fences literal.
+fn html_segments(text: &str, mut details_depth: usize) -> Vec<(HtmlSegment, Range<usize>)> {
     let mut segments = Vec::new();
     let mut raw_start = 0;
+    let mut line_end = 0;
     let mut at = 0;
-    while let Some(rel) = text[at..].find('<') {
+    let mut fence = None;
+    let mut spans = None;
+    let last_tag_end = text.rfind('>');
+    while at < text.len() {
+        if at >= line_end {
+            line_end = text[at..].find('\n').map_or(text.len(), |pos| at + pos + 1);
+            if details_depth > 0 && (at == 0 || text.as_bytes()[at - 1] == b'\n') {
+                let line = text[at..line_end].trim_start_matches([' ', '\t']);
+                let marker = line.as_bytes().first().copied().unwrap_or_default();
+                let len = line.bytes().take_while(|&byte| byte == marker).count();
+                if let Some((open, count)) = fence {
+                    if marker == open && len >= count && line[len..].trim().is_empty() {
+                        fence = None;
+                    }
+                    at = line_end;
+                    continue;
+                }
+                if matches!(marker, b'`' | b'~')
+                    && len >= 3
+                    && (marker != b'`' || !line[len..].contains('`'))
+                {
+                    fence = Some((marker, len));
+                    at = line_end;
+                    continue;
+                }
+            }
+        }
+        let Some(rel) = text[at..line_end].find(['<', '`']) else {
+            at = line_end;
+            continue;
+        };
         let open = at + rel;
+        if text.as_bytes()[open] == b'`' {
+            let len = text.as_bytes()[open..]
+                .iter()
+                .take_while(|&&byte| byte == b'`')
+                .count();
+            if details_depth > 0
+                && !super::destinations::is_escaped(text.as_bytes(), open)
+                && let Some(&end) = spans.get_or_insert_with(|| code_span_ends(text)).get(&open)
+            {
+                at = end;
+            } else {
+                at = open + len;
+            }
+            continue;
+        }
+        if last_tag_end.is_none_or(|end| open > end) && !text[open..].starts_with("<!--") {
+            at = open + 1;
+            continue;
+        }
         let Some((token, len)) = parse_html_tag(&text[open..]) else {
             at = open + 1;
             continue;
         };
         let segment = match &token {
-            HtmlToken::Comment => Some(None),
+            HtmlToken::Comment => None,
             HtmlToken::Tag { name, closing, .. } => match (name.as_str(), closing) {
-                ("details", false) => Some(Some(HtmlSegment::DetailsOpen)),
-                ("details", true) => Some(Some(HtmlSegment::DetailsClose)),
-                ("summary", false) => Some(Some(HtmlSegment::SummaryOpen)),
-                ("summary", true) => Some(Some(HtmlSegment::SummaryClose)),
+                ("details", false) => {
+                    details_depth += 1;
+                    Some(HtmlSegment::DetailsOpen)
+                }
+                ("details", true) => {
+                    details_depth = details_depth.saturating_sub(1);
+                    Some(HtmlSegment::DetailsClose)
+                }
+                ("summary", false) => Some(HtmlSegment::SummaryOpen),
+                ("summary", true) => Some(HtmlSegment::SummaryClose),
                 _ => None,
             },
             HtmlToken::Other => None,
         };
         if let Some(segment) = segment {
             if raw_start < open {
-                segments.push(HtmlSegment::Raw(&text[raw_start..open]));
+                segments.push((HtmlSegment::Raw, raw_start..open));
             }
-            segments.extend(segment);
+            segments.push((segment, open..open + len));
             raw_start = open + len;
         }
         at = open + len;
     }
     if raw_start < text.len() {
-        segments.push(HtmlSegment::Raw(&text[raw_start..]));
+        segments.push((HtmlSegment::Raw, raw_start..text.len()));
     }
     segments
 }
@@ -286,14 +460,16 @@ pub(super) fn parse_html_tag(text: &str) -> Option<(HtmlToken, usize)> {
             (None, b'"' | b'\'') => quote = Some(byte),
             (None, b'>') => {
                 let attrs = text[attrs_start..at].trim();
-                let self_closing = attrs.ends_with('/');
-                let attrs = attrs.trim_end_matches('/').trim().to_string();
+                let self_closing = attrs.ends_with('/')
+                    && html_attributes(attrs).last().is_some_and(|(_, value)| {
+                        value.is_none_or(|value| !value.ends_with('/') || !attrs.ends_with(value))
+                    });
                 return Some((
                     HtmlToken::Tag {
                         name,
                         closing,
                         self_closing,
-                        attrs,
+                        attrs: attrs.to_owned(),
                     },
                     at + 1,
                 ));
@@ -405,23 +581,48 @@ impl HtmlInline {
     }
 }
 
-/// The `href` of an anchor tag when it is a web or mail link.
-fn html_href(attrs: &str) -> Option<String> {
-    let lower = attrs.to_ascii_lowercase();
-    let at = lower.find("href")?;
-    let rest = attrs[at + 4..].trim_start().strip_prefix('=')?.trim_start();
-    let value = match rest.as_bytes().first()? {
-        quote @ (b'"' | b'\'') => {
-            let inner = &rest[1..];
-            &inner[..inner.find(*quote as char)?]
+fn html_attributes(mut rest: &str) -> impl Iterator<Item = (&str, Option<&str>)> {
+    std::iter::from_fn(move || {
+        rest = rest.trim_start();
+        if rest.is_empty() {
+            return None;
         }
-        _ => rest.split_whitespace().next()?,
-    };
-    let scheme = value.get(..8).unwrap_or(value).to_ascii_lowercase();
+        let end = rest
+            .find(|c: char| c.is_whitespace() || c == '=')
+            .unwrap_or(rest.len());
+        let name = &rest[..end];
+        rest = rest[end..].trim_start();
+        let Some(after) = rest.strip_prefix('=') else {
+            return Some((name, None));
+        };
+        rest = after.trim_start();
+        let (value, next) = match rest.as_bytes().first() {
+            Some(quote @ (b'"' | b'\'')) => {
+                let inner = &rest[1..];
+                let end = inner.find(*quote as char)?;
+                (&inner[..end], &inner[end + 1..])
+            }
+            _ => {
+                let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+                (&rest[..end], &rest[end..])
+            }
+        };
+        rest = next;
+        Some((name, Some(value)))
+    })
+}
+
+/// Links are decoded before validating the scheme.
+fn html_href(attrs: &str) -> Option<String> {
+    let value = html_attributes(attrs)
+        .find(|(name, _)| name.eq_ignore_ascii_case("href"))?
+        .1?;
+    let value = decode_entities(value);
+    let scheme = value.get(..8).unwrap_or(&value).to_ascii_lowercase();
     (scheme.starts_with("https://")
         || scheme.starts_with("http://")
         || scheme.starts_with("mailto:"))
-    .then(|| value.to_string())
+    .then(|| value.into_owned())
 }
 
 /// Styled text for a raw HTML block outside any disclosure: tags become
@@ -457,8 +658,13 @@ fn html_runs(raw: &str) -> Vec<InlineRun> {
     };
     let mut at = 0;
     let mut text_start = 0;
+    let last_tag_end = raw.rfind('>');
     while let Some(rel) = raw[at..].find('<') {
         let open = at + rel;
+        if last_tag_end.is_none_or(|end| open > end) && !raw[open..].starts_with("<!--") {
+            at = open + 1;
+            continue;
+        }
         let Some((token, len)) = parse_html_tag(&raw[open..]) else {
             at = open + 1;
             continue;

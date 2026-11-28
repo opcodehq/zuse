@@ -5766,54 +5766,54 @@ impl gpui::Element for ComposerTextElement {
             });
 
         let paint_bounds = self.input.read(cx).paint_bounds(bounds);
+        let theme = Theme::of(cx).clone();
+        // Fenced code: one rounded block per fence, the transcript's
+        // code-block frame, beneath chips, selection and text. It
+        // bleeds a little past the text box so glyphs are not flush
+        // with its edge (the surrounding mask still clips it).
+        if !fence_spans.is_empty() {
+            let mask = Bounds::new(
+                point(
+                    paint_bounds.left() - px(CODE_FENCE_PAD_X),
+                    paint_bounds.top(),
+                ),
+                size(
+                    paint_bounds.size.width + px(2.0 * CODE_FENCE_PAD_X),
+                    paint_bounds.size.height,
+                ),
+            );
+            window.with_content_mask(Some(gpui::ContentMask { bounds: mask }), |window| {
+                let content_top = bounds.top() - px(scroll);
+                for (top, bottom) in &fence_spans {
+                    let block = Bounds::new(
+                        point(
+                            bounds.left() - px(CODE_FENCE_PAD_X),
+                            content_top + *top - px(CODE_FENCE_PAD_Y),
+                        ),
+                        size(
+                            bounds.size.width + px(2.0 * CODE_FENCE_PAD_X),
+                            *bottom - *top + px(2.0 * CODE_FENCE_PAD_Y),
+                        ),
+                    );
+                    if block.bottom() < mask.top() || block.top() > mask.bottom() {
+                        continue;
+                    }
+                    window.paint_quad(gpui::quad(
+                        block,
+                        px(CODE_FENCE_RADIUS),
+                        theme.ink(0.035),
+                        px(1.0),
+                        theme.border,
+                        gpui::BorderStyle::Solid,
+                    ));
+                }
+            });
+        }
         window.with_content_mask(
             Some(gpui::ContentMask {
                 bounds: paint_bounds,
             }),
             |window| {
-                let theme = Theme::of(cx).clone();
-                // Fenced code: one rounded block per fence, the transcript's
-                // code-block frame, beneath chips, selection and text. It
-                // bleeds a little past the text box so glyphs are not flush
-                // with its edge (the surrounding mask still clips it).
-                if !fence_spans.is_empty() {
-                    let mask = Bounds::new(
-                        point(
-                            paint_bounds.left() - px(CODE_FENCE_PAD_X),
-                            paint_bounds.top(),
-                        ),
-                        size(
-                            paint_bounds.size.width + px(2.0 * CODE_FENCE_PAD_X),
-                            paint_bounds.size.height,
-                        ),
-                    );
-                    window.with_content_mask(Some(gpui::ContentMask { bounds: mask }), |window| {
-                        let content_top = bounds.top() - px(scroll);
-                        for (top, bottom) in &fence_spans {
-                            let block = Bounds::new(
-                                point(
-                                    bounds.left() - px(CODE_FENCE_PAD_X),
-                                    content_top + *top - px(CODE_FENCE_PAD_Y),
-                                ),
-                                size(
-                                    bounds.size.width + px(2.0 * CODE_FENCE_PAD_X),
-                                    *bottom - *top + px(2.0 * CODE_FENCE_PAD_Y),
-                                ),
-                            );
-                            if block.bottom() < mask.top() || block.top() > mask.bottom() {
-                                continue;
-                            }
-                            window.paint_quad(gpui::quad(
-                                block,
-                                px(CODE_FENCE_RADIUS),
-                                theme.ink(0.035),
-                                px(1.0),
-                                theme.border,
-                                gpui::BorderStyle::Solid,
-                            ));
-                        }
-                    });
-                }
                 for (chip, kind, icon) in prepaint.mention_chips.drain(..) {
                     paint_chip(window, chip, kind, icon.as_ref(), &theme, cx);
                 }

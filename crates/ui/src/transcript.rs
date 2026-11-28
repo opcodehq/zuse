@@ -1455,10 +1455,33 @@ fn parse_user_message(text: &str, mentions: &[crate::composer::SentMentionSpan])
     if mentions.is_empty() {
         return parse_user(text);
     }
-    let mut prefix = '\u{e000}'.to_string();
-    while text.contains(&prefix) {
-        prefix.push('\u{e000}');
+    // A marker must be absent from both the source and any character
+    // reference the Markdown parser can decode. Then only the masking pass
+    // can introduce it, regardless of how the parser splits or joins runs.
+    let private = |ch| matches!(ch, '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}');
+    let mut used: HashSet<_> = text.chars().filter(|&ch| private(ch)).collect();
+    for (at, _) in text.match_indices("&#") {
+        let digits = &text[at + 2..];
+        let (digits, radix, limit) = match digits.as_bytes().first() {
+            Some(b'x' | b'X') => (&digits[1..], 16, 7),
+            _ => (digits, 10, 8),
+        };
+        if let Some(end) = digits.bytes().take(limit + 1).position(|byte| byte == b';')
+            && let Ok(value) = u32::from_str_radix(&digits[..end], radix)
+            && let Some(ch) = char::from_u32(value)
+            && private(ch)
+        {
+            used.insert(ch);
+        }
     }
+    let Some(marker) = ('\u{e000}'..='\u{f8ff}')
+        .chain('\u{f0000}'..='\u{ffffd}')
+        .chain('\u{100000}'..='\u{10fffd}')
+        .find(|ch| !used.contains(ch))
+    else {
+        return parse_user(text);
+    };
+    let prefix = marker.to_string();
     let mut masked = String::with_capacity(text.len());
     let mut at = 0;
     for (index, mention) in mentions.iter().enumerate() {
@@ -3196,10 +3219,10 @@ impl HighlightStore {
         if let Some(entry) = self.entries.get(&slot_key)
             && entry.key == document_key
         {
-            let document = entry.document.as_ref()?;
-            if let Some(document) = document.upgrade() {
-                return Some(document);
-            }
+            // Pending and previously completed slots both stay settled
+            // for this source. An eviction must not create another async
+            // completion and redraw for the same fence.
+            return entry.document.as_ref().and_then(Weak::upgrade);
         }
         if let Some(document) = self.cache.get(&document_key) {
             self.entries.insert(
@@ -10031,7 +10054,7 @@ impl Transcript {
                     link,
                     workspace_root: workspace_root.clone(),
                     code,
-                    run: Some(self.run_ui(cx)),
+                    run: self.run_ui(cx),
                     user: false,
                     user_chips: None,
                 };
@@ -10103,7 +10126,7 @@ impl Transcript {
                     workspace_root: workspace_root.clone(),
                     code,
                     // Only a block the reply has moved past is complete.
-                    run: settled.then(|| self.run_ui(cx)),
+                    run: settled.then(|| self.run_ui(cx)).flatten(),
                     user: false,
                     user_chips: None,
                 };
@@ -10499,19 +10522,22 @@ impl Transcript {
 
     /// "Run in terminal" wiring for settled shell fences: the shell owns the
     /// terminal, so the click becomes a [`TranscriptEvent::RunInTerminal`].
-    fn run_ui(&self, cx: &mut Context<Self>) -> render::RunUi {
-        let entity = cx.weak_entity();
-        render::RunUi {
-            handler: Rc::new(move |command, _window, cx| {
-                entity
-                    .update(cx, |_, cx| {
-                        cx.emit(TranscriptEvent::RunInTerminal {
-                            command: command.to_string(),
-                        });
-                    })
-                    .ok();
-            }),
-        }
+    fn run_ui(&self, cx: &mut Context<Self>) -> Option<render::RunUi> {
+        // Detached transcripts do not own the active chat terminal.
+        (self.doc_override.is_none() && !self.state.read(cx).hosted_on_cloud_computer).then(|| {
+            let entity = cx.weak_entity();
+            render::RunUi {
+                handler: Rc::new(move |command, _window, cx| {
+                    entity
+                        .update(cx, |_, cx| {
+                            cx.emit(TranscriptEvent::RunInTerminal {
+                                command: command.to_string(),
+                            });
+                        })
+                        .ok();
+                }),
+            }
+        })
     }
 
     /// Copy-button wiring for one row's code blocks ([`render::CopyUi`]):
@@ -12154,13 +12180,16 @@ fn lift_file_mentions(
             if span.attachment.is_none() && !files.contains(&span.path) {
                 files.push(span.path.clone());
             }
-            while out.ends_with(' ') {
-                out.pop();
+            let line_start = out.rfind('\n').map_or(0, |ix| ix + 1);
+            let at_indent = out[line_start..]
+                .bytes()
+                .all(|byte| matches!(byte, b' ' | b'\t'));
+            if !at_indent {
+                out.truncate(out.trim_end_matches(' ').len());
             }
             let rest = text[at..].trim_start_matches(' ');
             at = text.len() - rest.len();
-            if !out.is_empty()
-                && !out.ends_with('\n')
+            if !at_indent
                 && !rest.is_empty()
                 && !rest.starts_with(['\n', '.', ',', ';', ':', '!', '?', ')'])
             {
@@ -12176,15 +12205,10 @@ fn lift_file_mentions(
         }
     }
     out.push_str(&text[at..]);
-    // Only plain spaces and newlines: a chip's own padding (no-break spaces)
-    // stays, so a chip left at either edge keeps its range.
-    let blank = [' ', '\n'];
-    let lead = out.len() - out.trim_start_matches(blank).len();
-    let trimmed = out.trim_matches(blank).to_owned();
-    for span in &mut kept {
-        span.range = span.range.start - lead..span.range.end - lead;
+    if kept.is_empty() && out.trim().is_empty() {
+        out.clear();
     }
-    (trimmed, kept, files)
+    (out, kept, files)
 }
 
 /// The transcript ErrorChip: a quiet line in the turn, not a red card — the
@@ -20442,6 +20466,49 @@ mod tests {
             "the chip is all that is left"
         );
         assert!(text[range].contains("docs"));
+    }
+
+    #[test]
+    fn lifting_a_file_mention_preserves_prompt_indentation() {
+        let raw = "    Review\n\nThen [a.rs](zuse-file:src/a.rs)";
+        let (display, spans) = crate::composer::sent_mention_display(raw).unwrap();
+        let (text, _, files) = lift_file_mentions(&display, spans);
+        assert_eq!(text, "    Review\n\nThen");
+        assert_eq!(files.len(), 1);
+    }
+
+    #[test]
+    fn private_use_text_adjacent_to_a_chip_stays_literal() {
+        for separator in ["", " "] {
+            let raw = format!("before \u{e000}{separator}[docs](zuse-file:docs/)");
+            let (display, spans) = crate::composer::sent_mention_display(&raw).unwrap();
+            let tree = parse_user_message(&display, &spans);
+            let Block::Paragraph { runs } = &tree.blocks[0].block else {
+                panic!("expected paragraph");
+            };
+            assert_eq!(
+                runs.iter().map(|run| run.text.as_str()).collect::<String>(),
+                display
+            );
+            assert!(runs.iter().any(|run| run.style.user_literal == Some(0)));
+        }
+    }
+
+    #[test]
+    fn decoded_prompt_text_cannot_impersonate_a_mention() {
+        let raw = "before &#xE000;0&#57345; [docs](zuse-file:docs/)";
+        let (display, spans) = crate::composer::sent_mention_display(raw).unwrap();
+        let tree = parse_user_message(&display, &spans);
+        let Block::Paragraph { runs } = &tree.blocks[0].block else {
+            panic!("expected paragraph");
+        };
+        assert_eq!(runs[0].text, "before \u{e000}0\u{e001} ");
+        assert_eq!(
+            runs.iter()
+                .filter(|run| run.style.user_literal == Some(0))
+                .count(),
+            1
+        );
     }
 
     #[test]

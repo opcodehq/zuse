@@ -80,6 +80,15 @@ pub fn close_hanging(text: &str) -> Option<String> {
     // An unclosed math span: (`$` run length, char index past the opener).
     let mut math: Option<(usize, usize)> = None;
 
+    let mut math_closes = (1..n)
+        .filter(|&j| {
+            cs[j].1 == '$'
+                && !cs[j - 1].1.is_whitespace()
+                && cs[j - 1].1 != '\\'
+                && at(j + 1) != Some('$')
+        })
+        .peekable();
+    let mut last_tex = None;
     let mut i = 0;
     while i < n {
         let c = cs[i].1;
@@ -190,13 +199,10 @@ pub fn close_hanging(text: &str) -> Option<String> {
                 if next.is_some_and(|c| !c.is_whitespace()) {
                     // Inline math closes on a `$` not preceded by whitespace
                     // (pulldown-cmark's rule — `$5 and $10` stays text).
-                    let close = (i + 2..n).find(|&j| {
-                        cs[j].1 == '$'
-                            && !cs[j - 1].1.is_whitespace()
-                            && cs[j - 1].1 != '\\'
-                            && at(j + 1) != Some('$')
-                    });
-                    if let Some(j) = close {
+                    while math_closes.peek().is_some_and(|&j| j < i + 2) {
+                        math_closes.next();
+                    }
+                    if let Some(j) = math_closes.next() {
                         last_content = Some(j);
                         i = j + 1;
                         continue;
@@ -204,9 +210,11 @@ pub fn close_hanging(text: &str) -> Option<String> {
                     // A hanging opener is math only when TeX follows; a
                     // price (`$5`) or a shell variable stays text.
                     if next.is_some_and(|c| !c.is_ascii_digit())
-                        && cs[i + 1..]
-                            .iter()
-                            .any(|&(_, c)| matches!(c, '\\' | '^' | '{'))
+                        && last_tex
+                            .get_or_insert_with(|| {
+                                cs.iter().rposition(|&(_, c)| matches!(c, '\\' | '^' | '{'))
+                            })
+                            .is_some_and(|j| j > i)
                     {
                         math = Some((1, i + 1));
                         break;

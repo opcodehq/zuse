@@ -214,6 +214,7 @@ fn code_line_selection_key(row_key: &str, code_ix: usize, line_ix: usize) -> std
 pub(crate) struct FenceLabel<'a> {
     pub language: Option<&'a str>,
     pub title: Option<&'a str>,
+    pub closed: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -701,7 +702,9 @@ fn render_code_block_source_with_actions(
     let mut actions = Vec::new();
     actions.extend(fit_button.map(IntoElement::into_any_element));
     actions.append(&mut extra_actions);
-    actions.extend(code_run_button(label.language, code, ix, opts, theme));
+    if label.closed {
+        actions.extend(code_run_button(label.language, code, ix, opts, theme));
+    }
     actions.extend(code_copy_button(code, ix, opts, theme));
 
     let lines = div()

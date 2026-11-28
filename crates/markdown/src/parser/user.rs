@@ -1,10 +1,13 @@
 //! Preserve the line breaks and leading indentation of sent prompts.
 
-use std::{collections::HashMap, ops::Range};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Range,
+};
 
-use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag};
+use pulldown_cmark::{CodeBlockKind, Event, RefDefs, Tag};
 
-use super::{BlockTree, options, tree_from_events, with_events};
+use super::{BlockTree, tree_from_events, with_events};
 
 /// Parse a message the user sent. A user types prose, not Markdown layout, so
 /// unlike [`super::parse_full`]:
@@ -14,15 +17,20 @@ use super::{BlockTree, options, tree_from_events, with_events};
 /// - a top-level run of lines indented four or more spaces stays prose, not
 ///   an indented code block. Fenced code is unchanged.
 pub fn parse_user(source: &str) -> BlockTree {
-    with_events(source, 0, |events| {
-        let (events, indents) = user_events(source, events);
-        tree_from_events(&events, Some(&indents))
+    with_events(source, 0, None, |events, refs, mut closed_fences| {
+        let (events, indents) = user_events(source, events, refs, &mut closed_fences);
+        tree_from_events(&events, Some(&indents), &closed_fences)
     })
 }
 
 type Events<'e> = Vec<(Event<'e>, Range<usize>)>;
 
-fn user_events<'e>(source: &str, events: Events<'e>) -> (Events<'e>, HashMap<usize, String>) {
+fn user_events<'e>(
+    source: &str,
+    events: Events<'e>,
+    refs: &RefDefs<'_>,
+    closed_fences: &mut HashSet<usize>,
+) -> (Events<'e>, HashMap<usize, String>) {
     // Top-level indented code reparses as its lines without the indentation.
     let mut spliced = Vec::with_capacity(events.len());
     let mut depth = 0usize;
@@ -36,7 +44,12 @@ fn user_events<'e>(source: &str, events: Events<'e>) -> (Events<'e>, HashMap<usi
                     break;
                 }
             }
-            spliced.extend(reparse_dedented(source, range.start..end));
+            spliced.extend(reparse_dedented(
+                source,
+                range.start..end,
+                refs,
+                closed_fences,
+            ));
             continue;
         }
         match event {
@@ -90,7 +103,12 @@ fn user_events<'e>(source: &str, events: Events<'e>) -> (Events<'e>, HashMap<usi
 
 /// Events for the lines of `range` with their leading whitespace removed,
 /// ranges mapped back into `source` (so each line still finds its indent).
-fn reparse_dedented(source: &str, range: Range<usize>) -> Events<'static> {
+fn reparse_dedented(
+    source: &str,
+    range: Range<usize>,
+    refs: &RefDefs<'_>,
+    closed_fences: &mut HashSet<usize>,
+) -> Events<'static> {
     let start = source[..range.start].rfind('\n').map_or(0, |at| at + 1);
     let mut dedented = String::new();
     // (line start in `dedented`, its first non-blank byte in `source`)
@@ -106,15 +124,18 @@ fn reparse_dedented(source: &str, range: Range<usize>) -> Events<'static> {
         let line = lines.partition_point(|&(from, _)| from <= offset) - 1;
         lines[line].1 + offset - lines[line].0
     };
-    Parser::new_ext(&dedented, options())
-        .into_offset_iter()
-        .map(|(event, range)| {
-            (
-                event.into_static(),
-                original(range.start)..original(range.end),
-            )
-        })
-        .collect()
+    with_events(&dedented, 0, Some(refs), |events, _, fences| {
+        closed_fences.extend(fences.into_iter().map(original));
+        events
+            .into_iter()
+            .map(|(event, range)| {
+                (
+                    event.into_static(),
+                    original(range.start)..original(range.end),
+                )
+            })
+            .collect()
+    })
 }
 
 /// The spaces and tabs between the start of `at`'s line and `at`, if that is

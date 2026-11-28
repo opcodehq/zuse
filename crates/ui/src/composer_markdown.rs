@@ -38,6 +38,7 @@ pub fn faces_and_fences(text: &str) -> (Vec<(Range<usize>, Face)>, Vec<CodeFence
     let mut faces = Vec::new();
     let mut fences = Vec::new();
     let mut quote_depth = 0;
+    let mut pending_fence = None;
     for (event, range) in Parser::new_ext(
         text,
         Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH,
@@ -58,9 +59,30 @@ pub fn faces_and_fences(text: &str) -> (Vec<(Range<usize>, Face)>, Vec<CodeFence
             Event::Start(Tag::Emphasis) => Face::Italic,
             Event::Start(Tag::CodeBlock(kind)) => {
                 if let pulldown_cmark::CodeBlockKind::Fenced(_) = kind {
-                    fences.push(code_fence(text, range.clone(), quote_depth));
+                    let fence = code_fence(text, range.clone(), quote_depth);
+                    let last_marker = text[..fence.lines.end].trim_end().len().saturating_sub(1);
+                    pending_fence = Some((fence, last_marker, range.end));
                 }
                 Face::Code
+            }
+            Event::Text(_) => {
+                if let Some((fence, last_marker, end)) = &mut pending_fence
+                    && range.contains(last_marker)
+                {
+                    // Pulldown treats this marker-looking line as code (for
+                    // example, when it is indented past the container's limit).
+                    fence.closed = false;
+                    if *end == text.len() {
+                        fence.lines.end = *end;
+                    }
+                }
+                continue;
+            }
+            Event::End(pulldown_cmark::TagEnd::CodeBlock) => {
+                if let Some((fence, _, _)) = pending_fence.take() {
+                    fences.push(fence);
+                }
+                continue;
             }
             Event::Code(_) => Face::Code,
             _ => continue,
@@ -567,6 +589,16 @@ pub fn decorations(text: &str, active: Range<usize>) -> Vec<(Range<usize>, Strin
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn an_overindented_fence_marker_leaves_the_caret_row_inside_code() {
+        let source = "~~~sh\necho hi\n    ~~~\n";
+        let (_, fences) = faces_and_fences(source);
+        assert_eq!(fences.len(), 1);
+        assert!(!fences[0].closed);
+        assert_eq!(fences[0].lines.end, source.len());
+    }
+
     use super::*;
     #[test]
     fn decorations_preserve_rules_code_and_nested_emphasis() {

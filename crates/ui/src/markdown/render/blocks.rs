@@ -6,7 +6,7 @@ use gpui::{AnyElement, Div, FontWeight, Hsla, SharedString, Window, div, prelude
 use zuse_syntax::HighlightedDocument;
 
 use crate::markdown::parser::{AlertKind, Block, BlockTree};
-use crate::theme::Theme;
+use crate::theme::{Appearance, Theme};
 
 use super::{
     CodeHighlight, RenderOptions,
@@ -225,10 +225,12 @@ fn render_block_at_depth(
             language,
             title,
             code,
+            fence_closed,
         } => render_code_block(
             FenceLabel {
                 language: language.as_deref(),
                 title: title.as_deref(),
+                closed: *fence_closed,
             },
             code,
             top_ix,
@@ -246,7 +248,8 @@ fn render_block_at_depth(
                 .flex()
                 .flex_col()
                 .gap(px(8.))
-                .when_some(kind.zip(color), |quote, (kind, color)| {
+                .when_some(*kind, |quote, kind| {
+                    let color = alert_label_color(kind, theme.appearance);
                     quote.child(
                         div()
                             .flex()
@@ -263,33 +266,43 @@ fn render_block_at_depth(
                     )
                 })
                 .child(container_children(
-                    children, top_ix, ix, opts, theme, window, highlight,
+                    children, top_ix, ix, list_depth, opts, theme, window, highlight,
                 ))
                 .into_any_element()
         }
-        Block::Details { summary, children } => {
-            // Raw HTML can contribute dedented Markdown to a disclosure, so
-            // its task marker ranges aren't safe to edit in the source file.
-            let readonly = RenderOptions {
-                tasks: None,
-                ..opts.clone()
-            };
-            DetailsDisclosure {
-                id: format!("{}-details-{top_ix}-{ix}", opts.row_key).into(),
-                label: if summary.is_empty() {
-                    "Details".into()
-                } else {
-                    summary
-                        .iter()
-                        .map(|run| run.text.as_str())
-                        .collect::<String>()
-                        .into()
-                },
-                body: container_children(children, top_ix, ix, &readonly, theme, window, highlight),
-                color: theme.text_muted,
-            }
-            .into_any_element()
+        Block::Details { summary, children } => DetailsDisclosure {
+            id: format!("{}-details-{top_ix}-{ix}", opts.row_key).into(),
+            label: if summary.iter().all(|run| run.text.trim().is_empty()) {
+                div().child("Details").into_any_element()
+            } else {
+                let label_options = RenderOptions {
+                    link: None,
+                    media: None,
+                    cache: None,
+                    veil: None,
+                    workspace_root: None,
+                    ..opts.clone()
+                };
+                text_element_styled(
+                    summary,
+                    opts.prose_text_size(),
+                    prose_line_height,
+                    TextStyle {
+                        weight: FontWeight::NORMAL,
+                        color: Some(theme.text_muted),
+                    },
+                    top_ix,
+                    ix,
+                    &label_options,
+                    theme,
+                )
+            },
+            body: container_children(
+                children, top_ix, ix, list_depth, opts, theme, window, highlight,
+            ),
+            color: theme.text_muted,
         }
+        .into_any_element(),
         Block::FootnoteDefinition {
             label,
             children,
@@ -308,7 +321,7 @@ fn render_block_at_depth(
                     .child(format!("[{label}]")),
             )
             .child(div().min_w_0().flex_1().child(container_children(
-                children, top_ix, ix, opts, theme, window, highlight,
+                children, top_ix, ix, list_depth, opts, theme, window, highlight,
             )))
             .into_any_element(),
         Block::List {
@@ -564,10 +577,26 @@ fn alert_color(kind: AlertKind) -> Hsla {
     .into()
 }
 
+fn alert_label_color(kind: AlertKind, appearance: Appearance) -> Hsla {
+    match appearance {
+        Appearance::Dark => alert_color(kind),
+        Appearance::Light => gpui::rgb(match kind {
+            AlertKind::Note => 0x1d4ed8,
+            AlertKind::Tip => 0x047857,
+            AlertKind::Important => 0x7e22ce,
+            AlertKind::Warning => 0x92400e,
+            AlertKind::Caution => 0xb91c1c,
+        })
+        .into(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn container_children(
     children: &[Block],
     top_ix: usize,
     ix: usize,
+    list_depth: usize,
     opts: &RenderOptions,
     theme: &Theme,
     window: &Window,
@@ -578,10 +607,11 @@ fn container_children(
         .flex_col()
         .gap(px(8.))
         .children(children.iter().enumerate().map(|(child_ix, child)| {
-            render_block(
+            render_block_at_depth(
                 child,
                 top_ix,
                 quote_child_ix(ix, child_ix),
+                list_depth,
                 opts,
                 theme,
                 window,
@@ -593,7 +623,7 @@ fn container_children(
 #[derive(gpui::IntoElement)]
 struct DetailsDisclosure {
     id: SharedString,
-    label: SharedString,
+    label: AnyElement,
     body: Div,
     color: Hsla,
 }
