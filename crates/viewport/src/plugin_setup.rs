@@ -748,11 +748,8 @@ impl Render for PluginSetup {
                 div()
                     .id("plugin-setup-error")
                     .role(Role::Alert)
-                    .rounded(px(7.))
-                    .bg(self.colors.danger.opacity(0.08))
-                    .px(px(10.))
-                    .py(px(6.))
-                    .line_height(px(20.))
+                    .line_height(px(18.))
+                    .text_size(px(12.))
                     .text_color(self.colors.danger)
                     .child(error),
             )

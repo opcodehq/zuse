@@ -530,7 +530,7 @@ impl SkillsPage {
                 self.error
                     .as_ref()
                     .filter(|_| self.installed_only)
-                    .map(|error| inline_error(error.clone(), theme)),
+                    .map(|error| widgets::inline_error(theme, error.clone())),
             );
         if results.is_empty() {
             let message = if self.installed_only && self.request.is_some() {
@@ -1006,7 +1006,7 @@ impl SkillsPage {
             .children(
                 self.error
                     .as_ref()
-                    .map(|error| inline_error(error.clone(), theme)),
+                    .map(|error| widgets::inline_error(theme, error.clone())),
             )
             .child(
                 div()
@@ -1087,25 +1087,6 @@ impl Render for SkillsPage {
                     .child(content),
             )
     }
-}
-
-/// A one-line error: warning icon and red text, no card around it.
-fn inline_error(message: String, theme: &Theme) -> gpui::Div {
-    div()
-        .w_full()
-        .min_w_0()
-        .flex()
-        .items_center()
-        .gap(px(6.))
-        .text_size(px(12.))
-        .text_color(theme.danger_muted)
-        .child(
-            icons::icon(icons::DANGER_TRIANGLE)
-                .size(px(13.))
-                .flex_none()
-                .text_color(theme.danger),
-        )
-        .child(div().min_w_0().truncate().child(message))
 }
 
 fn muted(value: impl Into<gpui::SharedString>, theme: &Theme) -> gpui::Div {
