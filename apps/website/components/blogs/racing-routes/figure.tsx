@@ -1,4 +1,4 @@
-import { Plate } from "@/components/iso/react/draw";
+import { Plate } from "@/components/iso/draw";
 import { RoutesArt } from "./art";
 import "@/components/iso/iso.css";
 import "./racing-routes.css";

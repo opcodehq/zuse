@@ -107,6 +107,21 @@ function Fixture() {
       setView(draft => { draft.route = {kind:"zappers",zapperId:"captain"}; draft.selectedChatId="parent"; draft.rightPanel=null; });
       setInspectorOpen(true); flush(); setTab("issues"); flush();
     },
+    // A roster of Zappers whose chats the motion check drives through every mood.
+    roster: () => {
+      setState(draft => {
+        const zapper = (id: string, name: string, mascot: string, color: string, home = "remote") => ({ ...structuredClone(sampleZapper), id, coordinatorChatId: `${id}-chat`, workers: [], issues: [], decisions: [], config: { ...structuredClone(sampleZapper.config), name, homeDeviceId: home, avatar: { mascot, color } } });
+        const extra = [zapper("release", "Release", "hex", "teal"), zapper("docs", "Docs", "squire", "violet"), zapper("triage", "Triage", "brawler", "yellow"), zapper("night", "Night shift", "viking", "blue", "laptop")];
+        extra[2]!.workers = [{ chatId: "triage-worker", deviceId: "remote", spaceId: "project", objective: "Sort the new bug reports", followups: 0 }];
+        draft.zappers = [...draft.zappers.filter(z => z.id === "captain"), ...extra] as typeof draft.zappers;
+        for (const id of ["release-chat", "docs-chat", "triage-chat", "night-chat", "triage-worker"]) draft.chats[id] = { id, deviceId: "remote", archived: false, createdAt: "", config: { harness: "codex", sandbox: "auto" } };
+        draft.devices.laptop = { id: "laptop", name: "Laptop", lastSeenAt: "2026-01-01T00:00:00Z" } as (typeof draft.devices)[string];
+      });
+      flush();
+    },
+    session: (chatId: string, status: string | null) => { setState(draft => { if (status) draft.sessions[chatId] = { chatId, deviceId: "remote", status, updatedAt: new Date().toISOString() } as (typeof draft.sessions)[string]; else delete draft.sessions[chatId]; }); flush(); },
+    reply: (chatId: string, seen: boolean) => { setState(draft => { const at = Date.now(); draft.chats[chatId]!.lastMessageAt = new Date(at).toISOString(); draft.chats[chatId]!.lastSeenAt = seen ? new Date(at + 1000).toISOString() : null; }); flush(); },
+    zapperStatus: (id: string, status: string) => { setState(draft => { draft.zappers.find(z => z.id === id)!.status = status as Zapper["status"]; }); flush(); },
     queued: () => { setState(draft=>{draft.zappers[0]!.workers[0]!.queuePosition=2;draft.zappers[0]!.issues[0]!.details.owner={type:"thread",chatId:"worker"};delete draft.chats.worker;}); flush(); },
     startQueued: () => {setState(draft=>{delete draft.zappers[0]!.workers[0]!.queuePosition;draft.chats.worker={...draft.chats.parent!,id:"worker",title:"Ready worker"};});flush();},
     openQueued: () => {setView(draft=>{draft.selectedChatId="worker";draft.route={kind:"zappers",zapperId:"captain"};});flush();},

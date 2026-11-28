@@ -1,28 +1,3 @@
-:root:not(.dark) .iso.rr-figure,
-:root:not(.dark) .iso.rr-widget {
-	--anatomy-page: #f2f2ef;
-	--anatomy-card: #fbfbfa;
-	--anatomy-text: #57575a;
-	--anatomy-strong: #18181a;
-	--anatomy-muted: #8c8c90;
-	--anatomy-paper: #fbfbfa;
-	--anatomy-face: #ffffff;
-	--anatomy-top: #ffffff;
-	--anatomy-shade-0: #dcdcd9;
-	--anatomy-shade-1: #e5e5e2;
-	--anatomy-shade-2: #ededea;
-	--anatomy-shade-3: #f4f4f1;
-	--anatomy-lit-top: #ffffff;
-	--anatomy-lit-shade: #eeeeeb;
-	--anatomy-hi: #26262a;
-	--anatomy-mid: #8a8a8f;
-	--anatomy-lo: #b4b4b8;
-	--anatomy-faint: #d4d4d6;
-	--anatomy-lit: #000000;
-	--anatomy-halo: #8a8a80;
-	--anatomy-halo-opacity: 0.32;
-	--anatomy-dot: #3a3a3e;
-}
 .rr-figure .iso-figure {
 	margin: 2rem 0 2.25rem;
 }

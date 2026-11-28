@@ -1,6 +1,6 @@
 # Private secret requests
 
-Status: private bearer-token operations implemented; verification results are recorded in the change report.
+Status: private HTTPS operations and explicitly approved private commands implemented. See verification notes below.
 
 ## T3 source review
 
@@ -30,9 +30,9 @@ Neither route is suitable for secret values.
 Both the desktop composer and web viewport render a dedicated password input.
 It never borrows ordinary composer input, draft state, or durable answers.
 Native tools and the MCP catalog expose `request_secret` with label, reason,
-HTTPS URL, method (GET/POST/PUT/PATCH/DELETE), and optional JSON body.
+an operation mode. HTTPS mode accepts URL, method (GET/POST/PUT/PATCH/DELETE), and optional JSON body. Command mode accepts an absolute executable, argument array, absolute working directory, stdin or environment delivery, and a bounded timeout.
 The card presents that exact operation for approval or decline. It expires
-in ten minutes and does not permit shell/file delivery.
+in ten minutes. Command mode discloses the weaker process/file boundary before approval.
 
 `SubmitPrivateSecret` is a transient, device-routed RPC. It validates the
 request's chat/request binding and active turn before resolving the input with
@@ -43,7 +43,7 @@ chat and one-shot RPC delivery rather than automatic replay.
 The process-local broker uses random IDs, scoped ownership, bounded entries and
 values, atomic one-use consumption, and zeroizing stored strings. RAII cleanup
 removes requests on decline, cancellation, timeout, and dropped operations.
-Values are never written to a secret file. Restart invalidates all requests.
+The broker never writes values to a temporary secret file. An approved command may intentionally persist a credential. Restart invalidates all requests.
 
 The backend inserts a sensitive Authorization header for the exact approved
 request. Redirects and proxy environment inheritance are disabled. DNS addresses
@@ -52,10 +52,40 @@ request; lookup and HTTP execution have time limits. Only HTTP status is
 returned, with generic errors. Response bodies and headers are withheld even
 when a remote server echoes credentials.
 
-This first consumer supports bearer-authenticated HTTPS operations only.
-It does not hand reusable credentials to shell commands or generic plugins,
-and does not return API response data such as newly created resource IDs.
-Additional consumers require a reviewed output contract.
+HTTPS mode supports bearer-authenticated public HTTPS operations only and withholds response bodies. It remains the default for existing callers.
+
+Command mode delivers the value directly to the approved child process through
+stdin (exact bytes, followed by EOF) or one named environment variable. It never
+interpolates the value into executable arguments, command text, or question metadata.
+There is no implicit shell: shell scripts require an explicitly approved shell
+executable and arguments. Both stdout and stderr go to the null device, so even
+an echo of the value cannot enter tool output. Results contain only success or
+failure; spawn and IO errors are generic. Execution defaults to 60 seconds, is
+limited to 1–300 seconds, and is cancelled with the operation. The immediate
+child is killed on drop; Unix sets a restrictive file creation mask (077)
+and kills its process group on completion,
+timeout, cancellation, or drop. Detached descendants and Windows descendant
+processes are not isolated by this mechanism.
+
+This mode supports CLI authentication and commands that save configuration.
+The card displays all command metadata, host context, delivery method, timeout,
+and a warning that the process can read, save, or transmit the value. It does
+not promise that the agent can never see a saved credential. A command that
+writes credentials must set appropriate file permissions and avoid source
+control, logs, and other persistent output itself. The broker does not create a
+reusable credential handle or alter global environment state.
+
+Example CLI authentication operation (use the actual absolute executable path
+and checkout path on the execution host):
+
+```json
+{"mode":"command","label":"GitHub CLI token","reason":"Authenticate gh for repository operations","program":"/usr/bin/gh","args":["auth","login","--with-token"],"cwd":"/workspace/project","delivery":"stdin","timeout_seconds":60}
+```
+
+For a CLI reading an environment variable, use `"delivery":"env"` and
+`"env_var":"SERVICE_API_KEY"` instead. The variable exists only in the child
+and any descendants it starts. Use one approved command/script to perform all
+steps that need the credential; every new private operation requires fresh entry.
 
 Example agent tool call (the credential is entered only in the private card):
 
@@ -99,8 +129,8 @@ credential entry, the receiving service must be trusted with the token.
    dumps. The agent cannot select an arbitrary destination for a credential.
 5. Generic shell injection cannot promise that an agent never sees the value:
    the process can print, transform, persist, or transmit it. Environment variables,
-   private files, and output redaction do not establish that guarantee. Offer any
-   future command mode under an explicitly weaker, accurately labeled contract.
+   private files, and output redaction do not establish that guarantee. The implemented
+   command mode uses an explicitly weaker, accurately labeled contract.
 6. Use short deadlines checked on every consume, atomic one-use consumption,
    cancellation/revocation, bounded input sizes, and deletion on completion or
    expiry. Restart invalidates memory-only capabilities. Persistent storage needs
@@ -122,7 +152,7 @@ transient submission and scans chat data and persisted host files for a sentinel
 A real desktop interaction and a live credential/network operation require a
 manual smoke test; do not use real credentials in automated tests.
 
-## Completed verification
+## Earlier HTTPS-only verification
 
 - Desktop and web viewport Cargo checks: passed. Linux development files were
   extracted locally for the check; system packages were not changed.
@@ -161,3 +191,24 @@ captures are in `.context/question-composer-screenshots/` in this checkout.
 Captures succeeded, but the fixture reports a ComposerInput handle leak during
 shutdown; its process exit is not a passing runtime check. The last Decline button
 move was compile checked after these captures.
+
+## Command-mode verification
+
+Synthetic tests cover stdin and environment injection into real child processes,
+intentional configuration writes, secret echoes on both output streams,
+invalid/read-only/declined operations, generic failures, timeout, cancellation,
+and dropped-approval cleanup. Broker scope and replay tests apply to both modes.
+These tests do not claim OS isolation or exercise a real credential.
+
+Verified for this command-mode change:
+
+- Engine broker/private-operation tests: 12 passed.
+- End-to-end transient submission and persistence scans (HTTPS and command): 2 passed.
+- Native tool regression suite, including both operation schemas: 13 passed.
+- MCP origin-binding regression: 1 passed.
+- Rust formatting and Git whitespace checks: passed.
+
+No real credential or live CLI account was used. Desktop/web interactions were
+not manually exercised for this change; UI changes only generalize secret input
+and retry wording. On native tools the existing checkout working-directory
+validation still applies before the private approval flow.

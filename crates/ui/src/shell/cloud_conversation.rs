@@ -282,12 +282,18 @@ impl CloudConversation {
                 }),
                 _ => {}
             }),
-            cx.subscribe(&transcript, |this: &mut Self, _, event, cx| {
-                if matches!(event, crate::transcript::TranscriptEvent::RetryNotSent) {
+            cx.subscribe(&transcript, |this: &mut Self, _, event, cx| match event {
+                crate::transcript::TranscriptEvent::RetryNotSent => {
                     this.composer.update(cx, |composer, cx| {
                         composer.retry_cloud_messages_not_sent(cx)
                     });
                 }
+                crate::transcript::TranscriptEvent::RemoveNotSent => {
+                    this.composer.update(cx, |composer, cx| {
+                        composer.remove_cloud_message_not_sent(cx)
+                    });
+                }
+                _ => {}
             }),
             cx.observe(&composer, |_: &mut Self, _, cx| cx.notify()),
             cx.observe(&state, |this: &mut Self, state, cx| {
@@ -466,14 +472,9 @@ impl CloudConversation {
                 }));
         activity::preparation(&self.computer.metadata, initial)
     }
-    /// The agent is mid-turn: a message it is working on whose turn the
-    /// transcript doesn't show finished. Tabs and sidebar rows spin on it,
-    /// like a local chat's.
-    pub(super) fn agent_working(&self, cx: &App) -> bool {
-        self.agent_activity(cx)
-            .is_some_and(|activity| activity.busy)
-    }
     /// What this conversation reports for its chat's sidebar row and tab.
+    /// `working`: a message it is working on whose turn the transcript
+    /// doesn't show finished; tabs and rows spin on it, like a local chat's.
     pub(super) fn live_activity(&self, cx: &App) -> crate::state::CloudLiveActivity {
         let activity = self.agent_activity(cx);
         crate::state::CloudLiveActivity {
@@ -482,7 +483,19 @@ impl CloudConversation {
                 .as_ref()
                 .is_some_and(|activity| activity.label == activity::NEEDS_INPUT),
             online: self.computer_online(),
+            background: self.background_work(cx),
         }
+    }
+    /// Background work this conversation's agent holds beside its turn,
+    /// what its Background work row lists.
+    pub(super) fn background_work(&self, cx: &App) -> u32 {
+        if self.access_revoked {
+            return 0;
+        }
+        let state = self.state.read(cx);
+        state.selected_chat.as_deref().map_or(0, |chat| {
+            state.background_work_for(chat, chrono::Utc::now())
+        })
     }
     /// What the computer's live session says about the current turn, when
     /// it is attached: the same state the transcript's "Working for" line

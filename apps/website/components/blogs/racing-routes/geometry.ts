@@ -36,7 +36,6 @@ import {
 	P,
 	RAIL_Z,
 	SLEEPER_H,
-	STUB_X,
 	at,
 	distanceAtX,
 	offset,

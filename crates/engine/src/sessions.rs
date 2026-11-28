@@ -17,6 +17,8 @@
 //! Every dying path must instead carry its own visible error (child crash with stderr,
 //! spawn failure, stream error, engine-restart recovery).
 
+mod usage_resume;
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
@@ -305,6 +307,8 @@ struct Inner {
     /// Last dispatched request per chat — the steer→new-turn fallback re-derives its
     /// run config from this (chat config rows land with the workspace doc in M4).
     last_requests: Mutex<HashMap<String, RunRequest>>,
+    usage_resume: Mutex<usage_resume::Store>,
+    usage_scheduler_started: std::sync::atomic::AtomicBool,
     /// Harness-native session ids per chat (resume continuity across turns) —
     /// the live-process cache over the durable copy on the workspace chat row
     /// (zuse kept the same pair on `chats.harness_session_id`). An empty
@@ -510,6 +514,8 @@ impl SessionsEngine {
                 shutting_down: std::sync::atomic::AtomicBool::new(false),
                 cancelled_sends: Mutex::new(HashMap::new()),
                 ipc_port: std::sync::atomic::AtomicU16::new(0),
+                usage_resume: Mutex::new(usage_resume::Store::open(journal.usage_resume_path())),
+                usage_scheduler_started: std::sync::atomic::AtomicBool::new(false),
                 journal,
                 continuing_turns: Mutex::new(Default::default()),
                 turn_starts: Mutex::new(HashMap::new()),
@@ -735,6 +741,7 @@ impl SessionsEngine {
     /// dispatch can register a run after the first terminate, so terminate
     /// repeats until the claim and the run are both gone.
     pub(crate) async fn end_for_archive(&self, chat_id: &str) -> Result<(), EngineError> {
+        self.cancel_usage_resume(chat_id)?;
         const SETTLE: std::time::Duration = std::time::Duration::from_secs(10);
         let deadline = tokio::time::Instant::now() + SETTLE;
         loop {
@@ -1074,6 +1081,10 @@ impl SessionsEngine {
     ) -> Result<String, EngineError> {
         let admission = self.filesystem_admission().await;
         self.require_unarchived(chat_id)?;
+        if !idle {
+            let user_id = message_id.get_or_insert_with(new_id);
+            self.begin_usage_turn(chat_id, user_id)?;
+        }
         let _activity = self.claim_filesystem_admission(chat_id);
         drop(admission);
         let mut turn_source = None;
@@ -1108,12 +1119,7 @@ impl SessionsEngine {
         // Project-less chats store a home-relative cwd (the creating device
         // can't know the host's home); expand it here, on the host, where the
         // run spawns, creating a new chat's scratch folder.
-        let scratch_root = self
-            .inner
-            .scratch_root
-            .get()
-            .cloned()
-            .unwrap_or_else(|| crate::repos::home_dir().join(".zuse").join("scratch"));
+        let scratch_root = self.chat_scratch_root();
         request.cwd = crate::repos::resolve_chat_cwd(&request.cwd, &scratch_root)
             .map_err(EngineError::Other)?;
         if let Some(stamp) = self.inner.request_stamp.get() {
@@ -1638,6 +1644,7 @@ impl SessionsEngine {
         zuse_protocol::invocation::validate_harness_invocations(prompt, harness_id)
             .map_err(EngineError::Other)?;
         let user_id = message_id.unwrap_or_else(new_id);
+        self.begin_usage_turn(chat_id, &user_id)?;
         let bootstrap = self.warm_fork_history(chat_id, harness_id, prompt, &history_sent)?;
         let delivered = bootstrap.as_deref().unwrap_or(prompt);
         // A steer runs on the configuration live now; record it with the
@@ -1749,6 +1756,7 @@ impl SessionsEngine {
     /// conversation in a fresh process. (Sending, steering and switching
     /// models never come here: they keep the runtime and its work.)
     pub async fn interrupt(&self, chat_id: &str) -> Result<bool, EngineError> {
+        self.cancel_usage_resume(chat_id)?;
         self.terminate(chat_id).await
     }
 
@@ -2069,6 +2077,7 @@ impl SessionsEngine {
     /// the remembered harness session (zuse: "not just eulogized";
     /// `MAX_AUTO_RESUME` = 3 consecutive revivals, fresh = crashed < 12h ago).
     pub fn recover_stale(&self) -> Result<usize, EngineError> {
+        self.start_usage_scheduler();
         const MAX_AUTO_RESUME: u32 = 3;
         const RESUME_FRESH_MS: i64 = 12 * 60 * 60 * 1000;
 
@@ -3012,6 +3021,7 @@ impl Inner {
         if runs.get(chat_id).is_some_and(|h| h.run_id == run_id) {
             runs.remove(chat_id);
         }
+        lock(&self.usage_resume).stopped_runs.remove(run_id);
     }
 }
 
@@ -3638,8 +3648,12 @@ async fn drive_run(
     if analytics_turn_open && let Some(analytics) = inner.analytics.get() {
         analytics.capture("turn started", analytics_turn.dimensions());
     }
+    let mut usage_blocked = false;
+    let mut usage_resets_at: Option<i64> = None;
+    let mut usage_reset_unknown = false;
     let user_prompt = request.prompt.clone();
     let mut source_message_id = resume_state.user_message_id.clone();
+    let mut consumed_request: Option<RunRequest> = None;
     let run_cwd = request.cwd.clone();
     if request.resume.is_none() {
         let _ = doc.clear_context_usage();
@@ -4982,6 +4996,16 @@ async fn drive_run(
             // this runtime's provider session.
             if let Some(steer) = &confirmed {
                 source_message_id = steer.message_id.clone();
+                consumed_request = steer
+                    .request
+                    .as_deref()
+                    .cloned()
+                    .or_else(|| lock(&inner.last_requests).get(&chat_id).cloned())
+                    .map(|mut request| {
+                        request.prompt = steer.prompt.clone();
+                        request.resume = None;
+                        request
+                    });
                 if !provisional_boundary {
                     turn.forget_steer(&steer.message_id);
                 }
@@ -5058,6 +5082,21 @@ async fn drive_run(
             _ => {}
         }
 
+        match &event {
+            AgentEvent::UsageLimit { resets_at } => {
+                usage_blocked = true;
+                usage_reset_unknown |= resets_at.is_none();
+                usage_resets_at = usage_resets_at.max(*resets_at);
+            }
+            AgentEvent::Error { message }
+            | AgentEvent::Done {
+                error: Some(message),
+                ..
+            } => {
+                usage_blocked |= usage_resume::is_usage_limit(message);
+            }
+            _ => {}
+        }
         inner.publish(&chat_id, &event);
 
         // Defensive rule from zuse: a mid-run SessionStarted re-emission (Claude SDK
@@ -5231,6 +5270,9 @@ async fn drive_run(
                 && !interrupted
                 && !inner.registry.update_pending(harness_id)
             {
+                usage_blocked = false;
+                usage_resets_at = None;
+                usage_reset_unknown = false;
                 folded.clear();
                 dirty = false;
                 entry_id = new_id();
@@ -5339,6 +5381,23 @@ async fn drive_run(
         .filter(|h| h.run_id == run_id)
         .map(|h| std::mem::take(&mut *lock(&h.routed_steers)).into())
         .unwrap_or_default();
+    if final_status == SessionStatus::Errored && usage_blocked && !interrupted {
+        let engine = SessionsEngine {
+            inner: inner.clone(),
+        };
+        if let Some(request) = consumed_request.or_else(|| engine.last_request(&chat_id)) {
+            if let Err(error) = engine.record_usage_limit(
+                &chat_id,
+                &run_id,
+                harness_id,
+                request,
+                Some(source_message_id.clone()),
+                usage_resets_at.filter(|_| !usage_reset_unknown),
+            ) {
+                tracing::warn!(%chat_id, %error, "could not save usage-limit continuation");
+            }
+        }
+    }
     inner.remove_run(&chat_id, &run_id);
     inner.set_status_with_completion(&chat_id, final_status, false, final_completed_turn);
     // A Stop cancels the messages it found waiting; one accepted after it
@@ -5438,7 +5497,7 @@ fn done_ends_turn(last: Option<&(u64, AgentEvent)>, turn_start: u64) -> bool {
 /// whose saved session could not be reattached.
 fn continuation_prompt(request: &str) -> String {
     format!(
-        "Zuse restarted while you were working, which interrupted your last turn. Check the current state of the work before doing anything else, then finish only what is still undone. Some steps may have completed without their results reaching you, so verify before repeating anything with side effects, such as commits, pushes, or migrations. If the work is already done, say so briefly.\n\nThe request you were working on:\n\n{request}"
+        "Your last turn was interrupted before it finished. Check the current state of the work before doing anything else, then finish only what is still undone. Some steps may have completed without their results reaching you, so verify before repeating anything with side effects, such as commits, pushes, or migrations. If the work is already done, say so briefly.\n\nThe request you were working on:\n\n{request}"
     )
 }
 

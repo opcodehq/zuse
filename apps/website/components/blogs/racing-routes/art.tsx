@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Dots, Line, Solid } from "@/components/iso/react/draw";
+import { Dots, Line, Solid } from "@/components/iso/draw";
 import { ROUTES, type RouteName } from "./model";
 import {
 	BASE_ART,

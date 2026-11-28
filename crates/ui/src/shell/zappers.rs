@@ -530,11 +530,16 @@ impl Shell {
                 .menu
                 .get()
                 .is_some_and(|(menu_zapper, _)| menu_zapper == &zapper.id);
+            let face = self.zapper_face(&zapper, cx);
             list = list.child(
                 div()
                     .id(SharedString::from(format!("zapper-{}", zapper.id)))
                     .role(gpui::Role::Button)
-                    .aria_label(SharedString::from(zapper.config.name.clone()))
+                    .aria_label(SharedString::from(format!(
+                        "{}, {}",
+                        zapper.config.name,
+                        face.mood.label()
+                    )))
                     .h(px(26.0))
                     .px(px(6.0))
                     .flex()
@@ -551,7 +556,7 @@ impl Shell {
                     .when(active, |d| d.bg(theme.bg_selected))
                     .when(!active && menu_open, |d| d.bg(theme.element_hover))
                     .when(!active, |d| d.hover(|d| d.bg(theme.element_hover)))
-                    .child(zapper_mascot(&self.zapper_face(&zapper, cx), 16.0))
+                    .child(zapper_mascot(&face, 16.0))
                     .child(
                         div()
                             .flex_1()

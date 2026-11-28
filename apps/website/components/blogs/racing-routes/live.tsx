@@ -1,8 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { IsoFigure } from "@/components/iso/react/draw";
-import { asksForStillness, follow, useInView, useLoop, useReadout } from "@/components/iso/react/live";
+import { IsoFigure } from "@/components/iso/draw";
+import { asksForStillness, follow, useInView, useLoop, useReadout } from "@/components/iso/live";
 import { translateAlong, type SolidPaths } from "@/components/iso/iso-kit";
 import { DECK_LIFT, depthKey, needleOf, trainOf } from "./geometry";
 import { LABEL, ROUTES, createSim, readoutOf, setAwake, setRoute, step, tripOf, trainTripOf, type RouteName, type Sim } from "./model";

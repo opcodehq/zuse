@@ -175,6 +175,20 @@ public struct CanonicalWorkspace: Sendable {
     return session
   }
 
+  /// Starts a thread parented to `parentChatID` (desktop's "+ New tab"): a child chat in the
+  /// same project, folder and branch, inheriting the parent's agent configuration.
+  public func createSideThread(parentChatID: String) async throws -> SessionRow {
+    let chats = try await rpc.snapshot("WatchChats").array
+    guard let parent = chats.first(where: { $0["id"].string == parentChatID }) else {
+      throw ClientError("This chat is no longer available.")
+    }
+    let chatID = UUID().uuidString
+    let deviceID = try await rpc.call("EngineInfo")["deviceId"]
+    _ = try await rpc.call(
+      "Mutate", ChatSideThread.createChat(parent: parent, chatID: chatID, deviceID: deviceID))
+    return ChatSideThread.row(parent: parent, chatID: chatID)
+  }
+
   public func diff(chatID: String, scope: String) async throws -> JSONValue {
     guard ["staged", "unstaged", "branch"].contains(scope) else {
       throw ClientError("Unknown diff scope")

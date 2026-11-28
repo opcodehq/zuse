@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Plate } from "@/components/iso/react/draw";
+import { Plate } from "@/components/iso/draw";
 import "@/components/iso/iso.css";
 import "./racing-routes.css";
 

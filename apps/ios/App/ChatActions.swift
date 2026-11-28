@@ -20,6 +20,8 @@ struct ChatActionsSheet: View {
   let target: ChatActionsTarget
   let openProfile: () -> Void
   let showChanges: () -> Void
+  /// Zooms out to every pane beside the chat.
+  let showPanes: () -> Void
   /// The chat or Zapper left the screen (archived or deleted).
   let left: () -> Void
   @Environment(\.dismiss) private var dismiss
@@ -76,6 +78,7 @@ struct ChatActionsSheet: View {
   @ViewBuilder private func zapperActions(_ zapper: Zapper) -> some View {
     let busy = store.busy[zapper.id] != nil
     Section {
+      panesButton
       Button {
         dismiss()
         openProfile()
@@ -125,8 +128,18 @@ struct ChatActionsSheet: View {
     }
   }
 
+  private var panesButton: some View {
+    Button {
+      dismiss()
+      showPanes()
+    } label: {
+      ActionRow(title: "All panes", icon: "square.grid.2x2", chevron: true)
+    }
+    .accessibilityIdentifier("chat-actions-panes")
+  }
   @ViewBuilder private func chatActions(_ session: SessionRow) -> some View {
     Section {
+      panesButton
       Button {
         dismiss()
         showChanges()

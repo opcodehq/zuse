@@ -1860,6 +1860,9 @@ fn forwardable(method: &str) -> bool {
             | zuse_protocol::custom_acp::catalog::ICON
             | methods::SET_CUSTOM_ACP_AGENT
             | methods::DELETE_CUSTOM_ACP_AGENT
+            | methods::GET_USAGE_RESUME
+            | methods::SET_USAGE_RESUME
+            | methods::RESUME_USAGE_LIMIT
             | methods::GET_TITLE_SETTINGS
             | methods::GET_CHAT_ARCHIVE_STATUS
             | methods::GET_THREAD_CONVERSATION
@@ -2914,12 +2917,17 @@ impl EngineRpc {
         }
 
         let mut params = params;
-        if method == methods::GET_CHAT_ARCHIVE_STATUS
-            || (method == methods::MUTATE
-                && matches!(
-                    params["op"].as_str(),
-                    Some("setChatArchived" | "forceDeleteChat")
-                ))
+        if matches!(
+            method,
+            methods::GET_CHAT_ARCHIVE_STATUS
+                | methods::GET_USAGE_RESUME
+                | methods::SET_USAGE_RESUME
+                | methods::RESUME_USAGE_LIMIT
+        ) || (method == methods::MUTATE
+            && matches!(
+                params["op"].as_str(),
+                Some("setChatArchived" | "forceDeleteChat")
+            ))
         {
             if let Some(id) = params["chatId"].as_str() {
                 if let Some(chat) = self.workspace.chat(id).map_err(failed)? {
@@ -4071,6 +4079,45 @@ impl EngineRpc {
                     .await
                     .map_err(RpcError::Failed)?;
                 RpcReply::value(&snapshot)
+            }
+            methods::GET_USAGE_RESUME | methods::SET_USAGE_RESUME | methods::RESUME_USAGE_LIMIT => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct UsageResumeParams {
+                    chat_id: Option<String>,
+                    enabled: Option<bool>,
+                }
+                let p: UsageResumeParams = parse_params(params)?;
+                if let Some(chat) = p.chat_id.as_deref() {
+                    let row = self
+                        .workspace
+                        .chat(chat)
+                        .map_err(failed)?
+                        .ok_or_else(|| RpcError::Failed("Thread not found.".into()))?;
+                    if row.device_id != self.doc_host.device_id() {
+                        return Err(RpcError::Failed(
+                            "Resume belongs to another computer.".into(),
+                        ));
+                    }
+                }
+                if method == methods::SET_USAGE_RESUME {
+                    let enabled = p
+                        .enabled
+                        .ok_or_else(|| RpcError::BadParams("enabled is required".into()))?;
+                    self.sessions
+                        .set_usage_resume(p.chat_id.as_deref(), enabled)
+                        .map_err(failed)?;
+                } else if method == methods::RESUME_USAGE_LIMIT {
+                    let chat = p
+                        .chat_id
+                        .as_deref()
+                        .ok_or_else(|| RpcError::BadParams("chatId is required".into()))?;
+                    self.sessions
+                        .resume_usage_limit(chat)
+                        .await
+                        .map_err(failed)?;
+                }
+                RpcReply::value(&self.sessions.usage_resume_status(p.chat_id.as_deref()))
             }
             methods::GET_TITLE_SETTINGS => RpcReply::value(&self.registry.title_settings()),
             methods::SET_TITLE_SETTINGS => {

@@ -52,7 +52,6 @@ use crate::markdown::parser::{
 use crate::markdown::render::{self, RenderCache, RenderOptions};
 use crate::markdown::veil::RowVeil;
 use crate::motion::{self, AnimationExt as _};
-use crate::notice::{NoticeChipIcon::Tile, notice_chip};
 use crate::state::AppState;
 use crate::syntax_cache::{DocumentHighlightKey, SyntaxHighlightCache};
 use crate::theme::Theme;
@@ -4015,6 +4014,9 @@ pub enum TranscriptEvent {
     /// The not-sent line's Retry (see [`Transcript::set_external_not_sent`]):
     /// send the messages the server never took again.
     RetryNotSent,
+    /// The not-sent line's Remove: the first message the server never took
+    /// leaves the chat and goes back to the draft with its files.
+    RemoveNotSent,
 }
 
 /// Where a reply's Fork menu sends the copy.
@@ -9377,13 +9379,19 @@ impl Transcript {
     /// asks the owner to send those messages again.
     fn render_not_sent_line(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();
+        let action = |id: &'static str, label: &'static str, aria: &'static str| {
+            div()
+                .id(id)
+                .debug_selector(move || id.into())
+                .role(gpui::Role::Button)
+                .aria_label(aria)
+                .tab_index(0)
+                .focus_visible(|style| style.underline())
+                .cursor_pointer()
+                .hover(|style| style.underline())
+                .child(SharedString::from(label))
+        };
         div()
-            .id("not-sent-retry")
-            .debug_selector(|| "not-sent-retry".into())
-            .role(gpui::Role::Button)
-            .aria_label("Not sent. Retry sending")
-            .tab_index(0)
-            .focus_visible(|style| style.underline())
             .flex()
             .flex_row()
             .items_center()
@@ -9391,9 +9399,20 @@ impl Transcript {
             .pt(px(Theme::SPACE_LG))
             .text_size(crate::typography::text_xs())
             .text_color(theme.danger)
-            .cursor_pointer()
-            .on_click(cx.listener(|_, _, _, cx| cx.emit(TranscriptEvent::RetryNotSent)))
-            .child(SharedString::from("Not sent — Retry"))
+            .child(SharedString::from("Not sent —"))
+            .child(
+                action("not-sent-retry", "Retry", "Not sent. Retry sending")
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(TranscriptEvent::RetryNotSent))),
+            )
+            .child(SharedString::from("·"))
+            .child(
+                action(
+                    "not-sent-remove",
+                    "Remove",
+                    "Not sent. Remove the message and keep it as a draft",
+                )
+                .on_click(cx.listener(|_, _, _, cx| cx.emit(TranscriptEvent::RemoveNotSent))),
+            )
             .into_any_element()
     }
 
@@ -11840,21 +11859,70 @@ fn lift_file_mentions(
     (trimmed, kept, files)
 }
 
-/// The transcript ErrorChip — the shared [`notice_chip`] in its tile
-/// treatment (a port of zuse chat-view.tsx `ErrorChip`, restacked for long
-/// payloads: header row with the red-washed tile and the medium "Error"
-/// label, then the human message below). Unlike the web port, the message
-/// WRAPS instead of truncating: startup-crash errors carry the agent's exit
-/// status and stderr, and a one-line ellipsis was exactly what made
-/// opcodehq/zuse#95 undiagnosable from the screenshot.
+/// The transcript ErrorChip: a quiet line in the turn, not a red card — the
+/// recovery (Sign in, Retry, Switch account) lives in the composer's tray, so
+/// the transcript only records what happened. A glyph tinted by the failure's
+/// kind (the tray's vocabulary: sign-in, usage limit, generic), the message
+/// in the muted transcript tone, and a Copy button revealed on hover. The
+/// message WRAPS instead of truncating: startup-crash errors carry the
+/// agent's exit status and stderr, and a one-line ellipsis was exactly what
+/// made opcodehq/zuse#95 undiagnosable from the screenshot.
 fn error_chip(message: SharedString, theme: &Theme) -> AnyElement {
+    use crate::composer::tray::{ProviderErrorKind, classify_provider_error};
+    let (glyph, tint) = match classify_provider_error(&message) {
+        ProviderErrorKind::SignIn => (crate::icons::LOGOUT_2, theme.danger),
+        ProviderErrorKind::UsageLimit => (crate::icons::DASHBOARD_SPEED, theme.warning),
+        ProviderErrorKind::Reconnecting => (crate::icons::REFRESH, theme.text_muted),
+        ProviderErrorKind::Generic => (crate::icons::ALERT_CIRCLE, theme.danger),
+    };
+    let copy = message.clone();
     div()
         .py(px(4.0))
         .w_full()
+        .min_w_0()
+        .group("transcript-error")
+        .flex()
+        .items_start()
+        .gap(px(8.0))
+        .text_size(crate::typography::text_md())
+        .line_height(px(20.0))
         .child(
-            notice_chip(theme, false, "Error", message, Tile)
-                .overflow_hidden()
-                .w_full(),
+            div().flex_none().h(px(20.0)).flex().items_center().child(
+                crate::icons::icon(glyph)
+                    .size(px(14.0))
+                    .text_color(tint.opacity(0.85)),
+            ),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_color(theme.text_muted)
+                .child(message),
+        )
+        .child(
+            div()
+                .id("transcript-error-copy")
+                .flex_none()
+                .size(px(20.0))
+                .rounded(px(6.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .opacity(0.0)
+                .group_hover("transcript-error", |s| s.opacity(1.0))
+                .hover(|s| s.bg(theme.hairline(0.08)))
+                .on_click(move |_, _, cx| {
+                    cx.stop_propagation();
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy.to_string()));
+                })
+                .tip("Copy message")
+                .child(
+                    crate::icons::icon(crate::icons::COPY)
+                        .size(px(12.0))
+                        .text_color(theme.text_muted),
+                ),
         )
         .into_any_element()
 }
