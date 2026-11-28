@@ -710,6 +710,9 @@ impl<'p> Builder<'p> {
                 detail: opt_str(self, 2).filter(|detail| !detail.trim().is_empty()),
             },
             "ConnectedPlugins" => Component::ConnectedPlugins {},
+            "MachineImageProposal" => Component::MachineImageProposal {
+                proposal: req_str(self, 0).trim().to_owned(),
+            },
             other => unreachable!("catalogue component {other} has no builder"),
         })
     }

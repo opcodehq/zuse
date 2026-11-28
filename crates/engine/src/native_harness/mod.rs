@@ -89,7 +89,7 @@ impl NativeHarness {
             None => inventory.first(),
         }
         .ok_or_else(|| {
-            failure("Sign in to a local Codex, Claude, or Grok CLI, or connect a model account in Settings, then refresh the model list.")
+            failure("Sign in to a local Codex, Claude, or Grok CLI, connect a model account, or add a Kimi or GLM API key in Settings, then refresh the model list.")
         })?;
         let mut options = Options::new(&selected.id);
         self.scheduling.apply(&mut options).map_err(failure)?;

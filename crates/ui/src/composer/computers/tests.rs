@@ -418,3 +418,230 @@ fn a_full_read_clears_requests_that_went_away(cx: &mut gpui::TestAppContext) {
         assert!(c.computers.runs.is_empty());
     });
 }
+
+/// A pushed `computer-request` hint shows a new approval at once, without
+/// waiting for the next poll.
+#[gpui::test]
+fn a_pushed_request_hint_fetches_the_approval_at_once(cx: &mut gpui::TestAppContext) {
+    let runtime = runtime();
+    let _entered = runtime.enter();
+    let (composer, _, mut requests, replies) = cloud_composer(cx, true);
+    let quiet = |label: &str, params: &Value| match label {
+        "pending" | "results" => Ok(json!([])),
+        _ => account(label, params),
+    };
+    let asked = serve(cx, &runtime, &mut requests, &replies, quiet);
+    let feed = asked
+        .iter()
+        .find(|r| r["method"] == methods::CLOUD_EVENTS)
+        .expect("the composer follows the account feed");
+    assert_eq!(feed["params"]["expectedAccountId"], "owner");
+    composer.update(cx, |c, _| assert!(c.computer_request_waiting().is_none()));
+    let hint = |workspace: &str| {
+        json!({"id":feed["id"],"item":{"accountId":"owner","organizationId":null,
+            "data":{"type":"events","events":[{"kind":"computer-request","resourceId":"session","workspaceId":workspace}]}}})
+    };
+    // Another computer's hint is not this chat's business.
+    runtime
+        .block_on(replies.send(format!("{}\n", hint("another-task"))))
+        .unwrap();
+    let asked = serve(cx, &runtime, &mut requests, &replies, account);
+    assert!(
+        !asked.iter().any(|r| r["params"]["action"] == "pending"),
+        "{asked:?}"
+    );
+    runtime
+        .block_on(replies.send(format!("{}\n", hint("task"))))
+        .unwrap();
+    let asked = serve(cx, &runtime, &mut requests, &replies, account);
+    assert!(asked.iter().any(|r| r["params"]["action"] == "pending"));
+    composer.update(cx, |c, _| {
+        assert_eq!(
+            c.computer_request_waiting().map(|p| p.id.as_str()),
+            Some("r1")
+        );
+    });
+}
+
+#[test]
+fn only_this_accounts_hints_for_this_computer_refetch() {
+    let frame = |account: &str, org: Value, data: Value| json!({"accountId":account,"organizationId":org,"data":data});
+    let hint = json!({"type":"events","events":[{"kind":"computer-request","workspaceId":"task","resourceId":"chat"}]});
+    assert!(requests_changed(
+        &frame("owner", Value::Null, hint.clone()),
+        "owner",
+        "task"
+    ));
+    assert!(!requests_changed(
+        &frame("owner", Value::Null, hint.clone()),
+        "owner",
+        "other"
+    ));
+    assert!(!requests_changed(
+        &frame("someone", Value::Null, hint.clone()),
+        "owner",
+        "task"
+    ));
+    assert!(!requests_changed(
+        &frame("owner", json!("org"), hint),
+        "owner",
+        "task"
+    ));
+    let other = json!({"type":"events","events":[{"kind":"billing","workspaceId":"task"}]});
+    assert!(!requests_changed(
+        &frame("owner", Value::Null, other),
+        "owner",
+        "task"
+    ));
+    // Hints may have been missed: read again.
+    for kind in ["connected", "reset"] {
+        assert!(requests_changed(
+            &frame("owner", Value::Null, json!({"type":kind})),
+            "owner",
+            "task"
+        ));
+    }
+}
+
+fn renewal_miss(label: &str, params: &Value) -> Result<Value, &'static str> {
+    match label {
+        "list" | "pending" | "results" => Err(zuse_protocol::cloud::SESSION_RENEWAL_UNAVAILABLE),
+        _ => account(label, params),
+    }
+}
+
+fn notice_shown(composer: &Entity<Composer>, cx: &mut gpui::TestAppContext) -> bool {
+    composer.update(cx, |c, cx| {
+        let theme = Theme::of(cx).clone();
+        c.computer_tray_rows(&theme, cx)
+            .iter()
+            .any(|row| row.id().as_ref() == "computers-error")
+    })
+}
+
+/// A session renewal that misses once (a network blip, a laptop waking up)
+/// stays silent, backs the reads off, and the next good read forgets it.
+#[gpui::test]
+fn a_renewal_miss_is_retried_quietly_and_cleared_by_the_next_read(cx: &mut gpui::TestAppContext) {
+    let runtime = runtime();
+    let _entered = runtime.enter();
+    let (composer, _, mut requests, replies) = cloud_composer(cx, true);
+    serve(cx, &runtime, &mut requests, &replies, renewal_miss);
+    assert!(!notice_shown(&composer, cx), "one miss shows nothing");
+    composer.read_with(cx, |c, _| {
+        assert!(c.computers.bridge_on, "this computer's connector is on");
+        assert_eq!(c.computers.reads.failures, 1);
+        assert!(c.computers.reads.delay() > FAST_POLL, "reads back off");
+    });
+    composer.update(cx, |c, cx| c.refresh_computers(cx));
+    serve(cx, &runtime, &mut requests, &replies, account);
+    composer.read_with(cx, |c, _| {
+        assert_eq!(c.computers.reads.failures, 0);
+        assert_eq!(c.computers.reads.delay(), FAST_POLL);
+    });
+    assert!(!notice_shown(&composer, cx));
+}
+
+#[test]
+fn only_a_lasting_relevant_failure_becomes_an_actionable_notice() {
+    use zuse_protocol::cloud::{SESSION_RENEWAL_UNAVAILABLE, SESSION_SIGNED_OUT};
+    let start = Instant::now();
+    let mut state = State {
+        bridge_on: true,
+        ..Default::default()
+    };
+    let miss = || Some(SESSION_RENEWAL_UNAVAILABLE.to_owned());
+    state.reads.record(miss(), start);
+    state.reads.record(miss(), start + Duration::from_secs(5));
+    assert_eq!(
+        state.read_notice(start + Duration::from_secs(90)),
+        None,
+        "two misses"
+    );
+    state.reads.record(miss(), start + Duration::from_secs(15));
+    assert_eq!(
+        state.read_notice(start + Duration::from_secs(30)),
+        None,
+        "not lasting yet"
+    );
+    let later = start + SUSTAINED_FOR;
+    assert_eq!(state.read_notice(later), Some(ReadNotice::Unreachable));
+    assert!(!ReadNotice::Unreachable.text().contains("Settings →"));
+
+    // Not using this computer from cloud chats and nothing waiting: silent.
+    state.bridge_on = false;
+    assert_eq!(state.read_notice(later), None);
+    // A request waiting in this chat makes it the owner's business again.
+    state.pending.push(Pending {
+        id: "r1".into(),
+        ..Default::default()
+    });
+    assert_eq!(state.read_notice(later), Some(ReadNotice::Unreachable));
+
+    // Dismissed, it stays away until the reads recover and fail again.
+    state.reads.dismissed = true;
+    assert_eq!(state.read_notice(later), None);
+    state.reads.record(None, later);
+    assert_eq!(state.reads, ReadHealth::default());
+
+    // A lost sign-in can't fix itself: a second read agreeing is enough.
+    state
+        .reads
+        .record(Some(SESSION_SIGNED_OUT.to_owned()), later);
+    assert_eq!(state.read_notice(later), None);
+    state
+        .reads
+        .record(Some(SESSION_SIGNED_OUT.to_owned()), later);
+    assert_eq!(state.read_notice(later), Some(ReadNotice::SignedOut));
+
+    // Other errors keep their own words.
+    let mut failing = State {
+        bridge_on: true,
+        ..Default::default()
+    };
+    for _ in 0..SUSTAINED_FAILURES {
+        failing
+            .reads
+            .record(Some("The cloud refused this request".into()), start);
+    }
+    assert_eq!(
+        failing.read_notice(later),
+        Some(ReadNotice::Failing("The cloud refused this request".into()))
+    );
+}
+
+#[test]
+fn failing_reads_back_off_to_a_cap() {
+    let mut reads = ReadHealth::default();
+    assert_eq!(reads.delay(), FAST_POLL);
+    let now = Instant::now();
+    let mut last = FAST_POLL;
+    for _ in 0..12 {
+        reads.record(Some("down".into()), now);
+        assert!(reads.delay() >= last);
+        last = reads.delay();
+    }
+    assert_eq!(last, BACKOFF_CAP);
+}
+
+/// While reads fail, the next poll reads everything again, so a slow read
+/// that keeps failing can't be hidden by the cheap reads succeeding.
+#[gpui::test]
+fn a_failing_poll_rereads_everything(cx: &mut gpui::TestAppContext) {
+    let runtime = runtime();
+    let _entered = runtime.enter();
+    let (composer, _, mut requests, replies) = cloud_composer(cx, true);
+    let list_down = |label: &str, params: &Value| match label {
+        "list" => Err(zuse_protocol::cloud::SESSION_RENEWAL_UNAVAILABLE),
+        _ => account(label, params),
+    };
+    serve(cx, &runtime, &mut requests, &replies, list_down);
+    composer.read_with(cx, |c, _| assert_eq!(c.computers.reads.failures, 1));
+    cx.executor().advance_clock(Duration::from_secs(31));
+    let asked = serve(cx, &runtime, &mut requests, &replies, list_down);
+    assert!(
+        asked.iter().any(|r| r["params"]["action"] == "list"),
+        "{asked:?}"
+    );
+    composer.read_with(cx, |c, _| assert_eq!(c.computers.reads.failures, 2));
+}

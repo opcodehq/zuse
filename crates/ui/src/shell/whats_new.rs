@@ -6,6 +6,10 @@
 //! the headline feature drawn with the app's own surfaces, text and controls,
 //! rising from the bottom edge of a grain field in the release's tint. The summary is the headline, followed by the highlights. Releases
 //! without notes skip the stage and list their changelog bullets instead.
+//!
+//! Every release adds its notes when the version is bumped; a test fails
+//! until the workspace version has an entry with a known scene (see
+//! "Preparing a release" in `internal-docs/packaging.md`).
 
 use super::*;
 use crate::theme::mix;
@@ -105,6 +109,10 @@ pub(super) fn named_icon(name: &str) -> Option<&'static str> {
         "bolt" => icons::FAST_TIER,
         "wrench" => icons::PR_REPAIR,
         "sparkle" => icons::MAGIC_STICK_3,
+        "laptop" => icons::LAPTOP,
+        "folder" => icons::FOLDER_WITH_FILES,
+        "activity" => icons::CLOUD_ACTIVITY,
+        "history" => icons::HISTORY,
         _ => return None,
     })
 }
@@ -242,9 +250,9 @@ fn tint_ink(release: &Release, theme: &Theme) -> gpui::Hsla {
 // Scenes: the headline feature, drawn with the app's own surfaces
 // ---------------------------------------------------------------------------
 
-/// Scene names usable in `whats-new.json`.
+/// Scene names usable in `whats-new.json`; each needs an arm in [`stage`].
 #[cfg(test)]
-pub(super) const SCENES: [&str; 2] = ["update-channel", "model-picker"];
+pub(super) const SCENES: [&str; 3] = ["update-channel", "model-picker", "computer-approval"];
 
 /// Sizes scaled for the dialog (`k = 1`), a narrow dialog, or the sidebar card.
 #[derive(Clone, Copy)]
@@ -615,6 +623,164 @@ fn model_picker_scene(theme: &Theme, k: Scale) -> AnyElement {
         .into_any_element()
 }
 
+/// Height of the computer approval card in scene units, and the space kept
+/// above and below it on a short stage.
+const APPROVAL_CARD_HEIGHT: f32 = 192.0;
+const APPROVAL_MARGIN: f32 = 10.0;
+
+/// The approval scene's scale on a stage `height` tall: the stage's own
+/// scale, shrunk further when needed so the whole card, actions included,
+/// stays on a short stage such as the sidebar card's.
+fn approval_scale(k: Scale, height: f32) -> Scale {
+    Scale(k.0.min(height / (APPROVAL_CARD_HEIGHT + APPROVAL_MARGIN * 2.0)))
+}
+
+/// A cloud chat asking to run a command on your own computer: the approval
+/// that takes the composer's place, laid out like the real prompt
+/// (`composer::computers`), under the message that asked for it.
+fn computer_approval_scene(theme: &Theme, k: Scale) -> AnyElement {
+    let ghost = |label: &'static str| {
+        div()
+            .flex_none()
+            .h(k.px(28.0))
+            .px(k.px(8.0))
+            .flex()
+            .items_center()
+            .rounded(k.px(6.0))
+            .text_size(k.px(11.0))
+            .text_color(theme.text_muted)
+            .child(label)
+    };
+    let allow_once = popover::dither_key(
+        div()
+            .flex_none()
+            .ml(k.px(4.0))
+            .h(k.px(28.0))
+            .px(k.px(12.0))
+            .flex()
+            .items_center()
+            .rounded(k.px(8.0))
+            .text_size(k.px(11.0))
+            .font_weight(gpui::FontWeight::MEDIUM)
+            .text_color(gpui::white()),
+        theme,
+        popover::DitherKey::Primary,
+        8.0 * k.0,
+    )
+    // Above the dither fill.
+    .child(div().relative().child("Allow once"));
+    let header = div()
+        .h(k.px(24.0))
+        .flex()
+        .items_center()
+        .gap(k.px(8.0))
+        .child(
+            div()
+                .flex_none()
+                .size(k.px(24.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(k.px(6.0))
+                .bg(theme.muted_fill())
+                .child(
+                    icon(icons::LAPTOP)
+                        .size(k.px(14.0))
+                        .text_color(theme.text_muted),
+                ),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_size(k.px(12.0))
+                .text_color(theme.text_muted)
+                .child("Computer"),
+        );
+    let command = div()
+        .mt(k.px(10.0))
+        .rounded(k.px(6.0))
+        .px(k.px(10.0))
+        .py(k.px(7.0))
+        .bg(theme.muted_fill().opacity(0.45))
+        .font_family(theme.font_mono.clone())
+        .text_size(k.px(11.0))
+        .line_height(k.px(16.0))
+        .text_color(theme.text)
+        .child(div().text_color(theme.text_muted).child("~/code/zuse"))
+        .child("$ cargo test");
+    let actions = div()
+        .mt(k.px(10.0))
+        .flex()
+        .items_center()
+        .gap(k.px(4.0))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_size(k.px(10.0))
+                .text_color(theme.text_muted)
+                .child("zsh"),
+        )
+        .child(ghost("Deny"))
+        .child(ghost("Allow for this chat"))
+        .child(ghost("Allow always"))
+        .child(allow_once);
+    let card = scene_panel(theme, k, 436.0, 12.0)
+        .flex_none()
+        .h(k.px(APPROVAL_CARD_HEIGHT))
+        .p(k.px(12.0))
+        .overflow_hidden()
+        .child(header)
+        .child(
+            div()
+                .mt(k.px(10.0))
+                .text_size(k.px(13.0))
+                .line_height(k.px(20.0))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(theme.text_strong)
+                .child("Run this command on your computer?"),
+        )
+        .child(
+            div()
+                .truncate()
+                .text_size(k.px(12.0))
+                .line_height(k.px(18.0))
+                .text_color(theme.text_muted)
+                .child("Swaraj's MacBook"),
+        )
+        .child(command)
+        .child(actions);
+    // The message that asked for it; a short stage crops it off the top.
+    let request = div()
+        .flex_none()
+        .self_end()
+        .px(k.px(12.0))
+        .py(k.px(5.0))
+        .rounded(k.px(12.0))
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.surface_dialog)
+        .shadow_sm()
+        .text_size(k.px(12.0))
+        .line_height(k.px(18.0))
+        .text_color(theme.text)
+        .child("Run the tests on my Mac");
+    div()
+        .w(k.px(436.0))
+        .h_full()
+        .pb(k.px(APPROVAL_MARGIN))
+        .flex()
+        .flex_col()
+        .justify_end()
+        .gap(k.px(8.0))
+        .child(request)
+        .child(card)
+        .into_any_element()
+}
+
 /// The release's stage, or `None` when its notes name no scene: the scene
 /// rising from the bottom edge of a grain field in the release's tint. `top_radius` and `bottom_radius` are the frame's rounding, which
 /// the field's cells stay inside.
@@ -629,9 +795,48 @@ fn stage(
     let (scene, top) = match notes(release)?.scene.as_deref()? {
         "update-channel" => (update_channel_scene(theme, k, cx), Some(26.0)),
         "model-picker" => (model_picker_scene(theme, k), None),
+        "computer-approval" => (
+            computer_approval_scene(theme, approval_scale(k, height)),
+            None,
+        ),
         _ => return None,
     };
-    let ink = tint_ink(release, theme);
+    Some(
+        div()
+            .relative()
+            .w_full()
+            .h(px(height))
+            .flex_none()
+            .overflow_hidden()
+            .child(announcement_background(
+                theme,
+                tint_ink(release, theme),
+                top_radius,
+                bottom_radius,
+            ))
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .top(k.px(top.unwrap_or(0.0)))
+                    .flex()
+                    .justify_center()
+                    // Own layer: inside the frosted dialog the panels would
+                    // otherwise share a draw order with the field.
+                    .child(crate::frost::layered(scene)),
+            ),
+    )
+}
+
+/// The textured panel shared by release announcements and the skill installer.
+pub(crate) fn announcement_background(
+    theme: &Theme,
+    ink: gpui::Hsla,
+    top_radius: f32,
+    bottom_radius: f32,
+) -> gpui::Div {
     let tone = |sat: f32, lightness: f32| gpui::hsla(ink.h, (ink.s * sat).min(0.6), lightness, 1.0);
     // Grain reads as texture, not noise, when its tones sit close to the
     // base: a deep tinted gradient in the dark, a pale one in the light.
@@ -650,33 +855,19 @@ fn stage(
             high: tone(0.95, 0.657),
         }
     };
-    Some(
-        div()
-            .relative()
-            .w_full()
-            .h(px(height))
-            .flex_none()
-            .overflow_hidden()
-            .bg(gpui::linear_gradient(
-                180.0,
-                gpui::linear_color_stop(palette.top, 0.0),
-                gpui::linear_color_stop(palette.bottom, 1.0),
-            ))
-            .child(grain_field(palette, top_radius, bottom_radius))
-            .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .right_0()
-                    .bottom_0()
-                    .top(k.px(top.unwrap_or(0.0)))
-                    .flex()
-                    .justify_center()
-                    // Own layer: inside the frosted dialog the panels would
-                    // otherwise share a draw order with the field.
-                    .child(crate::frost::layered(scene)),
-            ),
-    )
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .right_0()
+        .bottom_0()
+        .rounded(px(top_radius))
+        .bg(gpui::linear_gradient(
+            180.0,
+            gpui::linear_color_stop(palette.top, 0.0),
+            gpui::linear_color_stop(palette.bottom, 1.0),
+        ))
+        .child(grain_field(palette, top_radius, bottom_radius))
 }
 
 /// One stage cell, in logical pixels: the send key's grain.
@@ -1150,9 +1341,9 @@ impl Shell {
             .m_0()
             .px(px(INSET))
             .flex_none()
+            .justify_between()
             .child(
                 div()
-                    .mr_auto()
                     .min_w_0()
                     .flex()
                     .items_center()
@@ -1162,8 +1353,15 @@ impl Shell {
                     // drops the index link, so the keys stay on one line.
                     .when(roomy, |s| s.child(all_releases)),
             )
-            .child(pager)
-            .child(got_it)
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(pager)
+                    .child(got_it),
+            )
     }
 }
 
@@ -1279,6 +1477,59 @@ mod tests {
                 assert!(TINTS.iter().any(|t| t.name == tint), "unknown tint {tint}");
             }
         }
+    }
+
+    /// Release guard: the version being built and the newest changelog
+    /// section must ship hand-written notes with a stage, so the dialog never
+    /// opens on bare changelog bullets. Add the entry to
+    /// `assets/whats-new.json` when bumping the version (see
+    /// `internal-docs/packaging.md`).
+    #[test]
+    fn the_release_being_built_has_whats_new_notes_with_a_scene() {
+        let newest = releases().first().expect("CHANGELOG.md has a release");
+        // This crate takes the workspace version from the root Cargo.toml.
+        for version in [env!("CARGO_PKG_VERSION").to_owned(), newest.version.clone()] {
+            let Some(n) = all_notes().get(&version) else {
+                panic!("add a {version} entry to crates/ui/assets/whats-new.json");
+            };
+            assert!(!n.summary.trim().is_empty(), "{version}: empty summary");
+            assert!(
+                (2..=4).contains(&n.highlights.len()),
+                "{version}: needs 2 to 4 highlights"
+            );
+            for h in &n.highlights {
+                assert!(
+                    named_icon(&h.icon).is_some(),
+                    "{version}: unknown icon {}",
+                    h.icon
+                );
+                assert!(
+                    !h.title.trim().is_empty() && !h.body.trim().is_empty(),
+                    "{version}: highlight without a title or body"
+                );
+            }
+            let scene = n.scene.as_deref().unwrap_or_default();
+            assert!(
+                SCENES.contains(&scene),
+                "{version}: scene {scene:?} is not one of {SCENES:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn approval_scene_keeps_the_whole_card_on_short_stages() {
+        assert_eq!(approval_scale(Scale(1.0), STAGE_HEIGHT).0, 1.0);
+        let narrow = STAGE_HEIGHT * MIN_STAGE_SCALE;
+        assert_eq!(
+            approval_scale(Scale(MIN_STAGE_SCALE), narrow).0,
+            MIN_STAGE_SCALE
+        );
+        let compact = approval_scale(Scale(COMPACT_SCALE), CARD_THUMB_HEIGHT).0;
+        assert!(compact < COMPACT_SCALE);
+        assert!(
+            (APPROVAL_CARD_HEIGHT + APPROVAL_MARGIN) * compact <= CARD_THUMB_HEIGHT,
+            "card overflows the sidebar thumbnail"
+        );
     }
 
     #[test]

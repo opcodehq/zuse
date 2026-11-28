@@ -1,0 +1,1439 @@
+[
+  {
+    "repository": "mattpocock/skills",
+    "publisher": "Matt Pocock",
+    "avatar_id": 28293365,
+    "revision": "bbadaa631c37af594e5a05c9cefacd9956136b18",
+    "stars": 334487,
+    "skills": [
+      {
+        "id": "diagnosing-bugs",
+        "path": "skills/engineering/diagnosing-bugs",
+        "title": "Diagnosing Bugs",
+        "description": "Reproduce tricky bugs and slowdowns, isolate the cause, and verify a fix.",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "bytes": 8664,
+            "sha256": "849198df88cdb65fd0d97236604c1fca7ff2f22d2f705f9724a800d0266b118d"
+          },
+          {
+            "path": "agents/openai.yaml",
+            "bytes": 103,
+            "sha256": "3e430dbe4334a87597488c060cb3dc3786bb00c9182877d6f5ec41f62490e90b"
+          },
+          {
+            "path": "scripts/hitl-loop.template.sh",
+            "bytes": 1316,
+            "sha256": "35103539fc36873eea36074769ad454f9379d6fc8b2dc0e26ce987fd3bfe5503"
+          }
+        ],
+        "name": "diagnosing-bugs"
+      },
+      {
+        "id": "improve-codebase-architecture",
+        "path": "skills/engineering/improve-codebase-architecture",
+        "title": "Improve Codebase Architecture",
+        "description": "Find opportunities to improve module boundaries and discuss the tradeoffs.",
+        "files": [
+          {
+            "path": "HTML-REPORT.md",
+            "bytes": 6641,
+            "sha256": "581e8bb5a521e46bbda8ca7e19b15948bed882187108092ebb90c62513b77528"
+          },
+          {
+            "path": "SKILL.md",
+            "bytes": 6028,
+            "sha256": "35b03a3db61e0f5aa333ea59b54963e45a3d2ace6649b2ef4f9576603e2582a6"
+          },
+          {
+            "path": "agents/openai.yaml",
+            "bytes": 166,
+            "sha256": "c8cb20f68ebf0edb4e497bc11ae5fcaa196004e661cd189015b04f4109ced7f1"
+          }
+        ],
+        "name": "improve-codebase-architecture"
+      },
+      {
+        "id": "codebase-design",
+        "path": "skills/engineering/codebase-design",
+        "title": "Codebase Design",
+        "description": "Design modules around a shared domain vocabulary and clear interfaces.",
+        "files": [
+          {
+            "path": "DEEPENING.md",
+            "bytes": 2553,
+            "sha256": "f3dd099ce99289bd213914d8ee3e2429b78309c3957ca4583f7659551b1d53c1"
+          },
+          {
+            "path": "DESIGN-IT-TWICE.md",
+            "bytes": 2699,
+            "sha256": "c222ab5a82e0405672eb9062d62496139a08828e45d07fc5f18e4952c10fac1a"
+          },
+          {
+            "path": "SKILL.md",
+            "bytes": 6446,
+            "sha256": "2c20617f87ec8af6a434859f381b2f061a69b530444e74eb39e78bb016a6d1e2"
+          },
+          {
+            "path": "agents/openai.yaml",
+            "bytes": 102,
+            "sha256": "edebc9e4fcfe102114012575eaa9600b9b5fd08c311664f389c36e7bc717740f"
+          }
+        ],
+        "name": "codebase-design"
+      },
+      {
+        "id": "code-review",
+        "path": "skills/engineering/code-review",
+        "title": "Code Review",
+        "description": "Review a change against its stated intent and flag actionable surprises.",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "bytes": 6721,
+            "sha256": "9c921a8d88138a41401d8897ca1bb852088ab1b7b605cdd04edc13e3e8aab6dd"
+          },
+          {
+            "path": "agents/openai.yaml",
+            "bytes": 100,
+            "sha256": "8229ca854e11dc8e6aef2131ee03f31fb1561cf905fab9ccc325180cf3331352"
+          }
+        ],
+        "name": "code-review"
+      },
+      {
+        "id": "tdd",
+        "path": "skills/engineering/tdd",
+        "title": "Test-Driven Development",
+        "description": "Work through a behavior change using focused tests and small implementation steps.",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "bytes": 3629,
+            "sha256": "5505d25bbaa8fc14a79e4d20163936958992a2995b7f1dd1d6197edc9ed722e0"
+          },
+          {
+            "path": "agents/openai.yaml",
+            "bytes": 87,
+            "sha256": "ea6f01cf1b8c06a4b0f5b649d74b1b8ce8685e72af1b38d70d877693e092af0b"
+          },
+          {
+            "path": "mocking.md",
+            "bytes": 1481,
+            "sha256": "3ceb807fdf4a47d6a93d4d9a891e5ba6d362a6247bd08adc451feebfc17361ef"
+          },
+          {
+            "path": "tests.md",
+            "bytes": 2214,
+            "sha256": "859f9e592c188fda4fc7277dd180e4ce9c7a2e13f6efe1f6f29eccc9d28c106a"
+          }
+        ],
+        "name": "tdd"
+      },
+      {
+        "id": "pr",
+        "path": "skills/engineering/pr",
+        "title": "Pull Request",
+        "description": "Prepare a clear pull request from the changes and their intent.",
+        "files": [
+          {
+            "path": "CREDITS.md",
+            "bytes": 604,
+            "sha256": "a7a087127665d7298a72280ef6e19c41ad8404523712a788c8dc3ab414bc2497"
+          },
+          {
+            "path": "SKILL.md",
+            "bytes": 4169,
+            "sha256": "ab63f1cf78647389edcd386c9427c5dfca27ed2836930c24773ffee834c19bcd"
+          },
+          {
+            "path": "agents/openai.yaml",
+            "bytes": 93,
+            "sha256": "2295b586624db4ef546f3fd4695492f039d941a46d8a1593a702ce3ca511b8ad"
+          }
+        ],
+        "name": "pr"
+      },
+      {
+        "id": "handoff",
+        "path": "skills/productivity/handoff",
+        "title": "Handoff",
+        "description": "Capture the context a new thread needs to continue the work.",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "bytes": 940,
+            "sha256": "4cbb043950dad2ffd3662ff1a5a0b51ae676004b5cae10e3787e8ee7a4ee69d3"
+          },
+          {
+            "path": "agents/openai.yaml",
+            "bytes": 141,
+            "sha256": "5c479fd562c691851690e8b18c8501045bef0943c10743d636b2fae26add1d28"
+          }
+        ],
+        "name": "handoff"
+      },
+      {
+        "id": "grill-me",
+        "path": "skills/productivity/grill-me",
+        "title": "Grill Me",
+        "description": "Work through a plan or design decision by decision.",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "bytes": 157,
+            "sha256": "caaf8b8de1684f96e26b28f3c29189db5c89cce4b73e1c93d86164f66ef88637"
+          },
+          {
+            "path": "agents/openai.yaml",
+            "bytes": 137,
+            "sha256": "c061e39c3e0f9d865fb1b97556d485704af2a8a58f4b8221a8917a5c2074a32b"
+          }
+        ],
+        "name": "grill-me"
+      },
+      {
+        "id": "grilling",
+        "path": "skills/productivity/grilling",
+        "title": "Grilling",
+        "description": "Pressure-test a proposal and resolve branches in the decision tree.",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "bytes": 2077,
+            "sha256": "a146842ed93ca43d833550fa9adf02e58cb63c83fea9d4b4522995b82242d4e2"
+          },
+          {
+            "path": "agents/openai.yaml",
+            "bytes": 113,
+            "sha256": "1411d7df7d99b7e621a1ff8283c8133cc2464be63d064e52d8ce169c6800ee9b"
+          }
+        ],
+        "name": "grilling"
+      }
+    ]
+  },
+  {
+    "repository": "anthropics/skills",
+    "publisher": "Anthropic",
+    "avatar_id": 76263028,
+    "revision": "e4bb5d960d87126ff3b3a8af1a104b7db67560ba",
+    "stars": 201703,
+    "skills": [
+      {
+        "id": "frontend-design",
+        "path": "skills/frontend-design",
+        "title": "Frontend Design",
+        "description": "Design production-ready interfaces with a distinct visual direction.",
+        "files": [
+          {
+            "path": "LICENSE.txt",
+            "bytes": 10174,
+            "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+          },
+          {
+            "path": "SKILL.md",
+            "bytes": 9390,
+            "sha256": "d91970639e9f5c37682ac7ab60094d35f1c7c1f38d731bd56396563aee10c1d3"
+          }
+        ],
+        "name": "frontend-design"
+      },
+      {
+        "id": "doc-coauthoring",
+        "path": "skills/doc-coauthoring",
+        "title": "Doc Coauthoring",
+        "description": "Draft and review documentation with a structured collaboration workflow.",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "bytes": 15815,
+            "sha256": "2e47d78846faeea4a56e9809c52700087a15a2155a3f293a3efbaded81398ef4"
+          }
+        ],
+        "name": "doc-coauthoring"
+      },
+      {
+        "id": "webapp-testing",
+        "path": "skills/webapp-testing",
+        "title": "Web App Testing",
+        "description": "Use Playwright to exercise local web apps and inspect behavior.",
+        "files": [
+          {
+            "path": "LICENSE.txt",
+            "bytes": 11345,
+            "sha256": "bc6b3af2f331cbc7fb0da1344efb2cbe5877a31498b4d70dbc7000f3405a1362"
+          },
+          {
+            "path": "SKILL.md",
+            "bytes": 3913,
+            "sha256": "51b7349e77ec63b7744a6f63647e7566a0b4d2e301121cc10e8c2113af6556a2"
+          },
+          {
+            "path": "examples/console_logging.py",
+            "bytes": 1027,
+            "sha256": "ea46877289acb82da7e7ce59d0bc37c8977cd57e2a006d0c88d7a1c625bf95da"
+          },
+          {
+            "path": "examples/element_discovery.py",
+            "bytes": 1463,
+            "sha256": "d63c89604a22f8845d724e95dda45db49b1bf57c25ce0a83afbb7b8da3d402f0"
+          },
+          {
+            "path": "examples/static_html_automation.py",
+            "bytes": 953,
+            "sha256": "9d533aafb875ee3ab8b8ebf8f5b9003ac8d999da3d09b285cce252e623140064"
+          },
+          {
+            "path": "scripts/with_server.py",
+            "bytes": 3693,
+            "sha256": "b0dcf4918935b795f4eda9821579b9902119235ff4447f687a30286e7d0925fd",
+            "executable": true
+          }
+        ],
+        "name": "webapp-testing"
+      },
+      {
+        "id": "pdf",
+        "path": "skills/pdf",
+        "title": "PDF",
+        "description": "Read, assemble, or fill PDFs using the upstream PDF workflow.",
+        "files": [
+          {
+            "path": "FORMS.md",
+            "bytes": 11857,
+            "sha256": "d5df5757e23634cd8a1a37e092af6c3b3b63afb3fd3ce86337fce9017cc3ee9f"
+          },
+          {
+            "path": "LICENSE.txt",
+            "bytes": 11357,
+            "sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd"
+          },
+          {
+            "path": "REFERENCE.md",
+            "bytes": 16724,
+            "sha256": "07af9a8f59e77e88fe9b238a403348244f38a4771c54911c412716d8f88f0ea9"
+          },
+          {
+            "path": "SKILL.md",
+            "bytes": 8058,
+            "sha256": "d1c7caf5f35eb7d37877dd7fc33a095037be2b34fb5d2f7f4d43bde3165bb4ee"
+          },
+          {
+            "path": "scripts/check_bounding_boxes.py",
+            "bytes": 2774,
+            "sha256": "0ced522402dd7b3c82a0be9518cf4e485fa9cc0467d7beab6ddb04cb36fcc3e1"
+          },
+          {
+            "path": "scripts/check_fillable_fields.py",
+            "bytes": 268,
+            "sha256": "1fe10b9980a5493c9bbec8c20630c603eaa475b45403751c08f26738736647b8"
+          },
+          {
+            "path": "scripts/convert_pdf_to_images.py",
+            "bytes": 1008,
+            "sha256": "7f58e292a67e18a8ff000d30bad2469389546731f7e8a698cc1d0aed001ea15d"
+          },
+          {
+            "path": "scripts/create_validation_image.py",
+            "bytes": 1258,
+            "sha256": "8fa9fd7962c9f940045b81cf6b991e7c1057c1838e3f9cc6d305007a222ffebf"
+          },
+          {
+            "path": "scripts/extract_form_field_info.py",
+            "bytes": 4300,
+            "sha256": "bb235b36f497bbb1c7c6821cecf527bbba7213520de11219da99f7b13a38c109"
+          },
+          {
+            "path": "scripts/extract_form_structure.py",
+            "bytes": 3945,
+            "sha256": "6814e3fe8f78c2b16d766c132b5a727ff7a31b71d76a7d46bd6e40fe50bc97c5",
+            "executable": true
+          },
+          {
+            "path": "scripts/fill_fillable_fields.py",
+            "bytes": 3819,
+            "sha256": "d140872c2e92e41b1e05370ae8d270c5b7f5ebdf55d9905f03bc974a9c708ff5"
+          },
+          {
+            "path": "scripts/fill_pdf_form_with_annotations.py",
+            "bytes": 3235,
+            "sha256": "8a56e063a49ed53c0b0e1d312ecf8023af76816ed139486ec3b539873de202fd"
+          }
+        ],
+        "name": "pdf"
+      },
+      {
+        "id": "brand-guidelines",
+        "path": "skills/brand-guidelines",
+        "title": "Brand Guidelines",
+        "description": "Apply Anthropic’s official brand guidelines to relevant artifacts.",
+        "files": [
+          {
+            "path": "LICENSE.txt",
+            "bytes": 11345,
+            "sha256": "bc6b3af2f331cbc7fb0da1344efb2cbe5877a31498b4d70dbc7000f3405a1362"
+          },
+          {
+            "path": "SKILL.md",
+            "bytes": 2235,
+            "sha256": "1120b3769e2985cefb3d25be981b1f914abeba57ae079b83c20c666c164fa9fe"
+          }
+        ],
+        "name": "brand-guidelines"
+      }
+    ]
+  },
+  {
+    "repository": "addyosmani/agent-skills",
+    "publisher": "Addy Osmani",
+    "avatar_id": 110953,
+    "revision": "e997ac5b9a74eab332d5e9793bb38a38c8cfdd74",
+    "stars": 120860,
+    "skills": [
+      {
+        "id": "api-and-interface-design",
+        "path": "skills/api-and-interface-design",
+        "title": "API and Interface Design",
+        "description": "Design stable APIs, contracts, and module boundaries.",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "bytes": 14938,
+            "sha256": "cc5e2166c484b2c297e8253f56e7525e5031f81d66101ca4e760ef378ea6bad0"
+          }
+        ],
+        "name": "api-and-interface-design"
+      },
+      {
+        "id": "code-simplification",
+        "path": "skills/code-simplification",
+        "title": "Code Simplification",
+        "description": "Reduce complexity while preserving behavior.",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "bytes": 13719,
+            "sha256": "e13b433345e6bf425c3625442ac1b3507b371c18d7ea3e3db822da7a7f742a29"
+          }
+        ],
+        "name": "code-simplification"
+      },
+      {
+        "id": "documentation-and-adrs",
+        "path": "skills/documentation-and-adrs",
+        "title": "Documentation and ADRs",
+        "description": "Document decisions, interfaces, and operational knowledge.",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "bytes": 12594,
+            "sha256": "a55e540b4544237c2d76873965869e2e6add1e7eee935324f194411eee11e096"
+          }
+        ],
+        "name": "documentation-and-adrs"
+      },
+      {
+        "id": "git-workflow-and-versioning",
+        "path": "skills/git-workflow-and-versioning",
+        "title": "Git Workflow and Versioning",
+        "description": "Keep history, commits, and versioning conventions coherent.",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "bytes": 14403,
+            "sha256": "d77c955f57cfafde73efb7641ed9a478ffaa0f61c0f31bd9fe87317702f1b60d"
+          }
+        ],
+        "name": "git-workflow-and-versioning"
+      },
+      {
+        "id": "spec-driven-development",
+        "path": "skills/spec-driven-development",
+        "title": "Spec-Driven Development",
+        "description": "Define goals and acceptance criteria before implementing a change.",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "bytes": 17003,
+            "sha256": "516eaa5fbe8b1dd2e3a675f0a4361443d3828c41aec04750ae4b3143bb4f82ed"
+          }
+        ],
+        "name": "spec-driven-development"
+      },
+      {
+        "id": "deprecation-and-migration",
+        "path": "skills/deprecation-and-migration",
+        "title": "Deprecation and Migration",
+        "description": "Plan compatible transitions for APIs, schemas, and features.",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "bytes": 12839,
+            "sha256": "1896d7db836fc067e2856739664db9ff5bb642526fdff2126d08ec0d588da4b7"
+          }
+        ],
+        "name": "deprecation-and-migration"
+      }
+    ]
+  },
+  {
+    "repository": "vercel-labs/agent-browser",
+    "publisher": "Vercel",
+    "avatar_id": 108547162,
+    "revision": "3f43a2affd9944298104b7bb39d5f241aef85e91",
+    "stars": 54394,
+    "skills": [
+      {
+        "id": "agent-browser",
+        "path": "skills/agent-browser",
+        "title": "Agent Browser",
+        "description": "Automate browser interactions through the agent-browser CLI.",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "bytes": 3306,
+            "sha256": "7d46deeb0101e84f8d70fd2e5cd18e3b6017edfb973607ff23e95e22c92ce73e"
+          }
+        ],
+        "name": "agent-browser"
+      }
+    ]
+  },
+  {
+    "repository": "vercel-labs/agent-skills",
+    "publisher": "Vercel",
+    "avatar_id": 108547162,
+    "revision": "5a37a6329fbad3666c3207392a6a7c0110e92efb",
+    "stars": 35065,
+    "skills": [
+      {
+        "id": "react-best-practices",
+        "path": "skills/react-best-practices",
+        "title": "React Best Practices",
+        "description": "Review React and Next.js code for common performance problems.",
+        "files": [
+          {
+            "path": "AGENTS.md",
+            "bytes": 108261,
+            "sha256": "fc93e7421177bbf869cce892bc60a6c83a4517d974bc3bf65c4e2c1e58a6ccf6"
+          },
+          {
+            "path": "README.md",
+            "bytes": 3360,
+            "sha256": "9eafb2123d3b8b2aef41fba0db2648a3f4f49996f8c7c8bb2c86263befd8b48a"
+          },
+          {
+            "path": "SKILL.md",
+            "bytes": 7251,
+            "sha256": "71ed7794962fa6e803ee83030517b5b93a9f70fbfeb431ec4535c5480a8d8355"
+          },
+          {
+            "path": "metadata.json",
+            "bytes": 921,
+            "sha256": "c4e18bac3290fbe1b471a605867d4df68b03144ea26b8befdbe8f9d8fd124354"
+          },
+          {
+            "path": "rules/_sections.md",
+            "bytes": 1554,
+            "sha256": "01c59969e4e867f0708c8f8ef9c6d87fab9a07d0586244f429ff84013db8a115"
+          },
+          {
+            "path": "rules/_template.md",
+            "bytes": 631,
+            "sha256": "99df2a3ea088c6c22de2484ddc7e964d0e9923846f44c63380343ecc64455442"
+          },
+          {
+            "path": "rules/advanced-effect-event-deps.md",
+            "bytes": 1802,
+            "sha256": "55ed8f9f27a1bff803d6fa55828176207714b02123cbb97ddb8a90d88024a723"
+          },
+          {
+            "path": "rules/advanced-event-handler-refs.md",
+            "bytes": 1483,
+            "sha256": "a3097edeecfb2ff6851cd66ed8cdf0617c3c88180504bee824aa6e75a215bbbc"
+          },
+          {
+            "path": "rules/advanced-init-once.md",
+            "bytes": 958,
+            "sha256": "3e4dc22173eb0e2b6dcf583e3babd862b8696328f8f59aee7c4d746c5bc05f6c"
+          },
+          {
+            "path": "rules/advanced-use-latest.md",
+            "bytes": 1072,
+            "sha256": "8a3f64dfe5a77d1564248faf17fe662ae75b55d497a243cb30b38eb07ccbbf9a"
+          },
+          {
+            "path": "rules/async-api-routes.md",
+            "bytes": 1125,
+            "sha256": "523338540d73427dc14c0cbb19f2741ebccdf8b105a7b2c1b33d2905cf237a42"
+          },
+          {
+            "path": "rules/async-cheap-condition-before-await.md",
+            "bytes": 1220,
+            "sha256": "03107c1f70a293cd58a8abc5474c5548e20ea4efdf01b6d45aae7ad0ac1cb32c"
+          },
+          {
+            "path": "rules/async-defer-await.md",
+            "bytes": 2208,
+            "sha256": "f3c142d090615abdcc99d31c123be37b31f0f1ed8d9ec9f7789a3bc6883ae0fb"
+          },
+          {
+            "path": "rules/async-dependencies.md",
+            "bytes": 1293,
+            "sha256": "16ef469f877e30c6b8e1e1b4bc3e527312fa3c6318cb785a4eca186ea236131a"
+          },
+          {
+            "path": "rules/async-parallel.md",
+            "bytes": 654,
+            "sha256": "6d2f841896279e976dfcdc1ac89e70771ac188baadfd43c096b5706cb838b961"
+          },
+          {
+            "path": "rules/async-suspense-boundaries.md",
+            "bytes": 2510,
+            "sha256": "de05fedac2eb7ae563b887b5a424464ec3dfaf84e5b7797467ebe2a796ac8afc"
+          },
+          {
+            "path": "rules/bundle-analyzable-paths.md",
+            "bytes": 2382,
+            "sha256": "62090b5c815fd71bf1133dce754f51abc16a9456d0ccd025fd627de27726e92a"
+          },
+          {
+            "path": "rules/bundle-barrel-imports.md",
+            "bytes": 2795,
+            "sha256": "e648f6d54525f07a691357040ca5bff6ea3424788a91ff63812adb29622a671b"
+          },
+          {
+            "path": "rules/bundle-conditional.md",
+            "bytes": 949,
+            "sha256": "09c8259c3efb04fc0abb8e412ccbda217c222ae8118516283e571c995fe3a7d4"
+          },
+          {
+            "path": "rules/bundle-defer-third-party.md",
+            "bytes": 920,
+            "sha256": "3719fb47b191e8db4fe22686ec88448ad5af9e6838585425abbe103d0b642e37"
+          },
+          {
+            "path": "rules/bundle-dynamic-imports.md",
+            "bytes": 791,
+            "sha256": "401817a7369f315fc5a68a1095742ff7d53d0461906880dc9d64a41495ee1986"
+          },
+          {
+            "path": "rules/bundle-preload.md",
+            "bytes": 1149,
+            "sha256": "d1f7cc28da7cd5ab249acd287edc5b761afcfb194e9cb62cd44c5f3543db2de2"
+          },
+          {
+            "path": "rules/client-event-listeners.md",
+            "bytes": 1969,
+            "sha256": "242a873349febc1ce685e85617994784dbab92c2eaa68aed7fed5a83e7680e93"
+          },
+          {
+            "path": "rules/client-localstorage-schema.md",
+            "bytes": 1950,
+            "sha256": "0fb7cdf9dc93fdf22f87e3669f953fb9d4ac9b0be42eec4a29fe9a2560610b88"
+          },
+          {
+            "path": "rules/client-passive-event-listeners.md",
+            "bytes": 1644,
+            "sha256": "1f35016f9053de69e884ee9be00654e37979c2ca85f5e57764dc2626ff7acb4b"
+          },
+          {
+            "path": "rules/client-swr-dedup.md",
+            "bytes": 1159,
+            "sha256": "644652c39c6cc00de8d1c77a7273612e868dc3f7edda30764164c12ec0f764a3"
+          },
+          {
+            "path": "rules/js-batch-dom-css.md",
+            "bytes": 3266,
+            "sha256": "480b891b9eaf96e929dc1e964274a4828e3a78009b7d00ccd965a0d425215959"
+          },
+          {
+            "path": "rules/js-cache-function-results.md",
+            "bytes": 1949,
+            "sha256": "3daaa11d24f4295cb6be8bc6f407f2ce83cc7b5bd1f0e68891ea8ab835721dc7"
+          },
+          {
+            "path": "rules/js-cache-property-access.md",
+            "bytes": 532,
+            "sha256": "73e47431e74878a927061bf0ddc7cd91a7556cb35d2573f3421e82300d9ae311"
+          },
+          {
+            "path": "rules/js-cache-storage.md",
+            "bytes": 1651,
+            "sha256": "11b826b0433898c1ece2d3547010d8e77db9fb240185748c45db91493de9b6cc"
+          },
+          {
+            "path": "rules/js-combine-iterations.md",
+            "bytes": 753,
+            "sha256": "71add08aeeb43091d4ff4c0b2842cce8b4bdef8ad3e732cc034bb5a84827e746"
+          },
+          {
+            "path": "rules/js-early-exit.md",
+            "bytes": 1133,
+            "sha256": "925ce5ce87f3347186ca62212f29cc6baa2b8c85a96d2720ad07c3d0abf781c0"
+          },
+          {
+            "path": "rules/js-flatmap-filter.md",
+            "bytes": 1411,
+            "sha256": "9e5b166a41914d975bef7635467f8fb32cd98b5c3126c0bc6f163490812fb5f0"
+          },
+          {
+            "path": "rules/js-hoist-regexp.md",
+            "bytes": 1028,
+            "sha256": "f9e9aef2f7c2307dd7310f283df85dcada45fc43e9bb941b0c3aa414dec21ec4"
+          },
+          {
+            "path": "rules/js-index-maps.md",
+            "bytes": 837,
+            "sha256": "5df1bdc2cfabb2c98abd55d26762e5c18189535c2e686184f426082e62920391"
+          },
+          {
+            "path": "rules/js-length-check-first.md",
+            "bytes": 1747,
+            "sha256": "8b54a311c826b299272f29187fc58bc55772a04c4a72eeb29456ee96dc9fc624"
+          },
+          {
+            "path": "rules/js-min-max-loop.md",
+            "bytes": 2290,
+            "sha256": "87dfb67e2f39df6ad8bcfb5b78c5fb364d3c07554ad188a202408d99f3763421"
+          },
+          {
+            "path": "rules/js-request-idle-callback.md",
+            "bytes": 2647,
+            "sha256": "ee08f83905b4011abbc33d594033157d77561b5bbd9b36b04f0f409581ffec32"
+          },
+          {
+            "path": "rules/js-set-map-lookups.md",
+            "bytes": 532,
+            "sha256": "a7fd781a6ba9ad49065961b6f9a90ef486bf6b648390e1a08704025f98e1642b"
+          },
+          {
+            "path": "rules/js-tosorted-immutable.md",
+            "bytes": 1782,
+            "sha256": "d0a5e1b0fec48a0a81397957e2f068e224329f7c42cb5feeed8aae6fa64025e8"
+          },
+          {
+            "path": "rules/rendering-activity.md",
+            "bytes": 564,
+            "sha256": "1e5e7eaf3555e61d6a2e900089c676527d26259501db5594f59544b6c664f85a"
+          },
+          {
+            "path": "rules/rendering-animate-svg-wrapper.md",
+            "bytes": 1185,
+            "sha256": "9c6ae0ca7a51434e803887c64cded760956579a1452ccb80a461a03f9c937c77"
+          },
+          {
+            "path": "rules/rendering-conditional-render.md",
+            "bytes": 980,
+            "sha256": "2ec2fa23c4148285144687050c52369adba3da2fbe3d486f8d3e0aad8f06f2bc"
+          },
+          {
+            "path": "rules/rendering-content-visibility.md",
+            "bytes": 815,
+            "sha256": "64eee6d5b916fe74df33363994b27fc7f71bea3bcedc7ee04bda23107ca3e6e4"
+          },
+          {
+            "path": "rules/rendering-hoist-jsx.md",
+            "bytes": 1039,
+            "sha256": "93b229560fae92005ed9a2a829064607b39b2e984e92d221d05b2d41df2b7c0e"
+          },
+          {
+            "path": "rules/rendering-hydration-no-flicker.md",
+            "bytes": 2308,
+            "sha256": "dc7ab358c67c177bca6e6f360fbc935ebe4efa928c0ba3ebd3f9f3d9e2000ca3"
+          },
+          {
+            "path": "rules/rendering-hydration-suppress-warning.md",
+            "bytes": 872,
+            "sha256": "915bacb934e2927d84b37a3f3d225a47b309ac8f9e494ed2bcb66ce07c5676a2"
+          },
+          {
+            "path": "rules/rendering-resource-hints.md",
+            "bytes": 2549,
+            "sha256": "351b1095d641717b930f1b2253282b7120af3023bc74e06c17675168d4286864"
+          },
+          {
+            "path": "rules/rendering-script-defer-async.md",
+            "bytes": 1868,
+            "sha256": "4cea07b7875ba7fc2c7465ff23b63a2bb334f90aaf2d9293d38d67b05fdb32ab"
+          },
+          {
+            "path": "rules/rendering-svg-precision.md",
+            "bytes": 588,
+            "sha256": "ed468533f6e95f622859c884b122cf21f9f593ed6bb3d500a54de4b9f9bcb9fb"
+          },
+          {
+            "path": "rules/rendering-usetransition-loading.md",
+            "bytes": 2074,
+            "sha256": "3a1249c3f13026b6f54ab5712c388df219d6af01b12aa542749acd99a46f4bc1"
+          },
+          {
+            "path": "rules/rerender-defer-reads.md",
+            "bytes": 973,
+            "sha256": "234050a77faf50cb306be10a9e15bd4421134ab5907e75f13e6d78e2bd262dc9"
+          },
+          {
+            "path": "rules/rerender-dependencies.md",
+            "bytes": 824,
+            "sha256": "17eb5830956fb56486fd3cfc7431f5849d39751730c05ad9e77dd4f0c27169c5"
+          },
+          {
+            "path": "rules/rerender-derived-state-no-effect.md",
+            "bytes": 1201,
+            "sha256": "cb11ec76f50aa7b6847269f02d79b120c889a30d9ecd2c1d578f75144419c77a"
+          },
+          {
+            "path": "rules/rerender-derived-state.md",
+            "bytes": 728,
+            "sha256": "1c326bb67b01fb084eb00c8911b0a7cff54681c2315b629f88e49b64eaa6481d"
+          },
+          {
+            "path": "rules/rerender-functional-setstate.md",
+            "bytes": 2968,
+            "sha256": "5e68df6b2ae8058e67f476ff1ac67bde159f5a9d18df439e46eabcdeb7b52e58"
+          },
+          {
+            "path": "rules/rerender-lazy-state-init.md",
+            "bytes": 2016,
+            "sha256": "4ae844740f266fc8cbf050701230286624a2440ec5be67b9a63d9edc3c580573"
+          },
+          {
+            "path": "rules/rerender-memo-with-default-value.md",
+            "bytes": 1173,
+            "sha256": "81c47476564ad8a79fc68fc442734255ca7d6829424359464503fda0a9f9a0dd"
+          },
+          {
+            "path": "rules/rerender-memo.md",
+            "bytes": 1148,
+            "sha256": "1f258990c2f27ff6256b3cc5c43300631bb3f0d81f749aed08d07fcdcc131dd1"
+          },
+          {
+            "path": "rules/rerender-move-effect-to-event.md",
+            "bytes": 1268,
+            "sha256": "abc2cbf167bee056743023351e96806a411d3398da8802093620aecf0721f029"
+          },
+          {
+            "path": "rules/rerender-no-inline-components.md",
+            "bytes": 2135,
+            "sha256": "1cc32907a770272524ba682eef9e7efdd8ad4533b6f89b718a1fcd7d1d0eb6a3"
+          },
+          {
+            "path": "rules/rerender-simple-expression-in-memo.md",
+            "bytes": 1018,
+            "sha256": "5bdcf2d1558ba5204e643c887b7b4060f89630969425651eb68e96427d97f800"
+          },
+          {
+            "path": "rules/rerender-split-combined-hooks.md",
+            "bytes": 1844,
+            "sha256": "6f45d703343484ef9acef9388397f3642966ae6a5a258899a0cf1f9977cfbf6c"
+          },
+          {
+            "path": "rules/rerender-transitions.md",
+            "bytes": 1055,
+            "sha256": "60f4033909a62df5e5b8c601494f9e50a562e2f8c1c2d81eac24f38142265f1c"
+          },
+          {
+            "path": "rules/rerender-use-deferred-value.md",
+            "bytes": 1846,
+            "sha256": "8c3579576a61a949884167745dcfaf1d5426ba305cc61fd0a79602d70fda4909"
+          },
+          {
+            "path": "rules/rerender-use-ref-transient-values.md",
+            "bytes": 1742,
+            "sha256": "f1a649af9d1d0b5c762f6c9c4c1c70c90d7df82aa10296ee87aadb78c1b76c54"
+          },
+          {
+            "path": "rules/server-after-nonblocking.md",
+            "bytes": 2012,
+            "sha256": "d0b8d24a3db9f0f65f9e2bddbf230b0e03a5f60e1229d93a4a18f5e7a991c7c2"
+          },
+          {
+            "path": "rules/server-auth-actions.md",
+            "bytes": 2649,
+            "sha256": "a2ca8aa102839251c7971ec784560fab943c20b36fe6f80365d4110c13260c23"
+          },
+          {
+            "path": "rules/server-cache-lru.md",
+            "bytes": 1353,
+            "sha256": "1924b64561841923b88a657085097a0aeba3e0ba2d5470b9f5c15cc10d6ae70f"
+          },
+          {
+            "path": "rules/server-cache-react.md",
+            "bytes": 2228,
+            "sha256": "fddeea6c870bb3da4134b61d54b7d09b83d2603f929b7547cd3dc1dc269edd5c"
+          },
+          {
+            "path": "rules/server-dedup-props.md",
+            "bytes": 2060,
+            "sha256": "c2747424cdac46be62f835f245a0aa887b0090b416d28e2ac8676702645eeb37"
+          },
+          {
+            "path": "rules/server-hoist-static-io.md",
+            "bytes": 4423,
+            "sha256": "5abea4dd882b13661bd5f7dfb93f9e547d5f08176c61c448ade91b210ed5d49f"
+          },
+          {
+            "path": "rules/server-no-shared-module-state.md",
+            "bytes": 1766,
+            "sha256": "4d869bf1cd2f1632e5ca4c0e64b1cf0e71c5f5a0f940bc8a22174d205e735ed7"
+          },
+          {
+            "path": "rules/server-parallel-fetching.md",
+            "bytes": 1554,
+            "sha256": "569a2e9fc04f9606686cd75c5894ef8781b502786a7fffe241396846c7733472"
+          },
+          {
+            "path": "rules/server-parallel-nested-fetching.md",
+            "bytes": 992,
+            "sha256": "ad5d9656984d4a959997a2367bf59cc6632297b4634a1dd13a087939d83f30b3"
+          },
+          {
+            "path": "rules/server-serialization.md",
+            "bytes": 996,
+            "sha256": "f4c7d68b29c82381baad059c4a7f09e868e71ec9c3115a26ad3ae7d24c0dfe1f"
+          }
+        ],
+        "name": "vercel-react-best-practices"
+      },
+      {
+        "id": "composition-patterns",
+        "path": "skills/composition-patterns",
+        "title": "Composition Patterns",
+        "description": "Build flexible React component APIs through composition.",
+        "files": [
+          {
+            "path": "AGENTS.md",
+            "bytes": 22627,
+            "sha256": "89e3ddd58fcf99a53a50e25dfd21b8cde1be5f10b7df6bacd3dfa6796932f516"
+          },
+          {
+            "path": "README.md",
+            "bytes": 2140,
+            "sha256": "85915a43a6f0b4efe525e3cf6398dd866166da2025837c4460468a24a940da94"
+          },
+          {
+            "path": "SKILL.md",
+            "bytes": 2886,
+            "sha256": "e38e0eaa609316b10423a9a138ed95e35099accd3f735585295c8a8f165c28a3"
+          },
+          {
+            "path": "metadata.json",
+            "bytes": 530,
+            "sha256": "49262ed5cb4186f31ee980cf8d990be0170c51efed4908d0464a1cff9905bd05"
+          },
+          {
+            "path": "rules/_sections.md",
+            "bytes": 829,
+            "sha256": "a174213b87e6911e2b766995a2cbaf8d1534057076e82fb79fe3f0ecb38047df"
+          },
+          {
+            "path": "rules/_template.md",
+            "bytes": 329,
+            "sha256": "587f7d16b0660eb61fee4a4d3d7df2b3077d6835de170602c7d6e60bee559131"
+          },
+          {
+            "path": "rules/architecture-avoid-boolean-props.md",
+            "bytes": 2267,
+            "sha256": "007555ebb020f4d552582a2c4db194db71a1fd33094012e5187bcfa4f8c392d5"
+          },
+          {
+            "path": "rules/architecture-compound-components.md",
+            "bytes": 2600,
+            "sha256": "f246af13dc269b521cf20eb8ad99a0cb645beac381c8c9b117262c34612c8457"
+          },
+          {
+            "path": "rules/patterns-children-over-render-props.md",
+            "bytes": 1886,
+            "sha256": "7c45a0d21b3c4126a32cba916ee31adeae195386ad1dbbe6634aedb7457aa0ad"
+          },
+          {
+            "path": "rules/patterns-explicit-variants.md",
+            "bytes": 2395,
+            "sha256": "8c19e596e61807549d01ce8c6954c6358199f97a8511c0c02c625ec0efda8c0e"
+          },
+          {
+            "path": "rules/react19-no-forwardref.md",
+            "bytes": 953,
+            "sha256": "881830adb7534c4b2d70db426556646ad9837f5478f744f35641f635ada22227"
+          },
+          {
+            "path": "rules/state-context-interface.md",
+            "bytes": 4974,
+            "sha256": "09e73afbf9285fa416679cc864a287b9e8b821d0969272ab784295386d8c9bc3"
+          },
+          {
+            "path": "rules/state-decouple-implementation.md",
+            "bytes": 2699,
+            "sha256": "76a8c1eb29a70d8996ab3f71260345af2f7bc89deab815a421d6c87c6591a9c3"
+          },
+          {
+            "path": "rules/state-lift-state.md",
+            "bytes": 3224,
+            "sha256": "74c54038a6c554c748fe31cec673b80861b5d920b7553cf78cdf10d18b4b759b"
+          }
+        ],
+        "name": "vercel-composition-patterns"
+      },
+      {
+        "id": "web-design-guidelines",
+        "path": "skills/web-design-guidelines",
+        "title": "Web Design Guidelines",
+        "description": "Review a web interface against accessibility and usability guidelines.",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "bytes": 2077,
+            "sha256": "360b1240acfffa95e76373db9f837a1f28aba8f6d4c361e3d588be0eaefaa070"
+          },
+          {
+            "path": "references/command.md",
+            "bytes": 8055,
+            "sha256": "d246b026f4f29b5823a9cc857f9edf3d2507002e055e32040cadeaf3b38e0234"
+          }
+        ],
+        "name": "web-design-guidelines"
+      }
+    ]
+  },
+  {
+    "repository": "google/skills",
+    "publisher": "Google",
+    "avatar_id": 1342004,
+    "revision": "10c799ee69bcdb10b82836403d1531bfcc3d9d24",
+    "stars": 24933,
+    "skills": [
+      {
+        "id": "cloud-logging-query-generation",
+        "path": "skills/cloud/cloud-logging-query-generation",
+        "title": "Cloud Logging Queries",
+        "description": "Translate debugging questions into Google Cloud Logging filters.",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "bytes": 8145,
+            "sha256": "a53d70ee98951996bcf22071aad1423b720524e14697775d80c52ebd233f3e6d"
+          },
+          {
+            "path": "references/api_reference.md",
+            "bytes": 5195,
+            "sha256": "a8cc053822bd0d8c22ca47b755717d64762eeb2a3975b8d7fe232ce6c292efa2"
+          },
+          {
+            "path": "references/attribution.md",
+            "bytes": 1930,
+            "sha256": "66576ee354967c59c35a04b376c18641fb8b152b64643ae4ae9da1affe8ec8af"
+          },
+          {
+            "path": "references/query_app_engine.md",
+            "bytes": 2218,
+            "sha256": "7fad9ea6c368510af2fec977567221e64296e20fd84ac38a9393d16aa307c96c"
+          },
+          {
+            "path": "references/query_audit_logs.md",
+            "bytes": 8439,
+            "sha256": "399ecad1b52f565f1e57ff1c66ca2c8ac9b3bef6ebc44c33e0bc98b0e533fdd2"
+          },
+          {
+            "path": "references/query_bigquery.md",
+            "bytes": 6326,
+            "sha256": "1cb43034faafedbdba8684e3e79ff8fa8ecb9d494d0bd9bf7f44a68c62525c64"
+          },
+          {
+            "path": "references/query_cloud_functions.md",
+            "bytes": 2028,
+            "sha256": "c220cebffffb8da3d301d150ac0dcab9d29f574b3480399f6c016fd630256cfd"
+          },
+          {
+            "path": "references/query_cloud_observability.md",
+            "bytes": 1385,
+            "sha256": "15fe11b2db52ce0e22df3d2318778e6654a669ac8a772302519b655cba3dd0ca"
+          },
+          {
+            "path": "references/query_cloud_run.md",
+            "bytes": 1902,
+            "sha256": "34b809e324c754b23941a7216521ec05d7cdbee7229430767cbaed4b82e47db2"
+          },
+          {
+            "path": "references/query_cloud_source_repositories.md",
+            "bytes": 229,
+            "sha256": "4ac8afab21f5afd7cf531e7f1f8ede18c15b2375e4035287634e4c3237836910"
+          },
+          {
+            "path": "references/query_cloud_sql.md",
+            "bytes": 2663,
+            "sha256": "9604fd46d9b54bbb224948eeb2c8365699fd44f60a06be9f3e26a7ef4835a6f6"
+          },
+          {
+            "path": "references/query_cloud_storage.md",
+            "bytes": 1975,
+            "sha256": "22f59b7b4c7850f921e4d2ab554a4c64b0202ccb1b837e1c57fd08abbf191e32"
+          },
+          {
+            "path": "references/query_cloud_tasks.md",
+            "bytes": 202,
+            "sha256": "09019176bfcd065e3a650f7409617afce295e9ddeeae59d7af0cd0d5cd013581"
+          },
+          {
+            "path": "references/query_compute_engine.md",
+            "bytes": 15839,
+            "sha256": "7050dc53f940e54957fc72f2b61b03ad1dbf3f44cf6f087a0cbddbefa38d62e5"
+          },
+          {
+            "path": "references/query_dataflow.md",
+            "bytes": 224,
+            "sha256": "ecdf03c540c0ab5a2e093a32d4693e95f997517012b151d32d30ed5ae85dfac7"
+          },
+          {
+            "path": "references/query_dataproc.md",
+            "bytes": 235,
+            "sha256": "08c2ba0f10960e91b211fc4cf6384e0fa8d8381e1f2bb0bb21d2a34c7c7c3259"
+          },
+          {
+            "path": "references/query_deployment_manager.md",
+            "bytes": 753,
+            "sha256": "5e7ee5b8ceeeee9bc47fc2ea6be0e43fd58aa6affee2e67c28963eae3755b24e"
+          },
+          {
+            "path": "references/query_gke.md",
+            "bytes": 24175,
+            "sha256": "7b6160dbbb4f340933bc5bfc6f5880f1a34f93418df43ffeea0fb53f7b50e106"
+          },
+          {
+            "path": "references/query_iam.md",
+            "bytes": 5848,
+            "sha256": "1492c668bd5961a43e2638a32f212f6f9d5f72fc523f271fe3cd41f87dc57f62"
+          },
+          {
+            "path": "references/query_networking.md",
+            "bytes": 7819,
+            "sha256": "6cdf6e535aaaa84df2eed8585698904d77cf0f8aa9e2600d54210cc1e794b5c5"
+          },
+          {
+            "path": "references/query_security.md",
+            "bytes": 1416,
+            "sha256": "744645cdf9fbae73978cc2fa87b6ec75e30a944679233f9253f8c06791d58192"
+          },
+          {
+            "path": "references/query_service_usage.md",
+            "bytes": 836,
+            "sha256": "a6280300f6e0523f1b5e43f99dea2f1eb6fb0afcf6c2187bd216ca300bf1c159"
+          },
+          {
+            "path": "references/query_spanner.md",
+            "bytes": 244,
+            "sha256": "9acbd0ab9aacc42529bb7538fb51847df952d8aa3383c8b7307808fc070e4f32"
+          },
+          {
+            "path": "references/query_third_party.md",
+            "bytes": 4219,
+            "sha256": "d9fce81b1d6cdcdd0ba9e92d7c03f310e1c738adb5be53b128d5243e05403f67"
+          }
+        ],
+        "name": "cloud-logging-query-generation"
+      },
+      {
+        "id": "cloud-run-basics",
+        "path": "skills/cloud/cloud-run-basics",
+        "title": "Cloud Run",
+        "description": "Deploy and manage services and jobs on Cloud Run.",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "bytes": 16308,
+            "sha256": "8bf95426fb0c74b7f4e1a66d906791f59c143959e8bc7205c9249ada00e24903"
+          },
+          {
+            "path": "references/attribution.md",
+            "bytes": 1888,
+            "sha256": "98430e3a22ad85719cd51d6eae0ea04c9ecfd1cd424431e4a5c562ebbd803d70"
+          },
+          {
+            "path": "references/cli-usage.md",
+            "bytes": 2482,
+            "sha256": "87a58f1c49b848f66fa6bf1e30882fe247232aa1bf76e90987abf5e8b031580e"
+          },
+          {
+            "path": "references/client-library-usage.md",
+            "bytes": 3470,
+            "sha256": "2f2c95b3fe6b8c36cfea903644279abe129816a84785739d4ba49e6bb571e772"
+          },
+          {
+            "path": "references/core-concepts.md",
+            "bytes": 6709,
+            "sha256": "459830cc25d643dfd255b127df4df01bf9987b9eafd5c8aa8baca054517ccffe"
+          },
+          {
+            "path": "references/iac-usage.md",
+            "bytes": 2020,
+            "sha256": "429c3a3edba4bd108c5faea064fdd17f13fddc3fd2238a245de0c700d29d940c"
+          },
+          {
+            "path": "references/iam-security.md",
+            "bytes": 5342,
+            "sha256": "9430085095a0d16243ef7b8eb5a875690df633f8626078d3b004387bae2a7721"
+          },
+          {
+            "path": "references/mcp-usage.md",
+            "bytes": 1907,
+            "sha256": "ad9aecf215e01dc4384918b39457a118d15d16f3f6c7e10aa80a50a686eca780"
+          },
+          {
+            "path": "references/networking.md",
+            "bytes": 5909,
+            "sha256": "8a62caf6ae07721c77d384ec30991df7349ebc674fb8152d58dcad216527866c"
+          }
+        ],
+        "name": "cloud-run-basics"
+      },
+      {
+        "id": "gemini-api",
+        "path": "skills/cloud/gemini-api",
+        "title": "Gemini API",
+        "description": "Develop with the Gemini API and official SDKs.",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "bytes": 8471,
+            "sha256": "2ed9ef6fc55a0f3cc5b8f0ec5a8bb977308d3741bbe8ae108aa60155c0036a31"
+          },
+          {
+            "path": "references/advanced_features.md",
+            "bytes": 4746,
+            "sha256": "4761f23037bc8632916c16102906bca31c6907698078202ccc7b5d76cc6ba9e7"
+          },
+          {
+            "path": "references/attribution.md",
+            "bytes": 1878,
+            "sha256": "b1d7d2e96838c92e62303501d66019b5aac652a1ad64d5f108635a282ed65a56"
+          },
+          {
+            "path": "references/bounding_box.md",
+            "bytes": 1864,
+            "sha256": "7aa4f787eb57ce896308a147c40c3aea45b85d7437c1576018c1935eed6d50bb"
+          },
+          {
+            "path": "references/embeddings.md",
+            "bytes": 2429,
+            "sha256": "7f28cb162bbf90fb22d66628c1c74f27723ff0005f805b1719b0ca76b5e81d5e"
+          },
+          {
+            "path": "references/live_api.md",
+            "bytes": 1825,
+            "sha256": "626e5ad6b69b86dd5ca91f1bcb8319ca0b906cbc8ef6d6311cc6b0a28d78b759"
+          },
+          {
+            "path": "references/media_generation.md",
+            "bytes": 11341,
+            "sha256": "ff463b7b96c7ff94fc0c09e3cddfced005ddf3f7216a86715997dce6326ee902"
+          },
+          {
+            "path": "references/model_tuning.md",
+            "bytes": 2033,
+            "sha256": "136857dce05c51a0c686a07229623321b5e3fc3301b13d19e178fc01f580a076"
+          },
+          {
+            "path": "references/safety.md",
+            "bytes": 1880,
+            "sha256": "e5d2e2e88768fcadde932acb82e5aec2a07e763e62bbd96b801ab0b23b06a780"
+          },
+          {
+            "path": "references/sdks.md",
+            "bytes": 3821,
+            "sha256": "34988a59d3a7aee4b7fb00fee402bc8daaf76d09c66585da31232bf6dc5b6457"
+          },
+          {
+            "path": "references/structured_and_tools.md",
+            "bytes": 5646,
+            "sha256": "fba08cc5a9c16d42d4239db0a4adeb94499cff1348c884e2f76c8387bedbc9b6"
+          },
+          {
+            "path": "references/text_and_multimodal.md",
+            "bytes": 3803,
+            "sha256": "2f44f15630c2d8c439027cb1d0ca7f216322801a822cf29d5eb3dc456ba52d1a"
+          }
+        ],
+        "name": "gemini-api"
+      },
+      {
+        "id": "bigquery-basics",
+        "path": "skills/cloud/bigquery-basics",
+        "title": "BigQuery",
+        "description": "Work with datasets, tables, and queries in BigQuery.",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "bytes": 3452,
+            "sha256": "56a16fab677f74728cc7f46aa8db5d2179be8cf6ad04b1582107dc3983d13db3"
+          },
+          {
+            "path": "references/attribution.md",
+            "bytes": 1885,
+            "sha256": "407c27816073df66f74d72d52dbb25cc33e8cd2980134b1d1724f153c8e27814"
+          },
+          {
+            "path": "references/change-history.md",
+            "bytes": 2532,
+            "sha256": "6d21ec622c6efa8edd8377a9a963ac13de6d4dd2b53d4fe40c90cfb769e88088"
+          },
+          {
+            "path": "references/cli-usage.md",
+            "bytes": 2047,
+            "sha256": "b8ec6d981390d543a6af0ac3072813c6f7df641547dc17ecfaa2d43e766612db"
+          },
+          {
+            "path": "references/client-library-usage.md",
+            "bytes": 2319,
+            "sha256": "4b091ffcd5f657e1c96dc60e2ad913266850a380c39190a26bbd90e229eb6b5a"
+          },
+          {
+            "path": "references/continuous-queries.md",
+            "bytes": 3685,
+            "sha256": "01d77462193dc2343256ef2f69bdaa2c32cfc9af00e78a0e4ae010c2f1b589cc"
+          },
+          {
+            "path": "references/core-concepts.md",
+            "bytes": 3401,
+            "sha256": "0911ac060c9b0e9423ef9676bc98983b687c68696f178f01edc3d2b9715c4ab1"
+          },
+          {
+            "path": "references/iac-usage.md",
+            "bytes": 1777,
+            "sha256": "4cc7cba990280a5f2438bb965fb4bd575ca5967289f72bfd19b7830eb44b0208"
+          },
+          {
+            "path": "references/iam-security.md",
+            "bytes": 1979,
+            "sha256": "384c8d4b1eb64f9567cbc6f167cd38802a0b4b836b0616305d947fe4f46cca04"
+          },
+          {
+            "path": "references/mcp-usage.md",
+            "bytes": 2355,
+            "sha256": "f4cf2ef39e89ae3fc8e3a0bc19100e3382dc1eeec920d4cd8c5801dc51a62df7"
+          }
+        ],
+        "name": "bigquery-basics"
+      },
+      {
+        "id": "gcloud",
+        "path": "skills/cloud/gcloud",
+        "title": "Google Cloud CLI",
+        "description": "Use the gcloud CLI to work with Google Cloud resources.",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "bytes": 15594,
+            "sha256": "a16e7688f5b64c155b2d8ca452f9196df259ef1bd3c0a35f23e4a5f941eb037b"
+          },
+          {
+            "path": "references/attribution.md",
+            "bytes": 2425,
+            "sha256": "eb1fd36307c413d79d6030ff26f835c75f2f064f52d3277c8bad8d71acf72141"
+          },
+          {
+            "path": "references/cli-usage.md",
+            "bytes": 4880,
+            "sha256": "7a8b5b2499a02cb397d1064663616d21c338c4b2a6fc6eeb77a6de749fc33e1b"
+          },
+          {
+            "path": "references/mcp-usage.md",
+            "bytes": 7931,
+            "sha256": "04645f54167f5cd917baa2e5caab91a9db9f56451fef7145c1361cc7e050f5b1"
+          }
+        ],
+        "name": "gcloud"
+      }
+    ]
+  },
+  {
+    "repository": "wshobson/agents",
+    "publisher": "Seth Hobson",
+    "avatar_id": 553618,
+    "revision": "c96b5f6552dba32e4492307493ee613581430715",
+    "stars": 43001,
+    "skills": [
+      {
+        "id": "git-advanced-workflows",
+        "path": "plugins/developer-essentials/skills/git-advanced-workflows",
+        "title": "Advanced Git Workflows",
+        "description": "Navigate complex Git history and common recovery scenarios.",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "bytes": 5571,
+            "sha256": "8b912fe7d2ff010fd4f8947a61ecdb8058628dc8e4a7ff20b7675cde11c4e7dd"
+          },
+          {
+            "path": "references/details.md",
+            "bytes": 3999,
+            "sha256": "66ef1df71f2fb9cb6a86bb24e33175a3b2a2889afa245c7e6fa9bea8ac10cd44"
+          }
+        ],
+        "name": "git-advanced-workflows"
+      },
+      {
+        "id": "bash-defensive-patterns",
+        "path": "plugins/shell-scripting/skills/bash-defensive-patterns",
+        "title": "Defensive Bash",
+        "description": "Write shell scripts with robust input and error handling.",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "bytes": 1991,
+            "sha256": "741b42d1fa3167f2131a17f3e0fe891e93be4fc87aa3c19e1de5fd26d763f711"
+          },
+          {
+            "path": "references/details.md",
+            "bytes": 11760,
+            "sha256": "d0421adaa8edf86e63cc69ea55ecde03192e4f62b7f9201280dbca7ebf5c67c7"
+          }
+        ],
+        "name": "bash-defensive-patterns"
+      },
+      {
+        "id": "javascript-testing-patterns",
+        "path": "plugins/javascript-typescript/skills/javascript-testing-patterns",
+        "title": "JavaScript Testing Patterns",
+        "description": "Structure tests for JavaScript and TypeScript projects.",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "bytes": 14629,
+            "sha256": "d99e1d7344ca7b87395c7e49f6c635ea67fe16d57f4698d72c78d405020f5782"
+          },
+          {
+            "path": "references/advanced-testing-patterns.md",
+            "bytes": 12837,
+            "sha256": "c7aece88f868bb54b57cc7ea2ca87d3df0868ab32f974c22af247bb047ea353f"
+          }
+        ],
+        "name": "javascript-testing-patterns"
+      },
+      {
+        "id": "python-testing-patterns",
+        "path": "plugins/python-development/skills/python-testing-patterns",
+        "title": "Python Testing Patterns",
+        "description": "Use pytest fixtures, mocking, and practical test patterns.",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "bytes": 7282,
+            "sha256": "a1020718f31629c2a5b20731cad1804dbb81b18800495c5cebdf16e6cac9c175"
+          },
+          {
+            "path": "references/advanced-patterns.md",
+            "bytes": 9454,
+            "sha256": "f560ee8b3cffc0fe971e78269bed21dc74f541c2056eae58d34259d9e537176a"
+          },
+          {
+            "path": "references/details.md",
+            "bytes": 9329,
+            "sha256": "39411069cafe265c7000e9a605aa3c17448981756799f3981137ed2d9cc24c20"
+          }
+        ],
+        "name": "python-testing-patterns"
+      }
+    ]
+  }
+]

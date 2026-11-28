@@ -38,11 +38,11 @@ try {
  await clickText('Clear filters');
  await page.waitFor("document.querySelectorAll('.zp-issue-row').length===2");
  await page.click('.zp-tabs [aria-label="Drive"]');
- await page.waitFor("document.querySelector('.zp-document-link')?.textContent.includes('notes/plan.md')");
- await page.click('.zp-document-link');
+ await page.waitFor("!!document.querySelector('.zp-tree-row[data-path=\"notes/plan.md\"]')");
+ await page.click('.zp-tree-row[data-path="notes/plan.md"]');
  await page.waitFor("document.querySelector('.zp-page-surface:not([hidden])')?.textContent.includes('Current plan')");
  await page.click('[aria-label="Close plan.md"]');
- await page.waitFor("!!document.querySelector('.zp-document-link')");
+ await page.waitFor("!!document.querySelector('.zp-tree-row')");
  await page.press('[aria-label="Zapper actions"]');
  await page.waitFor("[...document.querySelectorAll('[role=menuitem]')].some(item=>item.textContent.trim()==='Version history')");
  await page.eval("[...document.querySelectorAll('[role=menuitem]')].find(item=>item.textContent.trim()==='Version history').setAttribute('data-history-item','')");

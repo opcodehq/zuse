@@ -14,6 +14,11 @@
 --   recreation, repair,   another operation owns the machine identity and
 --   memory-recovery       has its own attention state; reported, not raced
 --   no-retained-storage   no retained disk to pause; reported only
+-- lost_at: with a turn still recorded as starting, running or waiting for
+-- input but no live runtime to run it (hold is not live-turn), when that
+-- runtime was last known alive: the end of its credential's lifetime, or the
+-- latest activity if later. The backstop sleeps such a computer shortly after
+-- instead of a full quiet bound later. NULL without such a turn.
 SELECT w.workspace_id,
   GREATEST(w.last_activity_at, COALESCE(e.updated_at,0), COALESCE(l.created_at,0), COALESCE(i.created_at,0))::bigint AS quiet_since,
   CASE
@@ -29,7 +34,13 @@ SELECT w.workspace_id,
     WHEN COALESCE(w.request_config#>>'{rustRuntimeRepair,phase}','ready')<>'ready' THEN 'repair'
     WHEN w.request_config#>>'{rustMemoryTransportRecovery,operationId}'=w.request_config#>>'{rustLifecycleOperation,id}' THEN 'memory-recovery'
     WHEN w.request_config#>>'{rustRuntimeStorage,storageIncarnationId}' IS NULL THEN 'no-retained-storage'
-  END AS hold
+  END AS hold,
+  CASE
+    WHEN EXISTS(SELECT 1 FROM zuse_rust_task_command_execution x WHERE x.workspace_id=w.workspace_id
+       AND x.state IN('starting','running','waiting-input'))
+      THEN GREATEST(w.last_activity_at, COALESCE(e.updated_at,0), COALESCE(l.created_at,0), COALESCE(i.created_at,0),
+        COALESCE((w.request_config->>'runtimeCredentialExpiresAtMs')::bigint,0))::bigint
+  END AS lost_at
 FROM api_cloud_workspaces w
 JOIN zuse_rust_control_owners o
   ON o.resource_kind='workspace' AND o.resource_id=w.workspace_id

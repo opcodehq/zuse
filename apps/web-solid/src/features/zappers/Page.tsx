@@ -14,7 +14,7 @@ import { Icon } from "@/ui/Icon";
 import { Avatar, avatarOf } from "./Avatar";
 import { Issues, IssuePage } from "./Issues";
 import { Threads } from "./Threads";
-import { Drive } from "./Drive";
+import { Drive, FileDialogs } from "./Drive";
 import {
   act,
   command,
@@ -22,7 +22,6 @@ import {
   inspectorOpen,
   loadResources,
   openZapper,
-  resources,
   selectedZapper,
   setInspectorOpen,
   setTab,
@@ -157,20 +156,7 @@ function Directory() {
 }
 function Inspector(props: { zapper: Zapper }) {
   const [confirm, setConfirm] = createSignal<"delete" | "archive" | null>(null);
-  const files = createMemo(() => {
-    const latest=new Map<string,(typeof resources.files)[number]>();
-    for(const file of resources.files) if((latest.get(file.path)?.version ?? 0)<file.version)latest.set(file.path,file);
-    return [...latest.values()].filter(file=>(file.path!=="INSTRUCTIONS.md" || file.version>1) && file.content.trim());
-  });
-  const tabs = createMemo(
-    () =>
-      [
-        "overview",
-        "issues",
-        "threads",
-        ...(files().length || tab() === "drive" ? ["drive"] : []),
-      ] as Tab[],
-  );
+  const tabs = (): Tab[] => ["overview", "issues", "threads", "drive"];
   const panel = () => panelFor(props.zapper.id);
   const label = (page: import("./panel").PanelPage) => page.kind === "issue" ? `ZAP-${props.zapper.issues.find(issue=>issue.id===page.id)?.number ?? "?"}` : page.kind === "file" ? page.path.split("/").at(-1)! : page.kind === "pr" ? `#${page.url.split("/").at(-1)}` : page.kind === "agent" ? page.title ?? "Agent" : page.kind === "diff" ? "Changes" : "History";
   const target = (chatId:string): Target => targetForChat(chatId) ?? {chatId,deviceId:props.zapper.config.homeDeviceId,targetDeviceId:props.zapper.config.homeDeviceId,cwd:null,archived:false,space:null,git:false,local:false,branch:null,repoPath:null};
@@ -289,6 +275,7 @@ function Inspector(props: { zapper: Zapper }) {
           <Show when={page.kind === "pr" && pageKey(panel().active)===pageKey(page)}>{page.kind === "pr" && <PullRequest target={target(page.chatId)} url={page.url} active onBack={()=>closePage(props.zapper.id,page)} />}</Show>
         </section>}</For>
       </div>
+      <FileDialogs zapper={props.zapper} />
       <Dialog
         open={!!confirm()}
         onOpenChange={(open) => {

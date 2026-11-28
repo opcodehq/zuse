@@ -232,7 +232,7 @@ struct PullRequestListView: View {
     if store.repositories.isEmpty {
       Group {
         if store.resolvingRepositories {
-          ProgressView().frame(maxWidth: .infinity).padding(.top, 80)
+          LoadingRows(tile: 18, circle: true).padding(.top, 8)
         } else {
           PullRequestUnavailable(
             title: "No GitHub projects",
@@ -247,7 +247,7 @@ struct PullRequestListView: View {
     } else if model.items.isEmpty {
       Group {
         if model.loading {
-          ProgressView().frame(maxWidth: .infinity).padding(.top, 80)
+          LoadingRows(tile: 18, circle: true).padding(.top, 8)
         } else if let error = model.error {
           PullRequestUnavailable(
             title: "Couldn’t load pull requests", message: error, symbol: "exclamationmark.triangle"

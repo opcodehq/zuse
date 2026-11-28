@@ -444,7 +444,8 @@ impl ManagedAccessCard {
     }
     /// Other computers as rows for the Devices list; `offset` rows already sit above them.
     pub(super) fn computer_rows(&self, offset: usize, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        use zuse_viewport::{remote_access_style as r, settings_style as s};
+        use zuse_viewport::remote_access_style as r;
+        let theme = crate::theme::Theme::of(cx).for_settings_surface();
         let rows =
             zuse_protocol::managed_connection::computer_rows(&self.environments, &self.saved);
         rows.into_iter()
@@ -482,24 +483,24 @@ impl ManagedAccessCard {
                 } else {
                     "Update Zuse on this computer to connect."
                 };
-                div()
-                    .flex()
-                    .items_center()
-                    .min_h(px(48.))
-                    .gap(px(10.))
-                    .px(px(12.))
-                    .py(px(8.))
-                    .when(index > 0, |v| {
-                        v.border_t_1().border_color(s::card_border().opacity(0.4))
-                    })
-                    .child(r::glyph("monitor").size(px(16.)))
-                    .child(r::details(label.clone(), description.to_owned()).flex_1())
+                widgets::card_row(&theme, index == 0)
+                    .flex_nowrap()
+                    .child(
+                        div().w(px(20.)).flex_none().flex().justify_center().child(
+                            r::glyph("monitor")
+                                .size(px(16.))
+                                .text_color(theme.text_muted),
+                        ),
+                    )
+                    .child(widgets::row_copy(&theme, &label, description))
                     .when(compatible, |v| {
                         v.child(
-                            r::button(
+                            super::pairing::row_button(
+                                &theme,
+                                widgets::ActionTone::Filled,
                                 ("connect-account-computer", index),
-                                crate::localization::text("settings-remote_connect", cx),
                             )
+                            .child(crate::localization::text("settings-remote_connect", cx))
                             .on_click(move |_, window, cx| {
                                 if let Some(controller) = controller.clone() {
                                     crate::open_remote_workspace(
@@ -519,18 +520,23 @@ impl ManagedAccessCard {
                         )
                     })
                     .child(
-                        r::button(("forget-account-computer", index), "Remove")
-                            .when(self.busy, |v| v.opacity(0.5).cursor_default())
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.request(
-                                    methods::REMOVE_ACCOUNT_COMPUTER,
-                                    json!({
-                                        "environmentId": forget_id,
-                                        "expectedSubject": forget_subject,
-                                    }),
-                                    cx,
-                                );
-                            })),
+                        super::pairing::row_button(
+                            &theme,
+                            widgets::ActionTone::Quiet,
+                            ("forget-account-computer", index),
+                        )
+                        .child("Remove")
+                        .when(self.busy, |v| v.opacity(0.5).cursor_default())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.request(
+                                methods::REMOVE_ACCOUNT_COMPUTER,
+                                json!({
+                                    "environmentId": forget_id,
+                                    "expectedSubject": forget_subject,
+                                }),
+                                cx,
+                            );
+                        })),
                     )
                     .into_any_element()
             })

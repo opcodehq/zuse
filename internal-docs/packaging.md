@@ -62,8 +62,8 @@ launcher, it keeps that command's old interface.
   set -e
   installer=$(mktemp)
   trap 'rm -f "$installer"' EXIT
-  curl -fsSL https://github.com/opcodehq/zuse/releases/download/v0.27.9/install.sh -o "$installer"
-  sh "$installer" --version 0.27.9
+  curl -fsSL https://github.com/opcodehq/zuse/releases/download/v0.27.10/install.sh -o "$installer"
+  sh "$installer" --version 0.27.10
 )
 ```
 
@@ -285,6 +285,32 @@ Custom feeds keep stable metadata at `manifest.json` (or legacy `latest.txt`)
 and preview metadata at `preview/manifest.json` (or `preview/latest.txt`). Both
 manifests reference files at the feed root. A stable manifest must name a stable
 version. `ZUSE_RELEASES_URL` and `ZUSE_EDGE_URL` continue to select the feed.
+
+### Preparing a release
+
+A "Prepare X.Y.Z" pull request bumps the version everywhere it is pinned and
+writes the release's notes:
+
+1. Bump `[workspace.package] version` in `Cargo.toml` (and `Cargo.lock`), the
+   SDK in `packages/sdk`, the README download links and the versions in this
+   document.
+2. Add the `## X.Y.Z - YYYY-MM-DD` section to `CHANGELOG.md`.
+3. Add an `"X.Y.Z"` entry to `crates/ui/assets/whats-new.json`, the in-app
+   What's new dialog and sidebar card: a one-line `summary`, a `scene` (the
+   headline feature drawn with the app's own surfaces), a `tint` and 2 to 4
+   `highlights` (`icon`, `title`, `body`). Scene names are `SCENES` in
+   `crates/ui/src/shell/whats_new.rs`, icon names `named_icon`; when no
+   existing scene fits the headline, add one there. Check it with
+   `ZUSE_SIDEBAR_WHATS_NEW=0` on the `sidebar-fixture` example, at full size,
+   in a narrow window and on the sidebar card (0.27.10:
+   [dialog](images/whats-new/dialog-dark.png),
+   [narrow](images/whats-new/dialog-narrow.png),
+   [sidebar card](images/whats-new/sidebar-card.png)).
+
+The `zuse-ui` test
+`the_release_being_built_has_whats_new_notes_with_a_scene` fails CI when the
+workspace version or the newest changelog section has no entry, or the entry has
+an empty summary, fewer than two highlights, an unknown icon or no known scene.
 
 ### First stable upgrade from existing previews
 

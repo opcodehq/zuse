@@ -68,7 +68,19 @@ fn stamp(m: &fs::Metadata) -> (u64, u64, u64, i64, i64, i64, i64, u32) {
     )
 }
 fn select(root: &Path, prefix: &str, paths: &mut Vec<String>) -> Result<()> {
-    let output = std::process::Command::new("git")
+    let mut command = std::process::Command::new("git");
+    for name in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_NAMESPACE",
+    ] {
+        command.env_remove(name);
+    }
+    let output = command
         .arg("-C")
         .arg(root)
         .args([
@@ -599,10 +611,30 @@ async fn receive(
 async fn receive_controlled(
     root: PathBuf,
     workspace: String,
-    mut stream: BoxStream<'static, serde_json::Value>,
+    stream: BoxStream<'static, serde_json::Value>,
     objects: Arc<unix::Dir>,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<SnapshotResult> {
+    let (result, files) =
+        receive_files(&workspace, stream, &objects, &HashSet::new(), &cancel).await?;
+    // Once publication begins, finish it under the caller's gate. Disable/archive
+    // waits for this future; dropping a waiter must never release that gate early.
+    tokio::task::spawn_blocking(move || publish(&root, &workspace, files, &objects)).await??;
+    Ok(result)
+}
+/// Receive and verify a complete snapshot: every file's bytes end up in
+/// `objects` under their SHA-256, nothing is published anywhere.
+/// `elsewhere` lists hashes whose bytes the caller holds outside `objects`
+/// (it advertised them and verifies them itself), so their files may arrive
+/// without bytes.
+async fn receive_files(
+    workspace: &str,
+    mut stream: BoxStream<'static, serde_json::Value>,
+    objects: &Arc<unix::Dir>,
+    elsewhere: &HashSet<String>,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<(SnapshotResult, Vec<Entry>)> {
+    let workspace = workspace.to_owned();
     let mut checkout = None;
     let mut files = vec![];
     let mut seen = HashSet::new();
@@ -713,6 +745,10 @@ async fn receive_controlled(
                             } == 0,
                             "Could not retain verified snapshot object."
                         );
+                    } else if elsewhere.contains(&entry.hash) {
+                        // Held by the caller, who verifies it.
+                        files.push(entry);
+                        continue;
                     } else if entry.size == 0 && objects.optional_file(&entry.hash)?.is_none() {
                         ensure!(
                             entry.hash == format!("{:x}", Sha256::digest([])),
@@ -745,20 +781,163 @@ async fn receive_controlled(
             Frame::Error { message } => bail!("Cloud snapshot failed: {message}"),
         }
     }
-    ensure!(
-        complete,
-        "Cloud snapshot ended before verification completed."
-    );
+    if !complete {
+        return Err(Interrupted.into());
+    }
     let result = SnapshotResult {
         checkout_id: checkout.unwrap(),
         files: files.len(),
         transferred_bytes: bytes,
     };
     ensure!(!cancel.is_cancelled(), "Sync stopped.");
-    // Once publication begins, finish it under the caller's gate. Disable/archive
-    // waits for this future; dropping a waiter must never release that gate early.
-    tokio::task::spawn_blocking(move || publish(&root, &workspace, files, &objects)).await??;
-    Ok(result)
+    Ok((result, files))
+}
+/// One file of a received snapshot. Its bytes (for a regular file) are in
+/// the objects folder under `hash`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReceivedFile {
+    pub path: String,
+    /// SHA-256 of the contents (of the target, for a symlink).
+    pub hash: String,
+    /// Permission bits.
+    pub mode: u32,
+    pub size: u64,
+    /// The target, for a symlink.
+    pub link: Option<String>,
+}
+impl From<Entry> for ReceivedFile {
+    fn from(entry: Entry) -> Self {
+        Self {
+            path: entry.path,
+            hash: entry.hash,
+            mode: entry.mode,
+            size: entry.size,
+            link: entry.link,
+        }
+    }
+}
+/// The snapshot stream stopped before its last frame (the connection to the
+/// cloud computer dropped or was replaced). Every file verified so far stays
+/// in the objects folder, so the next attempt only fetches the rest.
+#[derive(Debug)]
+pub struct Interrupted;
+impl std::fmt::Display for Interrupted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Cloud snapshot ended before verification completed.")
+    }
+}
+impl std::error::Error for Interrupted {}
+
+/// The cloud computer runs a version that can't send snapshots.
+#[derive(Debug)]
+pub struct UpdateRequired;
+impl std::fmt::Display for UpdateRequired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Update this cloud computer to sync its files.")
+    }
+}
+impl std::error::Error for UpdateRequired {}
+
+/// The most hashes one snapshot request advertises, so the request stays
+/// well under every connection's message limit (about 67 bytes each).
+const MAX_ADVERTISED: usize = 20_000;
+
+/// Verified objects already in `objects` (named by their SHA-256), from an
+/// earlier attempt that was interrupted.
+fn retained_objects(objects: &Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(objects) else {
+        return vec![];
+    };
+    entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let name = entry.file_name().into_string().ok()?;
+            (name.len() == 64
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+                && entry.file_type().ok()?.is_file())
+            .then_some(name)
+        })
+        .collect()
+}
+
+/// What one snapshot request advertises: objects kept from an interrupted
+/// attempt first (they are verified again on arrival), then the caller's
+/// hashes, at most [`MAX_ADVERTISED`]. Returns the request's list and the
+/// caller's hashes in it (whose bytes the caller holds and verifies).
+fn advertised(retained: Vec<String>, have: Vec<String>) -> (Vec<String>, HashSet<String>) {
+    let mut seen = HashSet::new();
+    let mut request = Vec::new();
+    let mut elsewhere = HashSet::new();
+    for hash in retained {
+        if request.len() >= MAX_ADVERTISED {
+            break;
+        }
+        if seen.insert(hash.clone()) {
+            request.push(hash);
+        }
+    }
+    for hash in have {
+        if request.len() >= MAX_ADVERTISED {
+            break;
+        }
+        if seen.insert(hash.clone()) {
+            elsewhere.insert(hash.clone());
+            request.push(hash);
+        }
+    }
+    (request, elsewhere)
+}
+
+/// Receive one verified snapshot of `target` into `objects` (files named by
+/// their SHA-256) without publishing it. `have` lists hashes the caller
+/// already holds, whose bytes are not sent again. Objects left in `objects`
+/// by an interrupted attempt are not sent again either, so a large
+/// repository arrives over several attempts if it must. Never wakes compute.
+pub async fn receive_snapshot(
+    client: &zuse_rpc::RpcClient,
+    target: WorkspaceTarget,
+    workspace: &str,
+    objects: &Path,
+    have: Vec<String>,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<Vec<ReceivedFile>> {
+    ensure!(!cancel.is_cancelled(), "Sync stopped.");
+    let (have, elsewhere) = advertised(retained_objects(objects), have);
+    let mut params = serde_json::to_value(target)?;
+    params["have"] = serde_json::to_value(have)?;
+    // Checked, so a refusal before the first frame (an older computer that
+    // doesn't know the method, a chat it can't find) arrives as itself
+    // instead of looking like a stream that ended early. Stopping sync never
+    // waits behind a backpressured connection.
+    let stream = tokio::select! {biased;
+        _ = cancel.cancelled() => bail!("Sync stopped."),
+        stream = client.subscribe_checked(zuse_protocol::methods::WORKSPACE_SYNC_SNAPSHOT, params) => stream,
+    };
+    let stream = match stream {
+        Ok(stream) => stream,
+        Err(zuse_rpc::RpcError::UnknownMethod(_)) => return Err(UpdateRequired.into()),
+        Err(zuse_rpc::RpcError::Closed) => return Err(Interrupted.into()),
+        Err(error) => return Err(error.into()),
+    };
+    let stream = futures::stream::unfold(stream, |mut stream| async move {
+        stream.recv().await.map(|v| (v, stream))
+    })
+    .boxed();
+    receive_stream(workspace, stream, objects, elsewhere, cancel).await
+}
+/// Receive a snapshot stream into `objects` without publishing it.
+pub(crate) async fn receive_stream(
+    workspace: &str,
+    stream: BoxStream<'static, serde_json::Value>,
+    objects: &Path,
+    elsewhere: HashSet<String>,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<Vec<ReceivedFile>> {
+    let objects = Arc::new(ensure_dir(objects)?);
+    let (_, files) = receive_files(workspace, stream, &objects, &elsewhere, &cancel).await?;
+    Ok(files.into_iter().map(ReceivedFile::from).collect())
 }
 /// One complete transfer on an already connected execution client. This never
 /// acquires a gateway or resumes compute. The caller serializes sync and cleanup.
@@ -1141,5 +1320,84 @@ mod tests {
                 .next()
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn an_interrupted_snapshot_resumes_without_resending_verified_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let remote = temp.path().join("remote");
+        source(&remote);
+        for index in 0..6 {
+            fs::write(
+                remote.join(format!("file-{index}")),
+                format!("bytes {index}"),
+            )
+            .unwrap();
+        }
+        let objects = temp.path().join("objects");
+        let frames = snapshot_stream(remote.clone(), "checkout".into(), vec![])
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await;
+        // The connection drops part way: no Complete frame arrives.
+        let cut = frames.len() / 2;
+        let partial = futures::stream::iter(frames[..cut].to_vec()).boxed();
+        let error = receive_stream(
+            "w",
+            partial,
+            &objects,
+            HashSet::new(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.downcast_ref::<Interrupted>().is_some(), "{error}");
+        let kept = retained_objects(&objects);
+        assert!(!kept.is_empty());
+        // No half-written file is left behind.
+        assert!(fs::read_dir(&objects).unwrap().all(|e| {
+            !e.unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".receive-")
+        }));
+        // The next attempt advertises what arrived, so only the rest is sent,
+        // and what arrived is verified again from the objects folder.
+        let (have, elsewhere) = advertised(kept, vec![]);
+        assert!(elsewhere.is_empty());
+        let frames = snapshot_stream(remote.clone(), "checkout".into(), have)
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await;
+        let resent = frames.iter().filter(|f| f["type"] == "chunk").count();
+        let files = receive_stream(
+            "w",
+            futures::stream::iter(frames).boxed(),
+            &objects,
+            elsewhere,
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        let regular = files.iter().filter(|f| f.link.is_none()).count();
+        assert!(regular >= 6);
+        assert!(resent < regular, "{resent} of {regular} files sent again");
+        for file in files.iter().filter(|f| f.link.is_none()) {
+            assert!(objects.join(&file.hash).is_file(), "{}", file.path);
+        }
+    }
+
+    #[test]
+    fn a_request_never_advertises_more_than_its_limit() {
+        let hash = |i: usize| format!("{i:064x}");
+        let retained = (0..10).map(hash).collect::<Vec<_>>();
+        let have = (5..MAX_ADVERTISED + 50).map(hash).collect::<Vec<_>>();
+        let (request, elsewhere) = advertised(retained, have);
+        assert_eq!(request.len(), MAX_ADVERTISED);
+        // Retained objects come first and are never "held elsewhere"; a hash
+        // in both lists is advertised once, as retained.
+        assert!(!elsewhere.contains(&hash(3)));
+        assert!(!elsewhere.contains(&hash(7)));
+        assert!(elsewhere.contains(&hash(12)));
     }
 }

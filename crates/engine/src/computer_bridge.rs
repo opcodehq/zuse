@@ -20,7 +20,9 @@ use std::{
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
-use zuse_protocol::computer_tasks::{DEFAULT_TIMEOUT_SECS, HEARTBEAT_SECS, MAX_TIMEOUT_SECS};
+use zuse_protocol::computer_tasks::{
+    DEFAULT_TIMEOUT_SECS, HEARTBEAT_SECS, MAX_TIMEOUT_SECS, MAX_WAIT_MS,
+};
 
 /// Commands one computer runs at once; later approvals wait their turn.
 const MAX_CONCURRENT: usize = 4;
@@ -208,6 +210,9 @@ pub(crate) struct Timing {
     pub backoff_max: Duration,
     /// A session online this long resets the reconnect backoff.
     pub stable_after: Duration,
+    /// How long one wait for approved work is held open by the cloud. Zero
+    /// polls every `heartbeat` instead.
+    pub claim_wait: Duration,
 }
 impl Default for Timing {
     fn default() -> Self {
@@ -217,6 +222,7 @@ impl Default for Timing {
             backoff_min: Duration::from_secs(1),
             backoff_max: Duration::from_secs(30),
             stable_after: Duration::from_secs(60),
+            claim_wait: Duration::from_millis(u64::from(MAX_WAIT_MS)),
         }
     }
 }
@@ -325,6 +331,12 @@ impl Host {
             async move { while runs.join_next().await.is_some() {} }
         };
         let mut online = false;
+        // Wait for approved work instead of sleeping between claims, until a
+        // cloud from before waits refuses them.
+        let mut waits = !self.timing.claim_wait.is_zero();
+        // The last wait said work was ready; if the claim then finds none, the
+        // next round sleeps instead of asking again at once.
+        let mut woken = false;
         loop {
             while runs.try_join_next().is_some() {}
             self.set_running(runs.len());
@@ -344,11 +356,39 @@ impl Host {
                         });
                     }
                     if runs.len() < MAX_CONCURRENT && !stop.is_cancelled() {
+                        let was_woken = std::mem::take(&mut woken);
                         match self
                             .transport
                             .send(json!({"action":"claim","task":self.task}))
                             .await
                         {
+                            Ok(Value::Null) if waits && !was_woken => {
+                                let wait = json!({"action":"wait","task":self.task,
+                                    "waitMs":self.timing.claim_wait.as_millis() as u64});
+                                let started = Instant::now();
+                                // Dropping a wait is harmless: it never claims.
+                                tokio::select! {
+                                    _ = stop.cancelled() => {
+                                        finish(&mut runs).await;
+                                        return Ok(Exit::Shutdown);
+                                    }
+                                    Some(_) = runs.join_next(), if !runs.is_empty() => continue,
+                                    reply = self.transport.send(wait) => match reply {
+                                        Ok(Value::Bool(true)) => {
+                                            woken = true;
+                                            continue;
+                                        }
+                                        // Waited its full time: offer again and keep waiting.
+                                        Ok(_) if started.elapsed() >= self.timing.heartbeat => continue,
+                                        Ok(_) => {}
+                                        Err(SendError::Rejected(400 | 404 | 405 | 422)) => {
+                                            waits = false;
+                                        }
+                                        Err(error) if runs.is_empty() => return Err(error.into()),
+                                        Err(_) => {}
+                                    },
+                                }
+                            }
                             Ok(Value::Null) => {}
                             Ok(value) => match serde_json::from_value::<Claimed>(value) {
                                 Ok(claimed) => {
@@ -939,6 +979,11 @@ fn read_enabled(profile: &Path) -> Option<Enabled> {
     serde_json::from_slice(&std::fs::read(enabled_path(profile)).ok()?).ok()
 }
 
+/// Whether this profile's connector is allowed for `account`.
+pub(crate) fn enabled_for(profile: &Path, account: &str) -> bool {
+    read_enabled(profile).is_some_and(|enabled| enabled.owner == account)
+}
+
 fn write_enabled(profile: &Path, enabled: &Enabled) -> Result<()> {
     let path = enabled_path(profile);
     let dir = path.parent().context("Invalid profile")?;
@@ -1156,6 +1201,32 @@ impl Connector {
         )
         .await
     }
+
+    /// Tell the cloud which folder a chat is synced into on this computer
+    /// (none once it isn't), so its commands here start there. Only an
+    /// enabled computer reports; it never changes the chat's default
+    /// computer.
+    pub async fn report_synced_checkout(
+        &self,
+        profile: &Path,
+        account: &crate::account::Account,
+        account_id: &str,
+        workspace: &str,
+        chat: &str,
+    ) -> Result<()> {
+        if !enabled_for(profile, account_id) {
+            return Ok(());
+        }
+        claim_primary_at(
+            &api_origin()?,
+            profile,
+            account,
+            account_id,
+            (workspace, chat, None),
+        )
+        .await
+        .map(|_| ())
+    }
 }
 
 async fn claim_primary_at(
@@ -1214,6 +1285,14 @@ async fn claim_primary_at(
     let mut body = json!({"workspaceId":workspace,"chatId":chat});
     if let Some(command) = &command {
         body["commandId"] = json!(command);
+    }
+    // The folder this chat is synced into here: its commands start there.
+    // Omitted (cleared) when it isn't synced.
+    #[cfg(unix)]
+    if let Some(path) =
+        crate::cloud::checkout_sync::synced_path(profile, account_id, &workspace, &chat)
+    {
+        body["syncedCwd"] = json!(path);
     }
     let claimed: Claimed = client
         .post(url)

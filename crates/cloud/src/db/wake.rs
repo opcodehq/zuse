@@ -42,6 +42,10 @@ pub enum Work {
     /// An archived computer's deletion due time appeared or moved earlier
     /// (migration `0050_archive_machine_deletion.sql`).
     ArchiveRetention,
+    /// A computer request was made, decided, claimed, finished or stopped
+    /// (sent by the API with its `computer-request` hint); bridge long-polls
+    /// re-read.
+    Bridge,
     /// Notifications may have been missed (listener reconnected or lagged).
     All,
 }
@@ -60,6 +64,7 @@ impl Work {
             "idle_sleep" => Self::IdleSleep,
             "plugins" => Self::Plugins,
             "archive_retention" => Self::ArchiveRetention,
+            "bridge" => Self::Bridge,
             _ => return None,
         })
     }
@@ -76,6 +81,7 @@ impl Work {
             Self::IdleSleep => "idle_sleep",
             Self::Plugins => "plugins",
             Self::ArchiveRetention => "archive_retention",
+            Self::Bridge => "bridge",
             Self::All => "all",
         }
     }
@@ -441,6 +447,7 @@ mod tests {
             Work::IdleSleep,
             Work::Plugins,
             Work::ArchiveRetention,
+            Work::Bridge,
         ] {
             assert_eq!(Work::parse(kind.as_str()), Some(kind));
         }

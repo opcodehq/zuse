@@ -30,6 +30,7 @@ struct ChatsListView: View {
   var showsAsk = true
   /// Highlights the open chat, for layouts that show it beside the list.
   var highlightsSelection = false
+  @Environment(\.tabletLists) private var tablet
   @State private var view: ChatsView = .all
   @State private var ask = ""
   @State private var cloudConfirmation: CloudActionSelection?
@@ -93,6 +94,9 @@ struct ChatsListView: View {
     List(selection: $selection) {
       if showsConnectionBanner {
         ConnectionBanner(workspace: workspace).chatsRow(minHeight: 0).padding(.vertical, 4)
+        if rows.isEmpty && !workspace.connectionIssue {
+          LoadingRows(count: 5, tile: 18, circle: true).chatsRow(minHeight: 0).padding(.top, 10)
+        }
       }
       if let problem = workspace.catalogProblem {
         ChatsNotice(text: problem, icon: "arrow.clockwise")
@@ -194,20 +198,24 @@ struct ChatsListView: View {
 
   private func chips(projects: [String]) -> some View {
     HStack(spacing: 8) {
-      Menu {
-        Section { choice(.all, symbol: "bubble.left.and.bubble.right") }
-        if !projects.isEmpty {
-          Section("Projects") {
-            ForEach(projects, id: \.self) { name in choice(.project(name), symbol: "folder") }
+      if tablet {
+        tabletChips(projects: projects)
+      } else {
+        Menu {
+          Section { choice(.all, symbol: "bubble.left.and.bubble.right") }
+          if !projects.isEmpty {
+            Section("Projects") {
+              ForEach(projects, id: \.self) { name in choice(.project(name), symbol: "folder") }
+            }
           }
+          Section { choice(.archived, symbol: "archivebox") }
+        } label: {
+          FilterChip(title: view.title, prominent: true, showsChevron: true)
         }
-        Section { choice(.archived, symbol: "archivebox") }
-      } label: {
-        FilterChip(title: view.title, prominent: true, showsChevron: true)
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+        .accessibilityLabel("Showing \(view.title)")
+        .accessibilityIdentifier("archive-filter")
       }
-      .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
-      .accessibilityLabel("Showing \(view.title)")
-      .accessibilityIdentifier("archive-filter")
       if view != .all {
         Button {
           view = .all
@@ -219,6 +227,35 @@ struct ChatsListView: View {
         .buttonStyle(.plain).accessibilityLabel("Show all chats")
       }
       Spacer(minLength: 0)
+    }
+  }
+
+  /// iPad keeps the view and the project filter apart: which chats, then a Filter chip that
+  /// narrows them to one project.
+  @ViewBuilder private func tabletChips(projects: [String]) -> some View {
+    let archived = view == .archived
+    Menu {
+      choice(.all, symbol: "bubble.left.and.bubble.right")
+      choice(.archived, symbol: "archivebox")
+    } label: {
+      FilterChip(title: archived ? "Archived" : "All chats", prominent: true, showsChevron: true)
+    }
+    .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+    .accessibilityLabel("Showing \(archived ? "Archived" : "All chats")")
+    .accessibilityIdentifier("archive-filter")
+    if case .project(let name) = view {
+      FilterChip(title: name, systemImage: "folder")
+    } else if !projects.isEmpty {
+      Menu {
+        Section("Project") {
+          ForEach(projects, id: \.self) { name in choice(.project(name), symbol: "folder") }
+        }
+      } label: {
+        FilterChip(title: "Filter", systemImage: "plus")
+      }
+      .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+      .accessibilityLabel("Filter by project")
+      .accessibilityIdentifier("chats-project-filter")
     }
   }
 
@@ -262,8 +299,9 @@ struct ChatsListView: View {
     .padding(.leading, 2).padding(.trailing, canSend ? 2 : 14)
     .frame(minHeight: 48)
     .composerGlass(radius: 24)
-    .frame(maxWidth: 640).frame(maxWidth: .infinity)
-    .padding(.horizontal, 12).padding(.bottom, 6).padding(.top, 4)
+    // iPad's ask field runs the width of the list, like the rows above it.
+    .frame(maxWidth: tablet ? .infinity : 640).frame(maxWidth: .infinity)
+    .padding(.horizontal, tablet ? 24 : 12).padding(.bottom, 6).padding(.top, 4)
   }
 
   private func submitAsk() {
@@ -275,6 +313,12 @@ struct ChatsListView: View {
 
   // MARK: Empty
 
+  /// A computer or Zuse Cloud is open, so a new chat is one message away.
+  private var hasPlaceToWork: Bool {
+    workspace.isCloudActive || workspace.connectionState == "Connected"
+      || (workspace.connectionState == "Preview · offline" && !workspace.projects.isEmpty)
+  }
+
   @ViewBuilder private var emptyState: some View {
     if view == .archived {
       ZappersEmptyState(
@@ -284,6 +328,12 @@ struct ChatsListView: View {
       ZappersEmptyState(
         symbol: "folder", title: "No chats in \(name)",
         detail: "Start one from the field below.")
+    } else if !showsConnectionBanner && hasPlaceToWork {
+      ZappersEmptyState(
+        symbol: "bubble.left.and.bubble.right", title: "No chats yet",
+        detail:
+          "Ask anything below to start one. Chats you start on your computer show up here too."
+      )
     } else if !showsConnectionBanner {
       ZappersEmptyState(
         symbol: "bubble.left.and.bubble.right", title: "No chats yet",
@@ -304,9 +354,19 @@ struct ChatsListView: View {
             } label: {
               Text(signingIn ? "Signing In…" : "Sign In").frame(maxWidth: 260)
             }
-            .buttonStyle(.borderedProminent).tint(AppTheme.accent).disabled(signingIn)
+            .brandProminentButton().disabled(signingIn)
           }
-          if workspace.savedConnections.isEmpty && workspace.environments.isEmpty {
+          if let computer = workspace.recentComputer,
+            workspace.isCloudActive || workspace.rpc == nil
+          {
+            Button {
+              workspace.openRemote(computer)
+            } label: {
+              Label("Reconnect to \(computer.displayName)", systemImage: "arrow.clockwise")
+                .lineLimit(1).frame(maxWidth: 300)
+            }
+            .buttonStyle(.bordered)
+          } else if workspace.savedConnections.isEmpty && workspace.environments.isEmpty {
             Button(action: connect) {
               Label("Add computer", systemImage: "desktopcomputer").frame(maxWidth: 260)
             }
@@ -411,15 +471,18 @@ struct ChatRowLabel<Leading: View, Trailing: View>: View {
   var dimmed = false
   @ViewBuilder let leading: Leading
   @ViewBuilder var trailing: Trailing
+  /// iPad's full-width lists: a roomier title kept to a readable measure.
+  @Environment(\.tabletLists) private var tablet
   var body: some View {
-    HStack(alignment: .firstTextBaseline, spacing: 11) {
+    HStack(alignment: .firstTextBaseline, spacing: tablet ? 14 : 11) {
       leading.frame(width: 18, height: 18).alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
-      VStack(alignment: .leading, spacing: 2) {
-        Text(title).font(.system(size: 16))
+      VStack(alignment: .leading, spacing: tablet ? 3 : 2) {
+        Text(title).font(.system(size: tablet ? 17 : 16))
           .foregroundStyle(
             dimmed ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary.opacity(0.92))
           )
           .lineLimit(1)
+          .frame(maxWidth: tablet ? TabletMeasure.line : nil, alignment: .leading)
         if !meta.isEmpty {
           Text(meta).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
         }
@@ -427,7 +490,7 @@ struct ChatRowLabel<Leading: View, Trailing: View>: View {
       Spacer(minLength: 6)
       trailing
     }
-    .padding(.vertical, 7).contentShape(Rectangle())
+    .padding(.vertical, tablet ? 9 : 7).contentShape(Rectangle())
   }
 }
 

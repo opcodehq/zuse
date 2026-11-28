@@ -493,21 +493,36 @@ pub(super) fn fallback_glyph(id: &str) -> &'static str {
 }
 
 pub(crate) fn target_icon(target: &OpenTarget, theme: &Theme) -> AnyElement {
-    match &target.icon {
-        Some(png) => gpui::img(png.clone())
-            .size(px(20.0))
+    app_icon(
+        target.id,
+        target.icon.as_ref(),
+        fallback_glyph(target.id),
+        20.0,
+        theme,
+    )
+}
+
+/// An app's own icon at `size`: its macOS bundle PNG, else the bundled
+/// artwork for `id`, else `fallback` drawn as a glyph.
+pub(super) fn app_icon(
+    id: &str,
+    png: Option<&PathBuf>,
+    fallback: &'static str,
+    size: f32,
+    theme: &Theme,
+) -> AnyElement {
+    let image = |source: gpui::ImageSource| {
+        gpui::img(source)
+            .size(px(size))
             .flex_none()
-            .rounded(px(4.0))
-            .into_any_element(),
-        None if bundled_target_icon(target.id).is_some() => {
-            gpui::img(bundled_target_icon(target.id).unwrap())
-                .size(px(20.0))
-                .flex_none()
-                .rounded(px(4.0))
-                .into_any_element()
-        }
-        None => icon(fallback_glyph(target.id))
-            .size(px(20.0))
+            .rounded(px(size / 5.0))
+            .into_any_element()
+    };
+    match (png, bundled_target_icon(id)) {
+        (Some(png), _) => image(png.clone().into()),
+        (None, Some(art)) => image(art.into()),
+        (None, None) => icon(fallback)
+            .size(px(size))
             .flex_none()
             .text_color(theme.text_muted)
             .into_any_element(),

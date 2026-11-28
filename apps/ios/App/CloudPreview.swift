@@ -15,7 +15,7 @@
       .base64EncodedString().replacingOccurrences(of: "=", with: "")
       .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
       return Data(
-        #"{"access_token":"e30.\#(claims).preview","refresh_token":"preview","user":{"first_name":"Preview","last_name":"User","email":"preview@zuse.invalid"}}"#
+        #"{"access_token":"e30.\#(claims).preview","refresh_token":"preview","user":{"first_name":"Preview","last_name":"User","email":"preview@zuse.invalid","profile_picture_url":"https://cloud-preview.zuse.invalid/avatar.png"}}"#
           .utf8)
     }
     static func client() -> CloudClient {

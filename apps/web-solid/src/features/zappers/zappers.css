@@ -760,3 +760,45 @@
 .zp-inspector-body[data-workspace] { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
 .zp-inspector-body[data-workspace] > .zp-page-surface:not([hidden]) { flex: 1; min-height: 0; height: 100%; }
 .zp-issue-actions { display: flex; align-items: center; gap: 8px; margin: 16px 0; }
+
+/* Files: a tree like the workspace explorer, with guides for nesting. */
+.zp-files { display: flex; flex-direction: column; min-width: 0; }
+.zp-files .zp-section-heading > div { gap: 2px; }
+.zp-files-error { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.zp-files-empty { margin: 10px 8px 0; font-size: var(--text-xs); line-height: 1.5; }
+.zp-tree { display: flex; flex-direction: column; margin: 2px -8px 0; outline: none; }
+.zp-tree-row {
+  position: relative; display: flex; align-items: center; gap: 6px; min-width: 0; height: 28px; padding-right: 4px;
+  border-radius: 6px; color: var(--text); font-size: var(--text-sm); cursor: pointer; user-select: none; outline: none;
+}
+.zp-tree-row:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
+.zp-tree-row[aria-selected="true"] { background: var(--selected); }
+.zp-tree-row:focus-visible { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent); }
+.zp-tree-guide { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--border); pointer-events: none; }
+.zp-tree-caret { width: 12px; display: inline-flex; justify-content: center; flex-shrink: 0; color: var(--text-faint); }
+.zp-tree-row .ws-folder-icon { color: var(--text-muted); flex-shrink: 0; }
+.zp-tree-row[aria-expanded="false"] .zp-tree-name { color: var(--text-muted); }
+.zp-tree-row[aria-selected="true"] .zp-tree-name { color: var(--text); }
+.zp-tree-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zp-tree-row[data-missing] .zp-tree-name, .zp-tree-row[data-missing] .ws-file-icon { opacity: 0.55; }
+.zp-tree-hint { flex-shrink: 0; font-size: var(--text-xs); color: var(--text-faint); }
+.zp-tree-more { margin-left: auto; flex-shrink: 0; display: inline-flex; opacity: 0; }
+.zp-tree-row:hover .zp-tree-more, .zp-tree-row[aria-selected="true"] .zp-tree-more, .zp-tree-more:focus-within { opacity: 1; }
+.zp-tree-more-button {
+  display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: 0; border-radius: 5px;
+  background: transparent; color: var(--text-muted); cursor: pointer;
+}
+.zp-tree-more-button:hover, .zp-tree-more-button[data-expanded] { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
+.zp-file-page { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.zp-file-header { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.zp-file-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.zp-file-about { margin: 0; font-size: var(--text-xs); line-height: 1.5; }
+.zp-file-latest summary { cursor: pointer; font-size: var(--text-xs); color: var(--text-muted); }
+.zp-file-latest .zp-file-preview { max-height: 180px; overflow: auto; }
+.zp-delete-scope { font-size: var(--text-sm); color: var(--text-muted); }
+.zp-delete-scope p { margin: 0 0 6px; }
+.zp-delete-scope ul { margin: 0; padding-left: 18px; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text); }
+@media (max-width: 520px) { .zp-tree-more { opacity: 1; } }
+
+.zp-tree-conflict { color: var(--warning); }
+.zp-file-role { flex-shrink: 0; font-size: var(--text-xs); color: var(--text-muted); }

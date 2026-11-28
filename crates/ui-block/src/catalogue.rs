@@ -536,6 +536,19 @@ pub(crate) static CATALOGUE: &[ComponentDef] = &[
         ],
     },
     ComponentDef {
+        name: "MachineImageProposal",
+        description: "A setup chat's proposed machine image change, reviewed live.",
+        advertised: false,
+        field: false,
+        params: &[req(
+            "proposal",
+            Ty::Str {
+                min: 1,
+                max: Some(64),
+            },
+        )],
+    },
+    ComponentDef {
         name: "ConnectedPlugins",
         description: "The reader's Zuse plugins, listed live.",
         advertised: false,

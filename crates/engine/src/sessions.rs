@@ -327,6 +327,11 @@ struct Inner {
     provider_context: OnceLock<ProviderContext>,
     execution_observer: OnceLock<crate::execution_progress::Observer>,
     zappers: OnceLock<crate::zappers::Zappers>,
+    /// This engine hosts cloud chats that can run commands on the owner's
+    /// computers; their agents get the computer tools up front.
+    cloud_computers: std::sync::atomic::AtomicBool,
+    /// A setup chat's computer (see `zuse_protocol::machine_setup`).
+    machine_setup: std::sync::atomic::AtomicBool,
     /// Host settings a run must carry before it is routed (which Claude
     /// connection it launches against). Absent in bare tests.
     request_stamp: OnceLock<RequestStamp>,
@@ -524,6 +529,8 @@ impl SessionsEngine {
                 provider_context: OnceLock::new(),
                 execution_observer: OnceLock::new(),
                 zappers: OnceLock::new(),
+                cloud_computers: std::sync::atomic::AtomicBool::new(false),
+                machine_setup: std::sync::atomic::AtomicBool::new(false),
                 request_stamp: OnceLock::new(),
             }),
         }
@@ -547,6 +554,20 @@ impl SessionsEngine {
     }
     pub fn set_secret_filter(&self, filter: Arc<zuse_providers::credentials::redaction::Secrets>) {
         let _ = self.inner.secret_filter.set(filter);
+    }
+    /// Chats here are cloud chats that can run commands on the owner's
+    /// computers (see `zuse_mcp::McpConfig::cloud_computers`).
+    pub fn set_cloud_computers(&self) {
+        self.inner
+            .cloud_computers
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+    /// Chats here configure the account's machine image: their agents get
+    /// the image tools (see `zuse_protocol::machine_setup::MCP_ENV`).
+    pub fn set_machine_setup(&self) {
+        self.inner
+            .machine_setup
+            .store(true, std::sync::atomic::Ordering::Release);
     }
     pub fn set_ipc_port(&self, port: u16) {
         if let Some(zappers) = self.inner.zappers.get() {
@@ -2743,6 +2764,21 @@ impl Inner {
                 ("ZUSE_DEVICE_ID".to_owned(), self.device_id.clone()),
             ]
             .into_iter()
+            .chain(
+                self.cloud_computers
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    .then(|| ("ZUSE_CLOUD_COMPUTERS".to_owned(), "1".to_owned())),
+            )
+            .chain(
+                self.machine_setup
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    .then(|| {
+                        (
+                            zuse_protocol::machine_setup::MCP_ENV.to_owned(),
+                            "1".to_owned(),
+                        )
+                    }),
+            )
             .chain(
                 self.zappers
                     .get()

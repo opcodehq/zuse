@@ -30,6 +30,15 @@ mod presentation;
 mod repository_palette;
 mod secrets;
 pub use image_status::ImageReadiness;
+pub use machine::StartSetupChat;
+/// What a running image build is doing, for cards outside Settings.
+pub fn phase_label(phase: &str) -> &'static str {
+    machine::phase_copy(phase)
+}
+/// How far along a running image build is, by phase.
+pub fn phase_fraction(phase: &str) -> f32 {
+    machine::build_fraction(phase)
+}
 pub use onboarding::{FirstChatRepository, StartChat};
 gpui::actions!(
     cloud_setup_overlay,
@@ -145,6 +154,7 @@ pub struct RepositoryPanel {
 impl EventEmitter<Request> for RepositoryPanel {}
 impl EventEmitter<OpenPage> for RepositoryPanel {}
 impl EventEmitter<StartChat> for RepositoryPanel {}
+impl EventEmitter<machine::StartSetupChat> for RepositoryPanel {}
 impl RepositoryPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         images::bind_keys(cx);
@@ -435,6 +445,9 @@ impl RepositoryPanel {
                 self.error = Some(e);
                 self.queue.clear();
                 self.adding.clear();
+                // A failed add doesn't start a setup chat later on its own.
+                self.machine.setup_after_add = false;
+                self.machine.setup_repository = None;
                 cx.notify();
                 return;
             }
@@ -532,9 +545,23 @@ impl RepositoryPanel {
                         self.keys.remove(&identity);
                         self.adding.remove(&identity);
                         self.projects.retain(|p| p.project_id != project.project_id);
-                        self.projects.push(project);
                         self.notice = Some("Repository added.".into());
+                        if self.machine.setup_after_add && self.machine.setup_repository.is_none() {
+                            // The first one picked is added first.
+                            self.machine.setup_repository =
+                                Some(machine::StartSetupChat::on(&project));
+                        }
+                        self.projects.push(project);
                         self.connect_next(cx);
+                        // Start once every picked repository is in.
+                        if self.machine.setup_after_add
+                            && self.queue.is_empty()
+                            && !self.pending.values().any(|p| p.kind == "connect")
+                            && let Some(start) = self.machine.setup_repository.take()
+                        {
+                            self.machine.setup_after_add = false;
+                            cx.emit(start);
+                        }
                     }
                     self.bind_environment(cx);
                     // The server rebuilds the image for the new repository
@@ -626,6 +653,62 @@ mod owner_reset_tests {
                 assert!(panel.github_code.read(cx).value(cx).is_empty());
             })
             .unwrap();
+    }
+    #[gpui::test]
+    fn configure_with_agent_starts_a_setup_chat_on_the_first_repository(cx: &mut TestAppContext) {
+        use std::{cell::RefCell, rc::Rc};
+        cx.update(crate::initialize);
+        let window = cx.add_window(RepositoryPanel::new);
+        let panel = window.root(cx).unwrap();
+        let started = Rc::new(RefCell::new(Vec::<String>::new()));
+        let opened = Rc::new(RefCell::new(0));
+        cx.update(|cx| {
+            let started = started.clone();
+            cx.subscribe(&panel, move |_, event: &StartSetupChat, _| {
+                started
+                    .borrow_mut()
+                    .push(event.repository.project_id.clone())
+            })
+            .detach();
+            let opened = opened.clone();
+            cx.subscribe(&panel, move |_, _: &OpenPage, _| *opened.borrow_mut() += 1)
+                .detach();
+        });
+        window
+            .update(cx, |panel, window, cx| {
+                panel.bind_owner(Some(("account-a".into(), None)), cx);
+                // No repository and no GitHub yet: connect one first.
+                panel.configure_with_agent(window, cx);
+                assert!(!panel.machine.setup_after_add);
+                panel.projects = serde_json::from_value(json!([
+                    {"projectId":"project_1","repositoryIdentity":"github.com/a/one","repositoryUrl":"https://github.com/a/one.git","displayName":"one","defaultBranch":"main","visibility":"private","state":"connected","activeBuilds":{},"latestBuilds":{},"createdAt":1,"updatedAt":1},
+                    {"projectId":"project_2","repositoryIdentity":"github.com/a/two","repositoryUrl":"https://github.com/a/two.git","displayName":"two","defaultBranch":"main","visibility":"private","state":"connected","activeBuilds":{},"latestBuilds":{},"createdAt":2,"updatedAt":2}
+                ]))
+                .unwrap();
+                panel.configure_with_agent(window, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(*opened.borrow(), 1);
+        assert_eq!(*started.borrow(), ["project_1"]);
+
+        // With no repository, the chat starts on the first one picked, once
+        // every picked repository has been added.
+        let project = |id: &str, n: i64| json!({"accountId":"account-a","organizationId":null,"data":{"projectId":id,"repositoryIdentity":format!("github.com/a/{id}"),"repositoryUrl":"https://github.com/a/x.git","displayName":id,"defaultBranch":"main","visibility":"private","state":"connected","activeBuilds":{},"latestBuilds":{},"createdAt":n,"updatedAt":n}});
+        window
+            .update(cx, |panel, _, cx| {
+                panel.projects.clear();
+                panel.machine.setup_after_add = true;
+                panel.call("connect", methods::CLOUD_PROJECT_CONNECT, json!({}), cx);
+                let first = panel.next;
+                panel.call("connect", methods::CLOUD_PROJECT_CONNECT, json!({}), cx);
+                let second = panel.next;
+                panel.receive(first, Ok(project("picked_first", 3)), cx);
+                panel.receive(second, Ok(project("picked_second", 4)), cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(*started.borrow(), ["project_1", "picked_first"]);
     }
     #[test]
     fn fallback_reads_back_off_to_a_minute() {

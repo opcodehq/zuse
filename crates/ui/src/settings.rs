@@ -35,6 +35,7 @@ pub mod notifications;
 pub mod pairing;
 pub mod plugins;
 pub mod shortcuts;
+pub(crate) mod skills;
 mod theme_community;
 pub mod thread_naming;
 pub mod wallpaper;
@@ -1184,10 +1185,6 @@ pub struct UiSettings {
     /// Device-local pins for local profiles; synced profiles use registry pins.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub sidebar_pinned_session_ids_by_profile: HashMap<String, Vec<String>>,
-    /// Device-local thread settlement choices. `false` keeps a reopened thread
-    /// active even if its linked pull request is already merged.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub sidebar_settlement_by_profile: HashMap<String, HashMap<String, bool>>,
     /// Legacy: per-space tab order, from when tabs were the selected space's
     /// non-archived sessions. Kept for file compatibility; no longer read.
     #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
@@ -1324,6 +1321,10 @@ pub struct UiSettings {
     /// only: the conversation's own config always wins once it arrives.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub cloud_workspace_agents: Vec<CloudWorkspaceAgent>,
+    /// The app a cloud chat's synced folder opens in from the computer
+    /// menu, by Open in target id; `None` uses the file manager.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub synced_folder_app: Option<String>,
     /// Interactive identity overlay; imported themes default to their own accent.
     pub accent: zuse_theme::AccentSelection,
     /// Glass policy, independent from the selected appearance, theme, and accent.
@@ -1390,7 +1391,6 @@ impl Default for UiSettings {
             open_tabs: None,
             space_filter: None,
             sidebar_pinned_session_ids_by_profile: HashMap::new(),
-            sidebar_settlement_by_profile: HashMap::new(),
             sidebar_sections_by_profile: HashMap::new(),
             tab_order: std::collections::HashMap::new(),
             space_order: Vec::new(),
@@ -1456,6 +1456,7 @@ impl Default for UiSettings {
             files_show_all: false,
             closed_thread_conversations: HashMap::new(),
             cloud_workspace_agents: Vec::new(),
+            synced_folder_app: None,
             accent: zuse_theme::AccentSelection::default(),
             surface: zuse_theme::SurfacePreference::default(),
             new_thread_composer_background: None,
@@ -2309,7 +2310,6 @@ impl UiSettings {
             space_filter,
             sidebar_sections_by_profile,
             sidebar_pinned_session_ids_by_profile,
-            sidebar_settlement_by_profile,
             tab_order,
             space_order,
             sound_enabled,
@@ -2361,6 +2361,7 @@ impl UiSettings {
             files_show_all,
             closed_thread_conversations,
             cloud_workspace_agents,
+            synced_folder_app,
             accent,
             surface,
             new_thread_composer_background,
@@ -3322,13 +3323,6 @@ mod tests {
                     vec!["synced-1".to_string()],
                 ),
             ]),
-            sidebar_settlement_by_profile: HashMap::from([(
-                "local".into(),
-                HashMap::from([
-                    ("settled-thread".into(), true),
-                    ("reopened-thread".into(), false),
-                ]),
-            )]),
             tab_order: std::collections::HashMap::from([(
                 "space-1".to_string(),
                 vec!["b".to_string(), "a".to_string()],
@@ -3428,6 +3422,7 @@ mod tests {
                 workspace_id: "workspace".into(),
                 agent: "codex".into(),
             }],
+            synced_folder_app: Some("terminal".into()),
             accent: zuse_theme::AccentSelection::Preset(zuse_theme::AccentPreset::Cyan),
             surface: zuse_theme::SurfacePreference::Frosted,
             new_thread_composer_background: Some(NewThreadComposerBackground {

@@ -13,10 +13,13 @@ struct AccountUser: Codable, Sendable {
   let firstName: String?
   let lastName: String?
   let email: String?
+  /// The picture from the sign-in provider (Google, GitHub…), when there is one.
+  let profilePictureURL: String?
   enum CodingKeys: String, CodingKey {
     case firstName = "first_name"
     case lastName = "last_name"
     case email
+    case profilePictureURL = "profile_picture_url"
   }
 }
 
@@ -115,6 +118,12 @@ final class Account: NSObject, ASWebAuthenticationPresentationContextProviding {
   var email: String? {
     let value = credentials?.user?.email ?? credentials?.claims?["email"].string
     return value?.isEmpty == false ? value : nil
+  }
+  /// The account's picture: the sign-in profile's, or a `picture` claim in the token.
+  var pictureURL: URL? {
+    let value = credentials?.user?.profilePictureURL ?? credentials?.claims?["picture"].string
+    guard let value, let url = URL(string: value), url.scheme == "https" else { return nil }
+    return url
   }
   var archiveIdentity: String? {
     guard let claims = credentials?.claims, let subject = claims["sub"].string else { return nil }
@@ -230,6 +239,7 @@ final class Account: NSObject, ASWebAuthenticationPresentationContextProviding {
     webSession?.cancel()
     webSession = nil
     try Vault.write(nil, key: key)
+    AccountPictureStore.shared.clear()
     credentials = nil
     signedIn = false
     reauthenticationRequired = false

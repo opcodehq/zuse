@@ -136,7 +136,9 @@ export default function CloudAuthenticationScreen() {
 					);
 				const ciphertext = await sealCloudAuthSecret(
 					status.encryptionPublicJwk,
-					secret.trim(),
+					provider === "claude" && method === "subscription"
+						? secret.replace(/\s/g, "")
+						: secret.trim(),
 				);
 				assertAccount();
 				await Effect.runPromise(

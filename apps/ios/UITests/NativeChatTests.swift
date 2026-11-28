@@ -33,7 +33,7 @@ final class NativeChatTests: XCTestCase {
     sonnet.tap()
     app.buttons["Close"].tap()
     XCTAssertTrue(app.buttons["Current model: sample-sonnet"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.buttons["3 tool calls"].exists)
+    XCTAssertTrue(app.buttons["tool-group-turn-2:t0:activity"].exists)
     XCTAssertFalse(app.buttons["Send message"].isEnabled)
   }
 
@@ -43,29 +43,25 @@ final class NativeChatTests: XCTestCase {
     app.launch()
     let transcript = app.collectionViews["chat-transcript"]
     XCTAssertTrue(transcript.waitForExistence(timeout: 15))
-    let heading = app.buttons["3 tool calls"]
+    // The latest turn folds its work behind one line saying what it did; how long it took
+    // closes the turn beside the reply's actions.
+    let heading = app.buttons["tool-group-turn-2:t0:activity"]
     XCTAssertTrue(heading.waitForExistence(timeout: 10))
+    XCTAssertTrue(heading.label.hasPrefix("Ran 2 commands · searched once"))
+    XCTAssertTrue(
+      app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked for 21s"))
+        .firstMatch.exists)
+    XCTAssertFalse(app.buttons["activity-reply-2:x2"].exists)
     heading.tap()
-    XCTAssertFalse(app.buttons["activity-conversation-7"].exists)
-    heading.tap()
-    let run = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "swift test"))
-      .firstMatch
-    if !run.exists { transcript.swipeDown() }
+    let run = app.buttons["activity-reply-2:x2"]
     XCTAssertTrue(run.waitForExistence(timeout: 5))
     XCTAssertLessThanOrEqual(run.frame.height, 36)
     run.tap()
     XCTAssertTrue(
       app.descendants(matching: .any).matching(
-        NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "command", "command")
-      )
-      .firstMatch
-      .waitForExistence(timeout: 5))
-    XCTAssertFalse(app.buttons["Completed"].exists)
-    XCTAssertTrue(
-      app.descendants(matching: .any).matching(
         NSPredicate(
-          format: "label CONTAINS %@ OR value CONTAINS %@", "Sample test output",
-          "Sample test output")
+          format: "label CONTAINS %@ OR value CONTAINS %@", "Executed 214 tests",
+          "Executed 214 tests")
       ).firstMatch.waitForExistence(timeout: 5))
     let screenshot = XCTAttachment(screenshot: app.screenshot())
     screenshot.name = "Expanded tool call and composer"
@@ -130,6 +126,31 @@ final class NativeChatTests: XCTestCase {
     XCTAssertFalse(app.buttons["Send message"].isEnabled)
   }
 
+  /// iPad lists fill the window in landscape too, under a tab bar centred along the bottom, and
+  /// a chat opens over the whole window with the bar out of the way.
+  @MainActor func testTabletListFillsWindowAndPushesChatInLandscape() throws {
+    guard UIDevice.current.userInterfaceIdiom == .pad else {
+      throw XCTSkip("Checks the iPad layout.")
+    }
+    let app = XCUIApplication()
+    app.launchArguments = ["--native-preview", "--home-preview", "--tab=chats"]
+    app.launch()
+    addTeardownBlock { @MainActor in XCUIDevice.shared.orientation = .portrait }
+    XCUIDevice.shared.orientation = .landscapeLeft
+    let row = app.staticTexts["Polish the mobile navigation"]
+    XCTAssertTrue(row.waitForExistence(timeout: 15))
+    Thread.sleep(forTimeInterval: 1)
+    let window = app.windows.firstMatch.frame
+    let middleTab = app.buttons["tab-prs"]
+    XCTAssertTrue(middleTab.exists)
+    XCTAssertGreaterThan(middleTab.frame.minY, window.midY, "Tab bar sits along the bottom")
+    XCTAssertLessThan(abs(middleTab.frame.midX - window.midX), 4, "Tab bar is centred")
+    XCTAssertFalse(app.staticTexts["Your work, wherever you are"].exists, "No page beside the list")
+    row.tap()
+    XCTAssertTrue(app.collectionViews["chat-transcript"].waitForExistence(timeout: 10))
+    XCTAssertFalse(app.buttons["tab-prs"].exists, "The chat covers the tab bar")
+  }
+
   @MainActor func testTabsFilterChatsAndReachComputers() throws {
     let app = XCUIApplication()
     app.launchArguments = ["--native-preview", "--home-preview", "--tab=chats"]
@@ -145,15 +166,13 @@ final class NativeChatTests: XCTestCase {
     XCTAssertFalse(app.staticTexts["Polish the mobile navigation"].exists)
     app.buttons["Show all chats"].tap()
     XCTAssertTrue(app.staticTexts["Polish the mobile navigation"].waitForExistence(timeout: 5))
-    // iPad lists Settings and Computers in its sidebar; iPhone keeps them under More.
-    let sidebar = UIDevice.current.userInterfaceIdiom == .pad
-    if sidebar { openSidebar(app) }
-    app.buttons[sidebar ? "sidebar-settings" : "More"].firstMatch.tap()
+    // iPad draws its own tab bar; iPhone's is the system one.
+    let tablet = UIDevice.current.userInterfaceIdiom == .pad
+    app.buttons[tablet ? "tab-more" : "More"].firstMatch.tap()
     XCTAssertTrue(app.buttons["more-account"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.staticTexts["Sign in"].exists)
     XCTAssertTrue(app.staticTexts["Archived chats"].exists)
-    if sidebar { openSidebar(app) }
-    app.buttons[sidebar ? "sidebar-computers" : "settings-computers"].firstMatch.tap()
+    app.buttons["settings-computers"].firstMatch.tap()
     XCTAssertTrue(app.staticTexts["Connect your computer"].waitForExistence(timeout: 5))
     let computers = XCTAttachment(screenshot: app.screenshot())
     computers.name = "Computer connections"
@@ -174,10 +193,12 @@ final class NativeChatTests: XCTestCase {
     app.launch()
     XCTAssertTrue(app.staticTexts["Review authentication changes"].waitForExistence(timeout: 15))
     XCTAssertFalse(app.staticTexts["Polish the mobile navigation"].exists)
-    let search = app.searchFields.firstMatch
+    // iPad searches from its own full-width field; iPhone from the system one.
+    let tablet = UIDevice.current.userInterfaceIdiom == .pad
+    let search = tablet ? app.textFields["search-field"] : app.searchFields.firstMatch
     XCTAssertTrue(search.waitForExistence(timeout: 5))
     search.tap()
-    search.buttons["Clear text"].tap()
+    (tablet ? app.buttons["Clear text"] : search.buttons["Clear text"]).tap()
     search.typeText("Release")
     let zapper = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Release lead'"))
     XCTAssertTrue(zapper.firstMatch.waitForExistence(timeout: 5))
@@ -202,6 +223,31 @@ final class NativeChatTests: XCTestCase {
     XCTAssertTrue(resting.waitForExistence(timeout: 5))
     XCTAssertLessThanOrEqual(resting.frame.height, 48)
     XCTAssertEqual(input.value as? String, "Keep this draft")
+  }
+
+  /// Self-sized rows keep the height they measured at the old width; after the column changes
+  /// width they must measure again or they stack on top of each other.
+  @MainActor func testTranscriptRowsStayApartWhenTheColumnChangesWidth() throws {
+    let app = XCUIApplication()
+    app.launchArguments = ["--native-preview", "--conversation-preview", "--expand-activity"]
+    app.launch()
+    let transcript = app.collectionViews["chat-transcript"]
+    XCTAssertTrue(transcript.waitForExistence(timeout: 15))
+    addTeardownBlock { @MainActor in XCUIDevice.shared.orientation = .portrait }
+    for orientation in [UIDeviceOrientation.landscapeLeft, .portrait] {
+      XCUIDevice.shared.orientation = orientation
+      Thread.sleep(forTimeInterval: 1.5)
+      let frames = transcript.cells.allElementsBoundByIndex
+        .map(\.frame).filter { !$0.isEmpty }.sorted { $0.minY < $1.minY }
+      XCTAssertGreaterThan(frames.count, 1)
+      for (upper, lower) in zip(frames, frames.dropFirst()) {
+        XCTAssertLessThanOrEqual(upper.maxY, lower.minY + 1, "Rows overlap after rotating")
+      }
+    }
+    let screenshot = XCTAttachment(screenshot: app.screenshot())
+    screenshot.name = "Transcript after rotating"
+    screenshot.lifetime = .keepAlways
+    add(screenshot)
   }
 
   @MainActor func testLargeTranscriptOpensAtLatestMessageAndScrolls() throws {
@@ -310,13 +356,5 @@ final class NativeChatTests: XCTestCase {
     composer.typeText("A fresh native chat")
     app.buttons["Send message"].tap()
     XCTAssertTrue(app.staticTexts["Received: A fresh native chat"].waitForExistence(timeout: 10))
-  }
-
-  /// In portrait the iPad sidebar is tucked away; its toolbar button brings it back.
-  @MainActor private func openSidebar(_ app: XCUIApplication) {
-    let settings = app.buttons["sidebar-settings"].firstMatch
-    if settings.waitForExistence(timeout: 2) && settings.isHittable { return }
-    app.buttons["Show Sidebar"].firstMatch.tap()
-    XCTAssertTrue(settings.waitForExistence(timeout: 5))
   }
 }

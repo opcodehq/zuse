@@ -748,6 +748,7 @@ pub struct EngineRpc {
     zappers: Option<crate::zappers::Zappers>,
     slack_links: Option<crate::slack_links::SlackLinks>,
     model_connections: Option<crate::model_connections::ModelConnections>,
+    model_api_keys: Option<crate::harness_vendors::ApiKeys>,
     account: Option<crate::account::Account>,
     managed_access: Option<crate::managed_access::AccountClient>,
     managed_host: Option<crate::managed_access::host::Host>,
@@ -817,6 +818,7 @@ impl EngineRpc {
             zappers: None,
             slack_links: None,
             model_connections: None,
+            model_api_keys: None,
             account: None,
             managed_access: None,
             managed_host: None,
@@ -894,6 +896,11 @@ impl EngineRpc {
         connections: crate::model_connections::ModelConnections,
     ) -> Self {
         self.model_connections = Some(connections);
+        self
+    }
+
+    pub(crate) fn with_model_api_keys(mut self, keys: crate::harness_vendors::ApiKeys) -> Self {
+        self.model_api_keys = Some(keys);
         self
     }
 
@@ -1777,6 +1784,9 @@ fn forward_deadline(method: &str) -> std::time::Duration {
             Duration::from_secs(15 * 60)
         }
         methods::REQUEST_PRIVATE_OPERATION => Duration::from_secs(11 * 60),
+        // The GitHub download may take its full 40 seconds, then the
+        // checkout's filesystem work and the relayed response follow.
+        methods::PROJECT_SKILL_CATALOG => Duration::from_secs(75),
         methods::INSTALL_HARNESS => Duration::from_secs(15 * 60),
         // A full fleet of enabled providers is checked two at a time; each
         // provider may need both a CLI probe and a network request.
@@ -1861,6 +1871,7 @@ fn forwardable(method: &str) -> bool {
             | methods::INSPECT_RECOVERY
             | methods::RESOLVE_RECOVERY
             | methods::LIST_SKILLS
+            | methods::PROJECT_SKILL_CATALOG
             | methods::LIST_COMMANDS
             | methods::QUEUE_COMMAND
             | methods::SUBMIT_PRIVATE_SECRET
@@ -1966,6 +1977,9 @@ fn forwardable(method: &str) -> bool {
             | methods::CANCEL_AGENT_LOGIN
             | methods::GET_CLAUDE_CONNECTION
             | methods::SET_CLAUDE_CONNECTION
+            // Zuse agent API keys are saved on the device that runs the agent.
+            | methods::GET_MODEL_API_KEYS
+            | methods::SET_MODEL_API_KEY
             // Uploads/attachments target the chat's host device (the agent reads
             // the committed file from that device's disk).
             | methods::UPLOAD_CHUNK
@@ -3078,6 +3092,30 @@ impl EngineRpc {
                 .map_err(crate::cloud::rpc_error)?;
             return RpcReply::value(&value);
         }
+        #[cfg(unix)]
+        if matches!(
+            method,
+            methods::CLOUD_CHECKOUT_SYNC_STATUS
+                | methods::CLOUD_CHECKOUT_SYNC_CONFIGURE
+                | methods::CLOUD_CHECKOUT_SYNC_RESUME
+                | methods::CLOUD_CHECKOUT_SYNC_DELETE_FOLDER
+        ) {
+            if !crate::cloud::beta_enabled() {
+                return Err(RpcError::Failed(crate::cloud::BETA_MESSAGE.into()));
+            }
+            let identity = crate::cloud::identity::CloudIdentity::workspace(self.auth()?.clone())
+                .with_account(self.account.clone());
+            let method = method.to_owned();
+            let value = tokio::spawn(async move {
+                crate::cloud::checkout_sync::handle(identity, &method, params).await
+            })
+            .await
+            .map_err(|_| {
+                RpcError::Failed("The sync request was interrupted. Check its status.".into())
+            })?
+            .map_err(|error| RpcError::Failed(error.to_string()))?;
+            return RpcReply::value(&value);
+        }
         if AuthRpc::handles(method) {
             return AuthRpc::new(self.auth()?.clone())
                 .with_account(self.account.clone())
@@ -3811,6 +3849,9 @@ impl EngineRpc {
                             .stop_computer_bridge()
                             .await
                             .map_err(|e| RpcError::Failed(e.to_string()))?;
+                        // Chats synced into checkouts here go back now.
+                        #[cfg(unix)]
+                        crate::cloud::checkout_sync::nudge();
                         RpcReply::value(&gateway.computer_bridge_status())
                     }
                     "ComputerBridgeStatus" => RpcReply::value(&gateway.computer_bridge_status()),
@@ -3847,6 +3888,24 @@ impl EngineRpc {
                     .ok_or_else(|| RpcError::Failed("Computer tasks unavailable".into()))?;
                 let value = gateway
                     .computer_tasks(&p.chat_id, &p.request)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&value)
+            }
+            zuse_protocol::machine_setup::METHOD => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct P {
+                    chat_id: String,
+                    request: zuse_protocol::machine_setup::Request,
+                }
+                let p: P = parse_params(params)?;
+                let gateway = self
+                    .plugins
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("Machine image setup unavailable".into()))?;
+                let value = gateway
+                    .machine_setup(&p.chat_id, &p.request)
                     .await
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&value)
@@ -4099,6 +4158,25 @@ impl EngineRpc {
             methods::GET_CLAUDE_CONNECTION => {
                 RpcReply::value(&self.agent_accounts.get_claude_connection().await)
             }
+            methods::GET_MODEL_API_KEYS | methods::SET_MODEL_API_KEY => {
+                let keys = self.model_api_keys.as_ref().ok_or_else(|| {
+                    RpcError::Failed("The Zuse agent is unavailable on this device.".into())
+                })?;
+                if method == methods::SET_MODEL_API_KEY {
+                    #[derive(Deserialize)]
+                    #[serde(rename_all = "camelCase")]
+                    struct Params {
+                        id: String,
+                        #[serde(default)]
+                        api_key: String,
+                    }
+                    let p: Params = parse_params(params)?;
+                    let key = zeroize::Zeroizing::new(p.api_key);
+                    keys.set(&p.id, &key)
+                        .map_err(|e| RpcError::Failed(e.to_string()))?;
+                }
+                RpcReply::value(&keys.status())
+            }
             methods::SET_CLAUDE_CONNECTION => {
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase")]
@@ -4117,11 +4195,23 @@ impl EngineRpc {
                 .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&view)
             }
+            methods::PROJECT_SKILL_CATALOG => {
+                use zuse_protocol::skill_catalog::{CatalogAction, CatalogRequest};
+                let request: CatalogRequest = parse_params(params)?;
+                let _admission = if matches!(&request.action, CatalogAction::List) {
+                    None
+                } else {
+                    Some(self.sessions.filesystem_admission().await)
+                };
+                RpcReply::value(&self.workspace_files.project_skill_catalog(request).await?)
+            }
             methods::LIST_SKILLS => {
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase")]
                 struct Params {
                     harness: HarnessId,
+                    #[serde(default)]
+                    project_only: bool,
                     #[serde(default)]
                     chat_id: Option<String>,
                     #[serde(default)]
@@ -4130,6 +4220,9 @@ impl EngineRpc {
                     path: Option<String>,
                 }
                 let p: Params = parse_params(params)?;
+                if p.project_only && p.chat_id.is_none() && p.space_id.is_none() {
+                    return RpcReply::value(&Vec::<zuse_protocol::invocation::Skill>::new());
+                }
                 let root = self
                     .catalog_root(&FileSearchParams {
                         query: String::new(),
@@ -4138,11 +4231,16 @@ impl EngineRpc {
                         path: p.path,
                     })
                     .await?;
-                let skills = self
+                let mut skills = self
                     .registry
                     .discover_skills(p.harness, &root)
                     .await
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
+                if p.project_only
+                    && let Some(skills) = &mut skills
+                {
+                    skills.retain(|skill| std::path::Path::new(&skill.path).starts_with(&root));
+                }
                 RpcReply::value(&skills)
             }
             methods::LIST_COMMANDS => {

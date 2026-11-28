@@ -50,6 +50,32 @@ impl zuse_engine::plugins::RuntimePlugins for RuntimePluginClient {
             )
             .await
     }
+    async fn machine_setup(
+        &self,
+        chat: &str,
+        request: &zuse_protocol::machine_setup::Request,
+    ) -> anyhow::Result<serde_json::Value> {
+        anyhow::ensure!(
+            self.credentials.has_changed().is_ok(),
+            "Runtime supervisor closed"
+        );
+        let bootstrap = self.credentials.borrow().clone();
+        anyhow::ensure!(
+            bootstrap.workspace_id == self.workspace
+                && bootstrap.zuse_account_id == self.owner
+                && bootstrap.runtime_generation == self.generation
+                && bootstrap.runtime_credential_expires_at > crate::now_ms(),
+            "Runtime identity changed or expired"
+        );
+        self.authority
+            .post(
+                &bootstrap.workspace_id,
+                &["runtime", "machine-setup"],
+                &bootstrap.runtime_credential,
+                &serde_json::json!({"chatId":chat,"request":request}),
+            )
+            .await
+    }
     async fn tools(&self, request: &PluginToolRequest) -> anyhow::Result<serde_json::Value> {
         anyhow::ensure!(
             self.credentials.has_changed().is_ok(),

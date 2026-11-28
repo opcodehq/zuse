@@ -10,6 +10,8 @@
 //! tool server needs is five methods (`initialize`, `ping`, `tools/list`,
 //! `tools/call`, and the `initialized` notification), and the repo already
 //! owns JSON-RPC framing for the Codex and ACP drivers. Zero new crates.
+//! The one exception to "nothing here touches the filesystem" is a setup
+//! chat's `test_setup_script`, which runs a script on its own computer.
 //!
 //! When the engine launches a harness it can inject this server into the
 //! agent's MCP config with `ZUSE_CHAT_ID` / `ZUSE_DEVICE_ID` in the
@@ -18,6 +20,7 @@
 
 mod computer_wait;
 mod jsonrpc;
+mod machine_setup;
 mod tools;
 mod transcript;
 mod zuse;
@@ -34,6 +37,12 @@ pub struct McpConfig {
     pub ipc_port: u16,
     /// The chat whose agent spawned this server, when injected by the engine.
     pub origin: Origin,
+    /// A cloud chat that can run commands on the owner's computers
+    /// (`ZUSE_CLOUD_COMPUTERS=1`): those tools are loaded up front.
+    pub cloud_computers: bool,
+    /// A setup chat that configures the account's machine image
+    /// (`ZUSE_MACHINE_SETUP=1`): the image tools are listed.
+    pub machine_setup: bool,
 }
 
 impl McpConfig {
@@ -47,6 +56,9 @@ impl McpConfig {
         Self {
             ipc_port,
             origin: Origin::from_env(),
+            cloud_computers: std::env::var("ZUSE_CLOUD_COMPUTERS").as_deref() == Ok("1"),
+            machine_setup: std::env::var(zuse_protocol::machine_setup::MCP_ENV).as_deref()
+                == Ok("1"),
         }
     }
 }
@@ -54,7 +66,9 @@ impl McpConfig {
 /// Run the MCP server on this process's stdin/stdout until stdin closes.
 pub async fn run(config: McpConfig) -> anyhow::Result<()> {
     let zuse = Zuse::new(format!("ws://127.0.0.1:{}", config.ipc_port), config.origin);
-    let tools = Tools::new(std::sync::Arc::new(zuse));
+    let tools = Tools::new(std::sync::Arc::new(zuse))
+        .with_cloud_computers(config.cloud_computers)
+        .with_machine_setup(config.machine_setup);
     serve_stdio(std::sync::Arc::new(tools)).await
 }
 

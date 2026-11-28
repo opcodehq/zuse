@@ -146,6 +146,103 @@ pub fn segmented_tabs(
         }))
 }
 
+/// Catalog filters and page switches share the sidebar's selected tab plate.
+pub fn workspace_tabs(
+    theme: &Theme,
+    id: &'static str,
+    label: &'static str,
+    tabs: &[(&str, Option<&'static str>, Option<usize>)],
+    selected: usize,
+    mut wire: impl FnMut(usize, Stateful<gpui::Div>) -> Stateful<gpui::Div>,
+) -> Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .role(gpui::Role::TabList)
+        .aria_label(label)
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(4.))
+        .children(
+            tabs.iter()
+                .enumerate()
+                .map(|(index, &(label, glyph, count))| {
+                    let active = selected == index;
+                    let color = if active { theme.text } else { theme.text_muted };
+                    let tab = crate::surface_chrome::workspace_tab((id, index), active, theme)
+                        .debug_selector(move || format!("{id}-{index}"))
+                        .role(gpui::Role::Tab)
+                        .aria_label(label.to_owned())
+                        .aria_selected(active)
+                        .tab_index(0)
+                        .focus_visible(|tab| tab.border_1().border_color(theme.accent))
+                        .cursor_pointer()
+                        .h(px(28.))
+                        .px(px(9.))
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .text_size(crate::typography::text_xs())
+                        .text_color(color)
+                        .when(active, |tab| tab.font_weight(gpui::FontWeight::MEDIUM))
+                        .when_some(glyph, |tab, glyph| {
+                            tab.child(crate::icons::icon(glyph).size(px(14.)).text_color(color))
+                        })
+                        .child(label.to_owned())
+                        .when_some(count, |tab, count| {
+                            tab.child(div().text_color(theme.text_muted).child(count.to_string()))
+                        });
+                    wire(index, tab)
+                }),
+        )
+}
+
+pub fn activate(
+    control: Stateful<gpui::Div>,
+    action: impl Fn(&mut gpui::Window, &mut gpui::App) + Clone + 'static,
+) -> Stateful<gpui::Div> {
+    let keyboard = action.clone();
+    control
+        .on_click(move |_, window, cx| action(window, cx))
+        .on_key_down(move |event, window, cx| {
+            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                keyboard(window, cx);
+                cx.stop_propagation();
+            }
+        })
+}
+
+pub fn page_tabs(theme: &Theme, skills: bool) -> Option<Stateful<gpui::Div>> {
+    zuse_viewport::cloud_gate::enabled().then(|| {
+        workspace_tabs(
+            theme,
+            "catalog-page-tab",
+            "Catalog",
+            &[
+                ("Plugins", Some(crate::icons::DITHER_PLUG), None),
+                ("Skills", Some(crate::icons::SKILL), None),
+            ],
+            usize::from(skills),
+            |index, tab| {
+                if index == usize::from(skills) {
+                    return tab;
+                }
+                activate(tab, move |window, cx| {
+                    if index == 0 {
+                        window.dispatch_action(
+                            Box::new(crate::settings::plugins::OpenPluginsPage),
+                            cx,
+                        );
+                    } else {
+                        window
+                            .dispatch_action(Box::new(crate::settings::skills::OpenSkillsPage), cx);
+                    }
+                })
+            },
+        )
+    })
+}
+
 /// A rounded logo tile: the plugin's bundled brand image, else its initial.
 pub fn plugin_logo(theme: &Theme, domain: &str, name: &str, size: f32) -> gpui::Div {
     let path = format!("plugin-icons/{domain}");
@@ -209,4 +306,51 @@ pub fn title_block(
                 .text_color(theme.text_muted)
                 .child(description.into()),
         )
+}
+
+/// Plugins and Skills share one column, so switching between them keeps the
+/// heading, toolbar and tabs exactly in place.
+pub const PAGE_MAX_WIDTH: f32 = 768.;
+
+/// Side gutter for the Plugins and Skills pages at a given content width.
+pub fn page_padding(content_width: f32) -> f32 {
+    if content_width < 800. { 16. } else { 32. }
+}
+
+/// The page title and its one-line subtitle.
+pub fn page_heading(
+    theme: &Theme,
+    title: impl Into<SharedString>,
+    subtitle: impl Into<SharedString>,
+) -> gpui::Div {
+    div()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap(px(4.))
+        .child(
+            div()
+                .text_size(crate::typography::ui_rems(20.))
+                .line_height(crate::typography::ui_rems(28.))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .child(title.into()),
+        )
+        .child(
+            div()
+                .text_size(px(12.))
+                .line_height(px(16.))
+                .text_color(theme.text_muted)
+                .child(subtitle.into()),
+        )
+}
+
+/// A section label over a catalog grid ("Featured", "Popular", "All …").
+pub fn section_label(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div {
+    div()
+        .px(px(8.))
+        .pb(px(4.))
+        .text_size(px(13.))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(theme.text_strong)
+        .child(label.into())
 }

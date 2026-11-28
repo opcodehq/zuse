@@ -190,18 +190,30 @@ public struct CanonicalWorkspace: Sendable {
     let harnesses = try await rpc.call("ListHarnesses").array.filter {
       $0["installed"] != .bool(false) && $0["enabled"] != .bool(false)
     }
-    let providers = try await withThrowingTaskGroup(of: (String, JSONValue).self) { group in
+    // One agent that can't list its models (signed out, missing a key) mustn't hide the rest.
+    var failure: Error?
+    let providers = await withTaskGroup(of: (String, Result<JSONValue, Error>).self) { group in
       for harness in harnesses {
         guard let id = harness["id"].string else { continue }
         group.addTask {
-          let models = try await rpc.call("ListModels", ["harness": .string(id)])
-          return (id, .object(["displayName": harness["name"], "models": models]))
+          do {
+            let models = try await rpc.call("ListModels", ["harness": .string(id)])
+            return (id, .success(.object(["displayName": harness["name"], "models": models])))
+          } catch {
+            return (id, .failure(error))
+          }
         }
       }
       var values: [String: JSONValue] = [:]
-      for try await (id, provider) in group { values[id] = provider }
+      for await (id, result) in group {
+        switch result {
+        case .success(let provider): values[id] = provider
+        case .failure(let error): failure = failure ?? error
+        }
+      }
       return values
     }
+    if providers.isEmpty, let failure { throw failure }
     return .object(["providers": .object(providers)])
   }
 

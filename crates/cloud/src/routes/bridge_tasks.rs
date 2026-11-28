@@ -41,6 +41,15 @@ pub(super) enum Action {
     Claim {
         task: uuid::Uuid,
     },
+    /// Answer `true` once approved work is waiting for `task` (then claim
+    /// it), or `false` after `waitMs` (at most [`protocol::MAX_WAIT_MS`]).
+    /// Replaces the connector's sleep between claims; it never claims, so a
+    /// connector can drop it at any time.
+    Wait {
+        task: uuid::Uuid,
+        #[serde(rename = "waitMs")]
+        wait_ms: u32,
+    },
     Check {
         task: uuid::Uuid,
         request: uuid::Uuid,
@@ -61,7 +70,8 @@ pub(super) async fn host(
     Json(action): Json<Action>,
 ) -> Result<Json<Value>, ApiError> {
     let owner = personal_owner(&state, &headers).await?;
-    let pool = runtime(&state)?.shared_pool();
+    let control = runtime(&state)?;
+    let pool = control.shared_pool();
     let key = host_key(&pool, &headers, "/v1/cloud/bridge/host-task").await?;
     let device: String = sqlx::query_scalar(
         "SELECT enrollment_id FROM api_bridge_computers WHERE owner_id=$1 AND key_thumbprint=$2",
@@ -71,7 +81,152 @@ pub(super) async fn host(
     .fetch_optional(&pool)
     .await?
     .ok_or_else(|| ApiError::forbidden("computer_not_enrolled"))?;
-    Ok(Json(host_action(&pool, &owner, &device, action).await?))
+    let Action::Wait { task, wait_ms } = action else {
+        let finished = match &action {
+            Action::Finish { request, .. } => Some(*request),
+            _ => None,
+        };
+        let claim = matches!(action, Action::Claim { .. });
+        let out = host_action(&pool, &owner, &device, action).await?;
+        let claimed = claim
+            .then(|| {
+                out["id"]
+                    .as_str()
+                    .and_then(|id| uuid::Uuid::parse_str(id).ok())
+            })
+            .flatten();
+        if let Some(request) = finished.or(claimed) {
+            changed(&control, request).await;
+        }
+        return Ok(Json(out));
+    };
+    if wait_ms > protocol::MAX_WAIT_MS {
+        return Err(ApiError::bad_request("invalid_claim_wait"));
+    }
+    let wait = std::time::Duration::from_millis(u64::from(wait_ms));
+    let ready = wait_claimable(&pool, &owner, &device, task, wait, &*control).await?;
+    Ok(Json(json!(ready)))
+}
+
+/// Request `request` changed (made, decided, claimed, finished or stopped):
+/// long-polls in this process re-read now, and a `computer-request` hint
+/// tells the owner's apps (and other API processes, by NOTIFY). The change is
+/// committed: a hint that fails (a database before migration 0057) only
+/// leaves the apps to their polling.
+pub(super) async fn changed(control: &crate::runtime::RuntimeControl, request: uuid::Uuid) {
+    control.bridge_changed();
+    if let Err(error) = hint(&control.shared_pool(), request).await {
+        tracing::debug!(error = %error.code, "computer request hint not recorded");
+    }
+}
+
+/// Add request `request`'s chat hint to the account feed and NOTIFY 'bridge'.
+pub(super) async fn hint(pool: &sqlx::PgPool, request: uuid::Uuid) -> Result<(), ApiError> {
+    sqlx::query(
+        "WITH hint AS (
+            INSERT INTO zuse_rust_account_event_outbox(owner_id,kind,resource_id,workspace_id,payload,created_at)
+            SELECT owner_id,'computer-request',chat_id,workspace_id,'{}'::jsonb,
+                (extract(epoch FROM clock_timestamp())*1000)::bigint
+            FROM api_bridge_requests WHERE request_id=$1::text::uuid
+            RETURNING 1)
+         SELECT pg_notify(left('zuse_cloud_work:' || current_schema(), 63), 'bridge') FROM hint",
+    )
+    .bind(request.to_string())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Where a bridge long-poll hears that it should read again.
+pub(super) trait Changes {
+    fn subscribe(&self) -> tokio::sync::broadcast::Receiver<()>;
+    /// The longest it waits between reads without hearing of a change.
+    fn recheck(&self) -> std::time::Duration;
+}
+impl Changes for crate::runtime::RuntimeControl {
+    fn subscribe(&self) -> tokio::sync::broadcast::Receiver<()> {
+        self.bridge_changes()
+    }
+    fn recheck(&self) -> std::time::Duration {
+        self.bridge_recheck()
+    }
+}
+
+/// Read with `read` until `done` or `wait` passes, re-reading on each change.
+async fn long_poll<T, F, Fut>(
+    wait: std::time::Duration,
+    changes: &impl Changes,
+    mut read: F,
+    done: impl Fn(&T) -> bool,
+) -> Result<T, ApiError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, ApiError>>,
+{
+    let deadline = tokio::time::Instant::now() + wait;
+    // Subscribed before the first read, so no change after it is missed.
+    let mut heard = changes.subscribe();
+    loop {
+        let value = read().await?;
+        if done(&value) || tokio::time::Instant::now() >= deadline {
+            return Ok(value);
+        }
+        let next = deadline.min(tokio::time::Instant::now() + changes.recheck());
+        tokio::select! {
+            _ = heard.recv() => {}
+            _ = tokio::time::sleep_until(next) => {}
+        }
+    }
+}
+
+/// Whether approved work is waiting for `task`, answered as soon as some
+/// is or after `wait`.
+pub(super) async fn wait_claimable(
+    pool: &sqlx::PgPool,
+    owner: &str,
+    device: &str,
+    task: uuid::Uuid,
+    wait: std::time::Duration,
+    changes: &impl Changes,
+) -> Result<bool, ApiError> {
+    long_poll(
+        wait,
+        changes,
+        || claimable(pool, owner, device, task),
+        |ready| *ready,
+    )
+    .await
+}
+
+/// Approved, unclaimed requests for this enrollment that `task` (the
+/// connector's current offer, or the same offer from an earlier session) may
+/// take; `$1` owner, `$2` enrollment, `$3` task.
+const CLAIMABLE: &str =
+    "SELECT b.request_id FROM api_bridge_requests r JOIN api_bridge_runs b USING(request_id)
+    JOIN api_bridge_tasks t ON t.task_id=b.task_id
+    JOIN api_bridge_tasks cur ON cur.task_id=$3
+    WHERE r.owner_id=$1 AND r.enrollment_id=$2 AND NOT b.claimed AND b.result IS NULL
+      AND cur.owner_id=$1 AND cur.enrollment_id=$2 AND cur.expires_at>now()
+      -- The same offer from an earlier connector session (a reconnect or
+      -- restart gets a new task ID) still reaches its approved requests.
+      AND (b.task_id=$3 OR (t.owner_id,t.enrollment_id,t.dynamic,t.command,t.cwd,t.os_user)
+          =(cur.owner_id,cur.enrollment_id,cur.dynamic,cur.command,cur.cwd,cur.os_user))";
+
+/// Whether a claim by `task` would take something now.
+async fn claimable(
+    pool: &sqlx::PgPool,
+    owner: &str,
+    device: &str,
+    task: uuid::Uuid,
+) -> Result<bool, ApiError> {
+    Ok(
+        sqlx::query_scalar(&format!("SELECT EXISTS({CLAIMABLE} AND {GRANTED})"))
+            .bind(owner)
+            .bind(device)
+            .bind(task.to_string())
+            .fetch_one(pool)
+            .await?,
+    )
 }
 
 /// One host action for an authenticated enrollment.
@@ -126,19 +281,11 @@ pub(super) async fn host_action(
             .await?;
             Value::Null
         }
+        // Answered by `host` (it waits); read once here.
+        Action::Wait { task, .. } => json!(claimable(pool, owner, device, task).await?),
         Action::Claim { task } => {
             let claimed: Option<Value> = sqlx::query_scalar(&format!(
-                "WITH next AS (
-                    SELECT b.request_id FROM api_bridge_requests r JOIN api_bridge_runs b USING(request_id)
-                    JOIN api_bridge_tasks t ON t.task_id=b.task_id
-                    JOIN api_bridge_tasks cur ON cur.task_id=$3
-                    WHERE r.owner_id=$1 AND r.enrollment_id=$2 AND NOT b.claimed AND b.result IS NULL
-                      AND cur.owner_id=$1 AND cur.enrollment_id=$2 AND cur.expires_at>now()
-                      -- The same offer from an earlier connector session (a reconnect or
-                      -- restart gets a new task ID) still reaches its approved requests.
-                      AND (b.task_id=$3 OR (t.owner_id,t.enrollment_id,t.dynamic,t.command,t.cwd,t.os_user)
-                          =(cur.owner_id,cur.enrollment_id,cur.dynamic,cur.command,cur.cwd,cur.os_user))
-                      AND {GRANTED}
+                "WITH next AS ({CLAIMABLE} AND {GRANTED}
                     ORDER BY b.created_at,r.request_id LIMIT 1 FOR UPDATE OF b SKIP LOCKED)
                  UPDATE api_bridge_runs b SET claimed=true,claimed_at=now(),heartbeat_at=now(),task_id=$3
                  FROM next, api_bridge_requests r
@@ -278,12 +425,16 @@ pub(super) async fn computers_for(
 ) -> Result<Vec<Value>, ApiError> {
     Ok(sqlx::query_scalar(&format!(
         "SELECT jsonb_build_object('deviceId',c.enrollment_id,'name',c.label,'platform',c.platform,
-            'role',{ROLE},'online',t.task_id IS NOT NULL,'shell',t.command,'user',t.os_user,'cwd',t.cwd,
+            'role',{ROLE},'online',t.task_id IS NOT NULL,'shell',t.command,'user',t.os_user,
+            'cwd',CASE WHEN t.task_id IS NOT NULL THEN coalesce(a.synced_cwd,t.cwd) END,
+            'syncedCheckout',a.synced_cwd,
             'defaultTimeoutSeconds',$4::int,'maxTimeoutSeconds',$5::int)
          FROM api_bridge_computers c
          LEFT JOIN LATERAL (SELECT task_id,command,os_user,cwd FROM api_bridge_tasks t
              WHERE t.owner_id=c.owner_id AND t.enrollment_id=c.enrollment_id AND t.dynamic AND t.expires_at>now()
              ORDER BY t.expires_at DESC LIMIT 1) t ON true
+         LEFT JOIN api_bridge_attachments a ON a.owner_id=c.owner_id AND a.workspace_id=$2
+             AND a.chat_id=$3 AND a.enrollment_id=c.enrollment_id
          WHERE c.owner_id=$1 AND {OWNED_CHAT}
          ORDER BY {ROLE} <> 'primary', lower(c.label), c.enrollment_id"
     ))
@@ -316,16 +467,11 @@ pub(super) async fn request(
     Json(input): Json<Request>,
 ) -> Result<Json<Value>, ApiError> {
     let owner = personal_owner(&state, &headers).await?;
-    Ok(Json(
-        request_for(
-            &runtime(&state)?.shared_pool(),
-            &owner,
-            &workspace,
-            &chat,
-            input,
-        )
-        .await?,
-    ))
+    let control = runtime(&state)?;
+    let request = input.request_id;
+    let out = request_for(&control.shared_pool(), &owner, &workspace, &chat, input).await?;
+    changed(&control, request).await;
+    Ok(Json(out))
 }
 
 pub(super) async fn request_for(
@@ -420,7 +566,8 @@ pub(super) async fn request_for(
         "INSERT INTO api_bridge_requests(request_id,owner_id,workspace_id,chat_id,enrollment_id,computer_name,
             os_user,shell,cwd,command,timeout_ms,decision,role)
          SELECT $4::text::uuid,owner_id,workspace_id,chat_id,enrollment_id,label,os_user,
-            CASE WHEN dynamic THEN t.command ELSE 'direct executable' END,coalesce($7,t.cwd),coalesce($6,t.command),$8,
+            CASE WHEN dynamic THEN t.command ELSE 'direct executable' END,
+            coalesce($7,CASE WHEN dynamic THEN a.synced_cwd END,t.cwd),coalesce($6,t.command),$8,
             CASE WHEN EXISTS(SELECT FROM api_bridge_always_grants g WHERE g.owner_id=a.owner_id AND g.enrollment_id=a.enrollment_id) THEN 'always'
                  WHEN EXISTS(SELECT FROM api_bridge_session_grants g
                      WHERE (g.owner_id,g.workspace_id,g.chat_id,g.enrollment_id)=(a.owner_id,a.workspace_id,a.chat_id,a.enrollment_id)) THEN 'session' END,
@@ -458,7 +605,7 @@ pub(super) async fn request_for(
         .execute(&mut *tx)
         .await?;
     let created: Value = sqlx::query_scalar(
-        "SELECT jsonb_build_object('id',request_id,'deviceId',enrollment_id,'computer',computer_name,'role',role)
+        "SELECT jsonb_build_object('id',request_id,'deviceId',enrollment_id,'computer',computer_name,'role',role,'cwd',cwd)
          FROM api_bridge_requests WHERE request_id=$1::text::uuid",
     )
     .bind(&id)
@@ -492,7 +639,7 @@ async fn existing_request(
         Some(false) => Err(ApiError::conflict("computer_request_id_reused")),
         Some(true) => {
             let summary: Option<Value> = sqlx::query_scalar(
-                "SELECT jsonb_build_object('id',request_id,'deviceId',enrollment_id,'computer',computer_name,'role',role)
+                "SELECT jsonb_build_object('id',request_id,'deviceId',enrollment_id,'computer',computer_name,'role',role,'cwd',cwd)
                  FROM api_bridge_requests WHERE request_id=$1::text::uuid",
             )
             .bind(id)
@@ -580,6 +727,8 @@ pub(super) struct RuntimeRequest {
     request: protocol::Request,
 }
 
+use protocol::Request as Task;
+
 pub(super) async fn runtime_tasks(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -591,9 +740,56 @@ pub(super) async fn runtime_tasks(
         .computer_task_owner(&workspace, &input.chat_id, runtime_bearer(&headers)?)
         .await?;
     let pool = control.shared_pool();
-    Ok(Json(
-        runtime_request(&pool, &owner, &workspace, &input.chat_id, input.request).await?,
-    ))
+    let chat = &input.chat_id;
+    let Task::Wait {
+        request_id,
+        wait_ms,
+    } = input.request
+    else {
+        let submitted = match &input.request {
+            Task::Run { request_id, .. } | Task::Command { request_id, .. } => Some(*request_id),
+            _ => None,
+        };
+        let out = runtime_request(&pool, &owner, &workspace, chat, input.request).await?;
+        if let Some(request) = submitted {
+            // The owner's apps show its approval; one this chat or computer
+            // already allows is claimable now.
+            changed(&control, request).await;
+        }
+        return Ok(Json(out));
+    };
+    if wait_ms > protocol::MAX_WAIT_MS {
+        return Err(ApiError::bad_request("invalid_computer_wait"));
+    }
+    let wait = std::time::Duration::from_millis(u64::from(wait_ms));
+    let rows = wait_settled(&pool, &owner, &workspace, chat, request_id, wait, &*control).await?;
+    Ok(Json(json!(rows)))
+}
+
+/// This chat's results, answered as soon as request `id` settles (or is no
+/// longer listed) or after `wait`.
+pub(super) async fn wait_settled(
+    pool: &sqlx::PgPool,
+    owner: &str,
+    workspace: &str,
+    chat: &str,
+    id: uuid::Uuid,
+    wait: std::time::Duration,
+    changes: &impl Changes,
+) -> Result<Vec<Value>, ApiError> {
+    let id = id.to_string();
+    long_poll(
+        wait,
+        changes,
+        || results_for(pool, owner, workspace, chat),
+        |rows: &Vec<Value>| {
+            rows.iter()
+                .find(|row| row["id"].as_str() == Some(id.as_str()))
+                .and_then(|row| row["state"].as_str())
+                .is_none_or(protocol::settled)
+        },
+    )
+    .await
 }
 
 /// A request from the chat's own runtime, after its credential and chat are verified.
@@ -604,7 +800,6 @@ pub(super) async fn runtime_request(
     chat: &str,
     request: protocol::Request,
 ) -> Result<Value, ApiError> {
-    use protocol::Request as Task;
     // A retried submission is recognized before the computer's current
     // offer is resolved: the computer may have gone offline or restarted.
     if let Task::Run { request_id, .. } | Task::Command { request_id, .. } = &request {
@@ -696,7 +891,10 @@ pub(super) async fn runtime_request(
             )
             .await?
         }
-        Task::Results => json!(results_for(pool, owner, workspace, chat).await?),
+        // The waiting form is answered by `runtime_tasks`; here it reads once.
+        Task::Results | Task::Wait { .. } => {
+            json!(results_for(pool, owner, workspace, chat).await?)
+        }
     })
 }
 
@@ -706,14 +904,9 @@ pub(super) async fn cancel(
     Path((workspace, chat, request)): Path<(String, String, uuid::Uuid)>,
 ) -> Result<StatusCode, ApiError> {
     let owner = personal_owner(&state, &headers).await?;
-    cancel_for(
-        &runtime(&state)?.shared_pool(),
-        &owner,
-        &workspace,
-        &chat,
-        request,
-    )
-    .await?;
+    let control = runtime(&state)?;
+    cancel_for(&control.shared_pool(), &owner, &workspace, &chat, request).await?;
+    changed(&control, request).await;
     Ok(StatusCode::NO_CONTENT)
 }
 

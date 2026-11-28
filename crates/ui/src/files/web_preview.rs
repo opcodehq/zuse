@@ -1,5 +1,6 @@
 //! Per-document loopback origin for local media and web documents.
-//! Relative web assets stay under the workspace; archive entries are never extracted.
+//! Local assets stay under the workspace or an external document's containing directory;
+//! archive entries are never extracted.
 //! A page on another machine (a cloud computer) is served from memory, its
 //! assets read through the workspace file service, never from this disk.
 use gpui::AppContext;
@@ -185,6 +186,15 @@ enum Source {
 fn serve(root: &Path, path: &Path) -> Result<(String, Arc<AtomicBool>), String> {
     let root = root.canonicalize().map_err(|e| e.to_string())?;
     let path = path.canonicalize().map_err(|e| e.to_string())?;
+    // Preserve workspace-wide assets for internal files; external files only
+    // expose assets in their canonical containing directory.
+    let root = if path.starts_with(&root) {
+        root
+    } else {
+        path.parent()
+            .ok_or_else(|| "This file cannot be previewed.".to_string())?
+            .to_path_buf()
+    };
     let relative = path
         .strip_prefix(&root)
         .map_err(|e| e.to_string())?
@@ -272,6 +282,10 @@ fn serve_source(
         while !stopped.load(Ordering::Relaxed) {
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    // Accepted sockets can inherit the listener's nonblocking mode.
+                    if stream.set_nonblocking(false).is_err() {
+                        continue;
+                    }
                     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
                     let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
                     let mut request = [0; 16384];
@@ -574,11 +588,12 @@ mod tests {
             socket
                 .set_read_timeout(Some(Duration::from_secs(3)))
                 .unwrap();
-            write!(
-                socket,
-                "GET {path} HTTP/1.1\r\nHost: localhost\r\n{headers}Connection: close\r\n\r\n"
-            )
-            .unwrap();
+            socket
+                .write_all(
+                    format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n{headers}Connection: close\r\n\r\n")
+                        .as_bytes(),
+                )
+                .unwrap();
             let mut response = String::new();
             socket.read_to_string(&mut response).unwrap();
             response
@@ -620,14 +635,125 @@ mod tests {
         socket
             .set_read_timeout(Some(Duration::from_secs(3)))
             .unwrap();
-        write!(
-            socket,
-            "GET {path} HTTP/1.1\r\nHost: localhost\r\n{headers}Connection: close\r\n\r\n"
-        )
-        .unwrap();
+        socket
+            .write_all(
+                format!(
+                    "GET {path} HTTP/1.1\r\nHost: localhost\r\n{headers}Connection: close\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .unwrap();
         let mut response = String::new();
         socket.read_to_string(&mut response).unwrap();
         response
+    }
+
+    #[test]
+    fn waits_for_complete_request_headers() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.html"), "<h1>Ready</h1>").unwrap();
+        let (address, stop) = serve(dir.path(), &dir.path().join("index.html")).unwrap();
+        let url = url::Url::parse(&address).unwrap();
+        let mut socket = std::net::TcpStream::connect(("127.0.0.1", url.port().unwrap())).unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(80));
+        socket
+            .write_all(format!("GET {} HTTP/1.1\r\n", url.path()).as_bytes())
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(80));
+        socket
+            .write_all(b"Host: localhost\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        let mut response = String::new();
+        socket.read_to_string(&mut response).unwrap();
+        stop.store(true, Ordering::Relaxed);
+        assert!(response.starts_with("HTTP/1.1 200"));
+        assert!(response.ends_with("<h1>Ready</h1>"));
+    }
+
+    #[test]
+    fn external_page_serves_sibling_assets() {
+        let workspace = tempfile::tempdir().unwrap();
+        let external = tempfile::tempdir().unwrap();
+        let html = "<link rel=stylesheet href=style.css><img src=logo.svg>";
+        std::fs::write(external.path().join("index.html"), html).unwrap();
+        std::fs::write(external.path().join("style.css"), "body{color:red}").unwrap();
+        std::fs::write(external.path().join("logo.svg"), "<svg/>").unwrap();
+        let (address, stop) = serve(workspace.path(), &external.path().join("index.html")).unwrap();
+        let url = url::Url::parse(&address).unwrap();
+        let token = url.path().split('/').nth(1).unwrap();
+        let page = get(&address, url.path(), "");
+        assert!(page.starts_with("HTTP/1.1 200"));
+        assert!(page.ends_with(html));
+        for (asset, content_type, body) in [
+            ("style.css", "text/css", "body{color:red}"),
+            ("logo.svg", "image/svg+xml", "<svg/>"),
+        ] {
+            let asset_url = url.join(asset).unwrap();
+            let response = get(&address, asset_url.path(), "");
+            assert!(response.starts_with("HTTP/1.1 200"));
+            assert!(response.contains(&format!("Content-Type: {content_type}")));
+            assert!(response.ends_with(body));
+            assert!(get(&address, &format!("/{asset}"), "").starts_with("HTTP/1.1 404"));
+            let cookie = format!("Cookie: zuse_preview_{token}=1\r\n");
+            assert!(get(&address, &format!("/{asset}"), &cookie).ends_with(body));
+        }
+        stop.store(true, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn nested_workspace_page_retains_workspace_assets() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::create_dir(workspace.path().join("pages")).unwrap();
+        std::fs::write(
+            workspace.path().join("pages/index.html"),
+            "<link rel=stylesheet href=../style.css><script src=/app.js></script>",
+        )
+        .unwrap();
+        std::fs::write(workspace.path().join("style.css"), "body{color:red}").unwrap();
+        std::fs::write(workspace.path().join("app.js"), "hello").unwrap();
+        let (address, stop) =
+            serve(workspace.path(), &workspace.path().join("pages/index.html")).unwrap();
+        let url = url::Url::parse(&address).unwrap();
+        assert!(url.path().ends_with("/pages/index.html"));
+        assert!(get(&address, url.path(), "").starts_with("HTTP/1.1 200"));
+        let css_url = url.join("../style.css").unwrap();
+        assert!(get(&address, css_url.path(), "").ends_with("body{color:red}"));
+        let token = url.path().split('/').nth(1).unwrap();
+        let cookie = format!("Cookie: zuse_preview_{token}=1\r\n");
+        assert!(get(&address, "/app.js", &cookie).ends_with("hello"));
+        stop.store(true, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn external_page_cannot_escape_its_directory() {
+        let workspace = tempfile::tempdir().unwrap();
+        let external = tempfile::tempdir().unwrap();
+        let directory = external.path().join("gallery");
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::write(directory.join("index.html"), "<h1>Gallery</h1>").unwrap();
+        std::fs::write(external.path().join("secret.txt"), "private").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(external.path(), directory.join("outside")).unwrap();
+        let (address, stop) = serve(workspace.path(), &directory.join("index.html")).unwrap();
+        let url = url::Url::parse(&address).unwrap();
+        let token = url.path().split('/').nth(1).unwrap();
+        let cookie = format!("Cookie: zuse_preview_{token}=1\r\n");
+        for path in ["../secret.txt", "%2e%2e/secret.txt", "%2e%2e%2fsecret.txt"] {
+            assert!(get(&address, &format!("/{token}/{path}"), "").starts_with("HTTP/1.1 404"));
+            assert!(get(&address, &format!("/{path}"), &cookie).starts_with("HTTP/1.1 404"));
+        }
+        #[cfg(unix)]
+        {
+            assert!(
+                get(&address, &format!("/{token}/outside/secret.txt"), "")
+                    .starts_with("HTTP/1.1 404")
+            );
+            assert!(get(&address, "/outside/secret.txt", &cookie).starts_with("HTTP/1.1 404"));
+        }
+        stop.store(true, Ordering::Relaxed);
     }
 
     #[test]

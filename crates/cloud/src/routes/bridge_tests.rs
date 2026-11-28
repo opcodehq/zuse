@@ -1,8 +1,11 @@
 //! Cloud-chat computer requests against a real PostgreSQL: approval scopes,
 //! deadlines, stop, unknown outcomes and attachment boundaries.
 use super::bridge_approvals::{Decision, decide_for, pending_for};
-use super::bridge_computers::{attached_for, primary_for};
-use super::bridge_tasks::{Action, cancel_for, host_action, results_for, runtime_request};
+use super::bridge_computers::{attached_for, claim_for, primary_for};
+use super::bridge_tasks::{
+    Action, Changes, cancel_for, hint, host_action, results_for, runtime_request, wait_claimable,
+    wait_settled,
+};
 use serde_json::{Value, json};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use zuse_protocol::computer_tasks::Request;
@@ -57,6 +60,23 @@ async fn database() -> Option<PgPool> {
         .unwrap();
     sqlx::raw_sql(computers).execute(&pool).await.unwrap();
     sqlx::raw_sql(migration).execute(&pool).await.unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../migrations/0056_bridge_synced_checkout.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    // The account event outbox, then the hint kind request changes add.
+    let (outbox, _) = include_str!("../../migrations/0017_account_events.sql")
+        .split_once("CREATE TABLE zuse_rust_account_event_cursors")
+        .unwrap();
+    sqlx::raw_sql(outbox).execute(&pool).await.unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../migrations/0057_computer_request_hints.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::raw_sql(&format!(
         "INSERT INTO api_bridge_computers{}",
         STUBS
@@ -569,9 +589,9 @@ async fn attached_computers_list_offline_ones_with_their_limits() {
         rows,
         json!([
             {"deviceId":"linux","name":"Build box","platform":"linux","role":"secondary","online":false,"shell":null,
-             "user":null,"cwd":null,"defaultTimeoutSeconds":600,"maxTimeoutSeconds":3600},
+             "user":null,"cwd":null,"syncedCheckout":null,"defaultTimeoutSeconds":600,"maxTimeoutSeconds":3600},
             {"deviceId":"mac","name":"Mac","platform":"macos","role":"secondary","online":true,"shell":"/bin/sh",
-             "user":"me","cwd":"/home/me","defaultTimeoutSeconds":600,"maxTimeoutSeconds":3600}
+             "user":"me","cwd":"/home/me","syncedCheckout":null,"defaultTimeoutSeconds":600,"maxTimeoutSeconds":3600}
         ])
     );
 }
@@ -1010,4 +1030,299 @@ async fn a_late_claim_for_an_earlier_message_never_replaces_a_newer_default() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
+async fn a_synced_checkout_is_the_default_folder_for_that_chat_on_that_computer() {
+    let Some(pool) = database().await else { return };
+    let folder = "/Users/me/code/zuse";
+    let (mac, linux) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+    offer(&pool, "mac", mac).await;
+    offer(&pool, "linux", linux).await;
+    // The Mac proves the message came from it and reports the folder the
+    // chat is synced into there.
+    claim_for(
+        &pool,
+        "owner",
+        "w",
+        "chat",
+        "mac",
+        Some("cmd-1"),
+        Some(folder),
+    )
+    .await
+    .unwrap();
+    let computers = |pool: PgPool, chat: &'static str| async move {
+        let rows = runtime_request(&pool, "owner", "w", chat, Request::Computers)
+            .await
+            .unwrap();
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                (
+                    row["deviceId"].as_str().unwrap().to_owned(),
+                    (row["cwd"].clone(), row["syncedCheckout"].clone()),
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>()
+    };
+    let listed = computers(pool.clone(), "chat").await;
+    assert_eq!(listed["mac"], (json!(folder), json!(folder)));
+    assert_eq!(listed["linux"], (json!("/home/me"), Value::Null));
+    // Another chat on the same computer isn't synced.
+    assert_eq!(
+        computers(pool.clone(), "chat2").await["mac"],
+        (json!("/home/me"), Value::Null)
+    );
+
+    // Without a device or folder, a command goes to the Mac and starts in
+    // the synced folder; the agent and the approval both see that folder.
+    let id = uuid::Uuid::new_v4();
+    let created = runtime_request(
+        &pool,
+        "owner",
+        "w",
+        "chat",
+        Request::Command {
+            device_id: None,
+            command: "npm run dev".into(),
+            cwd: None,
+            request_id: id,
+            timeout_seconds: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(created["deviceId"], "mac");
+    assert_eq!(created["cwd"], folder);
+    let pending = pending_for(&pool, "owner", "w", "chat").await.unwrap();
+    assert_eq!(pending[0]["cwd"], folder);
+    // A directory the agent names still wins, and other computers keep
+    // their own default.
+    let named = runtime_request(
+        &pool,
+        "owner",
+        "w",
+        "chat",
+        Request::Command {
+            device_id: None,
+            command: "ls".into(),
+            cwd: Some("/tmp".into()),
+            request_id: uuid::Uuid::new_v4(),
+            timeout_seconds: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(named["cwd"], "/tmp");
+    let elsewhere = command(&pool, "w", "chat", "linux", "ls", None)
+        .await
+        .unwrap();
+    let rows = results_for(&pool, "owner", "w", "chat").await.unwrap();
+    let row = rows
+        .iter()
+        .find(|r| r["id"] == elsewhere.to_string())
+        .unwrap();
+    assert_eq!(row["cwd"], "/home/me");
+
+    // A claim without a folder (sync turned off) clears it, even when that
+    // claim doesn't move the chat's default computer.
+    claim_for(&pool, "owner", "w", "chat", "linux", Some("cmd-2"), None)
+        .await
+        .unwrap();
+    claim_for(&pool, "owner", "w", "chat", "mac", None, Some(folder))
+        .await
+        .unwrap();
+    assert_eq!(
+        computers(pool.clone(), "chat").await["mac"],
+        (json!(folder), json!(folder))
+    );
+    claim_for(&pool, "owner", "w", "chat", "mac", None, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        computers(pool.clone(), "chat").await["mac"],
+        (json!("/home/me"), Value::Null)
+    );
+    // Only an absolute, bounded folder is accepted.
+    for bad in ["relative/path", "", "/tmp/a\nb"] {
+        assert!(
+            claim_for(&pool, "owner", "w", "chat", "mac", None, Some(bad))
+                .await
+                .is_err(),
+            "{bad:?}"
+        );
+    }
+    claim_for(
+        &pool,
+        "owner",
+        "w",
+        "chat",
+        "mac",
+        None,
+        Some("C:\\Users\\me\\zuse"),
+    )
+    .await
+    .unwrap();
+}
+
+/// Changes a test announces by hand; nothing re-reads on its own.
+struct Announced(tokio::sync::broadcast::Sender<()>);
+impl Changes for Announced {
+    fn subscribe(&self) -> tokio::sync::broadcast::Receiver<()> {
+        self.0.subscribe()
+    }
+    fn recheck(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(60)
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
+async fn waits_answer_as_soon_as_work_is_approved_or_a_request_settles() {
+    use std::time::{Duration, Instant};
+    let Some(pool) = database().await else { return };
+    let changes = std::sync::Arc::new(Announced(tokio::sync::broadcast::channel(8).0));
+    let task = uuid::Uuid::new_v4();
+    attach(&pool, "w", "chat", "mac").await;
+    offer(&pool, "mac", task).await;
+    // Nothing approved: the wait ends at its deadline.
+    let started = Instant::now();
+    let ready = wait_claimable(
+        &pool,
+        "owner",
+        "mac",
+        task,
+        Duration::from_millis(300),
+        &*changes,
+    )
+    .await
+    .unwrap();
+    assert!(!ready && started.elapsed() >= Duration::from_millis(300));
+    let id = command(&pool, "w", "chat", "mac", "uname -a", None)
+        .await
+        .unwrap();
+    let connector = tokio::spawn({
+        let (pool, changes) = (pool.clone(), changes.clone());
+        async move {
+            let started = Instant::now();
+            let ready = wait_claimable(
+                &pool,
+                "owner",
+                "mac",
+                task,
+                Duration::from_secs(30),
+                &*changes,
+            )
+            .await
+            .unwrap();
+            (ready, started.elapsed())
+        }
+    });
+    let tool = tokio::spawn({
+        let (pool, changes) = (pool.clone(), changes.clone());
+        async move {
+            let started = Instant::now();
+            let rows = wait_settled(
+                &pool,
+                "owner",
+                "w",
+                "chat",
+                id,
+                Duration::from_secs(30),
+                &*changes,
+            )
+            .await
+            .unwrap();
+            (rows, started.elapsed())
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!connector.is_finished(), "pending work is not claimable");
+    decide_for(&pool, "owner", "w", "chat", id, Decision::Once)
+        .await
+        .unwrap();
+    let _ = changes.0.send(());
+    let (ready, waited) = connector.await.unwrap();
+    assert!(ready && waited < Duration::from_secs(5), "{waited:?}");
+    assert_eq!(claim(&pool, "mac", task).await["id"], id.to_string());
+    let _ = changes.0.send(());
+    // Claimed and running is not settled: the tool call keeps waiting.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!tool.is_finished());
+    host_action(
+        &pool,
+        "owner",
+        "mac",
+        Action::Finish {
+            task,
+            request: id,
+            output: "Linux\n".into(),
+            status: "exit status: 0".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let _ = changes.0.send(());
+    let (rows, waited) = tool.await.unwrap();
+    assert!(waited < Duration::from_secs(5), "{waited:?}");
+    let row = rows.iter().find(|r| r["id"] == id.to_string()).unwrap();
+    assert_eq!(row["state"], "finished");
+    assert_eq!(row["result"]["output"], "Linux\n");
+    // A request this chat doesn't list answers at once.
+    let started = Instant::now();
+    wait_settled(
+        &pool,
+        "owner",
+        "w",
+        "chat",
+        uuid::Uuid::new_v4(),
+        Duration::from_secs(30),
+        &*changes,
+    )
+    .await
+    .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
+async fn a_request_change_hints_its_chat_to_the_owners_apps() {
+    let Some(pool) = database().await else { return };
+    let hints = || async {
+        sqlx::query_as::<_, (String, String, Option<String>, Value)>(
+            "SELECT owner_id,resource_id,workspace_id,payload FROM zuse_rust_account_event_outbox
+             WHERE kind='computer-request' ORDER BY outbox_id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+    };
+    let task = uuid::Uuid::new_v4();
+    attach(&pool, "w", "chat", "mac").await;
+    offer(&pool, "mac", task).await;
+    let id = command(&pool, "w", "chat", "mac", "secret --token x", None)
+        .await
+        .unwrap();
+    hint(&pool, id).await.unwrap();
+    // The chat and its computer only: never the command.
+    assert_eq!(
+        hints().await,
+        [("owner".into(), "chat".into(), Some("w".into()), json!({}))]
+    );
+    hint(&pool, uuid::Uuid::new_v4()).await.unwrap();
+    assert_eq!(hints().await.len(), 1, "an unknown request hints nothing");
+    // A database before the hint kind refuses it; the change itself stands.
+    sqlx::raw_sql(
+        "ALTER TABLE zuse_rust_account_event_outbox DROP CONSTRAINT zuse_rust_account_event_outbox_kind_check;
+         ALTER TABLE zuse_rust_account_event_outbox ADD CONSTRAINT zuse_rust_account_event_outbox_kind_check
+         CHECK(kind IN ('workspace','billing')) NOT VALID",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(hint(&pool, id).await.is_err());
+    assert_eq!(state_of(&pool, "w", "chat", id).await["state"], "pending");
 }

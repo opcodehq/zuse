@@ -11,6 +11,7 @@ mod bridge_tests;
 #[cfg(test)]
 mod github_browser_policy_test;
 mod github_organizations;
+mod machine_setup;
 mod recreations;
 mod task_commands;
 use crate::{
@@ -371,6 +372,22 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         )
         .route("/v1/cloud/machine/rebuild", post(rebuild_machine))
         .route(
+            "/v1/cloud/machine/setup-proposals/{id}",
+            get(machine_setup::proposal),
+        )
+        .route(
+            "/v1/cloud/machine/setup-proposals/{id}/apply",
+            post(machine_setup::apply).layer(DefaultBodyLimit::max(1024)),
+        )
+        .route(
+            "/v1/cloud/machine/setup-proposals/{id}/discard",
+            post(machine_setup::discard).layer(DefaultBodyLimit::max(1024)),
+        )
+        .route(
+            "/v1/cloud/workspaces/{workspace}/runtime/machine-setup",
+            post(machine_setup::runtime_request).layer(DefaultBodyLimit::max(160 * 1024)),
+        )
+        .route(
             "/v1/cloud/machine/images/{image}/repositories/{project}/source-credential",
             post(user_image_source_credential),
         )
@@ -507,6 +524,10 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         )
         .route("/v1/cloud/workspaces", get(workspaces))
         .route("/v1/cloud/workspaces/{id}", get(workspace))
+        .route(
+            "/v1/cloud/workspaces/{id}/rename",
+            post(workspace_rename).layer(DefaultBodyLimit::max(4096)),
+        )
         .route(
             "/v1/cloud/workspaces/{id}/task-commands",
             post(task_commands::submit).layer(DefaultBodyLimit::max(256 * 1024)),
@@ -1644,6 +1665,35 @@ async fn workspaces(
         json!({"workspaces":state.store.workspaces(&access, query.project_id.as_deref()).await?}),
     ))
 }
+async fn workspace_rename(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Result<Json<Value>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let access = state.access(&headers, AccessKind::Content).await?;
+    if state.runtime.is_none() {
+        return Err(ApiError::unavailable("cloud_runtime_writes_disabled"));
+    }
+    let Json(body) = body.map_err(|_| ApiError::bad_request("invalid_cloud_chat_title"))?;
+    let title = body["title"]
+        .as_str()
+        .map(str::trim)
+        .filter(|title| {
+            !title.is_empty()
+                && title.chars().count() <= 200
+                && !title.chars().any(char::is_control)
+        })
+        .ok_or_else(|| ApiError::bad_request("invalid_cloud_chat_title"))?;
+    Ok(Json(
+        state
+            .store
+            .rename_workspace(&access, &id, title)
+            .await?
+            .public(),
+    ))
+}
+
 async fn workspace(
     State(state): State<AppState>,
     headers: HeaderMap,

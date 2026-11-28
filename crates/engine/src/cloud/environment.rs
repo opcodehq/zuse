@@ -393,26 +393,58 @@ async fn run(
             }
             Err(error) => error,
         };
-        let pending = failure.state == "starting";
-        if !pending {
+        if failure.state != "starting" {
             failures = failures.saturating_add(1);
         }
-        let retryable = failure.retry && failures < 8;
+        let (state, wait) = after_failure(failure.state, failure.retry, failures);
         status.send_replace(Status {
             workspace_id: workspace.clone(),
-            state: if retryable || failure.state == "paused" {
-                failure.state
-            } else {
-                "blocked"
-            },
+            state,
             epoch: control.generation(),
             message: failure.message,
         });
-        if retryable {
-            tokio::select! {biased;_=cancel.cancelled()=>return,_=retry.notified()=>{interactive_resume=resume_requested.swap(false, Ordering::AcqRel);if interactive_resume{resume=uuid::Uuid::new_v4().to_string();}},_=tokio::time::sleep(Duration::from_millis(if pending{500}else{(500u64<<failures.min(5)).min(10000)}))=>{}}
-        } else {
-            tokio::select! {biased;_=cancel.cancelled()=>return,_=retry.notified()=>{failures=0;interactive_resume=resume_requested.swap(false, Ordering::AcqRel);if interactive_resume{resume=uuid::Uuid::new_v4().to_string();}}}
+        let backoff = async {
+            match wait {
+                Some(wait) => tokio::time::sleep(wait).await,
+                None => std::future::pending().await,
+            }
+        };
+        tokio::select! {biased;
+            _=cancel.cancelled()=>return,
+            _=retry.notified()=>{if matches!(state,"blocked"|"paused"){failures=0;}interactive_resume=resume_requested.swap(false, Ordering::AcqRel);if interactive_resume{resume=uuid::Uuid::new_v4().to_string();}},
+            _=backoff=>{}
         }
+    }
+}
+
+/// Consecutive transport failures after which a connection reads as blocked,
+/// so a wait for the computer ends with a reason instead of spinning.
+const BLOCKED_AFTER: u32 = 8;
+/// How often a blocked but retryable connection still tries again on its
+/// own. A gateway outage (a runtime restarting, a network change) outlives the
+/// fast retries; the connection must come back without anyone reopening it.
+const SLOW_RETRY: Duration = Duration::from_secs(30);
+/// The state a failed attempt publishes and how long it waits before trying
+/// again; `None` waits for an explicit retry. Transport failures never stop
+/// retrying while someone watches the connection: they only slow down. A
+/// passive retry never resumes compute (only an interactive request can), so
+/// retrying costs a metadata read and a ticket, never a running machine.
+fn after_failure(
+    state: &'static str,
+    retry: bool,
+    failures: u32,
+) -> (&'static str, Option<Duration>) {
+    match (retry, state) {
+        (true, "starting") => (state, Some(Duration::from_millis(500))),
+        (true, _) if failures < BLOCKED_AFTER => (
+            state,
+            Some(Duration::from_millis(
+                (500u64 << failures.min(5)).min(10000),
+            )),
+        ),
+        (true, _) => ("blocked", Some(SLOW_RETRY)),
+        (false, "paused") => ("paused", None),
+        (false, _) => ("blocked", None),
     }
 }
 
@@ -839,6 +871,37 @@ mod tests {
             environment.cancel.cancel();
             environment.control.close();
         }
+    }
+    #[test]
+    fn transport_failures_slow_down_but_never_stop_retrying() {
+        // Fast retries first, with the transient state visible.
+        assert_eq!(
+            after_failure("reconnecting", true, 1),
+            ("reconnecting", Some(Duration::from_millis(1000)))
+        );
+        assert_eq!(
+            after_failure("reconnecting", true, 7),
+            ("reconnecting", Some(Duration::from_millis(10000)))
+        );
+        // A sustained outage reads as blocked (a wake stops waiting) but the
+        // connection keeps trying on its own, so it recovers when the
+        // gateway does without anyone reopening the chat.
+        for failures in [BLOCKED_AFTER, BLOCKED_AFTER + 1, 1000] {
+            assert_eq!(
+                after_failure("reconnecting", true, failures),
+                ("blocked", Some(SLOW_RETRY))
+            );
+        }
+        // A starting computer is polled quickly however long it takes.
+        assert_eq!(
+            after_failure("starting", true, 50),
+            ("starting", Some(Duration::from_millis(500)))
+        );
+        // Refusals wait for an explicit retry; a paused computer is never
+        // retried passively (that could resume it).
+        assert_eq!(after_failure("blocked", false, 1), ("blocked", None));
+        assert_eq!(after_failure("failed", false, 1), ("blocked", None));
+        assert_eq!(after_failure("paused", false, 1), ("paused", None));
     }
     #[tokio::test]
     async fn paused_workspace_requires_interactive_resume() {

@@ -1,6 +1,7 @@
 //! Conversation tabs share a thread checkout and retain independent agent sessions.
 use super::*;
 use crate::localization::message as tr;
+use crate::settings::composer::NewChatDestination;
 use zuse_i18n::messages as msg;
 
 const RIGHT_PANE_HEADER_CONTROLS_MIN_WIDTH: f32 = 8.0 + 4.0 + 4.0 + 28.0;
@@ -301,7 +302,7 @@ impl Shell {
         // The same list `render_active_rows` draws and the jump shortcuts
         // count — one function, so neither can drift from the screen.
         let order = self.sidebar_visible_order(cx);
-        let selected = self.state.read(cx).selected_chat.clone();
+        let selected = self.current_sidebar_thread(cx);
         if let Some(target) = cycle_target(&order, selected.as_deref(), forward) {
             self.open_chat(target, cx);
         }
@@ -333,6 +334,11 @@ impl Shell {
 
     /// Open a session from the sidebar: select it, the main area follows.
     pub(crate) fn open_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
+        // Keyboard navigation reaches cloud rows through the same order.
+        if chat_id.starts_with(CLOUD_ROW_PREFIX) {
+            self.open_cloud_sidebar_row(&chat_id, cx);
+            return;
+        }
         // Leaving the new-chat canvas notes it as it is, for New thread.
         self.track_current_cloud_canvas(cx);
         let same_thread = {
@@ -348,6 +354,7 @@ impl Shell {
         }
         self.cloud_conversation = None;
         self.cloud_conversation_events = None;
+        self.cloud_transcript_events = None;
         self.command_palette = None;
         // Opening any session steps the voice stage aside — including the one
         // already selected under it. The call keeps running in the background.
@@ -363,6 +370,8 @@ impl Shell {
     /// `+` in the titlebar: open the new-session canvas. A set sidebar filter
     /// re-homes the canvas onto that project; under "All" the canvas reopens
     /// on the project/device it was left at (see `AppState::canvas_target`).
+    /// It heads to the destination the user last picked (a computer, or
+    /// Cloud on a repository); Cloud picks itself only before that first pick.
     ///
     /// A new chat always starts with the terminal hidden: when the drawer is
     /// open it just hides (detach, not close — the source chat's tabs and
@@ -407,6 +416,13 @@ impl Shell {
                 None => {}
             }
         }
+        let remembered = self
+            .composer
+            .read(cx)
+            .pickers()
+            .read(cx)
+            .remembered_destination()
+            .cloned();
         if project.is_none() {
             let cloud_only = {
                 let state = self.state.read(cx);
@@ -417,43 +433,72 @@ impl Shell {
                     .into_iter()
                     .filter(|project| project["canCreate"] != false)
                     .collect();
-                let remembered = state.cloud_project.as_ref().and_then(|selected| {
-                    projects
-                        .iter()
-                        .find(|row| {
-                            row["projectId"] == selected["projectId"]
-                                && row["accountId"] == selected["accountId"]
-                        })
-                        .cloned()
-                });
-                let explicit_local = self
+                let same = |left: &serde_json::Value, right: &serde_json::Value| {
+                    left["projectId"] == right["projectId"]
+                        && left["accountId"] == right["accountId"]
+                };
+                let current = state
+                    .cloud_project
+                    .as_ref()
+                    .and_then(|selected| projects.iter().find(|row| same(row, selected)).cloned());
+                // The repository the user last headed a new chat to on Cloud.
+                let remembered_cloud = remembered
+                    .as_ref()
+                    .filter(|_| !state.cloud_access().withholds_cloud())
+                    .and_then(|destination| {
+                        projects
+                            .iter()
+                            .find(|row| destination.is_cloud_on(row))
+                            .cloned()
+                    });
+                let filter = self
                     .settings
                     .space_filter
                     .as_deref()
-                    .and_then(|id| state.space_row(id))
-                    .or_else(|| state.selected_space_row())
-                    .filter(|space| {
-                        !zuse_protocol::projectless::is_projectless_cwd(Some(&space.path))
-                    });
-                if let Some(space) = explicit_local {
-                    // A project backed by a Cloud repository starts on Cloud
-                    // for a subscriber, keeping the checkout as Local.
-                    let cloud = space.remote_repository.as_deref().and_then(|remote| {
+                    .and_then(|id| state.space_row(id));
+                let explicit_local =
+                    filter
+                        .or_else(|| state.selected_space_row())
+                        .filter(|space| {
+                            !zuse_protocol::projectless::is_projectless_cwd(Some(&space.path))
+                        });
+                let checkout_cloud = |space: &zuse_protocol::Space| {
+                    space.remote_repository.as_deref().and_then(|remote| {
                         crate::cloud_destination::matching_project(remote, &projects)
-                    });
-                    match crate::cloud_destination::new_chat(
-                        cloud,
-                        Some(&space.id),
-                        state.cloud_access().subscribed(),
-                    ) {
-                        crate::cloud_destination::NewChat::Cloud {
-                            project,
-                            local_space,
-                        } => Some((project, local_space)),
-                        crate::cloud_destination::NewChat::Local(_) => None,
+                    })
+                };
+                match (remembered.as_ref(), remembered_cloud, explicit_local) {
+                    // The user last chose a computer: Cloud never takes over.
+                    (Some(NewChatDestination::Computer), _, _) => None,
+                    // Cloud last time: back to its repository, keeping this
+                    // checkout as Local when it is the same repository. A
+                    // sidebar filter on a project picks that project instead.
+                    (_, Some(project), local) if filter.is_none() => {
+                        let local_space = local
+                            .filter(|space| {
+                                checkout_cloud(space).is_some_and(|row| same(row, &project))
+                            })
+                            .map(|space| space.id.clone());
+                        Some((project, local_space))
                     }
-                } else {
-                    remembered
+                    (_, _, Some(space)) => {
+                        // No pick yet (or its repository is gone): a project
+                        // backed by a Cloud repository starts on Cloud for a
+                        // subscriber, keeping the checkout as Local.
+                        match crate::cloud_destination::new_chat(
+                            checkout_cloud(space),
+                            Some(&space.id),
+                            state.cloud_access().subscribed(),
+                            remembered.as_ref(),
+                        ) {
+                            crate::cloud_destination::NewChat::Cloud {
+                                project,
+                                local_space,
+                            } => Some((project, local_space)),
+                            crate::cloud_destination::NewChat::Local(_) => None,
+                        }
+                    }
+                    (_, _, None) => current
                         .or_else(|| {
                             (!state.spaces.iter().any(|space| {
                                 !zuse_protocol::projectless::is_projectless_cwd(Some(&space.path))
@@ -461,7 +506,7 @@ impl Shell {
                             .then(|| projects.into_iter().next())
                             .flatten()
                         })
-                        .map(|project| (project, None))
+                        .map(|project| (project, None)),
                 }
             };
             if let Some((project, local_space)) = cloud_only {
@@ -469,7 +514,45 @@ impl Shell {
                 return;
             }
         }
+        // Headed for a computer: a Cloud destination left on the canvas
+        // (another project's repository) must not carry over.
+        let pickers = self.composer.read(cx).pickers().clone();
+        pickers.update(cx, |pickers, cx| pickers.leave_cloud_canvas(cx));
         self.reset_new_session_canvas(project, cx);
+    }
+
+    /// A sidebar project's plus: a new chat on that project, whatever the
+    /// last one was on. A project backed by a Cloud repository starts on
+    /// Cloud (the checkout stays the Local pick) unless the user last headed
+    /// a new chat to a computer; the project is what the next one reopens on.
+    pub(super) fn open_new_chat_in_project(
+        &mut self,
+        cloud_project: Option<serde_json::Value>,
+        space: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let pickers = self.composer.read(cx).pickers().clone();
+        let subscribed = self.state.read(cx).cloud_access().subscribed();
+        let choice = crate::cloud_destination::new_chat(
+            cloud_project.as_ref(),
+            space.as_deref(),
+            subscribed,
+            pickers.read(cx).remembered_destination(),
+        );
+        let cloud = match &choice {
+            crate::cloud_destination::NewChat::Cloud { project, .. } => Some(project.clone()),
+            crate::cloud_destination::NewChat::Local(_) => None,
+        };
+        pickers.update(cx, |pickers, _| {
+            pickers.remember_new_chat_project(space, cloud.as_ref())
+        });
+        match choice {
+            crate::cloud_destination::NewChat::Cloud {
+                project,
+                local_space,
+            } => self.open_new_cloud_session_in(project, local_space, cx),
+            crate::cloud_destination::NewChat::Local(space) => self.open_new_session(space, cx),
+        }
     }
 
     /// Reuse the current native conversation surface; callers choose its destination.
@@ -483,6 +566,7 @@ impl Shell {
         }
         self.cloud_conversation = None;
         self.cloud_conversation_events = None;
+        self.cloud_transcript_events = None;
         self.command_palette = None;
         self.set_voice_stage_open(false, cx);
         self.set_route(Route::Chat, cx);
@@ -760,6 +844,11 @@ impl Shell {
         };
         let open: Vec<String> = open.into_iter().map(|chat| chat.id).collect();
         if open.len() <= 1 {
+            if open.first().is_some_and(|open| open == chat_id)
+                && self.can_close_sidebar_thread_tab(&root, cx)
+            {
+                self.close_sidebar_thread_tab(&root, cx);
+            }
             return;
         }
         let Some(neighbour) = close_neighbour(&open, chat_id) else {
@@ -928,7 +1017,7 @@ impl Shell {
 
     pub(super) fn render_thread_conversations(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();
-        let Some((_, rows, closed_rows)) = self.thread_conversation_tabs(cx) else {
+        let Some((thread_id, rows, closed_rows)) = self.thread_conversation_tabs(cx) else {
             return Empty.into_any_element();
         };
         let state = self.state.read(cx);
@@ -964,7 +1053,9 @@ impl Shell {
             && state.pending_echoes().is_empty()
             && state.queue.is_empty();
         let main_tab = self.active_main_tab(cx);
-        let closable = rows.len() > 1;
+        let close_sidebar_thread =
+            rows.len() == 1 && self.can_close_sidebar_thread_tab(&thread_id, cx);
+        let closable = rows.len() > 1 || close_sidebar_thread;
         let tab_spinner = |id: &str, cx: &mut Context<Self>| {
             div()
                 .size(px(14.))
@@ -989,12 +1080,14 @@ impl Shell {
                 tab_close_button(id, label, active, group, &theme)
             };
         let main_chips = self.render_main_tab_chips(cx);
+        let thread_chips = self.sidebar_thread_tab_chips(&theme, cx);
         // A brand-new thread has only its empty initial conversation. Show
         // the strip as soon as a prompt is sent, or when another tab needs it.
         if rows.len() == 1
             && closed_rows.is_empty()
             && side_chats.is_empty()
             && main_chips.is_empty()
+            && thread_chips.is_empty()
             && empty_initial_conversation
             && working.is_empty()
             && self.review_surface(cx).is_none()
@@ -1123,6 +1216,7 @@ impl Shell {
                             tab: None,
                             position: event.position,
                             page: ChatMenuPage::Root,
+                            sidebar_actions: false,
                         });
                         cx.notify();
                     }),
@@ -1148,6 +1242,7 @@ impl Shell {
                     .min_w_0()
                     .overflow_x_scroll()
                     .gap(px(4.))
+                    .children(thread_chips)
                     .children(conversation_chips)
                     .children(side_chips)
                     .when(!archived, |d| {
@@ -1498,6 +1593,20 @@ impl Shell {
                 .items_center()
                 .gap(px(8.0))
                 .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                // Scrolls like the conversation strip, so chips past the
+                // title bar's width stay reachable.
+                .when(on_canvas, |row| {
+                    row.child(
+                        div()
+                            .id("canvas-thread-tabs")
+                            .flex()
+                            .items_center()
+                            .min_w_0()
+                            .overflow_x_scroll()
+                            .gap(px(8.0))
+                            .children(self.sidebar_thread_tab_chips(&theme, cx)),
+                    )
+                })
                 .when(!on_canvas && self.cloud_conversation.is_none(), |row| {
                     row.child(self.render_thread_conversations(cx))
                 })
