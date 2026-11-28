@@ -426,7 +426,13 @@ struct Inner {
     github: Arc<dyn CiProvider>,
     github_client: Option<GitHubCli>,
     shutdown: CancellationToken,
+    /// Whether a chat's pull request is linked to it in the cloud, which
+    /// then delivers its checks and conflicts by webhook: no polling here.
+    linked: std::sync::OnceLock<Linked>,
 }
+
+/// `(chat id, pull request url)` → linked to that chat.
+pub(crate) type Linked = Arc<dyn Fn(&str, &str) -> bool + Send + Sync>;
 
 #[derive(Clone)]
 pub struct PrWatches {
@@ -447,12 +453,27 @@ impl PrWatches {
                 github: Arc::new(github.clone()),
                 github_client: Some(github),
                 shutdown: CancellationToken::new(),
+                linked: std::sync::OnceLock::new(),
             }),
         })
     }
 
     pub(crate) fn github(&self) -> Option<GitHubCli> {
         self.inner.github_client.clone()
+    }
+
+    pub(crate) fn set_linked(&self, linked: Linked) {
+        let _ = self.inner.linked.set(linked);
+    }
+
+    /// Watches this loop polls: enabled, and not delivered by webhook.
+    fn polled(&self, records: Vec<Record>) -> Vec<Record> {
+        let linked = self.inner.linked.get();
+        records
+            .into_iter()
+            .filter(|r| r.status.enabled)
+            .filter(|r| linked.is_none_or(|linked| !linked(&r.status.chat_id, &r.status.url)))
+            .collect()
     }
 
     pub fn start(&self) {
@@ -467,7 +488,7 @@ impl PrWatches {
             loop {
                 let Some(inner) = weak.upgrade() else { return };
                 let service = Self { inner };
-                let records = service.store().records.clone();
+                let records = service.polled(service.store().records.clone());
                 // Durable observation retains the same provider resource as a
                 // visible PR. This loop processes policy, not provider polling.
                 summaries.retain(|url, rx| {

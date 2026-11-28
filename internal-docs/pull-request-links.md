@@ -1,9 +1,7 @@
 # Pull request links
 
-Status, 2026-11-27: ownership and webhook delivery to chats hosted on a
-desktop engine are built (see "Built" at the end). Cloud-hosted chats,
-`@zuse` mentions on pull requests no chat owns, native app UI and retiring
-PR watch polling are still to do.
+Status, 2026-11-28: built (see "Built" at the end). It needs the GitHub App
+changes under "Prerequisites" before any event arrives.
 
 A chat can own pull requests. When something happens on a pull request it
 owns (a comment, a review, a check result, a conflict, a merge), the chat
@@ -219,7 +217,7 @@ to claim it automatically when the chat pushed that branch.
   same.
 - **App permissions.** The App needs Checks: read, Issues: read (for issue
   comments) and Pull requests: read/write, and must subscribe to the events
-  above. Existing installations must accept the new permissions. Until they
+  above plus `push` (for conflict checks). Existing installations must accept the new permissions. Until they
   do, those accounts get no events, and the pull request panel says so.
 
 ## Build order
@@ -243,48 +241,83 @@ to claim it automatically when the chat pushed that branch.
 
 ## Built
 
-- **Cloud.**
-  - Migration `0058_pull_request_owners.sql` adds the owner table, the
-    sealed inbox and the `pull-request` hint. The hints come from triggers,
-    so any change to an owner row or a new inbox row tells the account's
-    apps.
-  - `crates/cloud/src/github/native/pull_requests.rs` handles claim,
-    release, list, event settings, inbox and ack, and routes webhooks
-    inside the delivery's transaction.
-  - `pull_requests/events.rs` turns webhook payloads into events. It is a
-    pure function and is unit-tested.
-  - Routes are in `crates/cloud/src/routes/github_pull_request_links.rs`,
-    under `/v1/cloud/github/pull-requests/{owned,claim,release,policy,inbox,inbox/ack}`.
-  - A Postgres test covers the whole flow
-    (`pull_requests/database_tests.rs`; run with
-    `ZUSE_CLOUD_TEST_DATABASE_URL` and `--include-ignored`).
-- **Echo handling as built.** Comments written by the owner's own GitHub
-  user are usually the agent posting with their token. They are delivered
-  as context unless they mention `@zuse`.
-- **Engine** (`crates/engine/src/pull_request_links.rs`):
-  - follows the account feed and reads the inbox when a hint arrives;
-    while the socket is down it reads every 60 seconds;
-  - delivers events as one `MessageSource::GitHub` message per chat;
-  - holds feedback until 20 seconds pass with no new feedback;
-  - applies the loop guard, the stale-chat rule and the archived rule;
-  - keeps context events for the chat's next prompt, using the
-    `SessionsEngine::set_prompt_context` hook;
-  - claims a pull request when a turn runs `gh pr create`, or when a turn
-    runs `git push` and the branch has an open pull request;
-  - skips failing-check events for a pull request whose CI watch already
-    has auto-fix on, so the two never both repair it.
-- **RPC.** `WatchPullRequestLinks`, `ClaimPullRequest`,
-  `ReleasePullRequest` and `SetPullRequestPolicy` are handled by the engine
-  that hosts the chat.
-- **Web client.**
-  - The session card lists the pull requests a chat is linked to.
-  - The pull request detail has a link row: "Linked to this chat", "Link
-    here instead" and "Unlink".
-  - Opening a chat whose branch has an open pull request with no owner
-    links it with source `branch`, which never takes a pull request from
-    another chat.
+- **Cloud** (`crates/cloud/src/github/native/pull_requests.rs`).
+  - Migration `0058_pull_request_owners.sql` holds:
+    - the owner table, which also records the host workspace for cloud
+      chats, the base branch and the conflict-check state;
+    - the sealed inbox;
+    - the mentions table;
+    - `pull-request` hint triggers on all three.
+  - Claim, release, list, event settings, inbox, ack and mentions are
+    served under `/v1/cloud/github/pull-requests/` (routes in
+    `crates/cloud/src/routes/github_pull_request_links.rs`).
+  - Webhooks are routed inside the delivery's transaction.
+    `pull_requests/events.rs` classifies payloads as a pure function.
+    The handled events are `pull_request`, `push`, `issue_comment`,
+    `pull_request_review`, `pull_request_review_comment`, `check_run` and
+    `check_suite`.
+  - **Cloud chats.** A pull request opened from, or pushed to, the branch
+    of a cloud computer in the account is linked to that computer's chat
+    when no chat owns it yet. Forks are excluded.
+  - **The worker** (`pull_requests/worker.rs`) is woken after each webhook,
+    with a 10-second timer for checks that come due later.
+    - It queues events for cloud chats into their conversation through
+      the cloud chat command queue, which wakes the computer. Feedback
+      waits for 20 seconds of quiet. Context waits for the next event
+      that starts a turn.
+    - **Conflicts.** A push to a pull request or to its base branch
+      schedules a check 30 seconds later. The worker reads mergeability
+      with a read-only installation token, retries while GitHub is still
+      computing it, and reports each head and base pair once.
+  - **Mentions.** `@zuse` from a connected Zuse user (personal accounts) on
+    a pull request none of their chats owns is recorded for their engine.
+  - **Echo handling.** Comments written by the owner's own GitHub user are
+    usually the agent posting with their token. They are delivered as
+    context unless they mention `@zuse`.
+  - **Tests** (`pull_requests/database_tests.rs`, run with
+    `ZUSE_CLOUD_TEST_DATABASE_URL` and `--include-ignored`):
+    - the desktop flow;
+    - cloud-chat links;
+    - push scheduling;
+    - mentions;
+    - the conflict check against a mock GitHub.
+- **Engine** (`crates/engine/src/pull_request_links.rs`).
+  - Follows the account feed and reads the inbox and mentions when a hint
+    arrives. While the socket is down it reads them every 60 seconds.
+  - Delivers events as one `MessageSource::GitHub` message per chat.
+    Feedback waits for 20 seconds of quiet. The loop guard, stale-chat rule
+    and archived rule apply.
+  - Keeps context events for the chat's next prompt, through the
+    `SessionsEngine::set_prompt_context` hook.
+  - Claims a pull request when a turn runs `gh pr create`, or runs
+    `git push` on a branch with an open pull request.
+  - **Mentions** start a chat in a project on this computer whose `origin`
+    is the repository, using the project's latest agent settings. The chat
+    is linked to the pull request and asked to `gh pr checkout` it first.
+  - **CI watch.** It no longer polls pull requests linked to their chat;
+    those arrive by webhook. Its auto-fix switch still decides whether
+    failed checks and conflicts start a turn or are only noted.
+- **RPC.** `WatchPullRequestLinks` lists the account's linked pull
+  requests from this computer's engine. `ClaimPullRequest`,
+  `ReleasePullRequest` and `SetPullRequestPolicy` go to the engine hosting
+  the chat. For a cloud chat they go through this engine, with
+  `workspaceId`.
+- **Web client and native app.** Both show the same things:
+  - linked pull requests in the session card;
+  - a link control on the pull request view ("Linked to this chat", "Link
+    here instead", "Unlink");
+  - event settings for each group: start a turn, note for next turn, or
+    ignore.
 
-Not built yet: conflict events (GitHub sends no webhook when a pull
-request's mergeability changes), cloud-hosted chats, `@zuse` mentions on
-pull requests with no owner, native app UI, a settings UI for event
-policies, and retiring PR watch polling.
+  Opening a chat whose branch has an open pull request with no owner links
+  it with source `branch`, which never takes a pull request from another
+  chat.
+
+Known limits:
+- Mentions only cover personal accounts. An organization's member list is
+  not read inside a webhook.
+- Cloud chats get no loop guard or stale-chat rule.
+- A message queued into a cloud chat resumes that chat's queue if someone
+  had stopped it, as a typed message would.
+- The worker's delivery to cloud chats is not covered by a test, because it
+  needs the cloud chat command runtime.

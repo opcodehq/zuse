@@ -208,6 +208,16 @@ export interface OwnedPullRequest {
   claimedBy: "created" | "pushed" | "manual" | "branch";
   claimedAt: number;
   checks?: "failed" | "passed" | null;
+  /** What each kind of activity does: start a turn, add context, or nothing. */
+  policy?: PullRequestPolicy;
+  /** The cloud computer hosting the chat, for cloud chats. */
+  workspaceId?: string | null;
+}
+
+export type PullRequestEventAction = "wake" | "context" | "ignore";
+export interface PullRequestPolicy {
+  actions?: Partial<Record<string, PullRequestEventAction>>;
+  bots?: PullRequestEventAction;
 }
 
 export interface CheckoutChangeRequestStatus {

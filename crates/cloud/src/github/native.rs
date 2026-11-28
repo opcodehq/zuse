@@ -32,6 +32,8 @@ mod catalog_unlink_tests;
 mod pull_requests;
 mod repository_access;
 mod tests;
+pub use pull_requests::PullRequestWorker;
+pub use pull_requests::worker::wake as wake_pull_request_worker;
 pub(crate) use repository_access::{RepositoryAuthorization, mark_project_access};
 
 type ObservationGates = tokio::sync::Mutex<

@@ -26,7 +26,7 @@ use zuse_model::{MessagePart, MessageRole, MessageStatus};
 use zuse_protocol::methods;
 use zuse_protocol::pull_request_links::{
     ClaimSource, EventAction, EventPolicy, FEED_KIND, InboxEvent, OwnedPullRequest,
-    PullRequestEventKind,
+    PullRequestEventKind, PullRequestMention, WAKE_INSTRUCTION, activity_text, summary,
 };
 use zuse_protocol::slack::MessageSource;
 
@@ -129,6 +129,21 @@ impl PullRequestLinks {
             }),
         };
         let weak = Arc::downgrade(&links.inner);
+        links
+            .inner
+            .pr_watches
+            .set_linked(Arc::new(move |chat: &str, url: &str| {
+                let Some(inner) = weak.upgrade() else {
+                    return false;
+                };
+                lock(&inner.state).owned.iter().any(|pr| {
+                    pr.chat_id() == Some(chat)
+                        && pr.workspace_id.is_none()
+                        && pr.state == "open"
+                        && same_pull_request(url, &pr.repository, pr.number)
+                })
+            }));
+        let weak = Arc::downgrade(&links.inner);
         sessions.set_prompt_context(Arc::new(move |chat: &str| {
             let inner = weak.upgrade()?;
             Self { inner }.take_context(chat)
@@ -216,9 +231,20 @@ impl PullRequestLinks {
                     .and_then(ClaimSource::parse)
                     .unwrap_or(ClaimSource::Manual);
                 let branch = params["branch"].as_str().map(str::to_owned);
-                let owned = self
-                    .claim(&chat, &repository, number, branch, source)
-                    .await?;
+                // Cloud chats are hosted by their cloud computer, not here.
+                let workspace = params["workspaceId"]
+                    .as_str()
+                    .filter(|w| !w.is_empty() && w.len() <= 200);
+                let owned = match workspace {
+                    Some(workspace) => {
+                        self.claim_hosted(&chat, workspace, &repository, number, source)
+                            .await?
+                    }
+                    None => {
+                        self.claim(&chat, &repository, number, branch, source)
+                            .await?
+                    }
+                };
                 Ok(json!({ "pullRequest": owned }))
             }
             methods::RELEASE_PULL_REQUEST => {
@@ -280,6 +306,33 @@ impl PullRequestLinks {
         let owned: OwnedPullRequest = serde_json::from_value(value["pullRequest"].clone())?;
         self.remember(owned.clone());
         self.inner.wake.notify_one();
+        Ok(owned)
+    }
+
+    /// Link a cloud chat (hosted by cloud computer `workspace`).
+    async fn claim_hosted(
+        &self,
+        chat: &str,
+        workspace: &str,
+        repository: &str,
+        number: Option<u64>,
+        source: ClaimSource,
+    ) -> Result<OwnedPullRequest> {
+        let value = self
+            .request(
+                reqwest::Method::POST,
+                &["claim"],
+                Some(json!({
+                    "chatKey": chat_key(chat),
+                    "repository": repository,
+                    "number": number.context("Choose a pull request.")?,
+                    "source": source,
+                    "workspaceId": workspace,
+                })),
+            )
+            .await?;
+        let owned: OwnedPullRequest = serde_json::from_value(value["pullRequest"].clone())?;
+        self.remember(owned.clone());
         Ok(owned)
     }
 
@@ -455,7 +508,129 @@ impl PullRequestLinks {
             )
             .await?;
         }
+        if let Err(error) = self.start_mentioned().await {
+            tracing::debug!(%error, "pull request mentions deferred");
+        }
         Ok(plan.due)
+    }
+
+    /// `@zuse` on a pull request no chat owns: start a chat for it in a
+    /// project on this computer with that repository, link it, and hand it
+    /// the request. Mentions with no matching project here stay for an
+    /// engine that has one.
+    async fn start_mentioned(&self) -> Result<()> {
+        let value = self
+            .request(reqwest::Method::GET, &["mentions"], None)
+            .await?;
+        let mentions: Vec<PullRequestMention> = serde_json::from_value(value["mentions"].clone())?;
+        if mentions.is_empty() {
+            return Ok(());
+        }
+        let device = self.inner.docs.device_id().to_owned();
+        let spaces: Vec<_> = self
+            .inner
+            .workspace
+            .watch_spaces()
+            .borrow()
+            .iter()
+            .filter(|s| s.device_id == device && s.git_detected)
+            .cloned()
+            .collect();
+        let mut repositories: HashMap<String, Option<String>> = HashMap::new();
+        let mut handled = Vec::new();
+        for mention in mentions {
+            let mut space = None;
+            for candidate in &spaces {
+                if !repositories.contains_key(&candidate.id) {
+                    let repo = origin_repository(&candidate.path).await.ok();
+                    repositories.insert(candidate.id.clone(), repo);
+                }
+                if repositories[&candidate.id]
+                    .as_deref()
+                    .is_some_and(|r| r.eq_ignore_ascii_case(&mention.repository))
+                {
+                    space = Some(candidate.clone());
+                    break;
+                }
+            }
+            let Some(space) = space else { continue };
+            let chat = format!("github-{}", short_id(&[&mention.event_id]));
+            match self.start_mention_chat(&chat, &space, &mention).await {
+                Ok(()) => handled.push(mention.sequence),
+                Err(error) => tracing::warn!(%error, "pull request mention could not start a chat"),
+            }
+        }
+        if !handled.is_empty() {
+            self.request(
+                reqwest::Method::POST,
+                &["mentions", "ack"],
+                Some(json!({ "sequences": handled })),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn start_mention_chat(
+        &self,
+        chat: &str,
+        space: &zuse_protocol::Space,
+        mention: &PullRequestMention,
+    ) -> Result<()> {
+        // The project's latest agent and model, so the chat runs like the others.
+        let config = self
+            .inner
+            .workspace
+            .read_chats()?
+            .into_iter()
+            .filter(|c| c.space_id.as_deref() == Some(space.id.as_str()) && c.config.is_some())
+            .max_by_key(|c| c.last_message_at.unwrap_or(c.created_at))
+            .and_then(|c| c.config);
+        self.inner
+            .workspace
+            .create_chat(chat, Some(&space.id), None, config, None)?;
+        let title = if mention.title.is_empty() {
+            format!("#{}", mention.number)
+        } else {
+            format!("#{} {}", mention.number, mention.title)
+        };
+        let _ = self
+            .inner
+            .workspace
+            .rename_chat(chat, &title.chars().take(120).collect::<String>());
+        self.claim(
+            chat,
+            &mention.repository,
+            Some(mention.number),
+            None,
+            ClaimSource::Manual,
+        )
+        .await?;
+        let event = InboxEvent {
+            sequence: mention.sequence,
+            chat_key: chat_key(chat),
+            event_id: format!("mention:{}", mention.event_id),
+            repository: mention.repository.clone(),
+            number: mention.number,
+            kind: mention.kind,
+            action: EventAction::Wake,
+            url: mention.comment_url.clone(),
+            author: mention.author.clone(),
+            body: mention.body.clone(),
+            location: mention.location.clone(),
+            created_at: mention.created_at,
+        };
+        let checkout = match &mention.head_ref {
+            Some(branch) => format!(
+                "You were asked on GitHub to help with this pull request (branch `{branch}`). Check it out first with `gh pr checkout {}`.",
+                mention.number
+            ),
+            None => format!(
+                "You were asked on GitHub to help with this pull request. Check it out first with `gh pr checkout {}`.",
+                mention.number
+            ),
+        };
+        self.deliver_with(chat, &[event], Some(&checkout), true)
     }
 
     /// Split inbox events into what to deliver now (per chat), what to
@@ -475,23 +650,25 @@ impl PullRequestLinks {
             if !self.inner.workspace.chat(&chat).ok().flatten().is_some() {
                 continue;
             }
-            // Delivered before a crash, or failing checks a CI watch with
-            // auto-fix already repairs.
-            let repaired = event.kind == PullRequestEventKind::ChecksFailed
+            let mut event = event;
+            // The CI watch's auto-fix switch still decides whether failing
+            // checks and conflicts start a turn; the watch no longer polls
+            // pull requests linked here.
+            if matches!(
+                event.kind,
+                PullRequestEventKind::ChecksFailed | PullRequestEventKind::Conflict
+            ) && event.action == EventAction::Wake
                 && watches.iter().any(|w| {
                     w.chat_id == chat
                         && w.enabled
-                        && w.auto_fix
-                        && zuse_protocol::pull_request_links::parse_url(&w.url).is_some_and(
-                            |(repo, n)| {
-                                repo.eq_ignore_ascii_case(&event.repository) && n == event.number
-                            },
-                        )
-                });
-            if delivered.contains(&event.event_id)
-                || repaired
-                || event.action == EventAction::Ignore
+                        && !w.auto_fix
+                        && same_pull_request(&w.url, &event.repository, event.number)
+                })
             {
+                event.action = EventAction::Context;
+            }
+            // Delivered before a crash.
+            if delivered.contains(&event.event_id) || event.action == EventAction::Ignore {
                 plan.skip.push(event.sequence);
                 continue;
             }
@@ -523,16 +700,32 @@ impl PullRequestLinks {
     /// Put `events` into `chat`: one message, which starts a turn unless the
     /// activity is only context.
     fn deliver(&self, chat: &str, events: &[InboxEvent]) -> Result<()> {
+        self.deliver_with(chat, events, None, false)
+    }
+
+    /// `preface` goes before the activity; `force` starts a turn whatever
+    /// the wake rules say (someone asked for one by name).
+    fn deliver_with(
+        &self,
+        chat: &str,
+        events: &[InboxEvent],
+        preface: Option<&str>,
+        force: bool,
+    ) -> Result<()> {
         let row = self.inner.workspace.chat(chat)?.context("chat is gone")?;
         let doc = self.inner.docs.open(chat)?.doc_arc();
         let entries = doc.read_entries()?;
-        let wake = should_wake(
-            events,
-            &entries,
-            row.archived,
-            chrono::Utc::now().timestamp_millis(),
-        );
-        let text = activity_text(events);
+        let wake = force
+            || should_wake(
+                events,
+                &entries,
+                row.archived,
+                chrono::Utc::now().timestamp_millis(),
+            );
+        let text = match preface {
+            Some(preface) => format!("{preface}\n\n{}", activity_text(events)),
+            None => activity_text(events),
+        };
         let first = &events[0];
         let ids: Vec<&str> = events.iter().map(|e| e.event_id.as_str()).collect();
         let mut parts = vec![chat];
@@ -564,9 +757,7 @@ impl PullRequestLinks {
             self.save(&state);
         }
         let prompt = if wake {
-            format!(
-                "{text}\n\nYou own this pull request. Handle what needs a change, push the fix, and reply on GitHub with `gh` when that helps the reviewer."
-            )
+            format!("{text}\n\n{WAKE_INSTRUCTION}")
         } else {
             text
         };
@@ -686,6 +877,11 @@ struct Plan {
     due: Option<Duration>,
 }
 
+fn same_pull_request(url: &str, repository: &str, number: u64) -> bool {
+    zuse_protocol::pull_request_links::parse_url(url)
+        .is_some_and(|(repo, n)| repo.eq_ignore_ascii_case(repository) && n == number)
+}
+
 /// Whether an account feed frame may mean new pull request activity.
 fn refresh_hint(frame: &Value) -> bool {
     let data = &frame["data"];
@@ -735,77 +931,6 @@ fn should_wake(
     true
 }
 
-fn describe(event: &InboxEvent) -> String {
-    let who = event.author.as_deref().unwrap_or("Someone");
-    let body = event.body.trim();
-    let mut line = match event.kind {
-        PullRequestEventKind::Comment => format!("{who} commented:\n{body}"),
-        PullRequestEventKind::Review => format!("{who} reviewed: {body}"),
-        PullRequestEventKind::ReviewComment => match &event.location {
-            Some(at) => format!("{who} commented on {at}:\n{body}"),
-            None => format!("{who} commented on the diff:\n{body}"),
-        },
-        PullRequestEventKind::ChecksFailed => match &event.author {
-            Some(app) => format!("A check failed ({app}): {body}"),
-            None => format!("A check failed: {body}"),
-        },
-        PullRequestEventKind::ChecksPassed => "Checks passed on the latest commit.".into(),
-        PullRequestEventKind::Merged => format!("{who} merged it."),
-        PullRequestEventKind::Closed => format!("{who} closed it without merging."),
-        PullRequestEventKind::Reopened => format!("{who} reopened it."),
-    };
-    if !event.url.is_empty() {
-        line.push_str(&format!("\n{}", event.url));
-    }
-    line
-}
-
-/// The full text the agent receives, grouped by pull request.
-fn activity_text(events: &[InboxEvent]) -> String {
-    let mut groups: Vec<((String, u64), Vec<&InboxEvent>)> = Vec::new();
-    for event in events {
-        let key = (event.repository.clone(), event.number);
-        match groups.iter_mut().find(|(k, _)| *k == key) {
-            Some((_, list)) => list.push(event),
-            None => groups.push((key, vec![event])),
-        }
-    }
-    groups
-        .into_iter()
-        .map(|((repository, number), list)| {
-            let items = list
-                .iter()
-                .map(|e| format!("- {}", describe(e).replace('\n', "\n  ")))
-                .collect::<Vec<_>>()
-                .join("\n");
-            format!(
-                "Activity on pull request {repository}#{number} (https://github.com/{repository}/pull/{number}):\n{items}"
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
-}
-
-/// The short line the transcript shows.
-fn summary(events: &[InboxEvent]) -> String {
-    if let [event] = events {
-        let line = describe(event);
-        let line = line.lines().take(2).collect::<Vec<_>>().join(" ");
-        return line.chars().take(280).collect();
-    }
-    let prs: HashSet<_> = events.iter().map(|e| (&e.repository, e.number)).collect();
-    if prs.len() == 1 {
-        format!(
-            "{} updates on {}#{}",
-            events.len(),
-            events[0].repository,
-            events[0].number
-        )
-    } else {
-        format!("{} updates on {} pull requests", events.len(), prs.len())
-    }
-}
-
 /// The latest turn ran a successful `git push`.
 fn pushed(entries: &[SessionMessageEntry]) -> bool {
     let turn = entries
@@ -846,9 +971,21 @@ async fn checkout_branch(cwd: &str) -> Result<(String, String)> {
     };
     let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"]).await?;
     anyhow::ensure!(!branch.is_empty() && branch != "HEAD", "detached checkout");
-    let remote = git(&["remote", "get-url", "origin"]).await?;
-    let repository = github_repository(&remote).context("origin is not a GitHub repository")?;
-    Ok((repository, branch))
+    Ok((origin_repository(cwd).await?, branch))
+}
+
+/// The GitHub repository (`owner/name`) a checkout's `origin` points at.
+async fn origin_repository(cwd: &str) -> Result<String> {
+    let output = tokio::process::Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(["remote", "get-url", "origin"])
+        .kill_on_drop(true)
+        .output()
+        .await?;
+    anyhow::ensure!(output.status.success(), "no origin remote");
+    github_repository(String::from_utf8_lossy(&output.stdout).trim())
+        .context("origin is not a GitHub repository")
 }
 
 /// `owner/name` from an HTTPS or SSH GitHub remote.
@@ -969,41 +1106,6 @@ mod tests {
         // A person writing in the chat resets it.
         history.push(entry("again", 0, false));
         assert!(should_wake(&comment, &history, false, 1));
-    }
-
-    #[test]
-    fn activity_is_grouped_by_pull_request() {
-        let mut failed = event(PullRequestEventKind::ChecksFailed, EventAction::Wake);
-        failed.author = Some("GitHub Actions".into());
-        failed.body = "test failed".into();
-        failed.url = "https://github.com/acme/app/actions/runs/1".into();
-        let mut other = event(PullRequestEventKind::Review, EventAction::Wake);
-        other.number = 8;
-        other.body = "Approved".into();
-        let text = activity_text(&[
-            event(PullRequestEventKind::Comment, EventAction::Wake),
-            failed,
-            other,
-        ]);
-        assert_eq!(
-            text,
-            "Activity on pull request acme/app#7 (https://github.com/acme/app/pull/7):\n\
-             - bob commented:\n  Please rename this\n  https://github.com/acme/app/pull/7#issuecomment-1\n\
-             - A check failed (GitHub Actions): test failed\n  https://github.com/acme/app/actions/runs/1\n\n\
-             Activity on pull request acme/app#8 (https://github.com/acme/app/pull/8):\n\
-             - bob reviewed: Approved\n  https://github.com/acme/app/pull/7#issuecomment-1"
-        );
-    }
-
-    #[test]
-    fn summaries_are_short() {
-        let one = [event(PullRequestEventKind::Comment, EventAction::Wake)];
-        assert_eq!(summary(&one), "bob commented: Please rename this");
-        let two = [
-            event(PullRequestEventKind::Comment, EventAction::Wake),
-            event(PullRequestEventKind::Review, EventAction::Wake),
-        ];
-        assert_eq!(summary(&two), "2 updates on acme/app#7");
     }
 
     #[test]

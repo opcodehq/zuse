@@ -62,10 +62,14 @@ async fn database() -> (PgPool, PgPool, String) {
 }
 
 fn authority(pool: &PgPool) -> NativeGithub {
+    authority_at(pool, "http://127.0.0.1:1/")
+}
+
+fn authority_at(pool: &PgPool, origin: &str) -> NativeGithub {
     use rsa::pkcs1::EncodeRsaPrivateKey;
     let key = rsa::RsaPrivateKey::new(&mut rand::thread_rng(), 2048).unwrap();
     let der = key.to_pkcs1_der().unwrap();
-    let origin = reqwest::Url::parse("http://127.0.0.1:1/").unwrap();
+    let origin = reqwest::Url::parse(origin).unwrap();
     NativeGithub {
         membership_epoch: std::sync::atomic::AtomicU64::new(0),
         observation_gates: Default::default(),
@@ -119,6 +123,7 @@ fn claim(chat: &str, number: u64, source: ClaimSource) -> ClaimRequest {
         number: Some(number),
         branch: None,
         source,
+        workspace_id: None,
     }
 }
 
@@ -404,6 +409,258 @@ async fn owned_pull_requests_receive_their_events() {
     assert!(authority.owned_pull_requests(&me).await.unwrap().is_empty());
     assert!(authority.pull_request_inbox(&me).await.unwrap().is_empty());
 
+    pool.close().await;
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn cloud_chats_pushes_and_mentions() {
+    let (admin, pool, schema) = database().await;
+    let authority = authority(&pool);
+    let me = access(ACCOUNT);
+    // A cloud computer on branch `fix-parser` of acme/app, and the account's
+    // GitHub App installation and identity.
+    sqlx::raw_sql(&format!("
+        CREATE TABLE api_cloud_projects(project_id text PRIMARY KEY, account_id text NOT NULL, repository_url text NOT NULL);
+        CREATE TABLE api_cloud_workspaces(workspace_id text PRIMARY KEY, account_id text NOT NULL, project_id text NOT NULL,
+            initial_session_id text NOT NULL, branch text NOT NULL, desired_state text NOT NULL,
+            request_config jsonb NOT NULL DEFAULT '{{}}', last_activity_at bigint NOT NULL DEFAULT 0);
+        INSERT INTO api_cloud_projects VALUES ('p','{ACCOUNT}','https://github.com/acme/app.git');
+        INSERT INTO api_cloud_workspaces(workspace_id,account_id,project_id,initial_session_id,branch,desired_state)
+            VALUES ('w1','{ACCOUNT}','p','session-1','fix-parser','ready'),('w2','{ACCOUNT}','p','session-2','other','ready');
+        INSERT INTO zuse_rust_github_scopes(owner_id) VALUES ('{ACCOUNT}');
+        INSERT INTO zuse_rust_github_installations(owner_id,installation_id,metadata,state,updated_at) VALUES ('{ACCOUNT}',9,'{{}}','active',0);
+        INSERT INTO zuse_rust_github_users(actor_id,github_user_id,state,updated_at) VALUES ('{ACCOUNT}',500,'connected',0);
+    ")).execute(&pool).await.unwrap();
+
+    // Opening a pull request from the cloud computer's branch links it to
+    // that computer's chat; its events stay out of desktop inboxes.
+    let opened = |action: &str, number: i64, head_repo: i64| {
+        json!({
+            "action": action, "installation": {"id": 9},
+            "repository": {"id": 44, "full_name": "acme/app"},
+            "sender": {"login": "zuse-bot", "id": 9},
+            "pull_request": {"number": number, "title": "Fix the parser", "state": "open", "merged": false,
+                "draft": false, "html_url": format!("https://github.com/acme/app/pull/{number}"),
+                "head": {"ref": "fix-parser", "sha": "ccccccc3", "repo": {"id": head_repo}},
+                "base": {"ref": "main", "sha": "ddddddd4"}}
+        })
+    };
+    deliver(&authority, "pull_request", "c1", opened("opened", 11, 44)).await;
+    // A fork's branch of the same name is not the computer's checkout.
+    deliver(&authority, "pull_request", "c2", opened("opened", 12, 99)).await;
+    let owned = authority.owned_pull_requests(&me).await.unwrap();
+    assert_eq!(owned.len(), 1);
+    assert_eq!(owned[0].chat_key, "chat:session-1");
+    assert_eq!(owned[0].workspace_id.as_deref(), Some("w1"));
+    assert_eq!(owned[0].claimed_by, ClaimSource::Created);
+    deliver(
+        &authority,
+        "issue_comment",
+        "c3",
+        comment(30, 11, "bob", 2, "Looks off"),
+    )
+    .await;
+    assert!(authority.pull_request_inbox(&me).await.unwrap().is_empty());
+    let hosted: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM zuse_rust_pull_request_inbox")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        hosted, 1,
+        "the cloud delivers events for cloud chats itself"
+    );
+
+    // Opening schedules a conflict check; so does a push to the base branch.
+    let due: Option<i64> = sqlx::query_scalar(
+        "SELECT conflict_due_at FROM zuse_rust_pull_request_owners WHERE number=11",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(due.is_some());
+    sqlx::query("UPDATE zuse_rust_pull_request_owners SET conflict_due_at=NULL")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let push = |branch: &str| json!({"ref": format!("refs/heads/{branch}"), "installation": {"id": 9}, "repository": {"id": 44}});
+    deliver(&authority, "push", "c4", push("feature")).await;
+    let due: Option<i64> = sqlx::query_scalar(
+        "SELECT conflict_due_at FROM zuse_rust_pull_request_owners WHERE number=11",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(due.is_none(), "a push elsewhere changes nothing");
+    deliver(&authority, "push", "c5", push("main")).await;
+    let due: Option<i64> = sqlx::query_scalar(
+        "SELECT conflict_due_at FROM zuse_rust_pull_request_owners WHERE number=11",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(due.is_some_and(|at| at > now()));
+
+    // `@zuse` from the account's own GitHub user on a pull request nobody
+    // in the account owns becomes a mention; on an owned one it is an
+    // ordinary event that starts a turn.
+    deliver(
+        &authority,
+        "issue_comment",
+        "c6",
+        comment(31, 20, "me", 500, "@zuse can you fix the flaky test?"),
+    )
+    .await;
+    deliver(
+        &authority,
+        "issue_comment",
+        "c7",
+        comment(32, 20, "eve", 77, "@zuse not you"),
+    )
+    .await;
+    let mentions = authority.pull_request_mentions(&me).await.unwrap();
+    assert_eq!(mentions.len(), 1);
+    assert_eq!(mentions[0].number, 20);
+    assert_eq!(mentions[0].repository, "acme/app");
+    assert_eq!(mentions[0].author.as_deref(), Some("me"));
+    assert!(mentions[0].body.contains("flaky test"));
+    deliver(
+        &authority,
+        "issue_comment",
+        "c8",
+        comment(33, 11, "me", 500, "@zuse rename it"),
+    )
+    .await;
+    assert_eq!(authority.pull_request_mentions(&me).await.unwrap().len(), 1);
+    assert_eq!(
+        authority
+            .ack_pull_request_mentions(&me, &[mentions[0].sequence])
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(
+        authority
+            .pull_request_mentions(&me)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // A person linking a cloud chat by hand names its computer, which must
+    // be the account's.
+    let mut other = claim("session-2", 11, ClaimSource::Manual);
+    other.workspace_id = Some("w2".into());
+    let moved = authority
+        .store_claim(&me, &other, &pull_request(11, "ccccccc3"), 9)
+        .await
+        .unwrap();
+    assert_eq!(moved.workspace_id.as_deref(), Some("w2"));
+    let mut foreign = claim("session-9", 11, ClaimSource::Manual);
+    foreign.workspace_id = Some("not-mine".into());
+    sqlx::query("INSERT INTO api_cloud_workspaces(workspace_id,account_id,project_id,initial_session_id,branch,desired_state) VALUES ('not-mine','someone','p','s','x','ready')")
+        .execute(&pool).await.unwrap();
+    // The ownership check runs before GitHub is asked.
+    assert!(authority.claim_pull_request(&me, &foreign).await.is_err());
+
+    pool.close().await;
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn conflicts_are_reported_once_after_github_computes_them() {
+    use axum::{
+        Router,
+        extract::State,
+        routing::{get, post},
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (admin, pool, schema) = database().await;
+    // GitHub: still computing on the first read, then conflicting.
+    let reads = Arc::new(AtomicUsize::new(0));
+    let app = Router::new()
+        .route(
+            "/app/installations/9/access_tokens",
+            post(|axum::Json(body): axum::Json<Value>| async move {
+                assert_eq!(body["repositories"], json!(["app"]));
+                assert_eq!(body["permissions"], json!({"pull_requests":"read"}));
+                (axum::http::StatusCode::CREATED, axum::Json(json!({"token":"installation-token"})))
+            }),
+        )
+        .route(
+            "/repos/acme/app/pulls/7",
+            get(|State(reads): State<Arc<AtomicUsize>>, headers: axum::http::HeaderMap| async move {
+                assert_eq!(headers["authorization"], "Bearer installation-token");
+                let mergeable = if reads.fetch_add(1, Ordering::SeqCst) == 0 { Value::Null } else { json!(false) };
+                axum::Json(json!({"number":7,"mergeable":mergeable,"html_url":"https://github.com/acme/app/pull/7",
+                    "head":{"sha":"aaaaaaa1"},"base":{"sha":"bbbbbbb2","ref":"main"}}))
+            }),
+        )
+        .with_state(reads.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let github = Arc::new(authority_at(&pool, &format!("http://{address}/")));
+    let me = access(ACCOUNT);
+    let mut pr = pull_request(7, "aaaaaaa1");
+    pr["base"]["ref"] = json!("main");
+    github
+        .store_claim(&me, &claim("one", 7, ClaimSource::Created), &pr, 9)
+        .await
+        .unwrap();
+    let due = |pool: PgPool| async move {
+        sqlx::query("UPDATE zuse_rust_pull_request_owners SET conflict_due_at=0")
+            .execute(&pool)
+            .await
+            .unwrap();
+    };
+    let worker = super::worker::PullRequestWorker::for_test(github.clone());
+
+    // Still computing: checked again later, nothing reported.
+    due(pool.clone()).await;
+    worker.check_conflicts().await.unwrap();
+    let (later, attempts): (Option<i64>, i32) = sqlx::query_as(
+        "SELECT conflict_due_at,conflict_attempts FROM zuse_rust_pull_request_owners",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(later.is_some_and(|at| at > now()));
+    assert_eq!(attempts, 1);
+    assert!(github.pull_request_inbox(&me).await.unwrap().is_empty());
+
+    // Conflicting: one event that starts a turn, and the check is done.
+    due(pool.clone()).await;
+    worker.check_conflicts().await.unwrap();
+    let inbox = github.pull_request_inbox(&me).await.unwrap();
+    assert_eq!(inbox.len(), 1);
+    assert_eq!(
+        (inbox[0].kind, inbox[0].action),
+        (PullRequestEventKind::Conflict, EventAction::Wake)
+    );
+    assert!(inbox[0].body.contains("merge conflicts with main"));
+    let later: Option<i64> =
+        sqlx::query_scalar("SELECT conflict_due_at FROM zuse_rust_pull_request_owners")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(later.is_none());
+
+    // The same head and base conflicting again is not news.
+    due(pool.clone()).await;
+    worker.check_conflicts().await.unwrap();
+    assert_eq!(github.pull_request_inbox(&me).await.unwrap().len(), 1);
+    assert_eq!(reads.load(Ordering::SeqCst), 3);
+
+    server.abort();
     pool.close().await;
     sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
         .execute(&admin)

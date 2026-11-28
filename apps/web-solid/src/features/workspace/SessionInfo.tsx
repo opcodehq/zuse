@@ -40,7 +40,7 @@ export function SessionInfo(props: { onClose: () => void }) {
         const stat = () => diffStatFor(t().chatId);
         const pr = () => workspace.changeRequests[t().chatId]?.changeRequest ?? null;
         // Pull requests this chat is linked to, besides its branch's own.
-        const linked = () => ownedPullRequests(t().chatId, t().deviceId).filter((o) => o.url !== pr()?.url);
+        const linked = () => ownedPullRequests(t().chatId).filter((o) => o.url !== pr()?.url);
         const worktree = () => !!t().space && !!t().cwd && t().cwd !== t().space!.path;
         const background = () =>
           ((state.sessions[t().chatId]?.backgroundTasks as BackgroundTask[] | undefined) ?? []).filter((task) => !task.endedAt && task.kind !== "agent");

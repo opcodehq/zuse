@@ -12,6 +12,8 @@ use zuse_protocol::pull_request_links::{
 };
 
 pub(crate) mod events;
+pub(crate) mod worker;
+pub use worker::PullRequestWorker;
 
 /// Events returned per inbox read.
 const INBOX_PAGE: i64 = 50;
@@ -40,8 +42,11 @@ fn inbox_context(account: &str, event_id: &str) -> String {
     format!("pull-request-inbox:{account}:{event_id}")
 }
 
-const OWNER_COLUMNS: &str =
-    "chat_key,repository,number,url,title,state,draft,head_ref,claimed_by,claimed_at,checks,policy";
+const OWNER_COLUMNS: &str = "chat_key,repository,number,url,title,state,draft,head_ref,claimed_by,claimed_at,checks,policy,workspace_id";
+
+/// A conflict check waits this long after a push, for GitHub to recompute
+/// mergeability, and retries while GitHub is still computing it.
+pub(crate) const CONFLICT_DELAY_MS: i64 = 30_000;
 
 fn owned(row: &sqlx::postgres::PgRow) -> Result<OwnedPullRequest, ApiError> {
     Ok(OwnedPullRequest {
@@ -58,6 +63,7 @@ fn owned(row: &sqlx::postgres::PgRow) -> Result<OwnedPullRequest, ApiError> {
         claimed_at: row.try_get("claimed_at")?,
         checks: row.try_get("checks")?,
         policy: serde_json::from_value(row.try_get("policy")?).unwrap_or_default(),
+        workspace_id: row.try_get("workspace_id")?,
     })
 }
 
@@ -120,8 +126,20 @@ impl NativeGithub {
                 .branch
                 .as_deref()
                 .is_some_and(|b| !crate::runtime::creation::valid_git_ref(b))
+            || request
+                .workspace_id
+                .as_deref()
+                .is_some_and(|w| w.is_empty() || w.len() > 200)
         {
             return Err(invalid());
+        }
+        // A cloud chat's computer must belong to this account.
+        if let Some(workspace) = &request.workspace_id {
+            let owned: bool = sqlx::query_scalar("SELECT to_regclass('api_cloud_workspaces') IS NOT NULL AND EXISTS(SELECT 1 FROM api_cloud_workspaces WHERE workspace_id=$1 AND account_id=$2 AND desired_state<>'deleted')")
+                .bind(workspace).bind(&access.owner_id).fetch_one(&self.pool).await.unwrap_or(false);
+            if !owned {
+                return Err(ApiError::forbidden("cloud_workspace_access_denied"));
+            }
         }
         let grant = self
             .scoped_git(
@@ -197,15 +215,18 @@ impl NativeGithub {
         let head_sha = pr["head"]["sha"]
             .as_str()
             .filter(|s| s.len() <= 64 && s.bytes().all(|b| b.is_ascii_hexdigit()));
+        let base_ref = pr["base"]["ref"].as_str().filter(|r| r.len() <= 255);
         let at = now();
         // Ownership moves unless this is a branch claim on someone else's pull
         // request; the copy of the pull request is refreshed either way.
         let row = sqlx::query(&format!(
-            "INSERT INTO zuse_rust_pull_request_owners(account_id,repository_id,number,installation_id,repository,actor_id,chat_key,claimed_by,claimed_at,url,title,state,draft,head_ref,head_sha,updated_at)
-             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$9)
+            "INSERT INTO zuse_rust_pull_request_owners(account_id,repository_id,number,installation_id,repository,actor_id,chat_key,claimed_by,claimed_at,url,title,state,draft,head_ref,head_sha,updated_at,base_ref,workspace_id)
+             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$9,$17,$18)
              ON CONFLICT(account_id,repository_id,number) DO UPDATE SET
               installation_id=EXCLUDED.installation_id,repository=EXCLUDED.repository,url=EXCLUDED.url,title=EXCLUDED.title,
               state=EXCLUDED.state,draft=EXCLUDED.draft,head_ref=EXCLUDED.head_ref,head_sha=EXCLUDED.head_sha,updated_at=EXCLUDED.updated_at,
+              base_ref=EXCLUDED.base_ref,
+              workspace_id=CASE WHEN $16 THEN EXCLUDED.workspace_id ELSE zuse_rust_pull_request_owners.workspace_id END,
               actor_id=CASE WHEN $16 THEN EXCLUDED.actor_id ELSE zuse_rust_pull_request_owners.actor_id END,
               chat_key=CASE WHEN $16 THEN EXCLUDED.chat_key ELSE zuse_rust_pull_request_owners.chat_key END,
               claimed_by=CASE WHEN $16 THEN EXCLUDED.claimed_by ELSE zuse_rust_pull_request_owners.claimed_by END,
@@ -228,6 +249,8 @@ impl NativeGithub {
         .bind(head_ref)
         .bind(head_sha)
         .bind(request.source.takes_over())
+        .bind(base_ref)
+        .bind(&request.workspace_id)
         .fetch_one(&self.pool)
         .await?;
         owned(&row)
@@ -292,7 +315,7 @@ impl NativeGithub {
     /// Events waiting for this member's chats, oldest first.
     pub async fn pull_request_inbox(&self, access: &Access) -> Result<Vec<InboxEvent>, ApiError> {
         self.require_pull_requests(access).await?;
-        let rows = sqlx::query("SELECT q.sequence,q.event_id,q.payload,q.created_at,o.chat_key,o.repository,o.number FROM zuse_rust_pull_request_inbox q JOIN zuse_rust_pull_request_owners o USING(account_id,repository_id,number) WHERE o.account_id=$1 AND o.actor_id=$2 ORDER BY q.sequence LIMIT $3")
+        let rows = sqlx::query("SELECT q.sequence,q.event_id,q.payload,q.created_at,o.chat_key,o.repository,o.number FROM zuse_rust_pull_request_inbox q JOIN zuse_rust_pull_request_owners o USING(account_id,repository_id,number) WHERE o.account_id=$1 AND o.actor_id=$2 AND o.workspace_id IS NULL ORDER BY q.sequence LIMIT $3")
             .bind(&access.owner_id).bind(&access.actor.account_id).bind(INBOX_PAGE)
             .fetch_all(&self.pool).await?;
         let mut events = Vec::with_capacity(rows.len());
@@ -354,15 +377,15 @@ impl NativeGithub {
         event: &str,
         value: &Value,
     ) -> Result<(), ApiError> {
-        if !events::handles(event) {
+        if !events::handles(event) || !self.pull_request_schema().await? {
             return Ok(());
+        }
+        if event == "push" {
+            return self.route_push(tx, value).await;
         }
         let Some(classified) = events::classify(event, value) else {
             return Ok(());
         };
-        if !self.pull_request_schema().await? {
-            return Ok(());
-        }
         let Classified {
             installation_id,
             repository_id,
@@ -374,17 +397,29 @@ impl NativeGithub {
             Target::Number(n) => (vec![*n], None),
             Target::Checks { numbers, head_sha } => (numbers.clone(), Some(head_sha.as_str())),
         };
+        let action = value["action"].as_str().unwrap_or("");
+        let pushed = event == "pull_request"
+            && matches!(action, "opened" | "reopened" | "synchronize" | "edited");
+        if event == "pull_request" && matches!(action, "opened" | "reopened" | "synchronize") {
+            self.claim_for_cloud_chat(tx, installation_id, repository_id, value)
+                .await?;
+        }
         // Owner rows of this pull request in every account, joined with each
         // owner's GitHub identity for recognising their own comments.
         let rows = sqlx::query("SELECT o.account_id,o.number,o.policy,o.head_sha,o.checks,o.checks_sha,u.github_user_id FROM zuse_rust_pull_request_owners o LEFT JOIN zuse_rust_github_users u ON u.actor_id=o.actor_id AND u.state='connected' WHERE o.repository_id=$1 AND o.installation_id=$2 AND (o.number=ANY($3) OR ($4::text IS NOT NULL AND o.state='open' AND o.head_sha=$4)) FOR UPDATE OF o")
             .bind(repository_id).bind(installation_id).bind(&numbers).bind(head_sha)
             .fetch_all(&mut **tx).await?;
+        let owned_accounts: Vec<String> = rows
+            .iter()
+            .filter_map(|row| row.try_get("account_id").ok())
+            .collect();
         for row in rows {
             let account: String = row.try_get("account_id")?;
             let number: i64 = row.try_get("number")?;
-            sqlx::query("UPDATE zuse_rust_pull_request_owners SET title=COALESCE($4,title),state=COALESCE($5,state),draft=COALESCE($6,draft),head_ref=COALESCE($7,head_ref),head_sha=COALESCE($8,head_sha),updated_at=$9 WHERE account_id=$1 AND repository_id=$2 AND number=$3")
+            sqlx::query("UPDATE zuse_rust_pull_request_owners SET title=COALESCE($4,title),state=COALESCE($5,state),draft=COALESCE($6,draft),head_ref=COALESCE($7,head_ref),head_sha=COALESCE($8,head_sha),base_ref=COALESCE($10,base_ref),updated_at=$9,conflict_due_at=CASE WHEN $11 THEN $9+$12 ELSE conflict_due_at END,conflict_attempts=CASE WHEN $11 THEN 0 ELSE conflict_attempts END WHERE account_id=$1 AND repository_id=$2 AND number=$3")
                 .bind(&account).bind(repository_id).bind(number)
                 .bind(&update.title).bind(update.state).bind(update.draft).bind(&update.head_ref).bind(&update.head_sha).bind(now())
+                .bind(&update.base_ref).bind(pushed && update.state == Some("open")).bind(CONFLICT_DELAY_MS)
                 .execute(&mut **tx).await?;
             let Some(draft) = &draft else { continue };
             let checks: Option<String> = row.try_get("checks")?;
@@ -418,23 +453,253 @@ impl NativeGithub {
                 continue;
             }
             let event_id = format!("{}:{number}:{}", repository_id, draft.event_id);
-            let payload = self.seal(
-                &inbox_context(&account, &event_id),
-                &Sealed {
-                    kind: draft.kind,
-                    action,
-                    url: draft.url.clone(),
-                    author: draft.author.clone(),
-                    body: draft.body.clone(),
-                    location: draft.location.clone(),
-                },
-            )?;
-            sqlx::query("INSERT INTO zuse_rust_pull_request_inbox(account_id,repository_id,number,event_id,payload,created_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING")
-                .bind(&account).bind(repository_id).bind(number).bind(&event_id).bind(payload).bind(now())
+            self.record(
+                tx,
+                &account,
+                repository_id,
+                number,
+                &event_id,
+                draft,
+                action,
+            )
+            .await?;
+        }
+        if let Some(draft) = draft
+            .as_ref()
+            .filter(|d| d.kind.is_feedback() && !d.bot && events::mentions_zuse(&d.body))
+            && let [number] = numbers.as_slice()
+        {
+            self.record_mention(
+                tx,
+                installation_id,
+                repository_id,
+                *number,
+                &owned_accounts,
+                draft,
+                value,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Seal one event into an owner's inbox.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn record(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        account: &str,
+        repository_id: i64,
+        number: i64,
+        event_id: &str,
+        draft: &Draft,
+        action: EventAction,
+    ) -> Result<(), ApiError> {
+        let payload = self.seal(
+            &inbox_context(account, event_id),
+            &Sealed {
+                kind: draft.kind,
+                action,
+                url: draft.url.clone(),
+                author: draft.author.clone(),
+                body: draft.body.clone(),
+                location: draft.location.clone(),
+            },
+        )?;
+        sqlx::query("INSERT INTO zuse_rust_pull_request_inbox(account_id,repository_id,number,event_id,payload,created_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING")
+            .bind(account).bind(repository_id).bind(number).bind(event_id).bind(payload).bind(now())
+            .execute(&mut **tx).await?;
+        Ok(())
+    }
+
+    /// A push to a branch can make the pull requests based on it conflict:
+    /// check each owned one once GitHub has recomputed mergeability.
+    async fn route_push(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        value: &Value,
+    ) -> Result<(), ApiError> {
+        let (Some(installation), Some(repository), Some(branch)) = (
+            value["installation"]["id"].as_i64().filter(|n| *n > 0),
+            value["repository"]["id"].as_i64().filter(|n| *n > 0),
+            value["ref"]
+                .as_str()
+                .and_then(|r| r.strip_prefix("refs/heads/"))
+                .filter(|b| b.len() <= 255),
+        ) else {
+            return Ok(());
+        };
+        sqlx::query("UPDATE zuse_rust_pull_request_owners SET conflict_due_at=$4,conflict_attempts=0 WHERE repository_id=$1 AND installation_id=$2 AND base_ref=$3 AND state='open'")
+            .bind(repository).bind(installation).bind(branch).bind(now() + CONFLICT_DELAY_MS)
+            .execute(&mut **tx).await?;
+        Ok(())
+    }
+
+    /// A pull request opened from, or pushed to, a cloud chat's branch belongs
+    /// to that chat unless another chat already owns it. GitHub does not say
+    /// who pushed, so this never takes a pull request over.
+    async fn claim_for_cloud_chat(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        installation_id: i64,
+        repository_id: i64,
+        value: &Value,
+    ) -> Result<(), ApiError> {
+        let pr = &value["pull_request"];
+        let (Some(number), Some(head_ref), Some(repository), Some(url)) = (
+            pr["number"].as_i64().filter(|n| *n > 0),
+            pr["head"]["ref"].as_str().filter(|r| r.len() <= 255),
+            value["repository"]["full_name"]
+                .as_str()
+                .filter(|r| valid_repository(r)),
+            pr["html_url"]
+                .as_str()
+                .filter(|u| u.starts_with("https://github.com/") && u.len() <= 512),
+        ) else {
+            return Ok(());
+        };
+        // A fork's branch is never a cloud computer's checkout.
+        if pr["head"]["repo"]["id"].as_i64() != Some(repository_id) {
+            return Ok(());
+        }
+        let ready: bool = sqlx::query_scalar("SELECT to_regclass('api_cloud_workspaces') IS NOT NULL AND to_regclass('api_cloud_projects') IS NOT NULL")
+            .fetch_one(&mut **tx).await?;
+        if !ready {
+            return Ok(());
+        }
+        let source = if value["action"] == "synchronize" {
+            ClaimSource::Pushed
+        } else {
+            ClaimSource::Created
+        };
+        let at = now();
+        sqlx::query(r#"INSERT INTO zuse_rust_pull_request_owners(account_id,repository_id,number,installation_id,repository,actor_id,chat_key,claimed_by,claimed_at,url,title,state,draft,head_ref,head_sha,base_ref,workspace_id,updated_at)
+            SELECT DISTINCT ON (w.account_id) w.account_id,$1,$2,$3,$4,COALESCE(w.request_config->>'rustActorId',w.account_id),'chat:'||w.initial_session_id,$5,$6,$7,$8,'open',$9,$10,$11,$12,w.workspace_id,$6
+            FROM api_cloud_workspaces w
+            JOIN api_cloud_projects p ON p.project_id=w.project_id AND p.account_id=w.account_id
+            JOIN zuse_rust_github_installations i ON i.owner_id=w.account_id AND i.installation_id=$3 AND i.state='active'
+            WHERE w.branch=$10 AND w.desired_state NOT IN ('archived','deleted')
+              AND lower(regexp_replace(regexp_replace(p.repository_url,'\.git$',''),'^https://github\.com/',''))=lower($4)
+            ORDER BY w.account_id, w.last_activity_at DESC
+            ON CONFLICT(account_id,repository_id,number) DO NOTHING"#)
+            .bind(repository_id).bind(number).bind(installation_id).bind(repository)
+            .bind(source.as_str()).bind(at).bind(url)
+            .bind(events::clip(pr["title"].as_str().unwrap_or(""), 500))
+            .bind(pr["draft"] == true).bind(head_ref)
+            .bind(pr["head"]["sha"].as_str().filter(|s| s.len() <= 64))
+            .bind(pr["base"]["ref"].as_str().filter(|r| r.len() <= 255))
+            .execute(&mut **tx).await?;
+        Ok(())
+    }
+
+    /// `@zuse` from a connected Zuse user on a pull request none of their
+    /// chats owns: their engine starts a chat for it.
+    #[allow(clippy::too_many_arguments)]
+    async fn record_mention(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        installation_id: i64,
+        repository_id: i64,
+        number: i64,
+        owned_accounts: &[String],
+        draft: &Draft,
+        value: &Value,
+    ) -> Result<(), ApiError> {
+        let Some(author) = draft.author_id else {
+            return Ok(());
+        };
+        let Some(repository) = value["repository"]["full_name"]
+            .as_str()
+            .filter(|r| valid_repository(r))
+        else {
+            return Ok(());
+        };
+        let pr = if value["pull_request"].is_object() {
+            &value["pull_request"]
+        } else {
+            &value["issue"]
+        };
+        // Personal accounts only: an organization's member list is not read
+        // inside a webhook.
+        let accounts: Vec<String> = sqlx::query_scalar("SELECT u.actor_id FROM zuse_rust_github_users u JOIN zuse_rust_github_installations i ON i.owner_id=u.actor_id AND i.installation_id=$1 AND i.state='active' WHERE u.github_user_id=$2 AND u.state='connected'")
+            .bind(installation_id).bind(author)
+            .fetch_all(&mut **tx).await?;
+        for account in accounts.into_iter().filter(|a| !owned_accounts.contains(a)) {
+            let event_id = format!("{repository_id}:{number}:{}", draft.event_id);
+            let mention = zuse_protocol::pull_request_links::PullRequestMention {
+                sequence: 0,
+                event_id: event_id.clone(),
+                repository: repository.to_owned(),
+                number: number as u64,
+                url: format!("https://github.com/{repository}/pull/{number}"),
+                title: events::clip(pr["title"].as_str().unwrap_or(""), 500),
+                head_ref: pr["head"]["ref"]
+                    .as_str()
+                    .filter(|r| r.len() <= 255)
+                    .map(str::to_owned),
+                kind: draft.kind,
+                comment_url: draft.url.clone(),
+                author: draft.author.clone(),
+                body: draft.body.clone(),
+                location: draft.location.clone(),
+                created_at: 0,
+            };
+            let payload = self.seal(&mention_context(&account, &event_id), &mention)?;
+            sqlx::query("INSERT INTO zuse_rust_pull_request_mentions(account_id,actor_id,repository_id,number,installation_id,event_id,payload,created_at) VALUES($1,$1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING")
+                .bind(&account).bind(repository_id).bind(number).bind(installation_id).bind(&event_id).bind(payload).bind(now())
                 .execute(&mut **tx).await?;
         }
         Ok(())
     }
+
+    /// Mentions waiting for this member's engine to start a chat.
+    pub async fn pull_request_mentions(
+        &self,
+        access: &Access,
+    ) -> Result<Vec<zuse_protocol::pull_request_links::PullRequestMention>, ApiError> {
+        self.require_pull_requests(access).await?;
+        let rows = sqlx::query("SELECT sequence,event_id,payload,created_at FROM zuse_rust_pull_request_mentions WHERE account_id=$1 AND actor_id=$2 ORDER BY sequence LIMIT $3")
+            .bind(&access.owner_id).bind(&access.actor.account_id).bind(INBOX_PAGE)
+            .fetch_all(&self.pool).await?;
+        let mut mentions = Vec::with_capacity(rows.len());
+        for row in rows {
+            let event_id: String = row.try_get("event_id")?;
+            let mut mention: zuse_protocol::pull_request_links::PullRequestMention = self.open(
+                &mention_context(&access.owner_id, &event_id),
+                &row.try_get::<String, _>("payload")?,
+            )?;
+            mention.sequence = row.try_get("sequence")?;
+            mention.created_at = row.try_get("created_at")?;
+            mentions.push(mention);
+        }
+        Ok(mentions)
+    }
+
+    pub async fn ack_pull_request_mentions(
+        &self,
+        access: &Access,
+        sequences: &[i64],
+    ) -> Result<u64, ApiError> {
+        self.require_pull_requests(access).await?;
+        if sequences.len() > ACK_LIMIT {
+            return Err(invalid());
+        }
+        let acked = sqlx::query("DELETE FROM zuse_rust_pull_request_mentions WHERE sequence=ANY($1) AND account_id=$2 AND actor_id=$3")
+            .bind(sequences).bind(&access.owner_id).bind(&access.actor.account_id)
+            .execute(&self.pool).await?.rows_affected();
+        sqlx::query(
+            "DELETE FROM zuse_rust_pull_request_mentions WHERE account_id=$1 AND created_at<$2",
+        )
+        .bind(&access.owner_id)
+        .bind(now() - INBOX_RETENTION_MS)
+        .execute(&self.pool)
+        .await?;
+        Ok(acked)
+    }
+}
+
+fn mention_context(account: &str, event_id: &str) -> String {
+    format!("pull-request-mention:{account}:{event_id}")
 }
 
 #[cfg(test)]

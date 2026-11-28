@@ -13,7 +13,8 @@ import { createEffect, createMemo, createSignal, For, Match, Show, Switch } from
 import { parsePatch } from "./diff";
 import { DiffView } from "./DiffView";
 import { Banner, DiffStat, Empty, PrStateIcon } from "./parts";
-import { errorText, liveSubscribe, readErrorText, setWorkspace, workspace, type Target } from "./store";
+import { errorText, linkRoute, liveSubscribe, readErrorText, setWorkspace, workspace, type Target } from "./store";
+import type { PullRequestEventAction, PullRequestPolicy } from "./types";
 import type { ChangeRequestCheck, ChangeRequestComment, ChangeRequestDetail, ChangeRequestListItem, ChangeRequestPage, ChangeRequestUpdate, SourceControlFrame } from "./types";
 import { copyText, plural, timeAgo } from "./util";
 
@@ -231,11 +232,40 @@ const drafts = new Map<string, string>();
 /** Pull requests whose last comment post lost its receipt. */
 const uncertain = new Set<string>();
 
+/** Kinds of pull request activity, grouped as the settings menu shows them; defaults match the engine's. */
+const POLICY_GROUPS: { label: string; kinds: string[]; fallback: PullRequestEventAction; bots?: boolean }[] = [
+  { label: "Comments and reviews", kinds: ["comment", "review", "review-comment"], fallback: "wake" },
+  { label: "Failed checks", kinds: ["checks-failed"], fallback: "wake" },
+  { label: "Checks passing again", kinds: ["checks-passed"], fallback: "wake" },
+  { label: "Merge conflicts", kinds: ["conflict"], fallback: "wake" },
+  { label: "Merged, closed or reopened", kinds: ["merged", "closed", "reopened"], fallback: "context" },
+  { label: "Bot comments", kinds: [], fallback: "ignore", bots: true },
+];
+const ACTION_LABELS: Record<PullRequestEventAction, string> = { wake: "Start a turn", context: "Note for next turn", ignore: "Ignore" };
+const NEXT_ACTION: Record<PullRequestEventAction, PullRequestEventAction> = { wake: "context", context: "ignore", ignore: "wake" };
+
+/** One row per group showing what it does now; choosing a row moves it to the next choice. */
+function policyItems(policy: PullRequestPolicy, save: (policy: PullRequestPolicy) => void): MenuItem[] {
+  return POLICY_GROUPS.map((group) => {
+    const current = group.bots ? policy.bots ?? group.fallback : policy.actions?.[group.kinds[0]!] ?? group.fallback;
+    const next = NEXT_ACTION[current];
+    return {
+      label: `${group.label}: ${ACTION_LABELS[current]}`,
+      onSelect: () => {
+        if (group.bots) return save({ ...policy, bots: next });
+        const actions = { ...(policy.actions ?? {}) };
+        for (const kind of group.kinds) actions[kind] = next;
+        save({ ...policy, actions });
+      },
+    };
+  });
+}
+
 /** Which chat this pull request is linked to: that chat hears its comments, reviews and check results. */
 function LinkRow(props: { target: Target; url: string }) {
   const [busy, setBusy] = createSignal(false);
   const [failed, setFailed] = createSignal<string | null>(null);
-  const owner = () => (workspace.ownedPullRequests[props.target.deviceId] ?? []).find((pr) => pr.url === props.url) ?? null;
+  const owner = () => workspace.ownedPullRequests.find((pr) => pr.url === props.url) ?? null;
   const mine = () => owner()?.chatKey === `chat:${props.target.chatId}`;
   const otherTitle = () => {
     const id = owner()?.chatKey.slice(5);
@@ -245,7 +275,7 @@ function LinkRow(props: { target: Target; url: string }) {
     setBusy(true);
     setFailed(null);
     rpc
-      .call(method, { chatId: props.target.chatId, url: props.url, targetDeviceId: props.target.deviceId, ...params })
+      .call(method, { chatId: props.target.chatId, url: props.url, ...linkRoute(props.target), ...params })
       .catch((e) => setFailed(errorText(e)))
       .finally(() => setBusy(false));
   };
@@ -265,6 +295,15 @@ function LinkRow(props: { target: Target; url: string }) {
         when={mine()}
         fallback={<Button size="sm" variant="ghost" disabled={busy()} onClick={() => act(M.CLAIM_PULL_REQUEST, { source: "manual" })}>{owner() ? "Link here instead" : "Link to this chat"}</Button>}
       >
+        <Menu
+          placement="bottom-end"
+          trigger={(p) => (
+            <button {...p} type="button" class="icon-btn" data-size="sm" aria-label="What reaches this chat" title="What reaches this chat" disabled={busy()}>
+              <Icon name="settings" size={12} />
+            </button>
+          )}
+          items={policyItems(owner()?.policy ?? {}, (policy) => act(M.SET_PULL_REQUEST_POLICY, { policy }))}
+        />
         <Button size="sm" variant="ghost" disabled={busy()} onClick={() => act(M.RELEASE_PULL_REQUEST, {})}>Unlink</Button>
       </Show>
       <Show when={failed()}>

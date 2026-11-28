@@ -3130,6 +3130,8 @@ async fn github_browser_select(
     if let Some(joining) = state.store.github_organization_authority() {
         joining.notify_dispatch();
     }
+    // Conflict checks and cloud-chat deliveries the webhook may have queued.
+    crate::github::native::wake_pull_request_worker();
     Ok(github_browser_response(
         github_page(&state, &selection.state, &headers).await?,
     ))

@@ -62,9 +62,11 @@ pub enum PullRequestEventKind {
     Merged,
     Closed,
     Reopened,
+    /// The branch can no longer merge cleanly into its base.
+    Conflict,
 }
 impl PullRequestEventKind {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Comment,
         Self::Review,
         Self::ReviewComment,
@@ -73,6 +75,7 @@ impl PullRequestEventKind {
         Self::Merged,
         Self::Closed,
         Self::Reopened,
+        Self::Conflict,
     ];
     pub fn as_str(self) -> &'static str {
         match self {
@@ -84,6 +87,7 @@ impl PullRequestEventKind {
             Self::Merged => "merged",
             Self::Closed => "closed",
             Self::Reopened => "reopened",
+            Self::Conflict => "conflict",
         }
     }
     pub fn parse(value: &str) -> Option<Self> {
@@ -170,6 +174,10 @@ pub struct OwnedPullRequest {
     pub checks: Option<String>,
     #[serde(default)]
     pub policy: EventPolicy,
+    /// The cloud computer hosting the chat, for cloud chats; their events are
+    /// delivered by the cloud rather than a desktop engine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
 }
 impl OwnedPullRequest {
     pub fn chat_id(&self) -> Option<&str> {
@@ -189,6 +197,9 @@ pub struct ClaimRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
     pub source: ClaimSource,
+    /// The cloud computer hosting the chat, when it is a cloud chat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
 }
 
 /// One pull request event waiting for the engine that hosts its chat.
@@ -215,6 +226,115 @@ pub struct InboxEvent {
     pub location: Option<String>,
     pub created_at: i64,
 }
+
+/// Someone asked Zuse for help (`@zuse`) on a pull request no chat of theirs
+/// owns. The engine starts a chat for it in a project with that repository.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestMention {
+    pub sequence: i64,
+    pub event_id: String,
+    pub repository: String,
+    pub number: u64,
+    pub url: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_ref: Option<String>,
+    pub kind: PullRequestEventKind,
+    /// Where the mention is on GitHub.
+    pub comment_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    pub created_at: i64,
+}
+
+/// One line (or a few) about an event, as the agent reads it.
+pub fn describe(event: &InboxEvent) -> String {
+    let who = event.author.as_deref().unwrap_or("Someone");
+    let body = event.body.trim();
+    let mut line = match event.kind {
+        PullRequestEventKind::Comment => format!("{who} commented:\n{body}"),
+        PullRequestEventKind::Review => format!("{who} reviewed: {body}"),
+        PullRequestEventKind::ReviewComment => match &event.location {
+            Some(at) => format!("{who} commented on {at}:\n{body}"),
+            None => format!("{who} commented on the diff:\n{body}"),
+        },
+        PullRequestEventKind::ChecksFailed => match &event.author {
+            Some(app) => format!("A check failed ({app}): {body}"),
+            None => format!("A check failed: {body}"),
+        },
+        PullRequestEventKind::ChecksPassed => "Checks passed on the latest commit.".into(),
+        PullRequestEventKind::Merged => format!("{who} merged it."),
+        PullRequestEventKind::Closed => format!("{who} closed it without merging."),
+        PullRequestEventKind::Reopened => format!("{who} reopened it."),
+        PullRequestEventKind::Conflict if body.is_empty() => {
+            "It has merge conflicts with its base branch.".into()
+        }
+        PullRequestEventKind::Conflict => body.to_owned(),
+    };
+    if !event.url.is_empty() {
+        line.push_str(&format!("\n{}", event.url));
+    }
+    line
+}
+
+/// The full text the agent receives, grouped by pull request.
+pub fn activity_text(events: &[InboxEvent]) -> String {
+    let mut groups: Vec<((String, u64), Vec<&InboxEvent>)> = Vec::new();
+    for event in events {
+        let key = (event.repository.clone(), event.number);
+        match groups.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, list)) => list.push(event),
+            None => groups.push((key, vec![event])),
+        }
+    }
+    groups
+        .into_iter()
+        .map(|((repository, number), list)| {
+            let items = list
+                .iter()
+                .map(|e| format!("- {}", describe(e).replace('\n', "\n  ")))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!(
+                "Activity on pull request {repository}#{number} (https://github.com/{repository}/pull/{number}):\n{items}"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// The short line a transcript shows for a delivery.
+pub fn summary(events: &[InboxEvent]) -> String {
+    if let [event] = events {
+        let line = describe(event);
+        let line = line.lines().take(2).collect::<Vec<_>>().join(" ");
+        return line.chars().take(280).collect();
+    }
+    let mut prs: Vec<(&str, u64)> = events
+        .iter()
+        .map(|e| (e.repository.as_str(), e.number))
+        .collect();
+    prs.sort_unstable();
+    prs.dedup();
+    match (prs.as_slice(), events.first()) {
+        ([_], Some(first)) => format!(
+            "{} updates on {}#{}",
+            events.len(),
+            first.repository,
+            first.number
+        ),
+        _ => format!("{} updates on {} pull requests", events.len(), prs.len()),
+    }
+}
+
+/// What the agent is asked to do after activity that starts a turn.
+pub const WAKE_INSTRUCTION: &str = "You own this pull request. Handle what needs a change, push the fix, and reply on GitHub with `gh` when that helps the reviewer.";
 
 /// Account feed kind the cloud sends when a pull request owned in this
 /// account changes owner or has new inbox events.
@@ -351,5 +471,68 @@ mod tests {
         assert_eq!(back, source);
         assert_eq!(source.sender_name(), "ada on acme/app#7 · GitHub");
         assert!(source.is_github() && !source.is_slack());
+    }
+
+    fn event(kind: PullRequestEventKind, action: EventAction) -> InboxEvent {
+        InboxEvent {
+            sequence: 1,
+            chat_key: "chat:c".into(),
+            event_id: format!("{kind:?}"),
+            repository: "acme/app".into(),
+            number: 7,
+            kind,
+            action,
+            url: "https://github.com/acme/app/pull/7#issuecomment-1".into(),
+            author: Some("bob".into()),
+            body: "Please rename this".into(),
+            location: None,
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn activity_is_grouped_by_pull_request() {
+        let mut failed = event(PullRequestEventKind::ChecksFailed, EventAction::Wake);
+        failed.author = Some("GitHub Actions".into());
+        failed.body = "test failed".into();
+        failed.url = "https://github.com/acme/app/actions/runs/1".into();
+        let mut other = event(PullRequestEventKind::Review, EventAction::Wake);
+        other.number = 8;
+        other.body = "Approved".into();
+        let text = activity_text(&[
+            event(PullRequestEventKind::Comment, EventAction::Wake),
+            failed,
+            other,
+        ]);
+        assert_eq!(
+            text,
+            "Activity on pull request acme/app#7 (https://github.com/acme/app/pull/7):\n\
+             - bob commented:\n  Please rename this\n  https://github.com/acme/app/pull/7#issuecomment-1\n\
+             - A check failed (GitHub Actions): test failed\n  https://github.com/acme/app/actions/runs/1\n\n\
+             Activity on pull request acme/app#8 (https://github.com/acme/app/pull/8):\n\
+             - bob reviewed: Approved\n  https://github.com/acme/app/pull/7#issuecomment-1"
+        );
+    }
+
+    #[test]
+    fn summaries_are_short() {
+        let one = [event(PullRequestEventKind::Comment, EventAction::Wake)];
+        assert_eq!(summary(&one), "bob commented: Please rename this");
+        let two = [
+            event(PullRequestEventKind::Comment, EventAction::Wake),
+            event(PullRequestEventKind::Review, EventAction::Wake),
+        ];
+        assert_eq!(summary(&two), "2 updates on acme/app#7");
+    }
+
+    #[test]
+    fn conflicts_read_plainly() {
+        let mut conflict = event(PullRequestEventKind::Conflict, EventAction::Wake);
+        conflict.body = String::new();
+        conflict.url = String::new();
+        assert_eq!(
+            describe(&conflict),
+            "It has merge conflicts with its base branch."
+        );
     }
 }

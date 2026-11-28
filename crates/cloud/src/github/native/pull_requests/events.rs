@@ -25,6 +25,7 @@ pub(crate) struct Update {
     pub draft: Option<bool>,
     pub head_ref: Option<String>,
     pub head_sha: Option<String>,
+    pub base_ref: Option<String>,
 }
 
 /// Something to tell the owning chat.
@@ -55,6 +56,7 @@ pub(crate) fn handles(event: &str) -> bool {
     matches!(
         event,
         "pull_request"
+            | "push"
             | "issue_comment"
             | "pull_request_review"
             | "pull_request_review_comment"
@@ -271,6 +273,10 @@ fn pull_request_update(pr: &Value) -> Update {
         head_sha: pr["head"]["sha"]
             .as_str()
             .filter(|s| sha_ok(s))
+            .map(str::to_owned),
+        base_ref: pr["base"]["ref"]
+            .as_str()
+            .filter(|r| r.len() <= 255)
             .map(str::to_owned),
     }
 }

@@ -88,8 +88,8 @@ export interface GitState {
 interface WorkspaceData {
   diffStats: Record<string, DiffStat>;
   changeRequests: Record<string, CheckoutChangeRequestStatus | null>;
-  /** Pull requests owned by chats, per hosting device. */
-  ownedPullRequests: Record<string, OwnedPullRequest[]>;
+  /** Pull requests linked to this account's chats, as this computer's engine last heard from the cloud. */
+  ownedPullRequests: OwnedPullRequest[];
   /** The pull request the panel shows for a chat, when one was picked elsewhere. */
   pullRequestFocus: Record<string, string | null>;
   git: Record<string, GitState>;
@@ -105,7 +105,7 @@ interface WorkspaceData {
 export const [workspace, setWorkspace] = createStore<WorkspaceData>({
   diffStats: {},
   changeRequests: {},
-  ownedPullRequests: {},
+  ownedPullRequests: [],
   pullRequestFocus: {},
   git: {},
   previews: {},
@@ -180,9 +180,13 @@ function applyDiffFrame(value: unknown) {
 }
 
 /** Pull requests `chatId` owns, newest claim first. */
-export function ownedPullRequests(chatId: string, deviceId: string | null | undefined): OwnedPullRequest[] {
-  if (!deviceId) return [];
-  return (workspace.ownedPullRequests[deviceId] ?? []).filter((pr) => pr.chatKey === `chat:${chatId}`);
+export function ownedPullRequests(chatId: string): OwnedPullRequest[] {
+  return workspace.ownedPullRequests.filter((pr) => pr.chatKey === `chat:${chatId}`);
+}
+
+/** Where a link change for `target` goes: the engine hosting the chat, or for a cloud chat this computer's engine naming the chat's cloud computer. */
+export function linkRoute(target: { deviceId: string }): Record<string, unknown> {
+  return target.deviceId.startsWith("cloud:") ? { workspaceId: target.deviceId.slice(6) } : { targetDeviceId: target.deviceId };
 }
 
 /** Show one pull request in a chat's pull request panel. */
@@ -268,16 +272,12 @@ createRoot(() => {
         : undefined,
   );
 
-  // Pull requests the chat's host says its chats own, as they change.
+  // Pull requests linked to the account's chats (every computer's and the cloud's), as they change.
   keyedWatch(
-    () => [selectedTarget()?.deviceId ?? null, state.epoch, connected()] as const,
-    ([deviceId, , live]) =>
-      deviceId && live
-        ? liveSubscribe<OwnedPullRequest[]>(
-            M.WATCH_PULL_REQUEST_LINKS,
-            { targetDeviceId: deviceId },
-            (owned) => setWorkspace(draft => { draft["ownedPullRequests"]![deviceId] = owned; }),
-          )
+    () => [state.epoch, connected()] as const,
+    ([, live]) =>
+      live
+        ? liveSubscribe<OwnedPullRequest[]>(M.WATCH_PULL_REQUEST_LINKS, {}, (owned) => setWorkspace(draft => { draft["ownedPullRequests"] = owned; }))
         : undefined,
   );
 
@@ -288,8 +288,9 @@ createRoot(() => {
     () => {
       const t = selectedTarget();
       const pr = t ? workspace.changeRequests[t.chatId]?.changeRequest : null;
-      const owned = t ? workspace.ownedPullRequests[t.deviceId] : undefined;
-      return t && !t.archived && pr?.url && owned && pr.state === "open" ? { chatId: t.chatId, deviceId: t.deviceId, url: pr.url, owned } : null;
+      const owned = workspace.ownedPullRequests;
+      // Cloud chats are linked by the cloud when their branch's pull request opens.
+      return t && !t.archived && !t.deviceId.startsWith("cloud:") && pr?.url && pr.state === "open" ? { chatId: t.chatId, deviceId: t.deviceId, url: pr.url, owned } : null;
     },
     (next) => {
       if (!next || next.owned.some((o) => o.url === next.url)) return;

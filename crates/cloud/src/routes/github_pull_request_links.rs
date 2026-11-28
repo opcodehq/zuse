@@ -32,6 +32,11 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/v1/cloud/github/pull-requests/policy", post(policy))
         .route("/v1/cloud/github/pull-requests/inbox", get(inbox))
         .route("/v1/cloud/github/pull-requests/inbox/ack", post(ack))
+        .route("/v1/cloud/github/pull-requests/mentions", get(mentions))
+        .route(
+            "/v1/cloud/github/pull-requests/mentions/ack",
+            post(ack_mentions),
+        )
         .layer(DefaultBodyLimit::max(8192))
 }
 
@@ -102,6 +107,29 @@ async fn ack(
     let access = state.access(&headers, AccessKind::Content).await?;
     let acked = native_github(&state)?
         .ack_pull_request_inbox(&access, &request.sequences)
+        .await?;
+    Ok(Json(json!({ "acked": acked })))
+}
+
+async fn mentions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let access = state.access(&headers, AccessKind::Content).await?;
+    let mentions = native_github(&state)?
+        .pull_request_mentions(&access)
+        .await?;
+    Ok(Json(json!({ "mentions": mentions })))
+}
+
+async fn ack_mentions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<Ack>,
+) -> Result<Json<Value>, ApiError> {
+    let access = state.access(&headers, AccessKind::Content).await?;
+    let acked = native_github(&state)?
+        .ack_pull_request_mentions(&access, &request.sequences)
         .await?;
     Ok(Json(json!({ "acked": acked })))
 }

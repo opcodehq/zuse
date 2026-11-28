@@ -1829,6 +1829,7 @@ async fn main() -> Result<()> {
             let listener = tokio::net::TcpListener::bind(config.listen).await?;
             tracing::info!(address = %listener.local_addr()?,runtime_control=runtime_enabled, "Zuse cloud API listening");
             let app = router(state.clone(), origins);
+            let state_for_pull_requests = state.clone();
             #[cfg(feature = "hosted-browser")]
             let app = if let Some(extension) = hosted_browser.as_ref() {
                 app.merge(extension.router())
@@ -1851,7 +1852,14 @@ async fn main() -> Result<()> {
             } else {
                 None
             };
+            // Merge-conflict checks and deliveries to chats on cloud computers.
+            let pull_request_worker =
+                zuse_cloud::github::native::PullRequestWorker::new(&state_for_pull_requests)
+                    .map(|worker| worker.start());
             axum_serve(listener, app).await?;
+            if let Some(worker) = pull_request_worker {
+                worker.abort();
+            }
             if let Some(worker) = slack_worker {
                 worker.abort();
             }
