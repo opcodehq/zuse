@@ -787,6 +787,7 @@ mod tests {
                     tab: None,
                     position: gpui::point(px(40.0), px(120.0)),
                     page: super::ChatMenuPage::Copy,
+                    sidebar_actions: false,
                 });
                 cx.notify();
             })

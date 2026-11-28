@@ -11,6 +11,7 @@ import { FORK_MENU, forkChat } from "./actions";
 import { copyText } from "./clipboard";
 import { frameThrottled } from "./frame";
 import { buildItems, foldsTurn, type Item } from "./layout";
+import { isImageNote } from "./imageNote";
 import { Markdown } from "./Markdown";
 import { ReferenceMarkdown } from "./ReferenceMarkdown";
 import type { ReferenceCatalog } from "./references";
@@ -37,7 +38,9 @@ export interface EntryContext {
 export function Entry(props: { entry: SessionMessageEntry; ctx: EntryContext }) {
   return (
     <Show when={props.entry.role === "user"} fallback={<AssistantEntry entry={props.entry} ctx={props.ctx} />}>
-      <UserEntry entry={props.entry} ctx={props.ctx} />
+      <Show when={!isImageNote(props.entry)}>
+        <UserEntry entry={props.entry} ctx={props.ctx} />
+      </Show>
     </Show>
   );
 }

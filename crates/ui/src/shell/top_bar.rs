@@ -439,20 +439,18 @@ impl Shell {
                 card.child(
                     div()
                         .px(px(8.0))
-                        .py(px(8.0))
-                        .rounded(px(6.0))
-                        .bg(theme.danger.opacity(0.08))
+                        .py(px(6.0))
                         .flex()
                         .flex_col()
-                        .gap(px(4.0))
-                        .text_size(crate::typography::text_xs())
+                        .gap(px(2.0))
+                        .child(crate::settings::widgets::inline_error(&theme, title))
                         .child(
                             div()
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(theme.danger)
-                                .child(title),
-                        )
-                        .child(div().text_color(theme.text).child(detail)),
+                                .pl(px(19.0))
+                                .text_size(crate::typography::text_xs())
+                                .text_color(theme.text_muted)
+                                .child(detail),
+                        ),
                 )
             })
             .child(section_label("Local branches"))

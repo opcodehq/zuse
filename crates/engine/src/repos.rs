@@ -162,18 +162,21 @@ pub(crate) fn expand_home(cwd: &str) -> Result<String, &'static str> {
 /// folder under `scratch_root`, created on first use — createChat only names
 /// it, possibly on another device.
 pub(crate) fn resolve_chat_cwd(cwd: &str, scratch_root: &Path) -> Result<String, String> {
+    let resolved = map_chat_cwd(cwd, scratch_root)?;
+    if zuse_protocol::projectless::is_scratch_cwd(cwd) {
+        std::fs::create_dir_all(&resolved)
+            .map_err(|error| format!("could not create the chat's folder {resolved}: {error}"))?;
+    }
+    Ok(resolved)
+}
+
+/// Map a stored chat cwd to its host path without creating a scratch folder.
+pub(crate) fn map_chat_cwd(cwd: &str, scratch_root: &Path) -> Result<String, String> {
     if !zuse_protocol::projectless::is_scratch_cwd(cwd) {
         return expand_home(cwd).map_err(str::to_string);
     }
     let name = cwd.trim().rsplit('/').next().unwrap_or_default();
-    let folder = scratch_root.join(name);
-    std::fs::create_dir_all(&folder).map_err(|error| {
-        format!(
-            "could not create the chat's folder {}: {error}",
-            folder.display()
-        )
-    })?;
-    Ok(folder.to_string_lossy().into_owned())
+    Ok(scratch_root.join(name).to_string_lossy().into_owned())
 }
 
 /// Resolve the host user's home for a session that explicitly uses `~`.
@@ -2844,6 +2847,18 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn mapping_scratch_cwd_does_not_create_the_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("scratch");
+        let cwd = "~/.zuse/scratch/usage-resume";
+        let mapped = map_chat_cwd(cwd, &root).unwrap();
+        assert_eq!(mapped, root.join("usage-resume").to_string_lossy());
+        assert!(!root.exists());
+        assert_eq!(resolve_chat_cwd(cwd, &root).unwrap(), mapped);
+        assert!(std::path::Path::new(&mapped).is_dir());
+    }
 
     #[test]
     fn windows_worktree_limit_counts_utf16_without_verbatim_prefix() {

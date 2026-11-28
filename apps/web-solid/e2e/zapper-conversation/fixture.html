@@ -1,0 +1,24 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Zapper conversation</title>
+<script>
+  // A fake clock: Date.now and intervals advance only through clock.advance(ms).
+  (() => {
+    let now = Date.parse("2026-11-27T12:00:00Z");
+    const timers = [];
+    const realNow = Date.now;
+    Date.now = () => now;
+    window.setInterval = (fn, ms) => { timers.push({ fn, ms, next: now + ms }); return timers.length; };
+    window.clock = {
+      now: () => now,
+      advance(ms) {
+        const end = now + ms;
+        for (;;) {
+          const due = timers.filter(t => t.next <= end).sort((a, b) => a.next - b.next)[0];
+          if (!due) break;
+          now = due.next; due.next += due.ms; due.fn();
+        }
+        now = end;
+      },
+      real: realNow,
+    };
+  })();
+</script></head><body><div id="root"></div><script type="module" src="./fixture.tsx"></script></body></html>

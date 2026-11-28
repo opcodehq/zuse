@@ -519,6 +519,21 @@ public enum ChatTimeline {
       mimeType: content["mimeType"].string ?? TimelineAttachment.mimeType(for: path))
   }
 
+  /// The note Claude Code adds after every image the model reads. Older
+  /// subagent transcripts saved it as a user message; it is the CLI talking to
+  /// the model, so it draws nothing. Mirrors
+  /// `zuse_protocol::presentation::image_note`.
+  static func isImageNote(_ text: String) -> Bool {
+    let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.contains("\n"), text.hasSuffix("]") else { return false }
+    if text.hasPrefix("[Image source: ") { return true }
+    guard text.hasPrefix("[Image: ") else { return false }
+    let body = text.dropFirst("[Image: ".count)
+    return body.hasPrefix("source: ")
+      || (body.hasPrefix("original ") && body.contains(", displayed at ")
+        && body.hasSuffix(" to map to original image.]"))
+  }
+
   private static func user(_ group: [ChatMessage]) -> TimelineUser? {
     var texts: [String] = []
     var attachments: [TimelineAttachment] = []
@@ -544,6 +559,7 @@ public enum ChatTimeline {
     }
     let text = texts.filter { !$0.isEmpty }.joined(separator: "\n\n")
     guard !text.isEmpty || !attachments.isEmpty else { return nil }
+    if attachments.isEmpty, isImageNote(text) { return nil }
     var seen = Set<String>()
     return TimelineUser(
       id: group[0].id, text: text,

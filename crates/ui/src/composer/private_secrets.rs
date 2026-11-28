@@ -88,7 +88,7 @@ impl Composer {
             if result.is_err() {
                 this.update(cx, |this, cx| {
                     this.failure = Some(
-                        "Private secret submission failed or expired. Re-enter the token to retry."
+                        "Private secret submission failed or expired. Re-enter the secret to retry."
                             .into(),
                     );
                     this.failure_key = Some(chat_id.clone());

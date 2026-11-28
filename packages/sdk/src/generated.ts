@@ -61,7 +61,26 @@ outOfScope: string,
  */
 parent?: string, };
 export type ZapperIssuePullRequest = { url: string, title: string, };
-export type ZapperIssueActivity = { actor: string | null, id: string, createdAt: number, kind: string, text: string, replyTo?: string, };
+export type ZapperIssueDeliveryState = "queued" | "retrying" | "sent" | "answered" | "cancelled" | "held";
+export type ZapperIssueDelivery = { chatId: string, state: ZapperIssueDeliveryState, detail?: string,
+/**
+ * The thread's report whose turn this message started.
+ */
+reply?: string, };
+export type ZapperIssueChange = { field: string, before?: string, after?: string, };
+export type ZapperIssueActivity = { actor: string | null, id: string, createdAt: number, kind: string, text: string, replyTo?: string,
+/**
+ * A person's comment routed straight to one thread, and how far it got.
+ */
+delivery?: ZapperIssueDelivery,
+/**
+ * The live thread a question was asked for; its answer goes there.
+ */
+thread?: string,
+/**
+ * What an update changed, before and after. Older entries only have text.
+ */
+changes?: Array<ZapperIssueChange>, };
 export type ZapperIssue = { id: string, number: number, details: ZapperIssueDetails, createdAt: number, updatedAt: number, threads: Array<string>, pullRequests: Array<ZapperIssuePullRequest>, activity: Array<ZapperIssueActivity>, };
 export type Zapper = { id: string, revision: number, activityRevision: number, config: ZapperConfig, status: ZapperStatus, coordinatorChatId: string, previousCoordinatorChats: Array<string>, workers: Array<ZapperWorker>, decisions: Array<ZapperDecision>, issues: Array<ZapperIssue>,
 /**
@@ -100,5 +119,5 @@ action: ZapperAction, };
 export type ZapperEvent = { id: string, zapperId: string, workerChatId: string, kind: string, summary: string, acknowledged: boolean, };
 export type ControlInfo = { apiVersion: number, appVersion: string, capabilities: Array<string>, methods: Array<string>, schemas: Record<string, unknown>, };
 export const API_VERSION = 1 as const;
-export const METHODS = ["ControlInfo","ZapperCommand","WatchZappers","ZapperFiles","ZapperEvents","ZapperIssue","AckZapperEvents","ControlUpdateStatus","RetryControlUpdate","EngineInfo","WatchDevices","WatchSpaces","WatchChats","WatchSessions","Mutate","ListHarnesses","ListModels","ListSkills","ListCommands","QueueCommand","WatchDocMessages","WatchQueue","QueueMessage","UpdateQueuedMessage","RemoveQueuedMessage","SendQueuedMessageNow","SteerQueuedMessageNow","ListRepos","AddRepo","CloneRepo","CreateRepo","ListBranches","ListRefs","ListGitHistory","SearchGitHistory","FetchAll","SwitchRef","CreateWorktree","DeleteWorktree","GetWorktreeSettings","SetWorktreeSettings","ListWorkspaceDirectory","SearchWorkspaceFiles","SearchWorkspaceContent","ReadWorkspaceFile","WriteWorkspaceFile","MoveWorkspaceEntry","DeleteWorkspaceEntry","WatchWorkspaceFiles","OpenTerminal","SubscribeTerminal","WriteTerminal","ResizeTerminal","CloseTerminal","WatchCheckoutDiffs","WatchWorkspaceGitStatus","GetCheckoutDiff","GetCheckoutFileDiffText","WatchCheckoutChangeRequest","ListChangeRequestPage","GetChangeRequest","GetChangeRequestDiff","PostChangeRequestComment","ListProjectActions","UpsertProjectAction","DeleteProjectAction","RunProjectAction","GetTitleSettings","SetTitleSettings","InspectRecovery","ResolveRecovery","UpdateStatus","ApplyUpdate"] as const;
+export const METHODS = ["ControlInfo","ZapperCommand","WatchZappers","ZapperFiles","ZapperEvents","ZapperIssue","AckZapperEvents","ControlUpdateStatus","RetryControlUpdate","EngineInfo","WatchDevices","WatchSpaces","WatchChats","WatchSessions","Mutate","ListHarnesses","ListModels","ListSkills","ListCommands","QueueCommand","WatchDocMessages","WatchQueue","QueueMessage","UpdateQueuedMessage","RemoveQueuedMessage","SendQueuedMessageNow","SteerQueuedMessageNow","ListRepos","AddRepo","CloneRepo","CreateRepo","ListBranches","ListRefs","ListGitHistory","SearchGitHistory","FetchAll","SwitchRef","CreateWorktree","DeleteWorktree","GetWorktreeSettings","SetWorktreeSettings","ListWorkspaceDirectory","SearchWorkspaceFiles","SearchWorkspaceContent","ReadWorkspaceFile","WriteWorkspaceFile","MoveWorkspaceEntry","DeleteWorkspaceEntry","WatchWorkspaceFiles","OpenTerminal","SubscribeTerminal","WriteTerminal","ResizeTerminal","CloseTerminal","WatchCheckoutDiffs","WatchWorkspaceGitStatus","GetCheckoutDiff","GetCheckoutFileDiffText","WatchCheckoutChangeRequest","ListChangeRequestPage","GetChangeRequest","GetChangeRequestDiff","PostChangeRequestComment","ListProjectActions","UpsertProjectAction","DeleteProjectAction","RunProjectAction","GetUsageResume","SetUsageResume","ResumeUsageLimit","GetTitleSettings","SetTitleSettings","InspectRecovery","ResolveRecovery","UpdateStatus","ApplyUpdate"] as const;
 export type ControlMethod = typeof METHODS[number];

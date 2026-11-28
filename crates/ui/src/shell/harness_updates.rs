@@ -412,8 +412,8 @@ impl Shell {
         )
     }
 
-    /// One surface, anchored by the Home mount. The bottom edge never moves;
-    /// width, height, corner radius and row reveal share the shell resize clock.
+    /// One surface, pinned below the titlebar at the top right. The top edge
+    /// never moves; width, height and row reveal share the shell resize clock.
     pub(super) fn render_harness_update_card(
         &mut self,
         window: &mut Window,

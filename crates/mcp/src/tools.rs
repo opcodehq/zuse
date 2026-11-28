@@ -206,10 +206,14 @@ fn catalog() -> Vec<ToolDef> {
     let mut tools = vec![
         ToolDef {
             name: "request_secret",
-            description: "Ask the user for a bearer token in a private masked card, then perform exactly the HTTPS operation they approve. The agent never receives the token. Returns only HTTP status, never response body. Do not ask users to paste credentials into chat. No shell/file delivery. Public HTTPS destinations only; redirects are disabled.",
-            input_schema: json!({"type":"object","additionalProperties":false,"required":["label","reason","url","method"],"properties":{
+            description: "Ask for a secret in a private masked card and execute exactly the approved operation. Never place secrets in chat or tool arguments. mode=https (default, requires url and method): one public HTTPS bearer request, returning only HTTP status. mode=command: run an absolute executable with args and absolute cwd, injecting the secret via stdin (exact bytes then EOF) or env (requires env_var). Use command mode for CLI authentication or saving configuration. The command can read/save/transmit the secret; saved files may be readable by the agent. All command output is discarded; only completion status is returned. timeout_seconds defaults to 60 (1-300).",
+            input_schema: json!({"type":"object","additionalProperties":false,"required":["label","reason"],"properties":{
                 "label":{"type":"string","minLength":1,"maxLength":200},"reason":{"type":"string","minLength":1,"maxLength":2000},
-                "url":{"type":"string","maxLength":2048},"method":{"type":"string","enum":["GET","POST","PUT","PATCH","DELETE"]},"body":{"type":"string","maxLength":16000}
+                "mode":{"type":"string","enum":["https","command"]},
+                "url":{"type":"string","minLength":1,"maxLength":2048},"method":{"type":"string","enum":["GET","POST","PUT","PATCH","DELETE"]},"body":{"type":"string","maxLength":16000},
+                "program":{"type":"string","minLength":1,"maxLength":2048},"args":{"type":"array","maxItems":128,"items":{"type":"string","maxLength":16000}},
+                "cwd":{"type":"string","minLength":1,"maxLength":4096},"delivery":{"type":"string","enum":["stdin","env"]},
+                "env_var":{"type":"string","minLength":1,"maxLength":128},"timeout_seconds":{"type":"integer","minimum":1,"maximum":300}
             }}),
         },
         ToolDef {

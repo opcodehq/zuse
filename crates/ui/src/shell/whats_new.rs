@@ -801,7 +801,42 @@ fn stage(
         ),
         _ => return None,
     };
-    let ink = tint_ink(release, theme);
+    Some(
+        div()
+            .relative()
+            .w_full()
+            .h(px(height))
+            .flex_none()
+            .overflow_hidden()
+            .child(announcement_background(
+                theme,
+                tint_ink(release, theme),
+                top_radius,
+                bottom_radius,
+            ))
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .top(k.px(top.unwrap_or(0.0)))
+                    .flex()
+                    .justify_center()
+                    // Own layer: inside the frosted dialog the panels would
+                    // otherwise share a draw order with the field.
+                    .child(crate::frost::layered(scene)),
+            ),
+    )
+}
+
+/// The textured panel shared by release announcements and the skill installer.
+pub(crate) fn announcement_background(
+    theme: &Theme,
+    ink: gpui::Hsla,
+    top_radius: f32,
+    bottom_radius: f32,
+) -> gpui::Div {
     let tone = |sat: f32, lightness: f32| gpui::hsla(ink.h, (ink.s * sat).min(0.6), lightness, 1.0);
     // Grain reads as texture, not noise, when its tones sit close to the
     // base: a deep tinted gradient in the dark, a pale one in the light.
@@ -820,33 +855,19 @@ fn stage(
             high: tone(0.95, 0.657),
         }
     };
-    Some(
-        div()
-            .relative()
-            .w_full()
-            .h(px(height))
-            .flex_none()
-            .overflow_hidden()
-            .bg(gpui::linear_gradient(
-                180.0,
-                gpui::linear_color_stop(palette.top, 0.0),
-                gpui::linear_color_stop(palette.bottom, 1.0),
-            ))
-            .child(grain_field(palette, top_radius, bottom_radius))
-            .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .right_0()
-                    .bottom_0()
-                    .top(k.px(top.unwrap_or(0.0)))
-                    .flex()
-                    .justify_center()
-                    // Own layer: inside the frosted dialog the panels would
-                    // otherwise share a draw order with the field.
-                    .child(crate::frost::layered(scene)),
-            ),
-    )
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .right_0()
+        .bottom_0()
+        .rounded(px(top_radius))
+        .bg(gpui::linear_gradient(
+            180.0,
+            gpui::linear_color_stop(palette.top, 0.0),
+            gpui::linear_color_stop(palette.bottom, 1.0),
+        ))
+        .child(grain_field(palette, top_radius, bottom_radius))
 }
 
 /// One stage cell, in logical pixels: the send key's grain.

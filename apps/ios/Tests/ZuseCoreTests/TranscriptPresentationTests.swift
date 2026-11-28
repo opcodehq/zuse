@@ -287,6 +287,19 @@ private func project(_ entries: [JSONValue], running: Bool = false) throws -> [T
   #expect(TimelineAttachment.split(prose).0 == prose)
 }
 
+@Test func savedCLIImageNotesDrawNoUserBubble() {
+  let note =
+    "[Image: original 1290x2796, displayed at 923x2000. Multiply coordinates by 1.40 to map to original image.]"
+  let items = ChatTimeline.project([
+    legacy("ask", "user", role: "user", text: "Check the screen"),
+    legacy("note", "user", role: "user", text: note),
+    legacy("source", "user", role: "user", text: "[Image source: /tmp/a.png]"),
+    legacy("steer", "user", role: "user", text: "[Image: source: /tmp/a.png]\n\nfix the header"),
+  ])
+  #expect(users(items).map(\.id) == ["ask", "steer"])
+  #expect(ChatTimeline.isImageNote("[Image: the logo]") == false)
+}
+
 @Test func agentChangesForksAndSubagentsAreNamed() throws {
   let items = try project([
     entry(

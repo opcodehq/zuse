@@ -20,6 +20,7 @@ pub(super) enum CloudConversationEvent {
     Desktop,
     Terminal,
     Files,
+    Skills,
     OpenFile(String),
     /// Open a folder on this computer (the synced copy) in an app.
     OpenPathIn(super::open_in::OpenTarget, String),
@@ -263,6 +264,9 @@ impl CloudConversation {
                 }
                 ComposerEvent::WorkspaceCommand(crate::composer::WorkspaceCommand::Files) => {
                     cx.emit(CloudConversationEvent::Files)
+                }
+                ComposerEvent::WorkspaceCommand(crate::composer::WorkspaceCommand::Skills) => {
+                    cx.emit(CloudConversationEvent::Skills)
                 }
                 ComposerEvent::OpenFile(path) => {
                     cx.emit(CloudConversationEvent::OpenFile(path.to_string()))
@@ -1869,6 +1873,7 @@ impl Shell {
             Some(cx.subscribe(view, move |this, _, event, cx| match event {
                 CloudConversationEvent::Desktop => this.open_desktop_panel(cx),
                 CloudConversationEvent::Terminal => this.add_terminal_surface(cx),
+                CloudConversationEvent::Skills => this.open_skills_page(cx),
                 CloudConversationEvent::Files => {
                     this.pending_workspace_command = Some(crate::composer::WorkspaceCommand::Files);
                     cx.notify();

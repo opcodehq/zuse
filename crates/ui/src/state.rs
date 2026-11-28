@@ -1070,6 +1070,7 @@ pub struct AppState {
     pub chats_synced: bool,
     pub spaces_synced: bool,
     pending_deep_link: Option<crate::links::ConversationDeepLink>,
+    cloud_deep_link: Option<String>,
     deep_link_notice: Option<String>,
     /// Joined transcript of the selected chat (continuations folded engine-side).
     pub transcript: Vec<SessionMessageEntry>,
@@ -1336,6 +1337,7 @@ impl AppState {
             chats_synced: false,
             spaces_synced: false,
             pending_deep_link: None,
+            cloud_deep_link: None,
             deep_link_notice: None,
         }
     }
@@ -3193,13 +3195,20 @@ impl AppState {
         let in_filter = self.project_filter(space_filter);
         let rows = self.overview_chats(now);
         // A row stands for its whole thread: a sibling conversation working
-        // (or waiting on input) in another tab lights the row too.
+        // (or waiting on input) in another tab lights the row too. A sibling's
+        // unseen finish badges its own tab only: opening the thread marks the
+        // tab in front seen, so a rolled-up check would never clear.
         let mut thread_status: HashMap<&str, ChatIndicator> = HashMap::new();
         for (status, chat) in &rows {
+            let status = if chat.thread_id.is_some() && *status == ChatIndicator::Completed {
+                ChatIndicator::Idle
+            } else {
+                *status
+            };
             thread_status
                 .entry(chat.thread_id())
-                .and_modify(|rolled| *rolled = louder_indicator(*rolled, *status))
-                .or_insert(*status);
+                .and_modify(|rolled| *rolled = louder_indicator(*rolled, status))
+                .or_insert(status);
         }
         rows.into_iter()
             .filter(|(_, chat)| chat.thread_id.is_none() && in_filter(chat))
@@ -4224,11 +4233,19 @@ impl AppState {
         let Some(link) = self.pending_deep_link.clone() else {
             return false;
         };
-        let Some(locator) = crate::links::workspace_locator(
-            self.workspace_scope,
-            self.auth.as_ref(),
-            self.local_device_id.as_deref(),
-        ) else {
+        let cloud = link.chat_id.strip_prefix("cloud:");
+        let locator = if cloud.is_some() {
+            self.cloud_user_id().map(|account| {
+                crate::links::cloud_workspace_locator(account, self.cloud_organization_id())
+            })
+        } else {
+            crate::links::workspace_locator(
+                self.workspace_scope,
+                self.auth.as_ref(),
+                self.local_device_id.as_deref(),
+            )
+        };
+        let Some(locator) = locator else {
             return false;
         };
         if locator != link.workspace {
@@ -4236,6 +4253,16 @@ impl AppState {
             self.deep_link_notice =
                 Some("This conversation link belongs to another workspace".into());
             return true;
+        }
+        if let Some(workspace) = cloud {
+            if self.cloud_sidebar_workspace(workspace).is_some() {
+                self.pending_deep_link = None;
+                self.cloud_deep_link = Some(workspace.to_owned());
+                return true;
+            }
+            if self.cloud_sidebar_stale() || self.cloud_sidebar_loading() {
+                return false;
+            }
         }
         if self.chats.iter().any(|chat| chat.id == link.chat_id) {
             self.pending_deep_link = None;
@@ -4248,6 +4275,17 @@ impl AppState {
         } else {
             false
         }
+    }
+
+    pub(crate) fn take_cloud_deep_link(&mut self, cx: &mut Context<Self>) -> Option<String> {
+        if self
+            .pending_deep_link
+            .as_ref()
+            .is_some_and(|link| link.chat_id.starts_with("cloud:"))
+        {
+            self.apply_pending_deep_link(cx);
+        }
+        self.cloud_deep_link.take()
     }
 
     pub fn take_deep_link_notice(&mut self) -> Option<String> {
@@ -7555,6 +7593,19 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].1.id, "root");
         assert_eq!(status(&state), ChatIndicator::Working);
+    }
+
+    #[test]
+    fn a_sibling_conversations_unseen_finish_does_not_badge_the_thread_row() {
+        // Opening the thread marks only the tab in front seen, so a check
+        // rolled up from another tab would stay on the row being read.
+        let now = Utc::now();
+        let mut state = AppState::new();
+        let mut sibling = chat("sibling", 1, Some(2));
+        sibling.thread_id = Some("root".into());
+        state.apply_chats(vec![chat("root", 0, None), sibling]);
+        assert!(state.chats.iter().any(|c| c.id == "sibling" && c.unseen()));
+        assert_eq!(state.sidebar_chats(now, None)[0].0, ChatIndicator::Idle);
     }
 
     #[test]

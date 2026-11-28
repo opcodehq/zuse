@@ -41,6 +41,13 @@ pub fn workspace_locator(
     Some(format!("{:x}", hash.finalize())[..16].to_string())
 }
 
+pub(crate) fn cloud_workspace_locator(account: &str, organization: Option<&str>) -> String {
+    let mut hash = Sha256::new();
+    let identity = organization.map_or_else(|| format!("user:{account}"), |id| format!("org:{id}"));
+    hash.update(format!("cloud\0{identity}"));
+    format!("{:x}", hash.finalize())[..16].to_string()
+}
+
 pub fn zuse_conversation_link(chat_id: &str, workspace: &str) -> String {
     format!(
         "zuse://open/chat/{}?workspace={}",

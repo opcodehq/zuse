@@ -32,6 +32,7 @@ use crate::{Repos, WorkspaceHost, WorkspaceSearch};
 
 mod archived;
 mod mutations;
+mod skill_catalog;
 
 const MAX_RELATIVE_PATH_BYTES: usize = 4096;
 const MAX_RELATIVE_PATH_COMPONENTS: usize = 256;

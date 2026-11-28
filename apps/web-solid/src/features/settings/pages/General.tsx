@@ -1,5 +1,6 @@
 // General: account, language, theme, notifications, thread naming, worktrees and the engine version
 // (crates/ui/src/settings/general.rs and the groups shortcuts.rs composes around it).
+import { useUsageResume } from "@/features/composer/usageResume";
 import { rpc } from "@/core/connection";
 import { M } from "@/core/methods";
 import { state } from "@/core/store";
@@ -31,6 +32,7 @@ export function General() {
         <Theme />
         <Notices />
         <Analytics />
+        <UsageResume />
         <ThreadNaming />
         <Worktrees />
         <About />
@@ -657,4 +659,14 @@ function About() {
       )}
     </Show>
   );
+}
+
+function UsageResume() {
+  const recovery = useUsageResume(() => null);
+  return <Group title="Usage limits" description="Continue interrupted work when your provider's usage limit resets.">
+    <Card><Row title="Auto-resume after usage limits" description="Resume chats on this engine at the reset time supplied by Claude Code or Codex. Schedules survive an app restart.">
+      <Switch checked={recovery.status()?.enabled ?? false} label="Auto-resume after usage limits" disabled={!recovery.status() || recovery.busy()} onChange={(enabled) => void recovery.setEnabled(enabled)} />
+    </Row></Card>
+    <Show when={recovery.error()}>{(error) => <ErrorStrip>{error()}</ErrorStrip>}</Show>
+  </Group>;
 }
