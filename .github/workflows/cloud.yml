@@ -94,7 +94,7 @@ concurrency:
 # slowest job rather than the sum of all of them.
 jobs:
   checks:
-    runs-on: boat
+    runs-on: boat-large
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -137,7 +137,7 @@ jobs:
       - run: node --test scripts/cloud-provider-benchmark.test.mjs
 
   cloud:
-    runs-on: boat
+    runs-on: boat-large
     env:
       CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_PROFILE_TEST_DEBUG: 0
@@ -197,7 +197,7 @@ jobs:
   # guest runtimes listed in infra/cloud/runtime-compat.json. No-op while the
   # list is empty; non-blocking until it is populated and green.
   compat-releases:
-    runs-on: boat
+    runs-on: boat-large
     outputs:
       count: ${{ steps.list.outputs.count }}
       matrix: ${{ steps.list.outputs.matrix }}
@@ -220,7 +220,7 @@ jobs:
     needs: compat-releases
     if: needs.compat-releases.outputs.count != '0'
     continue-on-error: true
-    runs-on: boat
+    runs-on: boat-large
     # Old runtimes are read from the staging release bucket.
     environment: staging
     strategy:

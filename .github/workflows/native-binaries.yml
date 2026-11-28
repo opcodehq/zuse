@@ -30,7 +30,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: boat
+          - os: boat-large
             platform: linux
             arch: x86_64
             target: x86_64-unknown-linux-gnu

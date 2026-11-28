@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   candidates:
-    runs-on: boat
+    runs-on: boat-large
     steps:
       - uses: actions/checkout@v4
       - run: python3 infra/cloud/tests/harness-release.py

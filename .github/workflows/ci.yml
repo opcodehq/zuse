@@ -41,7 +41,7 @@ jobs:
   # A pull request runs the macOS check only when it touches desktop code or a
   # file with macOS-specific paths; main and nightly always run it.
   platforms:
-    runs-on: boat
+    runs-on: boat-large
     permissions:
       contents: read
       pull-requests: read
@@ -54,20 +54,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
         run: |
-          native='["boat","macos-latest"]'
+          native='["boat-large","macos-latest"]'
           # A diff GitHub refuses to list, or a deleted file, keeps macOS on.
           if [ -n "$PR" ] && changed=$(gh pr diff "$PR" --name-only); then
             desktop='^(apps/desktop/|crates/(ui|text|viewport|preview|simulator|update)/|dist/macos/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|\.github/workflows/ci\.yml$)'
             missing=$(printf '%s\n' "$changed" | while IFS= read -r file; do if [ ! -f "$file" ]; then printf '%s\n' "$file"; fi; done)
             if [ -z "$missing" ] && ! grep -qE "$desktop" <<<"$changed" && ! xargs -d '\n' grep -qE 'target_os *= *"macos"' <<<"$changed"; then
-              native='["boat"]'
+              native='["boat-large"]'
             fi
           fi
           echo "native=$native" >> "$GITHUB_OUTPUT"
 
   # Everything that needs no Rust build: formatting, scripts, JS tests.
   checks:
-    runs-on: boat
+    runs-on: boat-large
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -92,7 +92,7 @@ jobs:
         run: npm ci && npm test
 
   rust:
-    runs-on: boat
+    runs-on: boat-large
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -142,7 +142,7 @@ jobs:
         run: npm ci && npm run test:engine
 
   harness-evaluation:
-    runs-on: boat
+    runs-on: boat-large
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -232,7 +232,7 @@ jobs:
           PY
 
   browser:
-    runs-on: boat
+    runs-on: boat-large
     env:
       HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
       HUGEICONS_SOLID_VERSION: ${{ vars.HUGEICONS_SOLID_VERSION }}
