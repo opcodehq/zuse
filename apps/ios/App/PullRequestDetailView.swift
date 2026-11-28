@@ -22,6 +22,9 @@ enum PullRequestTab: String, CaseIterable, Identifiable {
 struct PullRequestDetailView: View {
   let store: PullRequestStore
   let link: PullRequestLink
+  /// Shown as a pane beside a chat: the navigation bar belongs to the chat, so the title and
+  /// menu stay out of it and checks open in a sheet.
+  var embedded = false
   @State private var model: PullRequestDetailModel
   @State private var tab: PullRequestTab = .conversation
   @State private var showsMerge = false
@@ -34,9 +37,10 @@ struct PullRequestDetailView: View {
   @State private var barHeight: CGFloat = 120
   @FocusState private var composerFocused: Bool
 
-  init(store: PullRequestStore, link: PullRequestLink) {
+  init(store: PullRequestStore, link: PullRequestLink, embedded: Bool = false) {
     self.store = store
     self.link = link
+    self.embedded = embedded
     _model = State(initialValue: PullRequestDetailModel(link: link, store: store))
   }
 
@@ -57,14 +61,7 @@ struct PullRequestDetailView: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(AppTheme.surface)
-    .navigationTitle(link.shortLabel)
-    .compactNavigationTitle()
-    .toolbar {
-      ToolbarItem(placement: .principal) {
-        Text(link.shortLabel).font(.system(size: 17, weight: .semibold)).monospacedDigit()
-      }
-      ToolbarItem(placement: .primaryAction) { moreMenu }
-    }
+    .modifier(PullRequestHeader(title: link.shortLabel, enabled: !embedded) { moreMenu })
     .task { await model.load() }
     .task { await model.watch() }
     .task(id: store.previewRevision) {
@@ -82,9 +79,10 @@ struct PullRequestDetailView: View {
         }
       }
     }
-    .navigationDestination(isPresented: $showsChecks) {
-      if let detail = model.detail { PullRequestChecksView(detail: detail) }
-    }
+    .modifier(
+      ChecksDestination(presented: $showsChecks, asSheet: embedded) {
+        if let detail = model.detail { PullRequestChecksView(detail: detail) }
+      })
   }
 
   // MARK: Page
@@ -545,5 +543,48 @@ struct PullRequestDetailSkeleton: View {
   private func bar(width: CGFloat, height: CGFloat) -> some View {
     RoundedRectangle(cornerRadius: height / 2, style: .continuous)
       .fill(Color.primary.opacity(0.07)).frame(maxWidth: width).frame(height: height)
+  }
+}
+
+/// The pull request's title and menu in the navigation bar, unless it is a pane in a chat.
+private struct PullRequestHeader<Menu: View>: ViewModifier {
+  let title: String
+  let enabled: Bool
+  @ViewBuilder let menu: Menu
+  func body(content: Content) -> some View {
+    if enabled {
+      content
+        .navigationTitle(title)
+        .compactNavigationTitle()
+        .toolbar {
+          ToolbarItem(placement: .principal) {
+            Text(title).font(.system(size: 17, weight: .semibold)).monospacedDigit()
+          }
+          ToolbarItem(placement: .primaryAction) { menu }
+        }
+    } else {
+      content
+    }
+  }
+}
+
+/// Checks push onto the pull request's stack, or open in a sheet from a chat's pane.
+private struct ChecksDestination<Checks: View>: ViewModifier {
+  @Binding var presented: Bool
+  let asSheet: Bool
+  @ViewBuilder let checks: Checks
+  func body(content: Content) -> some View {
+    if asSheet {
+      content.sheet(isPresented: $presented) {
+        NavigationStack {
+          checks.toolbar {
+            ToolbarItem(placement: .confirmationAction) { Button("Done") { presented = false } }
+          }
+        }
+        .nativeSheetSize(width: 620, height: 640)
+      }
+    } else {
+      content.navigationDestination(isPresented: $presented) { checks }
+    }
   }
 }

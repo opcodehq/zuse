@@ -56,6 +56,8 @@ struct WorkspaceView: View {
   @State private var linkedPullRequestPath: [PullRequestRoute] = []
   /// The open chat's pull request, shown beside its branch in the header.
   @State private var chatPullRequest: PullRequestCheckoutSummary?
+  /// Each chat's opened panes.
+  @State private var panes = ChatPaneStore()
   @Environment(\.openURL) private var openURL
   /// The Chats tab: its list selection, its columns and the new chat page.
   @State private var selection: SessionRow?
@@ -233,6 +235,9 @@ struct WorkspaceView: View {
             if case .zapper(let id) = target { push(.overview(id)) }
           },
           showChanges: { showDiff = true },
+          showPanes: {
+            if let session = workspace.selectedSession { togglePaneOverview(session) }
+          },
           left: {
             switch target {
             case .chat: closeChat()
@@ -963,6 +968,145 @@ struct WorkspaceView: View {
     chatPage(session).hidesTabBar()
   }
   @ViewBuilder private func chatPage(_ session: SessionRow) -> some View {
+    let deck = panes.deck(session.id)
+    ChatPaneHost(context: paneContext(session)) {
+      chatBody(session)
+    }
+    .navigationTitle(session.title.isEmpty ? "Chat" : session.title)
+    .compactNavigationTitle()
+    .hidesTabBarWhenCompact()
+    // Each stack shows its own chat; the one transcript follows whichever is on screen.
+    .onAppear {
+      if workspace.selectedSession?.id != session.id { workspace.selectSession(session) }
+    }
+    // Moving off the conversation puts the keyboard away.
+    .onChange(of: deck.focus) { _, focus in
+      if focus != ChatPaneDeck.mainID { composerFocused = false }
+    }
+    #if DEBUG
+      // `--draft=<text>` writes a draft and `--focus-composer` raises the keyboard, for
+      // screenshots of a chat mid-message.
+      .task {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard
+          arguments.contains("--focus-composer")
+            || arguments.contains(where: {
+              $0.hasPrefix("--draft=")
+            })
+        else { return }
+        try? await Task.sleep(for: .milliseconds(900))
+        if let draft = arguments.first(where: { $0.hasPrefix("--draft=") })?.dropFirst(8) {
+          workspace.draft = String(draft)
+        }
+        // The detail column may still be settling; ask again until the field takes it.
+        for _ in 0..<8 where arguments.contains("--focus-composer") && !composerFocused {
+          composerFocused = true
+          try? await Task.sleep(for: .milliseconds(400))
+        }
+      }
+    #endif
+    .toolbar { chatToolbar(session, deck: deck) }
+  }
+  /// What a chat's panes can reach on this page.
+  private func paneContext(_ session: SessionRow) -> ChatPaneContext {
+    let zapper = coordinatedBy(session)
+    var pullRequest = chatPullRequest
+    var preview = false
+    #if DEBUG
+      preview =
+        ProcessInfo.processInfo.arguments.contains("--panes-preview") && workspace.rpc == nil
+      if preview && pullRequest == nil { pullRequest = PanePreview.pullRequest }
+    #endif
+    return ChatPaneContext(
+      workspace: workspace, store: panes, session: session, zapper: zapper,
+      pullRequest: workspace.selectedSession?.id == session.id ? pullRequest : nil,
+      showsChanges: workspace.rpc != nil && workspace.connectionState == "Connected"
+        && !workspace.zappers.keepsChat(session.id),
+      preview: preview, push: push,
+      openChat: { thread in
+        if zapper != nil || workspace.zappers.keepsChat(session.id) {
+          push(.chat(thread))
+        } else {
+          openChat(thread)
+        }
+      },
+      closeZapper: closeZapper)
+  }
+  /// Zooms a chat's pages out to the overview, or back to the page in front.
+  private func togglePaneOverview(_ session: SessionRow) {
+    withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(duration: 0.42, bounce: 0.12)) {
+      panes.setOverview(session.id, !panes.isOverview(session.id))
+    }
+  }
+  @ToolbarContentBuilder private func chatToolbar(_ session: SessionRow, deck: ChatPaneDeck)
+    -> some ToolbarContent
+  {
+    if let zapper = coordinatedBy(session) {
+      // A Zapper's conversation: its face and name lead to the overview.
+      ToolbarItem(placement: .principal) {
+        VStack(spacing: 3) {
+          Button {
+            push(.overview(zapper.id))
+          } label: {
+            HStack(spacing: 8) {
+              ZapperTile(zapper: zapper, size: 26)
+              Text(zapper.config.name).font(.headline).foregroundStyle(.primary).lineLimit(1)
+            }
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel("\(zapper.config.name) overview")
+          ChatPageDots(count: deck.pageIDs.count, index: deck.focusIndex) {
+            togglePaneOverview(session)
+          }
+        }
+      }
+      ToolbarItem(placement: .primaryAction) {
+        Button {
+          chatActions = .zapper(zapper.id)
+        } label: {
+          Image(systemName: "ellipsis")
+            .overlay(alignment: .topTrailing) {
+              if zapper.needsYouCount > 0 {
+                Circle().fill(Color.orange).frame(width: 8, height: 8).offset(x: 6, y: -6)
+              }
+            }
+        }
+        .tint(.primary)
+        .accessibilityLabel(
+          zapper.needsYouCount > 0
+            ? "More, \(zapper.needsYouCount) waiting for you" : "More"
+        )
+        .accessibilityIdentifier("chat-actions")
+      }
+    } else {
+      ToolbarItem(placement: .principal) {
+        ChatHeaderTitle(
+          title: session.title.isEmpty ? "Chat" : session.title,
+          subtitle: [
+            workspace.projects.first { $0.id == session.projectId }?.name, branchName,
+          ].compactMap { $0 }.joined(separator: " · "),
+          pullRequest: chatPullRequest,
+          openPullRequest: { openPullRequestLink($0.url) },
+          pages: (deck.pageIDs.count, deck.focusIndex),
+          openPanes: { togglePaneOverview(session) })
+      }
+      if !isCompact && !workspace.zappers.keepsChat(session.id) {
+        ToolbarItem(placement: .primaryAction) {
+          Button("Changes", systemImage: "plusminus") { showDiff.toggle() }
+            .tint(.primary).disabled(workspace.connectionState != "Connected")
+        }
+      }
+      if !workspace.zappers.keepsChat(session.id) {
+        ToolbarItem(placement: .primaryAction) {
+          Button("More", systemImage: "ellipsis") { chatActions = .chat(session) }
+            .tint(.primary)
+            .accessibilityIdentifier("chat-actions")
+        }
+      }
+    }
+  }
+  /// The conversation itself: transcript, pending sends, questions and the composer.
+  @ViewBuilder private func chatBody(_ session: SessionRow) -> some View {
     VStack(spacing: 0) {
       if workspace.transcript.olderSequence != nil {
         Button(workspace.paging ? "Loading…" : "Load earlier messages") {
@@ -1047,93 +1191,6 @@ struct WorkspaceView: View {
       }
     }
     .onPreferenceChange(ComposerHeightKey.self) { composerHeight = $0 }
-    .navigationTitle(session.title.isEmpty ? "Chat" : session.title)
-    .compactNavigationTitle()
-    .hidesTabBarWhenCompact()
-    // Each stack shows its own chat; the one transcript follows whichever is on screen.
-    .onAppear {
-      if workspace.selectedSession?.id != session.id { workspace.selectSession(session) }
-    }
-    #if DEBUG
-      // `--draft=<text>` writes a draft and `--focus-composer` raises the keyboard, for
-      // screenshots of a chat mid-message.
-      .task {
-        let arguments = ProcessInfo.processInfo.arguments
-        guard
-          arguments.contains("--focus-composer")
-            || arguments.contains(where: {
-              $0.hasPrefix("--draft=")
-            })
-        else { return }
-        try? await Task.sleep(for: .milliseconds(900))
-        if let draft = arguments.first(where: { $0.hasPrefix("--draft=") })?.dropFirst(8) {
-          workspace.draft = String(draft)
-        }
-        // The detail column may still be settling; ask again until the field takes it.
-        for _ in 0..<8 where arguments.contains("--focus-composer") && !composerFocused {
-          composerFocused = true
-          try? await Task.sleep(for: .milliseconds(400))
-        }
-      }
-    #endif
-    .toolbar {
-      if let zapper = coordinatedBy(session) {
-        // A Zapper's conversation: its face and name lead to the overview.
-        ToolbarItem(placement: .principal) {
-          Button {
-            push(.overview(zapper.id))
-          } label: {
-            HStack(spacing: 8) {
-              ZapperTile(zapper: zapper, size: 28)
-              Text(zapper.config.name).font(.headline).foregroundStyle(.primary).lineLimit(1)
-            }
-          }
-          .buttonStyle(.plain)
-          .accessibilityLabel("\(zapper.config.name) overview")
-        }
-        ToolbarItem(placement: .primaryAction) {
-          Button {
-            chatActions = .zapper(zapper.id)
-          } label: {
-            Image(systemName: "ellipsis")
-              .overlay(alignment: .topTrailing) {
-                if zapper.needsYouCount > 0 {
-                  Circle().fill(Color.orange).frame(width: 8, height: 8).offset(x: 6, y: -6)
-                }
-              }
-          }
-          .tint(.primary)
-          .accessibilityLabel(
-            zapper.needsYouCount > 0
-              ? "More, \(zapper.needsYouCount) waiting for you" : "More"
-          )
-          .accessibilityIdentifier("chat-actions")
-        }
-      } else {
-        ToolbarItem(placement: .principal) {
-          ChatHeaderTitle(
-            title: session.title.isEmpty ? "Chat" : session.title,
-            subtitle: [
-              workspace.projects.first { $0.id == session.projectId }?.name, branchName,
-            ].compactMap { $0 }.joined(separator: " · "),
-            pullRequest: chatPullRequest,
-            openPullRequest: { openPullRequestLink($0.url) })
-        }
-        if !isCompact && !workspace.zappers.keepsChat(session.id) {
-          ToolbarItem(placement: .primaryAction) {
-            Button("Changes", systemImage: "plusminus") { showDiff.toggle() }
-              .tint(.primary).disabled(workspace.connectionState != "Connected")
-          }
-        }
-        if !workspace.zappers.keepsChat(session.id) {
-          ToolbarItem(placement: .primaryAction) {
-            Button("More", systemImage: "ellipsis") { chatActions = .chat(session) }
-              .tint(.primary)
-              .accessibilityIdentifier("chat-actions")
-          }
-        }
-      }
-    }
   }
   /// The Zapper whose coordinator conversation this is, if any.
   private func coordinatedBy(_ session: SessionRow) -> Zapper? {
@@ -1366,6 +1423,9 @@ private struct ChatHeaderTitle: View {
   let subtitle: String
   var pullRequest: PullRequestCheckoutSummary?
   var openPullRequest: (PullRequestCheckoutSummary) -> Void = { _ in }
+  /// How many pages the chat has and which is in front, drawn as dots.
+  var pages: (count: Int, index: Int)?
+  var openPanes: (() -> Void)?
   var body: some View {
     VStack(spacing: 1) {
       Text(title).font(.system(size: 17, weight: .semibold)).lineLimit(1)
@@ -1392,9 +1452,12 @@ private struct ChatHeaderTitle: View {
           }
         }
       }
+      if let pages {
+        ChatPageDots(count: pages.count, index: pages.index, action: openPanes).padding(.top, 2)
+      }
     }
     .frame(maxWidth: 240)
-    .accessibilityElement(children: pullRequest == nil ? .combine : .contain)
+    .accessibilityElement(children: pullRequest == nil && openPanes == nil ? .combine : .contain)
     .accessibilityAddTraits(.isHeader)
   }
 }
