@@ -139,8 +139,10 @@ try {
   });
 
   await step("merge-refusal", async () => {
-    await page.press('#ws-surface-pullRequest .ws-pr-merge button');
-    await pickMenu("Squash and merge");
+    await page.press('#ws-surface-pullRequest .ws-pr-merge-more');
+    await page.waitFor("!!document.querySelector('.ws-merge-menu')");
+    await page.eval(`[...document.querySelectorAll(".ws-merge-menu .ws-merge-row")].find((b) => b.textContent.startsWith("Force merge")).click()`);
+    await page.eval(`[...document.querySelectorAll(".ws-merge-confirm button")].find((b) => b.textContent === "Force merge").click()`);
     await page.waitFor(`/blocked by a failing/.test(document.querySelector("#ws-surface-pullRequest")?.textContent ?? "")`, 5000);
     await shot("merge-refused");
     const l = await log();
@@ -152,7 +154,7 @@ try {
     await pickMenu("Convert to draft");
     await page.waitFor(`document.querySelector("#ws-surface-pullRequest .ws-pr-state")?.textContent === "Draft"`, 5000);
     await shot("draft");
-    await page.eval(`[...document.querySelectorAll("#ws-surface-pullRequest .ws-pr-merge button")].find((b) => b.textContent.includes("Ready for review")).click()`);
+    await page.eval(`document.querySelector("#ws-surface-pullRequest .ws-pr-merge-main").click()`);
     await page.waitFor(`document.querySelector("#ws-surface-pullRequest .ws-pr-state")?.textContent === "Open"`, 5000);
   });
 

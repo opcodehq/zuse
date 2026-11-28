@@ -1957,6 +1957,7 @@ fn forwardable(method: &str) -> bool {
             | methods::WATCH_PR_WATCHES
             | methods::GET_CHANGE_REQUEST_DIFF
             | methods::POST_CHANGE_REQUEST_COMMENT
+            | methods::REPLY_CHANGE_REQUEST_THREAD
             | methods::UPDATE_CHANGE_REQUEST
             | methods::UPDATE_CHANGE_REQUEST_AT_HEAD
             | methods::GET_CHECKOUT_DIFF
@@ -5266,6 +5267,27 @@ impl EngineRpc {
                 let comment = self
                     .github
                     .post_comment(&p.url, &p.body)
+                    .await
+                    .map_err(change_request_rpc_error)?;
+                RpcReply::value(&comment)
+            }
+            methods::REPLY_CHANGE_REQUEST_THREAD => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct P {
+                    url: String,
+                    thread_id: String,
+                    body: String,
+                }
+                let p: P = parse_params(params)?;
+                if p.body.trim().is_empty() || p.body.len() > 60_000 {
+                    return Err(RpcError::BadParams(
+                        "Comment must contain 1–60000 bytes".into(),
+                    ));
+                }
+                let comment = self
+                    .github
+                    .reply_to_thread(&p.url, &p.thread_id, &p.body)
                     .await
                     .map_err(change_request_rpc_error)?;
                 RpcReply::value(&comment)

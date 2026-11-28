@@ -892,6 +892,77 @@ impl GitHubCli {
         })
     }
 
+    pub async fn reply_to_thread(
+        &self,
+        url: &str,
+        thread_id: &str,
+        body: &str,
+    ) -> Result<zuse_protocol::ChangeRequestComment, ChangeRequestError> {
+        let url = validated_pull_request_url(url)?;
+        if body.trim().is_empty() || body.len() > 60_000 {
+            return Err(ChangeRequestError::Decode);
+        }
+        if thread_id.is_empty()
+            || thread_id.len() > 200
+            || !thread_id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'=' | b'-'))
+        {
+            return Err(ChangeRequestError::Decode);
+        }
+        let query = "mutation($id:ID!,$body:String!){ addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$id, body:$body}) { comment { id url body createdAt author { login avatarUrl(size: 64) } } } }";
+        let output = self
+            .runner
+            .run(ProcessRequest {
+                args: vec!["api".into(), "graphql".into(), "--input".into(), "-".into()],
+                stdin: Some(
+                    serde_json::to_vec(&serde_json::json!({
+                        "query": query,
+                        "variables": { "id": thread_id, "body": body },
+                    }))
+                    .map_err(|_| ChangeRequestError::Decode)?,
+                ),
+                ..github_request()
+            })
+            .await;
+        let mut cache = self.pr_cache.lock().await;
+        cache.entries.retain(|entry| !entry.0.contains(&url));
+        cache.in_flight.retain(|entry, _| !entry.contains(&url));
+        drop(cache);
+        self.invalidate_watches();
+        let output = output.map_err(classify_run_error)?;
+        if !output.success {
+            return Err(classify_github_failure(&output.stderr));
+        }
+        if output.stdout_truncated {
+            return Err(ChangeRequestError::Decode);
+        }
+        let value: serde_json::Value =
+            serde_json::from_slice(&output.stdout).map_err(|_| ChangeRequestError::Decode)?;
+        if value.get("errors").is_some() {
+            return Err(ChangeRequestError::Decode);
+        }
+        let comment = &value["data"]["addPullRequestReviewThreadReply"]["comment"];
+        Ok(zuse_protocol::ChangeRequestComment {
+            id: comment["id"].as_str().unwrap_or_default().into(),
+            url: comment["url"].as_str().unwrap_or_default().into(),
+            viewer_did_author: true,
+            body: comment["body"]
+                .as_str()
+                .ok_or(ChangeRequestError::Decode)?
+                .into(),
+            author: zuse_protocol::ChangeRequestActor {
+                login: comment["author"]["login"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .into(),
+                avatar_url: comment["author"]["avatarUrl"].as_str().map(str::to_owned),
+            },
+            created_at: comment["createdAt"].as_str().unwrap_or_default().into(),
+            ..Default::default()
+        })
+    }
+
     async fn fetch_revision_diff(&self, url: &str, head: &str, base: &str) -> PrResult {
         let _slot = self
             .read_slots
@@ -940,7 +1011,12 @@ impl GitHubCli {
             };
             let mut detail: zuse_protocol::ChangeRequestDetail =
                 serde_json::from_value(value).map_err(|_| ChangeRequestError::Decode)?;
-            detail.review_threads = self.fetch_review_threads(&url).await.ok();
+            if let Ok((threads, merge_methods)) =
+                self.fetch_review_threads_and_merge_methods(&url).await
+            {
+                detail.review_threads = Some(threads);
+                detail.merge_methods = merge_methods;
+            }
             return serde_json::to_value(detail).map_err(|_| ChangeRequestError::Decode);
         }
         self.fetch_summary_data(&url, diff).await
@@ -3514,6 +3590,124 @@ mod tests {
             .unwrap();
         assert!(output.success);
         assert_eq!(output.stdout, body.as_bytes());
+    }
+
+    #[tokio::test]
+    async fn pr_review_thread_reply_sends_thread_id_and_invalidates_detail() {
+        let body = "Agreed, `$(do-not-run)` fixed";
+        let runner = FakeProcessRunner::with_responses([command_success(
+            serde_json::to_vec(&serde_json::json!({"data": {"addPullRequestReviewThreadReply": {"comment": {
+                "id": "PRRC_1", "url": "https://github.com/a/b/pull/1#discussion_r2", "body": body,
+                "createdAt": "2026-11-28T10:00:00Z",
+                "author": {"login": "octocat", "avatarUrl": "https://avatars.test/o"}
+            }}}}))
+            .unwrap(),
+        )]);
+        let github = GitHubCli::with_runner(runner.clone());
+        github.pr_cache.lock().await.entries.push((
+            "false:https://github.com/a/b/pull/1::".into(),
+            Instant::now(),
+            Ok(serde_json::json!({})),
+        ));
+        let comment = github
+            .reply_to_thread("https://github.com/a/b/pull/1", "PRRT_kwDO-a_b=", body)
+            .await
+            .unwrap();
+        assert_eq!(comment.id, "PRRC_1");
+        assert_eq!(comment.url, "https://github.com/a/b/pull/1#discussion_r2");
+        assert_eq!(comment.body, body);
+        assert_eq!(comment.author.login, "octocat");
+        assert_eq!(
+            comment.author.avatar_url.as_deref(),
+            Some("https://avatars.test/o")
+        );
+        assert_eq!(comment.created_at, "2026-11-28T10:00:00Z");
+        assert!(comment.viewer_did_author);
+        assert!(github.pr_cache.lock().await.entries.is_empty());
+        let requests = runner.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].args, ["api", "graphql", "--input", "-"]);
+        let sent: serde_json::Value =
+            serde_json::from_slice(requests[0].stdin.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            sent["variables"],
+            serde_json::json!({"id": "PRRT_kwDO-a_b=", "body": body})
+        );
+        assert!(
+            sent["query"]
+                .as_str()
+                .unwrap()
+                .contains("addPullRequestReviewThreadReply")
+        );
+    }
+
+    #[tokio::test]
+    async fn pr_review_thread_reply_rejects_invalid_inputs_and_graphql_errors() {
+        let runner = FakeProcessRunner::with_responses([command_success(
+            br#"{"errors":[{"message":"Could not resolve to a node"}]}"#.to_vec(),
+        )]);
+        let github = GitHubCli::with_runner(runner.clone());
+        let url = "https://github.com/a/b/pull/1";
+        let too_long = "a".repeat(201);
+        for (url, thread, body) in [
+            ("https://evil.test/a/b/pull/1", "PRRT_1", "hello"),
+            (url, "", "hello"),
+            (url, "PRRT 1", "hello"),
+            (url, "PRRT_1\"}", "hello"),
+            (url, too_long.as_str(), "hello"),
+            (url, "PRRT_1", "  "),
+        ] {
+            assert!(github.reply_to_thread(url, thread, body).await.is_err());
+        }
+        assert!(
+            github
+                .reply_to_thread(url, "PRRT_1", &"x".repeat(60_001))
+                .await
+                .is_err()
+        );
+        assert!(runner.requests().is_empty());
+        assert!(
+            github
+                .reply_to_thread(url, "PRRT_1", "hello")
+                .await
+                .is_err()
+        );
+        assert_eq!(runner.requests().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn pr_review_threads_read_allowed_merge_methods() {
+        let runner = FakeProcessRunner::with_responses([
+            command_success(br#"{"data":{"repository":{"squashMergeAllowed":true,"mergeCommitAllowed":false,"rebaseMergeAllowed":true,"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}"#.to_vec()),
+            command_success(br#"{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}"#.to_vec()),
+        ]);
+        let github = GitHubCli::with_runner(runner.clone());
+        let url = "https://github.com/a/b/pull/1";
+        let (threads, methods) = github
+            .fetch_review_threads_and_merge_methods(url)
+            .await
+            .unwrap();
+        assert!(threads.is_empty());
+        assert_eq!(
+            methods,
+            Some(vec![
+                zuse_protocol::ChangeRequestMergeMethod::Squash,
+                zuse_protocol::ChangeRequestMergeMethod::Rebase,
+            ])
+        );
+        let sent: serde_json::Value =
+            serde_json::from_slice(runner.requests()[0].stdin.as_deref().unwrap()).unwrap();
+        assert!(
+            sent["query"]
+                .as_str()
+                .unwrap()
+                .contains("squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed")
+        );
+        let (_, methods) = github
+            .fetch_review_threads_and_merge_methods(url)
+            .await
+            .unwrap();
+        assert_eq!(methods, None, "older fixtures without the fields");
     }
 
     #[tokio::test]

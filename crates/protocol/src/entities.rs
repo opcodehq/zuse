@@ -1240,6 +1240,10 @@ pub struct ChangeRequestDetail {
     /// reviews are the viewer's. Absent from older engines.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub viewer_login: Option<String>,
+    /// Merge methods the repository allows, in squash, merge, rebase order.
+    /// Absent from older engines or when unreadable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merge_methods: Option<Vec<ChangeRequestMergeMethod>>,
 }
 
 impl ChangeRequestDetail {

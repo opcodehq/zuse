@@ -205,6 +205,7 @@ export const M = {
   REMOVE_ACCOUNT_COMPUTER: "RemoveAccountComputer",
   REMOVE_QUEUED_MESSAGE: "RemoveQueuedMessage",
   RENEW_QUEUED_MESSAGE_EDIT: "RenewQueuedMessageEdit",
+  REPLY_CHANGE_REQUEST_THREAD: "ReplyChangeRequestThread",
   REPORT_VOICE_MEDIA_V2: "ReportVoiceMediaV2",
   REQUEST_PRIVATE_OPERATION: "RequestPrivateOperation",
   RESIZE_TERMINAL: "ResizeTerminal",

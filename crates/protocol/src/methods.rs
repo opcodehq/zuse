@@ -227,6 +227,10 @@ pub const LIST_CHANGE_REQUEST_PAGE: &str = "ListChangeRequestPage";
 pub const GET_CHANGE_REQUEST_REPOSITORY: &str = "GetChangeRequestRepository";
 pub const GET_CHANGE_REQUEST: &str = "GetChangeRequest";
 pub const POST_CHANGE_REQUEST_COMMENT: &str = "PostChangeRequestComment";
+/// Reply within an inline review thread. `{url, threadId, body}` → the
+/// posted comment. Older hosts reject this method rather than posting a
+/// top-level comment.
+pub const REPLY_CHANGE_REQUEST_THREAD: &str = "ReplyChangeRequestThread";
 /// Merge, toggle auto-merge, or change a pull request's status, on the
 /// device whose `gh` acts for the user. `{url, update}` →
 /// `{refusal?: string}`: GitHub's reason when it declined.

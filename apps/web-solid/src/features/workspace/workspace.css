@@ -374,6 +374,21 @@
 .ws-pr-scroll { flex: 1; min-height: 0; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 16px; }
 .ws-pr-merge { display: flex; align-items: center; }
 .ws-pr-merge .btn { gap: 4px; }
+.ws-pr-merge-main { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.ws-pr-merge-main:only-child { border-radius: var(--radius-sm); }
+.ws-pr-merge-more { padding: 0 6px; border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: 1px; }
+.ws-merge-menu { width: 300px; display: flex; flex-direction: column; }
+.ws-merge-comment { width: 100%; box-sizing: border-box; min-height: 64px; resize: vertical; margin-bottom: 6px; font: inherit; font-size: var(--text-sm); }
+.ws-merge-label { padding: 6px 8px 2px; font-size: var(--text-xs); color: var(--text-faint); }
+.ws-merge-row {
+  width: 100%; display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 0; border-radius: var(--radius-sm);
+  background: none; color: var(--text); font: inherit; font-size: var(--text-sm); text-align: left; cursor: pointer;
+}
+.ws-merge-row:hover, .ws-merge-row:focus-visible { background: var(--hover); outline: none; }
+.ws-merge-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.ws-merge-detail { font-size: var(--text-xs); color: var(--text-muted); }
+.ws-merge-confirm { display: flex; flex-direction: column; gap: 8px; padding: 6px 8px; }
+.ws-fb-reply { display: flex; flex-direction: column; gap: 6px; }
 .ws-pr-props { margin: -6px 0 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: 16px; font-size: var(--text-xs); }
 .ws-pr-prop { display: contents; }
 .ws-pr-prop dt { display: flex; align-items: center; gap: 8px; height: 24px; color: var(--text-muted); }

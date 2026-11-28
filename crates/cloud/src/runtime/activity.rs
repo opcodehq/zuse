@@ -62,6 +62,7 @@ pub(crate) fn meaningful_rpc(payload: &zuse_protocol::cloud_gateway::Payload) ->
                             | m::FETCH_ALL
                             | m::RUN_PROJECT_ACTION
                             | m::POST_CHANGE_REQUEST_COMMENT
+                            | m::REPLY_CHANGE_REQUEST_THREAD
                             | m::UPDATE_CHANGE_REQUEST
                     )
                 })

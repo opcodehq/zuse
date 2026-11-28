@@ -250,6 +250,8 @@ export interface ChangeRequestDetail {
   statusCheckRollup: ChangeRequestCheck[];
   autoMergeRequest?: { mergeMethod: string } | null;
   viewerLogin?: string | null;
+  /** The repository's allowed merge methods; absent from older engines. */
+  mergeMethods?: ("squash" | "merge" | "rebase")[];
 }
 
 export type CiState = "noChecks" | "pending" | "passed" | "skipped" | "failed" | "unknown";

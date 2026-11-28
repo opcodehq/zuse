@@ -85,6 +85,41 @@ export interface MenuItem {
   disabled?: boolean;
   onSelect?: () => void;
   separator?: boolean;
+  /** Right-aligned secondary text, such as a shortcut. */
+  hint?: string;
+  /** Opens a submenu instead of selecting. */
+  children?: MenuItem[];
+}
+
+function MenuItems(props: { items: MenuItem[] }) {
+  return (
+    <For each={props.items}>
+      {(item) =>
+        item.separator ? (
+          <DropdownMenu.Separator class="menu-sep" />
+        ) : item.children ? (
+          <DropdownMenu.Sub gutter={2}>
+            <DropdownMenu.SubTrigger class="menu-item" disabled={item.disabled}>
+              <Show when={item.icon}>{(name) => <Icon name={name()} size={14} />}</Show>
+              {item.label}
+              <Icon name="alt-arrow-right" size={12} class="menu-hint" />
+            </DropdownMenu.SubTrigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.SubContent class="menu">
+                <MenuItems items={item.children} />
+              </DropdownMenu.SubContent>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Sub>
+        ) : (
+          <DropdownMenu.Item class="menu-item" data-danger={item.danger ? "true" : undefined} disabled={item.disabled} onSelect={() => item.onSelect?.()}>
+            <Show when={item.icon}>{(name) => <Icon name={name()} size={14} />}</Show>
+            {item.label}
+            <Show when={item.hint}><span class="menu-hint">{item.hint}</span></Show>
+          </DropdownMenu.Item>
+        )
+      }
+    </For>
+  );
 }
 
 /** A dropdown menu attached to any trigger element. */
@@ -95,18 +130,7 @@ export function Menu(props: { trigger: (triggerProps: Record<string, unknown>) =
       <DropdownMenu.Trigger as={(triggerProps: Record<string, unknown>) => props.trigger(triggerProps)} />
       <DropdownMenu.Portal>
         <DropdownMenu.Content class="menu">
-          <For each={props.items}>
-            {(item) =>
-              item.separator ? (
-                <DropdownMenu.Separator class="menu-sep" />
-              ) : (
-                <DropdownMenu.Item class="menu-item" data-danger={item.danger ? "true" : undefined} disabled={item.disabled} onSelect={() => item.onSelect?.()}>
-                  <Show when={item.icon}>{(name) => <Icon name={name()} size={14} />}</Show>
-                  {item.label}
-                </DropdownMenu.Item>
-              )
-            }
-          </For>
+          <MenuItems items={props.items} />
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu>

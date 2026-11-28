@@ -34,6 +34,10 @@ const METHODS: &[(&str, &str)] = &[
     (m::FETCH_ALL, "references fetched"),
     (m::GIT_WORKSPACE_ACTION, "git action"),
     (m::POST_CHANGE_REQUEST_COMMENT, "pull request commented"),
+    (
+        m::REPLY_CHANGE_REQUEST_THREAD,
+        "pull request thread replied",
+    ),
     (m::UPDATE_CHANGE_REQUEST, "pull request updated"),
     (m::UPDATE_CHANGE_REQUEST_AT_HEAD, "pull request updated"),
     (m::SET_PR_WATCH, "pull request watch changed"),

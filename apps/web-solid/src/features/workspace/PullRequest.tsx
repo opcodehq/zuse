@@ -13,12 +13,14 @@ import { issueLabel, type ReferenceCatalog } from "@/features/transcript/referen
 import { Icon } from "@/ui/Icon";
 import { TerminalSpinner } from "@/ui/loaders";
 import { providerMarkdownHtml } from "@/ui/markdown";
-import { Button, IconButton, Menu, Spinner, Tabs, toast, type MenuItem } from "@/ui/primitives";
+import { Button, Dialog, IconButton, Menu, Spinner, Tabs, toast, type MenuItem } from "@/ui/primitives";
+import { Popover } from "@kobalte/core/popover";
 import { type JSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
 import { parsePatch } from "./diff";
 import { addPrompt, checksSummary, checksTone, checkTone, cleanBody, fixAllPrompt, fixPrompt, groupFeedback, sortChecks, statusLine, type CheckTone, type FeedbackItem } from "./feedback";
 import { DiffView } from "./DiffView";
+import { allowedMethods, MERGE_METHODS, mergeButton, pickMethod, type MergeMethod } from "./merge";
 import { Banner, DiffStat, Empty, PrStateIcon } from "./parts";
 import { errorText, liveSubscribe, readErrorText, workspace, type Target } from "./store";
 import type { ChangeRequestCheck, ChangeRequestComment, ChangeRequestDetail, ChangeRequestListItem, ChangeRequestPage, ChangeRequestUpdate, SourceControlFrame } from "./types";
@@ -29,12 +31,6 @@ const FILTERS: { value: Filter; label: string }[] = [
   { value: "authored", label: "Mine" },
   { value: "reviewing", label: "Reviewing" },
   { value: "all", label: "All" },
-];
-type Method = "squash" | "merge" | "rebase";
-const METHODS: { value: Method; label: string }[] = [
-  { value: "squash", label: "Squash and merge" },
-  { value: "merge", label: "Create a merge commit" },
-  { value: "rebase", label: "Rebase and merge" },
 ];
 
 const openExternal = (url: string) => window.open(url, "_blank", "noopener,noreferrer");
@@ -317,26 +313,44 @@ function PullRequestDetail(props: { target: Target; url: string; own: boolean; o
   createEffect(() => [(tab)(), (() => detail()?.headRefOid)()] as const, ([t, head]) => { void (t === "files" && head && patch() === null && loadPatch()); });
   createEffect(() => detail()?.headRefOid, () => { void (setPatch(null)); }, { defer: true });
 
-  const update = (change: ChangeRequestUpdate, label: string) => {
+  const update = (change: ChangeRequestUpdate, label: string): Promise<boolean> => {
     const d = detail();
-    if (!d || updating()) return;
+    if (!d || updating()) return Promise.resolve(false);
     const merging = change.kind === "merge" || change.kind === "enableAutoMerge";
     setUpdating(label);
     setNotice(null);
-    rpc
+    return rpc
       .call<{ refusal?: string | null }>(merging ? M.UPDATE_CHANGE_REQUEST_AT_HEAD : M.UPDATE_CHANGE_REQUEST, host({ url: d.url, update: change, headRefOid: d.headRefOid }))
       .then(
         (result) => {
           if (result?.refusal) setNotice(result.refusal);
           read();
+          return !result?.refusal;
         },
         (e) => {
           if (e instanceof RpcError && e.outcomeUnknown) setNotice("The connection dropped. Refresh the pull request before trying again; the change may have been made.");
           else setNotice(errorText(e, "GitHub refused the change."));
+          return false;
         },
       )
       .finally(() => setUpdating(null));
   };
+
+  /** Merging or enabling auto-merge posts the optional comment once GitHub accepts the change. */
+  const updateWithComment = (change: ChangeRequestUpdate, label: string, body: string) =>
+    update(change, label).then((done) => {
+      if (!done || !body.trim()) return done;
+      return rpc.call(M.POST_CHANGE_REQUEST_COMMENT, host({ url: props.url, body })).then(
+        () => (read(), true),
+        (e) => (setNotice(e instanceof RpcError && e.outcomeUnknown ? "Comment delivery is uncertain. Check the discussion before posting again." : errorText(e, "Couldn't post the comment.")), true),
+      );
+    });
+
+  const reply = (threadId: string, body: string) =>
+    rpc.call(M.REPLY_CHANGE_REQUEST_THREAD, host({ url: props.url, threadId, body })).then(
+      () => (read(), true),
+      (e) => (setNotice(e instanceof RpcError && e.outcomeUnknown ? "Reply delivery is uncertain. Refresh before replying again." : errorText(e, "Couldn't post the reply.")), false),
+    );
 
   const post = () => {
     const body = comment();
@@ -396,17 +410,36 @@ function PullRequestDetail(props: { target: Target; url: string; own: boolean; o
     toast(`${what} added to the chat`);
   };
 
-  const statusItems = (): MenuItem[] => {
+  const [mergeOpen, setMergeOpen] = createSignal(false);
+  const [confirmClose, setConfirmClose] = createSignal(false);
+  const linkedChats = () => {
+    const url = detail()?.url.replace(/\/$/, "");
+    return Object.entries(workspace.changeRequests).flatMap(([chatId, status]) => (status?.changeRequest?.url.replace(/\/$/, "") === url && state.chats[chatId] ? [state.chats[chatId]!] : []));
+  };
+
+  const overflowItems = (): MenuItem[] => {
     const d = detail();
     if (!d) return [];
-    const items: MenuItem[] = [];
+    const chats = linkedChats();
+    const items: MenuItem[] = [
+      { label: "Open in GitHub", icon: "pr-github", onSelect: () => openExternal(d.url) },
+      {
+        label: "Copy",
+        icon: "copy",
+        children: [
+          { label: "Link", onSelect: () => void copyText(d.url, "Link copied") },
+          { label: "Branch name", hint: d.headRefName.length > 28 ? `${d.headRefName.slice(0, 27)}…` : d.headRefName, onSelect: () => void copyText(d.headRefName, "Branch name copied") },
+          { label: "Number", hint: `#${d.number}`, onSelect: () => void copyText(`#${d.number}`, "Number copied") },
+        ],
+      },
+      { label: "Threads", icon: "chat-round-line", children: chats.length ? chats.map((c) => ({ label: c.title || "Untitled chat", onSelect: () => openChat(c.id) })) : [{ label: "No linked threads", disabled: true }] },
+      { label: "Refresh", icon: "refresh", onSelect: () => read() },
+    ];
     if (open()) {
-      items.push(d.isDraft ? { label: "Mark ready for review", icon: "eye", onSelect: () => update({ kind: "markReady" }, "Marking ready") } : { label: "Convert to draft", icon: "git-state-draft", onSelect: () => update({ kind: "markDraft" }, "Converting to draft") });
-      if (d.autoMergeRequest) items.push({ label: "Disable auto-merge", icon: "close", onSelect: () => update({ kind: "disableAutoMerge" }, "Disabling auto-merge") });
-      else for (const m of METHODS) items.push({ label: `Auto-merge: ${m.label.toLowerCase()}`, icon: "clock-circle", onSelect: () => update({ kind: "enableAutoMerge", method: m.value }, "Enabling auto-merge") });
-      items.push({ label: "", separator: true }, { label: "Close pull request", icon: "git-state-closed", danger: true, onSelect: () => update({ kind: "close" }, "Closing") });
-    } else if (!merged()) items.push({ label: "Reopen pull request", icon: "git-state-open", onSelect: () => update({ kind: "reopen" }, "Reopening") });
-    items.push({ label: "", separator: true }, { label: "Copy link", icon: "copy", onSelect: () => void copyText(d.url, "Link copied") }, { label: "Open on GitHub", icon: "arrow-up-right", onSelect: () => openExternal(d.url) });
+      items.push({ label: "", separator: true }, d.isDraft ? { label: "Ready for review", icon: "eye", onSelect: () => void update({ kind: "markReady" }, "Marking ready") } : { label: "Convert to draft", icon: "git-state-draft", onSelect: () => void update({ kind: "markDraft" }, "Converting to draft") });
+      if (!d.isDraft) items.push({ label: "Merge pull request", icon: "git-merge", onSelect: () => requestAnimationFrame(() => setMergeOpen(true)) });
+      items.push({ label: "", separator: true }, { label: "Close pull request", icon: "close", danger: true, onSelect: () => setConfirmClose(true) });
+    } else if (!merged()) items.push({ label: "", separator: true }, { label: "Reopen pull request", icon: "git-state-open", onSelect: () => void update({ kind: "reopen" }, "Reopening") });
     return items;
   };
 
@@ -426,11 +459,11 @@ function PullRequestDetail(props: { target: Target; url: string; own: boolean; o
         <Show when={updating()}>
           <span class="ws-muted ws-small">{updating()}…</span>
         </Show>
-        <Show when={open() && detail()}>
-          {(d) => <MergeControl detail={d()} busy={!!updating()} onMerge={(method) => update({ kind: "merge", method }, "Merging")} onReady={() => update({ kind: "markReady" }, "Marking ready")} />}
-        </Show>
-        <Show when={loading()} fallback={<IconButton icon="refresh" label="Refresh pull request" size="sm" iconSize={14} onClick={() => read()} />}>
+        <Show when={loading()}>
           <span class="ws-icon-slot"><Spinner label="Loading pull request" /></span>
+        </Show>
+        <Show when={detail() && mergeButton(detail()!) && detail()}>
+          {(d) => <MergeControl detail={d()} busy={!!updating()} open={mergeOpen()} onOpenChange={setMergeOpen} onRun={updateWithComment} />}
         </Show>
         <Show when={detail()}>
           <Menu
@@ -440,10 +473,22 @@ function PullRequestDetail(props: { target: Target; url: string; own: boolean; o
                 <Icon name="more-horizontal" size={14} />
               </button>
             )}
-            items={statusItems()}
+            items={overflowItems()}
           />
         </Show>
       </div>
+      <Dialog
+        open={confirmClose()}
+        onOpenChange={setConfirmClose}
+        title="Close this pull request?"
+        description="It stays on GitHub and can be reopened later."
+        footer={
+          <>
+            <Button size="sm" variant="ghost" onClick={() => setConfirmClose(false)}>Cancel</Button>
+            <Button size="sm" variant="danger" onClick={() => { setConfirmClose(false); void update({ kind: "close" }, "Closing"); }}>Close pull request</Button>
+          </>
+        }
+      />
       <Show when={error()}>
         <Banner tone="danger" actions={<Button size="sm" variant="ghost" onClick={() => read()}>Retry</Button>}>{error()}</Banner>
       </Show>
@@ -516,7 +561,7 @@ function PullRequestDetail(props: { target: Target; url: string; own: boolean; o
                   <Show when={d().statusCheckRollup.length}>
                     <ChecksSection checks={d().statusCheckRollup} />
                   </Show>
-                  <FeedbackSection detail={d()} onAdd={addToChat} />
+                  <FeedbackSection detail={d()} onAdd={addToChat} onReply={reply} />
                 </div>
               </Match>
               <Match when={tab() === "activity"}>
@@ -620,25 +665,120 @@ function StatusText(props: { detail: ChangeRequestDetail }) {
   );
 }
 
-/** A quiet merge button that turns primary only once the pull request is ready to merge. */
-function MergeControl(props: { detail: ChangeRequestDetail; busy: boolean; onMerge: (method: Method) => void; onReady: () => void }) {
-  const conflicted = () => props.detail.mergeable.toUpperCase() === "CONFLICTING";
+const METHOD_KEY = "zuse.pullRequest.mergeMethod";
+const readMethod = () => {
+  try {
+    return localStorage.getItem(METHOD_KEY);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * One split button: the main half follows the pull request's state (Merge, Auto-merge, Auto-merge on); the
+ * menu holds an optional comment, the repository's merge methods, and auto-merge or force-merge.
+ */
+function MergeControl(props: { detail: ChangeRequestDetail; busy: boolean; open: boolean; onOpenChange: (open: boolean) => void; onRun: (change: ChangeRequestUpdate, label: string, comment: string) => Promise<boolean> }) {
+  const button = () => mergeButton(props.detail) ?? { label: "Merge", action: "merge" as const, primary: false };
+  const methods = () => allowedMethods(props.detail);
+  const [remembered, setRemembered] = createSignal(readMethod());
+  const method = () => pickMethod(methods(), remembered());
+  const methodLabel = () => MERGE_METHODS.find((m) => m.value === method())!.label;
+  const [comment, setComment] = createSignal("");
+  const [forcing, setForcing] = createSignal(false);
+  const armed = () => !!props.detail.autoMergeRequest;
+  const choose = (value: MergeMethod) => {
+    setRemembered(value);
+    try {
+      localStorage.setItem(METHOD_KEY, value);
+    } catch {
+      // Private windows may refuse storage; the pick then lasts for the tab.
+    }
+  };
+  const run = (change: ChangeRequestUpdate, label: string) =>
+    void props.onRun(change, label, armed() ? "" : comment()).then((done) => {
+      if (!done) return;
+      setComment("");
+      setForcing(false);
+      props.onOpenChange(false);
+    });
+  const main = () => {
+    const action = button().action;
+    if (action === "menu") return props.onOpenChange(!props.open);
+    if (action === "markReady") return run({ kind: "markReady" }, "Marking ready");
+    if (action === "merge") return run({ kind: "merge", method: method() }, "Merging");
+    run({ kind: "enableAutoMerge", method: method() }, "Enabling auto-merge");
+  };
   return (
-    <div class="ws-pr-merge">
-      <Show when={!props.detail.isDraft} fallback={<Button size="sm" disabled={props.busy} onClick={() => props.onReady()}>Ready for review</Button>}>
-        <Menu
-          placement="bottom-end"
-          trigger={(p) => (
-            <button {...p} type="button" class="btn" data-variant={statusLine(props.detail).ready ? "primary" : "default"} data-size="sm" disabled={props.busy || conflicted()}>
-              <Icon name="git-merge" size={14} />
-              Merge
-              <Icon name="alt-arrow-down" size={12} />
-            </button>
-          )}
-          items={METHODS.map((m) => ({ label: m.label, onSelect: () => props.onMerge(m.value) }))}
-        />
-      </Show>
-    </div>
+    <Popover open={props.open} onOpenChange={(next) => { props.onOpenChange(next); if (!next) setForcing(false); }} placement="bottom-end" gutter={4}>
+      <Popover.Anchor class="ws-pr-merge" data-primary={button().primary ? "" : undefined}>
+        <button type="button" class="btn ws-pr-merge-main" data-variant={button().primary ? "primary" : "default"} data-size="sm" disabled={props.busy} onClick={main}>
+          <Icon name={button().action === "markReady" ? "eye" : "git-merge"} size={14} />
+          {button().label}
+        </button>
+        <Show when={!props.detail.isDraft}>
+          <Popover.Trigger class="btn ws-pr-merge-more" data-variant={button().primary ? "primary" : "default"} data-size="sm" aria-label="Merge options" disabled={props.busy}>
+            <Icon name="alt-arrow-down" size={12} />
+          </Popover.Trigger>
+        </Show>
+      </Popover.Anchor>
+      <Popover.Portal>
+        <Popover.Content class="menu ws-merge-menu" aria-label="Merge options">
+          <Show when={!armed()}>
+            <textarea class="field ws-merge-comment" rows={3} placeholder="Leave a comment (optional)" aria-label="Merge comment" value={comment()} onInput={(e) => setComment(e.currentTarget.value)} />
+            <div class="ws-merge-label">Select method</div>
+            <div role="radiogroup" aria-label="Merge method">
+              <For each={methods()}>
+                {(m) => (
+                  <button type="button" role="radio" class="ws-merge-row" aria-checked={m.value === method() ? "true" : "false"} onClick={() => choose(m.value)}>
+                    <span class="ws-merge-text">
+                      <span>{m.label}</span>
+                      <span class="ws-merge-detail">{m.detail}</span>
+                    </span>
+                    <Show when={m.value === method()}><Icon name="check" size={14} /></Show>
+                  </button>
+                )}
+              </For>
+            </div>
+          </Show>
+          <Show when={!armed()}>
+            <div class="menu-sep" />
+          </Show>
+          <Switch>
+            <Match when={armed()}>
+              <div class="ws-merge-label">Auto-merge is on ({props.detail.autoMergeRequest!.mergeMethod.toLowerCase()})</div>
+              <button type="button" class="ws-merge-row" onClick={() => run({ kind: "disableAutoMerge" }, "Cancelling auto-merge")}>
+                <span class="ws-merge-text"><span>Cancel auto-merge</span><span class="ws-merge-detail">Wait for someone to merge by hand</span></span>
+              </button>
+            </Match>
+            <Match when={button().action === "merge"}>
+              <button type="button" class="ws-merge-row" onClick={() => run({ kind: "merge", method: method() }, "Merging")}>
+                <span class="ws-merge-text"><span>Merge pull request</span><span class="ws-merge-detail">{methodLabel()}</span></span>
+              </button>
+            </Match>
+            <Match when={forcing()}>
+              <div class="ws-merge-confirm" role="alertdialog" aria-label="Confirm force merge">
+                <span class="ws-merge-detail">Merge before checks pass? GitHub still refuses if branch rules require them.</span>
+                <div class="ws-form-row">
+                  <div class="ws-grow" />
+                  <Button size="sm" variant="ghost" onClick={() => setForcing(false)}>Cancel</Button>
+                  <Button size="sm" variant="danger" onClick={() => run({ kind: "merge", method: method() }, "Merging")}>Force merge</Button>
+                </div>
+              </div>
+            </Match>
+            <Match when={true}>
+              <button type="button" class="ws-merge-row" onClick={() => run({ kind: "enableAutoMerge", method: method() }, "Enabling auto-merge")}>
+                <span class="ws-merge-text"><span>Enable auto-merge</span><span class="ws-merge-detail">Merge when checks pass</span></span>
+              </button>
+              <button type="button" class="ws-merge-row" onClick={() => setForcing(true)}>
+                <span class="ws-merge-text"><span>Force merge</span><span class="ws-merge-detail">Attempt before checks pass</span></span>
+                <Icon name="alt-arrow-right" size={12} class="ws-faint" />
+              </button>
+            </Match>
+          </Switch>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover>
   );
 }
 
@@ -726,10 +866,17 @@ function CheckRow(props: { check: ChangeRequestCheck }) {
   );
 }
 
-function FeedbackSection(props: { detail: ChangeRequestDetail; onAdd: (text: string, what: string, replaces?: string[]) => void }) {
+function FeedbackSection(props: { detail: ChangeRequestDetail; onAdd: (text: string, what: string, replaces?: string[]) => void; onReply: (threadId: string, body: string) => Promise<boolean> }) {
   const groups = createMemo(() => groupFeedback(props.detail));
   const [open, setOpen] = createSignal(true);
   const [showClosed, setShowClosed] = createSignal(false);
+  // Keyed by item id, so a refresh after a reply or a merge keeps rows open.
+  const [expanded, setExpanded] = createSignal<ReadonlySet<string>>(new Set());
+  const toggle = (id: string) => {
+    const next = new Set(expanded());
+    if (!next.delete(id)) next.add(id);
+    setExpanded(next);
+  };
   return (
     <Show when={groups().open.length || groups().closed.length}>
       <section class="ws-pr-section" aria-label="Feedback">
@@ -741,7 +888,7 @@ function FeedbackSection(props: { detail: ChangeRequestDetail; onAdd: (text: str
         <Show when={open()}>
           <Show when={groups().open.length}>
             <div class="ws-fb-list" role="list" aria-label="Open feedback">
-              <For each={groups().open}>{(item) => <FeedbackRow item={item} onAdd={(text) => props.onAdd(text, "Comment")} />}</For>
+              <For each={groups().open}>{(item) => <FeedbackRow item={item} expanded={expanded().has(item.id)} onToggle={() => toggle(item.id)} onAdd={(text) => props.onAdd(text, "Comment")} onReply={item.kind === "thread" ? (body) => props.onReply(item.id, body) : undefined} />}</For>
             </div>
           </Show>
           <Show when={groups().closed.length}>
@@ -752,7 +899,7 @@ function FeedbackSection(props: { detail: ChangeRequestDetail; onAdd: (text: str
             </button>
             <Show when={showClosed()}>
               <div class="ws-fb-list" role="list" aria-label="Resolved feedback">
-                <For each={groups().closed}>{(item) => <FeedbackRow item={item} onAdd={(text) => props.onAdd(text, "Comment")} />}</For>
+                <For each={groups().closed}>{(item) => <FeedbackRow item={item} expanded={expanded().has(item.id)} onToggle={() => toggle(item.id)} onAdd={(text) => props.onAdd(text, "Comment")} onReply={(body) => props.onReply(item.id, body)} />}</For>
               </div>
             </Show>
           </Show>
@@ -762,15 +909,14 @@ function FeedbackSection(props: { detail: ChangeRequestDetail; onAdd: (text: str
   );
 }
 
-function FeedbackRow(props: { item: FeedbackItem; onAdd: (text: string) => void }) {
-  const [expanded, setExpanded] = createSignal(false);
+function FeedbackRow(props: { item: FeedbackItem; expanded: boolean; onToggle: () => void; onAdd: (text: string) => void; onReply?: (body: string) => Promise<boolean> }) {
+  const expanded = () => props.expanded;
   const closed = () => props.item.resolved || props.item.outdated;
   const prompt = () => fixPrompt(props.item);
-  const toggle = () => setExpanded(!expanded());
   return (
     <article class="ws-fb" role="listitem" data-closed={closed() ? "" : undefined} data-expanded={expanded() ? "" : undefined}>
       <div class="ws-fb-row">
-        <button type="button" class="ws-fb-toggle" aria-expanded={expanded() ? "true" : "false"} onClick={toggle}>
+        <button type="button" class="ws-fb-toggle" aria-expanded={expanded() ? "true" : "false"} onClick={() => props.onToggle()}>
           <Show when={closed()} fallback={<Avatar login={props.item.author} />}>
             <Icon name="check" size={14} class="ws-fb-check" label={props.item.resolved ? "Resolved" : "Outdated"} />
           </Show>
@@ -818,9 +964,44 @@ function FeedbackRow(props: { item: FeedbackItem; onAdd: (text: string) => void 
             </div>
             <pre class="ws-fb-prompt-text">{prompt()}</pre>
           </div>
+          <Show when={props.onReply}>{(send) => <ReplyBox onSend={send()} />}</Show>
         </div>
       </Show>
     </article>
+  );
+}
+
+/** An inline reply to a review thread, posted to GitHub as the signed-in account. */
+function ReplyBox(props: { onSend: (body: string) => Promise<boolean> }) {
+  const [text, setText] = createSignal("");
+  const [sending, setSending] = createSignal(false);
+  const send = () => {
+    const body = text();
+    if (!body.trim() || sending()) return;
+    setSending(true);
+    void props.onSend(body).then((done) => done && setText("")).finally(() => setSending(false));
+  };
+  return (
+    <form class="ws-fb-reply" onSubmit={(e) => { e.preventDefault(); send(); }}>
+      <textarea
+        class="field ws-textarea"
+        rows={2}
+        placeholder="Reply…"
+        aria-label="Reply to this thread"
+        value={text()}
+        onInput={(e) => setText(e.currentTarget.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            send();
+          }
+        }}
+      />
+      <div class="ws-form-row">
+        <span class="ws-faint ws-small ws-grow">Replies on GitHub as you.</span>
+        <Button size="sm" type="submit" disabled={!text().trim() || sending()}>{sending() ? "Replying…" : "Reply"}</Button>
+      </div>
+    </form>
   );
 }
 

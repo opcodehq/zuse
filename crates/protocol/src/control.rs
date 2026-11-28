@@ -80,6 +80,7 @@ pub const METHODS: &[&str] = &[
     "GetChangeRequest",
     "GetChangeRequestDiff",
     "PostChangeRequestComment",
+    "ReplyChangeRequestThread",
     "ListProjectActions",
     "UpsertProjectAction",
     "DeleteProjectAction",

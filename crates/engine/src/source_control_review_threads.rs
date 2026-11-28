@@ -1,7 +1,7 @@
 //! Inline feedback is a separate, doubly paginated GitHub connection.
 use super::*;
 use serde_json::{Value, json};
-use zuse_protocol::{ChangeRequestComment, ChangeRequestReviewThread};
+use zuse_protocol::{ChangeRequestComment, ChangeRequestMergeMethod, ChangeRequestReviewThread};
 
 const COMMENT_FIELDS: &str = "id url body createdAt diffHunk author { login avatarUrl(size: 64) } viewerDidAuthor replyTo { id }";
 const PAGE_INFO: &str = "pageInfo { hasNextPage endCursor }";
@@ -48,16 +48,31 @@ impl GitHubCli {
         &self,
         url: &str,
     ) -> Result<Vec<ChangeRequestReviewThread>, ChangeRequestError> {
+        Ok(self.fetch_review_threads_and_merge_methods(url).await?.0)
+    }
+
+    /// The repository's allowed merge methods ride along on the first page.
+    pub(crate) async fn fetch_review_threads_and_merge_methods(
+        &self,
+        url: &str,
+    ) -> Result<
+        (
+            Vec<ChangeRequestReviewThread>,
+            Option<Vec<ChangeRequestMergeMethod>>,
+        ),
+        ChangeRequestError,
+    > {
         let url = validated_pull_request_url(url)?;
         let parts: Vec<_> = url.split('/').collect();
         let number: u64 = parts[6].parse().map_err(|_| ChangeRequestError::Decode)?;
         let query = format!(
-            "query($owner:String!,$name:String!,$number:Int!,$after:String) {{ repository(owner:$owner,name:$name) {{ pullRequest(number:$number) {{ reviewThreads(first:100,after:$after) {{ {PAGE_INFO} nodes {{ id isResolved isOutdated path line startLine originalLine originalStartLine diffSide startDiffSide comments(first:100) {{ {PAGE_INFO} nodes {{ {COMMENT_FIELDS} }} }} }} }} }} }} }}"
+            "query($owner:String!,$name:String!,$number:Int!,$after:String) {{ repository(owner:$owner,name:$name) {{ squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed pullRequest(number:$number) {{ reviewThreads(first:100,after:$after) {{ {PAGE_INFO} nodes {{ id isResolved isOutdated path line startLine originalLine originalStartLine diffSide startDiffSide comments(first:100) {{ {PAGE_INFO} nodes {{ {COMMENT_FIELDS} }} }} }} }} }} }} }}"
         );
         let replies_query = format!(
             "query($id:ID!,$after:String) {{ node(id:$id) {{ ... on PullRequestReviewThread {{ comments(first:100,after:$after) {{ {PAGE_INFO} nodes {{ {COMMENT_FIELDS} }} }} }} }} }}"
         );
         let mut threads = Vec::new();
+        let mut merge_methods = None;
         let mut cursor = None;
         let mut seen = std::collections::HashSet::new();
         // Bound aggregate memory; never present a partial result as complete.
@@ -72,6 +87,9 @@ impl GitHubCli {
                     &mut budget,
                 )
                 .await?;
+            if cursor.is_none() {
+                merge_methods = allowed_merge_methods(&value["data"]["repository"]);
+            }
             let connection = &value["data"]["repository"]["pullRequest"]["reviewThreads"];
             for node in connection["nodes"]
                 .as_array()
@@ -107,8 +125,29 @@ impl GitHubCli {
                 break;
             }
         }
-        Ok(threads)
+        Ok((threads, merge_methods))
     }
+}
+
+fn allowed_merge_methods(repository: &Value) -> Option<Vec<ChangeRequestMergeMethod>> {
+    let flags = [
+        ("squashMergeAllowed", ChangeRequestMergeMethod::Squash),
+        ("mergeCommitAllowed", ChangeRequestMergeMethod::Merge),
+        ("rebaseMergeAllowed", ChangeRequestMergeMethod::Rebase),
+    ];
+    if flags
+        .iter()
+        .all(|(key, _)| repository[*key].as_bool().is_none())
+    {
+        return None;
+    }
+    Some(
+        flags
+            .into_iter()
+            .filter(|(key, _)| repository[*key].as_bool() == Some(true))
+            .map(|(_, method)| method)
+            .collect(),
+    )
 }
 
 fn next_cursor(

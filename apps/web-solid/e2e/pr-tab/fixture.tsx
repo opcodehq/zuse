@@ -11,6 +11,7 @@ import { setState } from "@/core/store";
 import { setView } from "@/core/view";
 import { draftFor } from "@/features/composer/drafts";
 import { PullRequest } from "@/features/workspace/PullRequest";
+import { setWorkspace } from "@/features/workspace/store";
 import type { ChangeRequestCheck, ChangeRequestComment, ChangeRequestDetail } from "@/features/workspace/types";
 import { flush } from "solid-js";
 
@@ -30,7 +31,7 @@ const rabbit = (severity: string, title: string, text: string, prompt: string) =
   "<details>", "<summary>🤖 Prompt for AI Agents</summary>", "", "```", prompt, "```", "", "</details>", "", "<!-- fingerprinting:phantom:medusa:ocelot -->",
 ].join("\n");
 const running = variant === "waiting";
-const detail: ChangeRequestDetail = {
+let detail: ChangeRequestDetail = {
   title: "Quieter chat errors, and resume the chat once sign-in lands",
   body: [
     "A failed turn now shows as a quiet line instead of a red card. A chat stopped by an expired sign-in now carries on by itself once you sign back in.",
@@ -62,15 +63,32 @@ const detail: ChangeRequestDetail = {
     check("harness-evaluation", "COMPLETED", "SUCCESS"), check("browser", "COMPLETED", "SUCCESS"), check("native (ubuntu-24.04)", running ? "QUEUED" : "COMPLETED", running ? "" : "SUCCESS"),
     check("native (macos-latest)", "COMPLETED", "SUCCESS"), check("CodeRabbit", "COMPLETED", "SUCCESS", false), check("Workers Builds: zuse-website", "COMPLETED", "SUCCESS"),
   ],
-  autoMergeRequest: null, viewerLogin: "swarajbachu",
+  autoMergeRequest: null, viewerLogin: "swarajbachu", mergeMethods: ["squash", "rebase"],
 };
 
-const calls: { method: string; params: unknown }[] = [];
+// A stand-in for the GitHub-backed methods: updates change the fixture, comments and replies append to it.
+type Params = { update?: { kind: string; method?: string }; body?: string; threadId?: string };
+const calls: { method: string; params: Params }[] = [];
+const posted = (body: string) => ({ id: `c${calls.length}`, url: `${URL_}#issuecomment-${calls.length}`, author: { login: "swarajbachu" }, body, state: "", createdAt: new Date().toISOString(), submittedAt: "", diffHunk: "" });
 Object.assign(rpc, {
-  call: async (method: string, params: unknown) => {
-    calls.push({ method, params });
+  call: async (method: string, params: Params) => {
+    calls.push({ method, params: structuredClone(params) });
     if (method === "GetChangeRequest") return structuredClone(detail);
-    return null;
+    if (method === "PostChangeRequestComment") return (detail = { ...detail, comments: [...detail.comments, posted(params.body!)] }), posted(params.body!);
+    if (method === "ReplyChangeRequestThread") {
+      detail = { ...detail, reviewThreads: detail.reviewThreads!.map((t) => (t.id === params.threadId ? { ...t, comments: [...t.comments, posted(params.body!)] } : t)) };
+      return posted(params.body!);
+    }
+    const update = params.update!;
+    if (update.kind === "merge" && detail.statusCheckRollup.some((c) => c.status !== "COMPLETED")) return { refusal: "Required status checks are still running." };
+    if (update.kind === "merge") detail = { ...detail, state: "MERGED" };
+    if (update.kind === "enableAutoMerge") detail = { ...detail, autoMergeRequest: { mergeMethod: update.method!.toUpperCase() } };
+    if (update.kind === "disableAutoMerge") detail = { ...detail, autoMergeRequest: null };
+    if (update.kind === "close") detail = { ...detail, state: "CLOSED" };
+    if (update.kind === "reopen") detail = { ...detail, state: "OPEN" };
+    if (update.kind === "markDraft") detail = { ...detail, isDraft: true };
+    if (update.kind === "markReady") detail = { ...detail, isDraft: false };
+    return { refusal: null };
   },
   subscribe: () => ({ cancel() {} }),
 });
@@ -80,6 +98,7 @@ setState(draft => { Object.assign(draft, {
   chats: { [CHAT]: { id: CHAT, deviceId: DEVICE, title: "Quieter chat errors", archived: false, cwd: "/repo", createdAt: new Date().toISOString(), config: { harness: "claude-code" } } },
   harnesses: [{ id: "claude-code", name: "Fixture Agent" }],
 }); });
+setWorkspace(draft => { draft.changeRequests = { [CHAT]: { checkoutId: CHAT, deviceId: DEVICE, cwd: "/repo", branch: detail.headRefName, updatedAt: "", error: null, changeRequest: { provider: "github", number: 425, title: detail.title, url: URL_, state: "open", baseRef: "main", headRef: detail.headRefName } } }; });
 setView(draft => { Object.assign(draft, { selectedChatId: CHAT, route: { kind: "chat" } }); draft.preferences.theme = theme; });
 flush();
 

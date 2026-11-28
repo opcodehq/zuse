@@ -31,7 +31,7 @@ try {
   assert.match(await page.eval(text(`${S} .ws-pr-props`)), /2 running, 7 passed/);
   assert.equal(await page.eval(`[...document.querySelectorAll("${S} .ws-pr-prop-icon")].every((i) => i.style.width === "14px")`), true);
   assert.equal(await page.eval(`document.querySelector("${S} .ws-pr-ref .md-ref")?.textContent`), "Quieter chat errors", "thread row uses the reference chip");
-  assert.equal(await page.eval(`document.querySelector("${S} .ws-pr-merge .btn").dataset.variant`), "default", "merge stays quiet while checks run");
+  assert.equal(await page.eval(`document.querySelector("${S} .ws-pr-merge-main").dataset.variant`), "default", "merge stays quiet while checks run");
   assert.equal(await page.eval(`document.querySelector("${S} .ws-pr-desc").hasAttribute("data-clamped")`), true, "description starts collapsed");
   await page.eval(clickText(`${S} .ws-pr-link`, "Show more"));
   assert.equal(await page.eval(`document.querySelector("${S} .ws-pr-desc").hasAttribute("data-clamped")`), false);
@@ -87,6 +87,103 @@ try {
   await page.eval(`document.querySelector("${S} .ws-fb[data-closed] .ws-fb-toggle").click()`);
   assert.equal(await page.eval(`document.querySelectorAll("${S} .ws-fb[data-closed][data-expanded]").length`), 1, "a resolved item expands on click");
 
+  // Merge control: one split button that never looks disabled; comment, method, auto-merge and force merge.
+  const calls = () => page.eval("__pr.calls.filter((c) => c.method !== 'GetChangeRequest')");
+  const mergeLabel = () => page.eval(text(`${S} .ws-pr-merge-main`));
+  assert.equal(await mergeLabel(), "Auto-merge");
+  assert.deepEqual(await page.eval(`(() => { const b = document.querySelector("${S} .ws-pr-merge-main"); return [b.dataset.variant, b.disabled] })()`), ["default", false], "pending checks keep the button quiet but enabled");
+  await page.press(`${S} .ws-pr-merge-more`);
+  await page.waitFor("!!document.querySelector('.ws-merge-menu')", 5000);
+  assert.deepEqual(await page.eval(all(".ws-merge-menu [role=radio] .ws-merge-text > span:first-child")), ["Squash and merge", "Rebase and merge"], "only the methods the repository allows");
+  assert.equal(await page.eval(text(".ws-merge-menu [role=radio][aria-checked=true]")), "Squash and mergeCombine all commits");
+  await page.eval(clickText(".ws-merge-menu [role=radio]", "Rebase and merge"));
+  assert.equal(await page.eval("localStorage.getItem('zuse.pullRequest.mergeMethod')"), "rebase", "the pick is remembered");
+  await page.eval("(() => { const t = document.querySelector('.ws-merge-comment'); t.value = 'Shipping once CI is green.'; t.dispatchEvent(new InputEvent('input', { bubbles: true })); })()");
+  assert.deepEqual(await page.eval(all(".ws-merge-menu .ws-merge-row:not([role=radio]) .ws-merge-text > span:first-child")), ["Enable auto-merge", "Force merge"]);
+  await page.eval(clickText(".ws-merge-menu .ws-merge-row", "Enable auto-merge"));
+  await page.waitFor(`/Auto-merge on/.test(${text(`${S} .ws-pr-merge-main`)})`, 5000);
+  assert.deepEqual((await calls()).slice(-2), [
+    { method: "UpdateChangeRequestAtHead", params: { url: "https://github.com/opcodehq/zuse/pull/425", update: { kind: "enableAutoMerge", method: "rebase" }, headRefOid: "a".repeat(40), targetDeviceId: "fixture-device" } },
+    { method: "PostChangeRequestComment", params: { url: "https://github.com/opcodehq/zuse/pull/425", body: "Shipping once CI is green.", targetDeviceId: "fixture-device" } },
+  ], "auto-merge uses the picked method and posts the comment after GitHub accepts it");
+  assert.equal(await page.eval("!!document.querySelector('.ws-merge-menu')"), false, "the menu closes once done");
+  await page.press(`${S} .ws-pr-merge-main`);
+  await page.waitFor("!!document.querySelector('.ws-merge-menu')", 5000);
+  assert.equal(await page.eval("!!document.querySelector('.ws-merge-comment')"), false, "no comment box while auto-merge is on");
+  await page.eval(clickText(".ws-merge-menu .ws-merge-row", "Cancel auto-merge"));
+  await page.waitFor(`${text(`${S} .ws-pr-merge-main`)} === "Auto-merge"`, 5000);
+  assert.deepEqual((await calls()).at(-1).params.update, { kind: "disableAutoMerge" });
+  await page.press(`${S} .ws-pr-merge-more`);
+  await page.waitFor("!!document.querySelector('.ws-merge-menu')", 5000);
+  await page.eval(clickText(".ws-merge-menu .ws-merge-row", "Force merge"));
+  assert.match(await page.eval(text(".ws-merge-confirm")), /Merge before checks pass\?/, "force merge asks first");
+  const before = (await calls()).length;
+  await page.eval(clickText(".ws-merge-confirm button", "Cancel"));
+  assert.equal((await calls()).length, before, "cancelling sends nothing");
+  await page.eval(clickText(".ws-merge-menu .ws-merge-row", "Force merge"));
+  await page.eval(clickText(".ws-merge-confirm button", "Force merge"));
+  await page.waitFor(`/Required status checks are still running/.test(${text(`${S} .ws-banner`)})`, 5000);
+  assert.deepEqual((await calls()).at(-1).params.update, { kind: "merge", method: "rebase" });
+  await page.key("Escape", "Escape", 27);
+  await sleep(200);
+
+  // Overflow menu: every existing action, with Copy and Threads submenus and a confirmed close.
+  await page.press(`${S} [aria-label="Pull request actions"]`);
+  await page.waitFor("document.querySelectorAll('.menu .menu-item').length > 3", 5000);
+  assert.deepEqual(await page.eval(all(".menu .menu-item")), ["Open in GitHub", "Copy", "Threads", "Refresh", "Convert to draft", "Merge pull request", "Close pull request"]);
+  assert.equal(await page.eval("[...document.querySelectorAll('.menu .menu-item')].at(-1).dataset.danger"), "true");
+  await page.eval("[...document.querySelectorAll('.menu .menu-item')].find((m) => m.textContent.trim() === 'Copy').setAttribute('data-e2e', 'copy')");
+  await page.press("[data-e2e=copy]");
+  await page.waitFor("document.querySelectorAll('.menu').length > 1", 5000);
+  assert.deepEqual(await page.eval("[...document.querySelectorAll('.menu')].at(-1) && [...[...document.querySelectorAll('.menu')].at(-1).querySelectorAll('.menu-item')].map((m) => m.textContent.trim())"), ["Link", "Branch namezuse/quiet-errors-resume-af…", "Number#425"]);
+  await page.key("Escape", "Escape", 27);
+  await page.key("Escape", "Escape", 27);
+  await sleep(200);
+  await page.press(`${S} [aria-label="Pull request actions"]`);
+  await page.waitFor("document.querySelectorAll('.menu .menu-item').length > 3", 5000);
+  await page.eval("[...document.querySelectorAll('.menu .menu-item')].find((m) => m.textContent.trim() === 'Threads').setAttribute('data-e2e', 'threads')");
+  await page.press("[data-e2e=threads]");
+  await page.waitFor("document.querySelectorAll('.menu').length > 1", 5000);
+  assert.deepEqual(await page.eval("[...[...document.querySelectorAll('.menu')].at(-1).querySelectorAll('.menu-item')].map((m) => m.textContent.trim())"), ["Quieter chat errors"]);
+  await page.key("Escape", "Escape", 27);
+  await page.key("Escape", "Escape", 27);
+  await sleep(200);
+  await page.press(`${S} [aria-label="Pull request actions"]`);
+  await page.waitFor("document.querySelectorAll('.menu .menu-item').length > 3", 5000);
+  await page.eval("[...document.querySelectorAll('.menu .menu-item')].find((m) => m.textContent.trim() === 'Close pull request').setAttribute('data-e2e', 'close')");
+  await page.press("[data-e2e=close]");
+  await page.waitFor("!!document.querySelector('.dialog')", 5000);
+  assert.equal(await page.eval(text(".dialog-title")), "Close this pull request?");
+  const beforeClose = (await calls()).length;
+  await page.eval(clickText(".dialog-footer button", "Close pull request"));
+  await page.waitFor(`${text(`${S} .ws-pr-state`)} === "Closed"`, 5000);
+  assert.equal((await calls()).length, beforeClose + 1);
+  assert.deepEqual((await calls()).at(-1).params.update, { kind: "close" });
+  assert.equal(await page.eval(`document.querySelectorAll("${S} .ws-pr-merge").length`), 0, "closed pull requests show no merge button");
+  await page.press(`${S} [aria-label="Pull request actions"]`);
+  await page.waitFor("document.querySelectorAll('.menu .menu-item').length > 3", 5000);
+  assert.equal(await page.eval("[...document.querySelectorAll('.menu .menu-item')].at(-1).textContent.trim()"), "Reopen pull request");
+  await page.eval("[...document.querySelectorAll('.menu .menu-item')].at(-1).setAttribute('data-e2e', 'reopen')");
+  await page.press("[data-e2e=reopen]");
+  await page.waitFor(`${text(`${S} .ws-pr-state`)} === "Open"`, 5000);
+
+  // Replies: an inline reply from an expanded review thread, and a top-level comment from Activity.
+  const thread = `[...document.querySelectorAll("${S} .ws-fb:not([data-closed])")].find((f) => /pending line/.test(f.textContent))`;
+  await page.eval(`${thread}.hasAttribute("data-expanded") || ${thread}.querySelector(".ws-fb-toggle").click()`);
+  await page.waitFor(`!!${thread}.querySelector(".ws-fb-reply textarea")`, 5000);
+  await page.eval(`(() => { const t = ${thread}.querySelector(".ws-fb-reply textarea"); t.value = "Fixed in the next push."; t.dispatchEvent(new InputEvent("input", { bubbles: true })); })()`);
+  await sleep(50);
+  await page.eval(`${thread}.querySelector(".ws-fb-reply").requestSubmit()`);
+  await page.waitFor("__pr.calls.some((c) => c.method === 'ReplyChangeRequestThread')", 5000);
+  assert.deepEqual((await calls()).find((c) => c.method === "ReplyChangeRequestThread").params, { url: "https://github.com/opcodehq/zuse/pull/425", threadId: "t2", body: "Fixed in the next push.", targetDeviceId: "fixture-device" });
+  await page.waitFor(`/2 replies on GitHub/.test(${thread}.textContent) && ${thread}.querySelector(".ws-fb-reply textarea").value === ""`, 5000);
+  await page.eval(clickText(`${S} .tab`, "Activity"));
+  await page.waitFor(`!!document.querySelector("${S} .ws-pr-compose textarea")`, 5000);
+  await page.eval(`(() => { const t = document.querySelector("${S} .ws-pr-compose textarea"); t.value = "Thanks for the reviews."; t.dispatchEvent(new InputEvent("input", { bubbles: true })); })()`);
+  await page.eval(clickText(`${S} .ws-pr-compose button`, "Comment"));
+  await page.waitFor("__pr.calls.some((c) => c.method === 'PostChangeRequestComment' && c.params.body === 'Thanks for the reviews.')", 5000);
+  await page.eval(clickText(`${S} .tab`, "Overview"));
+
   for (const theme of ["dark", "light"]) {
     for (const state of ["waiting", "ready"]) {
       await page.eval("localStorage.clear()");
@@ -95,13 +192,31 @@ try {
       assert.equal(await page.eval("document.documentElement.dataset.theme"), theme);
       if (state === "ready") {
         assert.equal(await page.eval(text(`${S} .ws-pr-status`)), "Open·Ready to merge");
-        assert.equal(await page.eval(`document.querySelector("${S} .ws-pr-merge .btn").dataset.variant`), "primary", "merge turns primary once ready");
+        assert.deepEqual(await page.eval(`[document.querySelector("${S} .ws-pr-merge-main").textContent.trim(), document.querySelector("${S} .ws-pr-merge-main").dataset.variant]`), ["Merge", "primary"], "merge turns primary once ready");
       } else {
         await page.eval(`document.querySelectorAll("${S} .ws-fb-toggle")[0].click()`);
         await page.eval(clickText(`${S} .ws-fb-closed-toggle`, "2 resolved"));
       }
       await sleep(300);
       if (shots) await page.screenshot(`${shots}/after-${state}-${theme}.png`);
+      if (state === "waiting") {
+        await page.eval(`document.querySelector("${S} .ws-pr-scroll").scrollTop = 0`);
+        await page.press(`${S} .ws-pr-merge-more`);
+        await page.waitFor("!!document.querySelector('.ws-merge-menu')", 5000);
+        await sleep(200);
+        if (shots) await page.screenshot(`${shots}/after-merge-menu-${theme}.png`);
+        await page.key("Escape", "Escape", 27);
+        await sleep(200);
+        await page.press(`${S} [aria-label="Pull request actions"]`);
+        await page.waitFor("document.querySelectorAll('.menu .menu-item').length > 3", 5000);
+        await page.eval("[...document.querySelectorAll('.menu .menu-item')].find((m) => m.textContent.trim() === 'Copy').setAttribute('data-e2e', 'copy')");
+        await page.press("[data-e2e=copy]");
+        await page.waitFor("document.querySelectorAll('.menu').length > 1", 5000);
+        await sleep(200);
+        if (shots) await page.screenshot(`${shots}/after-overflow-${theme}.png`);
+        await page.key("Escape", "Escape", 27);
+        await page.key("Escape", "Escape", 27);
+      }
     }
   }
   await page.goto(url("dark", "merged"));
