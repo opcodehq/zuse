@@ -82,25 +82,12 @@ def restore(root=ROOT):
             info = path.stat()
             os.utime(path, ns=(info.st_atime_ns, timestamp))
             restored += 1
-    previous_directories = receipt.get("directories", {})
+    # Legacy receipts cannot prove that an untracked directory input disappeared.
+    # Restore directories only when their original entry fingerprints were saved.
+    previous_directories = receipt.get("directories")
     if isinstance(previous_directories, dict):
         for name, fingerprint in directories(root, current).items():
             previous = previous_directories.get(name, {})
-            if not previous and "directories" not in receipt:
-                # Older receipts contain file mtimes only. A fully tracked tree
-                # is unchanged only if every path and digest still matches.
-                prefix = name + "/"
-                before = {key: value for key, value in receipt["files"].items()
-                          if key.startswith(prefix)}
-                after = {key: value for key, value in current.items()
-                         if key.startswith(prefix)}
-                if (before and before.keys() == after.keys()
-                        and all(isinstance(value, dict)
-                                and value.get("sha256") == after[key]["sha256"]
-                                and isinstance(value.get("mtime_ns"), int)
-                                for key, value in before.items())):
-                    previous = {"sha256": fingerprint["sha256"],
-                                "mtime_ns": max(value["mtime_ns"] for value in before.values())}
             if (isinstance(previous, dict) and fingerprint["sha256"] == previous.get("sha256")
                     and isinstance(previous.get("mtime_ns"), int) and previous["mtime_ns"] > 0):
                 path = root / name

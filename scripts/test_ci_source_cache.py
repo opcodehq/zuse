@@ -94,12 +94,15 @@ class SourceCacheTests(unittest.TestCase):
         receipt.write_text("not JSON")
         self.assertEqual(ci_source_cache.restore(self.root), 0)
 
-    def test_legacy_receipt_reuses_unchanged_directory_inputs(self):
+    def test_legacy_receipt_preserves_untracked_input_deletion(self):
         (self.root / "assets").mkdir()
         (self.root / "assets/input").write_text("original")
+        generated = self.root / "assets/generated"
+        generated.write_text("generated")
         (self.root / "build.rs").write_text(
-            'fn main() { println!("cargo:rerun-if-changed=assets"); }\n')
-        subprocess.run(["git", "add", "assets", "build.rs"], cwd=self.root, check=True)
+            'fn main() { println!("cargo:rerun-if-changed=assets"); '
+            'std::fs::read("assets/generated").expect("missing generated input"); }\n')
+        subprocess.run(["git", "add", "assets/input", "build.rs"], cwd=self.root, check=True)
         self.assertEqual(self.cargo().returncode, 0)
         ci_source_cache.save(self.root)
         receipt_path = self.root / ci_source_cache.RECEIPT
@@ -107,14 +110,14 @@ class SourceCacheTests(unittest.TestCase):
         del receipt["directories"]
         receipt_path.write_text(json.dumps(receipt))
         directory = self.root / "assets"
+        generated.unlink()
         changed = directory.stat().st_mtime_ns + 2_000_000_000
         os.utime(directory, ns=(changed, changed))
         ci_source_cache.restore(self.root)
+        self.assertEqual(directory.stat().st_mtime_ns, changed)
         result = self.cargo()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        artifacts = [json.loads(line) for line in result.stdout.splitlines()
-                     if json.loads(line).get("reason") == "compiler-artifact"]
-        self.assertTrue(all(artifact["fresh"] for artifact in artifacts))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("missing generated input", result.stderr)
 
     def test_receipt_cannot_change_untracked_files(self):
         ci_source_cache.save(self.root)

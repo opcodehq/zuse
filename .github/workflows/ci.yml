@@ -92,7 +92,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
-          prefix-key: v1-ci
+          prefix-key: v2-ci
           save-if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
           cache-workspace-crates: true
           cache-directories: .context/ci-source-cache.json
@@ -126,7 +126,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
-          prefix-key: v1-ci
+          prefix-key: v2-ci
           save-if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
           cache-workspace-crates: true
           cache-directories: .context/ci-source-cache.json
@@ -171,7 +171,7 @@ jobs:
         with:
           cache-on-failure: true
           env-vars: "CARGO CC CFLAGS CXX CMAKE RUST HUGEICONS_BUILD_KEY"
-          prefix-key: v1-ci
+          prefix-key: v2-ci
           save-if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
           cache-workspace-crates: true
           cache-directories: .context/ci-source-cache.json
@@ -250,7 +250,7 @@ jobs:
           workspaces: ". -> target/browser"
           cache-on-failure: true
           env-vars: "CARGO CC CFLAGS CXX CMAKE RUST HUGEICONS_BUILD_KEY"
-          prefix-key: v1-ci
+          prefix-key: v2-ci
           save-if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
           cache-workspace-crates: true
           cache-directories: .context/ci-source-cache.json

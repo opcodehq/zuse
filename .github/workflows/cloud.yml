@@ -177,7 +177,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
-          prefix-key: v1-ci
+          prefix-key: v2-ci
           save-if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
           cache-workspace-crates: true
           cache-directories: .context/ci-source-cache.json
@@ -213,7 +213,7 @@ jobs:
         run: bash scripts/ci-linux-linker.sh
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: v1-ci
+          prefix-key: v2-ci
           save-if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
           cache-workspace-crates: true
           cache-directories: .context/ci-source-cache.json
@@ -309,7 +309,7 @@ jobs:
         if: steps.fetch.outputs.fetched == 'true'
         with:
 
-          prefix-key: v1-ci
+          prefix-key: v2-ci
           save-if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
           cache-workspace-crates: true
           cache-directories: .context/ci-source-cache.json
