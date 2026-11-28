@@ -1322,15 +1322,7 @@ impl PluginsCard {
             .flex()
             .flex_col()
             .gap(px(4.))
-            .child(
-                div()
-                    .px(px(8.))
-                    .pb(px(4.))
-                    .text_size(px(13.))
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(theme.text_strong)
-                    .child(title),
-            )
+            .child(catalog_ui::section_label(theme, title))
             .child(grid)
             .into_any_element()
     }
@@ -1351,11 +1343,7 @@ impl PluginsCard {
         } else {
             prefs.sidebar_width
         };
-        let padding = if f32::from(window.viewport_size().width) - sidebar < 800. {
-            16.
-        } else {
-            32.
-        };
+        let padding = catalog_ui::page_padding(f32::from(window.viewport_size().width) - sidebar);
         zuse_viewport::palette::set_light(theme.appearance.is_light());
         if let Some(definition) = self.browse_selected.as_ref().and_then(|id| {
             catalog::catalog(&self.plugins.snapshot, "", false)
@@ -1378,7 +1366,7 @@ impl PluginsCard {
                 .child(
                     div()
                         .w_full()
-                        .max_w(px(768.))
+                        .max_w(px(catalog_ui::PAGE_MAX_WIDTH))
                         .mx_auto()
                         .px(px(padding))
                         .py(px(32.))
@@ -1464,23 +1452,29 @@ impl PluginsCard {
                 );
             }
         }
-        let tabs = catalog_ui::segmented_tabs(
+        let card = cx.entity();
+        let tabs = catalog_ui::workspace_tabs(
             &theme,
             "plugins-tab",
+            "Filter plugins",
             &[
-                ("Browse", None),
-                ("Connected", (connected > 0).then_some(connected)),
+                ("Browse", None, None),
+                ("Connected", None, (connected > 0).then_some(connected)),
             ],
             usize::from(self.connected_only),
             |index, tab| {
-                tab.on_click(cx.listener(move |this, _, _, cx| {
-                    this.connected_only = index == 1;
-                    this.browse_page = 0;
-                    cx.notify();
-                }))
+                let card = card.clone();
+                catalog_ui::activate(tab, move |_, cx| {
+                    card.update(cx, |this, cx| {
+                        this.connected_only = index == 1;
+                        this.browse_page = 0;
+                        cx.notify();
+                    });
+                })
             },
         );
         let toolbar = div()
+            .w_full()
             .flex()
             .items_center()
             .gap(px(8.))
@@ -1500,6 +1494,7 @@ impl PluginsCard {
                         .on_click(cx.listener(|this, _, window, cx| this.add_server(window, cx))),
                 )
             })
+            .child(div().flex_1())
             .child(
                 catalog_ui::icon_button(
                     &theme,
@@ -1524,7 +1519,7 @@ impl PluginsCard {
             .child(
                 div()
                     .w_full()
-                    .max_w(px(768.))
+                    .max_w(px(catalog_ui::PAGE_MAX_WIDTH))
                     .mx_auto()
                     .px(px(padding))
                     .pt(px(32.))
@@ -1540,29 +1535,23 @@ impl PluginsCard {
                             .flex_col()
                             .items_start()
                             .gap(px(16.))
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(4.))
-                                    .child(
-                                        div()
-                                            .text_size(crate::typography::ui_rems(20.))
-                                            .line_height(crate::typography::ui_rems(28.))
-                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                            .child(tr(cx, msg::plugins::plugins_back)),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(12.))
-                                            .text_color(theme.text_muted)
-                                            .child(tr(cx, msg::plugins::plugins_subtitle)),
-                                    ),
-                            )
+                            .child(catalog_ui::page_heading(
+                                &theme,
+                                tr(cx, msg::plugins::plugins_back),
+                                tr(cx, msg::plugins::plugins_subtitle),
+                            ))
                             .child(toolbar),
                     )
-                    .child(div().flex().child(tabs))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .flex_wrap()
+                            .gap(px(8.))
+                            .child(tabs)
+                            .children(catalog_ui::page_tabs(&theme, false)),
+                    )
                     .children(status)
                     .children(sections),
             )

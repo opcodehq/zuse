@@ -88,6 +88,7 @@ pub mod completion_sound;
 pub mod notifications;
 
 pub mod plugin_setup;
+pub mod skill_catalog;
 pub mod plugin_state;
 
 pub mod cloud_auth;

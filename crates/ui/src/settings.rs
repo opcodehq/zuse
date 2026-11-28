@@ -35,6 +35,7 @@ pub mod notifications;
 pub mod pairing;
 pub mod plugins;
 pub mod shortcuts;
+pub(crate) mod skills;
 mod theme_community;
 pub mod thread_naming;
 pub mod wallpaper;

@@ -74,6 +74,7 @@ pub mod managed_access;
 pub mod relay_access;
 pub use zuse_harness::processes::supervisor as command_host;
 mod acp_catalog;
+pub mod github_skills;
 mod harness_api;
 mod harness_local;
 pub mod harness_models;
