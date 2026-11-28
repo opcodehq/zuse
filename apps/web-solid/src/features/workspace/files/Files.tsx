@@ -192,10 +192,11 @@ export function Files(props: { target: Target }) {
 
   // Other surfaces (Changes, History, transcript file chips) ask for a file through the pending slot.
   createEffect(() => pending.seq, () => {
-    const { path, line } = takePending();
+    const { path, line, directory } = takePending();
     if (!path) return;
-    wantLine = line ? { path, line } : null;
     reveal(chatId, path);
+    if (directory) return toggleDirectory(chatId, path, true);
+    wantLine = line ? { path, line } : null;
     openPath(path);
     revealWantedLine();
   });

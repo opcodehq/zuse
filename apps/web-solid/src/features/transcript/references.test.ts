@@ -97,7 +97,7 @@ describe("new reference kinds", () => {
   const rich = referenceCatalog({
     issues: [], pullRequests: [], threads: [], agents: [],
     files: [{ path: "src/auth.ts", icon: "ts.svg" }, { path: "reports/ZUSA-16.md" }, { path: "docs/" , directory: true }, { path: "a/index.ts" }, { path: "b/index.ts" }, { path: "/etc/passwd" }],
-    branches: [{ name: "main", chatId: "c1" }, { name: "inline-reference-chips", chatId: "c1" }, { name: "zuse/fix-billing" }],
+    branches: [{ name: "main", chatId: "c1" }, { name: "inline-reference-chips", chatId: "c1" }, { name: "zuse/fix-billing", chatId: "c2" }],
     attachments: [{ name: "screenshot.png", path: "/tmp/x/screenshot.png" }, { name: "notes", path: "/tmp/notes" }],
     zappers: [{ id: "z1", name: "Website", status: "active" }, { id: "z2", name: "QA", status: "paused" }],
   });
@@ -109,6 +109,8 @@ describe("new reference kinds", () => {
     const repeated = referenceCatalog({ issues: [], pullRequests: [], threads: [], agents: [], files: [{ path: "src/auth.ts" }, { path: "./src/auth.ts" }] });
     assert.equal(repeated.index.get("auth.ts")?.target, "src/auth.ts", "the same file listed twice keeps its basename");
     assert.deepEqual(found("Top-level folders need their slash: docs/ but not docs"), [["docs/", "file", null]]);
+    const overlap = referenceCatalog({ issues: [], pullRequests: [], threads: [], agents: [], files: [{ path: "src/auth.ts" }], branches: [{ name: "123", chatId: "c1" }] });
+    assert.deepEqual(findReferences("src/auth.ts:123 and 123", overlap).map(match => [match.start, match.end, match.reference.kind]), [[0, 15, "file"], [20, 23, "branch"]], "a line suffix is never matched again");
   });
   test("unknown, absolute and ambiguous paths stay plain", () => {
     assert.deepEqual(found("src/other.ts index.ts /etc/passwd lib/src/auth.ts"), []);

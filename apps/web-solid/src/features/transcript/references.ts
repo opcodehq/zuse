@@ -19,7 +19,7 @@ export interface ReferenceSources {
   threads: readonly { id: string; title?: string | null }[];
   agents: readonly { ref: string; title: string; status: string }[];
   files?: readonly { path: string; directory?: boolean; icon?: string }[];
-  branches?: readonly { name: string; chatId?: string }[];
+  branches?: readonly { name: string; chatId: string }[];
   attachments?: readonly { name: string; path: string }[];
   zappers?: readonly { id: string; name: string; status: string }[];
 }
@@ -92,7 +92,7 @@ export function referenceCatalog(sources: ReferenceSources): ReferenceCatalog {
     if (base !== path && /\.\w/.test(base)) basenames.set(base, seen === undefined || seen?.path === path ? { ...file, path } : null);
   }
   for (const [base, file] of basenames) if (file && !index.has(base)) add({ kind: "file", label: base, title: file.path, target: file.path, icon: file.icon, status: file.directory ? "directory" : undefined });
-  for (const branch of sources.branches ?? []) if (branch.name.length >= 3 && /[/\-_.\d]/.test(branch.name)) add({ kind: "branch", label: branch.name, title: `Branch ${branch.name}`, target: branch.chatId ?? branch.name });
+  for (const branch of sources.branches ?? []) if (branch.name.length >= 3 && /[/\-_.\d]/.test(branch.name)) add({ kind: "branch", label: branch.name, title: `Branch ${branch.name}`, target: branch.chatId });
   for (const attachment of sources.attachments ?? []) if (/\.\w{2,5}$/.test(attachment.name)) add({ kind: "attachment", label: attachment.name, title: attachment.name, target: attachment.path });
   for (const zapper of sources.zappers ?? []) if (zapper.name.trim().length >= 3) add({ kind: "zapper", label: zapper.name.trim(), title: `Zapper ${zapper.name.trim()}`, target: zapper.id, status: zapper.status });
   const labels = [...index.keys()].sort((a, b) => b.length - a.length).map(label => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
@@ -105,11 +105,14 @@ const LINE = /^(?::(\d{1,7})(?::\d{1,5})?|#L(\d{1,7}))(?![\p{L}\p{N}_])/u;
 export function findReferences(text: string, catalog: ReferenceCatalog, limit = MATCH_LIMIT): ReferenceMatch[] {
   if (!catalog.pattern || limit <= 0) return [];
   const matches: ReferenceMatch[] = [];
+  let consumed = 0;
   for (const match of text.matchAll(catalog.pattern)) {
+    if (match.index < consumed) continue;
     const reference = catalog.index.get(match[0])!;
     let end = match.index + match[0].length;
     const line = reference.kind === "file" ? LINE.exec(text.slice(end)) : null;
     if (line) end += line[0].length;
+    consumed = end;
     matches.push({ start: match.index, end, reference: line ? { ...reference, line: Number(line[1] ?? line[2]) } : reference });
     if (matches.length >= limit) break;
   }

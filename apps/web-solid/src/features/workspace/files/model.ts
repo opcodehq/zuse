@@ -51,16 +51,16 @@ const [files, setFiles] = createStore<Record<string, ChatFiles>>({});
 export { files };
 
 /** A file another surface asked the Files panel to open. */
-const [pending, setPending] = createStore<{ path: string | null; line: number | null; seq: number }>({ path: null, line: null, seq: 0 });
+const [pending, setPending] = createStore<{ path: string | null; line: number | null; directory: boolean; seq: number }>({ path: null, line: null, directory: false, seq: 0 });
 export { pending };
 
-export function openFileInPanel(path: string, line?: number) {
-  setPending(draft => { Object.assign(draft, { path, line: line ?? null, seq: pending.seq + 1 }); });
+export function openFileInPanel(path: string, target: { line?: number; directory?: boolean } = {}) {
+  setPending(draft => { Object.assign(draft, { path, line: target.line ?? null, directory: !!target.directory, seq: pending.seq + 1 }); });
   openPanel("files");
 }
 export function takePending() {
-  const request = { path: pending.path, line: pending.line };
-  setPending(draft => { draft["path"] = null; draft["line"] = null; });
+  const request = { path: pending.path, line: pending.line, directory: pending.directory };
+  setPending(draft => { draft["path"] = null; draft["line"] = null; draft["directory"] = false; });
   return request;
 }
 

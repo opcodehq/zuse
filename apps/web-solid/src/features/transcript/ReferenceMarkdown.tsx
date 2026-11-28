@@ -101,7 +101,10 @@ export function chatReferences(source: { chatId: string }): Accessor<ReferenceCa
       ].map(file => ({ ...file, icon: file.directory ? undefined : fileIconUrl(file.path.slice(file.path.lastIndexOf("/") + 1)) })),
       branches: [
         ...Object.values(state.chats).flatMap(chat => chat.branch ? [{ name: chat.branch, chatId: chat.id }] : []),
-        ...Object.values(workspace.changeRequests).flatMap(status => status?.changeRequest ? [{ name: status.changeRequest.headRef, chatId: Object.values(state.chats).find(chat => chat.checkoutId === status.checkoutId)?.id }] : []),
+        ...Object.values(workspace.changeRequests).flatMap(status => {
+          const chatId = Object.values(state.chats).find(chat => chat.checkoutId === status?.checkoutId)?.id;
+          return status?.changeRequest && chatId ? [{ name: status.changeRequest.headRef, chatId }] : [];
+        }),
       ],
       attachments: messages.flatMap(entry => entry.role === "user" ? parseAttachments(userRawText(entry)).attachments.filter(item => isImagePath(item.path)) : []),
       zappers: state.zappers.map(zapper => ({ id: zapper.id, name: zapper.config.name, status: zapper.status })),
@@ -255,10 +258,10 @@ export function decorateReferences(html: string, catalog: ReferenceCatalog, chat
   return count ? template.innerHTML : html;
 }
 
-export function openReference(kind: string, target: string, chatId: string, line?: number) {
+export function openReference(kind: string, target: string, chatId: string, line?: number, directory?: boolean) {
   if (kind === "thread") return openChat(target);
   if (kind === "agent") return openSubagent(chatId, target);
-  if (kind === "file") return openFileInPanel(target, line);
+  if (kind === "file") return openFileInPanel(target, { line, directory });
   if (kind === "commit") return void window.open(target, "_blank", "noopener,noreferrer");
   if (kind === "zapper") {
     const zapper = state.zappers.find(item => item.id === target);
@@ -299,7 +302,7 @@ export function referenceClick(event: MouseEvent, catalog: ReferenceCatalog, cha
     return;
   }
   const target = anchor.dataset.target ?? catalog.index.get(label)?.target ?? (kind === "pr" ? anchor.getAttribute("href") : null);
-  if (target) openReference(kind, target, chatId, Number(anchor.dataset.line) || undefined);
+  if (target) openReference(kind, target, chatId, Number(anchor.dataset.line) || undefined, anchor.dataset.status === "directory");
 }
 
 export function ReferenceMarkdown(props: { text: string; live: boolean; chatId: string; references: ReferenceCatalog; htmlPreview?: boolean }) {
