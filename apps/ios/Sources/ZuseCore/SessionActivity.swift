@@ -43,6 +43,18 @@ public struct SessionActivity: Sendable {
   }
 }
 
+/// Bounds a single connect attempt so a stale route, an asleep computer or a quiet socket can
+/// never leave the UI on "Connecting…" forever: the attempt is given up to a retryable state
+/// at its deadline and then retried with `RetryBackoff`.
+public enum ConnectionAttempt: Sendable {
+  /// How long to wait for a fresh connect before resolving it to a retryable state. Cloud
+  /// workspaces get longer, because reaching one can include waking its runtime.
+  public static func timeout(cloud: Bool) -> Duration { .seconds(cloud ? 40 : 15) }
+  /// The state a timed-out or failed connect resolves to; the computer item and the Chats banner
+  /// read it as "offline, reconnecting" with a working Retry, never an endless "Connecting…".
+  public static let retryableState = "Offline · reconnecting"
+}
+
 /// Immediate first recovery, with bounded jitter when a transport repeatedly flaps.
 public struct RetryBackoff: Sendable {
   public private(set) var attempt = 0

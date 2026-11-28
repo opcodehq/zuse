@@ -71,3 +71,15 @@ extension SessionActivity.Operation {
     #expect(retry.nextDelay(jitter: 0.75) == 0.75)
   }
 }
+
+@Suite struct ConnectionAttemptTests {
+  @Test func connectAttemptsAreAlwaysBoundedAndResolveToARetryableState() {
+    // Every connect has a finite deadline, so the UI can never sit on "Connecting…" forever.
+    #expect(ConnectionAttempt.timeout(cloud: false) == .seconds(15))
+    // Cloud gets longer, because reaching a workspace can include waking its runtime.
+    #expect(ConnectionAttempt.timeout(cloud: true) > ConnectionAttempt.timeout(cloud: false))
+    // A timed-out attempt resolves to the retryable state, not back to "Connecting…".
+    #expect(ConnectionAttempt.retryableState == "Offline · reconnecting")
+    #expect(ConnectionAttempt.retryableState != "Connecting…")
+  }
+}

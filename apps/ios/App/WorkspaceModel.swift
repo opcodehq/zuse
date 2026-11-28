@@ -81,6 +81,9 @@ import ZuseCore
   var draft = ""
   private(set) var rpc: RPCClient?
   private var connectionTask: Task<Void, Never>?
+  /// Bounds a single connect attempt so the UI never sits on "Connecting…" forever: if the
+  /// attempt has not come up by its deadline it is resolved to a retryable state and retried.
+  private var connectTimeoutTask: Task<Void, Never>?
   private var timelineTask: Task<Void, Never>?
   private var selection = UUID()
   private var source: Source?
@@ -281,6 +284,13 @@ import ZuseCore
     }
   }
   func refreshCloud(reportErrors: Bool = true) async {
+    #if DEBUG
+      // Offline previews keep their injected cloud chats instead of reaching the network or
+      // clearing on a signed-out account.
+      if ProcessInfo.processInfo.arguments.contains("--native-preview"), !CloudPreview.enabled {
+        return
+      }
+    #endif
     guard account.signedIn else {
       cloudChats = []
       pendingCloudActions = [:]
@@ -601,6 +611,7 @@ import ZuseCore
     connectionState = "Connecting…"
     linkRoute = nil
     connectionProblem = nil
+    startConnectWatchdog(source: source, selection: current, generation: accountGeneration)
     connectionTask = Task {
       var pendingClient: RPCClient?
       do {
@@ -727,6 +738,10 @@ import ZuseCore
         }
         rpc = client
         healthySince = .now
+        // The socket is up; the post-connect RPC calls carry their own timeouts, so the
+        // connect watchdog has done its job.
+        connectTimeoutTask?.cancel()
+        connectTimeoutTask = nil
         zappers.attach(client)
         pullRequests.attach(client)
         if !ProcessInfo.processInfo.arguments.contains("--rpc-fixture") {
@@ -1393,6 +1408,8 @@ import ZuseCore
     checkpointTask?.cancel()
     checkpointTask = nil
     connectionTask?.cancel()
+    connectTimeoutTask?.cancel()
+    connectTimeoutTask = nil
     sessionCatalogTask?.cancel()
     catalogProblem = nil
     timelineTask?.cancel()
@@ -1564,6 +1581,36 @@ import ZuseCore
       }
     }
   }
+  /// Starts the bounded deadline for a fresh connect. If the socket has not come up by then the
+  /// attempt is torn down and resolved to a retryable state, then retried with backoff — a stuck
+  /// route or an asleep computer can no longer leave the UI on "Connecting…" forever.
+  private func startConnectWatchdog(source: Source, selection: UUID, generation: UUID) {
+    connectTimeoutTask?.cancel()
+    let isCloud: Bool
+    if case .cloud = source { isCloud = true } else { isCloud = false }
+    let deadline = ConnectionAttempt.timeout(cloud: isCloud)
+    connectTimeoutTask = Task { [weak self] in
+      try? await Task.sleep(for: deadline)
+      guard !Task.isCancelled else { return }
+      await self?.connectAttemptTimedOut(selection: selection, generation: generation)
+    }
+  }
+  private func connectAttemptTimedOut(selection: UUID, generation: UUID) {
+    // Only act on the attempt that is still in flight and still has no socket.
+    guard self.selection == selection, account.generation == generation, rpc == nil,
+      connectionState == "Connecting…"
+    else { return }
+    connectTimeoutTask = nil
+    // Tear the in-flight attempt down; its catch is skipped because it is cancelled, so this
+    // path owns resolving the state and scheduling the retry.
+    connectionTask?.cancel()
+    loading = false
+    connectionProblem =
+      connectionProblem
+      ?? "\(connectedComputer ?? "Your computer") didn’t answer in time. Reconnecting…"
+    connectionState = ConnectionAttempt.retryableState
+    scheduleRecovery()
+  }
   private func scheduleRecovery() {
     recoveryTask?.cancel()
     heartbeatTask?.cancel()
@@ -1647,8 +1694,11 @@ import ZuseCore
     foreground = active
     if active {
       PairedNetwork.changed()
+      // The computer reconnect and the cloud refresh are independent: a stuck computer must not
+      // delay cloud chats, and a slow cloud fetch must not delay the computer. A cloud failure
+      // stays as a retryable notice rather than a one-shot alert.
       if source != nil { reconnect() }
-      Task { await refreshCloud() }
+      Task { await refreshCloud(reportErrors: false) }
     } else {
       persistDraft(immediate: true)
       recoveryTask?.cancel()
