@@ -200,6 +200,17 @@ fn enabled() -> bool {
     true
 }
 
+/// A plugin connected on the previous plugin service, to connect once more.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MovedPlugin {
+    pub plugin_id: String,
+    pub name: String,
+    /// A server added by URL: it is added again, not signed in to.
+    #[serde(default)]
+    pub custom: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
@@ -215,6 +226,11 @@ pub enum PluginResponse {
         endpoint: String,
         catalog: Vec<PluginDefinition>,
         connections: Vec<PluginConnection>,
+        /// Plugins this workspace had on the previous plugin service and has
+        /// not connected again here. Filled in by the desktop engine; the
+        /// hosted API never sends it.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        moved: Vec<MovedPlugin>,
     },
     Attempt {
         id: String,

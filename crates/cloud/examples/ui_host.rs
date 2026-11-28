@@ -24,6 +24,7 @@ async fn main() -> anyhow::Result<()> {
         core.plugins = zuse_engine::plugins::Plugins::open(
             &root,
             core.account.clone(),
+            api.into(),
             core.workspace.clone(),
             false,
         )?;
