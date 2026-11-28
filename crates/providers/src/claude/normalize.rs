@@ -970,11 +970,19 @@ impl Normalizer {
                 }
                 let window =
                     rate_window_label(f.rate_limit_info.rate_limit_type.as_deref().unwrap_or(""));
-                vec![AgentEvent::Error {
-                    message: format!(
-                        "Claude {window} limit reached — the turn was blocked. Try again after it resets."
-                    ),
-                }]
+                vec![
+                    AgentEvent::UsageLimit {
+                        resets_at: f
+                            .rate_limit_info
+                            .resets_at
+                            .and_then(|seconds| seconds.checked_mul(1000)),
+                    },
+                    AgentEvent::Error {
+                        message: format!(
+                            "Claude {window} limit reached — the turn was blocked. Try again after it resets."
+                        ),
+                    },
+                ]
             }
 
             Frame::Result(f) => {
@@ -1301,11 +1309,30 @@ mod tests {
     }
 
     #[test]
+    fn usage_limit_preserves_reset_time_for_resuming() {
+        let events = normalize_one(
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1800000000,"rateLimitType":"five_hour"}}"#,
+        );
+        assert!(matches!(
+            events.first(),
+            Some(AgentEvent::UsageLimit {
+                resets_at: Some(1_800_000_000_000)
+            })
+        ));
+    }
+
+    #[test]
     fn a_rejected_window_carried_by_overage_is_not_an_error() {
         let blocked = normalize_one(
             r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"five_hour","overageStatus":"rejected"}}"#,
         );
-        assert!(matches!(blocked.as_slice(), [AgentEvent::Error { .. }]));
+        assert!(matches!(
+            blocked.as_slice(),
+            [
+                AgentEvent::UsageLimit { resets_at: None },
+                AgentEvent::Error { .. }
+            ]
+        ));
         for overage in [
             r#""overageStatus":"allowed""#,
             r#""overageStatus":"allowed_warning""#,

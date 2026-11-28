@@ -1,9 +1,14 @@
-import { createEffect, createMemo, createSignal, createStore, flush, For, onSettled, Show } from "solid-js";
+import { createEffect, createRoot, createMemo, createSignal, createStore, flush, For, onSettled, Show } from "solid-js";
 import { render } from "@solidjs/web";
 import type { SessionMessageEntry, TranscriptFrame } from "@/core/protocol";
 import { applyTranscriptFrame, TranscriptDesync } from "@/core/transcript";
 import { Dialog, Menu } from "@/ui/primitives";
 import { createVirtualizer } from "@/ui/virtualizer";
+
+import { rpc } from "@/core/connection";
+import { M } from "@/core/methods";
+import { setState, state } from "@/core/store";
+import { useUsageResume } from "@/features/composer/usageResume";
 
 const check = (value: unknown, message: string) => { if (!value) throw new Error(message); };
 const entry = (id: string, text = id): SessionMessageEntry => ({
@@ -52,6 +57,7 @@ function Fixture() {
 
   (window as unknown as { solid2: unknown }).solid2 = {
     transcriptChecks,
+    recoveryChecks,
     counters: () => ({ effectRuns, cleanups, rowMounts }),
     update: () => { setCount(1); setCount(2); flush(); },
     unmount: () => { setMounted(false); flush(); },
@@ -78,3 +84,50 @@ function Fixture() {
   </>;
 }
 render(() => <Fixture />, document.getElementById("root")!);
+
+/** A failed or skipped cancellation must never report success to the tray. */
+function recoveryChecks() {
+  const original = rpc.call;
+  const connection = state.connection;
+  setState(draft => { draft.connection = { kind: "connecting" }; });
+  return createRoot(dispose => {
+    const status = { enabled: true, pending: { enabled: false, resetsAt: null } };
+    let mutations = 0;
+    let rejectMutation: (error: Error) => void = () => {};
+    rpc.call = (async (method: string) => {
+      if (method === M.GET_USAGE_RESUME) return status;
+      mutations++;
+      return new Promise((_resolve, reject) => { rejectMutation = reject; });
+    }) as typeof rpc.call;
+    const recovery = useUsageResume(() => null);
+    return (async () => {
+      try {
+        check(await recovery.setEnabled(false) === false, "offline cancellation must fail explicitly");
+        check(mutations === 0, "offline cancellation must not send");
+        setState(draft => { draft.connection = { kind: "connected" }; });
+        flush();
+        const pending = recovery.setEnabled(false);
+        flush();
+        check(await recovery.setEnabled(false) === false, "busy cancellation must fail explicitly");
+        check(mutations === 1, "busy cancellation must not send twice");
+        rejectMutation(new Error("Cancellation failed"));
+        check(await pending === false, "RPC rejection must not dismiss a scheduled error");
+        flush();
+        rpc.call = (async () => status) as typeof rpc.call;
+        check(await recovery.setEnabled(false) === true, "confirmed cancellation must report success");
+        flush();
+        let finish: (value: typeof status) => void = () => {};
+        rpc.call = (() => new Promise(resolve => { finish = resolve; })) as typeof rpc.call;
+        const stale = recovery.setEnabled(false);
+        setState(draft => { draft.epoch++; });
+        flush();
+        finish(status);
+        check(await stale === false, "old cancellation must not dismiss a different chat or connection");
+      } finally {
+        dispose();
+        rpc.call = original;
+        setState(draft => { draft.connection = connection; });
+      }
+    })();
+  });
+}
