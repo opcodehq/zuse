@@ -1,6 +1,5 @@
 "use client";
 import { useWebsiteMessages } from "@zuse/i18n/website/react";
-import { CalendarDays } from "lucide-react";
 import { motion } from "motion/react";
 import type React from "react";
 import { Button } from "@/components/button";
@@ -70,15 +69,18 @@ export function FeaturesTwo() {
 						{t("showcase:cloud_beta")}
 					</p>
 					<h3 className="text-heading mt-2 text-3xl font-light tracking-tight">
-						{t("showcase:interested_in_a_hosted_workspace")}
+						{t("showcase:try_a_hosted_workspace_first_week_1")}
 					</h3>
 				</div>
-				<Button
-					href="https://cal.com/swaraj/15min"
-					text={t("showcase:book_a_call")}
-					icon={<CalendarDays aria-hidden="true" className="size-4 shrink-0" />}
-					containerClassName="justify-center min-w-40"
-				/>
+				<div className="flex flex-col items-center gap-2">
+					<Button
+						text={t("showcase:start_for_1")}
+						containerClassName="justify-center min-w-40"
+					/>
+					<p className="text-muted-foreground font-mono text-[11px]">
+						{t("showcase:subscribe_in_the_app_after_you_download")}
+					</p>
+				</div>
 			</div>
 		</Container>
 	);

@@ -1,5 +1,6 @@
 {
-	"book_a_call": "Gespräch buchen",
+	"start_for_1": "Für 1 $ starten",
+	"subscribe_in_the_app_after_you_download": "Nach dem Download in der App abonnieren",
 	"review": "Rezension",
 	"inspect_the_complete_branch_commit_deliberately_push_when_it_is_ready": "Untersuchen Sie den gesamten Zweig, führen Sie einen bewussten Commit durch, pushen Sie ihn, wenn er bereit ist, und senden Sie fehlgeschlagene Prüfungen zurück an den aktiven Agenten.",
 	"agent_handoff": "Agentenübergabe",
@@ -139,7 +140,7 @@
 	"bring_the_agents_you_already_use": "Bringen Sie die Agenten mit, die Sie bereits verwenden",
 	"three_rack_mounted_servers_online": "Drei Rack-Server online",
 	"zuse_desktop_workspace": "Zuse Desktop-Arbeitsbereich",
-	"interested_in_a_hosted_workspace": "Interessiert an einem gehosteten Arbeitsbereich?",
+	"try_a_hosted_workspace_first_week_1": "Gehosteten Arbeitsbereich testen: erste Woche 1 $",
 	"cloud_beta": "Cloud-Beta",
 	"agent_finished": "Agent ist fertig",
 	"interest_registered_we_ll_email_you_about_beta_access": "Interesse angemeldet. Wir informieren Sie per E-Mail über den Beta-Zugang.",

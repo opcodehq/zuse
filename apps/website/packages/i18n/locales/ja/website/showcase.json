@@ -1,5 +1,6 @@
 {
-	"book_a_call": "通話を予約",
+	"start_for_1": "1ドルで始める",
+	"subscribe_in_the_app_after_you_download": "ダウンロード後にアプリ内で登録",
 	"agent_handoff": "エージェントのハンドオフ",
 	"review": "レビュー",
 	"continue_the_work_with_another_agent": "別のエージェントと作業を続行する",
@@ -139,7 +140,7 @@
 	"agent_finished": "エージェントが終了しました",
 	"zuse_desktop_workspace": "Zuse デスクトップ ワークスペース",
 	"bring_the_agents_you_already_use": "すでに使用しているエージェントを持ち込む",
-	"interested_in_a_hosted_workspace": "ホストされたワークスペースに興味がありますか?",
+	"try_a_hosted_workspace_first_week_1": "ホスト型ワークスペースを試す: 最初の1週間は1ドル",
 	"three_rack_mounted_servers_online": "3 台のラックマウント型サーバーがオンライン",
 	"interest_registered_we_ll_email_you_about_beta_access": "興味が登録されました。ベータ版へのアクセスについてはメールでお知らせします。",
 	"connect_your_existing_coding_agent_subscriptions_and_choose_the_right": "既存のコーディング エージェント サブスクリプションを接続し、各セッションに適切なプロバイダーを選択します。",

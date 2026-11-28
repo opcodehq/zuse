@@ -1,5 +1,6 @@
 {
-	"book_a_call": "預約通話",
+	"start_for_1": "1 美元開始",
+	"subscribe_in_the_app_after_you_download": "下載後在應用程式內訂閱",
 	"agent_handoff": "座席切換",
 	"review": "審查",
 	"continue_the_work_with_another_agent": "與另一位代理商繼續合作",
@@ -140,7 +141,7 @@
 	"agents_in_your_pocket": "口袋裡的代理",
 	"connect_your_existing_coding_agent_subscriptions_and_choose_the_right": "連接您現有的編碼代理訂閱並為每個會話選擇正確的提供者。",
 	"give_every_task_its_own_chat_branch_and_git_worktree_so_multiple_attem": "為每個任務提供自己的聊天、分支和 git 工作樹，這樣多次嘗試就不會互相覆蓋。",
-	"interested_in_a_hosted_workspace": "對託管工作區有興趣嗎？",
+	"try_a_hosted_workspace_first_week_1": "試用託管工作區：首週 1 美元",
 	"zuse_desktop_workspace": "Zuse 桌面工作區",
 	"bring_the_agents_you_already_use": "帶上您已經使用的代理",
 	"three_rack_mounted_servers_online": "三台機架式伺服器在線",

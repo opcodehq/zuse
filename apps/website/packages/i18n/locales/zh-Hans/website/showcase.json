@@ -1,5 +1,6 @@
 {
-	"book_a_call": "预约通话",
+	"start_for_1": "1 美元开始",
+	"subscribe_in_the_app_after_you_download": "下载后在应用内订阅",
 	"review": "审查",
 	"continue_the_work_with_another_agent": "换一个智能体，继续当前工作",
 	"fork_a_session_or_start_a_new_provider_with_the_plan_transcript_and_fi": "从当前会话创建新会话，或换用其他模型服务商，并附上所需的计划、会话记录和文件。由你决定如何继续。",
@@ -129,7 +130,7 @@
 	"follow_runs_and_approve_decisions_from_your_phone": "用手机跟进任务进度，并确认需要你批准的操作。",
 	"run_isolated_cloud_workspaces_even_after_your_computer_goes_offline": "即使你的电脑离线，智能体仍可在独立的云端工作区中持续运行。",
 	"run_agents_inspect_changes_and_manage_worktrees_in_zuse_desktop": "在 Zuse 桌面端运行智能体、审查代码改动并管理 Git worktree。",
-	"interested_in_a_hosted_workspace": "对托管工作区感兴趣吗？",
+	"try_a_hosted_workspace_first_week_1": "试用托管工作区：首周 1 美元",
 	"email_address": "电子邮件",
 	"request_access": "请求访问权限",
 	"sending": "正在发送...",
