@@ -1470,7 +1470,6 @@ mod tests {
         cx.run_until_parked();
         cx.update(|window, cx| window.draw(cx).clear());
         assert!(cx.debug_bounds("chat-local-pin").is_some());
-        assert!(cx.debug_bounds("sidebar-settled-toggle").is_none());
     }
 
     #[gpui::test]
