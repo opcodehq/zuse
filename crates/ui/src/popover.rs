@@ -677,6 +677,34 @@ pub fn nested_menu_with_gutter(
         .into_any_element()
 }
 
+/// A nested menu hanging below its trigger, right edges aligned, painted
+/// above the menu that holds the trigger. Like [`nested_menu`], outside
+/// clicks still reach the parent menu; the parent decides what they close.
+pub fn nested_menu_below_end(id: impl Into<SharedString>, content: AnyElement) -> AnyElement {
+    let content = crate::frost::floating_glass(CARD_RADIUS, crate::frost::MENU_BLUR, content)
+        .into_any_element();
+    div()
+        .absolute()
+        .bottom_0()
+        .right_0()
+        .size_0()
+        .child(
+            gpui::deferred(
+                gpui::anchored()
+                    .anchor(Anchor::TopRight)
+                    .snap_to_window_with_margin(px(8.0))
+                    .child(menu_motion_from(
+                        id.into(),
+                        None,
+                        div().occlude().pt(px(MENU_TRAVEL)).child(content),
+                        -MENU_TRAVEL,
+                    )),
+            )
+            .priority(2),
+        )
+        .into_any_element()
+}
+
 /// [`anchored_menu_below`] with a caller-chosen trigger→card gap — the
 /// changes-header dropdowns hang off a tight titlebar band and need more
 /// breathing room than the default 6px (user report; about 10 reads well).

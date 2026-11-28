@@ -88,6 +88,9 @@ impl EngineBackend for RemoteEngine {
         self.retry.notify_one();
         true
     }
+    fn connection_stopped(&self) -> bool {
+        self.source.cancellation().is_cancelled() || self.control.stopped().is_cancelled()
+    }
     fn mode(&self) -> EngineMode {
         EngineMode::Remote {
             url: self

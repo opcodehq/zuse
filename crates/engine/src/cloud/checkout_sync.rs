@@ -1,18 +1,24 @@
-//! A cloud chat's files in the user's own local checkout of the same
-//! repository, one way, so the tools already running there (a dev server,
-//! containers, builds) pick up what the cloud agent changes.
+//! A cloud chat's files in a folder of its own on this computer, one way, so
+//! a dev server, containers or builds can run against what the cloud agent
+//! changes without ever touching the user's own checkout.
 //!
-//! Turning it on saves the checkout exactly (branch, HEAD and tracked
-//! changes, pinned under hidden refs and persisted in the profile), then
-//! checks out a checkpoint commit of the chat's files, detached. While on,
-//! each new snapshot of the chat's checkout becomes the next checkpoint.
-//! Edits made in the folder pause sync instead of being overwritten.
-//! Turning it off, archiving the chat, stopping this computer's connector or
-//! switching accounts restores the saved state; an interrupted restore
-//! finishes after a restart. Untracked and ignored files are never touched.
+//! Turning it on makes `~/zuse/cloud/<owner>-<repo>/<chat>`: a git worktree
+//! of the user's clone of the repository when Zuse knows one (cheap: it
+//! shares that clone's objects), otherwise a fresh shallow clone. Each new
+//! snapshot of the chat's checkout becomes a checkpoint commit the folder
+//! moves to, detached. Edits made in the folder pause sync instead of being
+//! overwritten; the user discards them to resume or stops syncing to keep
+//! editing. Turning it off keeps the folder; deleting it, or archiving the
+//! chat while the folder holds nothing but the chat's files, removes it.
+//! Untracked and ignored files are never touched.
+//!
+//! Earlier versions synced into the user's own checkout. Such a sync is put
+//! back exactly as saved (branch, HEAD and tracked changes; crash-safe), then
+//! the chat moves on to a folder of its own.
 //!
 //! Snapshots come over the chat's existing computer connection (the same
-//! transfer as "Sync to a local directory") and never wake compute.
+//! transfer as "Sync to a local directory") and never wake compute. A
+//! snapshot is verified completely before anything in the folder changes.
 use super::*;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -37,9 +43,26 @@ const MIN_DELAY: Duration = Duration::from_secs(3);
 const MAX_DELAY: Duration = Duration::from_secs(30);
 /// How often the chat itself is checked for being archived.
 const CHAT_CHECK: Duration = Duration::from_secs(30);
+/// Snapshot attempts in one step when the connection drops part way; each
+/// one keeps what arrived.
+const SNAPSHOT_ATTEMPTS: usize = 3;
+/// State file versions: 1 synced the user's own checkout, 2 a folder of the
+/// chat's own (older versions of the app skip those).
+const VERSION_CHECKOUT: u32 = 1;
+const VERSION_FOLDER: u32 = 2;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum Mode {
+    /// The user's own checkout, saved and put back (earlier versions).
+    #[default]
+    Checkout,
+    /// A folder made for this chat.
+    Folder,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -49,33 +72,50 @@ enum Phase {
     On,
     /// Putting the checkout back began; it finishes even after a restart.
     Restoring,
+    /// Not syncing; the chat's folder stays.
+    Stopped,
 }
 
-/// What is persisted for one synced checkout, written before any file in
-/// the checkout changes.
+/// What is persisted for one synced folder, written before any file in it
+/// changes.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct State {
     version: u32,
+    #[serde(default)]
+    mode: Mode,
     account_id: String,
     workspace_id: String,
     chat_id: String,
     path: PathBuf,
     phase: Phase,
-    /// How the checkout was before its first checkpoint; absent until then.
+    /// How the folder was before its first checkpoint; absent until then.
     #[serde(default)]
     branch: Option<String>,
     #[serde(default)]
     head: Option<String>,
     #[serde(default)]
     changes: Option<String>,
-    /// The checkpoint the checkout is on.
+    /// The checkpoint the folder is on.
     #[serde(default)]
     checkpoint: Option<String>,
     /// The checkpoint a move began toward, recorded before any file moves:
     /// if HEAD is there, the move finished.
     #[serde(default)]
     pending: Option<String>,
+    /// A chat's folder: the user's clone it is a worktree of, when it is one.
+    #[serde(default)]
+    source: Option<PathBuf>,
+    /// A chat's folder: the repository (`host/owner/repo`) and where to
+    /// clone it from when there is no clone to make a worktree of.
+    #[serde(default)]
+    repository: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    /// An own-checkout sync being put back so the chat can move to a folder
+    /// of its own; remembered across a restart.
+    #[serde(default)]
+    migrating: bool,
 }
 impl State {
     fn saved(&self) -> Option<repo::Saved> {
@@ -92,6 +132,34 @@ impl State {
             self.chat_id.clone(),
         )
     }
+    fn folder(
+        account: &str,
+        workspace: &str,
+        chat: &str,
+        path: PathBuf,
+        repository: &str,
+        source: Option<PathBuf>,
+        url: Option<String>,
+    ) -> Self {
+        Self {
+            version: VERSION_FOLDER,
+            mode: Mode::Folder,
+            account_id: account.into(),
+            workspace_id: workspace.into(),
+            chat_id: chat.into(),
+            path,
+            phase: Phase::On,
+            branch: None,
+            head: None,
+            changes: None,
+            checkpoint: None,
+            pending: None,
+            source,
+            repository: Some(repository.into()),
+            url,
+            migrating: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -101,16 +169,22 @@ pub(crate) struct Status {
     chat_id: String,
     enabled: bool,
     /// `off`, `preparing`, `syncing`, `synced`, `behind` (the cloud computer
-    /// isn't reachable right now), `paused` (edited here), `restoring` or
+    /// isn't reachable right now), `paused` (edited here), `restoring` (an
+    /// earlier version's sync into the user's checkout going back) or
     /// `error`.
     state: &'static str,
+    /// The chat's folder, also while off when it was kept.
     local_path: Option<PathBuf>,
+    /// The user's clone the folder is a worktree of.
+    source_path: Option<PathBuf>,
     last_synced_at: Option<i64>,
     files: usize,
     /// Why it is paused, behind or failed.
     error: Option<String>,
     /// Something to tell the user once, such as where kept edits went.
     notice: Option<String>,
+    /// The cloud computer must be updated before it can sync.
+    update_required: bool,
 }
 impl Status {
     fn off(workspace: &str, chat: &str) -> Self {
@@ -120,10 +194,12 @@ impl Status {
             enabled: false,
             state: "off",
             local_path: None,
+            source_path: None,
             last_synced_at: None,
             files: 0,
             error: None,
             notice: None,
+            update_required: false,
         }
     }
     fn on(state: &State) -> Self {
@@ -132,8 +208,10 @@ impl Status {
             state: match state.phase {
                 Phase::On => "preparing",
                 Phase::Restoring => "restoring",
+                Phase::Stopped => "off",
             },
             local_path: Some(state.path.clone()),
+            source_path: state.source.clone(),
             ..Self::off(&state.workspace_id, &state.chat_id)
         }
     }
@@ -152,7 +230,7 @@ type Reporter = Arc<dyn Fn(String, String, String) + Send + Sync>;
 
 #[derive(Default)]
 pub(super) struct Manager {
-    /// By checkout folder: one chat per checkout.
+    /// By folder: one chat per folder.
     records: Mutex<HashMap<PathBuf, Record>>,
     /// What the user should hear about a chat whose sync ended on its own.
     notices: Mutex<HashMap<(String, String, String), String>>,
@@ -164,6 +242,9 @@ pub(super) struct Manager {
     reporter: Mutex<Option<Reporter>>,
     /// Checkouts being put back right now: one restore per checkout.
     restoring: Mutex<std::collections::HashSet<PathBuf>>,
+    /// Kept folders of stopped syncs by how many checks in a row found their
+    /// chat archived.
+    archived: Mutex<HashMap<PathBuf, u8>>,
 }
 
 /// Holds a checkout's restore slot until dropped.
@@ -213,12 +294,77 @@ fn read_states(profile: &Path) -> Vec<(PathBuf, State)> {
                 return None;
             }
             let state: State = serde_json::from_slice(&fs::read(&path).ok()?).ok()?;
-            (state.version == 1
-                && state.path.is_absolute()
-                && path == state_file(profile, &state.path))
-            .then_some((path, state))
+            let known = match state.mode {
+                Mode::Checkout => state.version == VERSION_CHECKOUT,
+                Mode::Folder => state.version == VERSION_FOLDER,
+            };
+            (known && state.path.is_absolute() && path == state_file(profile, &state.path))
+                .then_some((path, state))
         })
         .collect()
+}
+
+/// Where chats' folders go: `ZUSE_CLOUD_SYNC_ROOT` when set, otherwise
+/// `~/zuse/cloud`.
+fn folders_root() -> Result<PathBuf> {
+    if let Some(root) = std::env::var_os("ZUSE_CLOUD_SYNC_ROOT").map(PathBuf::from)
+        && root.is_absolute()
+    {
+        return Ok(root);
+    }
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|home| home.is_absolute())
+        .context("Couldn't find your home folder.")?;
+    Ok(home.join("zuse").join("cloud"))
+}
+
+/// One path segment from free text: lowercase letters, digits, `.`, `_`
+/// and `-`.
+fn segment_name(value: &str) -> String {
+    let name = value
+        .to_ascii_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    let name = name.trim_matches(|c| c == '-' || c == '.').to_owned();
+    if name.is_empty() { "chat".into() } else { name }
+}
+
+/// The folder for a chat of `repository` (`host/owner/repo`) under `root`:
+/// `<owner>-<repo>/<the chat id's last 8 letters and digits>`, with a number
+/// added when something else is already there.
+fn folder_for(root: &Path, repository: &str, chat: &str, taken: &dyn Fn(&Path) -> bool) -> PathBuf {
+    let mut parts = repository.rsplit('/');
+    let repo = parts.next().unwrap_or("repository");
+    let owner = parts.next();
+    let group = segment_name(&match owner {
+        Some(owner) => format!("{owner}-{repo}"),
+        None => repo.to_owned(),
+    });
+    let letters = chat
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect::<Vec<_>>();
+    let short = segment_name(
+        &letters[letters.len().saturating_sub(8)..]
+            .iter()
+            .collect::<String>(),
+    );
+    let base = root.join(group);
+    let mut path = base.join(&short);
+    let mut n = 2;
+    while taken(&path) {
+        path = base.join(format!("{short}-{n}"));
+        n += 1;
+    }
+    path
 }
 
 /// The folder a chat is synced into on this computer, once it holds the
@@ -243,8 +389,8 @@ pub(crate) fn synced_path(
     })
 }
 
-/// Make `path` a checkout synced to a chat (tests of the connector's
-/// report). The returned closure moves it onto a branch, as a user would.
+/// Make `path` a folder synced to a chat (tests of the connector's report).
+/// The returned closure moves it onto a branch, as a user would.
 #[cfg(test)]
 pub(crate) fn record_synced_for_test(
     profile: &Path,
@@ -276,19 +422,17 @@ pub(crate) fn record_synced_for_test(
     run(&["commit", "-q", "--allow-empty", "-m", "base"]);
     run(&["checkout", "-q", "--detach"]);
     let checkpoint = repo::head(path).unwrap();
-    let state = State {
-        version: 1,
-        account_id: account.into(),
-        workspace_id: workspace.into(),
-        chat_id: chat.into(),
-        path: path.to_owned(),
-        phase: Phase::On,
-        branch: None,
-        head: Some(checkpoint.clone()),
-        changes: None,
-        checkpoint: Some(checkpoint),
-        pending: None,
-    };
+    let mut state = State::folder(
+        account,
+        workspace,
+        chat,
+        path.to_owned(),
+        "github.com/example/repo",
+        None,
+        None,
+    );
+    state.head = Some(checkpoint.clone());
+    state.checkpoint = Some(checkpoint);
     write_state(&state_file(profile, path), &state).unwrap();
     let path = path.to_owned();
     move || {
@@ -315,7 +459,7 @@ pub fn set_reporter(report: impl Fn(String, String, String) + Send + Sync + 'sta
     }
 }
 
-/// Re-check every synced checkout now (for example after this computer's
+/// Re-check every synced folder now (for example after this computer's
 /// connector stopped).
 pub fn nudge() {
     if let Ok(api) = CloudApi::shared() {
@@ -329,6 +473,40 @@ fn authorized(auth: &Auth, account: &str) -> bool {
     super::sync::authorized(auth, account)
 }
 
+/// Why a sync must end on its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Ending {
+    Account,
+    Connector,
+    Archived,
+}
+impl Ending {
+    /// What the user hears, for a sync of `state`'s kind.
+    fn notice(self, state: &State) -> String {
+        let folder = state.path.display();
+        match (state.mode, self) {
+            (Mode::Checkout, Ending::Account) => {
+                format!("You switched accounts, so {folder} went back to how you left it.")
+            }
+            (Mode::Checkout, Ending::Connector) => format!(
+                "This computer stopped running cloud chat commands, so {folder} went back to how you left it."
+            ),
+            (Mode::Checkout, Ending::Archived) => {
+                format!("This chat was archived, so {folder} went back to how you left it.")
+            }
+            (Mode::Folder, Ending::Account) => {
+                format!("You switched accounts, so sync stopped. The folder stays at {folder}.")
+            }
+            (Mode::Folder, Ending::Connector) => format!(
+                "This computer stopped running cloud chat commands, so sync stopped. The folder stays at {folder}."
+            ),
+            (Mode::Folder, Ending::Archived) => format!(
+                "This chat was archived. Its folder has changes made here, so it stays at {folder}."
+            ),
+        }
+    }
+}
+
 impl Manager {
     fn report(&self, chat: (String, String, String)) {
         let reporter = lock(&self.reporter).clone();
@@ -337,7 +515,7 @@ impl Manager {
         }
     }
 
-    /// Load persisted checkouts once per profile.
+    /// Load persisted syncs once per profile.
     fn hydrate(&self, profile: &Path) {
         let mut loaded = lock(&self.loaded);
         if loaded.as_deref() == Some(profile) {
@@ -358,24 +536,25 @@ impl Manager {
     }
 
     fn by_chat(&self, account: &str, workspace: &str, chat: &str) -> Option<PathBuf> {
-        lock(&self.records)
+        let records = lock(&self.records);
+        let matching = |r: &&Record| {
+            r.state.account_id == account
+                && r.state.workspace_id == workspace
+                && r.state.chat_id == chat
+        };
+        // An earlier version's sync of the user's checkout comes first: it
+        // must go back before anything else happens for this chat.
+        records
             .iter()
-            .find(|(_, r)| {
-                r.state.account_id == account
-                    && r.state.workspace_id == workspace
-                    && r.state.chat_id == chat
-            })
+            .filter(|(_, r)| matching(r))
+            .min_by_key(|(_, r)| r.state.mode == Mode::Folder)
             .map(|(path, _)| path.clone())
     }
 
     fn status(&self, account: &str, workspace: &str, chat: &str) -> Status {
+        let key = self.by_chat(account, workspace, chat);
         let records = lock(&self.records);
-        let found = records.values().find(|r| {
-            r.state.account_id == account
-                && r.state.workspace_id == workspace
-                && r.state.chat_id == chat
-        });
-        match found {
+        match key.and_then(|key| records.get(&key)) {
             Some(record) => record.status.clone(),
             None => {
                 let mut status = Status::off(workspace, chat);
@@ -415,12 +594,42 @@ impl Manager {
         Ok(())
     }
 
+    /// Record a new chat folder (not made yet: its worker makes it).
+    fn insert(&self, profile: &Path, state: State) -> Result<PathBuf> {
+        let key = state.path.clone();
+        let file = state_file(profile, &key);
+        write_state(&file, &state)?;
+        lock(&self.records).insert(
+            key.clone(),
+            Record {
+                status: Status::on(&state),
+                state,
+                file,
+                cancel: CancellationToken::new(),
+                wake: Arc::new(Notify::new()),
+                task: None,
+            },
+        );
+        Ok(key)
+    }
+
+    /// A free folder for a new chat folder under `root`.
+    fn new_folder(&self, root: &Path, repository: &str, chat: &str) -> Result<PathBuf> {
+        fs::create_dir_all(root).with_context(|| format!("Couldn't create {}.", root.display()))?;
+        let root = root.canonicalize()?;
+        let records = lock(&self.records);
+        Ok(folder_for(&root, repository, chat, &|path| {
+            records.contains_key(path) || path.exists()
+        }))
+    }
+
     fn start(api: &Arc<CloudApi>, auth: &Auth, key: &Path) {
         let mut records = lock(&api.checkouts.records);
         let Some(record) = records.get_mut(key) else {
             return;
         };
-        if record.state.phase != Phase::On
+        if record.state.mode != Mode::Folder
+            || record.state.phase != Phase::On
             || record.task.as_ref().is_some_and(|task| !task.is_finished())
             || !authorized(auth, &record.state.account_id)
         {
@@ -435,10 +644,8 @@ impl Manager {
         }));
     }
 
-    /// Stop syncing `key` (waiting for its worker) and put the checkout back.
-    /// `notice` is what the user hears when this wasn't their own choice.
-    async fn end(&self, key: &Path, notice: Option<String>) -> Result<Status> {
-        let chat = self.state(key).map(|state| state.chat());
+    /// Stop `key`'s worker and wait for it.
+    async fn halt_worker(&self, key: &Path) {
         let task = {
             let mut records = lock(&self.records);
             records.get_mut(key).and_then(|record| {
@@ -451,7 +658,16 @@ impl Manager {
         {
             tracing::warn!("checkout sync: worker ended abnormally");
         }
+    }
+
+    /// Turn sync off. A chat's folder stays; the user's own checkout (from
+    /// an earlier version) goes back. `notice` is what the user hears when
+    /// this wasn't their own choice.
+    async fn end(&self, key: &Path, notice: Option<String>) -> Result<Status> {
+        let chat = self.state(key).map(|state| state.chat());
+        self.halt_worker(key).await;
         match (self.state(key), chat) {
+            (Some(state), _) if state.mode == Mode::Folder => self.stopped(key, notice),
             (Some(_), _) => self.restore(key, notice).await,
             // Its worker already put it back.
             (None, Some(chat)) => Ok(self.status(&chat.0, &chat.1, &chat.2)),
@@ -459,8 +675,86 @@ impl Manager {
         }
     }
 
-    /// Put the checkout back; the record goes once it is. The caller has
-    /// stopped its worker (or is it).
+    /// Mark a chat's folder as no longer syncing (its worker is stopped, or
+    /// is the caller).
+    fn stopped(&self, key: &Path, notice: Option<String>) -> Result<Status> {
+        let mut state = self.state(key).context("Sync stopped.")?;
+        if state.phase != Phase::Stopped {
+            state.phase = Phase::Stopped;
+            state.pending = None;
+            self.save_state(key, &state)?;
+        }
+        let status = {
+            let mut records = lock(&self.records);
+            let record = records.get_mut(key).context("Sync stopped.")?;
+            record.status.enabled = false;
+            record.status.state = "off";
+            record.status.error = None;
+            record.status.update_required = false;
+            record.status.notice = notice;
+            record.status.clone()
+        };
+        self.report(state.chat());
+        Ok(status)
+    }
+
+    /// Forget a chat's folder record (the folder itself is already gone or
+    /// stays as the user's).
+    fn forget(&self, key: &Path) {
+        let record = lock(&self.records).remove(key);
+        lock(&self.archived).remove(key);
+        if let Some(record) = record {
+            let _ = fs::remove_file(&record.file);
+            if let Some(profile) = lock(&self.loaded).clone() {
+                let _ = fs::remove_dir_all(objects_dir(&profile, key));
+            }
+            self.report(record.state.chat());
+        }
+    }
+
+    /// Stop syncing and remove the chat's folder.
+    async fn delete(&self, key: &Path) -> Result<Status> {
+        let state = self
+            .state(key)
+            .context("This chat isn't synced to a folder here.")?;
+        ensure!(
+            state.mode == Mode::Folder,
+            "This chat's sync uses your own checkout; it can't be deleted."
+        );
+        self.halt_worker(key).await;
+        let path = state.path.clone();
+        tokio::task::spawn_blocking(move || repo::remove_folder(&path))
+            .await
+            .context("Deleting the folder was interrupted.")??;
+        self.forget(key);
+        lock(&self.notices).remove(&state.chat());
+        Ok(Status::off(&state.workspace_id, &state.chat_id))
+    }
+
+    /// The chat was archived: remove its folder when it holds nothing but
+    /// the chat's files, otherwise keep it, stopped, and say so.
+    async fn archived(&self, key: &Path) -> Result<()> {
+        let state = self.state(key).context("Sync stopped.")?;
+        let path = state.path.clone();
+        let checkpoint = state.checkpoint.clone();
+        let untouched = tokio::task::spawn_blocking(move || {
+            !path.exists()
+                || checkpoint.is_some_and(|checkpoint| repo::untouched(&path, &checkpoint))
+        })
+        .await
+        .unwrap_or(false);
+        if untouched {
+            let path = state.path.clone();
+            tokio::task::spawn_blocking(move || repo::remove_folder(&path)).await??;
+            self.forget(key);
+        } else {
+            self.stopped(key, Some(Ending::Archived.notice(&state)))?;
+        }
+        Ok(())
+    }
+
+    /// Put the user's own checkout back (a sync from an earlier version);
+    /// the record goes once it is. The caller has stopped its worker.
     async fn restore(&self, key: &Path, notice: Option<String>) -> Result<Status> {
         ensure!(
             lock(&self.restoring).insert(key.to_owned()),
@@ -470,6 +764,10 @@ impl Manager {
         let Some(mut state) = self.state(key) else {
             anyhow::bail!("This chat isn't synced to a folder here.");
         };
+        ensure!(
+            state.mode == Mode::Checkout,
+            "This chat's folder is its own."
+        );
         if state.phase != Phase::Restoring {
             state.phase = Phase::Restoring;
             self.save_state(key, &state)?;
@@ -529,11 +827,61 @@ impl Manager {
             }
         }
     }
+
+    /// Move a chat synced into the user's own checkout (an earlier version)
+    /// to a folder of its own: put the checkout back exactly first, then
+    /// make the chat's folder from it. Returns the new folder's key.
+    async fn migrate(&self, profile: &Path, root: &Path, key: &Path) -> Result<PathBuf> {
+        self.halt_worker(key).await;
+        let mut state = self.state(key).context("Sync stopped.")?;
+        ensure!(
+            state.mode == Mode::Checkout,
+            "This chat's folder is its own."
+        );
+        if !state.migrating {
+            state.migrating = true;
+            self.save_state(key, &state)?;
+        }
+        let checkout = state.path.clone();
+        self.restore(key, None).await?;
+        let chat = state.chat();
+        let earlier = lock(&self.notices).remove(&chat);
+        let source = checkout.clone();
+        let repository = tokio::task::spawn_blocking(move || repo::remote(&source))
+            .await
+            .ok()
+            .flatten()
+            .map(|remote| normalize(&remote))
+            .unwrap_or_else(|| "repository".into());
+        let path = self.new_folder(root, &repository, &chat.2)?;
+        let folder = State::folder(
+            &chat.0,
+            &chat.1,
+            &chat.2,
+            path,
+            &repository,
+            checkout.is_dir().then(|| checkout.clone()),
+            None,
+        );
+        let key = self.insert(profile, folder)?;
+        let mut notice = format!(
+            "Sync now uses a folder of its own, so {} went back to how you left it.",
+            checkout.display()
+        );
+        if let Some(earlier) = earlier {
+            notice = format!("{notice} {earlier}");
+        }
+        if let Some(record) = lock(&self.records).get_mut(&key) {
+            record.status.notice = Some(notice);
+        }
+        Ok(key)
+    }
 }
 
-/// Keep persisted checkouts in step with the signed-in account: finish
-/// interrupted restores, restore after an account switch, resume the rest.
-/// Started with the engine; idempotent.
+/// Keep persisted syncs in step with the signed-in account: finish
+/// interrupted restores, move syncs of the user's own checkout to folders of
+/// their own, stop after an account switch, resume the rest. Started with
+/// the engine; idempotent.
 pub(super) fn supervise(auth: Auth) {
     let Ok(api) = CloudApi::shared() else {
         return;
@@ -576,34 +924,80 @@ async fn reconcile(api: &Arc<CloudApi>, auth: &Auth, profile: &Path) {
         if lock(&api.checkouts.restoring).contains(&key) {
             continue;
         }
-        if state.phase == Phase::Restoring {
-            let _ = api.checkouts.restore(&key, None).await;
-        } else if current.as_deref() != Some(&state.account_id) {
-            let _ = api
-                .checkouts
-                .end(
-                    &key,
-                    Some(format!(
-                        "You switched accounts, so {} went back to how you left it.",
-                        state.path.display()
-                    )),
-                )
-                .await;
-        } else {
-            Manager::start(api, auth, &key);
+        let ours = current.as_deref() == Some(&state.account_id);
+        match (state.mode, state.phase) {
+            // Put back first, whatever else is going on: never left half way.
+            (Mode::Checkout, Phase::Restoring) if !(state.migrating && ours) => {
+                let _ = api.checkouts.restore(&key, None).await;
+            }
+            (Mode::Checkout, _) if !ours => {
+                let _ = api
+                    .checkouts
+                    .end(&key, Some(Ending::Account.notice(&state)))
+                    .await;
+            }
+            (Mode::Checkout, _) => {
+                let migrated = match folders_root() {
+                    Ok(root) => api.checkouts.migrate(profile, &root, &key).await,
+                    Err(error) => Err(error),
+                };
+                match migrated {
+                    Ok(folder) => Manager::start(api, auth, &folder),
+                    Err(error) => tracing::info!(%error, "checkout sync: not moved yet"),
+                }
+            }
+            (Mode::Folder, Phase::On) if !ours => {
+                let _ = api
+                    .checkouts
+                    .end(&key, Some(Ending::Account.notice(&state)))
+                    .await;
+            }
+            (Mode::Folder, Phase::On) => Manager::start(api, auth, &key),
+            (Mode::Folder, _) if ours => {
+                // A kept folder goes with its chat once that is archived.
+                if chat_archived(api, auth, &state).await {
+                    let misses = {
+                        let mut archived = lock(&api.checkouts.archived);
+                        let misses = archived.entry(key.clone()).or_default();
+                        *misses += 1;
+                        *misses
+                    };
+                    if misses >= 2 {
+                        let _ = api.checkouts.archived(&key).await;
+                    }
+                } else {
+                    lock(&api.checkouts.archived).remove(&key);
+                }
+            }
+            (Mode::Folder, _) => {}
         }
     }
 }
 
+/// Whether a stopped sync's chat is archived, as far as can be told now.
+async fn chat_archived(api: &CloudApi, auth: &Auth, state: &State) -> bool {
+    match workspace_row(api, auth, state).await {
+        Ok(row) if gone(&row) => true,
+        Ok(_) => chat_active(api, auth, state, false).await == Some(false),
+        Err(_) => false,
+    }
+}
+
+fn gone(row: &Workspace) -> bool {
+    row.archived() || row.deleting() || matches!(row.state.as_str(), "deleted" | "deleting")
+}
+
 enum Cycle {
-    /// The checkout moved to a new checkpoint of this many files.
+    /// The folder moved to a new checkpoint of this many files.
     Changed(usize),
-    /// The chat's files are what the checkout already has.
+    /// The chat's files are what the folder already has.
     Same,
     /// Waiting for the cloud computer, with why.
     Behind(String),
     /// Edited here: waiting for the user.
     Paused(String),
+    /// The cloud computer must be updated first.
+    Update(String),
 }
 
 async fn run(
@@ -631,7 +1025,7 @@ async fn run(
             break;
         }
         let row = workspace_row(&api, &auth, &state).await;
-        if let Some(reason) = ended(
+        if let Some(ending) = ended(
             &api,
             &auth,
             &state,
@@ -642,7 +1036,13 @@ async fn run(
         .await
         {
             if !cancel.is_cancelled() {
-                let _ = api.checkouts.restore(&key, Some(reason)).await;
+                let _ = match ending {
+                    Ending::Archived => api.checkouts.archived(&key).await,
+                    _ => api
+                        .checkouts
+                        .stopped(&key, Some(ending.notice(&state)))
+                        .map(|_| ()),
+                };
             }
             return;
         }
@@ -674,6 +1074,7 @@ async fn run(
                 api.checkouts.set_status(&key, &cancel, |s| {
                     s.state = "synced";
                     s.error = None;
+                    s.update_required = false;
                     s.files = files;
                     s.last_synced_at = Some(chrono::Utc::now().timestamp_millis());
                 });
@@ -683,6 +1084,7 @@ async fn run(
                 api.checkouts.set_status(&key, &cancel, |s| {
                     s.state = "synced";
                     s.error = None;
+                    s.update_required = false;
                     s.last_synced_at = Some(chrono::Utc::now().timestamp_millis());
                 });
             }
@@ -690,6 +1092,7 @@ async fn run(
                 delay = (delay * 2).min(MAX_DELAY);
                 api.checkouts.set_status(&key, &cancel, |s| {
                     s.state = "behind";
+                    s.update_required = false;
                     s.error = Some(why);
                 });
             }
@@ -697,6 +1100,15 @@ async fn run(
                 delay = MIN_DELAY.max(Duration::from_secs(5));
                 api.checkouts.set_status(&key, &cancel, |s| {
                     s.state = "paused";
+                    s.update_required = false;
+                    s.error = Some(why);
+                });
+            }
+            Ok(Cycle::Update(why)) => {
+                delay = MAX_DELAY;
+                api.checkouts.set_status(&key, &cancel, |s| {
+                    s.state = "error";
+                    s.update_required = true;
                     s.error = Some(why);
                 });
             }
@@ -707,6 +1119,7 @@ async fn run(
                 delay = Duration::from_secs(15);
                 api.checkouts.set_status(&key, &cancel, |s| {
                     s.state = "error";
+                    s.update_required = false;
                     s.error = Some(error.to_string());
                 });
             }
@@ -753,26 +1166,17 @@ async fn ended(
     row: &std::result::Result<Workspace, String>,
     chat_checked: &mut Option<tokio::time::Instant>,
     (chat_missing, chat_listed): (&mut u8, &mut bool),
-) -> Option<String> {
-    let folder = state.path.display();
+) -> Option<Ending> {
     if !authorized(auth, &state.account_id) {
-        return Some(format!(
-            "You switched accounts, so {folder} went back to how you left it."
-        ));
+        return Some(Ending::Account);
     }
     if !crate::computer_bridge::enabled_for(auth.profile_dir(), &state.account_id) {
-        return Some(format!(
-            "This computer stopped running cloud chat commands, so {folder} went back to how you left it."
-        ));
+        return Some(Ending::Connector);
     }
     if let Ok(row) = row
-        && (row.archived()
-            || row.deleting()
-            || matches!(row.state.as_str(), "deleted" | "deleting"))
+        && gone(row)
     {
-        return Some(format!(
-            "This chat was archived, so {folder} went back to how you left it."
-        ));
+        return Some(Ending::Archived);
     }
     let now = tokio::time::Instant::now();
     if chat_checked.is_none_or(|at| now.duration_since(at) >= CHAT_CHECK) {
@@ -787,9 +1191,7 @@ async fn ended(
         }
         // Twice in a row, so one odd listing never ends a sync.
         if *chat_missing >= 2 {
-            return Some(format!(
-                "This chat was archived, so {folder} went back to how you left it."
-            ));
+            return Some(Ending::Archived);
         }
     }
     None
@@ -821,7 +1223,110 @@ async fn chat_active(api: &CloudApi, auth: &Auth, state: &State, listed: bool) -
     ((listed || !items.is_empty()) && listing["nextCursor"].is_null()).then_some(false)
 }
 
-/// One sync step: take a snapshot of the chat's files and move the checkout
+/// Make the chat's folder when it isn't there (first time, or the user
+/// removed it): a worktree of the user's clone when there is a usable one,
+/// otherwise a clone. Whatever was recorded about the old folder goes.
+async fn prepare_folder(api: &CloudApi, key: &Path, state: &State) -> Result<State> {
+    let path = state.path.clone();
+    let made = {
+        let path = path.clone();
+        tokio::task::spawn_blocking(move || repo::is_folder(&path)).await?
+    };
+    if made {
+        return Ok(state.clone());
+    }
+    let mut fresh = state.clone();
+    fresh.branch = None;
+    fresh.head = None;
+    fresh.changes = None;
+    fresh.checkpoint = None;
+    fresh.pending = None;
+    api.checkouts.save_state(key, &fresh)?;
+    let repository = state
+        .repository
+        .clone()
+        .context("This chat's repository isn't known.")?;
+    let url = state
+        .url
+        .clone()
+        .unwrap_or_else(|| format!("https://{repository}.git"));
+    let source = state.source.clone();
+    let how = tokio::task::spawn_blocking(move || {
+        // Only a clone of this very repository can lend its objects.
+        let source = source
+            .and_then(|source| repo::clone_root(&source))
+            .filter(|source| {
+                repo::remote(source).map(|remote| normalize(&remote)) == Some(repository.clone())
+            });
+        repo::create_folder(&path, source.as_deref(), &url)
+    })
+    .await??;
+    if how != repo::Made::Worktree && fresh.source.is_some() {
+        fresh.source = None;
+        api.checkouts.save_state(key, &fresh)?;
+    }
+    if let Some(record) = lock(&api.checkouts.records).get_mut(key) {
+        record.status.source_path = fresh.source.clone();
+    }
+    Ok(fresh)
+}
+
+/// One snapshot of the chat's files into `objects`, verified completely.
+/// A dropped connection keeps what arrived and tries again.
+async fn snapshot(
+    api: &CloudApi,
+    state: &State,
+    objects: &Path,
+    have: Vec<String>,
+    cancel: &CancellationToken,
+) -> Result<std::result::Result<Vec<mirror::ReceivedFile>, Cycle>> {
+    for attempt in 1..=SNAPSHOT_ATTEMPTS {
+        // The environment stays held for the whole transfer: letting it go
+        // (the chat closed meanwhile) would close the connection mid-way.
+        let environment = api.environments.get(&state.account_id, &state.workspace_id);
+        let Some(client) = environment
+            .as_ref()
+            .and_then(|environment| environment.ready_client())
+        else {
+            return Ok(Err(Cycle::Behind(
+                // Like "Sync to a local directory", sync rides the connection
+                // an open chat holds; it never connects (or wakes) on its own.
+                "Open this chat to keep syncing; its changes arrive once it connects.".into(),
+            )));
+        };
+        let received = mirror::receive_snapshot(
+            &client,
+            WorkspaceTarget {
+                chat_id: Some(state.chat_id.clone()),
+                space_id: None,
+                checkout_path: None,
+            },
+            &state.workspace_id,
+            objects,
+            have.clone(),
+            cancel.clone(),
+        )
+        .await;
+        drop(environment);
+        match received {
+            Ok(files) => return Ok(Ok(files)),
+            Err(error) if error.downcast_ref::<mirror::UpdateRequired>().is_some() => {
+                return Ok(Err(Cycle::Update(error.to_string())));
+            }
+            Err(error) if error.downcast_ref::<mirror::Interrupted>().is_some() => {
+                ensure!(!cancel.is_cancelled(), "Sync stopped.");
+                tracing::info!(attempt, "checkout sync: snapshot interrupted, resuming");
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(Err(Cycle::Behind(
+        "The connection to the cloud computer dropped while sending files. Sync continues where it stopped."
+            .into(),
+    )))
+}
+
+/// One sync step: take a snapshot of the chat's files and move the folder
 /// to it, unless it was edited here.
 async fn cycle(
     api: &Arc<CloudApi>,
@@ -836,7 +1341,7 @@ async fn cycle(
         Err(error) => return Ok(Cycle::Behind(error)),
     };
     if row.rpc_protocol.as_deref() != Some("zuse-rpc-v1") {
-        return Ok(Cycle::Behind(
+        return Ok(Cycle::Update(
             "Update this cloud computer to sync its files.".into(),
         ));
     }
@@ -845,6 +1350,15 @@ async fn cycle(
             "The cloud computer is asleep. Its changes arrive when it wakes.".into(),
         ));
     }
+    let mut state = state.clone();
+    if state.mode == Mode::Folder {
+        if !repo::is_folder(&state.path) {
+            api.checkouts
+                .set_status(key, cancel, |s| s.state = "preparing");
+            *known = None;
+        }
+        state = prepare_folder(api, key, &state).await?;
+    }
     let path = state.path.clone();
     ensure!(
         path.is_dir(),
@@ -852,7 +1366,6 @@ async fn cycle(
         path.display()
     );
     // A move recorded but not confirmed: finished if HEAD got there.
-    let mut state = state.clone();
     if let Some(pending) = state.pending.clone() {
         let dir = path.clone();
         let target = pending.clone();
@@ -889,17 +1402,6 @@ async fn cycle(
             return Ok(Cycle::Paused(reason.into()));
         }
     }
-    let Some(client) = api
-        .environments
-        .get(&state.account_id, &state.workspace_id)
-        .and_then(|environment| environment.ready_client())
-    else {
-        return Ok(Cycle::Behind(
-            // Like "Sync to a local directory", sync rides the connection an
-            // open chat holds; it never connects (or wakes) on its own.
-            "Open this chat to keep syncing; its changes arrive once it connects.".into(),
-        ));
-    };
     if known.is_none() {
         let dir = path.clone();
         let base = state.head.clone().unwrap_or_else(|| "HEAD".into());
@@ -912,27 +1414,20 @@ async fn cycle(
     let profile = lock(&api.checkouts.loaded)
         .clone()
         .context("Sync stopped.")?;
+    // Kept across attempts: what an interrupted snapshot verified is not
+    // sent again.
     let objects = objects_dir(&profile, key);
-    let _ = fs::remove_dir_all(&objects);
     fs::create_dir_all(&objects)?;
     let have: Vec<String> = known
         .as_ref()
-        .map(|known| known.keys().take(90_000).cloned().collect())
+        .map(|known| known.keys().cloned().collect())
         .unwrap_or_default();
-    let files = mirror::receive_snapshot(
-        &client,
-        WorkspaceTarget {
-            chat_id: Some(state.chat_id.clone()),
-            space_id: None,
-            checkout_path: None,
-        },
-        &state.workspace_id,
-        &objects,
-        have,
-        cancel.clone(),
-    )
-    .await?;
+    let files = match snapshot(api, state, &objects, have, cancel).await? {
+        Ok(files) => files,
+        Err(waiting) => return Ok(waiting),
+    };
     ensure!(!cancel.is_cancelled(), "Sync stopped.");
+    // Verified completely; only now does anything in the folder change.
     let count = files.len();
     let mut blobs = known.take().unwrap_or_default();
     let state = state.clone();
@@ -968,7 +1463,7 @@ async fn cycle(
     let current = api.checkouts.state(key).context("Sync stopped.")?;
     match current.checkpoint.clone() {
         None => {
-            // First checkpoint: save the checkout as it is right now, persist
+            // First checkpoint: save the folder as it is right now, persist
             // that, then move it.
             let dir = path.clone();
             let saved = tokio::task::spawn_blocking(move || repo::save(&dir)).await??;
@@ -994,6 +1489,7 @@ async fn cycle(
                 back.branch = None;
                 back.head = None;
                 back.changes = None;
+                back.pending = None;
                 api.checkouts.save_state(key, &back)?;
                 return Err(error);
             }
@@ -1030,8 +1526,13 @@ async fn cycle(
 }
 
 /// The connected repository a cloud workspace was started from, as
-/// `host/owner/repo` (lowercase).
-async fn repository(api: &CloudApi, auth: &Auth, account: &str, row: &Value) -> Result<String> {
+/// `host/owner/repo` (lowercase), and its clone URL when Cloud knows one.
+async fn repository(
+    api: &CloudApi,
+    auth: &Auth,
+    account: &str,
+    row: &Value,
+) -> Result<(String, Option<String>)> {
     let token = auth
         .access_token()
         .await
@@ -1051,7 +1552,11 @@ async fn repository(api: &CloudApi, auth: &Auth, account: &str, row: &Value) -> 
         .as_str()
         .or_else(|| project["repositoryUrl"].as_str())
         .context("This chat's repository isn't connected to Zuse Cloud.")?;
-    Ok(normalize(identity))
+    let url = project["repositoryUrl"]
+        .as_str()
+        .filter(|url| url.starts_with("https://") || url.starts_with("git@"))
+        .map(str::to_owned);
+    Ok((normalize(identity), url))
 }
 
 /// One spelling for a repository: lowercase `host/owner/repo`.
@@ -1105,37 +1610,54 @@ pub async fn handle(auth: Auth, method: &str, params: Value) -> Result<Value> {
         return Ok(reply(api.checkouts.status(&account, &workspace, &chat)));
     }
     let _change = api.checkouts.changes.lock().await;
+    let existing = api.checkouts.by_chat(&account, &workspace, &chat);
+    let status = |api: &CloudApi| api.checkouts.status(&account, &workspace, &chat);
+    if method == methods::CLOUD_CHECKOUT_SYNC_DELETE_FOLDER {
+        let key = existing.context("This chat has no folder here.")?;
+        return Ok(reply(api.checkouts.delete(&key).await?));
+    }
     if method == methods::CLOUD_CHECKOUT_SYNC_RESUME {
-        let key = api
-            .checkouts
-            .by_chat(&account, &workspace, &chat)
-            .context("This chat isn't synced to a folder here.")?;
+        let key = existing.context("This chat isn't synced to a folder here.")?;
         let state = api.checkouts.state(&key).context("Sync stopped.")?;
-        if state.phase == Phase::Restoring {
-            api.checkouts.restore(&key, None).await?;
-            return Ok(reply(api.checkouts.status(&account, &workspace, &chat)));
+        if state.mode == Mode::Checkout {
+            // An earlier version's sync of the user's checkout: put it back,
+            // then on to a folder of its own unless it was being turned off.
+            if state.phase == Phase::Restoring && !state.migrating {
+                api.checkouts.restore(&key, None).await?;
+            } else {
+                let folder = api
+                    .checkouts
+                    .migrate(&profile, &folders_root()?, &key)
+                    .await?;
+                Manager::start(&api, &auth, &folder);
+            }
+            return Ok(reply(status(&api)));
         }
-        if let Some(checkpoint) = state.checkpoint.clone() {
+        if state.phase == Phase::On
+            && let Some(checkpoint) = state.checkpoint.clone()
+        {
+            // Paused by edits made in the folder: the user chose to discard
+            // them. The folder is the chat's own, so they don't go to the
+            // stash list (which the user's clone shares).
+            api.checkouts.halt_worker(&key).await;
             let dir = state.path.clone();
-            let kept = tokio::task::spawn_blocking(move || {
-                let kept = repo::keep_in_stash_list(
-                    &dir,
-                    "Zuse: edits made while synced to a cloud chat",
-                )?;
-                repo::return_to(&dir, &checkpoint)?;
-                Ok::<_, anyhow::Error>(kept)
-            })
-            .await??;
-            if let Some(record) = lock(&api.checkouts.records).get_mut(&key) {
-                record.status.state = "syncing";
-                record.status.error = None;
-                record.status.notice = kept
-                    .then(|| "Your edits are in the folder's stash list (git stash list).".into());
-                record.wake.notify_one();
+            let paused = {
+                let dir = dir.clone();
+                let checkpoint = checkpoint.clone();
+                tokio::task::spawn_blocking(move || repo::local_edits(&dir, &checkpoint)).await??
+            };
+            if paused.is_some() {
+                tokio::task::spawn_blocking(move || repo::return_to(&dir, &checkpoint)).await??;
             }
         }
+        if let Some(record) = lock(&api.checkouts.records).get_mut(&key) {
+            record.status.state = "syncing";
+            record.status.error = None;
+            record.status.notice = None;
+            record.wake.notify_one();
+        }
         Manager::start(&api, &auth, &key);
-        return Ok(reply(api.checkouts.status(&account, &workspace, &chat)));
+        return Ok(reply(status(&api)));
     }
     ensure!(
         method == methods::CLOUD_CHECKOUT_SYNC_CONFIGURE,
@@ -1144,7 +1666,6 @@ pub async fn handle(auth: Auth, method: &str, params: Value) -> Result<Value> {
     let enabled = params["enabled"]
         .as_bool()
         .context("Choose whether to sync this chat.")?;
-    let existing = api.checkouts.by_chat(&account, &workspace, &chat);
     if !enabled {
         let Some(key) = existing else {
             lock(&api.checkouts.notices).remove(&(
@@ -1160,11 +1681,30 @@ pub async fn handle(auth: Auth, method: &str, params: Value) -> Result<Value> {
         crate::computer_bridge::enabled_for(&profile, &account),
         "Allow cloud chats to use this computer first (Settings → Cloud computer → Your computers)."
     );
-    let requested = params["localPath"]
-        .as_str()
-        .filter(|s| !s.trim().is_empty() && s.len() <= 4096)
-        .map(PathBuf::from)
-        .context("Choose this repository's folder on this computer.")?;
+    lock(&api.checkouts.notices).remove(&(account.clone(), workspace.clone(), chat.clone()));
+    if let Some(key) = existing {
+        let state = api.checkouts.state(&key).context("Sync stopped.")?;
+        let key = match state.mode {
+            Mode::Checkout => {
+                api.checkouts
+                    .migrate(&profile, &folders_root()?, &key)
+                    .await?
+            }
+            Mode::Folder => {
+                if state.phase != Phase::On {
+                    let mut on = state.clone();
+                    on.phase = Phase::On;
+                    api.checkouts.save_state(&key, &on)?;
+                    if let Some(record) = lock(&api.checkouts.records).get_mut(&key) {
+                        record.status = Status::on(&on);
+                    }
+                }
+                key
+            }
+        };
+        Manager::start(&api, &auth, &key);
+        return Ok(reply(status(&api)));
+    }
     let value = {
         let token = auth
             .access_token()
@@ -1180,67 +1720,36 @@ pub async fn handle(auth: Auth, method: &str, params: Value) -> Result<Value> {
         row.workspace_id == workspace,
         "Cloud workspace identity changed."
     );
-    ensure!(
-        !row.archived() && !row.deleting() && !matches!(row.state.as_str(), "deleted" | "deleting"),
-        "Unarchive this chat before syncing it."
-    );
+    ensure!(!gone(&row), "Unarchive this chat before syncing it.");
     ensure!(
         row.rpc_protocol.as_deref() == Some("zuse-rpc-v1"),
         "Update this cloud computer before syncing its files."
     );
-    let expected = repository(&api, &auth, &account, &value).await?;
-    let checked = requested.clone();
-    let path = tokio::task::spawn_blocking(move || -> Result<PathBuf> {
-        let root = repo::checkout_root(&checked)?;
-        let remote = repo::remote(&root).map(|r| normalize(&r));
-        ensure!(
-            remote.as_deref() == Some(expected.as_str()),
-            "{} is a checkout of {}, not {expected}.",
-            root.display(),
-            remote.as_deref().unwrap_or("another repository")
-        );
-        Ok(root)
-    })
-    .await??;
-    if let Some(key) = &existing {
-        if key == &path {
-            Manager::start(&api, &auth, key);
-            return Ok(reply(api.checkouts.status(&account, &workspace, &chat)));
+    let (repository, url) = repository(&api, &auth, &account, &value).await?;
+    // The user's clone of the repository lends its objects to the chat's
+    // folder; it is checked again when the folder is made.
+    let source = params["sourcePath"]
+        .as_str()
+        .or_else(|| params["localPath"].as_str())
+        .filter(|s| !s.trim().is_empty() && s.len() <= 4096)
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute());
+    let source = match source {
+        Some(source) => {
+            let expected = repository.clone();
+            tokio::task::spawn_blocking(move || {
+                let root = repo::clone_root(&source)?;
+                (repo::remote(&root).map(|r| normalize(&r)) == Some(expected)).then_some(root)
+            })
+            .await?
         }
-        api.checkouts.end(key, None).await?;
-    }
-    // Switching: the chat synced here before goes back first.
-    let occupied = lock(&api.checkouts.records).contains_key(&path);
-    if occupied {
-        api.checkouts.end(&path, None).await?;
-    }
-    lock(&api.checkouts.notices).remove(&(account.clone(), workspace.clone(), chat.clone()));
-    let state = State {
-        version: 1,
-        account_id: account.clone(),
-        workspace_id: workspace.clone(),
-        chat_id: chat.clone(),
-        path: path.clone(),
-        phase: Phase::On,
-        branch: None,
-        head: None,
-        changes: None,
-        checkpoint: None,
-        pending: None,
+        None => None,
     };
-    let file = state_file(&profile, &path);
-    write_state(&file, &state)?;
-    lock(&api.checkouts.records).insert(
-        path.clone(),
-        Record {
-            status: Status::on(&state),
-            state,
-            file,
-            cancel: CancellationToken::new(),
-            wake: Arc::new(Notify::new()),
-            task: None,
-        },
-    );
-    Manager::start(&api, &auth, &path);
-    Ok(reply(api.checkouts.status(&account, &workspace, &chat)))
+    let path = api
+        .checkouts
+        .new_folder(&folders_root()?, &repository, &chat)?;
+    let state = State::folder(&account, &workspace, &chat, path, &repository, source, url);
+    let key = api.checkouts.insert(&profile, state)?;
+    Manager::start(&api, &auth, &key);
+    Ok(reply(status(&api)))
 }

@@ -221,6 +221,29 @@ fn task_rejection(code: &str) -> Option<&'static str> {
     })
 }
 
+/// Why a cloud call could not get a current access token, in words that say
+/// what helps. A network miss (or the account's short cooldown after one)
+/// keeps the saved sign-in and clears up on its own, so it must not read as a
+/// broken session; only a missing or revoked sign-in asks for a new one.
+fn session_error(error: anyhow::Error) -> anyhow::Error {
+    use crate::account::AccountError;
+    use zuse_protocol::cloud::{SESSION_RENEWAL_UNAVAILABLE, SESSION_SIGNED_OUT};
+    match (
+        error.downcast_ref::<AccountError>(),
+        error.downcast_ref::<zuse_rpc::TokenError>(),
+    ) {
+        (Some(AccountError::SignedOut), _) | (_, Some(zuse_rpc::TokenError::SignedOut)) => {
+            anyhow::anyhow!(SESSION_SIGNED_OUT)
+        }
+        (Some(AccountError::Changed), _) => {
+            anyhow::anyhow!("Your account changed. Reopen this view.")
+        }
+        (Some(_), _) | (_, Some(_)) => anyhow::anyhow!(SESSION_RENEWAL_UNAVAILABLE),
+        // Already a sentence for the owner (an account switch mid-call).
+        (None, None) => error,
+    }
+}
+
 pub(crate) fn rpc_error(error: anyhow::Error) -> zuse_rpc::RpcError {
     if let Some(rejection) = error.downcast_ref::<TaskRejection>() {
         return rejection.rpc();
@@ -953,10 +976,7 @@ impl CloudApi {
             #[cfg(target_arch = "wasm32")]
             return Ok(json!({"head":null,"provisional":true}));
         }
-        let token = auth
-            .access_token()
-            .await
-            .map_err(|_| anyhow::anyhow!("Could not refresh your Cloud session. Check your connection or reconnect in Settings → General."))?;
+        let token = auth.access_token().await.map_err(session_error)?;
         ensure!(
             auth.user_id().as_deref() == Some(account.as_str())
                 && auth.state().org_id() == organization.as_deref(),
@@ -2225,9 +2245,7 @@ pub(crate) async fn slack_link_request(
         (auth.workos_enabled() || api.loopback) && auth.user_id().is_some(),
         "Sign in to Zuse Cloud to use Slack."
     );
-    let token = auth.access_token().await.map_err(|_| {
-        anyhow::anyhow!("Could not refresh your Cloud session. Check your connection or reconnect in Settings → General.")
-    })?;
+    let token = auth.access_token().await.map_err(session_error)?;
     api.request_scoped_verb(&token, path, body, None, query, verb)
         .await
 }
@@ -2251,6 +2269,34 @@ pub async fn handle(auth: &Auth, method: &str, params: Value) -> Result<Value> {
 #[cfg(test)]
 mod beta_tests {
     use super::*;
+    #[test]
+    fn a_token_miss_reads_as_transient_and_only_a_lost_sign_in_asks_to_sign_in() {
+        use crate::account::AccountError;
+        use zuse_protocol::cloud::{SESSION_RENEWAL_UNAVAILABLE, SESSION_SIGNED_OUT};
+        let text = |error: anyhow::Error| session_error(error).to_string();
+        for transient in [
+            anyhow::Error::new(AccountError::Unavailable),
+            anyhow::Error::new(AccountError::InvalidResponse),
+            anyhow::Error::new(zuse_rpc::TokenError::TemporarilyUnavailable("dns".into())),
+        ] {
+            assert_eq!(text(transient), SESSION_RENEWAL_UNAVAILABLE);
+        }
+        assert_eq!(
+            text(anyhow::Error::new(AccountError::SignedOut)),
+            SESSION_SIGNED_OUT
+        );
+        assert_eq!(
+            text(anyhow::Error::new(zuse_rpc::TokenError::SignedOut)),
+            SESSION_SIGNED_OUT
+        );
+        assert_eq!(
+            text(anyhow::Error::new(AccountError::Changed)),
+            "Your account changed. Reopen this view."
+        );
+        assert_eq!(text(anyhow::anyhow!("Kept as is")), "Kept as is");
+        // Neither points at a Settings path that can't fix a network miss.
+        assert!(!SESSION_RENEWAL_UNAVAILABLE.contains("Settings"));
+    }
     #[test]
     fn rejected_messages_say_why_instead_of_busy() {
         assert!(

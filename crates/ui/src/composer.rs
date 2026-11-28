@@ -6664,6 +6664,8 @@ pub struct Composer {
     /// The computer-command approval while it replaces the composer.
     computer_focus: FocusHandle,
     focus_computer_approval: bool,
+    /// Tray notices opened to show their whole message.
+    readable_notices: tray::ReadableNotices,
     /// New cloud chats still being created in tabs that are not in front,
     /// by their draft key. Each tab owns its launch; the composer serves
     /// the tab in front.
@@ -7577,6 +7579,7 @@ impl Composer {
             computers: Default::default(),
             computer_focus: cx.focus_handle(),
             focus_computer_approval: false,
+            readable_notices: Default::default(),
             parked_launches: HashMap::new(),
             parked_launch_run: false,
             unarchive_task: None,

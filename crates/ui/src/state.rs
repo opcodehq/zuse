@@ -159,6 +159,10 @@ trait EngineBackend: Send + Sync {
     fn retry_connection(&self) -> bool {
         false
     }
+    /// The connection ended for good and will not reconnect on its own.
+    fn connection_stopped(&self) -> bool {
+        false
+    }
     fn connection_revision(&self) -> u64 {
         0
     }
@@ -673,6 +677,10 @@ impl EngineHandle {
 
     pub(crate) fn retry_connection(&self) -> bool {
         self.inner.retry_connection()
+    }
+
+    pub(crate) fn connection_stopped(&self) -> bool {
+        self.inner.connection_stopped()
     }
 
     pub(crate) fn controller(&self) -> Self {
