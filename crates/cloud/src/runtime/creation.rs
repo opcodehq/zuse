@@ -60,6 +60,13 @@ fn validate(body: &CreateWorkspace) -> Result<(), ApiError> {
     if !body.pending_attachments.is_empty() && !valid_pending_attachments(body) {
         return Err(ApiError::bad_request("invalid_launch_attachments"));
     }
+    if body
+        .purpose
+        .as_deref()
+        .is_some_and(|p| p != zuse_protocol::machine_setup::PURPOSE)
+    {
+        return Err(ApiError::bad_request("invalid_cloud_workspace_purpose"));
+    }
     if body.idempotency_key.is_empty()
         || body.idempotency_key.len() > 512
         || body.project_id.is_empty()
@@ -204,6 +211,18 @@ impl RuntimeControl {
             return Err(ApiError::forbidden("cloud_workspace_creation_disabled"));
         }
         validate(&body)?;
+        let setup = body.purpose.as_deref() == Some(zuse_protocol::machine_setup::PURPOSE);
+        // Only someone who may change the account's machine starts a setup
+        // chat: a personal owner or an organization admin.
+        if setup
+            && (slack
+                || access
+                    .membership
+                    .as_ref()
+                    .is_some_and(|m| m.role.slug != "admin"))
+        {
+            return Err(ApiError::forbidden("machine_setup_requires_admin"));
+        }
         // An accepted idempotent retry must return its original receipt even if
         // repository access later changed. Default admission preflights access;
         // the selected pilot gates repository access during task preparation.
@@ -751,7 +770,9 @@ impl RuntimeControl {
             .ok_or_else(|| ApiError::conflict("cloud_project_not_ready"))?;
         // A cache is optional and usable only after its separate runtime/provider
         // certification. Candidate or mutable-ref requests retain managed-base boot.
+        // A setup chat edits the account's image, so it boots that image.
         let project_cache = if managed
+            && !setup
             && workload_bindings.is_empty()
             && project["visibility"] == "public"
             && build["settings"]["managedCandidateSha256"].is_null()
@@ -963,6 +984,9 @@ impl RuntimeControl {
             .create_transcript_key(owner, &id)
             .map_err(|_| ApiError::unavailable("cloud_transcript_key_unavailable"))?;
         let mut config = json!({"rustActorId":access.actor.account_id,"runtimeGeneration":1,"gatewayEpoch":1,"rustCreateRequestDigest":digest,"rustNativeTranscriptEnabled":self.transcript_objects.is_some(),"rustCommandMailboxEnabled":mailbox,"runtimeRpcProtocol":zuse_protocol::cloud_gateway::RUST_RPC,"title":title,"agent":body.agent,"initialTurnId":turn,"providerAuthMode":if brokered{"broker-v1"}else{"legacy-image"},"runtimeMode":intent["runtimeMode"],"permissions":intent["permissions"],"repositoryCache":"account-image","rustRepositoryCheckout":{"branch":branch,"baseRef":body.base_ref},"startupTimings":{"requestedAt":now}});
+        if setup {
+            config[zuse_protocol::machine_setup::BOOTSTRAP_FLAG] = json!(true);
+        }
         if managed && brokered && self.fast_start_accounts.contains(owner) {
             config["rustFastStartVersion"] = json!(1);
         }
@@ -1319,5 +1343,18 @@ mod pending_attachment_tests {
             .map(|n| file(&format!("f{n}"), &format!("f{n}.png")))
             .collect();
         assert!(!valid_pending_attachments(&body(mode, json!(many))));
+    }
+
+    #[test]
+    fn a_chat_is_a_task_or_a_machine_setup_chat() {
+        let mut request = body("mailbox-v1", json!([]));
+        assert!(validate(&request).is_ok());
+        request.purpose = Some(zuse_protocol::machine_setup::PURPOSE.into());
+        assert!(validate(&request).is_ok());
+        request.purpose = Some("anything-else".into());
+        assert_eq!(
+            validate(&request).unwrap_err().code,
+            "invalid_cloud_workspace_purpose"
+        );
     }
 }

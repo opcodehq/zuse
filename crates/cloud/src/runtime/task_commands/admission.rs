@@ -418,6 +418,30 @@ impl RuntimeControl {
             acceptance["wake"] = self
                 .task_command_wake_tx(tx, row, &request.command_id, now)
                 .await?;
+        } else if !recreating
+            && matches!(request.action, wire::Action::ReviewUnknown { .. })
+            && sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM zuse_rust_task_command_execution WHERE workspace_id=$1 AND session_id=$2 AND state='queued') OR EXISTS(SELECT 1 FROM zuse_rust_task_command_queue WHERE workspace_id=$1 AND session_id=$2 AND state='queued')")
+                .bind(id).bind(&request.session_id).fetch_one(&mut **tx).await?
+        {
+            // Reviewing the message that held them lets the user's queued
+            // messages run: their computer wakes for them as it did when they
+            // were sent. A computer that can't wake now keeps them queued for
+            // the next wake; the review itself still stands (a savepoint, so a
+            // failed wake leaves the transaction usable).
+            let mut attempt = sqlx::Acquire::begin(&mut **tx).await?;
+            match self
+                .task_command_wake_tx(&mut attempt, row, &request.command_id, now)
+                .await
+            {
+                Ok(wake) => {
+                    attempt.commit().await?;
+                    acceptance["wake"] = wake;
+                }
+                Err(error) => {
+                    attempt.rollback().await?;
+                    tracing::info!(workspace = %id, code = error.code, "Reviewed message's queue waits for the next wake")
+                }
+            }
         }
         acceptance["commandId"] = json!(request.command_id);
         acceptance["durablyAdmitted"] = json!(true);

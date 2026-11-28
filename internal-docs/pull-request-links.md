@@ -242,7 +242,7 @@ to claim it automatically when the chat pushed that branch.
 ## Built
 
 - **Cloud** (`crates/cloud/src/github/native/pull_requests.rs`).
-  - Migration `0058_pull_request_owners.sql` holds:
+  - Migration `0059_pull_request_owners.sql` holds:
     - the owner table, which also records the host workspace for cloud
       chats, the base branch and the conflict-check state;
     - the sealed inbox;

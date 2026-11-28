@@ -51,7 +51,7 @@ struct PullRequestNavigator: View {
   @ViewBuilder private var root: some View {
     switch entry {
     case .list:
-      PullRequestListView(store: store) { link in path.append(.detail(link)) }
+      PullRequestListView(store: store) { link in path.append(.detail(link)) }.clearsTabletBar()
     case .detail(let link):
       PullRequestDetailView(store: store, link: link)
     }

@@ -8,6 +8,8 @@ mod checkout_sync;
 mod computer;
 mod environment_card;
 mod monitor;
+mod open_menu;
+mod reconnect;
 
 pub(super) use computer::Tone;
 mod history;
@@ -23,6 +25,12 @@ pub(super) enum CloudConversationEvent {
     OpenPathIn(super::open_in::OpenTarget, String),
     /// Detect this computer's apps again (the Computer menu opened).
     RefreshOpenTargets,
+    /// The composer's background-work tray asked for a running subagent.
+    OpenSubagent {
+        chat_id: String,
+        doc_id: String,
+        title: String,
+    },
 }
 /// The header cloud glyph's color: the theme's success green while the
 /// computer is online, muted grey otherwise.
@@ -111,6 +119,14 @@ pub(super) struct CloudConversation {
     account: Option<Task<()>>,
     events: Option<Task<()>>,
     execution: Option<Task<()>>,
+    /// Failed attempts to connect the computer's tools, retried quietly.
+    reconnect: reconnect::Backoff,
+    /// The wait before the next attempt.
+    reconnect_wait: Option<Task<()>>,
+    /// Shows the strip once the failure has lasted.
+    reconnect_notice: Option<Task<()>>,
+    /// The attempt in flight was asked for with Reconnect.
+    reconnect_manual: bool,
     operation: Option<Task<()>>,
     sleep_command: Option<String>,
     /// A message's files asked for a wake while a sleep was still running.
@@ -251,7 +267,23 @@ impl CloudConversation {
                 ComposerEvent::OpenFile(path) => {
                     cx.emit(CloudConversationEvent::OpenFile(path.to_string()))
                 }
+                ComposerEvent::OpenSubagent {
+                    chat_id,
+                    doc_id,
+                    title,
+                } => cx.emit(CloudConversationEvent::OpenSubagent {
+                    chat_id: chat_id.clone(),
+                    doc_id: doc_id.clone(),
+                    title: title.clone(),
+                }),
                 _ => {}
+            }),
+            cx.subscribe(&transcript, |this: &mut Self, _, event, cx| {
+                if matches!(event, crate::transcript::TranscriptEvent::RetryNotSent) {
+                    this.composer.update(cx, |composer, cx| {
+                        composer.retry_cloud_messages_not_sent(cx)
+                    });
+                }
             }),
             cx.observe(&composer, |_: &mut Self, _, cx| cx.notify()),
             cx.observe(&state, |this: &mut Self, state, cx| {
@@ -262,6 +294,19 @@ impl CloudConversation {
                     this.title_is_placeholder = false;
                 }
                 this.publish_computer_online(cx);
+                // The tools' connection ended for good (the computer's
+                // runtime updated in place, so its identity changed): open
+                // a new one rather than leave the tools disconnected.
+                if this.authorized
+                    && this.execution.is_none()
+                    && state
+                        .read(cx)
+                        .engine()
+                        .is_some_and(|engine| engine.connection_stopped())
+                {
+                    this.detach_execution(cx);
+                    this.retry_execution(cx);
+                }
                 // A file tab that cannot read its file yet asks for the
                 // computer.
                 let requests = state.read(cx).cloud_wake_requests;
@@ -325,6 +370,10 @@ impl CloudConversation {
             account: None,
             events: None,
             execution: None,
+            reconnect: reconnect::Backoff::default(),
+            reconnect_wait: None,
+            reconnect_notice: None,
+            reconnect_manual: false,
             operation: None,
             sleep_command: None,
             wake_after_sleep: false,
@@ -431,20 +480,74 @@ impl CloudConversation {
             online: self.computer_online(),
         }
     }
-    /// The message's progress once it is with the agent.
+    /// What the computer's live session says about the current turn, when
+    /// it is attached: the same state the transcript's "Working for" line
+    /// and a local chat's controls follow.
+    fn session_turn(&self, cx: &App) -> Option<activity::Activity> {
+        let state = self.state.read(cx);
+        state.engine()?;
+        let chat = state.selected_chat.as_deref()?;
+        match state.indicator_for(chat, chrono::Utc::now()) {
+            crate::state::Indicator::Working => Some(activity::Activity {
+                label: activity::WORKING.into(),
+                next: None,
+                busy: true,
+            }),
+            crate::state::Indicator::AwaitingInput => Some(activity::Activity {
+                label: activity::NEEDS_INPUT.into(),
+                next: None,
+                busy: false,
+            }),
+            _ => None,
+        }
+    }
+    /// The message's progress once it is with the agent. The one answer the
+    /// transcript's working line, the composer's Stop and the sidebar row
+    /// all follow: a send in flight, the server's command record, or the
+    /// attached computer's live session, whichever knows the turn runs.
     fn agent_activity(&self, cx: &App) -> Option<activity::Activity> {
         if self.access_revoked {
             return None;
         }
-        self.composer
+        if self.composer.read(cx).cloud_messages_not_sent() {
+            // The server never took the newest messages: no turn starts for
+            // them, whatever an older read of its records still says. Only
+            // the computer's live session can still say its agent works.
+            return self.session_turn(cx);
+        }
+        let composer = self
+            .composer
             .read(cx)
             .cloud_activity()
             .map(|(label, busy)| activity::Activity {
                 label: label.into(),
                 next: None,
                 busy,
-            })
-            .or_else(|| activity::command(&self.admissions, &self.state.read(cx).transcript))
+            });
+        let command = activity::command(&self.admissions, &self.state.read(cx).transcript);
+        let session = self.session_turn(cx);
+        // A send in flight first, then whichever record knows the turn
+        // runs: the server's command row can trail the live session (a
+        // progress event not read yet) and the other way round.
+        let reports = [composer, command, session];
+        let busy = reports
+            .iter()
+            .flatten()
+            .find(|activity| activity.busy)
+            .cloned();
+        busy.or_else(|| reports.into_iter().flatten().next())
+    }
+    /// The agent's turn is running: its working line shows and the composer
+    /// offers Stop (or queues a message) instead of sending a new turn.
+    fn turn_running(&self, cx: &App) -> bool {
+        // Messages the server never took start no turn: as for the working
+        // line, an older read of its command rows doesn't count then.
+        let records = !self.composer.read(cx).cloud_messages_not_sent();
+        !self.access_revoked
+            && (records
+                && activity::command(&self.admissions, &self.state.read(cx).transcript)
+                    .is_some_and(|activity| activity.busy)
+                || self.session_turn(cx).is_some_and(|activity| activity.busy))
     }
     /// Id of the stand-in for the launch prompt until history delivers it.
     fn launch_echo_id(&self) -> String {
@@ -540,19 +643,32 @@ impl CloudConversation {
         // Once the agent answered the latest message, the computer is clearly
         // up: no waiting line.
         let answered = latest_message_answered(&self.state.read(cx).transcript);
-        let line = if !answered && computer.as_ref().is_some_and(|stage| stage.busy) {
+        // A message still on its way to the server says so first: what the
+        // computer was last read doing is not news about it.
+        // Nothing runs before a held message is reviewed, however the
+        // computer is doing.
+        let waiting = self.composer.read(cx).cloud_waiting_for_connection()
+            || agent
+                .as_ref()
+                .is_some_and(|activity| activity.label == activity::REVIEW_FIRST);
+        let line = if !waiting && !answered && computer.as_ref().is_some_and(|stage| stage.busy) {
             Some(SharedString::from("Waiting for computer…"))
         } else {
             agent
-                .filter(|activity| activity.busy)
+                .filter(|activity| activity.busy || activity.label == activity::REVIEW_FIRST)
                 .map(|activity| SharedString::from(activity.label))
         };
+        let not_sent = self.composer.read(cx).cloud_messages_not_sent();
+        let line = line.filter(|_| !not_sent);
+        let turn_running = self.turn_running(cx);
         self.composer.update(cx, |composer, cx| {
             composer.set_cloud_status(status, cx);
             composer.set_cloud_status_actions(failed, cx);
+            composer.set_cloud_turn_running(turn_running, cx);
         });
         self.transcript.update(cx, |transcript, cx| {
-            transcript.set_external_activity(line, cx)
+            transcript.set_external_activity(line, cx);
+            transcript.set_external_not_sent(not_sent, cx);
         });
     }
 
@@ -640,10 +756,19 @@ impl CloudConversation {
                 .w(px(320.))
                 .max_h(px(560.))
                 .overflow_y_scroll()
-                .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_computer(cx)))
-                .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                    if event.keystroke.key == "escape" {
+                .on_mouse_down_out(cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                    // The app menu floats outside this card; a press in it
+                    // isn't outside.
+                    if !this
+                        .computer
+                        .nested_bounds
+                        .is_some_and(|bounds| bounds.contains(&event.position))
+                    {
                         this.close_computer(cx);
+                    }
+                }))
+                .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                    if this.computer_menu_key(event, cx) {
                         cx.stop_propagation();
                     }
                 }))
@@ -937,6 +1062,9 @@ impl CloudConversation {
         self.history_read = None;
         self.history = history::State::default();
         self.execution = None;
+        self.reconnect = reconnect::Backoff::default();
+        self.reconnect_wait = None;
+        self.reconnect_notice = None;
         self.operation = None;
         self.computer = computer::State::default();
         self.state
@@ -1053,7 +1181,9 @@ impl CloudConversation {
         }
         self.admissions = value["commandAdmissions"].clone();
         self.composer.update(cx, |composer, cx| {
-            composer.apply_cloud_admission_activity(&self.admissions, cx)
+            composer.apply_cloud_admission_activity(&self.admissions, cx);
+            // The server answered: a message waiting for the connection goes now.
+            composer.cloud_connection_restored(cx);
         });
         self.apply_computer_metadata(&value["workspace"], cx);
         let Ok(head) = decoded else {
@@ -1206,6 +1336,7 @@ impl CloudConversation {
             && !self.domain_sleeping()
             && self.status["state"] == "ready"
         {
+            self.reconnect_wait = None;
             self.connect_execution(cx);
             return;
         }
@@ -1265,11 +1396,12 @@ impl CloudConversation {
                 .await;
             let Ok(mut stream) = result else {
                 let _ = this.update(cx, |this, cx| {
-                    this.error = Some(
-                        "Computer connection interrupted. Reconnect to check its current state."
-                            .into(),
-                    );
-                    this.report_wake_failure("Couldn't reach the computer.", cx);
+                    this.environment = None;
+                    if interactive {
+                        this.report_wake_failure("Couldn't reach the computer.", cx);
+                    }
+                    // Watched again after a backoff; shown only if it lasts.
+                    this.reconnect_later(false, cx);
                     cx.notify();
                 });
                 return;
@@ -1302,6 +1434,11 @@ impl CloudConversation {
                             _ => {}
                         }
                     }
+                    // The connection came back on its own (a network change):
+                    // try the tools now rather than wait out the backoff.
+                    if ready && this.status["state"] != "ready" {
+                        this.reconnect_wait = None;
+                    }
                     this.status = status;
                     this.publish_computer_online(cx);
                     if ready && !this.domain_sleeping() {
@@ -1322,37 +1459,118 @@ impl CloudConversation {
         }));
     }
     fn connect_execution(&mut self, cx: &mut Context<Self>) {
-        if !self.authorized || self.execution.is_some() {
+        // A pending backoff wait is honored; its timer, Reconnect, a file tab
+        // asking for the computer, or the connection coming back clear it.
+        if !self.authorized || self.execution.is_some() || self.reconnect_wait.is_some() {
             return;
         }
         if let Some(engine) = self.state.read(cx).engine() {
-            if !matches!(self.state.read(cx).connection, ConnectionStatus::Ready) {
-                engine.retry_connection();
+            if matches!(self.state.read(cx).connection, ConnectionStatus::Ready)
+                || engine.retry_connection()
+            {
+                return;
             }
-            return;
+            // That connection stopped for good: the computer's runtime was
+            // replaced (it updates in place) or its access ended. A new one
+            // is opened instead of leaving the tools disconnected.
+            self.detach_execution(cx);
         }
         let mut boot = self.boot.clone();
         boot.target = Some(crate::state::RemoteTarget::Cloud(self.target.clone()));
         let session = self.target.initial_session.clone();
         let connect = Tokio::spawn(cx, crate::state::EngineHandle::bootstrap(boot));
-        self.execution=Some(cx.spawn(async move |this,cx| {
-            let result=connect.await;
-            let _=this.update(cx,|this,cx| {
-                this.execution=None;
-                if !this.authorized{return;}
+        self.execution = Some(cx.spawn(async move |this, cx| {
+            let result = connect.await;
+            let _ = this.update(cx, |this, cx| {
+                this.execution = None;
+                let manual = std::mem::take(&mut this.reconnect_manual);
+                if !this.authorized {
+                    return;
+                }
                 match result {
-                    Ok(Ok(handle))=> {
-                        this.history.start_live(this.state.read(cx).transcript_revision);
-                        this.state.update(cx,|state,cx|state.attach_cloud_conversation(handle,session,cx));
-                    },
-                    _=>{
-                        this.error=Some("The conversation is saved, but the computer tools could not connect. Reconnect to try again.".into());
-                        this.report_wake_failure("Couldn't connect to the computer.", cx);
+                    Ok(Ok(handle)) => {
+                        this.reconnect.succeeded();
+                        this.reconnect_wait = None;
+                        this.reconnect_notice = None;
+                        this.history
+                            .start_live(this.state.read(cx).transcript_revision);
+                        this.state.update(cx, |state, cx| {
+                            state.attach_cloud_conversation(handle, session, cx)
+                        });
+                    }
+                    result => {
+                        let error = match result {
+                            Ok(Err(error)) => error.to_string(),
+                            _ => "connection task ended".into(),
+                        };
+                        tracing::warn!(workspace = %this.target.workspace, %error,
+                            "Cloud computer tools did not connect; retrying");
+                        this.reconnect_later(manual, cx);
                     }
                 }
                 cx.notify();
             });
         }));
+    }
+    /// The computer's tools did not connect: try again after a backoff
+    /// (sooner when the machine wakes). Only a failure that lasts is shown.
+    fn reconnect_later(&mut self, manual: bool, cx: &mut Context<Self>) {
+        let first = !self.reconnect.failing();
+        let shown = self.reconnect.visible();
+        let delay = self
+            .reconnect
+            .failed(cx.background_executor().now(), manual);
+        if self.reconnect.visible() && !shown {
+            self.report_wake_failure("Couldn't connect to the computer.", cx);
+        }
+        if first && !self.reconnect.visible() {
+            // Shown once the failure has lasted, even while an attempt or a
+            // wait is still running.
+            let executor = cx.background_executor().clone();
+            self.reconnect_notice = Some(cx.spawn(async move |this, cx| {
+                executor.timer(reconnect::SHOW_AFTER).await;
+                let _ = this.update(cx, |this, cx| {
+                    this.reconnect_notice = None;
+                    if this.reconnect.failing() && !this.reconnect.visible() {
+                        this.reconnect.show();
+                        this.report_wake_failure("Couldn't connect to the computer.", cx);
+                        cx.notify();
+                    }
+                });
+            }));
+        }
+        let executor = cx.background_executor().clone();
+        self.reconnect_wait = Some(cx.spawn(async move |this, cx| {
+            reconnect::wait(executor, delay).await;
+            let _ = this.update(cx, |this, cx| {
+                this.reconnect_wait = None;
+                this.retry_execution(cx);
+            });
+        }));
+    }
+    /// Try the computer's tools again. The environment is watched afresh,
+    /// which asks a connection that gave up to try again; its ready status
+    /// then opens the tools. Never resumes a sleeping computer.
+    fn retry_execution(&mut self, cx: &mut Context<Self>) {
+        if !self.authorized
+            || self.execution.is_some()
+            || self.domain_sleeping()
+            || self.state.read(cx).engine().is_some()
+                && matches!(self.state.read(cx).connection, ConnectionStatus::Ready)
+        {
+            return;
+        }
+        if self.operation.is_none() {
+            self.environment = None;
+            self.watch_environment(false, cx);
+        }
+    }
+    /// The strip's Reconnect: try now, and say so if it fails.
+    fn reconnect_now(&mut self, cx: &mut Context<Self>) {
+        self.reconnect_wait = None;
+        self.reconnect_manual = true;
+        self.retry_execution(cx);
+        cx.notify();
     }
     fn sleep(&mut self, cx: &mut Context<Self>) {
         if !self.authorized
@@ -1363,6 +1581,10 @@ impl CloudConversation {
         }
         self.environment = None;
         self.detach_execution(cx);
+        // A sleeping computer is not reconnected; waking it starts afresh.
+        self.reconnect = reconnect::Backoff::default();
+        self.reconnect_wait = None;
+        self.reconnect_notice = None;
         self.status = json!({"state":"connecting","message":"Putting computer to sleep…"});
         let target = self.target.clone();
         let mut params = self.params();
@@ -1400,6 +1622,59 @@ impl CloudConversation {
         }));
     }
 }
+impl CloudConversation {
+    /// The computer's tools have stayed disconnected on an awake computer.
+    fn tools_offline(&self, cx: &App) -> bool {
+        self.authorized
+            && self.reconnect.visible()
+            && !self.domain_sleeping()
+            && !(self.state.read(cx).engine().is_some()
+                && matches!(self.state.read(cx).connection, ConnectionStatus::Ready))
+    }
+    fn render_tools_offline(
+        &self,
+        theme: &Theme,
+        reconnecting: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .id("native-cloud-tools-offline")
+            .debug_selector(|| "native-cloud-tools-offline".into())
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(Theme::SPACE_SM))
+            .px(px(12.))
+            .py(px(6.))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(px(12.))
+                    .text_color(theme.text_muted)
+                    .child(reconnect::NOTICE),
+            )
+            .child(
+                crate::popover::btn_primary(
+                    theme,
+                    if reconnecting {
+                        "Reconnecting…"
+                    } else {
+                        "Reconnect"
+                    },
+                )
+                .id("native-cloud-tools-reconnect")
+                .debug_selector(|| "native-cloud-tools-reconnect".into())
+                .flex_none()
+                .when(reconnecting, |button| button.opacity(0.6))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if !reconnecting {
+                        this.reconnect_now(cx);
+                    }
+                })),
+            )
+    }
+}
 impl Render for CloudConversation {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
@@ -1408,7 +1683,9 @@ impl Render for CloudConversation {
         let composer_width =
             settings::current(cx).transcript_width + 2. * crate::composer::COMPOSER_OUTER_PAD;
         let notice = self.error.clone();
-        let show_tray = notice.is_some();
+        let tools_offline = self.tools_offline(cx);
+        let reconnecting = self.execution.is_some();
+        let show_tray = notice.is_some() || tools_offline;
         div()
             .id("native-cloud-conversation")
             .size_full()
@@ -1446,6 +1723,13 @@ impl Render for CloudConversation {
                                                 .text_color(theme.text_muted)
                                                 .child(text),
                                         )
+                                    })
+                                    .when(tools_offline, |tray| {
+                                        tray.child(self.render_tools_offline(
+                                            &theme,
+                                            reconnecting,
+                                            cx,
+                                        ))
                                     }),
                             )
                         })
@@ -1560,13 +1844,29 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.mark_cloud_conversation_seen(view, cx);
-        let (session, state) = {
+        let (session, state, transcript) = {
             let view = view.read(cx);
-            (view.target.initial_session.clone(), view.state.clone())
+            (
+                view.target.initial_session.clone(),
+                view.state.clone(),
+                view.transcript.clone(),
+            )
         };
         self.rebind_cloud_file_tabs(&session, &state, cx);
+        // Spawn chips and workflow rows open their agents in the right pane,
+        // fed by this conversation's state: its engine reaches the computer.
+        self.cloud_transcript_events =
+            Some(cx.subscribe(&transcript, |this, transcript, event, cx| {
+                if matches!(
+                    event,
+                    TranscriptEvent::OpenSubagent { .. }
+                        | TranscriptEvent::OpenWorkflowAgent { .. }
+                ) {
+                    this.on_transcript_event(transcript, event, cx);
+                }
+            }));
         self.cloud_conversation_events =
-            Some(cx.subscribe(view, |this, _, event, cx| match event {
+            Some(cx.subscribe(view, move |this, _, event, cx| match event {
                 CloudConversationEvent::Desktop => this.open_desktop_panel(cx),
                 CloudConversationEvent::Terminal => this.add_terminal_surface(cx),
                 CloudConversationEvent::Files => {
@@ -1581,6 +1881,18 @@ impl Shell {
                     this.open_path_in(target.clone(), path.clone(), cx);
                 }
                 CloudConversationEvent::RefreshOpenTargets => this.refresh_open_targets(cx),
+                CloudConversationEvent::OpenSubagent {
+                    chat_id,
+                    doc_id,
+                    title,
+                } => this.add_subagent_surface_in(
+                    state.clone(),
+                    chat_id.clone(),
+                    doc_id.clone(),
+                    title.clone(),
+                    false,
+                    cx,
+                ),
             }));
     }
     pub(super) fn open_cloud_conversation(
@@ -2429,6 +2741,190 @@ mod tests {
 
         });
     }
+    /// A long cloud turn (text, a finished segment, then a command still
+    /// running) reads as running everywhere at once: the transcript's working
+    /// line, the sidebar row and tab, and the composer's Stop. Whichever
+    /// record knows first (the server's command row or the attached
+    /// computer's live session) is enough, and both settle together.
+    #[gpui::test]
+    fn a_running_cloud_turn_reads_running_in_the_transcript_sidebar_and_composer(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(initialize);
+        let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
+            std::sync::Arc::new(PendingController),
+        ));
+        let view = cx.new(|cx| {
+            CloudConversation::new(
+                CloudTarget {
+                    controller: controller.clone(),
+                    subject: "owner".into(),
+                    organization: None,
+                    workspace: "task".into(),
+                    initial_session: "session".into(),
+                },
+                json!({"workspaceId":"task","state":"ready"}),
+                json!({}),
+                boot(dir.path()),
+                cx,
+            )
+        });
+        view.update(cx, |view, cx| {
+            use zuse_model::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
+            let entry = |id: &str, role, text: &str, status| SessionMessageEntry {
+                id: id.into(),
+                role,
+                parts: vec![MessagePart::Text {
+                    id: format!("text:{id}"),
+                    text: text.into(),
+                }],
+                created_at: 1,
+                device_id: String::new(),
+                status,
+                continuation_of: None,
+                duration_ms: None,
+            };
+            view.authorized = true;
+            view.computer.metadata = json!({"state":"ready"});
+            view.state.update(cx, |state, _| {
+                state.selected_chat = Some("session".into());
+                state.transcript = vec![
+                    entry("runtime-user", MessageRole::User, "compare features", None),
+                    entry(
+                        "segment-1",
+                        MessageRole::Assistant,
+                        "I'll inspect the app first.",
+                        Some(MessageStatus::Complete),
+                    ),
+                    entry(
+                        "segment-2",
+                        MessageRole::Assistant,
+                        "Running the build now.",
+                        Some(MessageStatus::Streaming),
+                    ),
+                ];
+            });
+            let running = |view: &mut CloudConversation, cx: &mut Context<CloudConversation>| {
+                view.sync_progress(cx);
+                let working_line = view.transcript.read(cx).external_activity_for_test();
+                (
+                    working_line.is_some(),
+                    view.live_activity(cx).working,
+                    view.composer.read(cx).run_live(cx),
+                )
+            };
+            // The server's command row says running; an earlier finished
+            // segment of the same turn does not end it.
+            view.admissions = json!([{"commandId":"launch:task","messageId":"admitted",
+                "text":"compare features","executionState":"running","createdAt":1}]);
+            assert_eq!(running(view, cx), (true, true, true), "command row running");
+            // No command row read yet and no computer attached: nothing
+            // knows the turn runs.
+            view.admissions = json!([]);
+            assert_eq!(
+                running(view, cx),
+                (false, false, false),
+                "nothing knows it runs"
+            );
+            // The attached computer's live session is working: running
+            // everywhere, though the row has not caught up.
+            let session = |status: &str| {
+                serde_json::from_value::<zuse_protocol::Session>(json!({
+                    "chatId":"session","deviceId":"cloud:task","status":status,
+                    "startedAt":chrono::Utc::now(),"updatedAt":chrono::Utc::now()}))
+                .unwrap()
+            };
+            view.state.update(cx, |state, _| {
+                state.set_test_engine(controller.clone());
+                state.apply_sessions(vec![session("working")]);
+            });
+            assert_eq!(
+                running(view, cx),
+                (true, true, true),
+                "live session working"
+            );
+            // The turn ends: the session settles and its row completes.
+            view.state.update(cx, |state, _| {
+                state.apply_sessions(vec![session("idle")]);
+                state.transcript[2].status = Some(MessageStatus::Complete);
+            });
+            view.admissions = json!([{"commandId":"launch:task","messageId":"admitted",
+                "text":"compare features","executionState":"completed","createdAt":1}]);
+            assert_eq!(running(view, cx), (false, false, false), "turn over");
+        });
+    }
+    /// The owner's "you are stuck?" report: messages the server never took
+    /// read as waiting for the connection, then as not sent with Retry,
+    /// never as "Starting agent turn…" from an older read of a command row.
+    #[gpui::test]
+    fn an_undelivered_cloud_message_never_reads_as_a_starting_turn(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(initialize);
+        let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
+            std::sync::Arc::new(PendingController),
+        ));
+        let view = cx.new(|cx| {
+            CloudConversation::new(
+                CloudTarget {
+                    controller,
+                    subject: "owner".into(),
+                    organization: None,
+                    workspace: "task".into(),
+                    initial_session: "session".into(),
+                },
+                json!({"workspaceId":"task","state":"ready"}),
+                json!({}),
+                boot(dir.path()),
+                cx,
+            )
+        });
+        view.update(cx, |view, cx| {
+            view.authorized = true;
+            view.computer.metadata = json!({"state":"ready"});
+            view.state.update(cx, |state, _| {
+                state.selected_chat = Some("session".into());
+            });
+            // The last read before the connection dropped: a turn starting.
+            view.admissions = json!([{"commandId":"earlier","messageId":"earlier-message",
+                "text":"what was the issue?","executionState":"starting","createdAt":1}]);
+            let shown = |view: &mut CloudConversation, cx: &mut Context<CloudConversation>| {
+                view.sync_progress(cx);
+                let transcript = view.transcript.read(cx);
+                (
+                    transcript
+                        .external_activity_for_test()
+                        .map(|line| line.to_string()),
+                    transcript.external_not_sent_for_test(),
+                )
+            };
+            assert_eq!(
+                shown(view, cx),
+                (Some("Starting agent turn…".into()), false),
+                "the server's record alone still reads as starting"
+            );
+            // A message on its way while the server can't be reached.
+            view.composer.update(cx, |composer, _| {
+                composer.hold_cloud_send_offline_for_test(false)
+            });
+            assert_eq!(
+                shown(view, cx),
+                (Some("Waiting for connection".into()), false)
+            );
+            // Retried until the limit: not sent, with Retry; no working line,
+            // nothing running, and the composer offers Send.
+            view.composer.update(cx, |composer, _| {
+                composer.hold_cloud_send_offline_for_test(true)
+            });
+            assert_eq!(shown(view, cx), (None, true));
+            assert!(!view.live_activity(cx).working);
+            assert!(!view.composer.read(cx).run_live(cx), "Send, not Stop");
+        });
+    }
     /// The owner's "yoo" sequence: the first message shows at once as the
     /// launch's stand-in with "Waiting for computer…"; when the computer is
     /// ready and its transcript has the message (under its own id) and the
@@ -3212,6 +3708,88 @@ mod tests {
             );
         });
     }
+    #[gpui::test]
+    fn a_cloud_chats_spawn_chip_opens_its_subagent_in_the_right_pane(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let directory = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            initialize(cx);
+            settings::init(UiSettings::default(), directory.path(), cx);
+            crate::history::init(
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                cx,
+            );
+        });
+        let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
+            std::sync::Arc::new(PendingController),
+        ));
+        let (host, cx) = cx.add_window_view(|_, cx| {
+            let shell = cx.new(|cx| {
+                let state = cx.new(|_| {
+                    let mut state = AppState::new();
+                    account(&mut state);
+                    state
+                });
+                let mut shell = Shell::new(state, boot(directory.path()), cx);
+                shell.reduced_motion = true;
+                shell.open_cloud_conversation(
+                    CloudTarget {
+                        controller,
+                        subject: "owner".into(),
+                        organization: None,
+                        workspace: "task".into(),
+                        initial_session: "session".into(),
+                    },
+                    json!({"workspaceId":"task","initialSessionId":"session"}),
+                    Value::Null,
+                    cx,
+                );
+                shell
+            });
+            CloudChromeHost {
+                shell,
+                _directory: directory,
+            }
+        });
+        let shell = host.read_with(cx, |host, _| host.shell.clone());
+        let (transcript, state) = shell.read_with(cx, |shell, cx| {
+            let view = shell.cloud_conversation.clone().unwrap();
+            let view = view.read(cx);
+            (view.transcript_for_test().clone(), view.state.clone())
+        });
+        // Before the fix nothing listened to the cloud transcript, so the
+        // click was dropped.
+        transcript.update(cx, |_, cx| {
+            cx.emit(TranscriptEvent::OpenSubagent {
+                chat_id: "session".into(),
+                doc_id: "session--sub--toolu_1".into(),
+                title: "Explore".into(),
+                frozen: false,
+            })
+        });
+        cx.run_until_parked();
+        shell.read_with(cx, |shell, _| {
+            assert_eq!(shell.subagent_tabs.len(), 1);
+            let (&id, tab) = shell.subagent_tabs.iter().next().unwrap();
+            assert_eq!(tab.doc_id, "session--sub--toolu_1");
+            // Fed by the conversation's own state, whose engine reaches the
+            // computer holding the doc.
+            assert_eq!(tab.state.entity_id(), state.entity_id());
+            assert!(
+                shell
+                    .right_tabs
+                    .values()
+                    .any(|tabs| tabs.contains(&RightSurface::Subagent(id)))
+            );
+        });
+    }
     /// The cloud computer's files, once it is awake: every image reads as
     /// one small PNG.
     struct ComputerFiles {
@@ -3651,6 +4229,297 @@ mod tests {
         view.update(cx, |view, cx| view.revoke(cx));
         pump(cx);
         state.read_with(cx, |state, _| assert!(!state.cloud_computer_online));
+    }
+    /// A computer whose tools' identity check can be made to fail, and whose
+    /// runtime can be replaced in place (a new identity on a new epoch).
+    struct ToolsController {
+        /// Identity checks still to fail; `usize::MAX` fails until changed.
+        failures: std::sync::atomic::AtomicUsize,
+        identity_calls: std::sync::atomic::AtomicUsize,
+        environment_calls: std::sync::Mutex<Vec<Value>>,
+        environment: tokio::sync::watch::Sender<Value>,
+        /// The runtime's capabilities, as its identity reports them.
+        capabilities: std::sync::Mutex<Vec<&'static str>>,
+    }
+    impl ToolsController {
+        fn new(failures: usize) -> std::sync::Arc<Self> {
+            std::sync::Arc::new(Self {
+                failures: failures.into(),
+                identity_calls: 0.into(),
+                environment_calls: Default::default(),
+                environment: tokio::sync::watch::Sender::new(json!({"state":"ready","epoch":1})),
+                capabilities: std::sync::Mutex::new(vec!["runtime-0.26"]),
+            })
+        }
+    }
+    #[async_trait::async_trait]
+    impl zuse_rpc::RpcService for ToolsController {
+        async fn handle(
+            &self,
+            method: &str,
+            params: Value,
+        ) -> Result<zuse_rpc::RpcReply, zuse_rpc::RpcError> {
+            use futures::StreamExt as _;
+            use std::sync::atomic::Ordering;
+            match method {
+                methods::CLOUD_ACCOUNT_STATUS => Ok(zuse_rpc::RpcReply::Stream(Box::pin(
+                    futures::stream::once(async { json!({"user":{"id":"owner"},"orgId":null}) })
+                        .chain(futures::stream::pending()),
+                ))),
+                methods::CLOUD_HISTORY => Ok(zuse_rpc::RpcReply::Value(retained_history(true))),
+                methods::CLOUD_ENVIRONMENT => {
+                    self.environment_calls.lock().unwrap().push(params);
+                    let status = self.environment.subscribe();
+                    Ok(zuse_rpc::RpcReply::Stream(Box::pin(
+                        futures::stream::unfold((status, true), |(mut status, first)| async move {
+                            if !first {
+                                status.changed().await.ok()?;
+                            }
+                            let value = status.borrow_and_update().clone();
+                            Some((value, (status, false)))
+                        }),
+                    )))
+                }
+                methods::CLOUD_RPC if params["method"] == methods::ENGINE_INFO => {
+                    self.identity_calls.fetch_add(1, Ordering::SeqCst);
+                    let failed = self
+                        .failures
+                        .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| match left {
+                            0 => None,
+                            usize::MAX => Some(usize::MAX),
+                            left => Some(left - 1),
+                        })
+                        .is_ok();
+                    if failed {
+                        // The gateway socket was reset under the check.
+                        return Err(zuse_rpc::RpcError::Transport(
+                            "Cloud connection interrupted".into(),
+                        ));
+                    }
+                    let capabilities = self.capabilities.lock().unwrap().clone();
+                    Ok(zuse_rpc::RpcReply::Stream(Box::pin(futures::stream::iter(
+                        [
+                            json!({"id":params["requestId"],"ok":{"deviceId":"cloud:task","workspaceScope":"synced","capabilities":capabilities},"done":true}),
+                        ],
+                    ))))
+                }
+                _ => Ok(zuse_rpc::RpcReply::Stream(Box::pin(
+                    futures::stream::pending(),
+                ))),
+            }
+        }
+    }
+    struct ToolsFixture {
+        runtime: tokio::runtime::Runtime,
+        _directory: tempfile::TempDir,
+        service: std::sync::Arc<ToolsController>,
+        view: Entity<CloudConversation>,
+    }
+    impl ToolsFixture {
+        fn open(cx: &mut TestAppContext, failures: usize) -> Self {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let service = ToolsController::new(failures);
+            let directory = tempfile::tempdir().unwrap();
+            let view = {
+                let _entered = runtime.enter();
+                cx.update(|cx| {
+                    initialize(cx);
+                    gpui_tokio::init_from_handle(cx, runtime.handle().clone());
+                });
+                let controller = crate::state::EngineHandle::from_test_client(
+                    zuse_rpc::memory_client(service.clone()),
+                );
+                cx.new(|cx| {
+                    CloudConversation::new(
+                        CloudTarget {
+                            controller,
+                            subject: "owner".into(),
+                            organization: None,
+                            workspace: "task".into(),
+                            initial_session: "session".into(),
+                        },
+                        json!({"workspaceId":"task","state":"ready","desiredState":"ready"}),
+                        Value::Null,
+                        boot(directory.path()),
+                        cx,
+                    )
+                })
+            };
+            let fixture = Self {
+                runtime,
+                _directory: directory,
+                service,
+                view,
+            };
+            fixture.pump(cx);
+            fixture
+        }
+        fn pump(&self, cx: &mut TestAppContext) {
+            let _entered = self.runtime.enter();
+            for _ in 0..40 {
+                cx.run_until_parked();
+                self.runtime.block_on(async {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await
+                });
+            }
+        }
+        /// Let the quiet retry's wait run out, then the attempt it starts.
+        fn wait(&self, cx: &mut TestAppContext, seconds: u64) {
+            for _ in 0..seconds {
+                cx.executor()
+                    .advance_clock(std::time::Duration::from_secs(1));
+                self.pump(cx);
+            }
+        }
+        fn identity_calls(&self) -> usize {
+            self.service
+                .identity_calls
+                .load(std::sync::atomic::Ordering::SeqCst)
+        }
+        fn connected(&self, cx: &mut TestAppContext) -> bool {
+            self.view.read_with(cx, |view, cx| {
+                view.state.read(cx).engine().is_some()
+                    && matches!(view.state.read(cx).connection, ConnectionStatus::Ready)
+            })
+        }
+        fn strip(&self, cx: &mut TestAppContext) -> bool {
+            self.view.read_with(cx, |view, cx| view.tools_offline(cx))
+        }
+        fn passive(&self) -> bool {
+            self.service
+                .environment_calls
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|call| call["interactiveResume"] == false)
+        }
+        fn close(self, cx: &mut TestAppContext) {
+            {
+                let _entered = self.runtime.enter();
+                self.view.update(cx, |view, cx| view.revoke(cx));
+            }
+            self.pump(cx);
+        }
+    }
+    /// A tools connection that fails for a moment (a gateway reset while it
+    /// opens) reconnects on its own and never shows a strip or an error.
+    #[gpui::test]
+    fn a_brief_tools_failure_reconnects_silently(cx: &mut TestAppContext) {
+        let fixture = ToolsFixture::open(cx, 2);
+        assert_eq!(fixture.identity_calls(), 1, "the first attempt failed");
+        assert!(!fixture.connected(cx));
+        assert!(!fixture.strip(cx), "a brief failure is not shown");
+        fixture.wait(cx, 1);
+        assert_eq!(fixture.identity_calls(), 2, "retried after a second");
+        assert!(!fixture.strip(cx));
+        fixture.wait(cx, 2);
+        assert_eq!(fixture.identity_calls(), 3);
+        assert!(fixture.connected(cx), "the tools connected on their own");
+        fixture.view.read_with(cx, |view, cx| {
+            assert!(!view.reconnect.failing());
+            assert!(!view.tools_offline(cx));
+            assert!(view.error.is_none(), "no error was ever left behind");
+            assert!(view.state.read(cx).cloud_wake_failure.is_none());
+        });
+        assert!(fixture.passive(), "a retry never wakes the computer");
+        // Nothing more is retried once connected.
+        let calls = fixture.identity_calls();
+        fixture.wait(cx, 60);
+        assert_eq!(fixture.identity_calls(), calls);
+        fixture.close(cx);
+    }
+    /// A tools connection that stays down shows one strip with a Reconnect
+    /// button; the button tries at once and the strip goes when it works.
+    #[gpui::test]
+    fn a_lasting_tools_failure_shows_a_strip_with_a_working_reconnect(cx: &mut TestAppContext) {
+        let fixture = ToolsFixture::open(cx, usize::MAX);
+        fixture.wait(cx, 16);
+        assert!(!fixture.strip(cx), "not shown before it has lasted");
+        assert!(
+            fixture.identity_calls() >= 4,
+            "retried quietly with backoff"
+        );
+        fixture.wait(cx, 4);
+        assert!(
+            fixture.strip(cx),
+            "shown once the failure lasted 20s, between attempts"
+        );
+        fixture.view.read_with(cx, |view, cx| {
+            assert!(view.error.is_none(), "the strip is not a stale error");
+            assert_eq!(
+                view.state.read(cx).cloud_wake_failure.as_deref(),
+                Some("Couldn't connect to the computer.")
+            );
+        });
+        // The computer becomes reachable; Reconnect tries now instead of
+        // waiting out the backoff.
+        fixture
+            .service
+            .failures
+            .store(0, std::sync::atomic::Ordering::SeqCst);
+        let calls = fixture.identity_calls();
+        let window = cx.add_window(|_, _| ChatSurface(fixture.view.clone()));
+        cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear())
+            .unwrap();
+        {
+            let _entered = fixture.runtime.enter();
+            let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+            assert!(
+                visual.debug_bounds("native-cloud-tools-offline").is_some(),
+                "the strip is drawn above the composer"
+            );
+            let button = visual
+                .debug_bounds("native-cloud-tools-reconnect")
+                .expect("the strip has a Reconnect button");
+            visual.simulate_click(button.center(), gpui::Modifiers::default());
+        }
+        fixture.pump(cx);
+        assert_eq!(
+            fixture.identity_calls(),
+            calls + 1,
+            "Reconnect tried at once"
+        );
+        assert!(fixture.connected(cx));
+        assert!(!fixture.strip(cx), "the strip goes once connected");
+        fixture.close(cx);
+    }
+    /// A computer's runtime updates in place (an older computer moving to a
+    /// newer runtime): the open tools connection sees a new identity and
+    /// stops for good. A new connection is opened instead of leaving the
+    /// tools disconnected behind a strip.
+    #[gpui::test]
+    fn a_runtime_updated_in_place_gets_a_new_tools_connection(cx: &mut TestAppContext) {
+        let fixture = ToolsFixture::open(cx, 0);
+        assert!(fixture.connected(cx));
+        let first = fixture
+            .view
+            .read_with(cx, |view, cx| view.state.read(cx).engine().unwrap().clone());
+        *fixture.service.capabilities.lock().unwrap() = vec!["runtime-0.27"];
+        {
+            let _entered = fixture.runtime.enter();
+            fixture
+                .service
+                .environment
+                .send_replace(json!({"state":"ready","epoch":2}));
+        }
+        fixture.pump(cx);
+        fixture.wait(cx, 2);
+        assert!(
+            first.connection_stopped(),
+            "the old connection refused the new identity"
+        );
+        assert!(fixture.connected(cx), "a new connection replaced it");
+        fixture.view.read_with(cx, |view, cx| {
+            let engine = view.state.read(cx).engine().unwrap();
+            assert!(!engine.connection_stopped());
+            assert!(engine.engine_info().supports("runtime-0.27"));
+            assert!(!view.tools_offline(cx));
+        });
+        assert!(fixture.passive());
+        fixture.close(cx);
     }
     /// A cloud chat closed while it is not in front and opened again gets a
     /// new conversation and state. Its file tab, still open beside it,

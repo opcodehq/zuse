@@ -12,6 +12,7 @@ mod bridge_tests;
 mod github_browser_policy_test;
 mod github_organizations;
 mod github_pull_request_links;
+mod machine_setup;
 mod recreations;
 mod task_commands;
 use crate::{
@@ -371,6 +372,22 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
                 .layer(DefaultBodyLimit::max(1536 * 1024)),
         )
         .route("/v1/cloud/machine/rebuild", post(rebuild_machine))
+        .route(
+            "/v1/cloud/machine/setup-proposals/{id}",
+            get(machine_setup::proposal),
+        )
+        .route(
+            "/v1/cloud/machine/setup-proposals/{id}/apply",
+            post(machine_setup::apply).layer(DefaultBodyLimit::max(1024)),
+        )
+        .route(
+            "/v1/cloud/machine/setup-proposals/{id}/discard",
+            post(machine_setup::discard).layer(DefaultBodyLimit::max(1024)),
+        )
+        .route(
+            "/v1/cloud/workspaces/{workspace}/runtime/machine-setup",
+            post(machine_setup::runtime_request).layer(DefaultBodyLimit::max(160 * 1024)),
+        )
         .route(
             "/v1/cloud/machine/images/{image}/repositories/{project}/source-credential",
             post(user_image_source_credential),

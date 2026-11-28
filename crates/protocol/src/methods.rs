@@ -45,6 +45,10 @@ pub const GET_CLAUDE_CONNECTION: &str = "GetClaudeConnection";
 /// `{mode, baseUrl?, apiKey?, fallback?}` → `ClaudeConnection`. Choosing the
 /// proxy without an address looks for a local one first.
 pub const SET_CLAUDE_CONNECTION: &str = "SetClaudeConnection";
+/// `{}` → `[ModelApiKey]`: the Zuse agent's built-in API-key connections.
+pub const GET_MODEL_API_KEYS: &str = "GetModelApiKeys";
+/// `{id, apiKey}` → `[ModelApiKey]`. An empty `apiKey` removes the saved key.
+pub const SET_MODEL_API_KEY: &str = "SetModelApiKey";
 pub const LIST_SKILLS: &str = "ListSkills";
 pub const LIST_COMMANDS: &str = "ListCommands";
 /// Transient secret submission; never enqueue or persist its parameters.
@@ -314,13 +318,15 @@ pub const CLOUD_LOCAL_TERMINAL: &str = "CloudLocalTerminal";
 pub const CLOUD_SYNC_STATUS: &str = "CloudSyncStatus";
 pub const CLOUD_SYNC_CONFIGURE: &str = "CloudSyncConfigure";
 pub const CLOUD_SYNC_RETRY: &str = "CloudSyncRetry";
-/// One cloud chat's tracked files in the user's own local checkout of the
-/// same repository (one-way, restorable). Status is a read; Configure turns
-/// it on or off (restoring the checkout); Resume continues after local edits
-/// paused it, keeping those edits in the checkout's stash list.
+/// One cloud chat's files in a dedicated folder on this computer, one way
+/// (a git worktree of the user's own clone, or a fresh clone). Status is a
+/// read; Configure turns it on or off (off keeps the folder); Resume
+/// discards edits made in the folder and continues; DeleteFolder stops sync
+/// and removes the folder.
 pub const CLOUD_CHECKOUT_SYNC_STATUS: &str = "CloudCheckoutSyncStatus";
 pub const CLOUD_CHECKOUT_SYNC_CONFIGURE: &str = "CloudCheckoutSyncConfigure";
 pub const CLOUD_CHECKOUT_SYNC_RESUME: &str = "CloudCheckoutSyncResume";
+pub const CLOUD_CHECKOUT_SYNC_DELETE_FOLDER: &str = "CloudCheckoutSyncDeleteFolder";
 pub const CLOUD_PAUSE: &str = "CloudPause";
 /// Explicit supervised repair; start and resolve retain uncertain delivery.
 pub const CLOUD_RUNTIME_REPAIR: &str = "CloudRuntimeRepair";
@@ -384,6 +390,7 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | CLOUD_AGENT_LOGIN_STATUS
         | CLOUD_PROJECT_ENVIRONMENT
         | CLOUD_MACHINE
+        | CLOUD_MACHINE_SETUP_PROPOSAL
         | CLOUD_PREPAID_BALANCE
         | CLOUD_BILLING_ENTITLEMENTS
         | CLOUD_BILLING_SUMMARY
@@ -406,6 +413,7 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | LIST_MODELS
         | LIST_PROVIDER_MODELS
         | GET_CLAUDE_CONNECTION
+        | GET_MODEL_API_KEYS
         | LIST_AGENT_ACCOUNTS
         | WATCH_DOC_MESSAGES
         | WATCH_QUEUE
@@ -493,6 +501,7 @@ mod retry_tests {
             CLOUD_SYNC_RETRY,
             CLOUD_CHECKOUT_SYNC_CONFIGURE,
             CLOUD_CHECKOUT_SYNC_RESUME,
+            CLOUD_CHECKOUT_SYNC_DELETE_FOLDER,
             CLOUD_DELETE,
             CLOUD_CLEANUP_MIRROR,
             CLOUD_CREATE,
@@ -589,6 +598,11 @@ pub const CLOUD_MACHINE: &str = "CloudMachine";
 pub const CLOUD_MACHINE_SAVE: &str = "CloudMachineSave";
 /// Rebuild the account's user image from its current setup script now.
 pub const CLOUD_MACHINE_REBUILD: &str = "CloudMachineRebuild";
+/// A setup chat's proposed image configuration, with the account machine.
+pub const CLOUD_MACHINE_SETUP_PROPOSAL: &str = "CloudMachineSetupProposal";
+/// Apply a proposal: save its setup script and repositories, then rebuild.
+pub const CLOUD_MACHINE_SETUP_APPLY: &str = "CloudMachineSetupApply";
+pub const CLOUD_MACHINE_SETUP_DISCARD: &str = "CloudMachineSetupDiscard";
 pub const CLOUD_PROJECT_SECRETS: &str = "CloudProjectSecrets";
 pub const CLOUD_PROJECT_SECRET_SAVE: &str = "CloudProjectSecretSave";
 pub const CLOUD_PROJECT_SECRET_REVOKE: &str = "CloudProjectSecretRevoke";

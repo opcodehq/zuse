@@ -77,15 +77,7 @@ impl ConnectionControl {
     ) -> Result<AgentConnection, ApiError> {
         self.allowed(owner)?;
         let input = Zeroizing::new(std::mem::take(&mut request.secret));
-        let secret = Zeroizing::new(
-            if request.agent == zuse_protocol::cloud_computers::AgentId::Claude
-                && request.method == ConnectionMethod::SetupToken
-            {
-                input.chars().filter(|c| !c.is_whitespace()).collect()
-            } else {
-                input.trim().to_owned()
-            },
-        );
+        let secret = Zeroizing::new(request.method.normalize_secret(request.agent, &input));
         if request.method == ConnectionMethod::DeviceCode
             || !request.method.supported(request.agent)
             || !(8..=32768).contains(&secret.len())

@@ -223,6 +223,12 @@ struct PullRequestRepository: Hashable, Identifiable {
   // MARK: Preview
 
   #if DEBUG
+    /// `--loading-preview`: pull requests for a computer whose repositories are still resolving.
+    func loadLoadingPreview() {
+      preview = true
+      available = true
+      resolvingRepositories = true
+    }
     func loadPreview(
       repositories: [PullRequestRepository], pages: [PullRequestFilter: [PullRequestListItem]],
       details: [String: PullRequestDetail], diffs: [String: String]

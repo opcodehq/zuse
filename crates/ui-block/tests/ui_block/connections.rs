@@ -56,3 +56,15 @@ fn new_components_round_trip_through_json() {
     let back: Component = serde_json::from_value(json).unwrap();
     assert_eq!(back, card);
 }
+
+#[test]
+fn machine_image_proposals_name_one_proposal_and_are_not_advertised() {
+    assert_eq!(
+        root(r#"root = MachineImageProposal(" msp_0123 ")"#),
+        Component::MachineImageProposal {
+            proposal: "msp_0123".into()
+        }
+    );
+    rejects(r#"root = MachineImageProposal("")"#, "MachineImageProposal");
+    assert!(!zuse_ui_block::tool_description().contains("MachineImageProposal"));
+}

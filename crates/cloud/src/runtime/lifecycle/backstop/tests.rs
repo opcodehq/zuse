@@ -57,6 +57,9 @@ enum Expect {
     Normal,
     /// Only the backstop sleeps it, after the max quiet bound.
     Backstop,
+    /// A turn whose runtime is gone: the backstop marks it lost (for review)
+    /// and sleeps the computer soon after the runtime was last alive.
+    Lost,
     /// A genuinely running turn: never slept.
     Never,
     /// Reported to operators with this hold, never raced.
@@ -232,7 +235,7 @@ fn matrix() -> Vec<Case> {
         rows.push(Case {
             command: Some((state, 2)),
             patch: json!({"runtimeCredentialExpiresAtMs":0}),
-            ..case(name("runtime credential expired"), Backstop)
+            ..case(name("runtime credential expired"), Lost)
         });
         rows.push(Case {
             command: Some((state, 2)),
@@ -271,7 +274,7 @@ fn matrix() -> Vec<Case> {
 }
 
 async fn reset(pool: &PgPool, row: &Case) {
-    sqlx::raw_sql("DELETE FROM zuse_rust_task_command_execution; DELETE FROM api_cloud_workspace_launch_intents; DELETE FROM zuse_rust_lifecycle_operations; DELETE FROM zuse_rust_jobs;")
+    sqlx::raw_sql("DELETE FROM zuse_rust_task_command_execution; DELETE FROM api_cloud_workspace_launch_intents; DELETE FROM zuse_rust_lifecycle_operations; DELETE FROM zuse_rust_jobs; DELETE FROM zuse_rust_account_event_outbox;")
         .execute(pool).await.unwrap();
     let mut config = config();
     for (key, value) in row.patch.as_object().unwrap() {
@@ -352,7 +355,7 @@ async fn regression_guard_no_computer_stays_awake_past_max_quiet() {
     ] {
         sqlx::raw_sql(ddl).execute(&pool).await.unwrap();
     }
-    sqlx::raw_sql("CREATE TABLE zuse_rust_task_command_execution(workspace_id text NOT NULL,command_id text NOT NULL,state text NOT NULL,updated_at bigint NOT NULL,runtime_generation bigint,PRIMARY KEY(workspace_id,command_id)); INSERT INTO zuse_rust_control_owners VALUES('workspace','ws-bob','rust',2,0)").execute(&pool).await.unwrap();
+    sqlx::raw_sql("CREATE TABLE zuse_rust_task_command_execution(workspace_id text NOT NULL,command_id text NOT NULL,state text NOT NULL,updated_at bigint NOT NULL,runtime_generation bigint,session_id text NOT NULL DEFAULT 'session-bob',error_code text,unknown_reviewed boolean NOT NULL DEFAULT false,PRIMARY KEY(workspace_id,command_id)); CREATE TABLE zuse_rust_account_event_outbox(owner_id text NOT NULL,kind text NOT NULL,resource_id text NOT NULL,workspace_id text,payload jsonb NOT NULL,created_at bigint NOT NULL); INSERT INTO zuse_rust_control_owners VALUES('workspace','ws-bob','rust',2,0)").execute(&pool).await.unwrap();
     let control = control(pool.clone());
     let quiet = control.max_quiet_awake_ms();
     let idle_window = control.idle_ms + crate::runtime::activity::COALESCE_MS;
@@ -374,6 +377,30 @@ async fn regression_guard_no_computer_stays_awake_past_max_quiet() {
             !control.idle_sleep_once(recent).await.unwrap() && slept(&pool).await.is_none(),
             "slept despite recent activity",
         );
+        if row.expect == Lost {
+            let lost = T0 + LOST_RUNTIME_GRACE_MS;
+            let due = control.idle_sleep_due(recent).await.unwrap();
+            check(due == Some(lost), &format!("lost-runtime deadline {due:?}"));
+            check(
+                control.idle_sleep_once(lost + 1_000).await.unwrap()
+                    && slept(&pool).await.is_some(),
+                "not slept soon after its runtime was lost",
+            );
+            let turn: (String, Option<String>, bool) = sqlx::query_as("SELECT state,error_code,unknown_reviewed FROM zuse_rust_task_command_execution WHERE workspace_id='ws-bob'")
+                .fetch_one(&pool).await.unwrap();
+            check(
+                turn == (
+                    "outcome-unknown".into(),
+                    Some("runtime-process-lost".into()),
+                    false,
+                ),
+                &format!("lost turn recorded as {turn:?}"),
+            );
+            let events: i64 = sqlx::query_scalar("SELECT count(*) FROM zuse_rust_account_event_outbox WHERE kind='task-command-progress' AND workspace_id='ws-bob'")
+                .fetch_one(&pool).await.unwrap();
+            check(events == 1, &format!("{events} review events"));
+            continue;
+        }
         let normal = control.idle_sleep_once(after_idle).await.unwrap();
         check(
             normal == (row.expect == Normal),
@@ -454,7 +481,7 @@ async fn regression_guard_no_computer_stays_awake_past_max_quiet() {
                     &format!("holds {holds:?}"),
                 );
             }
-            Normal => unreachable!(),
+            Normal | Lost => unreachable!(),
         }
     }
     assert!(failures.is_empty(), "{failures:#?}");

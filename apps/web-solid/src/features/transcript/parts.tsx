@@ -207,12 +207,22 @@ const now = (() => {
 })();
 
 const animePhrases = [
-  "Gathering chakra…",
-  "Entering focus arc…",
-  "Channeling nen…",
-  "Going plus ultra…",
-  "Preparing the next jutsu…",
+  "Expanding domain…",
+  "Summoning shadow army…",
+  "Activating Gear 5…",
+  "Charging total concentration breathing…",
   "Unlocking bankai…",
+  "Gathering chakra…",
+  "Going Super Saiyan…",
+  "Raising power level past 9000…",
+  "Charging a Kamehameha…",
+  "Spinning up a Rasengan…",
+  "Activating sharingan…",
+  "Entering sage mode…",
+  "Opening the Eight Gates…",
+  "Naruto running to the answer…",
+  "Loading training arc…",
+  "Engaging Ultra Instinct…",
 ];
 
 function AnimeWorkingWord() {

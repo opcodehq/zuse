@@ -18,6 +18,13 @@ const IDLE_EVERY: u32 = 4;
 /// The account's computers and the chat's primary, about every 15 s.
 const SLOW_EVERY: u32 = 6;
 const OUTPUT_LINES: usize = 4;
+/// Background reads that keep failing back off up to this long between tries.
+const BACKOFF_CAP: Duration = Duration::from_secs(30);
+/// A read failure is only worth a notice once it has lasted this long and
+/// repeated this often: a network blip, a laptop waking up or the account's
+/// short renewal cooldown all clear up on their own well before.
+const SUSTAINED_FOR: Duration = Duration::from_secs(60);
+const SUSTAINED_FAILURES: u32 = 3;
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
@@ -136,9 +143,114 @@ pub(in crate::composer) struct State {
     stopping: HashSet<String>,
     /// Unknown outcomes the owner has dismissed on this computer.
     dismissed: HashSet<String>,
+    /// An action the owner took here failed; shown right away.
     error: Option<String>,
+    /// How the background reads are doing; shown only once a failure lasts.
+    reads: ReadHealth,
+    /// This computer's connector ("Use this computer from cloud chats") is on.
+    bridge_on: bool,
 }
+
+/// Consecutive background read failures: when they began, the latest
+/// reason, and whether the owner dismissed the notice for this stretch.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct ReadHealth {
+    failures: u32,
+    since: Option<Instant>,
+    last: Option<String>,
+    dismissed: bool,
+}
+impl ReadHealth {
+    /// One refresh finished; `failure` is why a read in it failed.
+    fn record(&mut self, failure: Option<String>, now: Instant) {
+        match failure {
+            None => *self = Self::default(),
+            Some(reason) => {
+                self.failures = self.failures.saturating_add(1);
+                self.since.get_or_insert(now);
+                self.last = Some(reason);
+            }
+        }
+    }
+    /// How long to wait before the next background read: the normal cadence
+    /// while healthy, doubled for each failure up to [`BACKOFF_CAP`].
+    fn delay(&self) -> Duration {
+        match self.failures {
+            0 => FAST_POLL,
+            n => FAST_POLL.saturating_mul(1 << n.min(8)).min(BACKOFF_CAP),
+        }
+    }
+    fn signed_out(&self) -> bool {
+        self.last.as_deref() == Some(zuse_protocol::cloud::SESSION_SIGNED_OUT)
+    }
+    /// The failure has outlasted every transient cause. A lost sign-in can't
+    /// fix itself, so it only waits for a second read to agree.
+    fn sustained(&self, now: Instant) -> bool {
+        if self.dismissed {
+            return false;
+        }
+        if self.signed_out() {
+            return self.failures >= 2;
+        }
+        self.failures >= SUSTAINED_FAILURES
+            && self
+                .since
+                .is_some_and(|since| now.saturating_duration_since(since) >= SUSTAINED_FOR)
+    }
+}
+
+/// The notice a lasting read failure shows.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ReadNotice {
+    /// The account service or the cloud keeps being unreachable.
+    Unreachable,
+    /// The saved sign-in is gone; only signing in again helps.
+    SignedOut,
+    /// The cloud keeps answering with this error.
+    Failing(String),
+}
+impl ReadNotice {
+    fn text(&self) -> String {
+        match self {
+            Self::Unreachable => {
+                "Can't reach Zuse Cloud, so this chat's computer requests may be late. Retrying."
+                    .to_owned()
+            }
+            Self::SignedOut => {
+                "Your Zuse sign-in ended. Sign in again to get this chat's computer requests."
+                    .to_owned()
+            }
+            Self::Failing(reason) => {
+                format!("Couldn't check this chat's computer requests: {reason}")
+            }
+        }
+    }
+}
+
 impl State {
+    /// Whether a read failure concerns the owner at all: this computer takes
+    /// cloud commands, or the chat has a request waiting or running.
+    fn relevant(&self) -> bool {
+        self.bridge_on || self.busy()
+    }
+
+    /// The notice for a lasting read failure that concerns the owner.
+    pub(crate) fn read_notice(&self, now: Instant) -> Option<ReadNotice> {
+        if !self.relevant() || !self.reads.sustained(now) {
+            return None;
+        }
+        let reason = self.reads.last.clone()?;
+        Some(if self.reads.signed_out() {
+            ReadNotice::SignedOut
+        } else if reason == zuse_protocol::cloud::SESSION_RENEWAL_UNAVAILABLE
+            || unreachable(&reason)
+        {
+            ReadNotice::Unreachable
+        } else {
+            ReadNotice::Failing(reason)
+        })
+    }
+
     /// A request is waiting for the owner or a command is running.
     fn busy(&self) -> bool {
         !self.pending.is_empty()
@@ -163,7 +275,17 @@ struct Fetched {
     primary: Option<Option<String>>,
     pending: Option<Vec<Pending>>,
     runs: Option<Vec<Run>>,
+    bridge_on: Option<bool>,
+    /// Why a read failed; `None` when every read made succeeded.
     error: Option<String>,
+}
+
+/// The local engine or the network dropped the call, so it never reached
+/// the cloud.
+fn unreachable(reason: &str) -> bool {
+    reason == "connection closed"
+        || reason.starts_with("transport: ")
+        || reason.ends_with(zuse_protocol::cloud_task_commands::TASK_UNREACHABLE)
 }
 
 async fn fetch(scope: Scope, slow: bool, requests: bool) -> Fetched {
@@ -177,6 +299,11 @@ async fn fetch(scope: Scope, slow: bool, requests: bool) -> Fetched {
         }
         if let Ok(primary) = call("primary").await {
             out.primary = Some(primary["deviceId"].as_str().map(str::to_owned));
+        }
+        // Local only: whether this computer takes cloud commands at all.
+        if let Ok(status) = client.call("ComputerBridgeStatus", json!({})).await {
+            let state = serde_json::from_value::<BridgeStatus>(status).unwrap_or_default();
+            out.bridge_on = Some(!matches!(state.state.as_str(), "" | "off"));
         }
     }
     if slow || requests {
@@ -258,7 +385,13 @@ impl Composer {
             let mut events: Option<zuse_rpc::RpcSubscription> = None;
             let mut changed = false;
             loop {
-                let slow = tick.is_multiple_of(SLOW_EVERY);
+                // While reads are failing, every (backed-off) tick reads
+                // everything: a retry is never skipped, and a success means
+                // every read recovered, not just the cheap ones.
+                let failing = this
+                    .read_with(cx, |c, _| c.computers.reads.failures > 0)
+                    .unwrap_or(false);
+                let slow = failing || tick.is_multiple_of(SLOW_EVERY);
                 if events.is_none() && slow {
                     events = scope
                         .controller
@@ -275,7 +408,10 @@ impl Composer {
                 let busy = this
                     .read_with(cx, |c, cx| c.computers.busy() || c.run_live(cx))
                     .unwrap_or(false);
-                let requests = std::mem::take(&mut changed) || busy || tick.is_multiple_of(IDLE_EVERY);
+                let requests = std::mem::take(&mut changed)
+                    || busy
+                    || failing
+                    || tick.is_multiple_of(IDLE_EVERY);
                 if slow || requests {
                     let fetched = fetch(scope.clone(), slow, requests).await;
                     if this
@@ -286,7 +422,12 @@ impl Composer {
                     }
                 }
                 tick = tick.wrapping_add(1);
-                let mut timer = std::pin::pin!(cx.background_executor().timer(FAST_POLL));
+                // Failing reads back off instead of hammering a session that
+                // is renewing; a pushed hint still reads at once.
+                let wait = this
+                    .read_with(cx, |c, _| c.computers.reads.delay())
+                    .unwrap_or(FAST_POLL);
+                let mut timer = std::pin::pin!(cx.background_executor().timer(wait));
                 loop {
                     let Some(feed) = events.as_mut() else {
                         timer.as_mut().await;
@@ -341,9 +482,12 @@ impl Composer {
             });
             state.runs = runs;
         }
-        if fetched.error.is_some() && state.error.is_none() {
-            state.error = fetched.error;
+        if let Some(bridge_on) = fetched.bridge_on {
+            state.bridge_on = bridge_on;
         }
+        // A read failure stays quiet until it lasts; the next good read
+        // clears it. Errors from the owner's own actions are not reads.
+        state.reads.record(fetched.error, Instant::now());
         if directory.is_some() {
             let next = ComputerDirectory {
                 computers: state.computers.clone(),
@@ -655,16 +799,59 @@ impl Composer {
         Some(card.into_any_element())
     }
 
+    /// A lasting read failure: what is wrong, and the one place that fixes it.
+    fn read_notice_row(
+        &self,
+        notice: ReadNotice,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> TrayPill {
+        use crate::shell::SettingsSection;
+        let (label, section) = match notice {
+            ReadNotice::SignedOut => ("Sign in", SettingsSection::General),
+            _ => ("Settings", SettingsSection::CloudComputers),
+        };
+        let mut row = TrayPill::new("computers-error", "Computers")
+            .subtitle(notice.text())
+            .tone(TrayTone::Warning)
+            .glyph(icons::ALERT_CIRCLE);
+        if notice != ReadNotice::SignedOut {
+            row = row.action(
+                tray_text_action("computers-error-retry", "Retry", None, theme)
+                    .debug_selector(|| "computers-error-retry".into())
+                    .tab_index(0)
+                    .on_click(cx.listener(|this, _, _, cx| this.refresh_computers(cx))),
+            );
+        }
+        row.action(
+            tray_text_action("computers-error-settings", label, None, theme)
+                .debug_selector(|| "computers-error-settings".into())
+                .tab_index(0)
+                .on_click(cx.listener(move |_, _, window, cx| {
+                    if let Some(shell) = window.root::<crate::shell::Shell>().flatten() {
+                        shell.update(cx, |shell, cx| shell.open_settings(section, cx));
+                    }
+                })),
+        )
+        .action(
+            tray_text_action("computers-error-dismiss", "Dismiss", None, theme)
+                .tab_index(0)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.computers.reads.dismissed = true;
+                    cx.notify();
+                })),
+        )
+    }
+
     /// Tray rows: running commands with Stop, unknown outcomes, and errors.
     pub(super) fn computer_tray_rows(
         &self,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Vec<TrayPill> {
+        // Without a cloud chat in front the state is empty: a scope change
+        // starts it over.
         let mut rows = Vec::new();
-        if self.computers.scope.is_none() {
-            return rows;
-        }
         if let Some(error) = self.computers.error.clone() {
             rows.push(
                 TrayPill::new("computers-error", "Computers")
@@ -679,6 +866,8 @@ impl Composer {
                             })),
                     ),
             );
+        } else if let Some(notice) = self.computers.read_notice(Instant::now()) {
+            rows.push(self.read_notice_row(notice, theme, cx));
         }
         for (index, run) in self
             .computers
@@ -775,6 +964,25 @@ impl Composer {
             );
         }
         rows
+    }
+}
+
+#[cfg(feature = "browser-fixture")]
+impl Composer {
+    /// Review fixture: this computer takes cloud commands and the chat's
+    /// reads have kept failing long enough for the notice.
+    pub(crate) fn fixture_seed_computer_read_failure(&mut self, failing: bool) {
+        self.computers.bridge_on = failing;
+        self.computers.reads = ReadHealth::default();
+        if failing {
+            let now = Instant::now();
+            self.computers.reads = ReadHealth {
+                failures: SUSTAINED_FAILURES,
+                since: Some(now.checked_sub(SUSTAINED_FOR).unwrap_or(now)),
+                last: Some(zuse_protocol::cloud::SESSION_RENEWAL_UNAVAILABLE.into()),
+                dismissed: false,
+            };
+        }
     }
 }
 

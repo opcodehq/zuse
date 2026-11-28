@@ -1,6 +1,7 @@
 //! Isolated native sidebar review fixture. ZUSE_SIDEBAR_COMPACT / ZUSE_SIDEBAR_HIDE_LABEL select layout;
 //! ZUSE_SIDEBAR_BY_PROJECT groups by project, with a remote clone of the local repository.
 //! ZUSE_SIDEBAR_WHATS_NEW opens the "What's new" dialog (a number picks a release, 0 = newest).
+//! ZUSE_SIDEBAR_WINDOW=WIDTHxHEIGHT sizes the window.
 use gpui::{AppContext, Bounds, WindowBounds, WindowOptions, px, size};
 use zuse_ui::*;
 
@@ -91,8 +92,12 @@ fn main() -> anyhow::Result<()> {
             s
         });
         let boot = EngineBootConfig { target: None,  data_dir: data, ipc_port: 0, edge_url: String::new(), edge_token: None, org_id: None, workos_client_id: None, default_harness: HarnessId::ClaudeCode };
+        // ZUSE_SIDEBAR_WINDOW=WIDTHxHEIGHT resizes the window, e.g. `480x800` for the narrow dialog.
+        let (width, height) = std::env::var("ZUSE_SIDEBAR_WINDOW").ok()
+            .and_then(|v| { let (w, h) = v.split_once('x')?; Some((w.parse().ok()?, h.parse().ok()?)) })
+            .unwrap_or((1100.0, 800.0));
         let _window = cx.open_window(WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(Bounds::new(gpui::point(px(12.),px(30.)), size(px(1100.),px(800.))))),
+            window_bounds: Some(WindowBounds::Windowed(Bounds::new(gpui::point(px(12.),px(30.)), size(px(width),px(height))))),
             titlebar: Some(gpui::TitlebarOptions { title: None, appears_transparent: true, traffic_light_position: Some(gpui::point(px(14.),px(14.))) }),
             app_owns_titlebar_drag: true,
             // Same backdrop as the app window, or the frosted surface has nothing to blur.

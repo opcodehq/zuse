@@ -302,6 +302,12 @@ pub enum Component {
     /// The reader's Zuse plugins, listed live by the renderer (`/mcp`).
     /// Not advertised.
     ConnectedPlugins {},
+    /// A setup chat's proposed machine image configuration: the renderer
+    /// reads the proposal and the build live and offers Apply & rebuild or
+    /// Discard. Only the image tools make it; not advertised.
+    MachineImageProposal {
+        proposal: String,
+    },
 }
 
 impl Component {
@@ -335,6 +341,7 @@ impl Component {
             Component::Connect { .. } => "Connect",
             Component::McpServer { .. } => "McpServer",
             Component::ConnectedPlugins {} => "ConnectedPlugins",
+            Component::MachineImageProposal { .. } => "MachineImageProposal",
         }
     }
 

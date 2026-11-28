@@ -53,7 +53,7 @@ async fn database() -> (PgPool, PgPool, String) {
         .await
         .unwrap();
     sqlx::raw_sql(include_str!(
-        "../../../../migrations/0058_pull_request_owners.sql"
+        "../../../../migrations/0059_pull_request_owners.sql"
     ))
     .execute(&pool)
     .await

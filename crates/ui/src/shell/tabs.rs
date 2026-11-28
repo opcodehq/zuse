@@ -349,6 +349,7 @@ impl Shell {
         }
         self.cloud_conversation = None;
         self.cloud_conversation_events = None;
+        self.cloud_transcript_events = None;
         self.command_palette = None;
         // Opening any session steps the voice stage aside — including the one
         // already selected under it. The call keeps running in the background.
@@ -560,6 +561,7 @@ impl Shell {
         }
         self.cloud_conversation = None;
         self.cloud_conversation_events = None;
+        self.cloud_transcript_events = None;
         self.command_palette = None;
         self.set_voice_stage_open(false, cx);
         self.set_route(Route::Chat, cx);

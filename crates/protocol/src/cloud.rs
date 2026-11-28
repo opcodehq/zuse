@@ -5,6 +5,15 @@ use serde::{Deserialize, Serialize};
 pub const STARTUP_BIND_CAPABILITY: &str = "rust-startup-bind-v2";
 pub const STARTUP_BIND_HEADER: &str = "x-zuse-runtime-storage";
 
+/// A cloud call could not get a current access token because the account
+/// service was unreachable (or briefly cooling down after a miss). The saved
+/// sign-in is intact and the next attempt usually succeeds, so callers retry
+/// quietly instead of asking the owner to reconnect.
+pub const SESSION_RENEWAL_UNAVAILABLE: &str =
+    "Couldn't reach Zuse to renew your Cloud session. Check your connection.";
+/// The saved sign-in is gone or was revoked: only signing in again helps.
+pub const SESSION_SIGNED_OUT: &str = "Your Zuse sign-in ended. Sign in again in Settings.";
+
 /// How long an archived chat keeps its sleeping computer before the computer
 /// is backed up and deleted. The chat, transcript and project stay; opening
 /// the chat again restores a fresh computer from the backup.
@@ -397,4 +406,8 @@ pub struct CloudWorkspaceCreateRequest {
     pub initial_message_delivery: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fork_source: Option<serde_json::Value>,
+    /// What the chat is for. [`crate::machine_setup::PURPOSE`] starts a setup
+    /// chat that configures the account's machine image; absent is a task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<String>,
 }

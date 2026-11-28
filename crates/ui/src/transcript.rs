@@ -3678,6 +3678,10 @@ pub struct Transcript {
     /// computer starting or a first message on its way to the agent. While
     /// set, the working line under the last message shows it.
     external_activity: Option<SharedString>,
+    /// The newest messages never reached their executor (a cloud chat's
+    /// server stayed unreachable): the line under them says "Not sent" with
+    /// Retry instead of any working line.
+    external_not_sent: bool,
     /// The session notice the working row last showed, to repaint on change.
     last_notice: Option<String>,
     /// Memory-only viewport state for primary chats visited in this window.
@@ -3812,8 +3816,6 @@ pub struct Transcript {
     /// Last live elapsed (seconds) per assistant entry, used if `duration_ms`
     /// has not landed on the doc yet when the turn settles.
     last_live_elapsed: HashMap<String, i64>,
-    /// One redraw per second while the live timing line is visible.
-    live_timing_tick: Option<Task<()>>,
     /// Natural heights of compact-fold body rows, written by each row's
     /// prepaint probe without notifying. The work fold's TOOL_FOLD tween
     /// clips the sibling rows against one shared budget without knowing
@@ -3945,6 +3947,8 @@ pub struct Transcript {
     ui_blocks: HashMap<SharedString, Entity<zuse_viewport::ui_block::UiBlockView>>,
     /// Follows the app's plugins once a block shows live plugin cards.
     plugin_watch: Option<Subscription>,
+    /// Follows setup chats' image proposals once a card shows one.
+    machine_setup_watch: Option<Subscription>,
     /// Live pull request cards by row id, like [`Self::visuals`].
     pull_request_cards: HashMap<SharedString, Entity<crate::pull_request_card::PullRequestCard>>,
     /// Scheduled retry wake-ups for errored sources (the 2s→15s ladder).
@@ -4004,6 +4008,9 @@ pub enum TranscriptEvent {
     SendUiBlockReply { row_id: SharedString, text: String },
     /// A plugin card's button (connect, manage, browse, sign in).
     UiBlockPlugin(zuse_viewport::ui_block::PluginAction),
+    /// The not-sent line's Retry (see [`Transcript::set_external_not_sent`]):
+    /// send the messages the server never took again.
+    RetryNotSent,
 }
 
 /// Where a reply's Fork menu sends the copy.
@@ -4350,6 +4357,7 @@ impl Transcript {
             land_end_pending: doc_override.is_some() && !follow,
             doc_live: doc_override.is_some() && follow,
             external_activity: None,
+            external_not_sent: false,
             last_notice: None,
             doc_override,
             saved_viewports: SavedViewportCache::default(),
@@ -4396,7 +4404,6 @@ impl Transcript {
             split_diffs: crate::settings::split_diffs(cx),
             compact_mode: crate::settings::transcript_compact_mode(cx),
             last_live_elapsed: HashMap::new(),
-            live_timing_tick: None,
             compact_fold_heights: HashMap::new(),
             compact_fold_settle: None,
             turn_worked_secs: HashMap::new(),
@@ -4454,6 +4461,7 @@ impl Transcript {
             visuals: HashMap::new(),
             ui_blocks: HashMap::new(),
             plugin_watch: None,
+            machine_setup_watch: None,
             pull_request_cards: HashMap::new(),
             attachment_retries: HashMap::new(),
             blob_details: HashMap::new(),
@@ -4494,6 +4502,11 @@ impl Transcript {
 
     /// Show `label` in the working line until cleared. The chat's own live
     /// turn, when there is one, still takes precedence.
+    #[cfg(test)]
+    pub(crate) fn external_activity_for_test(&self) -> Option<SharedString> {
+        self.external_activity.clone()
+    }
+
     pub(crate) fn set_external_activity(
         &mut self,
         label: Option<SharedString>,
@@ -4505,6 +4518,20 @@ impl Transcript {
             self.remeasure_last_row();
             cx.notify();
         }
+    }
+
+    /// Show (or clear) the not-sent line under the last message.
+    pub(crate) fn set_external_not_sent(&mut self, not_sent: bool, cx: &mut Context<Self>) {
+        if self.external_not_sent != not_sent {
+            self.external_not_sent = not_sent;
+            self.remeasure_last_row();
+            cx.notify();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn external_not_sent_for_test(&self) -> bool {
+        self.external_not_sent
     }
 
     pub fn set_rail_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
@@ -8712,6 +8739,7 @@ impl Transcript {
                     view
                 });
                 let id = row_id.clone();
+                let this_state = self.state.clone();
                 cx.subscribe(
                     &view,
                     move |_, _, event: &zuse_viewport::ui_block::UiBlockEvent, cx| match event {
@@ -8723,6 +8751,13 @@ impl Transcript {
                         }
                         zuse_viewport::ui_block::UiBlockEvent::Plugin(action) => {
                             cx.emit(TranscriptEvent::UiBlockPlugin(action.clone()));
+                        }
+                        zuse_viewport::ui_block::UiBlockEvent::MachineSetup(action) => {
+                            let cards = crate::machine_setup_cards::MachineSetupCards::shared(
+                                this_state.clone(),
+                                cx,
+                            );
+                            cards.update(cx, |cards, cx| cards.act(action, cx));
                         }
                     },
                 )
@@ -8736,6 +8771,9 @@ impl Transcript {
             .uses_plugins()
             .then(|| self.plugin_directory(cx));
         let plugin_actions = self.doc_override.is_none();
+        let proposals = view.read(cx).machine_setup_proposals();
+        let machine_setup =
+            (!proposals.is_empty()).then(|| self.machine_setup_directory(&proposals, cx));
         view.update(cx, |view, cx| {
             view.set_palette(palette, cx);
             view.set_interactive(interactive, cx);
@@ -8743,8 +8781,53 @@ impl Transcript {
                 view.set_plugins(plugins, cx);
                 view.set_plugin_actions(plugin_actions, cx);
             }
+            if let Some(directory) = machine_setup {
+                view.set_machine_setup(directory, cx);
+                view.set_plugin_actions(plugin_actions, cx);
+            }
         });
         div().w_full().child(view).into_any_element()
+    }
+
+    /// Setup chats' proposals for live image cards: reads each shown
+    /// proposal once and pushes every change to the cards showing one.
+    fn machine_setup_directory(
+        &mut self,
+        proposals: &[String],
+        cx: &mut Context<Self>,
+    ) -> std::rc::Rc<zuse_viewport::ui_block::MachineSetupDirectory> {
+        use crate::machine_setup_cards::MachineSetupCards;
+        if self.state.read(cx).engine().is_none() {
+            return std::rc::Rc::new(zuse_viewport::ui_block::MachineSetupDirectory {
+                unavailable: true,
+                ..Default::default()
+            });
+        }
+        let cards = MachineSetupCards::shared(self.state.clone(), cx);
+        if self.machine_setup_watch.is_none() {
+            self.machine_setup_watch = Some(cx.observe(&cards, |this, cards, cx| {
+                let directory = std::rc::Rc::new(cards.read(cx).directory());
+                let views: Vec<_> = this
+                    .ui_blocks
+                    .iter()
+                    .map(|(row, view)| (row.clone(), view.clone()))
+                    .collect();
+                let mut rows = Vec::new();
+                for (row, view) in views {
+                    if !view.read(cx).machine_setup_proposals().is_empty() {
+                        view.update(cx, |view, cx| view.set_machine_setup(directory.clone(), cx));
+                        rows.push(row);
+                    }
+                }
+                // A loaded or rebuilt card changes height: remeasure its row.
+                if !rows.is_empty() {
+                    this.diagram_layout_changed(&rows, cx);
+                }
+            }));
+        }
+        let wanted = proposals.to_vec();
+        cards.update(cx, |cards, cx| cards.ensure(&wanted, cx));
+        std::rc::Rc::new(cards.read(cx).directory())
     }
 
     /// The app's plugins for live plugin cards. The first card starts
@@ -9228,8 +9311,8 @@ impl Transcript {
         }
     }
 
-    /// The live turn owns the timing line once it has a row to display it on.
-    /// Until then the trailer reports sending and working beneath the prompt.
+    /// The live turn's streaming reply row and its elapsed seconds, recorded
+    /// so the settled turn can show "Worked for …" above the reply.
     fn live_work(&self, cx: &gpui::App) -> Option<(SharedString, i64)> {
         let now = chrono::Utc::now();
         let state = self.state.read(cx);
@@ -9274,35 +9357,45 @@ impl Transcript {
         {
             return None;
         }
-        let label =
-            if let Some((entry, secs)) = self.live_work(cx).filter(|(id, _)| id == &row.entry_id) {
-                self.last_live_elapsed.insert(entry.to_string(), secs);
-                if self.live_timing_tick.is_none() {
-                    self.live_timing_tick = Some(cx.spawn(async move |this, cx| {
-                        cx.background_executor().timer(Duration::from_secs(1)).await;
-                        this.update(cx, |this, cx| {
-                            this.live_timing_tick = None;
-                            cx.notify();
-                        })
-                        .ok();
-                    }));
-                }
-                tr(cx, |l10n| {
-                    msg::chat::turn_working_for(l10n, &format_elapsed(secs))
-                })
-            } else {
-                let secs = *self.turn_worked_secs.get(&row.entry_id)?;
-                tr(cx, |l10n| {
-                    msg::chat::turn_worked_for(l10n, &format_elapsed(secs))
-                })
-            };
+        // While the turn runs, the working trailer beneath the reply owns the
+        // timer; the line above the reply only appears once it settles.
+        if self.live_work(cx).is_some_and(|(id, _)| id == row.entry_id) {
+            return None;
+        }
+        let secs = *self.turn_worked_secs.get(&row.entry_id)?;
+        let label = tr(cx, |l10n| {
+            msg::chat::turn_worked_for(l10n, &format_elapsed(secs))
+        });
         Some(turn_timing_line(theme).child(label))
+    }
+
+    /// The not-sent line (see [`Self::set_external_not_sent`]): its click
+    /// asks the owner to send those messages again.
+    fn render_not_sent_line(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::of(cx).clone();
+        div()
+            .id("not-sent-retry")
+            .debug_selector(|| "not-sent-retry".into())
+            .role(gpui::Role::Button)
+            .aria_label("Not sent. Retry sending")
+            .tab_index(0)
+            .focus_visible(|style| style.underline())
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(Theme::SPACE_SM))
+            .pt(px(Theme::SPACE_LG))
+            .text_size(crate::typography::text_xs())
+            .text_color(theme.danger)
+            .cursor_pointer()
+            .on_click(cx.listener(|_, _, _, cx| cx.emit(TranscriptEvent::RetryNotSent)))
+            .child(SharedString::from("Not sent — Retry"))
+            .into_any_element()
     }
 
     fn render_working_trailer(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if let Some((entry, elapsed)) = self.live_work(cx) {
             self.last_live_elapsed.insert(entry.to_string(), elapsed);
-            return None;
         }
         let now = chrono::Utc::now();
         // `turn` (the turn's start, ms) keys the rolling word and timer, so a
@@ -9330,6 +9423,11 @@ impl Transcript {
                 (false, false, 0, elapsed, last.created_at)
             } else {
                 let chat_id = self.chat_id.clone()?;
+                // A cloud chat's messages the server never took: the line is
+                // their Retry, never a turn starting for them.
+                if self.external_not_sent {
+                    return Some(self.render_not_sent_line(cx));
+                }
                 // Failed-send state first: past the grace window the trailer IS
                 // the retry affordance, whatever the indicator fell back to.
                 if self.state.read(cx).send_undelivered(&chat_id, now) {
@@ -13688,7 +13786,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn work_timer_moves_from_the_prompt_to_the_reply_and_uses_the_recorded_duration(
+    fn work_timer_stays_below_while_live_and_uses_the_recorded_duration(
         cx: &mut gpui::TestAppContext,
     ) {
         with_tool_group_navigation(cx, |state, transcript, cx| {
@@ -13733,8 +13831,8 @@ mod tests {
             transcript.update(cx, |this, cx| {
                 this.sync(cx);
                 let row = this.rows.last().unwrap().clone();
-                assert!(this.render_turn_timing(&row, &Theme::dark(), cx).is_some());
-                assert!(this.render_working_trailer(cx).is_none());
+                assert!(this.render_turn_timing(&row, &Theme::dark(), cx).is_none());
+                assert!(this.render_working_trailer(cx).is_some());
                 assert!(this.last_live_elapsed["reply"] >= 12);
             });
 

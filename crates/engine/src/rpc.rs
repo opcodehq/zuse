@@ -749,6 +749,7 @@ pub struct EngineRpc {
     slack_links: Option<crate::slack_links::SlackLinks>,
     pull_request_links: Option<crate::pull_request_links::PullRequestLinks>,
     model_connections: Option<crate::model_connections::ModelConnections>,
+    model_api_keys: Option<crate::harness_vendors::ApiKeys>,
     account: Option<crate::account::Account>,
     managed_access: Option<crate::managed_access::AccountClient>,
     managed_host: Option<crate::managed_access::host::Host>,
@@ -819,6 +820,7 @@ impl EngineRpc {
             slack_links: None,
             pull_request_links: None,
             model_connections: None,
+            model_api_keys: None,
             account: None,
             managed_access: None,
             managed_host: None,
@@ -896,6 +898,11 @@ impl EngineRpc {
         connections: crate::model_connections::ModelConnections,
     ) -> Self {
         self.model_connections = Some(connections);
+        self
+    }
+
+    pub(crate) fn with_model_api_keys(mut self, keys: crate::harness_vendors::ApiKeys) -> Self {
+        self.model_api_keys = Some(keys);
         self
     }
 
@@ -1981,6 +1988,9 @@ fn forwardable(method: &str) -> bool {
             | methods::CANCEL_AGENT_LOGIN
             | methods::GET_CLAUDE_CONNECTION
             | methods::SET_CLAUDE_CONNECTION
+            // Zuse agent API keys are saved on the device that runs the agent.
+            | methods::GET_MODEL_API_KEYS
+            | methods::SET_MODEL_API_KEY
             // Uploads/attachments target the chat's host device (the agent reads
             // the committed file from that device's disk).
             | methods::UPLOAD_CHUNK
@@ -3110,6 +3120,7 @@ impl EngineRpc {
             methods::CLOUD_CHECKOUT_SYNC_STATUS
                 | methods::CLOUD_CHECKOUT_SYNC_CONFIGURE
                 | methods::CLOUD_CHECKOUT_SYNC_RESUME
+                | methods::CLOUD_CHECKOUT_SYNC_DELETE_FOLDER
         ) {
             if !crate::cloud::beta_enabled() {
                 return Err(RpcError::Failed(crate::cloud::BETA_MESSAGE.into()));
@@ -3903,6 +3914,24 @@ impl EngineRpc {
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&value)
             }
+            zuse_protocol::machine_setup::METHOD => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct P {
+                    chat_id: String,
+                    request: zuse_protocol::machine_setup::Request,
+                }
+                let p: P = parse_params(params)?;
+                let gateway = self
+                    .plugins
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("Machine image setup unavailable".into()))?;
+                let value = gateway
+                    .machine_setup(&p.chat_id, &p.request)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&value)
+            }
             methods::PLUGIN_TOOLS => {
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -4150,6 +4179,25 @@ impl EngineRpc {
             }
             methods::GET_CLAUDE_CONNECTION => {
                 RpcReply::value(&self.agent_accounts.get_claude_connection().await)
+            }
+            methods::GET_MODEL_API_KEYS | methods::SET_MODEL_API_KEY => {
+                let keys = self.model_api_keys.as_ref().ok_or_else(|| {
+                    RpcError::Failed("The Zuse agent is unavailable on this device.".into())
+                })?;
+                if method == methods::SET_MODEL_API_KEY {
+                    #[derive(Deserialize)]
+                    #[serde(rename_all = "camelCase")]
+                    struct Params {
+                        id: String,
+                        #[serde(default)]
+                        api_key: String,
+                    }
+                    let p: Params = parse_params(params)?;
+                    let key = zeroize::Zeroizing::new(p.api_key);
+                    keys.set(&p.id, &key)
+                        .map_err(|e| RpcError::Failed(e.to_string()))?;
+                }
+                RpcReply::value(&keys.status())
             }
             methods::SET_CLAUDE_CONNECTION => {
                 #[derive(Deserialize)]

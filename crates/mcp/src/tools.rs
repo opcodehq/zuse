@@ -42,6 +42,8 @@ pub struct Tools {
     zuse: Arc<Zuse>,
     /// See [`crate::McpConfig::cloud_computers`].
     cloud_computers: bool,
+    /// See [`crate::McpConfig::machine_setup`].
+    machine_setup: bool,
     // Remember successful sends on this MCP connection so wait_for_turn after
     // wait:false also waits for a newly created chat with no session row yet.
     pending_turns: tokio::sync::Mutex<HashMap<String, Arc<PendingTurn>>>,
@@ -962,12 +964,18 @@ impl Tools {
         Self {
             zuse,
             cloud_computers: false,
+            machine_setup: false,
             pending_turns: Default::default(),
         }
     }
 
     pub fn with_cloud_computers(mut self, cloud_computers: bool) -> Self {
         self.cloud_computers = cloud_computers;
+        self
+    }
+
+    pub fn with_machine_setup(mut self, machine_setup: bool) -> Self {
+        self.machine_setup = machine_setup;
         self
     }
 
@@ -978,8 +986,9 @@ impl Tools {
         self.list()
             .into_iter()
             .map(|tool| {
-                let up_front = self.cloud_computers
-                    && matches!(tool.name, "run_on_computer" | "list_attached_computers");
+                let up_front = (self.cloud_computers
+                    && matches!(tool.name, "run_on_computer" | "list_attached_computers"))
+                    || crate::machine_setup::NAMES.contains(&tool.name);
                 let mut entry = serde_json::to_value(&tool).unwrap_or_default();
                 if up_front {
                     entry["_meta"] = json!({"anthropic/alwaysLoad": true});
@@ -1017,8 +1026,13 @@ impl Tools {
                 input_schema: if name=="zapper_command" {zapper_command_schema()}else if name=="zapper_issue" {json!({"type":"object","properties":{"zapperId":{"type":"string"},"issueId":{"type":"string"}},"required":["zapperId"]})}else{json!({"type":"object","properties":{"zapperId":{"type":"string"},"history":{"type":"boolean"},"path":{"type":"string"},"eventIds":{"type":"array","items":{"type":"string"}}},"required":["zapperId"]})},
             });
         }
+        all.extend(crate::machine_setup::definitions());
+        let machine_setup = in_chat && self.machine_setup;
         all.into_iter()
             .filter(|tool| {
+                if crate::machine_setup::NAMES.contains(&tool.name) {
+                    return machine_setup && !self.zuse.is_coordinator();
+                }
                 (in_chat
                     || (tool.name != "request_secret"
                         && tool.name != SHOW_VISUAL
@@ -1076,6 +1090,17 @@ impl Tools {
                     .await
             }
             PLUGINS_CONNECT => self.plugins_connect(parse(args)?).await,
+            crate::machine_setup::GET
+            | crate::machine_setup::PROPOSE
+            | crate::machine_setup::TEST => {
+                if !self.has(name) {
+                    return Err(
+                        "Image tools only work in a setup chat started from Settings → Machine."
+                            .into(),
+                    );
+                }
+                self.machine_setup_tool(name, args).await
+            }
             "list_computer_tasks"
             | "run_computer_task"
             | "computer_task_results"
@@ -1839,6 +1864,70 @@ impl Tools {
         }))
     }
 
+    /// A setup chat's image tools (see [`crate::machine_setup`]).
+    async fn machine_setup_tool(&self, name: &str, args: Value) -> anyhow::Result<Value> {
+        use crate::machine_setup as setup;
+        use zuse_protocol::machine_setup::Request;
+        if name == setup::TEST {
+            let script = args["setup_script"]
+                .as_str()
+                .context("Specify setup_script")?;
+            return setup::test_script(script, args["timeout_seconds"].as_u64()).await;
+        }
+        let chat_id = self
+            .zuse
+            .origin()
+            .chat_id
+            .clone()
+            .context("Image tools only work from an agent Zuse launched in a chat")?;
+        let request = if name == setup::GET {
+            Request::Get
+        } else {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Propose {
+                setup_script: String,
+                repositories: Vec<String>,
+                #[serde(default)]
+                notes: Option<String>,
+            }
+            let p: Propose = serde_json::from_value(args).map_err(|e| anyhow::anyhow!("{e}"))?;
+            Request::Propose {
+                setup_script: p.setup_script,
+                repositories: p.repositories,
+                notes: p.notes,
+            }
+        };
+        let proposing = matches!(request, Request::Propose { .. });
+        let result = self
+            .zuse
+            .call_once(
+                zuse_protocol::machine_setup::METHOD,
+                json!({"chatId":chat_id,"request":request}),
+            )
+            .await
+            .map_err(setup::explain)?;
+        if !proposing {
+            return Ok(result);
+        }
+        let id = result["proposalId"]
+            .as_str()
+            .context("proposal without an id")?;
+        let spec = setup::proposal_spec(id);
+        zuse_ui_block::validate(&spec).map_err(|e| anyhow::anyhow!("{e}"))?;
+        self.zuse
+            .call(
+                zuse_rpc::methods::PUBLISH_UI_BLOCK,
+                json!({ "chatId": chat_id, "spec": spec }),
+            )
+            .await?;
+        Ok(json!({
+            "ok": true,
+            "proposalId": id,
+            "message": "The proposed change is shown below your reply with Apply & rebuild and Discard. Don't describe the card; tell the user in one line what it changes and wait for their decision.",
+        }))
+    }
+
     async fn interrupt_chat(&self, args: ChatArgs) -> anyhow::Result<Value> {
         let chat = self.zuse.resolve_chat(&args.chat).await?;
         let command_id = self
@@ -2369,6 +2458,7 @@ mod tests {
                 pull_requests: vec![],
                 activity: vec![],
             }],
+            folders: vec![],
         };
         let full = serde_json::to_value(Some(&zapper)).unwrap();
         let args = json!({
@@ -2567,6 +2657,94 @@ mod tests {
         assert!(!human.has("plugins_call"));
         assert!(human.call("plugins_list", json!({})).await.is_err());
         assert_eq!(capture.0.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn image_tools_exist_only_in_setup_chats_and_a_proposal_shows_its_card() {
+        #[derive(Default)]
+        struct Capture(Mutex<Vec<(String, Value)>>);
+        #[async_trait]
+        impl RpcService for Capture {
+            async fn handle(&self, method: &str, params: Value) -> Result<RpcReply, RpcError> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push((method.to_owned(), params.clone()));
+                Ok(RpcReply::Value(match method {
+                    zuse_protocol::machine_setup::METHOD
+                        if params["request"]["action"] == "propose" =>
+                    {
+                        json!({"proposalId":"msp_0123456789abcdef0123456789abcdef","state":"proposed"})
+                    }
+                    zuse_protocol::machine_setup::METHOD => {
+                        json!({"revision":2,"setupScript":"true","repositories":[],"imageState":"ready"})
+                    }
+                    _ => json!({"id":"ui:1"}),
+                }))
+            }
+        }
+        let capture = Arc::new(Capture::default());
+        let origin = Origin {
+            chat_id: Some("setup-chat".into()),
+            device_id: None,
+        };
+        let plain = Tools::new(Arc::new(Zuse::with_client(
+            memory_client(capture.clone()),
+            origin.clone(),
+        )));
+        for name in crate::machine_setup::NAMES {
+            assert!(!plain.has(name), "{name} outside a setup chat");
+        }
+        assert!(
+            plain
+                .call("get_machine_image_config", json!({}))
+                .await
+                .is_err()
+        );
+        assert!(capture.0.lock().unwrap().is_empty());
+        let setup = Tools::new(Arc::new(Zuse::with_client(
+            memory_client(capture.clone()),
+            origin,
+        )))
+        .with_machine_setup(true);
+        let listed: Vec<Value> = setup.listing();
+        for name in crate::machine_setup::NAMES {
+            let tool = listed.iter().find(|t| t["name"] == name).unwrap();
+            assert_eq!(tool["_meta"]["anthropic/alwaysLoad"], true, "{name}");
+        }
+        let config = setup
+            .call("get_machine_image_config", json!({}))
+            .await
+            .unwrap();
+        assert_eq!(config["revision"], 2);
+        let proposed = setup
+            .call(
+                "propose_machine_image_config",
+                json!({"setup_script":"sudo apt-get install -y jq","repositories":["a/b"],"notes":"jq"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            proposed["proposalId"],
+            "msp_0123456789abcdef0123456789abcdef"
+        );
+        let calls = capture.0.lock().unwrap().clone();
+        assert_eq!(calls[0].1["chatId"], "setup-chat");
+        assert_eq!(
+            calls[1].1["request"]["setupScript"],
+            "sudo apt-get install -y jq"
+        );
+        assert_eq!(calls[2].0, methods::PUBLISH_UI_BLOCK);
+        assert_eq!(
+            calls[2].1["spec"],
+            "root = MachineImageProposal(\"msp_0123456789abcdef0123456789abcdef\")"
+        );
+        let tested = setup
+            .call("test_setup_script", json!({"setup_script":"echo ready"}))
+            .await
+            .unwrap();
+        assert_eq!(tested["output"], "ready");
+        assert_eq!(capture.0.lock().unwrap().len(), 3, "tests run locally");
     }
 
     #[tokio::test]

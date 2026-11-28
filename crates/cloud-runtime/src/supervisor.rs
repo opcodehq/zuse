@@ -129,7 +129,10 @@ pub async fn serve(
                 }
                 result=&mut socket=> {
                     match result {
-                        Ok(Err(zuse_rpc::RpcError::Capability(code))) if code=="cloud.runtime_fenced"=>bail!("runtime_authority_fenced"),
+                        // A socket that still carried the credential this
+                        // runtime has since renewed reconnects with the new
+                        // one; only a fence of the current credential ends it.
+                        Ok(Err(zuse_rpc::RpcError::Capability(code))) if code=="cloud.runtime_fenced" && !renewed_since(identity, &bootstrap)=>bail!("runtime_authority_fenced"),
                         Err(_)=>bail!("runtime_gateway_worker_failed"),
                         _=>{},
                     }
@@ -165,6 +168,13 @@ fn publish(
     if let Some(boot) = identity.bootstrap() {
         credentials.send_replace(boot.clone());
     }
+}
+/// Whether the identity holds a different credential than the one `used`
+/// carried: a refusal of `used` then says nothing about the current one.
+fn renewed_since(identity: &Identity, used: &zuse_protocol::cloud::CloudRuntimeBootstrap) -> bool {
+    identity
+        .bootstrap()
+        .is_some_and(|current| current.runtime_credential != used.runtime_credential)
 }
 pub fn retryable(error: &anyhow::Error) -> bool {
     error.downcast_ref::<Failure>().is_some_and(|e| e.retryable)
