@@ -21,6 +21,7 @@
     "e2e:web-parity": "node e2e/web-parity.mjs",
     "e2e:zappers": "node e2e/zappers.mjs",
     "e2e:references": "node e2e/transcript/references.mjs",
+    "e2e:pr-tab": "node e2e/pr-tab.mjs",
     "e2e:solid2": "node e2e/solid2.mjs"
   },
   "dependencies": {

@@ -748,7 +748,15 @@ impl Shell {
                 let active = current && !main_tab_active;
                 // Mid-turn, the tab trades its agent icon for the activity
                 // glyph, like a local chat's tab.
-                let working = view.read(cx).agent_working(cx);
+                // Background work the turn left running wears the quieter
+                // mark once no turn runs or waits on the user.
+                let live = view.read(cx).live_activity(cx);
+                let working = live.working;
+                let background = if live.awaiting_input {
+                    0
+                } else {
+                    live.background
+                };
                 crate::surface_chrome::workspace_tab(
                     ("cloud-conversation-tab", index),
                     active,
@@ -786,6 +794,15 @@ impl Shell {
                             cx,
                         ))
                         .into_any_element()
+                } else if background > 0 {
+                    crate::background_work::mark(
+                        format!("cloud-tab-background-{index}"),
+                        14.,
+                        crate::background_work::TAB_LOADER,
+                        background,
+                        &theme,
+                        cx,
+                    )
                 } else {
                     cloud_tab_icon(harness, index, &theme).into_any_element()
                 })

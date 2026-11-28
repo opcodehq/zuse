@@ -87,6 +87,10 @@ impl Progress {
         }
         progress
     }
+    /// The sent-bytes counter, for an upload that counts its own bytes.
+    pub(super) fn counter(&self) -> Arc<AtomicU64> {
+        self.sent.clone()
+    }
     pub(super) fn sent(&self) -> u64 {
         self.sent.load(Ordering::Relaxed).min(self.total)
     }

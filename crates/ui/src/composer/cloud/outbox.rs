@@ -195,6 +195,14 @@ impl Composer {
             self.retry_unsent_cloud_send(cx);
         }
     }
+    /// Remove from the not-sent line: the first message the server never
+    /// took goes back to the draft with its files; the rest go on in order.
+    /// A queued one has its own Remove on its row.
+    pub(crate) fn remove_cloud_message_not_sent(&mut self, cx: &mut Context<Self>) {
+        if self.cloud_messages_not_sent() && self.cloud_send_unsent() {
+            self.edit_unsent_cloud_send(cx);
+        }
+    }
     /// The message being sent is settled: the next waiting one goes.
     pub(super) fn send_next_waiting_cloud_message(&mut self, cx: &mut Context<Self>) {
         if self.cloud.task.is_some() || self.cloud.pending_native.is_some() {

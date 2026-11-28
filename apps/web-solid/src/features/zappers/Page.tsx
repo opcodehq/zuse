@@ -11,7 +11,8 @@ import { Transcript } from "@/features/transcript";
 import { TopBar } from "@/features/workspace";
 import { Button, Dialog, Menu } from "@/ui/primitives";
 import { Icon } from "@/ui/Icon";
-import { Avatar, avatarOf } from "./Avatar";
+import { Avatar, avatarOf, moodOf } from "./Avatar";
+import { now } from "@/features/sidebar/util";
 import { Issues, IssuePage } from "./Issues";
 import { Threads } from "./Threads";
 import { Drive, FileDialogs } from "./Drive";
@@ -65,7 +66,7 @@ export function ZapperPage() {
             <div class="zp-conversation">
               <div class="zp-context">
                 <button class="zp-context-name" onClick={() => openZapper(z())}>
-                  <Avatar avatar={avatarOf(z())} image={z().config.avatarImage} size={24} />
+                  <Avatar avatar={avatarOf(z())} image={z().config.avatarImage} size={24} mood={moodOf(z(), now())} />
                   <strong>{z().config.name}</strong>
                   <span class="zp-muted">
                     {view.selectedChatId === z().coordinatorChatId
@@ -309,7 +310,7 @@ function Overview(props: { zapper: Zapper; onOpenIssue: (id:string)=>void }) {
   const asks=()=>props.zapper.issues.filter(issue=>issue.details.status === "needsYou" && (!issue.details.owner || issue.details.owner.type === "user"));
   const decisions=()=>props.zapper.decisions.filter(decision=>decision.answer===null);
   return <>
-    <div class="zp-overview-hero"><Avatar avatar={avatarOf(props.zapper)} image={props.zapper.config.avatarImage} size={40} /><div><h2>{props.zapper.config.name}</h2><span class="zp-overview-status" data-status={props.zapper.status}><i />{props.zapper.status === "active" && working() ? `${working()} ${working()===1?"thread":"threads"} working` : statusLabel(props.zapper.status)}</span></div><Show when={["active","paused"].includes(props.zapper.status)}><Button size="sm" onClick={()=>act(props.zapper.id,{type:"setStatus",status:props.zapper.status === "active" ? "paused":"active"})}>{props.zapper.status === "active" ? "Pause":"Resume"}</Button></Show></div>
+    <div class="zp-overview-hero"><Avatar avatar={avatarOf(props.zapper)} image={props.zapper.config.avatarImage} size={40} mood={moodOf(props.zapper, now())} /><div><h2>{props.zapper.config.name}</h2><span class="zp-overview-status" data-status={props.zapper.status}><i />{props.zapper.status === "active" && working() ? `${working()} ${working()===1?"thread":"threads"} working` : statusLabel(props.zapper.status)}</span></div><Show when={["active","paused"].includes(props.zapper.status)}><Button size="sm" onClick={()=>act(props.zapper.id,{type:"setStatus",status:props.zapper.status === "active" ? "paused":"active"})}>{props.zapper.status === "active" ? "Pause":"Resume"}</Button></Show></div>
     <Show when={props.zapper.config.purpose.trim()}><p class="zp-purpose">{props.zapper.config.purpose}</p></Show>
     <Show when={asks().length || decisions().length}><div class="zp-needs-you"><h3>Needs you</h3><For each={asks()}>{issue=><button type="button" onClick={()=>props.onOpenIssue(issue.id)}><StatusIcon status="needsYou" /><div><strong>{issue.details.title}</strong><span>{[...issue.activity].reverse().find(event=>event.kind === "question")?.text ?? `ZAP-${issue.number}`}</span></div><span>Answer</span></button>}</For><For each={decisions()}>{item=><button type="button" onClick={()=>setDecision(item.id)}><Icon name="info-circle" size={14} /><div><strong>{item.question}</strong></div><span>Answer</span></button>}</For></div></Show>
     <div class="zp-section-heading"><h3>Work</h3><Button size="sm" onClick={()=>setTab("issues")}>All issues</Button></div><Issues zapper={props.zapper} compact onOpen={props.onOpenIssue} />

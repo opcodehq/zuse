@@ -1200,6 +1200,7 @@ impl Shell {
                     pr,
                     harness,
                     state.display_status_for(chat, Utc::now()),
+                    state.background_work_for(&chat.id, Utc::now()),
                     active,
                     chat.archived,
                     false,

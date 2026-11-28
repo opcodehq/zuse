@@ -138,8 +138,8 @@ struct IssueListRow: View {
     let comments = issue.activity.filter { ["comment", "question"].contains($0.kind) }.count
     HStack(spacing: 10) {
       IssueStatusIcon(status: issue.details.status)
-      Text(issue.details.title).font(.system(size: 16)).foregroundStyle(.primary.opacity(0.92))
-        .lineLimit(1)
+      Text(issue.details.title).font(.system(size: PaneMetrics.titleSize))
+        .foregroundStyle(.primary.opacity(0.92)).lineLimit(1)
       Spacer(minLength: 6)
       if comments > 0 {
         HStack(spacing: 2) {
@@ -160,7 +160,7 @@ struct IssueListRow: View {
       Text(CompactTime.label(milliseconds: issue.updatedAt)).font(.system(size: 13))
         .foregroundStyle(.secondary).monospacedDigit().frame(minWidth: 24, alignment: .trailing)
     }
-    .frame(minHeight: 44).contentShape(Rectangle())
+    .frame(minHeight: PaneMetrics.rowHeight).contentShape(Rectangle())
     .accessibilityElement(children: .combine)
     .accessibilityHint(issue.code)
   }

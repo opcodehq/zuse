@@ -1046,6 +1046,22 @@ impl Shell {
             })
             .map(|chat| chat.id.clone())
             .collect();
+        // Tabs whose turn ended with background work still running wear
+        // the quieter background mark instead.
+        let background: std::collections::HashMap<String, u32> = rows
+            .iter()
+            .chain(&side_chats)
+            .filter(|chat| {
+                matches!(
+                    state.display_status_for(chat, now),
+                    zuse_protocol::ChatIndicator::Idle | zuse_protocol::ChatIndicator::Completed
+                )
+            })
+            .filter_map(|chat| {
+                let count = state.background_work_for(&chat.id, now);
+                (count > 0).then(|| (chat.id.clone(), count))
+            })
+            .collect();
         let selected_id = selected.id.clone();
         let archived = selected.archived;
         let empty_initial_conversation = selected.last_message_at.is_none()
@@ -1115,6 +1131,15 @@ impl Shell {
                     })
                     .child(if working.contains(&id) {
                         tab_spinner(&id, cx)
+                    } else if let Some(&count) = background.get(&id) {
+                        crate::background_work::mark(
+                            format!("thread-conversation-background-{id}"),
+                            14.,
+                            crate::background_work::TAB_LOADER,
+                            count,
+                            &theme,
+                            cx,
+                        )
                     } else {
                         match brand {
                             Some((path, tint)) => {
@@ -1184,6 +1209,15 @@ impl Shell {
                 )
                 .child(if working.contains(&id) {
                     tab_spinner(&id, cx)
+                } else if let Some(&count) = background.get(&id) {
+                    crate::background_work::mark(
+                        format!("side-chat-background-{id}"),
+                        14.,
+                        crate::background_work::TAB_LOADER,
+                        count,
+                        &theme,
+                        cx,
+                    )
                 } else {
                     icons::brand_icon(
                         brand.map_or(icons::CHAT_ROUND_LINE, |(path, _)| path),

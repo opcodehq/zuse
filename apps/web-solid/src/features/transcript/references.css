@@ -1,10 +1,10 @@
-.t-root .md a.md-ref, .md a.md-ref, .t-waiting a.md-ref, .t-activity a.md-ref {
+.t-root .md a.md-ref, .md a.md-ref, .t-waiting a.md-ref, .t-activity a.md-ref, .ws-markdown a.md-ref, .ws-pr-ref a.md-ref {
   color: var(--syntax-function);
   text-decoration: none;
   overflow-wrap: anywhere;
   border-radius: 3px;
 }
-.t-root .md a.md-ref:hover, .md a.md-ref:hover, .t-waiting a.md-ref:hover, .t-activity a.md-ref:hover {
+.t-root .md a.md-ref:hover, .md a.md-ref:hover, .t-waiting a.md-ref:hover, .t-activity a.md-ref:hover, .ws-markdown a.md-ref:hover, .ws-pr-ref a.md-ref:hover {
   text-decoration: underline;
   text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
   text-underline-offset: 3px;
