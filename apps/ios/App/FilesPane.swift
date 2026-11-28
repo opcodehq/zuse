@@ -123,7 +123,7 @@ struct FilesPaneView: View {
   var body: some View {
     VStack(spacing: 0) {
       PaneSearchField(text: $query, prompt: "Search files")
-        .padding(.horizontal, 20).padding(.bottom, 10)
+        .padding(.horizontal, PaneMetrics.inset).padding(.bottom, PaneMetrics.searchGap)
       Group {
         if let results = model.results {
           if results.isEmpty && !model.searching {
@@ -141,7 +141,9 @@ struct FilesPaneView: View {
               }
               .buttonStyle(.plain)
               .listRowBackground(Color.clear).listRowSeparator(.hidden)
-              .listRowInsets(EdgeInsets(top: 0, leading: 22, bottom: 0, trailing: 22))
+              .listRowInsets(
+                EdgeInsets(
+                  top: 0, leading: PaneMetrics.inset, bottom: 0, trailing: PaneMetrics.inset))
             }
             .listStyle(.plain)
           }
@@ -169,7 +171,10 @@ struct FilesPaneView: View {
             }
             .buttonStyle(.plain)
             .listRowBackground(Color.clear).listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: 0, leading: 22, bottom: 0, trailing: 22))
+            .listRowInsets(
+              EdgeInsets(
+                top: 0, leading: PaneMetrics.inset, bottom: 0, trailing: PaneMetrics.inset)
+            )
             .accessibilityIdentifier("file-row-\(row.entry.path)")
           }
           .listStyle(.plain)
@@ -194,11 +199,12 @@ private struct FileRowLabel: View {
   var showsPath = false
 
   var body: some View {
-    HStack(spacing: 10) {
-      FileIcon(entry: entry).frame(width: 22)
+    HStack(spacing: PaneMetrics.gap) {
+      FileIcon(entry: entry).frame(width: PaneMetrics.leading)
       VStack(alignment: .leading, spacing: 1) {
         HStack(spacing: 5) {
-          Text(entry.name).font(.system(size: 16)).lineLimit(1).truncationMode(.middle)
+          Text(entry.name).font(.system(size: PaneMetrics.titleSize)).lineLimit(1)
+            .truncationMode(.middle)
             .foregroundStyle(entry.ignored ? .secondary : .primary)
           if entry.isDirectory && !showsPath {
             if loading {
@@ -211,14 +217,14 @@ private struct FileRowLabel: View {
           }
         }
         if showsPath, entry.path != entry.name {
-          Text(entry.path).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            .truncationMode(.head)
+          Text(entry.path).font(.system(size: PaneMetrics.detailSize)).foregroundStyle(.secondary)
+            .lineLimit(1).truncationMode(.head)
         }
       }
       Spacer(minLength: 0)
     }
     .padding(.leading, CGFloat(depth) * 20)
-    .frame(minHeight: 44)
+    .frame(minHeight: PaneMetrics.rowHeight)
     .contentShape(Rectangle())
     .accessibilityElement(children: .combine)
     .accessibilityValue(entry.isDirectory ? (expanded ? "Open" : "Closed") : "")
@@ -280,7 +286,7 @@ struct PaneSearchField: View {
       }
     }
     .font(.system(size: 16))
-    .padding(.horizontal, 14).frame(height: 42)
+    .padding(.horizontal, 14).frame(height: PaneMetrics.searchHeight)
     .background(Color.primary.opacity(0.06), in: Capsule())
   }
 }

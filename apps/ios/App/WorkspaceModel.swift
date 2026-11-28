@@ -1234,6 +1234,13 @@ import ZuseCore
     guard generation == selection, !Task.isCancelled else { throw CancellationError() }
     selectSession(session)
   }
+  /// Starts a new thread parented to a chat and returns its row, like desktop's "+ New tab".
+  func createSideThread(parent chatID: String) async throws -> SessionRow {
+    guard let rpc, connectionState == "Connected", await rpc.canonical else {
+      throw ClientError("Reconnect to a computer before starting a thread.")
+    }
+    return try await CanonicalWorkspace(rpc).createSideThread(parentChatID: chatID)
+  }
   func setModel(_ model: String) async {
     guard sessionReady, let session = selectedSession, let rpc, connectionState == "Connected",
       transcript.activeTurnID == nil

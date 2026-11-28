@@ -84,22 +84,35 @@ import Testing
   #expect(stale.focus == ChatPaneDeck.mainID)
 }
 
-@Test func sideThreadsAreTheChatsStartedFromAChat() {
-  let chats: [JSONValue] = [
-    .object(["id": .string("parent"), "title": .string("Parent")]),
-    .object([
-      "id": .string("side"), "title": .string("Check the README"),
-      "parentChatId": .string("parent"), "spaceId": .string("space"),
-      "config": .object(["harness": .string("codex"), "model": .string("gpt")]),
+@Test func newThreadInheritsItsParentsFolderBranchAndConfig() {
+  let parent: JSONValue = .object([
+    "id": .string("parent"), "spaceId": .string("space"), "cwd": .string("/repo/work"),
+    "branch": .string("feature"),
+    "config": .object([
+      "harness": .string("codex"), "model": .string("gpt"),
+      "sandbox": .string("workspace-write"),
     ]),
-    .object([
-      "id": .string("old"), "parentChatId": .string("parent"), "archived": .bool(true),
-    ]),
-    .object(["id": .string("other"), "parentChatId": .string("elsewhere")]),
-  ]
-  let rows = ChatSideThreads.rows(chats, parent: "parent")
-  #expect(rows.map(\.id) == ["side"])
-  #expect(rows.first?.title == "Check the README")
-  #expect(rows.first?.projectId == "space")
-  #expect(rows.first?.providerId == "codex")
+  ])
+  let payload = ChatSideThread.createChat(
+    parent: parent, chatID: "child", deviceID: .string("device"))
+  #expect(payload["op"]?.string == "createChat")
+  #expect(payload["chatId"]?.string == "child")
+  // The new thread is parented to the chat, in its project, folder and branch.
+  #expect(payload["parentChatId"]?.string == "parent")
+  #expect(payload["spaceId"]?.string == "space")
+  #expect(payload["cwd"]?.string == "/repo/work")
+  #expect(payload["branch"]?.string == "feature")
+  #expect(payload["deviceId"]?.string == "device")
+  // It inherits the parent's agent configuration.
+  #expect(payload["config"]?["harness"].string == "codex")
+  #expect(payload["config"]?["model"].string == "gpt")
+  #expect(payload["config"]?["sandbox"].string == "workspace-write")
+  // A stored chat omits `plan`; the engine wants a bool, not null, so it defaults to false.
+  #expect(payload["config"]?["plan"] == .bool(false))
+
+  let row = ChatSideThread.row(parent: parent, chatID: "child")
+  #expect(row.id == "child")
+  #expect(row.projectId == "space")
+  #expect(row.providerId == "codex")
+  #expect(row.model == "gpt")
 }

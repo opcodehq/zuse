@@ -8,8 +8,6 @@ public enum ChatPaneKind: String, Codable, Sendable, CaseIterable {
   case pullRequests
   /// A Zapper's issues.
   case issues
-  /// Side chats started from this chat.
-  case sideThreads
   /// One live shell on the chat's computer, in the chat's folder.
   case terminal
   /// The chat checkout's file tree.
@@ -170,18 +168,33 @@ public struct ChatPaneArchive: Codable, Sendable, Equatable {
   }
 }
 
-/// Side chats started from a chat, read from a `WatchChats` snapshot.
-public enum ChatSideThreads {
-  public static func rows(_ chats: [JSONValue], parent: String) -> [SessionRow] {
-    chats.compactMap { chat in
-      guard chat["parentChatId"].string == parent, !chat["archived"].bool,
-        let id = chat["id"].string
-      else { return nil }
-      let config = chat["config"]
-      return SessionRow(
-        id: id, projectId: chat["spaceId"].string ?? CanonicalWorkspace.projectless,
-        title: chat["title"].string ?? "Side thread", providerId: config["harness"].string ?? "",
-        model: config["model"].string ?? "", worktreeId: nil)
-    }
+/// A new thread started from a chat, like desktop's "+ New tab": a child chat parented to it
+/// that inherits the parent's project, folder, branch and agent configuration.
+public enum ChatSideThread {
+  /// The `createChat` mutation for a thread parented to `parent` (a `WatchChats` row).
+  public static func createChat(parent: JSONValue, chatID: String, deviceID: JSONValue)
+    -> [String: JSONValue]
+  {
+    let config = parent["config"]
+    return [
+      "op": .string("createChat"), "chatId": .string(chatID), "spaceId": parent["spaceId"],
+      "deviceId": deviceID, "cwd": parent["cwd"], "branch": parent["branch"],
+      "parentChatId": parent["id"],
+      "config": .object([
+        "harness": config["harness"], "model": config["model"], "reasoning": config["reasoning"],
+        "modelOptions": config["modelOptions"], "sandbox": config["sandbox"],
+        // The engine's `plan` is a plain bool; a stored chat omits it, so default it to false.
+        "plan": .bool(config["plan"].bool),
+      ]),
+    ]
+  }
+
+  /// The row the new thread opens as, before the host's next snapshot names it.
+  public static func row(parent: JSONValue, chatID: String) -> SessionRow {
+    let config = parent["config"]
+    return SessionRow(
+      id: chatID, projectId: parent["spaceId"].string ?? CanonicalWorkspace.projectless,
+      title: "New thread", providerId: config["harness"].string ?? "",
+      model: config["model"].string ?? "", worktreeId: nil)
   }
 }

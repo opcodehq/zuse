@@ -31,11 +31,23 @@ import ZuseCore
   func close(_ pane: String) {
     withAnimation(.snappy(duration: 0.3)) { store.close(chatID, pane) }
   }
+
+  /// Starts a new thread off this chat and opens it, the way desktop's "+ New tab" does.
+  func newThread() {
+    guard !preview else { return }
+    Task {
+      do {
+        let session = try await workspace.createSideThread(parent: chatID)
+        openChat(session)
+      } catch {
+        workspace.error = error.localizedDescription
+      }
+    }
+  }
 }
 
 /// What the pane picker knows beyond the chat itself, loaded from the computer.
 struct ChatPaneSources: Equatable {
-  var sideThreads: [SessionRow] = []
   var terminals: [TerminalSessionInfo] = []
   var documents: [ZapperFile] = []
   /// Terminals and files need the current engine protocol.
@@ -44,16 +56,6 @@ struct ChatPaneSources: Equatable {
   @MainActor static func load(_ context: ChatPaneContext) async -> ChatPaneSources {
     var sources = ChatPaneSources()
     if context.preview {
-      sources.sideThreads = [
-        SessionRow(
-          id: "preview-side-1", projectId: context.session.projectId,
-          title: "Check the README links", providerId: "Preview", model: "sample-balanced",
-          worktreeId: nil),
-        SessionRow(
-          id: "preview-side-2", projectId: context.session.projectId,
-          title: "Draft release notes", providerId: "Preview", model: "sample-balanced",
-          worktreeId: nil),
-      ]
       sources.workspaceFiles = true
       sources.terminals = [TerminalSessionInfo(id: "preview-terminal", cwd: "~", shell: "zsh")]
       if let zapper = context.zapper {
@@ -65,14 +67,12 @@ struct ChatPaneSources: Equatable {
     }
     guard context.connected, let rpc = context.rpc, await rpc.canonical else { return sources }
     sources.workspaceFiles = true
-    async let chats = try? rpc.snapshot("WatchChats").array
     async let terminals = try? TerminalClient(rpc: rpc).list(chatID: context.chatID)
     if let zapper = context.zapper {
       sources.documents =
         (try? await context.workspace.zappers.files(zapper.id))?.filter(ZapperDrive.isDocument)
         ?? []
     }
-    sources.sideThreads = ChatSideThreads.rows(await chats ?? [], parent: context.chatID)
     sources.terminals = await terminals ?? []
     return sources
   }
@@ -84,7 +84,6 @@ extension ChatPaneKind {
     case .threads: return "Threads"
     case .pullRequests: return "Pull requests"
     case .issues: return "Issues"
-    case .sideThreads: return "Side threads"
     case .terminal: return "Terminal"
     case .files: return "Files"
     case .docs: return "Docs"
@@ -101,7 +100,6 @@ extension ChatPaneKind {
     case .threads: return "bubble.left.and.bubble.right"
     case .pullRequests, .pullRequest: return AppIcon.pullRequest
     case .issues: return "circle.dashed"
-    case .sideThreads: return "bubble.left.and.text.bubble.right"
     case .terminal: return "terminal"
     case .files: return "doc.on.doc"
     case .docs, .document: return "doc.richtext"
@@ -145,10 +143,6 @@ struct PaneSelectionView: View {
           Tile(kind: .pullRequest, title: "Pull request #\(pull.number)", target: pull.url))
       }
     }
-    if !sources.sideThreads.isEmpty {
-      tiles.append(
-        Tile(kind: .sideThreads, title: "Side threads", count: sources.sideThreads.count))
-    }
     if files {
       let live = sources.terminals.count
       tiles.append(Tile(kind: .terminal, title: "Terminals", count: live == 0 ? nil : live))
@@ -191,7 +185,11 @@ struct PaneSelectionView: View {
           .accessibilityIdentifier("pane-tile-\(tile.kind.rawValue)")
         }
       }
-      if tiles.isEmpty {
+      // Under the grid, like desktop's "+ New tab": start a fresh thread off this chat.
+      if context.connected || context.preview {
+        NewThreadRow { context.newThread() }
+      }
+      if tiles.isEmpty && !(context.connected || context.preview) {
         Text("Connect to your computer to open terminals and files beside this chat.")
           .font(.subheadline).foregroundStyle(.secondary).frame(maxWidth: .infinity)
           .padding(.top, 40)
@@ -265,6 +263,32 @@ private struct PaneTileButtonStyle: ButtonStyle {
       .scaleEffect(configuration.isPressed ? 0.96 : 1)
       .opacity(configuration.isPressed ? 0.85 : 1)
       .animation(.snappy(duration: 0.18), value: configuration.isPressed)
+  }
+}
+
+/// The full-width action under the picker grid that starts a new thread off this chat.
+private struct NewThreadRow: View {
+  let action: () -> Void
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: 10) {
+        Image(systemName: "plus").font(.system(size: 15, weight: .bold))
+          .foregroundStyle(AppTheme.accent).frame(width: 28, height: 28)
+          .background(
+            AppTheme.accent.opacity(0.14),
+            in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        Text("New thread").font(.system(size: 16, weight: .semibold)).foregroundStyle(.primary)
+        Spacer(minLength: 0)
+      }
+      .padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
+      .background(
+        Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+      )
+      .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+    .buttonStyle(PaneTileButtonStyle())
+    .accessibilityIdentifier("pane-new-thread")
+    .accessibilityLabel("New thread")
   }
 }
 
@@ -343,8 +367,6 @@ struct ChatPaneContent: View {
       if let zapper = context.zapper { ZapperPullRequestsPane(context: context, zapper: zapper) }
     case .issues:
       if let zapper = context.zapper { ZapperIssuesPane(context: context, zapper: zapper) }
-    case .sideThreads:
-      SideThreadsPane(context: context, threads: sources.sideThreads)
     case .terminal:
       TerminalPaneView(
         model: context.store.terminal(pane, chat: context.chatID), rpc: context.rpc,
@@ -439,6 +461,25 @@ enum ZapperPullRequests {
   }
 }
 
+/// One set of metrics every list pane (Files, Issues, Threads, Pull requests, Docs) shares, so
+/// they read tight and line up: a compact row height, a single left inset, and a search field
+/// with matching margins.
+enum PaneMetrics {
+  /// Row tap target: compact, never under the 44pt minimum.
+  static let rowHeight: CGFloat = 44
+  /// The left/right inset every row, header and the search field align to.
+  static let inset: CGFloat = 16
+  /// The gap under the search field before the list starts.
+  static let searchGap: CGFloat = 8
+  /// The search field's height.
+  static let searchHeight: CGFloat = 40
+  /// The icon column every row leads with, and its gap to the text.
+  static let leading: CGFloat = 22
+  static let gap: CGFloat = 10
+  static let titleSize: CGFloat = 15
+  static let detailSize: CGFloat = 13
+}
+
 private struct PaneList<Row: View, Empty: View>: View {
   @Binding var query: String
   let count: Int
@@ -446,7 +487,8 @@ private struct PaneList<Row: View, Empty: View>: View {
   @ViewBuilder let empty: Empty
   var body: some View {
     VStack(spacing: 0) {
-      PaneSearchField(text: $query).padding(.horizontal, 20).padding(.bottom, 10)
+      PaneSearchField(text: $query)
+        .padding(.horizontal, PaneMetrics.inset).padding(.bottom, PaneMetrics.searchGap)
       if count == 0 {
         empty.frame(maxWidth: .infinity, maxHeight: .infinity)
       } else {
@@ -461,27 +503,31 @@ private struct PaneRow<Leading: View>: View {
   let detail: String
   @ViewBuilder let leading: Leading
   var body: some View {
-    HStack(alignment: .top, spacing: 12) {
-      leading.frame(width: 22).padding(.top, 2)
-      VStack(alignment: .leading, spacing: 3) {
-        Text(title).font(.system(size: 16)).foregroundStyle(.primary).lineLimit(1)
+    HStack(spacing: PaneMetrics.gap) {
+      leading.frame(width: PaneMetrics.leading)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(title).font(.system(size: PaneMetrics.titleSize)).foregroundStyle(.primary)
+          .lineLimit(1)
         if !detail.isEmpty {
-          Text(detail).font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(1)
+          Text(detail).font(.system(size: PaneMetrics.detailSize)).foregroundStyle(.secondary)
+            .lineLimit(1)
         }
       }
       Spacer(minLength: 0)
     }
-    .padding(.vertical, 6)
+    .frame(minHeight: PaneMetrics.rowHeight)
     .contentShape(Rectangle())
     .accessibilityElement(children: .combine)
   }
 }
 
 extension View {
+  /// The shared list-row chrome: clear background, no separators, one left/right inset.
   fileprivate func paneRow() -> some View {
     listRowBackground(Color.clear)
       .listRowSeparator(.hidden)
-      .listRowInsets(EdgeInsets(top: 4, leading: 22, bottom: 4, trailing: 22))
+      .listRowInsets(
+        EdgeInsets(top: 0, leading: PaneMetrics.inset, bottom: 0, trailing: PaneMetrics.inset))
   }
 }
 
@@ -625,34 +671,6 @@ struct ZapperIssuesPane: View {
   }
 }
 
-/// Side chats started from this chat; each opens its conversation.
-struct SideThreadsPane: View {
-  let context: ChatPaneContext
-  let threads: [SessionRow]
-  @State private var query = ""
-  var body: some View {
-    let shown = threads.filter { matches(query, $0.title) }
-    PaneList(query: $query, count: shown.count) {
-      ForEach(shown) { thread in
-        Button {
-          context.openChat(thread)
-        } label: {
-          PaneRow(title: thread.title, detail: thread.model) {
-            Image(systemName: "arrow.turn.down.right").font(.system(size: 14))
-              .foregroundStyle(.secondary)
-          }
-        }
-        .buttonStyle(.plain)
-        .paneRow()
-      }
-    } empty: {
-      PaneUnavailable(
-        symbol: "bubble.left.and.text.bubble.right",
-        text: query.isEmpty ? "No side threads yet." : "No side threads match.")
-    }
-  }
-}
-
 /// A Zapper's Drive documents; each opens as its own pane.
 struct ZapperDocsPane: View {
   let context: ChatPaneContext
@@ -744,7 +762,6 @@ struct ChatPaneHost<Main: View>: View {
         kinds = [(.terminal, nil, "Terminal"), (.files, nil, "Files")]
         if context.preview {
           kinds += [
-            (.sideThreads, nil, "Side threads"),
             (.pullRequest, PullRequestPreview.readyURL, "Pull request #370"),
             (.file, "apps/ios/App/ChatPanes.swift", "ChatPanes.swift"),
           ]

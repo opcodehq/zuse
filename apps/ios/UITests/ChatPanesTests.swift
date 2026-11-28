@@ -41,14 +41,14 @@ final class ChatPanesTests: XCTestCase {
 
   @MainActor func testSwipingBetweenPanesAndClosingOne() throws {
     let app = XCUIApplication()
-    // The sample chat opens with a terminal, files, side threads, a pull request and a file.
+    // The sample chat opens with a terminal, files, a pull request and a file.
     app.launchArguments = [
       "--native-preview", "--conversation-preview", "--panes-preview", "--pane=files",
     ]
     app.launch()
     XCTAssertTrue(
       app.descendants(matching: .any)["pane-dots"].firstMatch.waitForExistence(timeout: 15))
-    expectDots(app, "Page 3 of 7")
+    expectDots(app, "Page 3 of 6")
     let search = app.textFields["Search files"]
     XCTAssertTrue(search.waitForExistence(timeout: 5))
 
@@ -60,12 +60,12 @@ final class ChatPanesTests: XCTestCase {
       forDuration: 0.05,
       thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.62)),
       withVelocity: .fast, thenHoldForDuration: 0)
-    expectDots(app, "Page 4 of 7")
+    expectDots(app, "Page 4 of 6")
     middle.press(
       forDuration: 0.05,
       thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.62)),
       withVelocity: .fast, thenHoldForDuration: 0)
-    expectDots(app, "Page 3 of 7")
+    expectDots(app, "Page 3 of 6")
 
     // Pinching in zooms out to every page as a card. The iPad simulator doesn't deliver
     // XCTest's synthesized pinch, so there tapping the page dots opens the overview.
@@ -86,7 +86,7 @@ final class ChatPanesTests: XCTestCase {
       forDuration: 0.05, thenDragTo: card.withOffset(CGVector(dx: 0, dy: -420)),
       withVelocity: .fast, thenHoldForDuration: 0)
     XCTAssertTrue(waitToDisappear(files))
-    expectDots(app, "Page 2 of 6")
+    expectDots(app, "Page 2 of 5")
     // The chat and the picker can't be closed.
     XCTAssertTrue(app.buttons["pane-card-main"].exists)
     XCTAssertTrue(
@@ -100,7 +100,7 @@ final class ChatPanesTests: XCTestCase {
 
     // A pane's own close button closes it too.
     closeTerminal.tap()
-    expectDots(app, "Page 1 of 5")
+    expectDots(app, "Page 1 of 4")
   }
 
   @MainActor func testPickerOpensAPaneAfterTheOthers() throws {
@@ -114,21 +114,41 @@ final class ChatPanesTests: XCTestCase {
     XCTAssertTrue(
       app.descendants(matching: .any)["pane-dots"].firstMatch.waitForExistence(timeout: 15))
     expectDots(app, "Page 9 of 9")
-    let side = app.buttons["pane-tile-sideThreads"]
-    XCTAssertTrue(side.waitForExistence(timeout: 5))
+    // The picker offers a "New thread" action under the grid, like desktop's "+ New tab".
+    XCTAssertTrue(app.buttons["pane-new-thread"].waitForExistence(timeout: 5))
     capture(app, "panes-picker")
-    side.tap()
-    // It opens after the existing panes, before the picker, and comes to the front.
-    expectDots(app, "Page 9 of 10")
-    XCTAssertTrue(app.buttons["Close Side threads"].waitForExistence(timeout: 5))
     // Asking for a list that is already open brings it forward instead of opening it twice.
-    window(app).swipeLeft()
-    expectDots(app, "Page 10 of 10")
     app.buttons["pane-tile-threads"].tap()
-    expectDots(app, "Page 2 of 10")
+    expectDots(app, "Page 2 of 9")
   }
 
   private func window(_ app: XCUIApplication) -> XCUIElement { app.windows.firstMatch }
+
+  /// Against a computer: the picker's "New thread" action starts a fresh chat off this one and
+  /// opens it. Uses the same `ZUSE_PANES_PAIR_LINK` / `ZUSE_PANES_CHAT` as the live file test.
+  @MainActor func testLiveNewThread() throws {
+    let environment = ProcessInfo.processInfo.environment
+    let link = environment["ZUSE_PANES_PAIR_LINK"] ?? ""
+    let chat = environment["ZUSE_PANES_CHAT"] ?? ""
+    try XCTSkipIf(link.isEmpty || chat.isEmpty, "Needs a paired computer")
+    let app = XCUIApplication()
+    app.launchEnvironment["ZUSE_PAIR_LINK"] = link
+    // No `--panes-preview`: the real create path, not the offline preview no-op.
+    app.launchArguments = ["--open-chat=\(chat)"]
+    app.launch()
+    XCTAssertTrue(
+      app.descendants(matching: .any)["pane-dots"].firstMatch.waitForExistence(timeout: 30))
+    // Swipe to the picker (the chat's last page) and tap the New thread action.
+    window(app).swipeLeft()
+    let newThread = app.buttons["pane-new-thread"]
+    XCTAssertTrue(newThread.waitForExistence(timeout: 30))
+    capture(app, "live-new-thread-picker")
+    newThread.tap()
+    // The new thread opens as its own fresh chat: back to a main page, empty transcript.
+    expectDots(app, "Page 1 of 2")
+    XCTAssertTrue(app.staticTexts["Nothing here yet"].waitForExistence(timeout: 20))
+    capture(app, "live-new-thread-open")
+  }
 
   /// Holds a card halfway up for `PANES_HOLD` seconds, for a screenshot of the gesture, then
   /// lets it go; a card let go above the threshold closes.

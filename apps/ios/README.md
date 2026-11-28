@@ -119,9 +119,12 @@ reattach after a relaunch.
 | --- | --- | --- |
 | Threads, Pull requests, Issues, Docs, Overview | A Zapper's conversation | `WatchZappers`, `ZapperFiles` |
 | Changes, Pull request | An ordinary chat with a checkout (pull request only when it has one) | `GetCheckoutDiff`, pull request methods |
-| Side threads | Chats started from this chat (`parentChatId`) | `WatchChats` |
 | Terminals | Any chat on a current engine | `ListTerminals`, `OpenTerminal`, `SubscribeTerminal`, `WriteTerminal`, `ResizeTerminal`, `CloseTerminal` |
 | Files, and each file opened from it | Any chat on a current engine | `ListWorkspaceDirectory`, `SearchWorkspaceFiles`, `ReadWorkspaceFile` |
+
+Under the picker grid, a **New thread** action (like desktop's "+ New tab") starts a fresh
+chat parented to this one (`parentChatId`), in the same project, folder and branch and with
+the same agent configuration, then opens it (`createChat` via `Mutate`).
 
 The terminal (`App/TerminalPane.swift`, `TerminalScreen` in ZuseCore) handles SGR colours
 and attributes, cursor movement and erasing, scroll regions, the alternate screen, bracketed
@@ -136,7 +139,7 @@ Debug arguments for every state, offline with `--native-preview` (add `--zapper-
 | Argument | Shows |
 | --- | --- |
 | `--panes-preview` | Sample panes beside the chat (live terminals and files with a computer) |
-| `--pane=<kind>` | That pane in front: `threads`, `pullRequests`, `issues`, `sideThreads`, `terminal`, `files`, `docs`, `overview`, `changes`, `pullRequest`, `file` or `document`; `selection` for the picker, `main` for the chat |
+| `--pane=<kind>` | That pane in front: `threads`, `pullRequests`, `issues`, `terminal`, `files`, `docs`, `overview`, `changes`, `pullRequest`, `file` or `document`; `selection` for the picker, `main` for the chat |
 | `--pane-overview` | The cards overview |
 | `--pane-keyboard` | The terminal's keyboard and key bar |
 | `--terminal-type=<command>` | Types a command and Return into the terminal once it is live |
