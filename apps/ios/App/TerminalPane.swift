@@ -30,6 +30,9 @@ import ZuseCore
   @ObservationIgnored private var rpc: RPCClient?
   @ObservationIgnored private var stream: Task<Void, Never>?
   @ObservationIgnored private var writes: Task<Void, Never>?
+  /// Bumped when the shell restarts or closes, so input queued for one shell never
+  /// reaches the next.
+  @ObservationIgnored private var shellGeneration = 0
   @ObservationIgnored private var resizing: Task<Void, Never>?
   @ObservationIgnored private var publishing: Task<Void, Never>?
   @ObservationIgnored private var lastSeq: UInt64 = 0
@@ -144,6 +147,9 @@ import ZuseCore
 
   /// Opens a fresh shell in place of one that ended.
   func restart() {
+    shellGeneration += 1
+    writes?.cancel()
+    writes = nil
     stream?.cancel()
     stream = nil
     terminalID = nil
@@ -158,6 +164,9 @@ import ZuseCore
 
   /// Ends the shell on the computer.
   func close() {
+    shellGeneration += 1
+    writes?.cancel()
+    writes = nil
     stream?.cancel()
     stream = nil
     resizing?.cancel()
@@ -216,13 +225,16 @@ import ZuseCore
     }
     guard let rpc else { return }
     let previous = writes
+    let generation = shellGeneration
     writes = Task { [weak self] in
       await previous?.value
       for _ in 0..<200 {
         if self?.terminalID != nil || Task.isCancelled { break }
+        if self?.shellGeneration != generation { return }
         try? await Task.sleep(for: .milliseconds(50))
       }
-      guard let id = self?.terminalID else { return }
+      // The shell this was typed for may have exited and been replaced while we waited.
+      guard let self, self.shellGeneration == generation, let id = self.terminalID else { return }
       try? await TerminalClient(rpc: rpc).write(id, bytes: bytes)
     }
   }

@@ -157,3 +157,10 @@ private func screen(_ output: String, cols: Int = 20, rows: Int = 5) -> Terminal
   #expect(
     TerminalInput.paste("a\nb", bracketed: true) == Array("\u{1B}[200~a\rb\u{1B}[201~".utf8))
 }
+
+@Test func hugeCsiCountsDoNotOverflowOrOverAllocate() {
+  // Oversized move, insert and erase counts must not trap or allocate past the row.
+  let shown = screen("abc\u{1B}[99999999999C\u{1B}[2;1H\u{1B}[99999999999@x\u{1B}[99999999999X")
+  #expect(shown.cursorCol <= shown.lines[0].cells.count)
+  #expect(shown.lines[shown.cursorLine].cells.count <= 20)
+}

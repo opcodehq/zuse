@@ -56,10 +56,15 @@ struct FileContentsView: View {
           .padding(.horizontal, 18).padding(.bottom, 6)
       }
     }
-    .task { await load() }
+    // Restarts when a connection arrives, so a file opened offline fills in once connected.
+    .task(id: previewText == nil ? rpc.map(ObjectIdentifier.init)?.hashValue ?? 0 : 1) {
+      await load()
+    }
   }
 
   private func load() async {
+    loading = true
+    error = nil
     defer { loading = false }
     do {
       if let previewText {

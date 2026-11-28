@@ -406,7 +406,8 @@ public struct TerminalScreen: Sendable {
       .map { Int($0) }
     func value(_ index: Int, _ fallback: Int = 1) -> Int {
       guard index < params.count, let number = params[index], number > 0 else { return fallback }
-      return number
+      // A sequence can ask for any count; cap it so adding it to a coordinate can't overflow.
+      return min(number, 1_000_000)
     }
     switch (prefix, final) {
     case (nil, 0x41): moveTo(row: cursorRow - value(0), col: cursorCol)  // A
@@ -617,8 +618,10 @@ public struct TerminalScreen: Sendable {
     pendingWrap = false
     let index = cursorLine
     guard lines[index].cells.count > cursorCol else { return }
+    // Only the cells up to the right margin can survive, so never allocate more than those.
+    let inserted = min(count, cols - cursorCol)
     lines[index].cells.insert(
-      contentsOf: repeatElement(TerminalCell.blank(style), count: count), at: cursorCol)
+      contentsOf: repeatElement(TerminalCell.blank(style), count: inserted), at: cursorCol)
     if lines[index].cells.count > cols { lines[index].cells.removeSubrange(cols...) }
   }
 

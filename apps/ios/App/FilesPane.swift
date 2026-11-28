@@ -148,13 +148,23 @@ struct FilesPaneView: View {
             .listStyle(.plain)
           }
         } else if let failure = model.failure, !model.loaded {
-          ContentUnavailableView(
-            "Can’t show files", systemImage: "folder.badge.questionmark",
-            description: Text(failure))
+          ContentUnavailableView {
+            Label("Can’t show files", systemImage: "folder.badge.questionmark")
+          } description: {
+            Text(failure)
+          } actions: {
+            Button("Try again") { Task { await model.refresh(rpc) } }
+              .buttonStyle(.bordered).disabled(rpc == nil)
+          }
         } else if !model.loaded {
           ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if model.rows.isEmpty {
-          ContentUnavailableView("No files", systemImage: "folder")
+          ContentUnavailableView {
+            Label("No files", systemImage: "folder")
+          } actions: {
+            Button("Reload") { Task { await model.refresh(rpc) } }
+              .buttonStyle(.bordered).disabled(rpc == nil)
+          }
         } else {
           List(model.rows) { row in
             Button {
