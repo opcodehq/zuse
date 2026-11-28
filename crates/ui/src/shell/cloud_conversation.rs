@@ -8,6 +8,7 @@ mod checkout_sync;
 mod computer;
 mod environment_card;
 mod monitor;
+mod open_menu;
 mod reconnect;
 
 pub(super) use computer::Tone;
@@ -755,10 +756,19 @@ impl CloudConversation {
                 .w(px(320.))
                 .max_h(px(560.))
                 .overflow_y_scroll()
-                .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_computer(cx)))
-                .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                    if event.keystroke.key == "escape" {
+                .on_mouse_down_out(cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                    // The app menu floats outside this card; a press in it
+                    // isn't outside.
+                    if !this
+                        .computer
+                        .nested_bounds
+                        .is_some_and(|bounds| bounds.contains(&event.position))
+                    {
                         this.close_computer(cx);
+                    }
+                }))
+                .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                    if this.computer_menu_key(event, cx) {
                         cx.stop_propagation();
                     }
                 }))

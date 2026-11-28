@@ -526,6 +526,12 @@ fn computer_seed() -> Value {
     if checkout_mode().is_some() {
         workspace["repositoryIdentity"] = json!("github.com/example/cloud-only");
     }
+    // `FIXTURE_CHECKOUT=update`: the owner can recreate the computer onto
+    // the latest version.
+    if checkout_mode().as_deref() == Some("update") {
+        workspace["computerRecreationCanEdit"] = json!(true);
+        workspace["computerRecreationAvailable"] = json!(true);
+    }
     let chat = json!({"id":"fixture-session","threadId":"fixture-thread","deviceId":"cloud:fixture-computer","title":"Improve cloud startup","archived":false,"cwd":".","branch":"cloud/startup","createdAt":"2026-10-30T12:00:00Z","config":{"harness":"codex","model":"gpt-5.5","sandbox":"workspace-write"}});
     let messages = json!([
         {"id":"fixture-user","role":"user","parts":[{"id":"fixture-text","kind":"text","text":"Inspect the startup path and reduce redundant repository fetches."}],"createdAt":1793361600000_i64,"deviceId":"cloud:fixture-computer"},
@@ -880,8 +886,18 @@ fn checkout_mode() -> Option<String> {
     std::env::var("FIXTURE_CHECKOUT").ok()
 }
 
-/// `FIXTURE_CHECKOUT=off|synced|paused|behind`: this chat in the user's own
-/// checkout of its repository on this Mac.
+/// The chat's own folder on this Mac in the checkout modes.
+const CHECKOUT_FOLDER: &str = "/Users/alex/zuse/cloud/opcodehq-zuse/8f3k2c1a";
+
+/// The status the last change answered with; later reads return it, so a
+/// click in a capture sticks.
+static CHECKOUT_CHANGED: Mutex<Option<Value>> = Mutex::new(None);
+
+/// `FIXTURE_CHECKOUT=off|kept|synced|paused|behind|update|error`: this chat
+/// synced to a folder of its own on this Mac. `kept` is off with the folder
+/// left behind; `update` means the cloud computer is too old to sync.
+/// `FIXTURE_NESTED=folder|ssh` (with a click that opens the computer menu,
+/// e.g. `FIXTURE_CLICKS`) also opens the folder's or SSH's app menu.
 fn checkout_reply(method: &str, params: &Value) -> Option<Result<RpcReply, RpcError>> {
     let mode = checkout_mode()?;
     if !matches!(
@@ -889,34 +905,62 @@ fn checkout_reply(method: &str, params: &Value) -> Option<Result<RpcReply, RpcEr
         methods::CLOUD_CHECKOUT_SYNC_STATUS
             | methods::CLOUD_CHECKOUT_SYNC_CONFIGURE
             | methods::CLOUD_CHECKOUT_SYNC_RESUME
+            | methods::CLOUD_CHECKOUT_SYNC_DELETE_FOLDER
     ) {
         return None;
     }
-    let base = json!({"workspaceId":params["workspaceId"],"chatId":params["chatId"],
-        "lastSyncedAt":1793361700000_i64,"files":1284,"error":null,"notice":null});
-    let mut status = base.clone();
-    let (enabled, state, error) = match mode.as_str() {
-        "synced" => (true, "synced", None),
-        "paused" => (
-            true,
-            "paused",
-            Some("Files in this folder were edited here, so sync paused to keep them."),
-        ),
-        "behind" => (
-            true,
-            "behind",
-            Some("The cloud computer is asleep. Its changes arrive when it wakes."),
-        ),
-        _ => (false, "off", None),
-    };
-    status["enabled"] = json!(enabled);
-    status["state"] = json!(state);
-    status["error"] = json!(error);
-    status["localPath"] = if enabled {
-        json!("/Users/alex/code/web")
-    } else {
-        Value::Null
-    };
+    let mut status = json!({"workspaceId":params["workspaceId"],"chatId":params["chatId"],
+        "enabled":false,"state":"off","localPath":CHECKOUT_FOLDER,"sourcePath":"/Users/alex/code/web",
+        "lastSyncedAt":1793361700000_i64,"files":1284,"error":null,"notice":null,"updateRequired":false});
+    let changed = CHECKOUT_CHANGED.lock().unwrap().clone();
+    match method {
+        methods::CLOUD_CHECKOUT_SYNC_DELETE_FOLDER => {
+            status["localPath"] = Value::Null;
+        }
+        methods::CLOUD_CHECKOUT_SYNC_CONFIGURE if params["enabled"] == true => {
+            status["enabled"] = json!(true);
+            status["state"] = json!("synced");
+        }
+        methods::CLOUD_CHECKOUT_SYNC_CONFIGURE => {}
+        methods::CLOUD_CHECKOUT_SYNC_RESUME => {
+            status["enabled"] = json!(true);
+            status["state"] = json!("synced");
+        }
+        _ if changed.is_some() => status = changed.clone().unwrap(),
+        _ => {
+            let (enabled, state, error) = match mode.as_str() {
+                "synced" => (true, "synced", None),
+                "paused" => (
+                    true,
+                    "paused",
+                    Some("Files in the folder were edited here, so sync paused to keep them."),
+                ),
+                "behind" => (
+                    true,
+                    "behind",
+                    Some("The cloud computer is asleep. Its changes arrive when it wakes."),
+                ),
+                "update" => (
+                    true,
+                    "error",
+                    Some("This cloud computer's runtime is too old to sync."),
+                ),
+                "error" => (true, "error", Some("Couldn't reach the cloud computer.")),
+                "kept" => (false, "off", None),
+                _ => (false, "off", None),
+            };
+            status["enabled"] = json!(enabled);
+            status["state"] = json!(state);
+            status["error"] = json!(error);
+            status["updateRequired"] = json!(mode == "update");
+            if mode == "off" {
+                status["localPath"] = Value::Null;
+            }
+        }
+    }
+    if method != methods::CLOUD_CHECKOUT_SYNC_STATUS {
+        *CHECKOUT_CHANGED.lock().unwrap() = Some(status.clone());
+    }
     Some(RpcReply::value(
         &json!({"accountId":"fixture-owner","status":status}),
     ))

@@ -1324,6 +1324,10 @@ pub struct UiSettings {
     /// only: the conversation's own config always wins once it arrives.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub cloud_workspace_agents: Vec<CloudWorkspaceAgent>,
+    /// The app a cloud chat's synced folder opens in from the computer
+    /// menu, by Open in target id; `None` uses the file manager.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub synced_folder_app: Option<String>,
     /// Interactive identity overlay; imported themes default to their own accent.
     pub accent: zuse_theme::AccentSelection,
     /// Glass policy, independent from the selected appearance, theme, and accent.
@@ -1456,6 +1460,7 @@ impl Default for UiSettings {
             files_show_all: false,
             closed_thread_conversations: HashMap::new(),
             cloud_workspace_agents: Vec::new(),
+            synced_folder_app: None,
             accent: zuse_theme::AccentSelection::default(),
             surface: zuse_theme::SurfacePreference::default(),
             new_thread_composer_background: None,
@@ -2361,6 +2366,7 @@ impl UiSettings {
             files_show_all,
             closed_thread_conversations,
             cloud_workspace_agents,
+            synced_folder_app,
             accent,
             surface,
             new_thread_composer_background,
@@ -3428,6 +3434,7 @@ mod tests {
                 workspace_id: "workspace".into(),
                 agent: "codex".into(),
             }],
+            synced_folder_app: Some("terminal".into()),
             accent: zuse_theme::AccentSelection::Preset(zuse_theme::AccentPreset::Cyan),
             surface: zuse_theme::SurfacePreference::Frosted,
             new_thread_composer_background: Some(NewThreadComposerBackground {

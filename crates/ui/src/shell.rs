@@ -13174,6 +13174,14 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The cloud computer menu and the app menu over it take their keys
+        // before the composer sees them.
+        if let Some(conversation) = self.cloud_conversation.clone()
+            && conversation.update(cx, |view, cx| view.computer_menu_key(event, cx))
+        {
+            cx.stop_propagation();
+            return;
+        }
         if event.keystroke.key == "escape"
             && self
                 .sidebar_controls

@@ -348,7 +348,12 @@ async fn a_detached_checkout_and_submodule_pointers_come_back_as_they_were() {
 
 fn record_state(local: &Path, saved: &repo::Saved, checkpoint: &str, phase: Phase) -> State {
     State {
-        version: 1,
+        version: VERSION_CHECKOUT,
+        mode: Mode::Checkout,
+        source: None,
+        repository: None,
+        url: None,
+        migrating: false,
         account_id: "owner".into(),
         workspace_id: "w".into(),
         chat_id: "chat".into(),
@@ -439,7 +444,12 @@ fn only_well_formed_states_in_their_own_file_are_loaded() {
     let root = tempfile::tempdir().unwrap();
     let profile = root.path();
     let state = State {
-        version: 1,
+        version: VERSION_CHECKOUT,
+        mode: Mode::Checkout,
+        source: None,
+        repository: None,
+        url: None,
+        migrating: false,
         account_id: "owner".into(),
         workspace_id: "w".into(),
         chat_id: "chat".into(),
@@ -480,17 +490,11 @@ fn repository_spellings_match() {
 }
 
 #[test]
-fn only_a_repository_top_folder_without_an_operation_in_progress_is_accepted() {
+fn a_clone_is_found_from_any_folder_inside_it() {
     let (_root, local, _cloud) = repos();
-    assert_eq!(repo::checkout_root(&local).unwrap(), local);
-    assert!(repo::checkout_root(&local.join("src")).is_err());
-    fs::write(local.join(".git/MERGE_HEAD"), "x").unwrap();
-    assert!(
-        repo::checkout_root(&local)
-            .unwrap_err()
-            .to_string()
-            .contains("merge")
-    );
+    assert_eq!(repo::clone_root(&local).unwrap(), local);
+    assert_eq!(repo::clone_root(&local.join("src")).unwrap(), local);
+    assert_eq!(repo::clone_root(local.parent().unwrap()), None);
 }
 
 #[tokio::test]
@@ -528,5 +532,386 @@ async fn an_untracked_folder_where_a_tracked_file_was_deleted_is_never_reset_awa
     assert!(
         git(&local, &["diff", "--cached", "--name-only"]).contains("src/old.rs"),
         "the staged deletion is still staged"
+    );
+}
+
+// A chat's folder of its own.
+
+fn worktrees(clone: &Path) -> String {
+    git(clone, &["worktree", "list", "--porcelain"])
+}
+
+fn folder_state(path: &Path, source: Option<&Path>) -> State {
+    State::folder(
+        "owner",
+        "w",
+        "chat",
+        path.to_owned(),
+        "github.com/example/repo",
+        source.map(Path::to_owned),
+        None,
+    )
+}
+
+/// Make the chat's folder and move it to the cloud chat's files, as the
+/// worker's first step does. Returns the checkpoint.
+async fn first_sync(folder: &Path, cloud: &Path) -> (repo::Saved, String) {
+    let saved = repo::save(folder).unwrap();
+    let checkpoint = checkpoint_of(folder, cloud, &saved.head).await;
+    repo::enter(folder, &saved, &checkpoint).unwrap();
+    (saved, checkpoint)
+}
+
+#[tokio::test]
+async fn a_chat_folder_is_a_worktree_of_the_users_clone_and_never_touches_it() {
+    let (root, local, cloud) = repos();
+    let head = git(&local, &["rev-parse", "HEAD"]);
+    local_work(&local);
+    cloud_work(&cloud);
+    let folder = root.path().join("zuse/cloud/example-repo/chat");
+    let made =
+        repo::create_folder(&folder, Some(&local), "https://example.invalid/repo.git").unwrap();
+    assert_eq!(made, repo::Made::Worktree);
+    assert!(folder.join(".git").is_file(), "a worktree, not a copy");
+    assert!(worktrees(&local).contains(folder.to_str().unwrap()));
+    assert_eq!(git(&folder, &["rev-parse", "HEAD"]), head);
+    // The user's untracked and ignored files never come along.
+    assert!(read(&folder, "notes.txt").is_none());
+    assert!(read(&folder, ".env").is_none());
+
+    let (_saved, checkpoint) = first_sync(&folder, &cloud).await;
+    assert!(repo::holds(&folder, &checkpoint));
+    assert_eq!(
+        read(&folder, "src/lib.rs").unwrap(),
+        "pub fn a() {}\npub fn cloud() {}\n"
+    );
+    assert_eq!(read(&folder, "src/new.rs").unwrap(), "pub fn fresh() {}\n");
+    assert!(read(&folder, "src/old.rs").is_none());
+    // The user's own checkout is exactly as it was: branch, commit, staged
+    // and unstaged changes, untracked and ignored files.
+    assert_eq!(git(&local, &["rev-parse", "HEAD"]), head);
+    assert_local_work(&local);
+    assert_eq!(git(&local, &["stash", "list"]), "");
+
+    // Later cloud changes keep arriving, in the folder only.
+    write(&cloud, "src/later.rs", "later\n");
+    let base = git(&folder, &["rev-parse", "HEAD^"]);
+    let next = checkpoint_of(&folder, &cloud, &base).await;
+    repo::advance(&folder, &checkpoint, &next).unwrap();
+    assert_eq!(read(&folder, "src/later.rs").unwrap(), "later\n");
+    assert!(read(&local, "src/later.rs").is_none());
+    assert_local_work(&local);
+}
+
+#[tokio::test]
+async fn without_a_clone_the_folder_is_a_fresh_shallow_clone() {
+    let (root, _local, cloud) = repos();
+    let origin = root.path().join("origin");
+    let url = format!("file://{}", origin.display());
+    let folder = root.path().join("zuse/cloud/example-repo/chat");
+    assert_eq!(
+        repo::create_folder(&folder, None, &url).unwrap(),
+        repo::Made::Clone
+    );
+    assert!(folder.join(".git").is_dir());
+    assert_eq!(
+        git(&folder, &["rev-parse", "HEAD"]),
+        git(&origin, &["rev-parse", "HEAD"])
+    );
+    assert_eq!(
+        git(&folder, &["rev-parse", "--is-shallow-repository"]),
+        "true"
+    );
+    write(&cloud, "cloud.txt", "cloud\n");
+    let (_saved, checkpoint) = first_sync(&folder, &cloud).await;
+    assert!(repo::holds(&folder, &checkpoint));
+    assert_eq!(read(&folder, "cloud.txt").unwrap(), "cloud\n");
+}
+
+#[tokio::test]
+async fn when_cloning_fails_every_file_arrives_with_the_first_snapshot() {
+    let (root, _local, cloud) = repos();
+    let folder = root.path().join("zuse/cloud/example-repo/chat");
+    assert_eq!(
+        repo::create_folder(&folder, None, "file:///nowhere/at/all.git").unwrap(),
+        repo::Made::Empty
+    );
+    let base = repo::head(&folder).unwrap();
+    assert!(repo::known_blobs(&folder, &base).unwrap().is_empty());
+    let scratch = tempfile::tempdir().unwrap();
+    let objects = scratch.path().join("objects");
+    let files = snapshot(&cloud, &objects, vec![]).await;
+    let mut known = HashMap::new();
+    let checkpoint =
+        repo::checkpoint(&folder, &files, &objects, &mut known, &base, "cloud").unwrap();
+    let saved = repo::save(&folder).unwrap();
+    repo::enter(&folder, &saved, &checkpoint).unwrap();
+    assert_eq!(read(&folder, "README.md").unwrap(), "hello\n");
+    assert_eq!(read(&folder, "src/lib.rs").unwrap(), "pub fn a() {}\n");
+}
+
+#[test]
+fn a_folder_that_isnt_ours_is_never_used_or_removed() {
+    let root = tempfile::tempdir().unwrap();
+    let folder = root.path().join("taken");
+    write(&folder, "mine.txt", "mine\n");
+    assert!(repo::create_folder(&folder, None, "file:///nowhere.git").is_err());
+    assert!(repo::remove_folder(&folder).is_err());
+    assert_eq!(read(&folder, "mine.txt").unwrap(), "mine\n");
+}
+
+#[tokio::test]
+async fn edits_in_the_chat_folder_pause_sync_and_discarding_resumes_without_the_users_stash() {
+    let (root, local, cloud) = repos();
+    let folder = root.path().join("zuse/cloud/example-repo/chat");
+    repo::create_folder(&folder, Some(&local), "https://example.invalid/r.git").unwrap();
+    write(&cloud, "src/lib.rs", "cloud\n");
+    let (saved, checkpoint) = first_sync(&folder, &cloud).await;
+    write(&folder, "src/lib.rs", "edited in the chat's folder\n");
+    assert!(repo::local_edits(&folder, &checkpoint).unwrap().is_some());
+    write(&cloud, "src/lib.rs", "cloud again\n");
+    let next = checkpoint_of(&folder, &cloud, &saved.head).await;
+    // Never overwritten while paused.
+    assert!(repo::advance(&folder, &checkpoint, &next).is_err());
+    assert_eq!(
+        read(&folder, "src/lib.rs").unwrap(),
+        "edited in the chat's folder\n"
+    );
+    // "Discard my edits and resume".
+    repo::return_to(&folder, &checkpoint).unwrap();
+    assert_eq!(repo::local_edits(&folder, &checkpoint).unwrap(), None);
+    repo::advance(&folder, &checkpoint, &next).unwrap();
+    assert_eq!(read(&folder, "src/lib.rs").unwrap(), "cloud again\n");
+    // The clone's stash list (shared by its worktrees) stays the user's.
+    assert_eq!(git(&local, &["stash", "list"]), "");
+}
+
+#[tokio::test]
+async fn turning_sync_off_keeps_the_folder_and_turning_it_on_reuses_it() {
+    let (root, local, cloud) = repos();
+    let profile = root.path().join("profile");
+    let folder = root.path().join("zuse/cloud/example-repo/chat");
+    repo::create_folder(&folder, Some(&local), "https://example.invalid/r.git").unwrap();
+    write(&cloud, "cloud.txt", "cloud\n");
+    let (saved, checkpoint) = first_sync(&folder, &cloud).await;
+    let mut state = folder_state(&folder, Some(&local));
+    state.head = Some(saved.head.clone());
+    state.checkpoint = Some(checkpoint.clone());
+    write_state(&state_file(&profile, &folder), &state).unwrap();
+    // While on, the chat's commands on this computer start in its folder.
+    assert_eq!(
+        synced_path(&profile, "owner", "w", "chat").as_deref(),
+        Some(folder.as_path())
+    );
+
+    let manager = Manager::default();
+    manager.hydrate(&profile);
+    let status = manager.end(&folder, None).await.unwrap();
+    assert!(!status.enabled);
+    assert_eq!(status.state, "off");
+    assert_eq!(status.local_path.as_deref(), Some(folder.as_path()));
+    assert_eq!(read(&folder, "cloud.txt").unwrap(), "cloud\n");
+    assert!(worktrees(&local).contains(folder.to_str().unwrap()));
+    assert_eq!(synced_path(&profile, "owner", "w", "chat"), None);
+    // Remembered after a restart, still off, folder still there.
+    let again = Manager::default();
+    again.hydrate(&profile);
+    let status = again.status("owner", "w", "chat");
+    assert_eq!((status.enabled, status.state), (false, "off"), "{status:?}");
+    assert_eq!(status.local_path.as_deref(), Some(folder.as_path()));
+    assert_eq!(
+        again.by_chat("owner", "w", "chat").as_deref(),
+        Some(folder.as_path())
+    );
+}
+
+#[tokio::test]
+async fn archiving_the_chat_removes_its_folder_unless_it_was_changed_here() {
+    let (root, local, cloud) = repos();
+    let profile = root.path().join("profile");
+    write(&cloud, "cloud.txt", "cloud\n");
+    for edited in [false, true] {
+        let folder = root
+            .path()
+            .join(format!("zuse/cloud/example-repo/chat-{edited}"));
+        repo::create_folder(&folder, Some(&local), "https://example.invalid/r.git").unwrap();
+        let (saved, checkpoint) = first_sync(&folder, &cloud).await;
+        // Ignored build output never keeps a folder.
+        write(&folder, "target/debug/app", "build output\n");
+        if edited {
+            write(&folder, "mine.txt", "a new file made here\n");
+        }
+        let mut state = folder_state(&folder, Some(&local));
+        state.chat_id = format!("chat-{edited}");
+        state.head = Some(saved.head.clone());
+        state.checkpoint = Some(checkpoint.clone());
+        let file = state_file(&profile, &folder);
+        write_state(&file, &state).unwrap();
+        let manager = Manager::default();
+        manager.hydrate(&profile);
+        manager.archived(&folder).await.unwrap();
+        if edited {
+            assert_eq!(read(&folder, "mine.txt").unwrap(), "a new file made here\n");
+            let status = manager.status("owner", "w", "chat-true");
+            assert_eq!(status.state, "off");
+            assert!(status.notice.unwrap().contains("stays at"));
+            assert!(file.exists());
+        } else {
+            assert!(!folder.exists());
+            assert!(!worktrees(&local).contains(folder.to_str().unwrap()));
+            assert!(!file.exists());
+            assert_eq!(manager.status("owner", "w", "chat-false").local_path, None);
+        }
+    }
+    // The user's clone is untouched either way.
+    assert_eq!(git(&local, &["symbolic-ref", "HEAD"]), "refs/heads/main");
+    assert!(git(&local, &["status", "--porcelain"]).is_empty());
+}
+
+#[tokio::test]
+async fn deleting_the_folder_removes_it_and_its_worktree_entry_only() {
+    let (root, local, cloud) = repos();
+    let profile = root.path().join("profile");
+    let folder = root.path().join("zuse/cloud/example-repo/chat");
+    repo::create_folder(&folder, Some(&local), "https://example.invalid/r.git").unwrap();
+    let (saved, checkpoint) = first_sync(&folder, &cloud).await;
+    // A branch made in the folder lives in the user's clone and survives.
+    git(&folder, &["branch", "kept-branch"]);
+    let mut state = folder_state(&folder, Some(&local));
+    state.head = Some(saved.head);
+    state.checkpoint = Some(checkpoint);
+    state.phase = Phase::Stopped;
+    write_state(&state_file(&profile, &folder), &state).unwrap();
+    let manager = Manager::default();
+    manager.hydrate(&profile);
+    let status = manager.delete(&folder).await.unwrap();
+    assert_eq!((status.state, status.local_path), ("off", None));
+    assert!(!folder.exists());
+    assert!(
+        !folder.parent().unwrap().exists(),
+        "its empty group goes too"
+    );
+    assert!(!worktrees(&local).contains(folder.to_str().unwrap()));
+    assert!(git(&local, &["branch", "--list", "kept-branch"]).contains("kept-branch"));
+    assert!(read(&local, "README.md").is_some());
+    assert_eq!(manager.by_chat("owner", "w", "chat"), None);
+}
+
+#[tokio::test]
+async fn an_earlier_sync_of_the_users_checkout_goes_back_exactly_then_moves_to_a_folder() {
+    let (root, local, cloud) = repos();
+    let profile = root.path().join("profile");
+    let folders = root.path().join("zuse/cloud");
+    let head = git(&local, &["rev-parse", "HEAD"]);
+    local_work(&local);
+    write(&cloud, "cloud.txt", "cloud\n");
+    // As an earlier version left it: the user's checkout on a checkpoint.
+    let saved = repo::save(&local).unwrap();
+    let checkpoint = checkpoint_of(&local, &cloud, &saved.head).await;
+    let legacy = state_file(&profile, &local);
+    write_state(
+        &legacy,
+        &record_state(&local, &saved, &checkpoint, Phase::On),
+    )
+    .unwrap();
+    repo::enter(&local, &saved, &checkpoint).unwrap();
+    assert_eq!(read(&local, "cloud.txt").unwrap(), "cloud\n");
+
+    let manager = Manager::default();
+    manager.hydrate(&profile);
+    let folder = manager.migrate(&profile, &folders, &local).await.unwrap();
+    // The checkout is exactly as the user left it.
+    assert_eq!(git(&local, &["rev-parse", "HEAD"]), head);
+    assert_local_work(&local);
+    assert!(read(&local, "cloud.txt").is_none());
+    assert_eq!(git(&local, &["for-each-ref", "refs/worktree"]), "");
+    assert!(!legacy.exists());
+    // The chat now has a folder of its own, made from that checkout.
+    assert!(folder.starts_with(folders.canonicalize().unwrap()));
+    let state = manager.state(&folder).unwrap();
+    assert_eq!(
+        (state.mode, state.phase, state.version),
+        (Mode::Folder, Phase::On, VERSION_FOLDER)
+    );
+    assert_eq!(state.source.as_deref(), Some(local.as_path()));
+    assert_eq!(
+        manager.by_chat("owner", "w", "chat").as_deref(),
+        Some(folder.as_path())
+    );
+    let status = manager.status("owner", "w", "chat");
+    assert!(
+        status
+            .notice
+            .unwrap()
+            .contains("went back to how you left it")
+    );
+    let loaded = read_states(&profile);
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].1.mode, Mode::Folder);
+    // The connector reports no folder until the new one holds the chat's
+    // files, and never the user's own checkout again.
+    assert_eq!(synced_path(&profile, "owner", "w", "chat"), None);
+    // The worker's first step makes it from the checkout and syncs it.
+    repo::create_folder(
+        &folder,
+        state.source.as_deref(),
+        "https://example.invalid/r.git",
+    )
+    .unwrap();
+    let (saved, checkpoint) = first_sync(&folder, &cloud).await;
+    let mut on = state.clone();
+    on.head = Some(saved.head);
+    on.checkpoint = Some(checkpoint);
+    write_state(&state_file(&profile, &folder), &on).unwrap();
+    assert_eq!(
+        synced_path(&profile, "owner", "w", "chat").as_deref(),
+        Some(folder.as_path())
+    );
+    assert_eq!(read(&folder, "cloud.txt").unwrap(), "cloud\n");
+    assert_local_work(&local);
+}
+
+#[tokio::test]
+async fn a_move_interrupted_while_putting_the_checkout_back_finishes_after_a_restart() {
+    let (root, local, cloud) = repos();
+    let profile = root.path().join("profile");
+    let folders = root.path().join("zuse/cloud");
+    local_work(&local);
+    write(&cloud, "cloud.txt", "cloud\n");
+    let saved = repo::save(&local).unwrap();
+    let checkpoint = checkpoint_of(&local, &cloud, &saved.head).await;
+    let mut state = record_state(&local, &saved, &checkpoint, Phase::Restoring);
+    state.migrating = true;
+    write_state(&state_file(&profile, &local), &state).unwrap();
+    repo::enter(&local, &saved, &checkpoint).unwrap();
+    // Half way: tracked files reset, then the app stopped.
+    git(&local, &["reset", "-q", "--hard", "HEAD"]);
+    let manager = Manager::default();
+    manager.hydrate(&profile);
+    assert_eq!(manager.status("owner", "w", "chat").state, "restoring");
+    let folder = manager.migrate(&profile, &folders, &local).await.unwrap();
+    assert_local_work(&local);
+    assert_eq!(manager.state(&folder).unwrap().mode, Mode::Folder);
+}
+
+#[test]
+fn each_chat_gets_its_own_folder_named_after_its_repository() {
+    let root = Path::new("/home/me/zuse/cloud");
+    let none = |_: &Path| false;
+    assert_eq!(
+        folder_for(
+            root,
+            "github.com/OpcodeHQ/Zuse",
+            "ses_01JXA7Q2M9KD8F3K2C1A",
+            &none
+        ),
+        root.join("opcodehq-zuse/8f3k2c1a")
+    );
+    assert_eq!(folder_for(root, "repo", "a/b", &none), root.join("repo/ab"));
+    let first = root.join("opcodehq-zuse/8f3k2c1a");
+    let taken = |path: &Path| path == first;
+    assert_eq!(
+        folder_for(root, "github.com/opcodehq/zuse", "x8f3k2c1a", &taken),
+        root.join("opcodehq-zuse/8f3k2c1a-2")
     );
 }
