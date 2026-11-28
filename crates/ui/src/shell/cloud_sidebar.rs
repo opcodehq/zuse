@@ -1421,9 +1421,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn a_merged_pull_request_settles_its_thread_even_with_pr_badges_hidden(
-        cx: &mut TestAppContext,
-    ) {
+    fn a_merged_pull_request_leaves_its_thread_active(cx: &mut TestAppContext) {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1471,7 +1469,7 @@ mod tests {
                 cx.notify();
             });
             assert!(
-                !shell
+                shell
                     .sidebar_visible_order(cx)
                     .contains(&"local-pin".into())
             );
@@ -1479,10 +1477,16 @@ mod tests {
         });
         cx.run_until_parked();
         cx.update(|window, cx| window.draw(cx).clear());
-        assert!(cx.debug_bounds("chat-local-pin").is_none());
-        assert!(cx.debug_bounds("chat-local-1").is_some());
-        assert!(cx.debug_bounds("sidebar-settled-toggle").is_some());
+        assert!(cx.debug_bounds("chat-local-pin").is_some());
+        assert!(cx.debug_bounds("sidebar-settled-toggle").is_none());
+        // Settling stays a manual choice, and reopening undoes it.
         shell.update(cx, |shell, cx| {
+            shell.set_sidebar_thread_settled("local".into(), "local-pin".into(), true, cx);
+            assert!(
+                !shell
+                    .sidebar_visible_order(cx)
+                    .contains(&"local-pin".into())
+            );
             shell.set_sidebar_thread_settled("local".into(), "local-pin".into(), false, cx);
             assert!(
                 shell
@@ -1490,6 +1494,7 @@ mod tests {
                     .contains(&"local-pin".into())
             );
             assert!(shell.active_sidebar_pins(cx).contains(&"local-pin".into()));
+            assert!(shell.sidebar_settlement_choices(Some("local")).is_none());
         });
     }
 

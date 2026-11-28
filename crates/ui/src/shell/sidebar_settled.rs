@@ -2,7 +2,7 @@
 //! or changing its checkout, computer, tabs, pins, or section membership.
 use super::*;
 use serde_json::Value;
-use zuse_protocol::{ChangeRequestState, Chat};
+use zuse_protocol::Chat;
 
 /// Rows an open Settled section shows when the lists above fill the sidebar.
 const SETTLED_ROWS_AT_REST: f32 = 5.5;
@@ -28,18 +28,10 @@ impl Shell {
     }
 
     pub(super) fn local_thread_is_settled(
-        state: &AppState,
         chat: &Chat,
         choices: Option<&std::collections::HashMap<String, bool>>,
     ) -> bool {
-        choices
-            .and_then(|choices| choices.get(&chat.id))
-            .copied()
-            .unwrap_or_else(|| {
-                state
-                    .change_request_for_chat(chat)
-                    .is_some_and(|pr| pr.state == ChangeRequestState::Merged)
-            })
+        choices.and_then(|choices| choices.get(&chat.id)) == Some(&true)
     }
 
     pub(super) fn set_sidebar_thread_settled(
@@ -53,19 +45,8 @@ impl Shell {
         if self.sidebar_settlement_profile(cloud, cx).as_deref() != Some(profile.as_str()) {
             return;
         }
-        // Only override automatic settlement when reopening a thread whose
-        // PR has already merged. Reopening another thread clears its manual
-        // choice so a future merge can still move it into Settled.
-        let reopen_merged = !settled && !cloud && {
-            let state = self.state.read(cx);
-            state
-                .chats
-                .iter()
-                .find(|chat| chat.id == id)
-                .is_some_and(|chat| Self::local_thread_is_settled(state, chat, None))
-        };
         self.pull_settings(cx);
-        if settled || reopen_merged {
+        if settled {
             self.settings
                 .sidebar_settlement_by_profile
                 .entry(profile)
@@ -87,10 +68,8 @@ impl Shell {
         cx.notify();
     }
 
-    /// Cloud threads settle only by an explicit choice. Unlike local
-    /// threads ([`Self::local_thread_is_settled`]), a merged pull request
-    /// does not settle them: the account's workspace list carries a branch
-    /// but no pull request state to read.
+    /// Like local threads ([`Self::local_thread_is_settled`]), cloud threads
+    /// settle only by an explicit choice.
     pub(super) fn take_settled_cloud_rows(
         &self,
         groups: &mut [super::cloud_sidebar::CloudSidebarGroup],

@@ -3395,7 +3395,7 @@ impl Shell {
         let visible: HashSet<String> = self
             .computer_sidebar_chats(state, Utc::now(), payload.filter.as_deref())
             .into_iter()
-            .filter(|(_, chat)| !Self::local_thread_is_settled(state, chat, choices))
+            .filter(|(_, chat)| !Self::local_thread_is_settled(chat, choices))
             .map(|(_, chat)| chat.id.clone())
             .collect();
         if !visible.contains(&payload.chat_id) {
@@ -5319,7 +5319,7 @@ impl Shell {
         let mut chats: Vec<zuse_protocol::Chat> = self
             .computer_sidebar_chats(state, Utc::now(), filter.as_deref())
             .into_iter()
-            .filter(|(_, chat)| !Self::local_thread_is_settled(state, chat, choices))
+            .filter(|(_, chat)| !Self::local_thread_is_settled(chat, choices))
             .map(|(_, chat)| chat.clone())
             .collect();
         chats.sort_by(|left, right| compare_sidebar_chats(self.settings.sidebar_sort, left, right));
@@ -5449,7 +5449,6 @@ impl Shell {
         };
         let profile = self.sidebar_settlement_profile(false, cx);
         if Self::local_thread_is_settled(
-            self.state.read(cx),
             &chat,
             self.sidebar_settlement_choices(profile.as_deref()),
         ) {
@@ -5600,7 +5599,7 @@ impl Shell {
             let (settled, mut chats): (Vec<_>, Vec<_>) = self
                 .computer_sidebar_chats(state, now, filter.as_deref())
                 .into_iter()
-                .partition(|(_, chat)| Self::local_thread_is_settled(state, chat, choices));
+                .partition(|(_, chat)| Self::local_thread_is_settled(chat, choices));
             chats.sort_by(|left, right| {
                 compare_sidebar_chats(self.settings.sidebar_sort, &left.1, &right.1)
             });

@@ -9762,12 +9762,9 @@ impl Shell {
         let has_settle_slot = settlement_profile.is_some();
         let settle_on_hover = settlement_profile.filter(|_| row_hovered);
         let settled = settle_on_hover.as_deref().is_some_and(|profile| {
-            let choices = self.sidebar_settlement_choices(Some(profile));
-            if let Some(chat) = chat {
-                Self::local_thread_is_settled(state, chat, choices)
-            } else {
-                choices.and_then(|choices| choices.get(&id)) == Some(&true)
-            }
+            self.sidebar_settlement_choices(Some(profile))
+                .and_then(|choices| choices.get(&id))
+                == Some(&true)
         });
         let project_icon = (project_icon && search_query.is_none() && !nested)
             .then(|| self.render_project_icon(&id, avatar_size, selected, cx));

@@ -1184,8 +1184,8 @@ pub struct UiSettings {
     /// Device-local pins for local profiles; synced profiles use registry pins.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub sidebar_pinned_session_ids_by_profile: HashMap<String, Vec<String>>,
-    /// Device-local thread settlement choices. `false` keeps a reopened thread
-    /// active even if its linked pull request is already merged.
+    /// Device-local thread settlement choices. Only `true` settles a thread;
+    /// `false` entries are left over from merged-PR auto-settling.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub sidebar_settlement_by_profile: HashMap<String, HashMap<String, bool>>,
     /// Legacy: per-space tab order, from when tabs were the selected space's
