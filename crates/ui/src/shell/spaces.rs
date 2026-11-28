@@ -5448,10 +5448,8 @@ impl Shell {
             return false;
         };
         let profile = self.sidebar_settlement_profile(false, cx);
-        if Self::local_thread_is_settled(
-            &chat,
-            self.sidebar_settlement_choices(profile.as_deref()),
-        ) {
+        if Self::local_thread_is_settled(&chat, self.sidebar_settlement_choices(profile.as_deref()))
+        {
             self.settled_open = true;
         } else if self.active_sidebar_pins(cx).contains(&chat.id) {
             if !self.pinned_open {
