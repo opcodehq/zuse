@@ -5,8 +5,8 @@
 
 use crate::localization::message as tr;
 use gpui::{
-    Context, Entity, EventEmitter, FocusHandle, Keystroke, PathPromptOptions, SharedString, Window,
-    div, prelude::*, px,
+    Context, Entity, EventEmitter, FocusHandle, Keystroke, SharedString, Window, div, prelude::*,
+    px,
 };
 use zuse_i18n::messages as msg;
 
@@ -1178,7 +1178,6 @@ impl Render for ShortcutsPage {
                         .track_focus(&self.focus)
                         .child(
                             widgets::settings_page_column(window)
-                                .max_w(px(1152. + 2. * widgets::page_padding(window)))
                                 .child(widgets::section_title_with_action(
                                     &theme,
                                     "Keyboard shortcuts",
@@ -1188,10 +1187,18 @@ impl Render for ShortcutsPage {
                                         // `disabled:opacity-35` when nothing is
                                         // customized or while recording.
                                         let disabled = !customized || recording.is_some();
-                                        widgets::ghost_action(&theme)
+                                        // Same face and sizing as the Pull Requests
+                                        // Merge button's non-primary state.
+                                        widgets::action_button(&theme, widgets::ActionTone::Filled)
                                             .id("shortcuts-restore-defaults")
+                                            .role(gpui::Role::Button)
+                                            .aria_label("Restore default shortcuts")
+                                            .tab_index(if disabled { -1 } else { 0 })
                                             .flex_none()
-                                            .when(disabled, |el| el.opacity(0.35))
+                                            .min_h(px(26.0))
+                                            .px(px(10.0))
+                                            .py_0()
+                                            .when(disabled, |el| el.opacity(0.35).cursor_default())
                                             .when(!disabled, |el| {
                                                 el.on_click(cx.listener(|this, _, _, cx| {
                                                     this.keymap = KeymapConfig::default();
@@ -1215,26 +1222,13 @@ impl Render for ShortcutsPage {
                                             })
                                             .child(
                                                 crate::icons::icon(crate::icons::RESTART)
-                                                    .size(px(14.0))
+                                                    .size(px(13.0))
                                                     .text_color(theme.text_muted),
                                             )
                                             .child(SharedString::from("Restore defaults"))
                                             .into_any_element()
                                     }),
                                 ))
-                                .child(
-                                    div().mb_3().flex().justify_end().child(
-                                        widgets::ghost_action(&theme)
-                                            .id("shortcuts-import-electron")
-                                            .child(tr(
-                                                cx,
-                                                msg::native::import_from_electron_f24edf6b,
-                                            ))
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.import_shortcuts(cx)
-                                            })),
-                                    ),
-                                )
                                 .child(widgets::section_stack().children(groups))
                                 .child(
                                     div()
@@ -1666,53 +1660,5 @@ mod tests {
             ComposerSendBehavior::ModEnter,
             "mod-shift-enter"
         ));
-    }
-}
-
-impl ShortcutsPage {
-    fn import_shortcuts(&mut self, cx: &mut Context<Self>) {
-        let paths = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: Some("Choose Electron keybindings.json".into()),
-        });
-        cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(paths))) = paths.await else {
-                return;
-            };
-            let Some(path) = paths.first().cloned() else {
-                return;
-            };
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    let bytes = std::fs::read(path)
-                        .map_err(|_| "Could not read the keyboard shortcuts file.".to_owned())?;
-                    if bytes.len() > 256 * 1024 {
-                        return Err("The keyboard shortcuts file is too large.".to_owned());
-                    }
-                    let value = serde_json::from_slice(&bytes)
-                        .map_err(|_| "Choose a valid Electron keybindings.json file.".to_owned())?;
-                    super::keybindings::import(&value)
-                })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                match result {
-                    Ok(rules) => {
-                        // Electron defaults plus its ordered overrides replace the
-                        // keyboard map; every unrelated GPUI preference stays.
-                        this.keymap = KeymapConfig::default();
-                        this.keymap.import_desktop_rules(rules);
-                        this.conflict_notice =
-                            Some("Keyboard shortcuts imported from Electron.".into());
-                        this.commit(cx);
-                    }
-                    Err(message) => this.conflict_notice = Some(message.into()),
-                }
-                cx.notify();
-            });
-        })
-        .detach();
     }
 }
