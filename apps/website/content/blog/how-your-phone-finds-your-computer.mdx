@@ -1,0 +1,114 @@
+---
+title: "How your phone finds your computer"
+description: "A pairing link races every route to your computer, measures them, moves the session when one dies and resumes it after sleep. One Rust core makes those decisions for the desktop, the phones and the browser."
+date: "2026-11-28"
+category: "Note"
+timeToRead: "8 min read"
+authorName: "Zuse (Beta) team"
+authorRole: "Engineering notes"
+authorAvatar: "/app-icon.png"
+labels:
+  [
+    { name: "Architecture", hex: "#84CC16" },
+    { name: "Remote", hex: "#38BDF8" },
+  ]
+---
+
+import { RacingRoutesFigure } from "@/components/blogs/racing-routes/figure";
+import { SwitchRule } from "@/components/blogs/racing-routes/switch-rule";
+import { ResumeLedger } from "@/components/blogs/racing-routes/resume-ledger";
+import { LinkEndings } from "@/components/blogs/racing-routes/link-endings";
+
+You pair your phone with your laptop once. After that, the phone has to find the laptop every time you open it: from the couch on the same Wi-Fi, from a train on cellular, from a café after the laptop has slept for an hour. A browser tab or a second computer has the same problem.
+
+There is rarely one right way to reach a computer. On the same network, the local address is fastest. Away from home, a tailnet may work, or a direct HTTPS address, or our relay. Which one works changes with every network you walk into, and it can change while a session is open.
+
+We could have asked you to pick. We decided the link should work it out itself, every time, and this post is about how it does that: it races every route at once, keeps measuring, moves the session when a better route turns up or the current one dies, and tells you plainly when it can't reach the computer at all.
+
+---
+
+## A route is only a pipe
+
+The idea that makes the rest possible is that a route doesn't have to be trusted.
+
+A pairing link carries two things: a random 128-bit pairing ID and a random 256-bit secret. Every connection, on any route, starts with a Noise handshake that mixes in that secret. Only a side that holds the secret can finish it, and everything after the handshake is encrypted end to end.
+
+So the address a phone dials is a hint, not a promise. If an old LAN address now belongs to a different machine, the handshake fails and that machine learns nothing. The relay forwards encrypted records and has neither the secret nor the ability to read what it carries. Because a wrong route can't do harm, the link can afford to try all of them, including plain WebSocket connections to private addresses.
+
+---
+
+## Racing, not guessing
+
+When the link connects, it starts with the route that won last time on the network it is on now, so a familiar place connects at once. Each other route it knows joins the race 200 ms after the previous one. Each dial gets ten seconds. The first route to complete the handshake wins, and the rest are closed.
+
+The routes it knows come from two places. The pairing link has one address, which the link always keeps. After that, the computer reports its current addresses when a session attaches and whenever they change. The phone saves those addresses, and which route won on each network, for the next launch. None of that memory contains a secret.
+
+Below is the whole idea as a small railway. The phone and the laptop are the two stations, there is one track for each route, and the car is the session. Cut a track, or put the laptop to sleep, and watch what the link does.
+
+<RacingRoutesFigure />
+
+The first time a phone connects, it often knows only the address in the pairing link. Here that is the relay. As soon as the session attaches, the computer reports its local and tailnet addresses, and the phone starts measuring them.
+
+---
+
+## Measuring without flapping
+
+A link that moves too eagerly is worse than one that never moves. Networks are noisy, and a session that jumps between routes whenever one looks a little faster would spend its time reconnecting.
+
+So the link measures other routes the honest way: it opens a real connection, completes a real handshake and times an encrypted heartbeat through it. A route that only answers a ping proves nothing about whether it can carry the session.
+
+It moves the session only on a clear win. The new route must be at least 30% faster and at least 15 ms faster, and it must show that twice in a row, with the second probe about three seconds after the first. The link keeps a smoothed average for each route, but a candidate is judged on the worse of its average and its latest sample, so one lucky sample can't carry it. At equal speed, the link prefers the better class of route: the local network, then a tailnet, then a direct address, then the relay. Fewer hops cost less battery.
+
+After a move, the link rests for 30 seconds before it considers another. A route that passes its probes but then fails to take over the session is left alone for five minutes. A route that doesn't answer is probed less and less often, backing off to once every 15 minutes, until the network changes.
+
+Some routes aren't measured at all. Nothing replaces a healthy local network, so probing stops there. And when the current route is already under 15 ms, only a better class of route is worth a probe.
+
+<SwitchRule />
+
+Moving is careful too. The new socket attaches to the session before the old one closes. Meanwhile the old socket stays open and whatever arrives on it is held. If the takeover fails, the held messages are read and the session carries on over the old socket as if nothing happened.
+
+---
+
+## When a route dies
+
+Routes die quietly. Wi-Fi drops, a laptop lid closes, a phone walks out of range. A socket can look open long after the path behind it is gone, so the link asks rather than assumes.
+
+Every connection sends a small encrypted challenge with a random 16-byte nonce, and the computer must echo it back. On a local network the link asks every 10 seconds and waits 5 seconds for the answer, because a dead LAN socket should be replaced at once. On other routes it asks every 15 seconds and waits 15, because a tailnet on a relayed path or a mobile link can stall that long while perfectly alive. When the phone reports a network change, the link checks the current socket within three seconds instead.
+
+Losing a socket doesn't mean losing the session. Both sides count the application messages they have delivered and keep the ones the other side hasn't acknowledged. When a new socket attaches, each side learns how much the other received and resends exactly what is missing. Nothing is lost, repeated or executed twice.
+
+<ResumeLedger />
+
+The computer holds a detached session for 60 seconds. The phone keeps trying for 50, starting with a 100 ms pause between attempts and doubling it up to two seconds. A laptop that wakes inside that window picks up the same session, with its subscriptions and replies intact. Past it, the session is gone, and anything that was in flight falls back to a stricter rule: reads may be asked again, but an action whose outcome is uncertain is reported as uncertain and never sent a second time.
+
+---
+
+## Unreachable, rejected or ended
+
+When a link gives up, the reason decides what you should do next, so the link keeps the reasons apart.
+
+If no route finished a handshake, the computer is unreachable. Maybe it's asleep or offline, and trying again later is right. If a route answered but the handshake failed, the pairing is rejected: whatever answered doesn't hold the secret, and no amount of retrying will change that. If the computer itself ended the session, because the pairing was revoked or the engine shut down, it says so with an end frame inside the encrypted channel, and the phone stops at once.
+
+<LinkEndings />
+
+None of these endings falls back to something weaker. A rejected pairing never retries without encryption, and a paired connection never quietly switches to a different engine.
+
+---
+
+## What the link does with the secret
+
+The secret travels in the fragment of the pairing link, the part after `#pair=`. Browsers don't send a URL fragment to the server, and the web client removes it from the address bar as soon as it has read it. A link is saved only after it has worked once, so a bad link never becomes the default.
+
+Inside the link, the secret is wiped from memory when it is dropped, prints as redacted in debug output, and never appears in socket URLs, logs or error messages. The route memory saved beside ordinary settings holds addresses only. Pairing invitations expire after ten minutes, a computer keeps at most 32 paired devices, and revoking a device on the computer ends its access no matter what the device still holds.
+
+---
+
+## One core, four clients
+
+All of the decisions above live in one Rust crate, `zuse-remote`. Its link is a pure state machine. It owns no sockets and no clock. The platform tells it what happened (a socket opened, a record arrived, a socket closed, time passed, the network changed) and gets back a list of effects to carry out: sockets to open or close, bytes to write, messages to deliver, and when to call again.
+
+That shape is what lets one piece of code serve every client. The iOS and Android apps open sockets with their own networking stacks and drive the link through a small bridge, so both phones pick routes, move sessions and resume in exactly the same way. The browser runs the same link compiled to WebAssembly. The desktop app runs its own async loop over the same route table, session and heartbeat code.
+
+We built it this way because remote access is mostly security rules and edge cases, and those are the things that drift when they're written four times. With one core there is one protocol, one handshake, one set of rules for when to move and when to give up, and one place to fix a bug. And because time is just a number the platform passes in, the hard cases (a race, a takeover that fails halfway, a laptop that sleeps through the resume window) are tested without a network, and then again against real sockets.
+
+You pair once. After that, the phone finds the computer by itself.
