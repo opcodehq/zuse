@@ -26,8 +26,8 @@ try {
   assert.equal(await page.eval(text(`${S} .ws-pr-status`)), "Open·Waiting on checks");
   assert.equal(await page.eval(`document.querySelector("${S} .ws-pr-state").dataset.tone`), "success");
   assert.equal(await page.eval(`[...document.querySelectorAll("${S} .ws-pr-status [data-tone]:not(.ws-pr-icon)")].length`), 1, "only the state word carries a tone");
-  assert.deepEqual(await page.eval(all(`${S} .ws-pr-prop dt`)), ["Branch", "Status", "Reviews", "Checks", "Thread"]);
-  assert.match(await page.eval(text(`${S} .ws-pr-props`)), /zuse\/quiet-errors-resume-after-sign-in\s*main6 files\+176−131/);
+  assert.deepEqual(await page.eval(all(`${S} .ws-pr-prop dt`)), ["Branch", "Status", "Reviews", "Checks", "Thread", "Closes"]);
+  assert.match(await page.eval(text(`${S} .ws-pr-props`)), /zuse\/quiet-errors-resume-after-sign-in\s*main6 files3 commits\+176−131/);
   assert.match(await page.eval(text(`${S} .ws-pr-props`)), /2 running, 7 passed/);
   assert.equal(await page.eval(`[...document.querySelectorAll("${S} .ws-pr-prop-icon")].every((i) => i.style.width === "14px")`), true);
   assert.equal(await page.eval(`document.querySelector("${S} .ws-pr-ref .md-ref")?.textContent`), "Quieter chat errors", "thread row uses the reference chip");
@@ -182,6 +182,37 @@ try {
   await page.eval(`(() => { const t = document.querySelector("${S} .ws-pr-compose textarea"); t.value = "Thanks for the reviews."; t.dispatchEvent(new InputEvent("input", { bubbles: true })); })()`);
   await page.eval(clickText(`${S} .ws-pr-compose button`, "Comment"));
   await page.waitFor("__pr.calls.some((c) => c.method === 'PostChangeRequestComment' && c.params.body === 'Thanks for the reviews.')", 5000);
+
+  // GitHub's details the panel used to miss: commit count, requested reviewers, closing issues, the timeline.
+  await page.eval(clickText(`${S} .tab`, "Overview"));
+  const props = await page.eval(text(`${S} .ws-pr-props`));
+  assert.match(props, /6 files\s*3 commits/);
+  assert.match(props, /Waiting on alice/);
+  assert.match(props, /Closes\s*#430 Errors are too loud in the transcript/);
+  assert.ok((await page.eval(all(`${S} .tab`))).includes("Activity 17"));
+  await page.eval(clickText(`${S} .tab`, "Activity"));
+  await page.waitFor(`!!document.querySelector("${S} .ws-tl")`, 5000);
+  await page.eval("window.words = (el) => { const out = []; const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT); while (walk.nextNode()) { const n = walk.currentNode; if (!n.parentElement.closest('.ws-check-mark') && n.data.trim()) out.push(n.data.trim()); } return out.join(' '); }");
+  const timeline = () => page.eval(`[...document.querySelectorAll("${S} .ws-tl > .ws-tl-item, ${S} .ws-tl > .ws-tl-group > .ws-tl-divider")].map((r) => r.matches(".ws-tl-divider") ? "group: " + r.textContent.trim() : r.dataset.kind + ": " + words(r.querySelector(".ws-tl-text")))`);
+  assert.deepEqual(await timeline(), [
+    "opened: opened this pull request",
+    "commits: pushed 2 commits checks passed",
+    "group: 3 events: 2 label changes, 1 review request",
+    "comment: commented",
+    "connected: linked #430",
+    "forcePush: force-pushed 2b3c4d5 to 9f8e7d6",
+    "commits: pushed a commit checks running",
+    "comment: commented",
+    "review: reviewed",
+    "review: requested changes",
+  ]);
+  assert.equal(await page.eval(text(`${S} .ws-tl-earlier`)), "5 earlier events on GitHub");
+  assert.match(await page.eval(`[...document.querySelectorAll("${S} .ws-tl-item[data-kind=review]")].at(-1).textContent`), /Keep the banner change in its own pull request/, "review bodies show under their row");
+  assert.equal(/Walkthrough|Review details/.test(await page.eval(`[...document.querySelectorAll("${S} .ws-tl-item[data-kind=review]")][0].textContent`)), true, "bot bodies keep their text in Activity");
+  await page.eval(`document.querySelector("${S} .ws-tl-divider").click()`);
+  assert.deepEqual(await page.eval(`[...document.querySelectorAll("${S} .ws-tl-group .ws-tl-item")].map((r) => words(r.querySelector(".ws-tl-text")))`), ["added the ui label", "added the web label", "requested a review from maya"]);
+  await page.eval(`document.querySelector("${S} .ws-tl-item[data-kind=commits] .ws-tl-toggle").click()`);
+  assert.deepEqual(await page.eval(all(`${S} .ws-tl-commit`)), ["1a2b3c4Show failed turns as one quiet line", "2b3c4d5Resume a chat once sign-in lands"]);
   await page.eval(clickText(`${S} .tab`, "Overview"));
 
   for (const theme of ["dark", "light"]) {
@@ -200,6 +231,12 @@ try {
       await sleep(300);
       if (shots) await page.screenshot(`${shots}/after-${state}-${theme}.png`);
       if (state === "waiting") {
+        await page.eval(clickText(`${S} .tab`, "Activity"));
+        await page.waitFor(`!!document.querySelector("${S} .ws-tl")`, 5000);
+        await page.eval(`document.querySelector("${S} .ws-tl-divider").click(); document.querySelector("${S} .ws-tl-item[data-kind=commits] .ws-tl-toggle").click()`);
+        await sleep(200);
+        if (shots) await page.screenshot(`${shots}/after-activity-${theme}.png`);
+        await page.eval(clickText(`${S} .tab`, "Overview"));
         await page.eval(`document.querySelector("${S} .ws-pr-scroll").scrollTop = 0`);
         await page.press(`${S} .ws-pr-merge-more`);
         await page.waitFor("!!document.querySelector('.ws-merge-menu')", 5000);

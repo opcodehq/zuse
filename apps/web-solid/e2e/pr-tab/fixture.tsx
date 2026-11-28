@@ -64,7 +64,28 @@ let detail: ChangeRequestDetail = {
     check("native (macos-latest)", "COMPLETED", "SUCCESS"), check("CodeRabbit", "COMPLETED", "SUCCESS", false), check("Workers Builds: zuse-website", "COMPLETED", "SUCCESS"),
   ],
   autoMergeRequest: null, viewerLogin: "swarajbachu", mergeMethods: ["squash", "rebase"],
+  createdAt: iso(40),
+  commits: [{ oid: "1a2b3c4d5e", messageHeadline: "Show failed turns as one quiet line" }, { oid: "2b3c4d5e6f", messageHeadline: "Resume a chat once sign-in lands" }, { oid: "3c4d5e6f70", messageHeadline: "Replace stacked banners" }],
+  mergeStateStatus: running ? "BLOCKED" : "CLEAN",
+  requestedReviewers: ["alice"],
+  linkedIssues: [{ number: 430, title: "Errors are too loud in the transcript", url: "https://github.com/opcodehq/zuse/issues/430", state: "OPEN", isPullRequest: false }],
 };
+const swaraj = { login: "swarajbachu" };
+detail.timeline = [
+  { kind: "commit", actor: swaraj, createdAt: iso(39), state: "SUCCESS", commit: { oid: "1a2b3c4d5e", message: "Show failed turns as one quiet line" } },
+  { kind: "commit", actor: swaraj, createdAt: iso(38), state: "SUCCESS", commit: { oid: "2b3c4d5e6f", message: "Resume a chat once sign-in lands" } },
+  { kind: "labeled", actor: swaraj, createdAt: iso(37), name: "ui", color: "1d76db" },
+  { kind: "labeled", actor: swaraj, createdAt: iso(37), name: "web", color: "0e8a16" },
+  { kind: "reviewRequested", actor: swaraj, createdAt: iso(36), name: "maya" },
+  { kind: "comment", actor: swaraj, createdAt: iso(30), url: `${URL_}#discussion_rc1` },
+  { kind: "connected", actor: swaraj, createdAt: iso(14), subject: detail.linkedIssues![0] },
+  { kind: "forcePush", actor: swaraj, createdAt: iso(12), from: "2b3c4d5e6f", to: "9f8e7d6c5b" },
+  { kind: "commit", actor: swaraj, createdAt: iso(11), state: running ? "PENDING" : "SUCCESS", commit: { oid: "3c4d5e6f70", message: "Replace stacked banners" } },
+  { kind: "comment", actor: { login: "cloudflare-workers-and-pages[bot]" }, createdAt: iso(10), url: `${URL_}#discussion_rc2` },
+  { kind: "review", actor: { login: "coderabbitai[bot]" }, createdAt: iso(9), state: "COMMENTED", url: `${URL_}#discussion_rr1` },
+  { kind: "review", actor: { login: "maya" }, createdAt: iso(7), state: "CHANGES_REQUESTED", url: `${URL_}#discussion_rr2` },
+];
+detail.timelineTotal = detail.timeline.length + 5;
 
 // A stand-in for the GitHub-backed methods: updates change the fixture, comments and replies append to it.
 type Params = { update?: { kind: string; method?: string }; body?: string; threadId?: string };

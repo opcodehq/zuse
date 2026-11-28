@@ -20,6 +20,7 @@ import { createEffect, createMemo, createSignal, For, Match, Show, Switch } from
 import { parsePatch } from "./diff";
 import { addPrompt, checksSummary, checksTone, checkTone, cleanBody, fixAllPrompt, fixPrompt, groupFeedback, sortChecks, statusLine, type CheckTone, type FeedbackItem } from "./feedback";
 import { DiffView } from "./DiffView";
+import { buildTimeline, type TimelineCommits, type TimelineEvent, type TimelinePart, type TimelineRow } from "./timeline";
 import { allowedMethods, MERGE_METHODS, mergeButton, pickMethod, type MergeMethod } from "./merge";
 import { Banner, DiffStat, Empty, PrStateIcon } from "./parts";
 import { errorText, liveSubscribe, readErrorText, workspace, type Target } from "./store";
@@ -505,7 +506,7 @@ function PullRequestDetail(props: { target: Target; url: string; own: boolean; o
                 onChange={setTab}
                 items={[
                   { value: "overview", label: "Overview" },
-                  { value: "activity", label: activity().length ? `Activity ${activity().length}` : "Activity" },
+                  { value: "activity", label: d().timeline ? `Activity ${d().timelineTotal ?? d().timeline!.length}` : activity().length ? `Activity ${activity().length}` : "Activity" },
                   { value: "files", label: `Files ${d().files.length}` },
                 ]}
               />
@@ -528,8 +529,9 @@ function PullRequestDetail(props: { target: Target; url: string; own: boolean; o
                     <Property icon="git-branch" label="Branch">
                       <span class="ws-truncate ws-pr-branch" title={d().headRefName}>{d().headRefName}</span>
                       <Icon name="alt-arrow-right" size={12} class="ws-faint" />
-                      <span class="ws-pr-branch">{d().baseRefName}</span>
+                      <span class="ws-nowrap">{d().baseRefName}</span>
                       <span class="ws-faint ws-nowrap">{plural(d().files.length, "file")}</span>
+                      <Show when={d().commits?.length}>{(n) => <span class="ws-faint ws-nowrap">{plural(n(), "commit")}</span>}</Show>
                       <DiffStat additions={d().additions} deletions={d().deletions} />
                     </Property>
                     <Property icon="pull-request" label="Status">
@@ -549,6 +551,13 @@ function PullRequestDetail(props: { target: Target; url: string; own: boolean; o
                         <ReferenceText text={props.target.chatId} references={references()} chatId={props.target.chatId} />
                       </Property>
                     </Show>
+                    <Show when={d().linkedIssues?.length}>
+                      <Property icon="link" label="Closes">
+                        <span class="ws-pr-ref ws-truncate">
+                          <For each={d().linkedIssues}>{(i) => <a class="ws-tl-chip" data-kind="subject" href={i.url} target="_blank" rel="noopener noreferrer" title={i.title}>#{i.number} <span class="ws-muted">{i.title}</span></a>}</For>
+                        </span>
+                      </Property>
+                    </Show>
                     <Show when={issue()}>
                       {(found) => (
                         <Property icon="checklist" label="Issue">
@@ -566,9 +575,16 @@ function PullRequestDetail(props: { target: Target; url: string; own: boolean; o
               </Match>
               <Match when={tab() === "activity"}>
                 <div class="ws-pr-scroll">
-                  <For each={activity()} fallback={<Empty icon="chat-round-line" title="No discussion yet" />}>
-                    {(c) => <CommentView comment={c} />}
-                  </For>
+                  <Show
+                    when={buildTimeline(d())}
+                    fallback={
+                      <For each={activity()} fallback={<Empty icon="chat-round-line" title="No discussion yet" />}>
+                        {(c) => <CommentView comment={c} />}
+                      </For>
+                    }
+                  >
+                    {(rows) => <Timeline detail={d()} rows={rows()} />}
+                  </Show>
                 </div>
                 <form
                   class="ws-pr-compose"
@@ -637,9 +653,9 @@ function reviewLabel(decision: string) {
 
 function reviewsText(detail: ChangeRequestDetail) {
   const reviewers = [...new Set(detail.reviews.filter((r) => r.author.login && r.author.login !== detail.author.login).map((r) => r.author.login))];
-  const decision = reviewLabel(detail.reviewDecision);
-  if (!reviewers.length) return decision || "No reviews";
-  return decision ? `${decision} · ${reviewers.join(", ")}` : reviewers.join(", ");
+  const waiting = (detail.requestedReviewers ?? []).filter((login) => !reviewers.includes(login));
+  const parts = [reviewLabel(detail.reviewDecision), reviewers.join(", "), waiting.length ? `Waiting on ${waiting.join(", ")}` : ""].filter(Boolean);
+  return parts.length ? parts.join(" · ") : "No reviews";
 }
 
 function Property(props: { icon: string; label: string; children: JSX.Element }) {
@@ -872,11 +888,12 @@ function FeedbackSection(props: { detail: ChangeRequestDetail; onAdd: (text: str
   const [showClosed, setShowClosed] = createSignal(false);
   // Keyed by item id, so a refresh after a reply or a merge keeps rows open.
   const [expanded, setExpanded] = createSignal<ReadonlySet<string>>(new Set());
-  const toggle = (id: string) => {
-    const next = new Set(expanded());
-    if (!next.delete(id)) next.add(id);
-    setExpanded(next);
-  };
+  const toggle = (id: string) =>
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
   return (
     <Show when={groups().open.length || groups().closed.length}>
       <section class="ws-pr-section" aria-label="Feedback">
@@ -968,6 +985,137 @@ function FeedbackRow(props: { item: FeedbackItem; expanded: boolean; onToggle: (
         </div>
       </Show>
     </article>
+  );
+}
+
+/** The pull request's conversation as compact rows; comments and reviews show their body under the row. */
+function Timeline(props: { detail: ChangeRequestDetail; rows: TimelineRow[] }) {
+  const [open, setOpen] = createSignal<ReadonlySet<string>>(new Set());
+  const toggle = (id: string) =>
+    setOpen((current) => {
+      const next = new Set(current);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  const earlier = () => (props.detail.timelineTotal ?? 0) - (props.detail.timeline?.length ?? 0);
+  return (
+    <div class="ws-tl" role="list" aria-label="Timeline">
+      <Show when={earlier() > 0}>
+        <button type="button" class="ws-pr-link ws-tl-earlier" onClick={() => openExternal(props.detail.url)}>{plural(earlier(), "earlier event")} on GitHub</button>
+      </Show>
+      <Show when={!props.rows.length}>
+        <Empty icon="chat-round-line" title="No activity yet" />
+      </Show>
+      <For each={props.rows}>
+        {(row) => (
+          <Switch>
+            <Match when={row.type === "commits" && row}>
+              {(commits) => <TimelineCommitsRow row={commits()} open={open().has(commits().id)} onToggle={() => toggle(commits().id)} />}
+            </Match>
+            <Match when={row.type === "group" && row}>
+              {(group) => (
+                <div class="ws-tl-group" role="listitem">
+                  <button type="button" class="ws-tl-divider" aria-expanded={open().has(group().id) ? "true" : "false"} onClick={() => toggle(group().id)}>
+                    <Icon name={open().has(group().id) ? "alt-arrow-down" : "alt-arrow-right"} size={11} />
+                    {group().summary}
+                  </button>
+                  <Show when={open().has(group().id)}>
+                    <For each={group().rows}>{(event) => <TimelineEventRow row={event} />}</For>
+                  </Show>
+                </div>
+              )}
+            </Match>
+            <Match when={row.type === "event" && row}>{(event) => <TimelineEventRow row={event()} />}</Match>
+          </Switch>
+        )}
+      </For>
+    </div>
+  );
+}
+
+function TimelineActor(props: { login?: string | null }) {
+  return (
+    <span class="ws-tl-actor">
+      <Avatar login={props.login || "?"} />
+      <strong>{props.login || "Someone"}</strong>
+    </span>
+  );
+}
+
+function TimelineTime(props: { at: string }) {
+  return <time class="ws-tl-time" datetime={props.at} title={new Date(props.at).toLocaleString()}>{timeAgo(props.at)}</time>;
+}
+
+function TimelineParts(props: { parts: TimelinePart[] }) {
+  return (
+    <span class="ws-tl-text">
+      <For each={props.parts}>
+        {(part) =>
+          typeof part === "string" ? (
+            <span>{part}</span>
+          ) : part.href ? (
+            <a class="ws-tl-chip" data-kind={part.kind} href={part.href} target="_blank" rel="noopener noreferrer" title={part.title}>{part.chip}</a>
+          ) : (
+            <span class="ws-tl-chip" data-kind={part.kind} title={part.title}>
+              <Show when={part.color}>{(color) => <span class="ws-tl-swatch" style={{ background: `#${color()}` }} />}</Show>
+              {part.chip}
+            </span>
+          )
+        }
+      </For>
+    </span>
+  );
+}
+
+function TimelineEventRow(props: { row: TimelineEvent }) {
+  return (
+    <div class="ws-tl-item" role="listitem" data-kind={props.row.item.kind} data-state={props.row.item.state?.toLowerCase() || undefined}>
+      <div class="ws-tl-row">
+        <TimelineActor login={props.row.item.actor?.login} />
+        <TimelineParts parts={props.row.parts} />
+        <TimelineTime at={props.row.item.createdAt} />
+      </div>
+      <Show when={cleanBody(props.row.body)}>
+        {(body) => <div class="ws-tl-body"><MarkdownBody text={body()} /></div>}
+      </Show>
+    </div>
+  );
+}
+
+const PUSH_TONES: Record<NonNullable<TimelineCommits["checks"]>, CheckTone> = { passed: "passed", failed: "failed", running: "running" };
+
+function TimelineCommitsRow(props: { row: TimelineCommits; open: boolean; onToggle: () => void }) {
+  return (
+    <div class="ws-tl-item" role="listitem" data-kind="commits">
+      <div class="ws-tl-row">
+        <TimelineActor login={props.row.actor?.login ?? props.row.commits[0]?.commit?.author} />
+        <button type="button" class="ws-tl-text ws-tl-toggle" aria-expanded={props.open ? "true" : "false"} onClick={() => props.onToggle()}>
+          {props.row.commits.length === 1 ? "pushed a commit" : `pushed ${props.row.commits.length} commits`}
+          <Show when={props.row.checks}>
+            {(checks) => (
+              <span class="ws-tl-checks">
+                <CheckMark tone={PUSH_TONES[checks()]} />
+                checks {checks()}
+              </span>
+            )}
+          </Show>
+          <Icon name={props.open ? "alt-arrow-down" : "alt-arrow-right"} size={11} class="ws-faint" />
+        </button>
+        <TimelineTime at={props.row.createdAt} />
+      </div>
+      <Show when={props.open}>
+        <div class="ws-tl-commits">
+          <For each={props.row.commits}>
+            {(c) => (
+              <div class="ws-tl-commit">
+                <span class="ws-tl-chip" data-kind="sha">{c.commit?.oid.slice(0, 7)}</span>
+                <span class="ws-truncate">{c.commit?.message}</span>
+              </div>
+            )}
+          </For>
+        </div>
+      </Show>
+    </div>
   );
 }
 

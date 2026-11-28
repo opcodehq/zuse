@@ -252,6 +252,38 @@ export interface ChangeRequestDetail {
   viewerLogin?: string | null;
   /** The repository's allowed merge methods; absent from older engines. */
   mergeMethods?: ("squash" | "merge" | "rebase")[];
+  /** The fields below are absent from older engines. */
+  createdAt?: string;
+  commits?: { oid: string; messageHeadline: string }[];
+  /** GitHub's mergeStateStatus: BEHIND, BLOCKED, CLEAN, DIRTY, DRAFT, HAS_HOOKS, UNKNOWN or UNSTABLE. */
+  mergeStateStatus?: string;
+  requestedReviewers?: string[];
+  linkedIssues?: TimelineSubject[];
+  /** The newest timeline events, oldest first; timelineTotal counts every event on GitHub. */
+  timeline?: TimelineItem[];
+  timelineTotal?: number;
+}
+
+export interface TimelineSubject {
+  number: number;
+  title: string;
+  url: string;
+  state: string;
+  isPullRequest: boolean;
+}
+
+export interface TimelineItem {
+  kind: string;
+  actor?: { login: string; avatarUrl?: string | null } | null;
+  createdAt: string;
+  url?: string | null;
+  state?: string | null;
+  name?: string | null;
+  color?: string | null;
+  from?: string | null;
+  to?: string | null;
+  commit?: { oid: string; message: string; author?: string | null } | null;
+  subject?: TimelineSubject | null;
 }
 
 export type CiState = "noChecks" | "pending" | "passed" | "skipped" | "failed" | "unknown";

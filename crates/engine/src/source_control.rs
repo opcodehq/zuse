@@ -1011,11 +1011,11 @@ impl GitHubCli {
             };
             let mut detail: zuse_protocol::ChangeRequestDetail =
                 serde_json::from_value(value).map_err(|_| ChangeRequestError::Decode)?;
-            if let Ok((threads, merge_methods)) =
-                self.fetch_review_threads_and_merge_methods(&url).await
-            {
+            if let Ok((threads, first_page)) = self.fetch_review_threads_page(&url, true).await {
                 detail.review_threads = Some(threads);
-                detail.merge_methods = merge_methods;
+                if let Some(repository) = first_page {
+                    review_threads::apply_detail_extras(&mut detail, &repository);
+                }
             }
             return serde_json::to_value(detail).map_err(|_| ChangeRequestError::Decode);
         }
@@ -1037,7 +1037,7 @@ impl GitHubCli {
         if diff {
             args.push("--color=never".into());
         } else {
-            args.extend(["--json".into(), "title,body,url,number,author,baseRefName,headRefName,headRefOid,state,isDraft,reviewDecision,mergeable,additions,deletions,comments,reviews,files,statusCheckRollup,autoMergeRequest,headRepository,commits".into()]);
+            args.extend(["--json".into(), "title,body,url,number,author,baseRefName,headRefName,headRefOid,state,isDraft,reviewDecision,mergeable,additions,deletions,comments,reviews,files,statusCheckRollup,autoMergeRequest,headRepository,commits,createdAt".into()]);
         }
         let output = self
             .runner
@@ -3676,38 +3676,199 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pr_review_threads_read_allowed_merge_methods() {
-        let runner = FakeProcessRunner::with_responses([
-            command_success(br#"{"data":{"repository":{"squashMergeAllowed":true,"mergeCommitAllowed":false,"rebaseMergeAllowed":true,"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}"#.to_vec()),
-            command_success(br#"{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}"#.to_vec()),
+    async fn pr_detail_maps_timeline_and_first_page_extras() {
+        use serde_json::json;
+        let actor = json!({"login": "octocat", "avatarUrl": "https://avatars.test/o"});
+        let at = "2026-11-01T10:00:00Z";
+        let event = |typename: &str, extra: serde_json::Value| {
+            let mut node = json!({"__typename": typename, "actor": actor, "createdAt": at});
+            node.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            node
+        };
+        let nodes = json!([
+            {"__typename": "PullRequestCommit", "commit": {"oid": "a1", "messageHeadline": "Add dashboard",
+                "committedDate": at, "author": {"name": "Octo Cat", "user": actor},
+                "statusCheckRollup": {"state": "SUCCESS"}}},
+            event("HeadRefForcePushedEvent", json!({"beforeCommit": {"oid": "a1"}, "afterCommit": {"oid": "b2"}})),
+            {"__typename": "PullRequestReview", "author": actor, "createdAt": "2026-11-01T09:00:00Z",
+                "submittedAt": at, "url": "https://github.com/a/b/pull/1#pullrequestreview-1", "state": "APPROVED"},
+            {"__typename": "IssueComment", "author": actor, "createdAt": at,
+                "url": "https://github.com/a/b/pull/1#issuecomment-1"},
+            event("ReviewRequestedEvent", json!({"requestedReviewer": {"login": "hubot"}})),
+            event("ReviewRequestRemovedEvent", json!({"requestedReviewer": {"name": "core"}})),
+            event("LabeledEvent", json!({"label": {"name": "bug", "color": "d73a4a"}})),
+            event("UnlabeledEvent", json!({"label": {"name": "bug", "color": "d73a4a"}})),
+            event("ReadyForReviewEvent", json!({})),
+            event("ConvertToDraftEvent", json!({})),
+            event("BaseRefChangedEvent", json!({"previousRefName": "develop", "currentRefName": "main"})),
+            event("AutoMergeEnabledEvent", json!({})),
+            event("AutoMergeDisabledEvent", json!({})),
+            event("MergedEvent", json!({"commit": {"oid": "c3"}})),
+            event("ClosedEvent", json!({})),
+            event("ReopenedEvent", json!({})),
+            event("CrossReferencedEvent", json!({"source": {"__typename": "PullRequest", "number": 7,
+                "title": "Follow-up", "url": "https://github.com/a/b/pull/7", "state": "OPEN"}})),
+            event("ConnectedEvent", json!({"subject": {"__typename": "Issue", "number": 3,
+                "title": "Crash", "url": "https://github.com/a/b/issues/3", "state": "OPEN"}})),
+            event("DisconnectedEvent", json!({"subject": {"__typename": "Issue", "number": 3,
+                "title": "Crash", "url": "https://github.com/a/b/issues/3", "state": "OPEN"}})),
+            event("SubscribedEvent", json!({})),
         ]);
-        let github = GitHubCli::with_runner(runner.clone());
-        let url = "https://github.com/a/b/pull/1";
-        let (threads, methods) = github
-            .fetch_review_threads_and_merge_methods(url)
+        let first_page = json!({"data": {"repository": {
+            "squashMergeAllowed": true, "mergeCommitAllowed": false, "rebaseMergeAllowed": true,
+            "pullRequest": {
+                "mergeStateStatus": "BLOCKED",
+                "reviewRequests": {"nodes": [{"requestedReviewer": {"login": "hubot"}},
+                    {"requestedReviewer": {"name": "core"}}, {"requestedReviewer": null}]},
+                "closingIssuesReferences": {"nodes": [{"number": 3, "title": "Crash",
+                    "url": "https://github.com/a/b/issues/3", "state": "OPEN"}]},
+                "timelineItems": {"totalCount": 240, "nodes": nodes},
+                "reviewThreads": {"nodes": [], "pageInfo": {"hasNextPage": false}}
+            }
+        }}});
+        let runner = FakeProcessRunner::with_responses([
+            command_success(
+                serde_json::to_vec(
+                    &json!({"number": 1, "title": "A PR", "createdAt": "2026-10-30T08:00:00Z"}),
+                )
+                .unwrap(),
+            ),
+            command_success(serde_json::to_vec(&first_page).unwrap()),
+        ]);
+        let detail = GitHubCli::with_runner(runner.clone())
+            .detail("https://github.com/a/b/pull/1", false)
             .await
             .unwrap();
-        assert!(threads.is_empty());
+        let requests = runner.requests();
+        assert!(
+            requests[0]
+                .args
+                .iter()
+                .any(|arg| arg.ends_with(",createdAt"))
+        );
+        let sent: serde_json::Value =
+            serde_json::from_slice(requests[1].stdin.as_deref().unwrap()).unwrap();
+        let query = sent["query"].as_str().unwrap();
+        assert!(query.contains("timelineItems(last:100"));
+        assert!(query.contains("squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed"));
+        assert_eq!(detail.created_at.as_deref(), Some("2026-10-30T08:00:00Z"));
         assert_eq!(
-            methods,
+            detail.merge_methods,
             Some(vec![
                 zuse_protocol::ChangeRequestMergeMethod::Squash,
                 zuse_protocol::ChangeRequestMergeMethod::Rebase,
             ])
         );
-        let sent: serde_json::Value =
-            serde_json::from_slice(runner.requests()[0].stdin.as_deref().unwrap()).unwrap();
-        assert!(
-            sent["query"]
-                .as_str()
-                .unwrap()
-                .contains("squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed")
+        assert_eq!(detail.merge_state_status.as_deref(), Some("BLOCKED"));
+        assert_eq!(
+            detail.requested_reviewers,
+            Some(vec!["hubot".to_owned(), "core".to_owned()])
         );
-        let (_, methods) = github
-            .fetch_review_threads_and_merge_methods(url)
+        let issues = detail.linked_issues.as_ref().unwrap();
+        assert_eq!((issues[0].number, issues[0].is_pull_request), (3, false));
+        assert_eq!(detail.timeline_total, Some(240));
+        let timeline = serde_json::to_value(detail.timeline.as_ref().unwrap()).unwrap();
+        let octocat = json!({"login": "octocat", "avatarUrl": "https://avatars.test/o"});
+        let simple = |kind: &str| json!({"kind": kind, "actor": octocat, "createdAt": at});
+        let with = |kind: &str, extra: serde_json::Value| {
+            let mut item = simple(kind);
+            item.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            item
+        };
+        let issue = json!({"number": 3, "title": "Crash", "url": "https://github.com/a/b/issues/3",
+            "state": "OPEN", "isPullRequest": false});
+        assert_eq!(
+            timeline,
+            json!([
+                with(
+                    "commit",
+                    json!({"state": "SUCCESS",
+                    "commit": {"oid": "a1", "message": "Add dashboard", "author": "Octo Cat"}})
+                ),
+                with("forcePush", json!({"from": "a1", "to": "b2"})),
+                with(
+                    "review",
+                    json!({"url": "https://github.com/a/b/pull/1#pullrequestreview-1", "state": "APPROVED"})
+                ),
+                with(
+                    "comment",
+                    json!({"url": "https://github.com/a/b/pull/1#issuecomment-1"})
+                ),
+                with("reviewRequested", json!({"name": "hubot"})),
+                with("reviewRequestRemoved", json!({"name": "core"})),
+                with("labeled", json!({"name": "bug", "color": "d73a4a"})),
+                with("unlabeled", json!({"name": "bug", "color": "d73a4a"})),
+                simple("readyForReview"),
+                simple("convertedToDraft"),
+                with("baseRefChanged", json!({"from": "develop", "to": "main"})),
+                simple("autoMergeEnabled"),
+                simple("autoMergeDisabled"),
+                with("merged", json!({"to": "c3"})),
+                simple("closed"),
+                simple("reopened"),
+                with(
+                    "crossReferenced",
+                    json!({"subject": {"number": 7, "title": "Follow-up",
+                    "url": "https://github.com/a/b/pull/7", "state": "OPEN", "isPullRequest": true}})
+                ),
+                with("connected", json!({"subject": issue})),
+                with("disconnected", json!({"subject": issue})),
+            ])
+        );
+        println!("{}", serde_json::to_string_pretty(&timeline).unwrap());
+    }
+
+    #[tokio::test]
+    async fn pr_watch_review_threads_skip_detail_extras() {
+        let runner = FakeProcessRunner::with_responses([command_success(
+            br#"{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}"#.to_vec(),
+        )]);
+        let github = GitHubCli::with_runner(runner.clone());
+        let threads = github
+            .fetch_review_threads("https://github.com/a/b/pull/1")
             .await
             .unwrap();
-        assert_eq!(methods, None, "older fixtures without the fields");
+        assert!(threads.is_empty());
+        let sent: serde_json::Value =
+            serde_json::from_slice(runner.requests()[0].stdin.as_deref().unwrap()).unwrap();
+        let query = sent["query"].as_str().unwrap();
+        for extra in [
+            "timelineItems",
+            "mergeStateStatus",
+            "reviewRequests",
+            "closingIssuesReferences",
+            "squashMergeAllowed",
+        ] {
+            assert!(!query.contains(extra), "{extra}");
+        }
+    }
+
+    #[tokio::test]
+    async fn pr_detail_extras_stay_absent_for_older_fixtures() {
+        let runner = FakeProcessRunner::with_responses([
+            command_success(br#"{"number":1,"title":"A PR"}"#.to_vec()),
+            command_success(br#"{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}"#.to_vec()),
+        ]);
+        let detail = GitHubCli::with_runner(runner)
+            .detail("https://github.com/a/b/pull/1", false)
+            .await
+            .unwrap();
+        assert_eq!(detail.review_threads, Some(vec![]));
+        assert_eq!(detail.created_at, None);
+        assert_eq!(detail.merge_methods, None);
+        assert_eq!(detail.merge_state_status, None);
+        assert_eq!(detail.requested_reviewers, None);
+        assert_eq!(detail.linked_issues, None);
+        assert_eq!(detail.timeline, None);
+        assert_eq!(detail.timeline_total, None);
+        let wire = serde_json::to_value(&detail).unwrap();
+        for key in ["mergeMethods", "timeline", "timelineTotal", "createdAt"] {
+            assert!(wire.get(key).is_none(), "{key}");
+        }
     }
 
     #[tokio::test]

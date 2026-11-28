@@ -1244,6 +1244,84 @@ pub struct ChangeRequestDetail {
     /// Absent from older engines or when unreadable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub merge_methods: Option<Vec<ChangeRequestMergeMethod>>,
+    /// When the pull request was opened. Absent from older engines.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    /// GitHub's raw `mergeStateStatus` (BEHIND, BLOCKED, CLEAN, DIRTY, DRAFT,
+    /// HAS_HOOKS, UNKNOWN, UNSTABLE). Absent from older engines or when unreadable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merge_state_status: Option<String>,
+    /// Pending review requests as user or bot logins and team names. Absent
+    /// from older engines or when unreadable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_reviewers: Option<Vec<String>>,
+    /// Issues this pull request closes. Absent from older engines or when unreadable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linked_issues: Option<Vec<ChangeRequestTimelineSubject>>,
+    /// The newest timeline events, oldest first. Absent from older engines or
+    /// when unreadable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeline: Option<Vec<ChangeRequestTimelineItem>>,
+    /// Every timeline event GitHub holds for the selected kinds, so clients
+    /// can tell when `timeline` is only the newest part.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeline_total: Option<u64>,
+}
+
+/// An issue or pull request a timeline event or closing reference points at.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ChangeRequestTimelineSubject {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub state: String,
+    pub is_pull_request: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ChangeRequestTimelineCommit {
+    pub oid: String,
+    /// The commit's headline.
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+}
+
+/// One pull request timeline event. `kind` is one of commit, forcePush,
+/// review, comment, reviewRequested, reviewRequestRemoved, labeled,
+/// unlabeled, readyForReview, convertedToDraft, baseRefChanged,
+/// autoMergeEnabled, autoMergeDisabled, merged, closed, reopened,
+/// crossReferenced, connected, disconnected.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ChangeRequestTimelineItem {
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actor: Option<ChangeRequestActor>,
+    pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// A review's state, or a commit's check rollup state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    /// A label name, or a requested reviewer's login or team name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// A label color as hex without `#`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// The previous base branch, or the commit a force push replaced.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    /// The new base branch, the force-pushed commit, or the merge commit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commit: Option<ChangeRequestTimelineCommit>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject: Option<ChangeRequestTimelineSubject>,
 }
 
 impl ChangeRequestDetail {

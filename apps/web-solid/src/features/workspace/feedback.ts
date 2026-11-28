@@ -1,5 +1,6 @@
 // Pure helpers for the pull request overview: check ordering and counts, the one-line status, and review
 // feedback grouped into open and resolved items, each with a prompt the chat agent can act on.
+import { mergeReason } from "./timeline";
 import type { ChangeRequestCheck, ChangeRequestComment, ChangeRequestDetail } from "./types";
 
 export type CheckTone = "running" | "failed" | "passed" | "skipped";
@@ -69,6 +70,8 @@ export function statusLine(detail: ChangeRequestDetail): StatusLine {
   if (counts.running) return open("Waiting on checks");
   if (review === "CHANGES_REQUESTED") return open("Changes requested");
   if (review === "REVIEW_REQUIRED") return open("Review required");
+  const reason = mergeReason(detail);
+  if (reason) return open(reason);
   return open("Ready to merge", true);
 }
 

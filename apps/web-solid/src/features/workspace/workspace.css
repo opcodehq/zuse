@@ -389,6 +389,38 @@
 .ws-merge-detail { font-size: var(--text-xs); color: var(--text-muted); }
 .ws-merge-confirm { display: flex; flex-direction: column; gap: 8px; padding: 6px 8px; }
 .ws-fb-reply { display: flex; flex-direction: column; gap: 6px; }
+.ws-tl { display: flex; flex-direction: column; gap: 2px; font-size: var(--text-xs); color: var(--text-muted); }
+.ws-tl-earlier { padding: 0 0 6px; }
+.ws-tl-row { display: flex; align-items: baseline; gap: 6px; min-height: 24px; padding: 3px 0; }
+.ws-tl-actor { display: inline-flex; align-items: center; gap: 6px; flex: none; align-self: center; }
+.ws-tl-actor strong { font-weight: 500; color: var(--text); }
+.ws-tl-text { min-width: 0; display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px; overflow-wrap: anywhere; }
+.ws-tl-toggle { padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; align-items: center; }
+.ws-tl-toggle:hover, .ws-tl-toggle:focus-visible { color: var(--text); }
+.ws-tl-time { margin-left: auto; padding-left: 12px; flex: none; color: var(--text-faint); white-space: nowrap; }
+.ws-tl-chip {
+  display: inline-flex; align-items: center; gap: 4px; padding: 0 5px; border-radius: 4px; line-height: 16px;
+  background: color-mix(in srgb, var(--text) 6%, transparent); color: var(--text); text-decoration: none; white-space: nowrap;
+}
+.ws-tl-chip[data-kind="sha"], .ws-tl-chip[data-kind="ref"] { font-family: var(--font-mono); font-size: 11px; }
+.ws-tl-chip[data-kind="subject"] { color: var(--syntax-function); background: none; padding: 0; }
+.ws-tl-chip[data-kind="subject"]:hover { text-decoration: underline; text-underline-offset: 3px; }
+.ws-pr-ref .ws-tl-chip + .ws-tl-chip { margin-left: 8px; }
+.ws-tl-swatch { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.ws-tl-checks { display: inline-flex; align-items: center; gap: 4px; color: var(--text-faint); }
+.ws-tl-body { margin: 2px 0 8px 22px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); }
+.ws-tl-commits { display: flex; flex-direction: column; gap: 2px; margin: 0 0 6px 22px; }
+.ws-tl-commit { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--text); }
+.ws-tl-item[data-kind="review"][data-state="approved"] .ws-tl-text { color: var(--success); }
+.ws-tl-item[data-kind="review"][data-state="changes_requested"] .ws-tl-text { color: var(--danger); }
+.ws-tl-item[data-kind="merged"] .ws-tl-text > span:first-child { color: #a78bfa; }
+.ws-tl-group { display: flex; flex-direction: column; }
+.ws-tl-divider {
+  display: flex; align-items: center; gap: 8px; padding: 4px 0; border: 0; background: none; color: var(--text-faint);
+  font: inherit; cursor: pointer;
+}
+.ws-tl-divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+.ws-tl-divider:hover, .ws-tl-divider:focus-visible { color: var(--text); }
 .ws-pr-props { margin: -6px 0 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: 16px; font-size: var(--text-xs); }
 .ws-pr-prop { display: contents; }
 .ws-pr-prop dt { display: flex; align-items: center; gap: 8px; height: 24px; color: var(--text-muted); }
