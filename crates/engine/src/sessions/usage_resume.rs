@@ -24,6 +24,8 @@ struct Saved {
 pub(super) struct Store {
     path: PathBuf,
     saved: Saved,
+    // Message identities are turn generations, including warm-runtime follow-ups.
+    current_turns: HashMap<String, String>,
     pub(super) stopped_runs: std::collections::HashSet<String>,
 }
 impl Store {
@@ -39,6 +41,7 @@ impl Store {
             path,
             saved,
             stopped_runs: Default::default(),
+            current_turns: Default::default(),
         }
     }
     fn clear_pending(&mut self, chat: &str) -> Result<(), EngineError> {
@@ -50,6 +53,13 @@ impl Store {
         Ok(())
     }
 
+    fn begin_turn(&mut self, chat: &str, message_id: &str) -> Result<(), EngineError> {
+        self.clear_pending(chat)?;
+        self.current_turns
+            .insert(chat.to_owned(), message_id.to_owned());
+        Ok(())
+    }
+
     fn cancel(&mut self, chat: &str, run_id: Option<&str>) -> Result<(), EngineError> {
         if let Some(run_id) = run_id {
             self.stopped_runs.insert(run_id.to_owned());
@@ -58,7 +68,12 @@ impl Store {
     }
 
     fn record(&mut self, chat: &str, run_id: &str, pending: Pending) -> Result<(), EngineError> {
-        if self.stopped_runs.contains(run_id) {
+        if self.stopped_runs.contains(run_id)
+            || self
+                .current_turns
+                .get(chat)
+                .is_some_and(|current| pending.message_id.as_ref() != Some(current))
+        {
             return Ok(());
         }
         self.update(|saved| {
@@ -127,9 +142,16 @@ impl SessionsEngine {
         Ok(())
     }
 
-    pub(super) fn clear_usage_resume(&self, chat: &str) -> Result<(), EngineError> {
-        let mut store = lock(&self.inner.usage_resume);
-        store.clear_pending(chat)
+    pub(super) fn begin_usage_turn(&self, chat: &str, message_id: &str) -> Result<(), EngineError> {
+        lock(&self.inner.usage_resume).begin_turn(chat, message_id)
+    }
+
+    pub(super) fn chat_scratch_root(&self) -> PathBuf {
+        self.inner
+            .scratch_root
+            .get()
+            .cloned()
+            .unwrap_or_else(|| crate::repos::home_dir().join(".zuse").join("scratch"))
     }
 
     pub(super) fn cancel_usage_resume(&self, chat: &str) -> Result<(), EngineError> {
@@ -195,6 +217,12 @@ impl SessionsEngine {
                 ));
             }
             row.cwd
+                .as_deref()
+                .map(|cwd| {
+                    crate::repos::map_chat_cwd(cwd, &self.chat_scratch_root())
+                        .map_err(EngineError::Other)
+                })
+                .transpose()?
         } else {
             None
         };
@@ -339,6 +367,52 @@ mod tests {
                 .pending
                 .contains_key("chat")
         );
+    }
+
+    #[test]
+    fn new_message_rejects_late_recording_but_keeps_warm_followups() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("resume.json"));
+        let pending = |message: &str| Pending {
+            harness: HarnessId::Mock,
+            request: serde_json::from_value(serde_json::json!({
+                "prompt": "finish", "cwd": "/tmp", "sandbox": "workspace-write"
+            }))
+            .unwrap(),
+            message_id: Some(message.into()),
+            resets_at: Some(now_ms() + 60_000),
+            enabled: true,
+        };
+        store.begin_turn("chat", "first").unwrap();
+        store.record("chat", "warm-run", pending("first")).unwrap();
+        // New admission clears a saved continuation before the old run exits.
+        store.begin_turn("chat", "followup").unwrap();
+        store.record("chat", "warm-run", pending("first")).unwrap();
+        assert!(!store.saved.pending.contains_key("chat"));
+        assert!(
+            !Store::open(store.path.clone())
+                .saved
+                .pending
+                .contains_key("chat")
+        );
+        // A consumed follow-up may still pause in that same warm runtime.
+        store
+            .record("chat", "warm-run", pending("followup"))
+            .unwrap();
+        assert_eq!(
+            store.saved.pending["chat"].message_id.as_deref(),
+            Some("followup")
+        );
+        // An incompatible new dispatch also invalidates the dying runtime.
+        store.begin_turn("chat", "replacement").unwrap();
+        store
+            .record("chat", "warm-run", pending("followup"))
+            .unwrap();
+        assert!(!store.saved.pending.contains_key("chat"));
+        store
+            .record("chat", "replacement-run", pending("replacement"))
+            .unwrap();
+        assert!(store.saved.pending.contains_key("chat"));
     }
 
     #[test]

@@ -1082,7 +1082,8 @@ impl SessionsEngine {
         let admission = self.filesystem_admission().await;
         self.require_unarchived(chat_id)?;
         if !idle {
-            self.clear_usage_resume(chat_id)?;
+            let user_id = message_id.get_or_insert_with(new_id);
+            self.begin_usage_turn(chat_id, user_id)?;
         }
         let _activity = self.claim_filesystem_admission(chat_id);
         drop(admission);
@@ -1118,12 +1119,7 @@ impl SessionsEngine {
         // Project-less chats store a home-relative cwd (the creating device
         // can't know the host's home); expand it here, on the host, where the
         // run spawns, creating a new chat's scratch folder.
-        let scratch_root = self
-            .inner
-            .scratch_root
-            .get()
-            .cloned()
-            .unwrap_or_else(|| crate::repos::home_dir().join(".zuse").join("scratch"));
+        let scratch_root = self.chat_scratch_root();
         request.cwd = crate::repos::resolve_chat_cwd(&request.cwd, &scratch_root)
             .map_err(EngineError::Other)?;
         if let Some(stamp) = self.inner.request_stamp.get() {
@@ -1648,6 +1644,7 @@ impl SessionsEngine {
         zuse_protocol::invocation::validate_harness_invocations(prompt, harness_id)
             .map_err(EngineError::Other)?;
         let user_id = message_id.unwrap_or_else(new_id);
+        self.begin_usage_turn(chat_id, &user_id)?;
         let bootstrap = self.warm_fork_history(chat_id, harness_id, prompt, &history_sent)?;
         let delivered = bootstrap.as_deref().unwrap_or(prompt);
         // A steer runs on the configuration live now; record it with the

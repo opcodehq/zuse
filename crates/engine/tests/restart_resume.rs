@@ -1527,6 +1527,36 @@ async fn usage_limit_validation_failure_keeps_manual_continuation() {
     core.shutdown().await;
 }
 
+#[tokio::test]
+async fn usage_limit_projectless_chat_resumes_with_resolved_scratch_cwd() {
+    for automatic in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let requests: RequestLog = Default::default();
+        let reset = automatic.then(|| chrono::Utc::now().timestamp_millis() + 2_000);
+        let core = assemble_usage_limited(tmp.path(), requests.clone(), reset);
+        pre_title(&core);
+        let cwd = "~/.zuse/scratch/usage-resume";
+        core.workspace.set_chat_cwd(CHAT, cwd).unwrap();
+        core.sessions.set_usage_resume(None, automatic).unwrap();
+        queue_run(&core, "continue in scratch", cwd, "scratch-user");
+        wait_usage_limit(&core).await;
+        let resolved = requests.lock().unwrap()[0].cwd.clone();
+        assert_ne!(resolved, cwd);
+        assert!(std::path::Path::new(&resolved).is_dir());
+        if !automatic {
+            core.sessions.resume_usage_limit(CHAT).await.unwrap();
+        }
+        wait_for(
+            || requests.lock().unwrap().len() == 2 && !core.sessions.has_run(CHAT),
+            "projectless usage-limit resume",
+        )
+        .await;
+        assert_eq!(requests.lock().unwrap()[1].cwd, resolved);
+        assert!(core.sessions.usage_resume_status(Some(CHAT))["pending"].is_null());
+        core.shutdown().await;
+    }
+}
+
 struct WarmUsageLimitedHarness {
     requests: RequestLog,
 }
