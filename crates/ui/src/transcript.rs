@@ -11291,7 +11291,7 @@ fn user_bubble_runs(
         }
         // Chips are labels in the body font, like the composer's, with their
         // padding pinned to the face its insets are tuned for.
-        let [lead, trail] = crate::composer::chip_pad_ranges(&span.range);
+        let [lead, trail] = crate::composer::chip_pad_ranges(&span.range, span.kind);
         for (len, pad) in [
             (lead.len(), true),
             (trail.start - lead.end, false),
@@ -11383,7 +11383,7 @@ fn user_bubble_text(
         move |_, hitbox, window, cx| {
             for (span, icon) in mentions.iter().zip(&chip_icons) {
                 // Centered on the label like the composer's chips.
-                let label = crate::composer::chip_pad_ranges(&span.range)[0].end;
+                let label = crate::composer::chip_pad_ranges(&span.range, span.kind)[0].end;
                 for (row, rect) in render::range_rects(&layout, &span.range, 0.0, 2.0)
                     .into_iter()
                     .enumerate()
@@ -19696,7 +19696,7 @@ mod tests {
     #[test]
     fn bubble_chip_padding_is_shaped_in_geist() {
         let raw = format!(
-            "open {} and {}",
+            "open {} and {} at https://github.com/opcodehq/zuse.",
             zuse_protocol::attachment_mentions::attachment_mention_link(1, None),
             zuse_protocol::attachment_mentions::attachment_mention_link(2, Some("notes.md")),
         );
@@ -19718,7 +19718,8 @@ mod tests {
         }
         let expected: Vec<_> = spans
             .iter()
-            .flat_map(|span| crate::composer::chip_pad_ranges(&span.range))
+            .flat_map(|span| crate::composer::chip_pad_ranges(&span.range, span.kind))
+            .filter(|range| !range.is_empty())
             .collect();
         assert_eq!(pads, expected);
     }

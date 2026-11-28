@@ -1419,8 +1419,8 @@ impl TextProjection {
                 {
                     return (link.range.clone(), link.basename.clone(), None);
                 }
-                let pad = MENTION_SIDE_PAD;
-                let display = format!("{pad}{CHIP_ICON_SLOT}{label}{CHIP_TRAILING_PAD}");
+                let trail = link.kind.trailing_pad();
+                let display = format!("{MENTION_SIDE_PAD}{CHIP_ICON_SLOT}{label}{trail}");
                 (link.range.clone(), display, Some(link))
             })
             .collect();
@@ -4773,9 +4773,9 @@ impl ComposerInput {
         for (range, _) in &faces {
             boundaries.extend([range.start, range.end]);
         }
-        for (_, range) in &self.projection.mentions {
+        for (link, range) in &self.projection.mentions {
             boundaries.extend([range.start, range.end]);
-            for pad in chip_pad_ranges(range) {
+            for pad in chip_pad_ranges(range, link.kind) {
                 boundaries.extend([pad.start, pad.end]);
             }
         }
@@ -4814,16 +4814,17 @@ impl ComposerInput {
                     .mentions
                     .get(mention_ix)
                     .filter(|(_, range)| range.contains(&r[0]));
-                let chip_range = chip_mention.map(|(_, range)| range);
-                let chip = chip_range.is_some();
+                let chip = chip_mention.is_some();
                 let code = face_depth[composer_markdown::Face::Code as usize] > 0;
                 let mut run = run_for(
                     r[1] - r[0],
                     marked.as_ref().is_some_and(|range| range.contains(&r[0])),
                     code,
                 );
-                if chip_range.is_some_and(|range| {
-                    chip_pad_ranges(range).iter().any(|pad| pad.contains(&r[0]))
+                if chip_mention.is_some_and(|(link, range)| {
+                    chip_pad_ranges(range, link.kind)
+                        .iter()
+                        .any(|pad| pad.contains(&r[0]))
                 }) {
                     run.font.family = CHIP_PAD_FAMILY.into();
                 } else if let Some((color, weight)) =
@@ -5509,7 +5510,7 @@ impl gpui::Element for ComposerTextElement {
                 f32::from(shape.height) + IMAGE_PREVIEW_CHROME
             });
             let tooltip_gap = 1.0;
-            let label = chip_pad_ranges(display)[0].end;
+            let label = chip_pad_ranges(display, mention.kind)[0].end;
             for local_bounds in input.bounds_for_display_range(display.clone()) {
                 let row_top = origin.y + local_bounds.origin.y;
                 // Centered on the label (see `paint_chip`).
@@ -17388,8 +17389,9 @@ mod tests {
             (ChipKind::Link, url.clone())
         );
         assert_eq!(link.path, &raw[url.clone()]);
-        assert!(
-            projection.display[display.clone()].ends_with(&format!("a/b#7{CHIP_TRAILING_PAD}"))
+        assert_eq!(
+            &projection.display[display.clone()],
+            format!("{MENTION_SIDE_PAD}{CHIP_ICON_SLOT}a/b#7")
         );
         // Not atomic: the caret may step into a link.
         assert_eq!(projection.normalize_range(10..10), 10..10);
@@ -17410,14 +17412,21 @@ mod tests {
     }
 
     #[test]
-    fn sent_link_chips_copy_back_as_their_urls() {
-        let raw = "Review https://linear.app/acme/issue/ENG-4/x, please";
-        let (display, spans) = sent_mention_display(raw).expect("links project");
-        assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].kind, ChipKind::Link);
-        assert!(display.contains("ENG-4"));
-        assert!(!display.contains("https://"));
-        assert_eq!(display_with_link_urls(&display, &spans), raw);
+    fn sent_link_chips_preserve_spacing_and_copy_back_as_urls() {
+        let url = "https://github.com/opcodehq/zuse";
+        for suffix in [", please", ".", " please", ""] {
+            let raw = format!("Review {url}{suffix}");
+            let (display, spans) = sent_mention_display(&raw).expect("links project");
+            let [span] = spans.as_slice() else {
+                panic!("expected one link chip");
+            };
+            assert_eq!(span.kind, ChipKind::Link);
+            assert_eq!(
+                &display[span.range.start..],
+                format!("{MENTION_SIDE_PAD}{CHIP_ICON_SLOT}opcodehq/zuse{suffix}")
+            );
+            assert_eq!(display_with_link_urls(&display, &spans), raw);
+        }
     }
 
     fn tooltip_target(range: Range<usize>, path: &str) -> MentionTooltipTarget {
@@ -18672,7 +18681,7 @@ mod tests {
             zuse_protocol::attachment_mentions::attachment_mention_link(1, None)
         );
         let (display, spans) = sent_mention_display(&raw).expect("image chip projects");
-        let [lead, trail] = chip_pad_ranges(&spans[0].range);
+        let [lead, trail] = chip_pad_ranges(&spans[0].range, spans[0].kind);
         assert_eq!(
             &display[lead.clone()],
             format!("{MENTION_SIDE_PAD}{CHIP_ICON_SLOT}")
@@ -18691,8 +18700,8 @@ mod tests {
             let mut style = window.text_style();
             style.font_family = "Geist Mono".into();
             input.layout_text(px(600.0), &style, window, cx);
-            let (_, chip) = input.projection.mentions[0].clone();
-            let pads = chip_pad_ranges(&chip);
+            let (link, chip) = &input.projection.mentions[0];
+            let pads = chip_pad_ranges(chip, link.kind);
             let mut at = 0;
             let mut pinned = 0;
             for run in &input.last_runs {
