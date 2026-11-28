@@ -1,7 +1,8 @@
 //! General account services (sign-in, account, billing, models) and cloud tasks
 //! use separate default origins: accounts stay on the existing production API,
-//! cloud computers use the Rust cloud backend. One explicit override still
-//! scopes both, so staging and local development keep a single origin.
+//! cloud computers and hosted plugins use the Rust cloud backend. One explicit
+//! override still scopes both, so staging and local development keep a single
+//! origin.
 //! Workspace/relay authentication keeps its own edge URL.
 pub(crate) const DEFAULT_API_URL: &str = "https://api.zuse.sh";
 pub(crate) const DEFAULT_CLOUD_API_URL: &str = "https://api-rust.zuse.sh";
@@ -18,7 +19,7 @@ pub(crate) fn from_env() -> ApiOrigins {
     )
 }
 
-fn resolve(general: Option<String>, cloud: Option<String>) -> ApiOrigins {
+pub(crate) fn resolve(general: Option<String>, cloud: Option<String>) -> ApiOrigins {
     let explicit_general = general.clone();
     let general = general
         .or_else(|| cloud.clone())

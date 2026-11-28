@@ -1032,6 +1032,114 @@ impl PluginsCard {
     fn render_status(&self, theme: &Theme, cx: &mut Context<Self>) -> Vec<AnyElement> {
         self.render_status_except(theme, None, cx)
     }
+    /// Plugins connected on the previous plugin service that are not
+    /// connected here yet, until each is reconnected or the list dismissed.
+    fn moved_plugins(&self, cx: &App) -> Vec<zuse_protocol::plugins::MovedPlugin> {
+        if !self.signed_in() {
+            return Vec::new();
+        }
+        moved_plugins(
+            &self.plugins.snapshot,
+            crate::settings::current(cx).plugins_moved_dismissed,
+        )
+    }
+
+    /// "Reconnect your plugins": plugins now connect through the cloud API,
+    /// so each one connected before is signed in to once more.
+    fn render_moved(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let moved = self.moved_plugins(cx);
+        if moved.is_empty() {
+            return None;
+        }
+        let rows = moved.into_iter().enumerate().map(|(index, plugin)| {
+            let action = if plugin.custom {
+                "Add again"
+            } else {
+                "Reconnect"
+            };
+            widgets::card_row(theme, false)
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(crate::typography::text_xs())
+                        .child(plugin.name.clone()),
+                )
+                .child(
+                    widgets::text_action(theme, widgets::ActionTone::Solid, action)
+                        .id(("reconnect-moved-plugin", index))
+                        .tab_index(0)
+                        .role(gpui::Role::Button)
+                        .when(self.busy || self.plugins.active_attempt(), |v| {
+                            v.opacity(0.5)
+                        })
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.reconnect_moved(&plugin, window, cx)
+                        })),
+                )
+                .into_any_element()
+        });
+        Some(
+            widgets::section_card(theme)
+                .mt_0()
+                .child(
+                    widgets::card_row(theme, true)
+                        .child(catalog_ui::title_block(
+                            theme,
+                            "Reconnect your plugins",
+                            "Plugins now connect through Zuse Cloud, so local and cloud chats share them. Reconnect these once.",
+                            crate::typography::TEXT_SM,
+                            crate::typography::TEXT_XS,
+                        ))
+                        .child(
+                            widgets::text_action(theme, widgets::ActionTone::Quiet, "Dismiss")
+                                .id("dismiss-moved-plugins")
+                                .tab_index(0)
+                                .role(gpui::Role::Button)
+                                .on_click(cx.listener(|_, _, _, cx| {
+                                    crate::settings::update(
+                                        crate::settings::SavePolicy::Immediate,
+                                        cx,
+                                        |settings| settings.plugins_moved_dismissed = true,
+                                    );
+                                    cx.notify();
+                                })),
+                        ),
+                )
+                .children(rows)
+                .into_any_element(),
+        )
+    }
+
+    /// Sign in to a moved plugin right away when it uses OAuth; a key-based
+    /// plugin opens its page, and a server added by URL opens the Add form.
+    fn reconnect_moved(
+        &mut self,
+        plugin: &zuse_protocol::plugins::MovedPlugin,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.busy || self.plugins.active_attempt() {
+            return;
+        }
+        if plugin.custom {
+            self.add_server(window, cx);
+            return;
+        }
+        match zuse_viewport::plugin_catalog::catalog(&self.plugins.snapshot, "", false)
+            .into_iter()
+            .find(|definition| definition.id == plugin.plugin_id)
+        {
+            Some(definition)
+                if definition.api_key_header.is_none()
+                    && self.plugins.snapshot["canManage"] != false =>
+            {
+                self.start_oauth(&definition, cx)
+            }
+            Some(_) => self.show_plugin(&plugin.plugin_id, cx),
+            None => self.browse_for(&plugin.name, cx),
+        }
+    }
+
     /// [`Self::render_status`] without an error the page already shows inline.
     fn render_status_except(
         &self,
@@ -1079,6 +1187,7 @@ impl PluginsCard {
         {
             items.push(widgets::error_strip(theme, error).mt_0().into_any_element());
         }
+        items.extend(self.render_moved(theme, cx));
         if let Some(notice) = self.plugins.notice.clone() {
             items.push(
                 div()
@@ -2019,6 +2128,14 @@ pub(crate) fn connected_mention_plugins(
 }
 
 /// The pending attempt's https sign-in page, if it hasn't been opened yet.
+/// The snapshot's "Reconnect your plugins" list; empty once dismissed.
+fn moved_plugins(snapshot: &Value, dismissed: bool) -> Vec<zuse_protocol::plugins::MovedPlugin> {
+    if dismissed {
+        return Vec::new();
+    }
+    serde_json::from_value(snapshot["moved"].clone()).unwrap_or_default()
+}
+
 fn attempt_to_open(attempt: &Value, opened: Option<&str>) -> Option<(String, String)> {
     let id = attempt["id"].as_str()?;
     let url = attempt["authorizationUrl"].as_str()?;
@@ -2028,8 +2145,19 @@ fn attempt_to_open(attempt: &Value, opened: Option<&str>) -> Option<(String, Str
 
 #[cfg(test)]
 mod attempt_open_tests {
-    use super::attempt_to_open;
+    use super::{attempt_to_open, moved_plugins};
     use serde_json::json;
+
+    #[test]
+    fn moved_plugins_show_until_dismissed() {
+        let snapshot = json!({"moved":[{"pluginId":"posthog","name":"PostHog"}]});
+        let moved = moved_plugins(&snapshot, false);
+        assert_eq!(moved.len(), 1);
+        assert_eq!(moved[0].plugin_id, "posthog");
+        assert!(!moved[0].custom);
+        assert!(moved_plugins(&snapshot, true).is_empty());
+        assert!(moved_plugins(&json!({"connections":[]}), false).is_empty());
+    }
 
     #[test]
     fn opens_a_new_pending_attempt_once() {

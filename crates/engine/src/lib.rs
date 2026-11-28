@@ -501,6 +501,7 @@ impl EngineCore {
         let plugins = plugins::Plugins::open(
             data_dir,
             account.clone(),
+            cloud::configured_api_origin(),
             workspace.clone(),
             !profile.durable_command_commits(),
         )

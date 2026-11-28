@@ -691,6 +691,7 @@ impl PluginControl {
                     ),
                     catalog,
                     connections: visible.iter().map(ConnectionRow::public).collect(),
+                    moved: Vec::new(),
                 })
             }
             PluginRequest::Connect {

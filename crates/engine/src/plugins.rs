@@ -16,7 +16,8 @@ use zuse_plugins::{
     local::{self, LocalServers},
 };
 use zuse_protocol::plugins::{
-    PluginRequest, PluginResponse, PluginReturnTo, PluginToolRequest, is_local_server,
+    MovedPlugin, PluginConnectionState, PluginRequest, PluginResponse, PluginReturnTo,
+    PluginToolRequest, is_local_server,
 };
 
 #[async_trait]
@@ -61,6 +62,9 @@ pub trait RuntimePlugins: Send + Sync {
 #[derive(Clone)]
 pub struct Plugins {
     account: Account,
+    /// Hosted plugins live in the cloud API, the same service cloud chats ask
+    /// for their tools, so a plugin connected here reaches every chat.
+    api_origin: String,
     runtime: Arc<std::sync::RwLock<Option<Arc<dyn RuntimePlugins>>>>,
     workspace: WorkspaceHost,
     bindings: Arc<Mutex<Connection>>,
@@ -70,17 +74,22 @@ pub struct Plugins {
     local_root: Option<PathBuf>,
     computer_bridge: Arc<crate::computer_bridge::Connector>,
     local: Arc<tokio::sync::Mutex<Option<(String, Arc<LocalServers>)>>>,
+    /// What each workspace had on the previous plugin service (the account
+    /// API), read once per run so the Plugins page can offer Reconnect.
+    previous: Arc<tokio::sync::Mutex<BTreeMap<(String, String), Vec<MovedPlugin>>>>,
 }
 impl Plugins {
     pub fn open(
         root: &Path,
         account: Account,
+        api_origin: String,
         workspace: WorkspaceHost,
         local_servers: bool,
     ) -> anyhow::Result<Self> {
         let db = open_bindings(root)?;
         Ok(Self {
             account,
+            api_origin,
             runtime: Arc::new(std::sync::RwLock::new(None)),
             workspace,
             bindings: Arc::new(Mutex::new(db)),
@@ -89,6 +98,7 @@ impl Plugins {
             computer_bridge: Arc::default(),
             local_root: local_servers.then(|| root.to_path_buf()),
             local: Arc::new(tokio::sync::Mutex::new(None)),
+            previous: Arc::default(),
         })
     }
     /// One store per account; switching accounts stops the previous account's servers.
@@ -285,7 +295,7 @@ impl Plugins {
             }
         }
         let client = PluginClient::new(
-            self.account.api_url(),
+            &self.api_origin,
             Arc::new(BoundAccount {
                 account: self.account.clone(),
                 subject: subject.to_owned(),
@@ -362,9 +372,12 @@ impl Plugins {
             tenant_id,
             catalog,
             connections,
+            moved,
             ..
         } = &mut response
         {
+            let previous = self.previous(&credential.subject, tenant_id).await;
+            *moved = not_reconnected(previous, catalog, connections);
             if *tenant_id == format!("personal:{}", credential.subject) && self.local_root.is_some()
             {
                 // An unreadable local file hides local rows; hosted plugins stay usable.
@@ -378,6 +391,53 @@ impl Plugins {
             }
         }
         Ok(response)
+    }
+    /// Hosted plugins used to live on the account API. Its list (names
+    /// only, never credentials) is read once per workspace and run, so
+    /// plugins connected there can be connected again here. Unreachable or
+    /// the same service: nothing to offer.
+    async fn previous(&self, subject: &str, tenant: &str) -> Vec<MovedPlugin> {
+        let legacy = self.account.api_url();
+        if same_origin(legacy, &self.api_origin) {
+            return Vec::new();
+        }
+        let key = (subject.to_owned(), tenant.to_owned());
+        let mut cache = self.previous.lock().await;
+        if let Some(previous) = cache.get(&key) {
+            return previous.clone();
+        }
+        let read = async {
+            let client = PluginClient::new(
+                legacy,
+                Arc::new(BoundAccount {
+                    account: self.account.clone(),
+                    subject: subject.to_owned(),
+                }),
+            )
+            .await?;
+            let request = PluginRequest::List {
+                tenant_id: Some(tenant.to_owned()),
+            };
+            client
+                .request(&request, &self.account.session_cancellation())
+                .await
+        };
+        let previous = match tokio::time::timeout(PREVIOUS_LIST_DEADLINE, read).await {
+            Ok(Ok(PluginResponse::Snapshot {
+                tenant_id,
+                catalog,
+                connections,
+                ..
+            })) if tenant_id == tenant => previous_plugins(&catalog, &connections),
+            Ok(Ok(_)) => Vec::new(),
+            Ok(Err(error)) => {
+                tracing::info!(%error, "previous plugin list unavailable");
+                Vec::new()
+            }
+            Err(_) => Vec::new(),
+        };
+        cache.insert(key, previous.clone());
+        previous
     }
     pub async fn select_workspace(
         &self,
@@ -470,6 +530,65 @@ impl Plugins {
             _ => Ok(hosted.await?),
         }
     }
+}
+
+/// Reading the previous service never holds up the Plugins page for long.
+const PREVIOUS_LIST_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+
+fn same_origin(a: &str, b: &str) -> bool {
+    a.trim_end_matches('/') == b.trim_end_matches('/')
+}
+
+/// One entry per plugin that had a usable or signed-out account there.
+fn previous_plugins(
+    catalog: &[zuse_protocol::plugins::PluginDefinition],
+    connections: &[zuse_protocol::plugins::PluginConnection],
+) -> Vec<MovedPlugin> {
+    let mut previous: Vec<MovedPlugin> = Vec::new();
+    for connection in connections {
+        if matches!(connection.state, PluginConnectionState::Connecting)
+            || is_local_server(&connection.plugin_id)
+            || previous
+                .iter()
+                .any(|plugin| plugin.plugin_id == connection.plugin_id)
+        {
+            continue;
+        }
+        let definition = catalog
+            .iter()
+            .find(|definition| definition.id == connection.plugin_id);
+        previous.push(MovedPlugin {
+            plugin_id: connection.plugin_id.clone(),
+            name: definition
+                .map(|definition| definition.name.clone())
+                .unwrap_or_else(|| connection.label.clone()),
+            custom: definition.is_some_and(|definition| definition.custom),
+        });
+    }
+    previous
+}
+
+/// Previous plugins with no account here yet. Catalog plugins match by id;
+/// servers added by URL get new ids, so they match by name.
+fn not_reconnected(
+    previous: Vec<MovedPlugin>,
+    catalog: &[zuse_protocol::plugins::PluginDefinition],
+    connections: &[zuse_protocol::plugins::PluginConnection],
+) -> Vec<MovedPlugin> {
+    previous
+        .into_iter()
+        .filter(|plugin| {
+            !connections.iter().any(|connection| {
+                connection.plugin_id == plugin.plugin_id
+                    || (plugin.custom
+                        && catalog.iter().any(|definition| {
+                            definition.custom
+                                && definition.id == connection.plugin_id
+                                && definition.name.eq_ignore_ascii_case(&plugin.name)
+                        }))
+            })
+        })
+        .collect()
 }
 
 fn targets_local(request: &PluginRequest) -> bool {
@@ -834,6 +953,14 @@ mod tests {
     }
     #[cfg(feature = "test-support")]
     async fn hosted_plugins(root: &Path, origin: String) -> (crate::EngineCore, Plugins) {
+        hosted_plugins_with_account(root, origin, "http://127.0.0.1:1".into()).await
+    }
+    #[cfg(feature = "test-support")]
+    async fn hosted_plugins_with_account(
+        root: &Path,
+        origin: String,
+        account_origin: String,
+    ) -> (crate::EngineCore, Plugins) {
         let core = crate::EngineCore::assemble_with_profile(
             crate::EngineProfile::local(root).unwrap(),
             Arc::new(crate::HarnessRegistry::new()),
@@ -841,8 +968,9 @@ mod tests {
             None,
         )
         .unwrap();
-        let account = Account::fixture_signed_in(root, origin, "user_a");
-        let plugins = Plugins::open(root, account, core.workspace.clone(), true).unwrap();
+        // The account service is elsewhere: plugin traffic must never use it.
+        let account = Account::fixture_signed_in(root, account_origin, "user_a");
+        let plugins = Plugins::open(root, account, origin, core.workspace.clone(), true).unwrap();
         (core, plugins)
     }
     /// The full desktop read: engine list over HTTP, the RPC value it returns,
@@ -915,6 +1043,183 @@ mod tests {
             server.abort();
             core.shutdown().await;
         }
+    }
+    /// Cloud chats read their plugins from the cloud API. The desktop must
+    /// connect plugins there too, not on the separate account service, or a
+    /// plugin shows Connected while no chat can use it.
+    #[tokio::test]
+    async fn hosted_plugins_use_the_cloud_api_cloud_chats_read() {
+        let root = tempfile::tempdir().unwrap();
+        let core = crate::EngineCore::assemble_with_profile(
+            crate::EngineProfile::local(root.path()).unwrap(),
+            Arc::new(crate::HarnessRegistry::new()),
+            zuse_protocol::HarnessId::Mock,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            core.plugins.api_origin,
+            crate::cloud::configured_api_origin()
+        );
+        let defaults = crate::api_origins::resolve(None, None);
+        assert_ne!(defaults.general, defaults.cloud);
+        core.shutdown().await;
+    }
+    /// A plugin connected while a chat is running reaches that chat on its
+    /// next discovery: the gateway reads connections on every call.
+    #[cfg(feature = "test-support")]
+    #[tokio::test]
+    async fn a_plugin_connected_mid_chat_is_listed_on_the_next_call() {
+        use axum::{Router, routing::post};
+        let connected = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seen = connected.clone();
+        let app = Router::new().route(
+            "/v1/plugins/tools",
+            post(move || {
+                let connected = seen.load(std::sync::atomic::Ordering::SeqCst);
+                async move {
+                    axum::Json(if connected {
+                        serde_json::json!([{"connectionId":"conn-1","pluginId":"posthog","label":"PostHog"}])
+                    } else {
+                        serde_json::json!([])
+                    })
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let root = tempfile::tempdir().unwrap();
+        let (core, plugins) = hosted_plugins(root.path(), origin).await;
+        let config: zuse_protocol::ChatConfig = serde_json::from_value(
+            serde_json::json!({"harness":"mock","model":"fixture","sandbox":"read-only","plan":false}),
+        )
+        .unwrap();
+        core.workspace
+            .create_chat(
+                "running-chat",
+                None,
+                Some(&core.device_id),
+                Some(config),
+                Some(root.path().to_string_lossy().into_owned()),
+            )
+            .unwrap();
+        // No local servers in this store: the list is the hosted one.
+        let list = || plugins.tools("running-chat", &PluginToolRequest::List);
+        assert_eq!(list().await.unwrap(), serde_json::json!([]));
+        connected.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(list().await.unwrap()[0]["pluginId"], "posthog");
+        server.abort();
+        core.shutdown().await;
+    }
+    /// After the move to the cloud API, the Plugins page offers Reconnect for
+    /// what the workspace had on the account API, until it is connected here.
+    #[cfg(feature = "test-support")]
+    #[tokio::test]
+    async fn plugins_from_the_previous_service_are_offered_to_reconnect() {
+        use axum::response::IntoResponse;
+        let snapshot = |connections: serde_json::Value| {
+            serde_json::json!({
+                "kind": "snapshot",
+                "tenants": [{"id": "personal:user_a", "kind": "personal", "name": "Personal"}],
+                "tenantId": "personal:user_a",
+                "endpoint": "https://api.example/v1/plugins/personal%3Auser_a/mcp",
+                "catalog": [
+                    {"id":"posthog","name":"PostHog","description":"Analytics"},
+                    {"id":"linear","name":"Linear","description":"Issues"},
+                    {"id":"custom-old","name":"Docs","description":"docs.example","custom":true},
+                    {"id":"custom-new","name":"Docs","description":"docs.example","custom":true},
+                    {"id":"notion","name":"Notion","description":"Docs"},
+                ],
+                "connections": connections,
+            })
+        };
+        let row = |id: &str, plugin: &str, state: &str| serde_json::json!({"id":id,"pluginId":plugin,"label":plugin,"owner":"user","state":state,"createdAt":1.0,"enabled":true});
+        let (legacy, legacy_server) = hosted_fixture(
+            axum::Json(snapshot(serde_json::json!([
+                row("a", "posthog", "connected"),
+                row("b", "posthog", "needs-auth"),
+                row("c", "linear", "connected"),
+                row("d", "custom-old", "connected"),
+                row("e", "notion", "connecting"),
+            ])))
+            .into_response(),
+        )
+        .await;
+        let (cloud, cloud_server) = hosted_fixture(
+            axum::Json(snapshot(serde_json::json!([row(
+                "f",
+                "linear",
+                "connected"
+            )])))
+            .into_response(),
+        )
+        .await;
+        let root = tempfile::tempdir().unwrap();
+        let (core, plugins) = hosted_plugins_with_account(root.path(), cloud, legacy).await;
+        let PluginResponse::Snapshot { moved, .. } = plugins
+            .request(&PluginRequest::List { tenant_id: None })
+            .await
+            .unwrap()
+        else {
+            panic!("expected a snapshot");
+        };
+        assert_eq!(
+            moved,
+            [
+                MovedPlugin {
+                    plugin_id: "posthog".into(),
+                    name: "PostHog".into(),
+                    custom: false
+                },
+                MovedPlugin {
+                    plugin_id: "custom-old".into(),
+                    name: "Docs".into(),
+                    custom: true
+                },
+            ]
+        );
+        legacy_server.abort();
+        cloud_server.abort();
+        core.shutdown().await;
+    }
+    #[test]
+    fn reconnected_plugins_leave_the_reconnect_list() {
+        let definition = |id: &str, name: &str, custom: bool| {
+            serde_json::from_value::<zuse_protocol::plugins::PluginDefinition>(
+                serde_json::json!({"id":id,"name":name,"description":"","custom":custom}),
+            )
+            .unwrap()
+        };
+        let connection = |plugin: &str| {
+            serde_json::from_value::<zuse_protocol::plugins::PluginConnection>(serde_json::json!({
+                "id":"x","pluginId":plugin,"label":plugin,"owner":"user","state":"connected","createdAt":1.0
+            }))
+            .unwrap()
+        };
+        let previous = vec![
+            MovedPlugin {
+                plugin_id: "posthog".into(),
+                name: "PostHog".into(),
+                custom: false,
+            },
+            MovedPlugin {
+                plugin_id: "custom-old".into(),
+                name: "Docs".into(),
+                custom: true,
+            },
+        ];
+        let catalog = [definition("custom-new", "docs", true)];
+        assert_eq!(
+            not_reconnected(
+                previous.clone(),
+                &catalog,
+                &[connection("posthog"), connection("custom-new")]
+            ),
+            []
+        );
+        assert_eq!(not_reconnected(previous.clone(), &catalog, &[]), previous);
+        assert!(same_origin("https://api.example/", "https://api.example"));
     }
     #[test]
     fn local_environment_keeps_an_allowlist_and_a_usable_path() {

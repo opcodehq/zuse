@@ -417,7 +417,7 @@ fn catalog() -> Vec<ToolDef> {
     for (name, description, properties, required) in [
         (
             "plugins_list",
-            "List connected plugins for this agent's session, including hosted plugins and local MCP servers on this computer.",
+            "List connected plugins for this agent's session, including hosted plugins and local MCP servers on this computer. The list is live: check it again before saying a plugin isn't connected, since the user may have just connected it.",
             json!({}),
             json!([]),
         ),
