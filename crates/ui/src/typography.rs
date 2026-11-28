@@ -183,7 +183,7 @@ pub const fn text_base() -> Rems {
     ui_rems(TEXT_BASE)
 }
 
-pub const CODE_FONT_SIZE_DEFAULT: f32 = 12.5;
+pub const CODE_FONT_SIZE_DEFAULT: f32 = 13.0;
 pub const TERMINAL_FONT_SIZE_DEFAULT: f32 = 13.0;
 pub const FONT_SIZE_MIN: f32 = 8.0;
 pub const FONT_SIZE_MAX: f32 = 32.0;

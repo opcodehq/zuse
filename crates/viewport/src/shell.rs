@@ -1617,7 +1617,7 @@ pub(super) fn markdown_block(block: &Block) -> AnyElement {
             .font_weight(FontWeight::SEMIBOLD)
             .child(inline(runs))
             .into_any_element(),
-        Block::CodeBlock { language, code } => column()
+        Block::CodeBlock { language, code, .. } => column()
             .rounded_lg()
             .border_1()
             .border_color(rgb(BORDER))
@@ -1635,11 +1635,12 @@ pub(super) fn markdown_block(block: &Block) -> AnyElement {
                     .child(code.clone()),
             )
             .into_any_element(),
-        Block::BlockQuote { children } => column()
+        Block::BlockQuote { kind, children } => column()
             .border_l_2()
             .border_color(rgb(0x444444))
             .pl_3()
             .text_color(rgb(MUTED))
+            .when_some(*kind, |quote, kind| quote.child(label(kind.label())))
             .children(children.iter().map(markdown_block))
             .into_any_element(),
         Block::List {
@@ -1685,6 +1686,16 @@ pub(super) fn markdown_block(block: &Block) -> AnyElement {
                         .map(|c| div().flex_1().min_w_0().p_2().child(inline(c))),
                 )
             }))
+            .into_any_element(),
+        Block::Details { summary, children } => column()
+            .child(inline(summary))
+            .children(children.iter().map(markdown_block))
+            .into_any_element(),
+        Block::FootnoteDefinition {
+            label, children, ..
+        } => column()
+            .child(div().child(format!("[{label}]")))
+            .children(children.iter().map(markdown_block))
             .into_any_element(),
         Block::Rule => div().h(px(1.)).bg(rgb(BORDER)).my_2().into_any_element(),
     }

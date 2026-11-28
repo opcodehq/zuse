@@ -125,7 +125,7 @@ impl AccentColor {
             caret: primary,
             // Neutral plate: the accent text already marks the span, and an
             // accent wash under accent text read as a loud double tint.
-            code_wash: wash_for(appearance, 0.08),
+            code_wash: wash_for(appearance, 0.10),
             activity: primary,
             glyph: GlyphPalette::for_accent(primary, strong, appearance),
         }
@@ -375,9 +375,8 @@ pub const INK_FILL_SCALE: f32 = 1.0;
 /// keeps separators legible instead of dissolving into the panel.
 pub const INK_HAIRLINE_SCALE: f32 = 1.35;
 
-/// Paint-only syntax colors. The hues follow the Git history graph's lane
-/// palette (indigo, pink, emerald, amber, red, neutral), while light-mode
-/// variants are darkened enough to remain readable as text on white.
+/// Paint-only syntax colors: T3's pierre-dark and t3-light token roles.
+/// Light-mode tones are dark enough to read as text on white.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SyntaxPalette {
     pub comment: Hsla,
@@ -385,6 +384,7 @@ pub struct SyntaxPalette {
     pub string: Hsla,
     pub string_special: Hsla,
     pub escape: Hsla,
+    pub regex: Hsla,
     pub number: Hsla,
     pub boolean: Hsla,
     pub type_name: Hsla,
@@ -420,6 +420,7 @@ impl SyntaxPalette {
             HighlightKind::String => self.string,
             HighlightKind::StringSpecial => self.string_special,
             HighlightKind::Escape => self.escape,
+            HighlightKind::Regex => self.regex,
             HighlightKind::Number => self.number,
             HighlightKind::Boolean => self.boolean,
             HighlightKind::Type => self.type_name,
@@ -463,6 +464,7 @@ impl SyntaxPalette {
             string: color("string", fallback.string),
             string_special: color("stringSpecial", fallback.string_special),
             escape: color("escape", fallback.escape),
+            regex: color("regex", fallback.regex),
             number: color("number", fallback.number),
             boolean: color("boolean", fallback.boolean),
             type_name: color("type", fallback.type_name),
@@ -491,102 +493,109 @@ impl SyntaxPalette {
         }
     }
 
-    fn dark(text: Hsla, comment: Hsla, danger: Hsla) -> Self {
-        // Same sources and 72% saturation treatment as history::graph_color.
-        let indigo = git_graph_tone(hsla(83. / 360., 0.72, 0.46, 1.));
-        let pink = git_graph_tone(oklch(0.718, 0.202, 349.761));
-        let emerald = git_graph_tone(oklch(0.765, 0.177, 163.223));
-        let amber = git_graph_tone(oklch(0.828, 0.189, 84.429));
-        let red = git_graph_tone(danger);
+    /// T3's syntax roles: pierre-dark on dark surfaces, t3-light on light
+    /// ones. Each role has its own hue so keywords, calls, types, strings
+    /// and literals stay apart.
+    fn from_tones(tones: &SyntaxTones, danger: Hsla) -> Self {
+        let c = |hex: u32| -> Hsla { gpui::rgb(hex).into() };
         Self {
-            comment,
-            keyword: indigo,
-            string: emerald,
-            string_special: pink,
-            escape: pink,
-            number: amber,
-            boolean: amber,
-            type_name: amber,
-            type_builtin: emerald,
-            constructor: amber,
-            function: indigo,
-            function_builtin: pink,
-            macro_name: pink,
-            property: amber,
-            constant: emerald,
-            variable: text,
-            variable_special: pink,
-            parameter: text,
-            operator: text,
-            punctuation: text,
-            tag: pink,
-            attribute: amber,
-            label: amber,
-            markup_heading: indigo,
-            markup_raw: emerald,
-            markup_link: pink,
-            markup_reference: amber,
-            markup_emphasis: pink,
-            markup_strong: indigo,
-            invalid: red,
+            comment: c(tones.comment),
+            keyword: c(tones.keyword),
+            string: c(tones.string),
+            string_special: c(tones.escape),
+            escape: c(tones.escape),
+            regex: c(tones.regex),
+            number: c(tones.number),
+            boolean: c(tones.number),
+            type_name: c(tones.type_name),
+            type_builtin: c(tones.type_name),
+            constructor: c(tones.type_name),
+            function: c(tones.function),
+            function_builtin: c(tones.function),
+            macro_name: c(tones.function),
+            property: c(tones.property),
+            constant: c(tones.constant),
+            variable: c(tones.property),
+            variable_special: c(tones.variable_builtin),
+            parameter: c(tones.punctuation),
+            operator: c(tones.operator),
+            punctuation: c(tones.punctuation),
+            tag: c(tones.tag),
+            attribute: c(tones.attribute),
+            label: c(tones.constant),
+            markup_heading: c(tones.keyword),
+            markup_raw: c(tones.string),
+            markup_link: c(tones.attribute),
+            markup_reference: c(tones.tag),
+            markup_emphasis: c(tones.type_name),
+            markup_strong: c(tones.constant),
+            invalid: danger,
         }
     }
 
-    fn light(text: Hsla, comment: Hsla, danger: Hsla) -> Self {
-        // Match the light graph's hue families at text-safe lightness.
-        let indigo = git_graph_tone(oklch(0.47, 0.20, 276.966));
-        let pink = git_graph_tone(oklch(0.47, 0.17, 0.584));
-        let emerald = git_graph_tone(oklch(0.46, 0.11, 163.225));
-        let amber = git_graph_tone(oklch(0.47, 0.12, 48.998));
-        let red = git_graph_tone(danger);
-        Self {
-            comment,
-            keyword: indigo,
-            string: emerald,
-            string_special: pink,
-            escape: pink,
-            number: amber,
-            boolean: amber,
-            type_name: amber,
-            type_builtin: emerald,
-            constructor: amber,
-            function: indigo,
-            function_builtin: pink,
-            macro_name: pink,
-            property: amber,
-            constant: emerald,
-            variable: text,
-            variable_special: pink,
-            parameter: text,
-            operator: text,
-            punctuation: text,
-            tag: pink,
-            attribute: amber,
-            label: amber,
-            markup_heading: indigo,
-            markup_raw: emerald,
-            markup_link: pink,
-            markup_reference: amber,
-            markup_emphasis: pink,
-            markup_strong: indigo,
-            invalid: red,
-        }
-    }
-
-    fn for_appearance(appearance: Appearance, text: Hsla, comment: Hsla, danger: Hsla) -> Self {
-        match appearance {
-            Appearance::Dark => Self::dark(text, comment, danger),
-            Appearance::Light => Self::light(text, comment, danger),
-        }
+    fn for_appearance(appearance: Appearance, danger: Hsla) -> Self {
+        let tones = match appearance {
+            Appearance::Dark => &PIERRE_DARK,
+            Appearance::Light => &T3_LIGHT,
+        };
+        Self::from_tones(tones, danger)
     }
 }
 
-/// Git history intentionally softens lane saturation so the graph remains
-/// colorful without competing with content. Syntax uses the same treatment.
-fn git_graph_tone(mut color: Hsla) -> Hsla {
-    color.s *= 0.72;
-    color
+/// One appearance's syntax hues as `0xRRGGBB`.
+struct SyntaxTones {
+    keyword: u32,
+    function: u32,
+    type_name: u32,
+    string: u32,
+    escape: u32,
+    regex: u32,
+    number: u32,
+    constant: u32,
+    property: u32,
+    variable_builtin: u32,
+    operator: u32,
+    punctuation: u32,
+    tag: u32,
+    attribute: u32,
+    comment: u32,
 }
+
+const PIERRE_DARK: SyntaxTones = SyntaxTones {
+    keyword: 0xff678d,
+    function: 0x9d6afb,
+    type_name: 0xd568ea,
+    string: 0x5ecc71,
+    escape: 0x61d5c0,
+    regex: 0x64d1db,
+    number: 0x68cdf2,
+    constant: 0xffd452,
+    property: 0xffa359,
+    variable_builtin: 0xffab16,
+    operator: 0x08c0ef,
+    punctuation: 0xa3a3a3,
+    tag: 0xff855e,
+    attribute: 0x009fff,
+    comment: 0x737373,
+};
+
+const T3_LIGHT: SyntaxTones = SyntaxTones {
+    keyword: 0xb12251,
+    function: 0x693acf,
+    type_name: 0x912ba7,
+    string: 0x106a2b,
+    escape: 0x0b685b,
+    regex: 0x0d6971,
+    number: 0x0b5267,
+    constant: 0x735b02,
+    property: 0x8f4e17,
+    variable_builtin: 0x7e540e,
+    operator: 0x006781,
+    punctuation: 0x4b4b4b,
+    tag: 0xa43d23,
+    attribute: 0x00609f,
+    comment: 0x5c5c5c,
+};
 
 /// The app theme. Two concrete instances — [`Theme::dark`] and [`Theme::light`].
 #[derive(Debug, Clone)]
@@ -1422,12 +1431,7 @@ impl Theme {
             // mark it; an accent tint on every span read as noise.
             code_text: grey(0xf4),
             code_wash: accent.code_wash,
-            syntax: SyntaxPalette::for_appearance(
-                Appearance::Dark,
-                neutral(0.922),
-                neutral(0.60),
-                oklch(0.704, 0.191, 22.216),
-            ),
+            syntax: SyntaxPalette::for_appearance(Appearance::Dark, oklch(0.704, 0.191, 22.216)),
             diff_add: oklch(0.765, 0.177, 163.223), // emerald-400
             diff_del: oklch(0.704, 0.191, 22.216),  // red-400
             diff_hunk_bg: hsla(0.6, 0.35, 0.6, 0.05),
@@ -1517,12 +1521,7 @@ impl Theme {
             danger_strong: oklch(0.51, 0.20, 25.0),
             code_text: grey(0x0f),
             code_wash: accent.code_wash,
-            syntax: SyntaxPalette::for_appearance(
-                Appearance::Light,
-                neutral(0.25),
-                neutral(0.48),
-                oklch(0.505, 0.213, 27.518),
-            ),
+            syntax: SyntaxPalette::for_appearance(Appearance::Light, oklch(0.505, 0.213, 27.518)),
             diff_add: oklch(0.596, 0.145, 163.225), // emerald-600
             diff_del: oklch(0.577, 0.245, 27.325),  // red-600
             diff_hunk_bg: hsla(0.6, 0.35, 0.35, 0.07),
@@ -1743,8 +1742,10 @@ impl Theme {
         theme.caret = model_color(accent.caret);
         theme.danger_strong = model_color(colors.danger);
         theme.code_text = theme.text_strong;
-        theme.code_wash = theme.wash(0.08);
-        theme.syntax = SyntaxPalette::from_variant(variant, theme.syntax);
+        theme.code_wash = theme.wash(0.10);
+        if !(is_curated_builtin && matches!(variant.id.as_str(), "zuse-dark" | "zuse-light")) {
+            theme.syntax = SyntaxPalette::from_variant(variant, theme.syntax);
+        }
         theme.diff_add = model_color(colors.diff_add);
         theme.diff_del = model_color(colors.diff_delete);
         theme.diff_hunk_bg = model_color(colors.diff_hunk);
@@ -2077,7 +2078,7 @@ fn selected_wash() -> Hsla {
 pub fn user_bubble_bg() -> Hsla {
     match current_appearance() {
         Appearance::Dark => wash(0.08),
-        Appearance::Light => wash(0.04),
+        Appearance::Light => wash(0.07),
     }
 }
 
@@ -2789,6 +2790,7 @@ mod tests {
             HighlightKind::String,
             HighlightKind::StringSpecial,
             HighlightKind::Escape,
+            HighlightKind::Regex,
             HighlightKind::Number,
             HighlightKind::Boolean,
             HighlightKind::Type,

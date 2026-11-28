@@ -142,8 +142,30 @@ fn link_block(
                 runs,
             })
         }
-        Block::BlockQuote { children } => link_blocks(children, roots, probes, dirs, labels)
-            .map(|children| Block::BlockQuote { children }),
+        Block::BlockQuote { kind, children } => link_blocks(children, roots, probes, dirs, labels)
+            .map(|children| Block::BlockQuote {
+                kind: *kind,
+                children,
+            }),
+        Block::Details { summary, children } => {
+            let linked_summary = link_runs(summary, roots, probes, dirs, labels);
+            let linked_children = link_blocks(children, roots, probes, dirs, labels);
+            (linked_summary.is_some() || linked_children.is_some()).then(|| Block::Details {
+                summary: linked_summary.unwrap_or_else(|| summary.clone()),
+                children: linked_children.unwrap_or_else(|| children.clone()),
+            })
+        }
+        Block::FootnoteDefinition {
+            label,
+            children,
+            section_start,
+        } => link_blocks(children, roots, probes, dirs, labels).map(|children| {
+            Block::FootnoteDefinition {
+                label: label.clone(),
+                children,
+                section_start: *section_start,
+            }
+        }),
         Block::List {
             ordered_start,
             items,
@@ -279,7 +301,13 @@ fn code_spans<'a>(block: &'a Block, out: &mut Vec<&'a str>) {
             header.iter().for_each(|cell| push(cell));
             rows.iter().flatten().for_each(|cell| push(cell));
         }
-        Block::BlockQuote { children } => children.iter().for_each(|child| code_spans(child, out)),
+        Block::Details { summary, children } => {
+            push(summary);
+            children.iter().for_each(|child| code_spans(child, out));
+        }
+        Block::BlockQuote { children, .. } | Block::FootnoteDefinition { children, .. } => {
+            children.iter().for_each(|child| code_spans(child, out));
+        }
         Block::List { items, .. } => items
             .iter()
             .flatten()
@@ -418,7 +446,13 @@ mod tests {
         fn walk(block: &Block, out: &mut Vec<InlineRun>) {
             match block {
                 Block::Paragraph { runs } | Block::Heading { runs, .. } => out.extend(runs.clone()),
-                Block::BlockQuote { children } => children.iter().for_each(|c| walk(c, out)),
+                Block::Details { summary, children } => {
+                    out.extend(summary.clone());
+                    children.iter().for_each(|child| walk(child, out));
+                }
+                Block::BlockQuote { children, .. } | Block::FootnoteDefinition { children, .. } => {
+                    children.iter().for_each(|child| walk(child, out));
+                }
                 Block::List { items, .. } => {
                     items.iter().flatten().for_each(|child| walk(child, out))
                 }
@@ -732,7 +766,7 @@ mod tests {
                         &opts,
                         &Theme::of(cx).clone(),
                         window,
-                        &|_| None,
+                        &|_, _| None,
                     ))
             }
         }

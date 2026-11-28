@@ -12,10 +12,30 @@
 //! through both paths and assert equality.
 
 use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 
-use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag};
+use pulldown_cmark::{
+    Alignment, BlockQuoteKind, BrokenLink, CodeBlockKind, Event, HeadingLevel, Options, Parser,
+    RefDefs, Tag,
+};
+
+mod destinations;
+mod fences;
+mod html;
+mod incremental;
+mod user;
+
+#[cfg(test)]
+mod tests;
+
+use destinations::rewrite_absolute_destinations;
+use fences::{FenceTracker, normalize_fence_tabs};
+use html::{HtmlInline, HtmlToken, Sink, html_block_text, parse_html_tag};
+
+pub use incremental::IncrementalParser;
+pub use user::parse_user;
 
 // ---------------------------------------------------------------------------
 // Tree model
@@ -37,6 +57,14 @@ pub struct InlineStyle {
     pub file_label: Option<String>,
     pub image: Option<InlineImage>,
     pub task: Option<TaskMarker>,
+    /// Shown but never copied or selected: the indentation a user typed at
+    /// the start of a line in a sent message ([`parse_user`]). Never set by
+    /// [`parse_full`].
+    pub display_only: bool,
+    /// The host's inline token index, assigned when projecting a sent message.
+    pub user_literal: Option<usize>,
+    /// A footnote reference (`[^label]`); the run's text is `[label]`.
+    pub footnote: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,10 +102,30 @@ pub enum Block {
     },
     CodeBlock {
         language: Option<String>,
+        /// Fence title from the info string (`title="..."`, `title=...` or
+        /// `filename=...`), shown in place of the language label.
+        title: Option<String>,
         code: String,
+        /// An explicit closing fence recognized by CommonMark.
+        fence_closed: bool,
     },
     BlockQuote {
+        /// A GFM alert (`> [!NOTE]` …); `None` is an ordinary quote.
+        kind: Option<AlertKind>,
         children: Vec<Block>,
+    },
+    /// An HTML `<details>` disclosure: the `<summary>` label (empty when the
+    /// author gave none) over a body that starts collapsed.
+    Details {
+        summary: Vec<InlineRun>,
+        children: Vec<Block>,
+    },
+    /// A footnote definition (`[^label]: …`). `section_start` marks the first
+    /// of a run of consecutive definitions, which opens the footnote section.
+    FootnoteDefinition {
+        label: String,
+        children: Vec<Block>,
+        section_start: bool,
     },
     List {
         ordered_start: Option<u64>,
@@ -90,6 +138,41 @@ pub enum Block {
         align: Vec<TableAlign>,
     },
     Rule,
+}
+
+/// The five GFM alert kinds (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`,
+/// `[!WARNING]`, `[!CAUTION]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlertKind {
+    Note,
+    Tip,
+    Important,
+    Warning,
+    Caution,
+}
+
+impl AlertKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Note => "Note",
+            Self::Tip => "Tip",
+            Self::Important => "Important",
+            Self::Warning => "Warning",
+            Self::Caution => "Caution",
+        }
+    }
+}
+
+impl From<BlockQuoteKind> for AlertKind {
+    fn from(kind: BlockQuoteKind) -> Self {
+        match kind {
+            BlockQuoteKind::Note => Self::Note,
+            BlockQuoteKind::Tip => Self::Tip,
+            BlockQuoteKind::Important => Self::Important,
+            BlockQuoteKind::Warning => Self::Warning,
+            BlockQuoteKind::Caution => Self::Caution,
+        }
+    }
 }
 
 /// GFM column alignment for a table (mdast `align`; `None` renders as Left).
@@ -132,7 +215,12 @@ impl BlockTree {
 // ---------------------------------------------------------------------------
 
 fn options() -> Options {
-    Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS
+    Options::ENABLE_TABLES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_GFM
+        | Options::ENABLE_FOOTNOTES
+        | Options::ENABLE_MATH
 }
 
 /// Parse a whole source into a [`BlockTree`].
@@ -141,321 +229,118 @@ pub fn parse_full(source: &str) -> BlockTree {
 }
 
 fn parse_at(source: &str, offset: usize) -> BlockTree {
-    let (text, insertions) = match rewrite_absolute_destinations(source) {
+    parse_at_with_refs(source, offset, None)
+}
+
+fn parse_at_with_refs(source: &str, offset: usize, refs: Option<&RefDefs<'_>>) -> BlockTree {
+    with_events(source, offset, refs, |events, _, closed_fences| {
+        tree_from_events(&events, None, &closed_fences)
+    })
+}
+
+/// Run `build` over `source`'s pulldown events, with ranges in `source`.
+fn with_events<R>(
+    source: &str,
+    offset: usize,
+    refs: Option<&RefDefs<'_>>,
+    build: impl FnOnce(Vec<(Event, Range<usize>)>, &RefDefs<'_>, HashSet<usize>) -> R,
+) -> R {
+    let normalized = normalize_fence_tabs(source);
+    let (text, insertions) = match rewrite_absolute_destinations(&normalized) {
         Some((text, insertions)) => (Cow::Owned(text), Some(insertions)),
-        None => (Cow::Borrowed(source), None),
+        None => (normalized, None),
     };
-    let events: Vec<(Event, Range<usize>)> = Parser::new_ext(&text, options())
-        .into_offset_iter()
+    let lookup = |link: BrokenLink<'_>| {
+        let definition = refs?.get(&link.reference)?;
+        Some((
+            definition.dest.to_string().into(),
+            definition.title.as_deref().unwrap_or("").to_owned().into(),
+        ))
+    };
+    let mut parser =
+        Parser::new_with_broken_link_callback(&text, options(), Some(lookup)).into_offset_iter();
+    let mut closed_fences = HashSet::new();
+    let mut fences = FenceTracker::default();
+    let events: Vec<(Event, Range<usize>)> = parser
+        .by_ref()
         .map(|(event, range)| {
+            let closed = fences.closer(&text, &event, &range).is_some();
             // Inserted angle brackets shift every following offset; ranges
             // come from the rewritten text and must point into the original.
             let range = match &insertions {
                 Some(insertions) => insertions.original_range(range),
                 None => range,
             };
-            (event, range.start + offset..range.end + offset)
+            let range = range.start + offset..range.end + offset;
+            if closed {
+                closed_fences.insert(range.start);
+            }
+            (event, range)
         })
         .collect();
+    build(events, parser.reference_definitions(), closed_fences)
+}
+
+fn tree_from_events(
+    events: &[(Event, Range<usize>)],
+    indents: Option<&HashMap<usize, String>>,
+    closed_fences: &HashSet<usize>,
+) -> BlockTree {
     let mut cur = Cursor {
-        events: &events,
+        events,
         ix: 0,
+        indents,
+        closed_fences,
+        details_closes: 0,
+        details_breaks: None,
     };
-    let mut blocks = Vec::new();
+    let mut sink = Sink::default();
     while let Some((event, range)) = cur.peek() {
         let range = range.clone();
         match event {
             Event::Rule => {
                 cur.bump();
-                blocks.push(Arc::new(TopBlock {
-                    range,
-                    block: Block::Rule,
-                }));
+                sink.block(Block::Rule, range);
+            }
+            Event::Start(Tag::HtmlBlock) => {
+                let text = html_block_text(&mut cur);
+                sink.html(&text);
+            }
+            Event::Start(Tag::Paragraph) if sink.in_details() => {
+                parse_disclosure_paragraph(&mut cur, &mut sink, range);
             }
             Event::Start(_) => {
+                let closes = cur.details_closes;
                 for block in parse_started_block(&mut cur) {
-                    blocks.push(Arc::new(TopBlock {
-                        range: range.clone(),
-                        block,
-                    }));
+                    sink.block(block, range.clone());
                 }
+                sink.close_inline(cur.details_closes - closes, range.end);
             }
             // Stray inline events at top level (shouldn't happen): skip.
             _ => cur.bump(),
         }
     }
-    BlockTree { blocks }
-}
-
-/// Byte positions, in the rewritten text, of the angle brackets the rewrite
-/// inserted. A rewritten offset maps back to the original by subtracting the
-/// insertions before it; nothing is ever removed, so the mapping is exact.
-#[derive(Debug, Default)]
-struct Insertions {
-    positions: Vec<usize>,
-}
-
-impl Insertions {
-    fn original(&self, offset: usize) -> usize {
-        offset - self.positions.partition_point(|&at| at < offset)
+    BlockTree {
+        blocks: sink
+            .finish()
+            .into_iter()
+            .map(|(block, range)| Arc::new(TopBlock { range, block }))
+            .collect(),
     }
-
-    fn original_range(&self, range: Range<usize>) -> Range<usize> {
-        self.original(range.start)..self.original(range.end)
-    }
-}
-
-/// Wrap inline link and image destinations that spell an absolute path with
-/// literal spaces in pulldown-cmark's angle-bracket form: CommonMark ends a
-/// destination at its first space, so such a link otherwise stays plain text.
-/// Code keeps its spelling — a fenced block, an indented line or an inline
-/// code span is copied verbatim — and a destination that is already bracketed
-/// or whose closing `)` has not streamed in yet is left alone, which makes
-/// the rewrite idempotent and safe while text is still arriving.
-fn rewrite_absolute_destinations(source: &str) -> Option<(String, Insertions)> {
-    if !source.contains("](") {
-        return None;
-    }
-    let bytes = source.as_bytes();
-    let mut rewritten: Option<String> = None;
-    let mut insertions = Insertions::default();
-    // Bytes before this are already in `rewritten`; skipped regions advance
-    // it without copying, so the next splice stays contiguous.
-    let mut copied = 0usize;
-    let mut at = 0usize;
-    while at < bytes.len() {
-        if at == 0 || bytes[at - 1] == b'\n' {
-            if let Some(fence) = fence_open(&source[at..]) {
-                let end = skip_fenced_block(source, at, fence);
-                skip(&mut rewritten, source, &mut copied, end);
-                at = end;
-                continue;
-            }
-            if line_is_indented_code(&source[at..]) {
-                let end = line_end(source, at);
-                skip(&mut rewritten, source, &mut copied, end);
-                at = end;
-                continue;
-            }
-        }
-        match bytes[at] {
-            b'`' if !is_escaped(bytes, at) => {
-                let run = backtick_run(bytes, at);
-                let end = match closing_backtick_run(bytes, at + run, run) {
-                    Some(close) => close + run,
-                    None => at + run,
-                };
-                skip(&mut rewritten, source, &mut copied, end);
-                at = end;
-            }
-            b']' if bytes.get(at + 1) == Some(&b'(') && !is_escaped(bytes, at) => {
-                let start = skip_destination_spaces(bytes, at + 2);
-                let Some(close) = destination_close(bytes, start) else {
-                    at += 2;
-                    continue;
-                };
-                let destination = source[start..close].trim_end_matches(' ');
-                if absolute_destination_with_spaces(destination) {
-                    let out = match &mut rewritten {
-                        Some(out) => out,
-                        None => rewritten.insert({
-                            // Nothing is copied until the first rewrite; the
-                            // skipped code regions ahead of it come along with
-                            // the prefix.
-                            let mut out = String::with_capacity(source.len() + 8);
-                            out.push_str(&source[..copied]);
-                            out
-                        }),
-                    };
-                    out.push_str(&source[copied..start]);
-                    insertions.positions.push(out.len());
-                    out.push('<');
-                    out.push_str(destination);
-                    insertions.positions.push(out.len());
-                    out.push('>');
-                    copied = start + destination.len();
-                }
-                at = close + 1;
-            }
-            _ => at += 1,
-        }
-    }
-    let mut out = rewritten?;
-    out.push_str(&source[copied..]);
-    Some((out, insertions))
-}
-
-/// Advance the copy cursor over a region that keeps its spelling, appending
-/// it to the rewritten text when a rewrite is already in progress.
-fn skip(rewritten: &mut Option<String>, source: &str, copied: &mut usize, until: usize) {
-    if let Some(out) = rewritten {
-        out.push_str(&source[*copied..until]);
-    }
-    *copied = until;
-}
-
-/// Whether a destination needs the angle-bracket rewrite: an absolute path
-/// with at least one literal space that stays inside the absolute-path
-/// envelope the link classifier accepts. `file://` destinations are exempt
-/// from the file-name dot rule, exactly as they are when classified.
-fn absolute_destination_with_spaces(destination: &str) -> bool {
-    if !destination.contains(' ') {
-        return false;
-    }
-    let path = match destination.strip_prefix("file://") {
-        Some(rest) => {
-            // Only an empty host keeps this a file path; `file://localhost`
-            // and friends are ordinary URLs.
-            let host_end = rest.find('/').unwrap_or(rest.len());
-            if !rest[..host_end].is_empty() {
-                return false;
-            }
-            &rest[host_end..]
-        }
-        None if destination.starts_with('/') => destination,
-        None => return false,
-    };
-    if path.len() <= 1
-        || path.starts_with("//")
-        || path.ends_with('/')
-        || destination.contains(['\\', '?'])
-        || destination.chars().any(char::is_control)
-        || destination
-            .split('/')
-            .any(|part| matches!(part, "." | ".."))
-    {
-        return false;
-    }
-    let file_name = path.rsplit('/').next().unwrap_or(path);
-    destination.starts_with("file://") || file_name.contains('.')
-}
-
-/// A fence opener: up to three leading spaces, then at least three backticks
-/// or tildes. Returns the fence byte and its run length.
-fn fence_open(line: &str) -> Option<(u8, usize)> {
-    let bytes = line.as_bytes();
-    let indent = bytes.iter().take_while(|&&byte| byte == b' ').count();
-    if indent > 3 {
-        return None;
-    }
-    let fence = *bytes.get(indent)?;
-    if !matches!(fence, b'`' | b'~') {
-        return None;
-    }
-    let len = bytes[indent..].iter().take_while(|&&b| b == fence).count();
-    (len >= 3).then_some((fence, len))
-}
-
-/// The byte after a fenced block's closing line (or the end of the source for
-/// a still-open fence, whose body is literal by definition).
-fn skip_fenced_block(source: &str, at: usize, (fence, len): (u8, usize)) -> usize {
-    let bytes = source.as_bytes();
-    let mut cursor = line_end(source, at);
-    while cursor < bytes.len() {
-        let end = line_end(source, cursor);
-        let line = &bytes[cursor..end];
-        let indent = line.iter().take_while(|&&byte| byte == b' ').count();
-        if indent <= 3 {
-            let run = line[indent..].iter().take_while(|&&b| b == fence).count();
-            let rest = line.get(indent + run..).unwrap_or_default();
-            if run >= len
-                && rest
-                    .iter()
-                    .all(|&byte| byte == b' ' || byte == b'\n' || byte == b'\r')
-            {
-                return end;
-            }
-        }
-        cursor = end;
-    }
-    bytes.len()
-}
-
-/// Whether a line opens indented code: four leading spaces or a tab. The
-/// rewrite only needs the conservative direction — a line it treats as code
-/// just keeps today's plain-text rendering.
-fn line_is_indented_code(line: &str) -> bool {
-    line.starts_with('\t') || line.as_bytes().iter().take_while(|&&b| b == b' ').count() >= 4
-}
-
-fn line_end(source: &str, at: usize) -> usize {
-    source.as_bytes()[at..]
-        .iter()
-        .position(|&byte| byte == b'\n')
-        .map(|run| at + run + 1)
-        .unwrap_or(source.len())
-}
-
-/// An odd number of backslashes before `at` escapes the byte there.
-fn is_escaped(bytes: &[u8], at: usize) -> bool {
-    bytes[..at]
-        .iter()
-        .rev()
-        .take_while(|&&byte| byte == b'\\')
-        .count()
-        % 2
-        == 1
-}
-
-fn backtick_run(bytes: &[u8], at: usize) -> usize {
-    bytes[at..].iter().take_while(|&&byte| byte == b'`').count()
-}
-
-/// The start of the next backtick run as long as `run`, if any: an inline
-/// code span either closes with its own run length or stays literal.
-fn closing_backtick_run(bytes: &[u8], from: usize, run: usize) -> Option<usize> {
-    let mut at = from;
-    while at < bytes.len() {
-        if bytes[at] == b'`' {
-            let len = backtick_run(bytes, at);
-            if len == run {
-                return Some(at);
-            }
-            at += len;
-        } else {
-            at += 1;
-        }
-    }
-    None
-}
-
-fn skip_destination_spaces(bytes: &[u8], at: usize) -> usize {
-    let mut at = at;
-    while bytes.get(at) == Some(&b' ') {
-        at += 1;
-    }
-    at
-}
-
-/// The first unescaped `)` at paren depth zero — the destination's end. `)`
-/// inside balanced parentheses belongs to the path, an escaped `)` does not
-/// close, and a control character (a newline mid-destination, a tab) leaves
-/// the link alone rather than guessing at its shape.
-fn destination_close(bytes: &[u8], start: usize) -> Option<usize> {
-    let mut depth = 0usize;
-    let mut at = start;
-    while at < bytes.len() {
-        match bytes[at] {
-            b'\\' => at += 2,
-            b'(' => {
-                depth += 1;
-                at += 1;
-            }
-            b')' if depth == 0 => return Some(at),
-            b')' => {
-                depth -= 1;
-                at += 1;
-            }
-            byte if byte.is_ascii_control() => return None,
-            _ => at += 1,
-        }
-    }
-    None
 }
 
 struct Cursor<'a, 'e> {
     events: &'a [(Event<'e>, Range<usize>)],
     ix: usize,
+    /// Display-only indentation shown before the inline event at an index
+    /// ([`parse_user`] only).
+    indents: Option<&'a HashMap<usize, String>>,
+    closed_fences: &'a HashSet<usize>,
+    /// `</details>` tags seen in inline content so far; the enclosing
+    /// [`Sink`] closes that many disclosures after the block.
+    details_closes: usize,
+    /// Run positions and source spans of closes within a disclosure paragraph.
+    details_breaks: Option<Vec<(usize, Range<usize>)>>,
 }
 
 impl<'a, 'e> Cursor<'a, 'e> {
@@ -495,14 +380,75 @@ fn is_block_tag(tag: &Tag) -> bool {
     )
 }
 
+/// Split a fence info string into its language (first word, unless that word
+/// is itself an attribute) and an optional title from `title="..."`,
+/// `title=...` or `filename=...` (T3 also reads `file=`). Single or double
+/// quotes may wrap a value with spaces; `title` wins over `filename`.
+pub fn parse_fence_info(info: &str) -> (Option<String>, Option<String>) {
+    let info = info.trim();
+    let mut language = None;
+    let mut title = None;
+    let mut filename = None;
+    let mut rest = info;
+    let mut first = true;
+    while !rest.is_empty() {
+        rest = rest.trim_start();
+        if rest.is_empty() {
+            break;
+        }
+        let word_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let eq = rest[..word_end].find('=');
+        let Some(eq) = eq else {
+            if first {
+                language = Some(rest[..word_end].to_string());
+            }
+            first = false;
+            rest = &rest[word_end..];
+            continue;
+        };
+        first = false;
+        let key = rest[..eq].to_ascii_lowercase();
+        let after = &rest[eq + 1..];
+        let (value, next) = match after.chars().next() {
+            Some(q @ ('"' | '\'')) => match after[1..].find(q) {
+                Some(close) => (&after[1..1 + close], &after[2 + close..]),
+                None => (&after[1..], ""),
+            },
+            _ => {
+                let end = after.find(char::is_whitespace).unwrap_or(after.len());
+                (&after[..end], &after[end..])
+            }
+        };
+        let value = value.trim();
+        if !value.is_empty() {
+            match key.as_str() {
+                "title" if title.is_none() => title = Some(value.to_string()),
+                "filename" | "file" if filename.is_none() => filename = Some(value.to_string()),
+                _ => {}
+            }
+        }
+        rest = next;
+    }
+    (language, title.or(filename))
+}
+
 /// Consume a `Start(tag)` and everything through its matching `End`, producing
 /// block(s). Unknown containers are transparent (children splice in).
 fn parse_started_block(cur: &mut Cursor) -> Vec<Block> {
+    let start = cur.peek().map_or(0, |(_, range)| range.start);
     let Some(Event::Start(tag)) = cur.next_event() else {
         return Vec::new();
     };
     match tag {
         Tag::Paragraph => {
+            if let Some(code) = sole_display_math(cur) {
+                return vec![Block::CodeBlock {
+                    language: Some("math".into()),
+                    title: None,
+                    code,
+                    fence_closed: false,
+                }];
+            }
             vec![Block::Paragraph {
                 runs: parse_inline_container(cur, &InlineStyle::default()),
             }]
@@ -512,16 +458,9 @@ fn parse_started_block(cur: &mut Cursor) -> Vec<Block> {
             runs: parse_inline_container(cur, &InlineStyle::default()),
         }],
         Tag::CodeBlock(kind) => {
-            let language = match kind {
-                CodeBlockKind::Fenced(info) => {
-                    let lang = info.split_whitespace().next().unwrap_or("");
-                    if lang.is_empty() {
-                        None
-                    } else {
-                        Some(lang.to_string())
-                    }
-                }
-                CodeBlockKind::Indented => None,
+            let (language, title) = match kind {
+                CodeBlockKind::Fenced(info) => parse_fence_info(&info),
+                CodeBlockKind::Indented => (None, None),
             };
             let mut code = String::new();
             loop {
@@ -535,10 +474,21 @@ fn parse_started_block(cur: &mut Cursor) -> Vec<Block> {
             if code.ends_with('\n') {
                 code.pop();
             }
-            vec![Block::CodeBlock { language, code }]
+            vec![Block::CodeBlock {
+                language,
+                title,
+                code,
+                fence_closed: cur.closed_fences.contains(&start),
+            }]
         }
-        Tag::BlockQuote(_) => vec![Block::BlockQuote {
+        Tag::BlockQuote(kind) => vec![Block::BlockQuote {
+            kind: kind.map(AlertKind::from),
             children: parse_block_sequence(cur),
+        }],
+        Tag::FootnoteDefinition(label) => vec![Block::FootnoteDefinition {
+            label: label.into_string(),
+            children: parse_block_sequence(cur),
+            section_start: true,
         }],
         Tag::List(ordered_start) => {
             let mut items = Vec::new();
@@ -572,65 +522,158 @@ fn parse_started_block(cur: &mut Cursor) -> Vec<Block> {
             vec![parse_table(cur, align)]
         }
         Tag::HtmlBlock => {
-            // Render raw HTML blocks as plain text (zuse's markdown does the same).
-            let mut text = String::new();
-            loop {
-                match cur.next_event() {
-                    Some(Event::Html(t)) | Some(Event::Text(t)) => text.push_str(&t),
-                    Some(Event::End(_)) | None => break,
-                    Some(_) => {}
-                }
-            }
-            let text = text.trim_end_matches('\n').to_string();
-            if text.is_empty() {
-                Vec::new()
-            } else {
-                vec![Block::Paragraph {
-                    runs: vec![InlineRun {
-                        text,
-                        style: InlineStyle::default(),
-                    }],
-                }]
-            }
+            // Sequences route HTML blocks through their `Sink`; this is the
+            // same treatment for a lone block.
+            cur.ix -= 1;
+            let text = html_block_text(cur);
+            let mut sink = Sink::default();
+            sink.html(&text);
+            sink.finish().into_iter().map(|(block, _)| block).collect()
         }
-        // Transparent containers (footnote definitions when enabled, etc.).
+        // Transparent containers.
         _ => parse_block_sequence(cur),
     }
+}
+
+/// A paragraph that is only display math (`$$…$$`, whitespace around it)
+/// renders as a `math` code block. Consumes the paragraph when it is one.
+fn sole_display_math(cur: &mut Cursor) -> Option<String> {
+    let mut math: Vec<&str> = Vec::new();
+    let mut at = cur.ix;
+    loop {
+        match &cur.events.get(at)?.0 {
+            Event::DisplayMath(t) => math.push(t),
+            Event::Text(t) if t.trim().is_empty() => {}
+            Event::SoftBreak | Event::HardBreak => {}
+            Event::End(_) => break,
+            _ => return None,
+        }
+        at += 1;
+    }
+    if math.is_empty() {
+        return None;
+    }
+    let code = math
+        .iter()
+        .map(|t| t.trim_matches(|c| c == '\n' || c == '\r'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    cur.ix = at + 1;
+    Some(code)
 }
 
 /// Parse a block sequence until the container's `End` (consumed). Bare inline
 /// events (tight list items) accumulate into an implicit paragraph.
 fn parse_block_sequence(cur: &mut Cursor) -> Vec<Block> {
-    let mut out: Vec<Block> = Vec::new();
+    let mut sink = Sink::default();
     let mut inline_acc: Vec<InlineRun> = Vec::new();
+    let mut html = HtmlInline::default();
+    let mut closes = cur.details_closes;
     while let Some(event) = cur.peek_event() {
         match event {
             Event::End(_) => {
                 cur.bump();
                 break;
             }
+            Event::Start(Tag::HtmlBlock) => {
+                flush_paragraph(&mut sink, &mut inline_acc, cur, &mut closes);
+                let text = html_block_text(cur);
+                sink.html(&text);
+            }
+            Event::Start(Tag::Paragraph) if sink.in_details() => {
+                let range = cur.peek().unwrap().1.clone();
+                flush_paragraph(&mut sink, &mut inline_acc, cur, &mut closes);
+                parse_disclosure_paragraph(cur, &mut sink, range);
+                closes = cur.details_closes;
+            }
             Event::Start(tag) if is_block_tag(tag) => {
-                flush_paragraph(&mut out, &mut inline_acc);
-                out.extend(parse_started_block(cur));
+                flush_paragraph(&mut sink, &mut inline_acc, cur, &mut closes);
+                for block in parse_started_block(cur) {
+                    sink.block(block, 0..0);
+                }
+                sink.close_inline(cur.details_closes - closes, 0);
+                closes = cur.details_closes;
             }
             Event::Rule => {
-                flush_paragraph(&mut out, &mut inline_acc);
+                flush_paragraph(&mut sink, &mut inline_acc, cur, &mut closes);
                 cur.bump();
-                out.push(Block::Rule);
+                sink.block(Block::Rule, 0..0);
             }
-            _ => parse_inline_event(cur, &mut inline_acc, &InlineStyle::default()),
+            _ => parse_inline_event(cur, &mut inline_acc, &InlineStyle::default(), &mut html),
         }
     }
-    flush_paragraph(&mut out, &mut inline_acc);
-    out
+    flush_paragraph(&mut sink, &mut inline_acc, cur, &mut closes);
+    sink.finish().into_iter().map(|(block, _)| block).collect()
 }
 
-fn flush_paragraph(out: &mut Vec<Block>, acc: &mut Vec<InlineRun>) {
-    if !acc.is_empty() {
-        out.push(Block::Paragraph {
-            runs: merge_runs(std::mem::take(acc)),
-        });
+/// An inline close ends the current disclosure before the remaining prose,
+/// including when it appears in the middle of an emphasized span.
+fn parse_disclosure_paragraph(cur: &mut Cursor, sink: &mut Sink, range: Range<usize>) {
+    cur.bump();
+    if let Some(code) = sole_display_math(cur) {
+        sink.block(
+            Block::CodeBlock {
+                language: Some("math".into()),
+                title: None,
+                code,
+                fence_closed: false,
+            },
+            range,
+        );
+        return;
     }
+    cur.details_breaks = Some(Vec::new());
+    let mut runs = Vec::new();
+    parse_inline_runs(cur, &mut runs, &InlineStyle::default());
+    let breaks = cur.details_breaks.take().unwrap();
+    let mut runs = runs.into_iter();
+    let mut start = range.start;
+    let mut consumed = 0;
+    for (before, tag) in breaks {
+        if !sink.in_details() {
+            break;
+        }
+        let chunk = runs.by_ref().take(before - consumed).collect();
+        emit_disclosure_paragraph(
+            sink,
+            chunk,
+            start..tag.start,
+            consumed > 0 || start != range.start,
+        );
+        sink.close_inline(1, tag.end);
+        start = tag.end;
+        consumed = before;
+    }
+    emit_disclosure_paragraph(sink, runs.collect(), start..range.end, start != range.start);
+}
+
+fn emit_disclosure_paragraph(
+    sink: &mut Sink,
+    runs: Vec<InlineRun>,
+    range: Range<usize>,
+    after_close: bool,
+) {
+    let mut runs = autolink_runs(merge_runs(runs));
+    if after_close && let Some(first) = runs.first_mut() {
+        first.text = first.text.trim_start().to_owned();
+    }
+    runs.retain(|run| !run.text.is_empty());
+    if !runs.is_empty() {
+        sink.block(Block::Paragraph { runs }, range);
+    }
+}
+
+fn flush_paragraph(sink: &mut Sink, acc: &mut Vec<InlineRun>, cur: &Cursor, closes: &mut usize) {
+    if !acc.is_empty() {
+        sink.block(
+            Block::Paragraph {
+                runs: merge_runs(std::mem::take(acc)),
+            },
+            0..0,
+        );
+    }
+    sink.close_inline(cur.details_closes - *closes, 0);
+    *closes = cur.details_closes;
 }
 
 fn parse_table(cur: &mut Cursor, align: Vec<TableAlign>) -> Block {
@@ -681,24 +724,43 @@ fn parse_table_cells(cur: &mut Cursor) -> Vec<Vec<InlineRun>> {
 /// Parse inline events until the container's `End` (consumed).
 fn parse_inline_container(cur: &mut Cursor, style: &InlineStyle) -> Vec<InlineRun> {
     let mut runs = Vec::new();
+    parse_inline_runs(cur, &mut runs, style);
+    // Autolink after merging: pulldown can split the text of a URL into
+    // multiple events at characters that also act as Markdown delimiters.
+    autolink_runs(merge_runs(runs))
+}
+
+fn parse_inline_runs(cur: &mut Cursor, runs: &mut Vec<InlineRun>, style: &InlineStyle) {
+    let mut html = HtmlInline::default();
     while let Some(event) = cur.peek_event() {
         if matches!(event, Event::End(_)) {
             cur.bump();
             break;
         }
-        parse_inline_event(cur, &mut runs, style);
+        parse_inline_event(cur, runs, style, &mut html);
     }
-    // Autolink AFTER merging: pulldown splits Text events at would-be
-    // emphasis chars ("…/Foo_(bar)" arrives as three events), so scanning
-    // per-event would truncate URLs at every underscore.
-    autolink_runs(merge_runs(runs))
 }
 
-fn parse_inline_event(cur: &mut Cursor, runs: &mut Vec<InlineRun>, style: &InlineStyle) {
+fn parse_inline_event(
+    cur: &mut Cursor,
+    runs: &mut Vec<InlineRun>,
+    base: &InlineStyle,
+    html: &mut HtmlInline,
+) {
     let range = cur.peek().map(|(_, range)| range.clone());
+    if let Some(indent) = cur.indents.and_then(|indents| indents.get(&cur.ix)) {
+        runs.push(InlineRun {
+            text: indent.clone(),
+            style: InlineStyle {
+                display_only: true,
+                ..InlineStyle::default()
+            },
+        });
+    }
     let Some(event) = cur.next_event() else {
         return;
     };
+    let style = &html.style(base);
     let push = |runs: &mut Vec<InlineRun>, text: String, style: InlineStyle| {
         if !text.is_empty() {
             runs.push(InlineRun { text, style });
@@ -713,7 +775,30 @@ fn parse_inline_event(cur: &mut Cursor, runs: &mut Vec<InlineRun>, style: &Inlin
         }
         Event::SoftBreak => push(runs, " ".into(), style.clone()),
         Event::HardBreak => push(runs, "\n".into(), style.clone()),
-        Event::Html(t) | Event::InlineHtml(t) => push(runs, t.into_string(), style.clone()),
+        Event::Html(t) | Event::InlineHtml(t) => {
+            // One tag (or comment) per event: styling tags restyle what
+            // follows, `<br>` breaks the line, everything else vanishes.
+            if let Some((token, _)) = parse_html_tag(&t) {
+                if matches!(&token, HtmlToken::Tag { name, closing: true, .. } if name == "details")
+                {
+                    cur.details_closes += 1;
+                    if let Some(breaks) = &mut cur.details_breaks
+                        && let Some(range) = range
+                    {
+                        breaks.push((runs.len(), range));
+                    }
+                }
+                if let Some(text) = html.apply(&token, false) {
+                    push(runs, text.into(), html.style(base));
+                }
+            }
+        }
+        Event::InlineMath(t) | Event::DisplayMath(t) => {
+            let mut s = style.clone();
+            s.code = true;
+            let text = t.trim().replace(['\n', '\r'], " ");
+            push(runs, text, s);
+        }
         Event::TaskListMarker(done) => {
             let mut style = style.clone();
             style.task = Some(TaskMarker {
@@ -726,7 +811,11 @@ fn parse_inline_event(cur: &mut Cursor, runs: &mut Vec<InlineRun>, style: &Inlin
                 style,
             );
         }
-        Event::FootnoteReference(t) => push(runs, format!("[{t}]"), style.clone()),
+        Event::FootnoteReference(t) => {
+            let mut s = style.clone();
+            s.footnote = true;
+            push(runs, format!("[{t}]"), s);
+        }
         Event::Start(tag) => {
             let mut inner = style.clone();
             match tag {
@@ -736,10 +825,14 @@ fn parse_inline_event(cur: &mut Cursor, runs: &mut Vec<InlineRun>, style: &Inlin
                 Tag::Image {
                     dest_url, title, ..
                 } => {
+                    let breaks = cur.details_breaks.take();
+                    let closes = cur.details_closes;
                     let alt: String = parse_inline_container(cur, style)
                         .iter()
                         .map(|run| run.text.as_str())
                         .collect();
+                    cur.details_breaks = breaks;
+                    cur.details_closes = closes;
                     inner.image = Some(InlineImage {
                         source: dest_url.to_string(),
                         alt: alt.clone(),
@@ -758,7 +851,7 @@ fn parse_inline_event(cur: &mut Cursor, runs: &mut Vec<InlineRun>, style: &Inlin
                 }
                 _ => {}
             }
-            runs.extend(parse_inline_container(cur, &inner));
+            parse_inline_runs(cur, runs, &inner);
         }
         // `End` is consumed by the container loop; anything else is ignored.
         _ => {}
@@ -882,854 +975,5 @@ fn heading_level(level: HeadingLevel) -> u8 {
         HeadingLevel::H4 => 4,
         HeadingLevel::H5 => 5,
         HeadingLevel::H6 => 6,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Incremental parse
-// ---------------------------------------------------------------------------
-
-/// Streaming parser: appends reparse only from the last stable top-level block
-/// boundary (snapped back to a line start so indentation context survives).
-#[derive(Debug, Default)]
-pub struct IncrementalParser {
-    source: String,
-    tree: BlockTree,
-    /// Display-only replacement for the last top-level block when its source
-    /// has hanging inline markers ([`crate::mend`]): `None` means the display
-    /// tree is exactly [`Self::tree`]. Never fed back into the incremental
-    /// state — the canonical tree stays parity-exact with `parse_full`.
-    display_tail: Option<Vec<Arc<TopBlock>>>,
-    /// Link-reference definitions act at a distance — full reparses only.
-    full_only: bool,
-    /// Bytes fed through `parse_full` by the most recent `set_text`/`append`/
-    /// `reset` — instrumentation proving per-append work is O(tail), not
-    /// O(total). 0 for a no-op set_text.
-    last_parse_bytes: usize,
-    /// Number of leading top-level blocks guaranteed untouched by the most
-    /// recent update (render caches for these blocks stay valid).
-    stable_prefix_blocks: usize,
-}
-
-impl IncrementalParser {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn source(&self) -> &str {
-        &self.source
-    }
-
-    pub fn tree(&self) -> &BlockTree {
-        &self.tree
-    }
-
-    /// The tree to render while streaming: the canonical tree with the last
-    /// block swapped for its mended parse when inline markers hang (an
-    /// unclosed `**bold`, a half-streamed `[link](url…`). Same shape and cost
-    /// as `tree().clone()` — the stable prefix shares its blocks; only a
-    /// hanging tail adds one O(tail) reparse, done at append time.
-    pub fn display_tree(&self) -> BlockTree {
-        let Some(tail) = &self.display_tail else {
-            return self.tree.clone();
-        };
-        let stable = &self.tree.blocks[..self.tree.blocks.len() - 1];
-        let mut blocks = Vec::with_capacity(stable.len() + tail.len());
-        blocks.extend_from_slice(stable);
-        blocks.extend_from_slice(tail);
-        BlockTree { blocks }
-    }
-
-    /// Bytes actually reparsed by the last update (see field docs).
-    pub fn last_parse_bytes(&self) -> usize {
-        self.last_parse_bytes
-    }
-
-    /// Leading top-level blocks left untouched by the last update.
-    pub fn stable_prefix_blocks(&self) -> usize {
-        self.stable_prefix_blocks
-    }
-
-    /// Set the source: appends take the incremental path, anything else resets.
-    pub fn set_text(&mut self, text: &str) {
-        if text.len() >= self.source.len() && text.starts_with(self.source.as_str()) {
-            let delta = &text[self.source.len()..];
-            if delta.is_empty() {
-                self.last_parse_bytes = 0;
-                self.stable_prefix_blocks = self.tree.blocks.len();
-                return;
-            }
-            self.append(delta);
-        } else {
-            self.reset(text);
-        }
-    }
-
-    pub fn reset(&mut self, text: &str) {
-        self.source = text.to_string();
-        self.full_only = has_link_defs(text);
-        self.tree = parse_full(text);
-        self.last_parse_bytes = text.len();
-        self.stable_prefix_blocks = 0;
-        self.remend();
-    }
-
-    /// Append streamed text, reparsing from the last stable boundary.
-    pub fn append(&mut self, delta: &str) {
-        if delta.is_empty() {
-            self.last_parse_bytes = 0;
-            self.stable_prefix_blocks = self.tree.blocks.len();
-            return;
-        }
-        // The delta may complete a line begun earlier — rescan from that line's
-        // start when checking for definitions.
-        let scan_from = self.source.rfind('\n').map(|i| i + 1).unwrap_or(0);
-        self.source.push_str(delta);
-        if !self.full_only && has_link_defs(&self.source[scan_from..]) {
-            self.full_only = true;
-        }
-        if self.full_only {
-            self.tree = parse_full(&self.source);
-            self.last_parse_bytes = self.source.len();
-            self.stable_prefix_blocks = 0;
-            self.remend();
-            return;
-        }
-
-        // Stable boundary: start of the SECOND-to-last top-level block, snapped
-        // back to its line start (keeps indented-code / fenced-indent context
-        // intact). Reparsing the last two blocks — not just the last — covers
-        // continuation merges: a trailing paragraph like `3` can become `3.`
-        // and fuse into the preceding loose list. Merges cannot cascade
-        // further back (a block's separation from its predecessor is decided
-        // by its own already-streamed leading bytes), so two blocks suffice;
-        // the parity tests stream corpora to hold this invariant.
-        let boundary = match self.tree.blocks.len() {
-            0 | 1 => 0,
-            n => self.tree.blocks[n - 2].range.start,
-        };
-        let boundary = self.source[..boundary]
-            .rfind('\n')
-            .map(|i| i + 1)
-            .unwrap_or(0);
-
-        let tail = parse_at(&self.source[boundary..], boundary);
-        self.last_parse_bytes = self.source.len() - boundary;
-        self.tree.blocks.retain(|b| b.range.start < boundary);
-        self.stable_prefix_blocks = self.tree.blocks.len();
-        for top in tail.blocks {
-            self.tree.blocks.push(top);
-        }
-        self.remend();
-    }
-
-    /// Recompute the display tail: mend hanging inline markers in the last
-    /// top-level block (only place they can hang — a blank line settles a
-    /// block, and CommonMark keeps unclosed markers literal across it) and
-    /// reparse just that block's source. `close_hanging` is one O(last block)
-    /// scan and returns `None` when nothing hangs, so the extra parse happens
-    /// only while a marker is actually open.
-    fn remend(&mut self) {
-        self.display_tail = None;
-        let Some(last) = self.tree.blocks.last() else {
-            return;
-        };
-        // Code blocks render an unclosed fence verbatim (already stable);
-        // rules and tables have no inline tail to mend.
-        if matches!(
-            last.block,
-            Block::CodeBlock { .. } | Block::Rule | Block::Table { .. }
-        ) {
-            return;
-        }
-        let start = last.range.start;
-        let Some(mended) = crate::mend::close_hanging(&self.source[start..]) else {
-            return;
-        };
-        // Count toward the O(tail) instrumentation — this is real parse work,
-        // in the same bound as the reparse that produced the block.
-        self.last_parse_bytes += mended.len();
-        let mut tail = parse_at(&mended, start).blocks;
-        for top in &mut tail {
-            let top = Arc::make_mut(top);
-            // Display ranges point back into the unmended source; synthetic
-            // closers at the end clamp away.
-            top.range.end = top.range.end.min(self.source.len());
-        }
-        self.display_tail = Some(tail);
-    }
-}
-
-/// Conservative detector for link-reference-definition lines
-/// (`[label]: destination`, up to 3 leading spaces).
-fn has_link_defs(text: &str) -> bool {
-    text.lines().any(|line| {
-        let trimmed = line.trim_start();
-        line.len() - trimmed.len() <= 3 && trimmed.starts_with('[') && trimmed.contains("]:")
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn task_ranges_survive_nested_lists_unicode_crlf_and_streaming() {
-        let source = "Título 🦀\r\n\r\nIntro\r\n\r\n- [ ] repetida\r\n  - [X] repetida\r\n\r\n> - [x] citada\r\n\r\n```md\r\n- [ ] literal\r\n```\r\n";
-        fn collect(block: &Block, tasks: &mut Vec<TaskMarker>) {
-            match block {
-                Block::Paragraph { runs } => {
-                    tasks.extend(runs.iter().filter_map(|run| run.style.task.clone()))
-                }
-                Block::List { items, .. } => items
-                    .iter()
-                    .flatten()
-                    .for_each(|block| collect(block, tasks)),
-                Block::BlockQuote { children } => {
-                    children.iter().for_each(|block| collect(block, tasks))
-                }
-                _ => {}
-            }
-        }
-        let tree = parse_full(source);
-        let mut tasks = Vec::new();
-        for top in &tree.blocks {
-            collect(&top.block, &mut tasks);
-        }
-        assert_eq!(tasks.len(), 3);
-        assert_eq!(
-            tasks
-                .iter()
-                .map(|task| &source[task.range.clone()])
-                .collect::<Vec<_>>(),
-            ["[ ]", "[X]", "[x]"]
-        );
-        let mut stream = IncrementalParser::new();
-        for ch in source.chars() {
-            stream.append(&ch.to_string());
-            assert_eq!(stream.tree(), &parse_full(stream.source()));
-        }
-    }
-
-    #[test]
-    fn display_snapshots_share_stable_blocks_without_mutating_old_frames() {
-        let mut parser = IncrementalParser::new();
-        parser.set_text("first **bold** paragraph\n\nsecond paragraph\n\nlast **open");
-        let before = parser.display_tree();
-        let frozen = format!("{before:?}");
-        assert!(Arc::ptr_eq(&before.blocks[0], &parser.tree().blocks[0]));
-        parser.append(" tail**\n\nnext paragraph");
-        let after = parser.display_tree();
-        assert!(Arc::ptr_eq(&before.blocks[0], &after.blocks[0]));
-        assert_eq!(
-            format!("{before:?}"),
-            frozen,
-            "old paint snapshot is immutable"
-        );
-        assert_eq!(parser.tree(), &parse_full(parser.source()));
-        parser.reset("replacement");
-        assert_eq!(
-            format!("{before:?}"),
-            frozen,
-            "reset cannot alter an old frame"
-        );
-        assert_eq!(parser.tree(), &parse_full("replacement"));
-    }
-
-    fn stream(chunks: usize, text: &str) -> IncrementalParser {
-        let mut p = IncrementalParser::new();
-        let bytes = text.as_bytes();
-        let mut start = 0;
-        while start < bytes.len() {
-            let mut end = (start + chunks).min(bytes.len());
-            while end < bytes.len() && !text.is_char_boundary(end) {
-                end += 1;
-            }
-            p.append(&text[start..end]);
-            start = end;
-        }
-        p
-    }
-
-    const CORPORA: &[&str] = &[
-        "# Title\n\nHello **bold** and *italic* and `code` and ~~gone~~.\n",
-        "Paragraph one\nlazy continuation\n\nParagraph two with a [link](https://x.dev).\n",
-        "- item one\n- item two\n  - nested a\n  - nested b\n- item three\n\ntail\n",
-        "1. first\n2. second\n\n   loose paragraph in item\n\n3. third\n",
-        "```rust\nfn main() {\n    println!(\"hi\");\n}\n```\n\nafter code\n",
-        "intro\n\n```\nunclosed fence streaming",
-        "> quoted line\n> more quote\n>\n> - a list in a quote\n\nplain\n",
-        "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n\ndone\n",
-        "setext candidate\n===\n\nnext para\n---\n",
-        "***\n\ntext between rules\n\n---\n",
-        "- [x] done task\n- [ ] open task\n",
-        "    indented code line one\n    line two\n\npara\n",
-        "see [it's here](/tmp/2026/Some Folder/it's here.txt) and `[raw](/tmp/a b.md)`\n",
-        "text\n\n```\n[x](/tmp/a b.md)\n```\n\nafter [y](file:///tmp/c d.md)\n",
-        "para with <span>inline html</span> inside\n\n<div>\nblock html\n</div>\n",
-        "###### deep heading\n\n#### h4\n",
-    ];
-
-    #[test]
-    fn incremental_matches_full_on_streamed_corpora() {
-        for (ci, corpus) in CORPORA.iter().enumerate() {
-            let full = parse_full(corpus);
-            for chunk in [1usize, 2, 3, 7, 16, 64] {
-                let inc = stream(chunk, corpus);
-                assert_eq!(
-                    inc.tree(),
-                    &full,
-                    "corpus {ci} diverged at chunk size {chunk}:\n{corpus}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn appends_keep_committed_blocks_identical() {
-        // Streaming stability invariant: blocks before the reparse boundary
-        // (everything but the last two top-level blocks) must be reused
-        // as-is across appends — same index, same value — so row/element keys
-        // never re-mount and earlier blocks can never visibly reflow.
-        for corpus in CORPORA {
-            let mut p = IncrementalParser::new();
-            let mut prev = p.tree().clone();
-            let bytes = corpus.as_bytes();
-            let mut start = 0;
-            while start < bytes.len() {
-                let mut end = (start + 3).min(bytes.len());
-                while end < bytes.len() && !corpus.is_char_boundary(end) {
-                    end += 1;
-                }
-                p.append(&corpus[start..end]);
-                start = end;
-
-                let cur = p.tree();
-                let committed = prev.blocks.len().saturating_sub(2);
-                assert!(
-                    cur.blocks.len() >= committed,
-                    "committed blocks disappeared:\n{corpus}"
-                );
-                for i in 0..committed {
-                    assert_eq!(
-                        cur.blocks[i], prev.blocks[i],
-                        "block {i} changed across an append:\n{corpus}"
-                    );
-                }
-                prev = cur.clone();
-            }
-        }
-    }
-
-    #[test]
-    fn incremental_matches_full_with_link_definitions() {
-        // Definitions act at a distance → parser falls back to full reparses,
-        // so parity must still hold.
-        let corpus = "See [docs] for more.\n\nMore text.\n\n[docs]: https://example.com\n";
-        let full = parse_full(corpus);
-        for chunk in [1usize, 3, 9] {
-            assert_eq!(stream(chunk, corpus).tree(), &full, "chunk {chunk}");
-        }
-        // The reference actually resolved into a link.
-        let has_link = full.blocks.iter().any(|b| match &b.block {
-            Block::Paragraph { runs } => runs.iter().any(|r| r.style.link.is_some()),
-            _ => false,
-        });
-        assert!(has_link, "expected [docs] to resolve to a link");
-    }
-
-    #[test]
-    fn set_text_appends_or_resets() {
-        let mut p = IncrementalParser::new();
-        p.set_text("hello");
-        p.set_text("hello world");
-        assert_eq!(p.tree(), &parse_full("hello world"));
-        // Non-append rewrites reset cleanly.
-        p.set_text("different");
-        assert_eq!(p.tree(), &parse_full("different"));
-        assert_eq!(p.source(), "different");
-    }
-
-    #[test]
-    fn block_structure_basics() {
-        let tree = parse_full("## Head\n\npara **b _bi_** text\n\n```ts\nlet x = 1;\n```\n");
-        assert_eq!(tree.len(), 3);
-        match &tree.blocks[0].block {
-            Block::Heading { level, runs } => {
-                assert_eq!(*level, 2);
-                assert_eq!(runs[0].text, "Head");
-            }
-            other => panic!("unexpected {other:?}"),
-        }
-        match &tree.blocks[1].block {
-            Block::Paragraph { runs } => {
-                assert_eq!(runs.len(), 4); // "para ", "b ", "bi" (bold+italic), " text"
-                assert!(runs[1].style.bold && !runs[1].style.italic);
-                assert!(runs[2].style.bold && runs[2].style.italic);
-            }
-            other => panic!("unexpected {other:?}"),
-        }
-        match &tree.blocks[2].block {
-            Block::CodeBlock { language, code } => {
-                assert_eq!(language.as_deref(), Some("ts"));
-                assert_eq!(code, "let x = 1;");
-            }
-            other => panic!("unexpected {other:?}"),
-        }
-    }
-
-    #[test]
-    fn nested_lists_and_tight_items() {
-        let tree = parse_full("- a\n  - a1\n  - a2\n- b\n");
-        let Block::List {
-            ordered_start,
-            items,
-        } = &tree.blocks[0].block
-        else {
-            panic!("expected list");
-        };
-        assert_eq!(*ordered_start, None);
-        assert_eq!(items.len(), 2);
-        // Tight item text became an implicit paragraph, nested list follows.
-        assert!(matches!(items[0][0], Block::Paragraph { .. }));
-        assert!(matches!(items[0][1], Block::List { .. }));
-    }
-
-    #[test]
-    fn tables_parse_header_and_rows() {
-        let tree = parse_full("| a | b |\n|---|---|\n| 1 | 2 |\n");
-        let Block::Table {
-            header,
-            rows,
-            align,
-        } = &tree.blocks[0].block
-        else {
-            panic!("expected table");
-        };
-        assert_eq!(header.len(), 2);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0][1][0].text, "2");
-        assert_eq!(align, &vec![TableAlign::Left, TableAlign::Left]);
-    }
-
-    #[test]
-    fn tables_parse_column_alignment() {
-        let tree = parse_full("| a | b | c |\n|:--|:-:|--:|\n| 1 | 2 | 3 |\n");
-        let Block::Table { align, .. } = &tree.blocks[0].block else {
-            panic!("expected table");
-        };
-        assert_eq!(
-            align,
-            &vec![TableAlign::Left, TableAlign::Center, TableAlign::Right]
-        );
-    }
-
-    #[test]
-    fn links_carry_urls() {
-        let tree = parse_full("go to [zed](https://zed.dev) now\n");
-        let Block::Paragraph { runs } = &tree.blocks[0].block else {
-            panic!()
-        };
-        let link = runs
-            .iter()
-            .find(|r| r.style.link.is_some())
-            .expect("link run");
-        assert_eq!(link.text, "zed");
-        assert_eq!(link.style.link.as_deref(), Some("https://zed.dev"));
-    }
-
-    /// The paragraph's single link run: (text, url).
-    fn only_link(source: &str) -> Option<(String, String)> {
-        let tree = parse_full(source);
-        let Block::Paragraph { runs } = &tree.blocks[0].block else {
-            panic!()
-        };
-        let links: Vec<_> = runs
-            .iter()
-            .filter_map(|r| Some((r.text.clone(), r.style.link.clone()?)))
-            .collect();
-        assert!(links.len() <= 1, "expected at most one link: {links:?}");
-        links.into_iter().next()
-    }
-
-    /// Bare URLs autolink (the GFM extension pulldown-cmark lacks): the URL
-    /// becomes a clickable run, trailing sentence punctuation stays text.
-    #[test]
-    fn bare_urls_autolink() {
-        assert_eq!(
-            only_link("PR is updated: https://github.com/opcodehq/zuse/pull/31\n"),
-            Some((
-                "https://github.com/opcodehq/zuse/pull/31".into(),
-                "https://github.com/opcodehq/zuse/pull/31".into()
-            ))
-        );
-        assert_eq!(
-            only_link("see https://x.dev/a, then rest.\n").map(|l| l.1),
-            Some("https://x.dev/a".into())
-        );
-        // A wrapping paren is shed; one balanced by an opener in the path stays.
-        assert_eq!(
-            only_link("(docs: https://x.dev/Foo_(bar))\n").map(|l| l.1),
-            Some("https://x.dev/Foo_(bar)".into())
-        );
-        // Bold text still autolinks, and the run keeps the emphasis.
-        let tree = parse_full("**see https://x.dev now**\n");
-        let Block::Paragraph { runs } = &tree.blocks[0].block else {
-            panic!()
-        };
-        let link = runs.iter().find(|r| r.style.link.is_some()).unwrap();
-        assert!(link.style.bold);
-        assert_eq!(link.style.link.as_deref(), Some("https://x.dev"));
-    }
-
-    /// Non-links stay text: glued schemes, bare schemes, code spans, and the
-    /// destination text of a real markdown link.
-    #[test]
-    fn autolink_leaves_non_urls_alone() {
-        assert_eq!(only_link("foohttps://x.dev is glued\n"), None);
-        assert_eq!(only_link("the https:// scheme alone\n"), None);
-        assert_eq!(only_link("`https://x.dev` in code\n"), None);
-        // A markdown link whose TEXT is a URL keeps the written destination.
-        assert_eq!(
-            only_link("[https://shown.dev](https://real.dev)\n"),
-            Some(("https://shown.dev".into(), "https://real.dev".into()))
-        );
-    }
-
-    #[test]
-    fn top_level_ranges_are_stable_anchors() {
-        let src = "first\n\nsecond\n\nthird";
-        let tree = parse_full(src);
-        assert_eq!(tree.len(), 3);
-        assert!(
-            tree.blocks
-                .windows(2)
-                .all(|w| w[0].range.start < w[1].range.start)
-        );
-        assert_eq!(&src[tree.blocks[1].range.clone()], "second\n");
-    }
-
-    /// Concatenated visible text of a block (what the user reads).
-    fn flat(block: &Block) -> String {
-        fn walk(b: &Block, out: &mut String) {
-            match b {
-                Block::Paragraph { runs } | Block::Heading { runs, .. } => {
-                    for r in runs {
-                        out.push_str(&r.text);
-                    }
-                }
-                Block::BlockQuote { children } => children.iter().for_each(|c| walk(c, out)),
-                Block::List { items, .. } => items.iter().flatten().for_each(|c| walk(c, out)),
-                _ => {}
-            }
-        }
-        let mut s = String::new();
-        walk(block, &mut s);
-        s
-    }
-
-    #[test]
-    fn display_tree_styles_hanging_bold_immediately() {
-        let mut p = IncrementalParser::new();
-        p.set_text("intro **bo");
-        let display = p.display_tree();
-        let Block::Paragraph { runs } = &display.blocks[0].block else {
-            panic!("expected paragraph");
-        };
-        let bold: Vec<_> = runs.iter().filter(|r| r.style.bold).collect();
-        assert_eq!(bold.len(), 1);
-        assert_eq!(bold[0].text, "bo");
-        assert!(!flat(&display.blocks[0].block).contains("**"));
-        // The canonical tree stays honest: literal markers until truly closed.
-        assert!(flat(&p.tree().blocks[0].block).contains("**"));
-    }
-
-    #[test]
-    fn display_tree_converges_to_canonical_when_balanced() {
-        let corpus = "a **b** *c* `d` [e](https://x.dev) ~~f~~";
-        let mut p = IncrementalParser::new();
-        p.set_text(corpus);
-        assert_eq!(p.display_tree(), *p.tree());
-        assert_eq!(p.tree(), &parse_full(corpus));
-    }
-
-    #[test]
-    fn display_tree_never_leaks_streaming_urls() {
-        let full = "read [docs](https://example.com/long/path) now";
-        let mut p = IncrementalParser::new();
-        for i in 1..=full.len() {
-            if !full.is_char_boundary(i) {
-                continue;
-            }
-            p.set_text(&full[..i]);
-            let text = flat(&p.display_tree().blocks[0].block);
-            assert!(!text.contains("http"), "url leaked at {i}: {text:?}");
-        }
-        // Mid-URL the link text carries the pending sentinel destination.
-        let mut p = IncrementalParser::new();
-        p.set_text("read [docs](https://exa");
-        let Block::Paragraph { runs } = &p.display_tree().blocks[0].block else {
-            panic!("expected paragraph");
-        };
-        let link = runs
-            .iter()
-            .find(|r| r.style.link.is_some())
-            .expect("link run");
-        assert_eq!(link.text, "docs");
-        assert_eq!(
-            link.style.link.as_deref(),
-            Some(crate::mend::PENDING_LINK_URL)
-        );
-    }
-
-    #[test]
-    fn display_tree_leaves_code_blocks_alone() {
-        let mut p = IncrementalParser::new();
-        p.set_text("intro\n\n```\nunclosed **fence");
-        assert_eq!(p.display_tree(), *p.tree());
-    }
-
-    #[test]
-    fn display_tree_suppresses_setext_flicker() {
-        // "para" + "\n-" parses as an H2 for exactly one chunk before the
-        // list item's text arrives; the display tree keeps it a paragraph.
-        let mut p = IncrementalParser::new();
-        p.set_text("para\n-");
-        let display = p.display_tree();
-        assert!(
-            matches!(
-                display.blocks.last().unwrap().block,
-                Block::Paragraph { .. }
-            ),
-            "expected paragraph, got {display:?}"
-        );
-    }
-
-    #[test]
-    fn display_tree_prefix_matches_canonical_across_streams() {
-        // Mending swaps only the last block: everything before it must be
-        // byte-identical to the canonical tree so render caches and row keys
-        // survive.
-        for corpus in CORPORA {
-            let mut p = IncrementalParser::new();
-            let bytes = corpus.as_bytes();
-            let mut start = 0;
-            while start < bytes.len() {
-                let mut end = (start + 3).min(bytes.len());
-                while end < bytes.len() && !corpus.is_char_boundary(end) {
-                    end += 1;
-                }
-                p.append(&corpus[start..end]);
-                start = end;
-
-                let display = p.display_tree();
-                let canonical = p.tree();
-                for i in 0..canonical.blocks.len().saturating_sub(1) {
-                    assert_eq!(
-                        display.blocks[i], canonical.blocks[i],
-                        "display prefix diverged:\n{corpus}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn empty_and_whitespace_sources() {
-        assert!(parse_full("").is_empty());
-        assert!(parse_full("\n\n  \n").is_empty());
-        let mut p = IncrementalParser::new();
-        p.append("");
-        assert!(p.tree().is_empty());
-    }
-}
-
-#[cfg(test)]
-mod closing_quote_blocks {
-    use super::*;
-
-    const STORY: &str = "\"How do we negotiate with machines that won't speak?\" someone asked.\n\nYuki almost laughed. \"You don't. You listen to the silence. And you finally understand what it means to be powerless.\"";
-
-    #[test]
-    fn full_parse_keeps_trailing_quote_in_block() {
-        let tree = parse_full(STORY);
-        for b in &tree.blocks {
-            eprintln!("block {:?} => {:?}", b.range, &STORY[b.range.clone()]);
-        }
-        assert_eq!(tree.blocks.len(), 2, "two paragraphs expected");
-        let last = &tree.blocks[1];
-        assert!(STORY[last.range.clone()].ends_with("powerless.\""));
-    }
-
-    #[test]
-    fn streamed_boundary_at_quote_adds_no_block() {
-        // Stream with a commit boundary exactly between `powerless.` and `"`.
-        let split = STORY.len() - 1;
-        let mut p = IncrementalParser::new();
-        p.set_text(&STORY[..split]);
-        p.set_text(STORY);
-        let tree = p.tree();
-        for b in &tree.blocks {
-            eprintln!("block {:?} => {:?}", b.range, &STORY[b.range.clone()]);
-        }
-        assert_eq!(tree.blocks.len(), 2, "streamed split must not add blocks");
-        assert!(STORY[tree.blocks[1].range.clone()].ends_with("powerless.\""));
-    }
-
-    #[test]
-    fn streamed_small_chunks_match_full_parse() {
-        let mut p = IncrementalParser::new();
-        let mut fed = String::new();
-        for chunk in STORY.as_bytes().chunks(7) {
-            fed.push_str(std::str::from_utf8(chunk).unwrap());
-            p.set_text(&fed);
-        }
-        let full = parse_full(STORY);
-        assert_eq!(p.tree().blocks.len(), full.blocks.len());
-        for (a, b) in p.tree().blocks.iter().zip(full.blocks.iter()) {
-            assert_eq!(a.range, b.range);
-        }
-    }
-}
-
-#[cfg(test)]
-mod destination_rewrite_tests {
-    use super::*;
-
-    fn paragraph(source: &str) -> Vec<InlineRun> {
-        let tree = parse_full(source);
-        let Some(TopBlock {
-            block: Block::Paragraph { runs },
-            ..
-        }) = tree.blocks.first().map(|top| top.as_ref())
-        else {
-            panic!("expected a paragraph for {source:?}");
-        };
-        runs.clone()
-    }
-
-    fn link_of(runs: &[InlineRun]) -> Option<&str> {
-        runs.iter().find_map(|run| run.style.link.as_deref())
-    }
-
-    fn text(runs: &[InlineRun]) -> String {
-        runs.iter().map(|run| run.text.as_str()).collect()
-    }
-
-    #[test]
-    fn absolute_destinations_with_spaces_become_links() {
-        let runs = paragraph("see [it's here](/tmp/2026/Some Folder/it's here.txt) now");
-        assert_eq!(text(&runs), "see it's here now");
-        assert_eq!(link_of(&runs), Some("/tmp/2026/Some Folder/it's here.txt"));
-
-        let runs = paragraph("[x](file:///tmp/a b/c.md)");
-        assert_eq!(link_of(&runs), Some("file:///tmp/a b/c.md"));
-
-        let runs = paragraph("shot ![two](/tmp/pics/two words.png) done");
-        let image = runs.iter().find_map(|run| run.style.image.as_ref());
-        assert_eq!(
-            image.map(|image| image.source.as_str()),
-            Some("/tmp/pics/two words.png")
-        );
-    }
-
-    #[test]
-    fn non_absolute_or_unsafe_destinations_keep_their_text() {
-        for source in [
-            // Relative destinations with spaces stay plain text.
-            "[x](Some Folder/a.md)",
-            // The file-name dot rule applies to plain absolute paths.
-            "[x](/usr/bin/some thing)",
-            // `file://localhost` is an ordinary URL, not a host path.
-            "[x](file://localhost/tmp/a b.md)",
-            "[x](/tmp/a b/c/)",
-            "[x](/tmp/a?b c.md)",
-            "[x](/tmp/../a b.md)",
-        ] {
-            let runs = paragraph(source);
-            assert_eq!(link_of(&runs), None, "{source}");
-            assert!(text(&runs).contains('('), "{source} should stay literal");
-        }
-    }
-
-    #[test]
-    fn already_bracketed_destinations_are_left_alone() {
-        let runs = paragraph("see [it](/tmp/Some Folder/it's here.txt) now");
-        assert_eq!(text(&runs), "see it now");
-        assert_eq!(link_of(&runs), Some("/tmp/Some Folder/it's here.txt"));
-    }
-
-    #[test]
-    fn code_keeps_its_spelling() {
-        let tree = parse_full("```\n[x](/tmp/a b.md)\n```\n");
-        let Block::CodeBlock { code, .. } = &tree.blocks[0].block else {
-            panic!("fenced code");
-        };
-        assert_eq!(code.trim_end(), "[x](/tmp/a b.md)");
-
-        let tree = parse_full("    [x](/tmp/a b.md)\n");
-        let Block::CodeBlock { code, .. } = &tree.blocks[0].block else {
-            panic!("indented code");
-        };
-        assert_eq!(code.trim_end(), "[x](/tmp/a b.md)");
-
-        let runs = paragraph("`[x](/tmp/a b.md)`");
-        assert!(runs.iter().all(|run| run.style.link.is_none()));
-        assert_eq!(text(&runs), "[x](/tmp/a b.md)");
-    }
-
-    #[test]
-    fn unclosed_destinations_wait_for_their_closing_paren() {
-        let mut parser = IncrementalParser::new();
-        parser.append("see [x](/tmp/a b");
-        assert!(link_of(&paragraph(parser.source())).is_none());
-        parser.append(".md) now");
-        assert_eq!(link_of(&paragraph(parser.source())), Some("/tmp/a b.md"));
-        assert_eq!(parser.tree(), &parse_full(parser.source()));
-    }
-
-    #[test]
-    fn rewritten_ranges_map_back_to_the_original_source() {
-        let source = "intro [x](/tmp/a b.md) tail\n\nsecond paragraph\n";
-        let tree = parse_full(source);
-        assert_eq!(tree.blocks.len(), 2);
-        assert_eq!(
-            &source[tree.blocks[0].range.clone()],
-            "intro [x](/tmp/a b.md) tail\n"
-        );
-        assert_eq!(&source[tree.blocks[1].range.clone()], "second paragraph\n");
-    }
-
-    #[test]
-    fn rewrite_is_idempotent_on_its_own_output() {
-        let source = "see [it](/tmp/Some Folder/it's here.txt) and [web](https://x.dev/a b)";
-        let once = rewrite_absolute_destinations(source).expect("rewrite");
-        assert!(once.0.contains("](</tmp/Some Folder/it's here.txt>)"));
-        assert!(once.0.contains("https://x.dev/a b"));
-        assert!(
-            rewrite_absolute_destinations(&once.0).is_none(),
-            "second pass must find nothing to rewrite"
-        );
-    }
-}
-
-#[cfg(test)]
-mod image_model_tests {
-    use super::*;
-    #[test]
-    fn images_preserve_alt_title_position_links_and_empty_alt() {
-        let tree =
-            parse_full("Before [![**alt**](a.png \"Title\")](next.md) after ![](b.png) ![](b.png)");
-        let Block::Paragraph { runs } = &tree.blocks[0].block else {
-            panic!("paragraph");
-        };
-        let images: Vec<_> = runs.iter().filter_map(|r| r.style.image.as_ref()).collect();
-        assert_eq!(images.len(), 3);
-        assert_eq!(images[0].alt, "alt");
-        assert_eq!(images[0].title, "Title");
-        assert_eq!(images[0].link.as_deref(), Some("next.md"));
-        assert_eq!(images[1].source, "b.png");
-        assert!(images[1].alt.is_empty());
-        assert_eq!(runs.first().unwrap().text, "Before ");
     }
 }

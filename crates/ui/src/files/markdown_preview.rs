@@ -67,7 +67,13 @@ fn strip_outside_links(block: &mut Block) {
     }
     match block {
         Block::Paragraph { runs } | Block::Heading { runs, .. } => strip_runs(runs),
-        Block::BlockQuote { children } => children.iter_mut().for_each(strip_outside_links),
+        Block::Details { summary, children } => {
+            strip_runs(summary);
+            children.iter_mut().for_each(strip_outside_links);
+        }
+        Block::BlockQuote { children, .. } | Block::FootnoteDefinition { children, .. } => {
+            children.iter_mut().for_each(strip_outside_links);
+        }
         Block::List { items, .. } => items.iter_mut().flatten().for_each(strip_outside_links),
         Block::Table { header, rows, .. } => {
             header.iter_mut().for_each(|runs| strip_runs(runs));
@@ -175,7 +181,8 @@ pub(super) struct MarkdownPreview {
     pub editor: Option<gpui::WeakEntity<super::editor::FileEditorState>>,
     list: ListState,
     cache: Rc<RefCell<RenderCache>>,
-    highlights: HashMap<usize, Arc<zuse_syntax::HighlightedDocument>>,
+    /// Fence tokens by `(top-level block ix, element ix)`, nested fences included.
+    highlights: HashMap<(usize, usize), Arc<zuse_syntax::HighlightedDocument>>,
     anchors: HashMap<String, usize>,
     parse_task: Option<Task<()>>,
     epoch: u64,
@@ -499,13 +506,13 @@ impl MarkdownPreview {
                     let mut highlights = HashMap::new();
                     let mut anchors = HashMap::new();
                     for (ix, top) in tree.blocks.iter().enumerate() {
-                        if let Block::CodeBlock { language, code } = &top.block {
+                        for fence in render::code_blocks(&top.block, ix) {
                             if let Ok(doc) = zuse_syntax::highlight(zuse_syntax::HighlightRequest {
-                                source: code,
+                                source: fence.code,
                                 path: None,
-                                fence_tag: language.as_deref(),
+                                fence_tag: fence.language,
                             }) {
-                                highlights.insert(ix, Arc::new(doc));
+                                highlights.insert((ix, fence.ix), Arc::new(doc));
                             }
                         }
                         if let Block::Heading { runs, .. } = &top.block {
@@ -1306,7 +1313,11 @@ impl MarkdownPreview {
                                         &opts,
                                         &theme,
                                         window,
-                                        self.highlights.get(&ix).map(|h| h.lines.as_slice()),
+                                        &|element| {
+                                            self.highlights
+                                                .get(&(ix, element))
+                                                .map(|h| h.lines.as_slice())
+                                        },
                                     )),
                             ),
                         )
@@ -2004,6 +2015,33 @@ mod layout_tests {
 mod async_tests {
     use super::*;
     use gpui::{AppContext, TestAppContext};
+
+    #[gpui::test]
+    fn preview_loads_deeply_nested_markdown_disclosures(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_global(Theme::dark()));
+        let view = cx.new(|cx| MarkdownPreview::new("README.md".into(), Rc::new(|_, _| {}), cx));
+        let depth = 10_000;
+        let source = format!(
+            "{}\n~~~rust\nfn example() {{}}\n~~~\n{}",
+            "<details>".repeat(depth),
+            "</details>".repeat(depth)
+        );
+        view.update(cx, |view, cx| view.set_source(source, false, cx));
+        cx.run_until_parked();
+        cx.executor().advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.tree.len(), 1);
+            let mut block = &view.tree.blocks[0].block;
+            let mut rendered_depth = 0;
+            while let Block::Details { children, .. } = block {
+                rendered_depth += 1;
+                block = &children[0];
+            }
+            assert!((1..=32).contains(&rendered_depth));
+            assert_eq!(view.highlights.len(), 1);
+        });
+    }
 
     #[gpui::test]
     fn edits_and_suspension_cancel_obsolete_preview_work(cx: &mut TestAppContext) {

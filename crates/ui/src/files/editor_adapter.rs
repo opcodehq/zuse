@@ -20,6 +20,7 @@ impl HighlightStyleResolver for ZuseHighlightStyleResolver {
     fn style(&self, name: &str) -> Option<HighlightStyle> {
         kind_for_name(name).map(|kind| HighlightStyle {
             color: Some(self.palette.color(kind)),
+            font_style: (kind == HighlightKind::Comment).then_some(gpui::FontStyle::Italic),
             ..Default::default()
         })
     }
@@ -199,6 +200,7 @@ fn name_for_kind(kind: HighlightKind) -> &'static str {
         HighlightKind::String => "string",
         HighlightKind::StringSpecial => "string_special",
         HighlightKind::Escape => "escape",
+        HighlightKind::Regex => "regex",
         HighlightKind::Number => "number",
         HighlightKind::Boolean => "boolean",
         HighlightKind::Type => "type",
@@ -229,12 +231,13 @@ fn name_for_kind(kind: HighlightKind) -> &'static str {
 }
 
 fn kind_for_name(name: &str) -> Option<HighlightKind> {
-    const KINDS: [HighlightKind; 31] = [
+    const KINDS: [HighlightKind; 32] = [
         HighlightKind::Comment,
         HighlightKind::Keyword,
         HighlightKind::String,
         HighlightKind::StringSpecial,
         HighlightKind::Escape,
+        HighlightKind::Regex,
         HighlightKind::Number,
         HighlightKind::Boolean,
         HighlightKind::Type,

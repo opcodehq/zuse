@@ -55,6 +55,60 @@ pub enum LanguageId {
     Dockerfile,
     Nix,
     Make,
+    Diff,
+    Xml,
+    GraphQl,
+    Proto,
+    Hcl,
+    PowerShell,
+    Ini,
+    Elixir,
+    Zig,
+}
+
+impl LanguageId {
+    /// Canonical fence tag; [`language_for_alias`] maps it back to `self`.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Rust => "rust",
+            Self::JavaScript => "javascript",
+            Self::Jsx => "jsx",
+            Self::TypeScript => "typescript",
+            Self::Tsx => "tsx",
+            Self::Python => "python",
+            Self::Go => "go",
+            Self::Json => "json",
+            Self::Jsonc => "jsonc",
+            Self::Bash => "bash",
+            Self::Toml => "toml",
+            Self::Markdown => "markdown",
+            Self::Html => "html",
+            Self::Css => "css",
+            Self::Yaml => "yaml",
+            Self::C => "c",
+            Self::Cpp => "cpp",
+            Self::CSharp => "csharp",
+            Self::Java => "java",
+            Self::Kotlin => "kotlin",
+            Self::Swift => "swift",
+            Self::Ruby => "ruby",
+            Self::Php => "php",
+            Self::Sql => "sql",
+            Self::Lua => "lua",
+            Self::Dockerfile => "dockerfile",
+            Self::Nix => "nix",
+            Self::Make => "make",
+            Self::Diff => "diff",
+            Self::Xml => "xml",
+            Self::GraphQl => "graphql",
+            Self::Proto => "proto",
+            Self::Hcl => "hcl",
+            Self::PowerShell => "powershell",
+            Self::Ini => "ini",
+            Self::Elixir => "elixir",
+            Self::Zig => "zig",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -64,6 +118,7 @@ pub enum HighlightKind {
     String,
     StringSpecial,
     Escape,
+    Regex,
     Number,
     Boolean,
     Type,
@@ -101,7 +156,7 @@ impl HighlightKind {
             Self::Macro => 90,
             Self::Property | Self::Attribute => 85,
             Self::FunctionBuiltin | Self::TypeBuiltin | Self::VariableSpecial => 80,
-            Self::StringSpecial | Self::Constructor | Self::Parameter => 75,
+            Self::StringSpecial | Self::Regex | Self::Constructor | Self::Parameter => 75,
             Self::Function | Self::Type | Self::Constant | Self::Tag | Self::Label => 70,
             Self::Comment | Self::Keyword | Self::String | Self::Number | Self::Boolean => 60,
             Self::Variable | Self::Operator => 50,
@@ -382,6 +437,7 @@ fn injected_languages(parent: LanguageId) -> Vec<LanguageId> {
         Markdown => vec![
             Rust, JavaScript, Jsx, TypeScript, Tsx, Python, Go, Json, Jsonc, Bash, Toml, Html, Css,
             Yaml, C, Cpp, CSharp, Java, Kotlin, Swift, Ruby, Php, Sql, Lua, Dockerfile, Nix, Make,
+            Diff, Xml, GraphQl, Proto, Hcl, PowerShell, Ini, Elixir, Zig,
         ],
         Dockerfile => vec![Bash, Json, Yaml, Toml],
         _ => Vec::new(),
@@ -414,7 +470,7 @@ fn cached_configuration(
     registry!(
         Rust, JavaScript, Jsx, TypeScript, Tsx, Python, Go, Json, Jsonc, Bash, Toml, Markdown,
         Html, Css, Yaml, C, Cpp, CSharp, Java, Kotlin, Swift, Ruby, Php, Sql, Lua, Dockerfile, Nix,
-        Make,
+        Make, Diff, Xml, GraphQl, Proto, Hcl, PowerShell, Ini, Elixir, Zig,
     )
 }
 
@@ -606,7 +662,10 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
         Css => make_configuration(
             tree_sitter_css::LANGUAGE.into(),
             "css",
-            tree_sitter_css::HIGHLIGHTS_QUERY,
+            // Declaration names take the attribute role, as in T3's themes,
+            // so they read apart from selectors' class and id names.
+            &tree_sitter_css::HIGHLIGHTS_QUERY
+                .replace("(property_name) @property", "(property_name) @attribute"),
             "",
             "",
         ),
@@ -712,6 +771,71 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             tree_sitter_containerfile::INJECTIONS_QUERY,
             "",
         ),
+        Diff => make_configuration(
+            tree_sitter_diff::LANGUAGE.into(),
+            "diff",
+            // Hunk headers (`@@ -1,2 +1,3 @@`) take the function role.
+            &tree_sitter_diff::HIGHLIGHTS_QUERY
+                .replace("(location) @attribute", "(location) @function"),
+            "",
+            "",
+        ),
+        Xml => make_configuration(
+            tree_sitter_xml::LANGUAGE_XML.into(),
+            "xml",
+            tree_sitter_xml::XML_HIGHLIGHT_QUERY,
+            "",
+            "",
+        ),
+        GraphQl => make_configuration(
+            tree_sitter_graphql::LANGUAGE.into(),
+            "graphql",
+            include_str!("../queries/graphql/highlights.scm"),
+            "",
+            "",
+        ),
+        Proto => make_configuration(
+            tree_sitter_proto::LANGUAGE.into(),
+            "proto",
+            tree_sitter_proto::HIGHLIGHTS_QUERY,
+            "",
+            "",
+        ),
+        Hcl => make_configuration(
+            tree_sitter_hcl::LANGUAGE.into(),
+            "hcl",
+            include_str!("../queries/hcl/highlights.scm"),
+            "",
+            "",
+        ),
+        PowerShell => make_configuration(
+            tree_sitter_powershell::LANGUAGE.into(),
+            "powershell",
+            tree_sitter_powershell::HIGHLIGHTS_QUERY,
+            "",
+            "",
+        ),
+        Ini => make_configuration(
+            tree_sitter_ini::LANGUAGE.into(),
+            "ini",
+            tree_sitter_ini::HIGHLIGHTS_QUERY,
+            "",
+            "",
+        ),
+        Elixir => make_configuration(
+            tree_sitter_elixir::LANGUAGE.into(),
+            "elixir",
+            tree_sitter_elixir::HIGHLIGHTS_QUERY,
+            "",
+            "",
+        ),
+        Zig => make_configuration(
+            tree_sitter_zig::LANGUAGE.into(),
+            "zig",
+            tree_sitter_zig::HIGHLIGHTS_QUERY,
+            "",
+            "",
+        ),
     }
 }
 
@@ -722,7 +846,10 @@ const CAPTURE_NAMES: &[&str] = &[
     "keyword",
     "string",
     "string.special",
+    "string.special.symbol",
     "string.escape",
+    "string.regex",
+    "string.regexp",
     "number",
     "boolean",
     "type",
@@ -735,6 +862,7 @@ const CAPTURE_NAMES: &[&str] = &[
     "constant",
     "variable",
     "variable.builtin",
+    "variable.member",
     "variable.parameter",
     "operator",
     "punctuation",
@@ -756,7 +884,10 @@ const CAPTURE_KINDS: &[HighlightKind] = &[
     HighlightKind::Keyword,
     HighlightKind::String,
     HighlightKind::StringSpecial,
+    HighlightKind::Constant,
     HighlightKind::Escape,
+    HighlightKind::Regex,
+    HighlightKind::Regex,
     HighlightKind::Number,
     HighlightKind::Boolean,
     HighlightKind::Type,
@@ -769,6 +900,7 @@ const CAPTURE_KINDS: &[HighlightKind] = &[
     HighlightKind::Constant,
     HighlightKind::Variable,
     HighlightKind::VariableSpecial,
+    HighlightKind::Property,
     HighlightKind::Parameter,
     HighlightKind::Operator,
     HighlightKind::Punctuation,
@@ -790,10 +922,23 @@ pub fn detect_language(
     fence_tag: Option<&str>,
     first_line: Option<&str>,
 ) -> Option<LanguageId> {
+    // An explicit plain-text fence opts out; a shebang must not override it.
+    if fence_tag.is_some_and(is_plain_text_alias) {
+        return None;
+    }
     fence_tag
         .and_then(language_for_alias)
         .or_else(|| path.and_then(language_for_path))
         .or_else(|| first_line.and_then(language_for_shebang))
+}
+
+/// Fence tags that explicitly mean unhighlighted text.
+pub fn is_plain_text_alias(alias: &str) -> bool {
+    alias.split_ascii_whitespace().next().is_some_and(|alias| {
+        ["text", "txt", "plain", "plaintext"]
+            .iter()
+            .any(|plain| alias.eq_ignore_ascii_case(plain))
+    })
 }
 
 pub fn language_for_alias(alias: &str) -> Option<LanguageId> {
@@ -810,13 +955,14 @@ pub fn language_for_alias(alias: &str) -> Option<LanguageId> {
         "tsx" => LanguageId::Tsx,
         "python" | "py" | "python3" => LanguageId::Python,
         "go" | "golang" => LanguageId::Go,
-        "json" => LanguageId::Json,
+        "json" | "jsonl" | "json5" => LanguageId::Json,
         "jsonc" => LanguageId::Jsonc,
-        "bash" | "sh" | "shell" | "zsh" | "console" => LanguageId::Bash,
+        "bash" | "sh" | "shell" | "zsh" | "console" | "shell-session" | "sh-session"
+        | "shellsession" => LanguageId::Bash,
         "toml" => LanguageId::Toml,
         "markdown" | "md" => LanguageId::Markdown,
         "html" | "htm" => LanguageId::Html,
-        "css" => LanguageId::Css,
+        "css" | "scss" | "less" => LanguageId::Css,
         "yaml" | "yml" => LanguageId::Yaml,
         "c" => LanguageId::C,
         "cpp" | "c++" | "cc" | "cxx" | "hpp" => LanguageId::Cpp,
@@ -831,6 +977,16 @@ pub fn language_for_alias(alias: &str) -> Option<LanguageId> {
         "dockerfile" | "docker" => LanguageId::Dockerfile,
         "nix" => LanguageId::Nix,
         "make" | "makefile" => LanguageId::Make,
+        "diff" | "patch" => LanguageId::Diff,
+        "xml" | "xsl" | "xslt" | "xsd" | "svg" | "plist" => LanguageId::Xml,
+        "graphql" | "gql" => LanguageId::GraphQl,
+        "proto" | "protobuf" => LanguageId::Proto,
+        "hcl" | "terraform" | "tf" | "tfvars" => LanguageId::Hcl,
+        "powershell" | "ps1" | "psm1" | "psd1" | "pwsh" => LanguageId::PowerShell,
+        "ini" | "cfg" | "conf" | "properties" | "gitconfig" | "editorconfig" | "gitignore"
+        | "gitattributes" => LanguageId::Ini,
+        "elixir" | "ex" | "exs" => LanguageId::Elixir,
+        "zig" => LanguageId::Zig,
         _ => return None,
     })
 }
@@ -842,6 +998,8 @@ pub fn language_for_path(path: &str) -> Option<LanguageId> {
         "dockerfile" | "containerfile" => return Some(LanguageId::Dockerfile),
         "makefile" | "gnumakefile" => return Some(LanguageId::Make),
         "cargo.lock" | "cargo.toml" | "pyproject.toml" => return Some(LanguageId::Toml),
+        ".gitignore" | ".gitconfig" | ".gitattributes" | ".gitmodules" | ".editorconfig"
+        | ".dockerignore" | ".npmrc" => return Some(LanguageId::Ini),
         _ => {}
     }
     language_for_alias(path.extension()?.to_str()?)
@@ -1196,6 +1354,43 @@ fn build(value: usize) -> Widget {
                 "Dockerfile",
                 "FROM alpine\nRUN echo hello",
             ),
+            (
+                LanguageId::Diff,
+                "fix.patch",
+                "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new",
+            ),
+            (LanguageId::Xml, "a.xml", "<root id=\"1\"><!-- c --></root>"),
+            (
+                LanguageId::GraphQl,
+                "q.graphql",
+                "query Q($id: ID!) { user(id: $id) @include(if: true) { name } }\ntype User implements Node { name: String! }",
+            ),
+            (
+                LanguageId::Proto,
+                "a.proto",
+                "syntax = \"proto3\";\nmessage User { string name = 1; }",
+            ),
+            (
+                LanguageId::Hcl,
+                "main.tf",
+                "resource \"aws_s3_bucket\" \"b\" {\n  bucket = \"${var.name}-x\"\n  count = length(local.items)\n  tags = { Name = true }\n}",
+            ),
+            (
+                LanguageId::PowerShell,
+                "run.ps1",
+                "$name = \"zuse\"\nWrite-Host $name",
+            ),
+            (
+                LanguageId::Ini,
+                ".editorconfig",
+                "[*]\nindent_style = space",
+            ),
+            (
+                LanguageId::Elixir,
+                "app.ex",
+                "defmodule App do\n  def call(x), do: :ok\nend",
+            ),
+            (LanguageId::Zig, "main.zig", "const std = @import(\"std\");"),
         ];
         for (language, path, source) in fixtures {
             let config =
@@ -1326,5 +1521,117 @@ fn build(value: usize) -> Widget {
             "YAML fence was not injected: {:?}",
             document.lines[5]
         );
+    }
+
+    #[test]
+    fn language_names_round_trip_through_aliases() {
+        use LanguageId::*;
+        for language in [
+            Rust, JavaScript, Jsx, TypeScript, Tsx, Python, Go, Json, Jsonc, Bash, Toml, Markdown,
+            Html, Css, Yaml, C, Cpp, CSharp, Java, Kotlin, Swift, Ruby, Php, Sql, Lua, Dockerfile,
+            Nix, Make, Diff, Xml, GraphQl, Proto, Hcl, PowerShell, Ini, Elixir, Zig,
+        ] {
+            assert_eq!(language_for_alias(language.name()), Some(language));
+        }
+    }
+
+    #[test]
+    fn fence_aliases_cover_common_variants() {
+        let cases = [
+            ("jsonl", LanguageId::Json),
+            ("json5", LanguageId::Json),
+            ("scss", LanguageId::Css),
+            ("less", LanguageId::Css),
+            ("shell-session", LanguageId::Bash),
+            ("sh-session", LanguageId::Bash),
+            ("console", LanguageId::Bash),
+            ("patch", LanguageId::Diff),
+            ("diff", LanguageId::Diff),
+            ("xsl", LanguageId::Xml),
+            ("svg", LanguageId::Xml),
+            ("plist", LanguageId::Xml),
+            ("gql", LanguageId::GraphQl),
+            ("protobuf", LanguageId::Proto),
+            ("terraform", LanguageId::Hcl),
+            ("tf", LanguageId::Hcl),
+            ("ps1", LanguageId::PowerShell),
+            ("pwsh", LanguageId::PowerShell),
+            ("gitignore", LanguageId::Ini),
+            ("ini", LanguageId::Ini),
+            ("exs", LanguageId::Elixir),
+            ("zig", LanguageId::Zig),
+        ];
+        for (alias, expected) in cases {
+            assert_eq!(language_for_alias(alias), Some(expected), "{alias}");
+        }
+        assert_eq!(language_for_path(".gitignore"), Some(LanguageId::Ini));
+        assert_eq!(language_for_path("infra/main.tf"), Some(LanguageId::Hcl));
+    }
+
+    #[test]
+    fn plain_text_fences_are_never_highlighted() {
+        for tag in ["text", "txt", "plain", "PlainText"] {
+            assert!(is_plain_text_alias(tag), "{tag}");
+            assert_eq!(language_for_alias(tag), None, "{tag}");
+            // A shebang-looking first line must not pull the fence into Bash.
+            assert_eq!(detect_language(None, Some(tag), Some("#!/bin/bash")), None);
+            assert_eq!(
+                highlight(HighlightRequest {
+                    source: "#!/bin/bash\necho hi",
+                    path: None,
+                    fence_tag: Some(tag),
+                }),
+                Err(HighlightError::UnknownLanguage)
+            );
+        }
+    }
+
+    fn fence_fragments<'a>(source: &'a str, tag: &str) -> Vec<(&'a str, HighlightKind)> {
+        let document = highlight(HighlightRequest {
+            source,
+            path: None,
+            fence_tag: Some(tag),
+        })
+        .unwrap();
+        source
+            .lines()
+            .zip(document.lines)
+            .flat_map(|(line, spans)| {
+                spans
+                    .into_iter()
+                    .map(move |span| (&line[span.range], span.kind))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn diff_fences_mark_hunks_additions_and_deletions() {
+        let fragments = fence_fragments("@@ -1,2 +1,2 @@\n-old line\n+new line\n same", "patch");
+        assert!(
+            fragments
+                .iter()
+                .any(|(text, kind)| text.contains("-1,2") && *kind == HighlightKind::Function),
+            "{fragments:?}"
+        );
+        assert!(
+            fragments.contains(&("+new line", HighlightKind::String)),
+            "{fragments:?}"
+        );
+        assert!(
+            fragments.contains(&("-old line", HighlightKind::Keyword)),
+            "{fragments:?}"
+        );
+    }
+
+    #[test]
+    fn css_declarations_and_symbols_take_distinct_roles() {
+        let css = fence_fragments(".app { color: red; }", "scss");
+        assert!(
+            css.contains(&("color", HighlightKind::Attribute)),
+            "{css:?}"
+        );
+        assert!(css.contains(&("app", HighlightKind::Property)), "{css:?}");
+        let ruby = fence_fragments("value = :ok", "ruby");
+        assert!(ruby.contains(&(":ok", HighlightKind::Constant)), "{ruby:?}");
     }
 }

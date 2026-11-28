@@ -5353,6 +5353,7 @@ impl Shell {
             }
             // A cloud chat's own conversation answers its not-sent line.
             TranscriptEvent::RetryNotSent | TranscriptEvent::RemoveNotSent => {}
+            TranscriptEvent::RunInTerminal { command } => self.run_in_terminal(command, cx),
         }
     }
 
@@ -5967,6 +5968,33 @@ impl Shell {
         self.file_surface_keys.retain(|_, value| *value != id);
         self.pending_file_closes.remove(&surface);
         self.forget_main_file_tab(id, cx);
+        cx.notify();
+    }
+
+    /// A transcript shell fence's "Run in terminal": open the bottom drawer
+    /// (sliding in when it was closed) and run `command` in a fresh tab.
+    /// Cloud chats keep their terminal in the task sidebar, which takes no
+    /// typed input from here.
+    fn run_in_terminal(&mut self, command: &str, cx: &mut Context<Self>) {
+        if self.cloud_conversation.is_some() {
+            self.show_notice(
+                crate::toast::ToastKind::Info,
+                "Run in terminal isn't available in cloud chats yet",
+                cx,
+            );
+            return;
+        }
+        if !self.terminal_open(cx) {
+            let from = self.terminal_geometry.get().height;
+            let key = self.panel_key(cx);
+            self.panels
+                .update(&key, |panels| panels.terminal_open = true);
+            self.terminal_tween = Some(WidthTween::new(from, self.terminal_target(cx)));
+        }
+        self.composer
+            .update(cx, |composer, _| composer.focus_pending = false);
+        let panel = self.terminal_panel(cx);
+        panel.update(cx, |panel, cx| panel.run_command(command, cx));
         cx.notify();
     }
 

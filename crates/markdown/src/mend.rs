@@ -57,6 +57,9 @@ struct OpenDelim {
 /// Repair hanging inline markers in a streaming block's source. Returns
 /// `None` when the text needs no repair (the overwhelmingly common case).
 pub fn close_hanging(text: &str) -> Option<String> {
+    if let Some(mended) = alert_marker(text) {
+        return Some(mended);
+    }
     let cs: Vec<(usize, char)> = text.char_indices().collect();
     let n = cs.len();
     let at = |i: usize| cs.get(i).map(|&(_, c)| c);
@@ -71,7 +74,21 @@ pub fn close_hanging(text: &str) -> Option<String> {
     let mut last_content: Option<usize> = None;
     // Char index of the `]` of a `](…` whose URL runs off the end.
     let mut pending_url: Option<usize> = None;
+    // Char index where a still-streaming HTML comment or tag begins: the
+    // display drops it until it completes (a bare `<kb` never shows).
+    let mut cut: Option<usize> = None;
+    // An unclosed math span: (`$` run length, char index past the opener).
+    let mut math: Option<(usize, usize)> = None;
 
+    let mut math_closes = (1..n)
+        .filter(|&j| {
+            cs[j].1 == '$'
+                && !cs[j - 1].1.is_whitespace()
+                && cs[j - 1].1 != '\\'
+                && at(j + 1) != Some('$')
+        })
+        .peekable();
+    let mut last_tex = None;
     let mut i = 0;
     while i < n {
         let c = cs[i].1;
@@ -143,6 +160,69 @@ pub fn close_hanging(text: &str) -> Option<String> {
                 last_content = Some(i);
                 i += 1;
             }
+            '<' => {
+                let rest = &text[cs[i].0..];
+                if let Some(len) = html_span_len(rest) {
+                    // A whole tag or comment: attributes are not markdown.
+                    let end = cs[i].0 + len;
+                    last_content = Some(i);
+                    while i < n && cs[i].0 < end {
+                        i += 1;
+                    }
+                } else if partial_html_at_end(rest) {
+                    cut = Some(i);
+                    break;
+                } else {
+                    last_content = Some(i);
+                    i += 1;
+                }
+            }
+            '$' => {
+                let run = run_len(&cs, i);
+                if run >= 2 {
+                    // Display math closes on the next `$$`; its body is TeX.
+                    match (i + run..n.saturating_sub(1))
+                        .find(|&j| cs[j].1 == '$' && cs[j + 1].1 == '$')
+                    {
+                        Some(j) => {
+                            last_content = Some(j + 1);
+                            i = j + 2;
+                        }
+                        None => {
+                            math = Some((2, i + run));
+                            break;
+                        }
+                    }
+                    continue;
+                }
+                let next = at(i + 1);
+                if next.is_some_and(|c| !c.is_whitespace()) {
+                    // Inline math closes on a `$` not preceded by whitespace
+                    // (pulldown-cmark's rule — `$5 and $10` stays text).
+                    while math_closes.peek().is_some_and(|&j| j < i + 2) {
+                        math_closes.next();
+                    }
+                    if let Some(j) = math_closes.next() {
+                        last_content = Some(j);
+                        i = j + 1;
+                        continue;
+                    }
+                    // A hanging opener is math only when TeX follows; a
+                    // price (`$5`) or a shell variable stays text.
+                    if next.is_some_and(|c| !c.is_ascii_digit())
+                        && last_tex
+                            .get_or_insert_with(|| {
+                                cs.iter().rposition(|&(_, c)| matches!(c, '\\' | '^' | '{'))
+                            })
+                            .is_some_and(|j| j > i)
+                    {
+                        math = Some((1, i + 1));
+                        break;
+                    }
+                }
+                last_content = Some(i);
+                i += 1;
+            }
             c if c.is_whitespace() => i += 1,
             _ => {
                 last_content = Some(i);
@@ -150,6 +230,10 @@ pub fn close_hanging(text: &str) -> Option<String> {
             }
         }
     }
+    let text = match cut {
+        Some(at) => &text[..cs[at].0],
+        None => text,
+    };
 
     // Text ends inside a link/image URL: drop the partial URL, keep the text.
     if let Some(close) = pending_url {
@@ -161,6 +245,11 @@ pub fn close_hanging(text: &str) -> Option<String> {
     // splits the emphasis closers naturally: delimiters opened inside the
     // link text close before the `](…)`, ones opened before it close after.
     let mut pending: Vec<(usize, String)> = Vec::new();
+    if let Some((len, pos)) = math
+        && cs[pos..].iter().any(|&(_, c)| !c.is_whitespace())
+    {
+        pending.push((pos, "$".repeat(len)));
+    }
     if let Some((ticks, cpos)) = code
         && last_content.is_some_and(|lc| lc >= cpos)
     {
@@ -186,7 +275,7 @@ pub fn close_hanging(text: &str) -> Option<String> {
     let setext = setext_partial(text);
 
     if closers.is_empty() && !setext {
-        return None;
+        return cut.map(|_| text.to_string());
     }
     if setext {
         // Closers belong to the paragraph content above the underline line.
@@ -203,6 +292,135 @@ pub fn close_hanging(text: &str) -> Option<String> {
     // same reason).
     let end = text.trim_end().len();
     Some(format!("{}{closers}{}", &text[..end], &text[end..]))
+}
+
+/// The five GFM alert kinds, as their markers spell them.
+const ALERT_KINDS: [&str; 5] = ["NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION"];
+
+/// A quote whose only line is a half-typed alert marker (`> [!`, `> [!WAR`)
+/// would show its marker as text, then snap into an alert. Complete the
+/// marker when its letters already name one kind (every kind has its own
+/// first letter), and hide a bare `[!` until the first letter decides.
+fn alert_marker(text: &str) -> Option<String> {
+    if text.contains('\n') {
+        return None;
+    }
+    let trimmed = text.trim_start_matches(' ');
+    if text.len() - trimmed.len() > 3 {
+        return None;
+    }
+    let rest = trimmed.strip_prefix('>')?;
+    let rest = rest.strip_prefix(' ').unwrap_or(rest);
+    let letters = rest.strip_prefix("[!")?;
+    if !letters.chars().all(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    let quote = &text[..text.len() - rest.len()];
+    if letters.is_empty() {
+        return Some(quote.trim_end().to_string());
+    }
+    let upper = letters.to_ascii_uppercase();
+    let mut kinds = ALERT_KINDS.iter().filter(|kind| kind.starts_with(&upper));
+    let kind = kinds.next()?;
+    Some(format!("{quote}[!{kind}]"))
+}
+
+/// Tags the display hides while their name is still streaming.
+const KNOWN_TAGS: [&str; 41] = [
+    "a",
+    "b",
+    "blockquote",
+    "br",
+    "code",
+    "dd",
+    "del",
+    "details",
+    "div",
+    "dl",
+    "dt",
+    "em",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "hr",
+    "i",
+    "img",
+    "kbd",
+    "li",
+    "mark",
+    "ol",
+    "p",
+    "pre",
+    "s",
+    "samp",
+    "small",
+    "span",
+    "strike",
+    "strong",
+    "sub",
+    "summary",
+    "sup",
+    "table",
+    "td",
+    "th",
+    "tr",
+    "ul",
+];
+
+/// Byte length of a complete HTML tag or comment at the start of `text`.
+fn html_span_len(text: &str) -> Option<usize> {
+    if let Some(rest) = text.strip_prefix("<!--") {
+        return rest.find("-->").map(|end| 4 + end + 3);
+    }
+    let bytes = text.as_bytes();
+    let mut at = 1 + usize::from(bytes.get(1) == Some(&b'/'));
+    if !bytes.get(at).is_some_and(u8::is_ascii_alphabetic) {
+        return None;
+    }
+    while bytes
+        .get(at)
+        .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'-')
+    {
+        at += 1;
+    }
+    match bytes.get(at) {
+        Some(b'>') => return Some(at + 1),
+        Some(b' ' | b'/' | b'\t') => {}
+        _ => return None,
+    }
+    let close = text[at..].find(['>', '<', '\n'])?;
+    (bytes[at + close] == b'>').then_some(at + close + 1)
+}
+
+/// An HTML comment or a known tag still streaming at the very end of the
+/// block: `<!-- note`, `<det`, `</summ`, `<a href="x`.
+fn partial_html_at_end(text: &str) -> bool {
+    if text.starts_with("<!--") {
+        return true; // `html_span_len` already found no close
+    }
+    if text.contains(['>', '\n']) {
+        return false;
+    }
+    if matches!(text, "<!" | "<!-" | "</") {
+        return true;
+    }
+    let body = text[1..].strip_prefix('/').unwrap_or(&text[1..]);
+    let name_len = body
+        .find(|c: char| !c.is_ascii_alphanumeric())
+        .unwrap_or(body.len());
+    let (name, attrs) = body.split_at(name_len);
+    if name.is_empty() {
+        return false;
+    }
+    let name = name.to_ascii_lowercase();
+    if attrs.is_empty() {
+        KNOWN_TAGS.iter().any(|tag| tag.starts_with(&name))
+    } else {
+        attrs.starts_with([' ', '\t', '/']) && KNOWN_TAGS.contains(&name.as_str())
+    }
 }
 
 fn run_len(cs: &[(usize, char)], i: usize) -> usize {

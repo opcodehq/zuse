@@ -2920,7 +2920,7 @@ impl Shell {
                         &options,
                         theme,
                         window,
-                        &|_| None,
+                        &|_, _| None,
                     )),
             )
             .into_any_element()

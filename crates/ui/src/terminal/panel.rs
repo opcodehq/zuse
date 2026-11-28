@@ -484,6 +484,28 @@ impl TerminalPanel {
         Some(self.tab_seq)
     }
 
+    /// Open the drawer and type `command` plus Enter into a fresh tab for the
+    /// selected chat: the first tab opening creates, else a new one, so a
+    /// running program never receives it. Input queued before the PTY opens
+    /// is held until it does.
+    pub fn run_command(&mut self, command: &str, cx: &mut Context<Self>) {
+        let chat = self.selected_chat(cx);
+        let tab_count = |panel: &Self| panel.chats.get(&chat).map_or(0, |entry| entry.tabs.len());
+        let before = tab_count(self);
+        self.set_open(true, cx);
+        if tab_count(self) == before {
+            self.open_tab(chat.clone(), cx);
+        }
+        if tab_count(self) == before {
+            // No engine to open a session with.
+            return;
+        }
+        self.request_focus(cx);
+        let mut bytes = command.as_bytes().to_vec();
+        bytes.push(b'\r');
+        self.queue_input(&bytes, cx);
+    }
+
     /// Create a named placeholder tab without opening a PTY. Project Actions
     /// use this before their host-side run RPC completes.
     pub fn reserve_tab_for_chat(
@@ -685,6 +707,9 @@ impl TerminalPanel {
             ).await;
             let _ = this.update(cx, |panel, cx| {
                 panel.catalogs.remove(&chat);
+                let active = panel.chats.get(&chat)
+                    .filter(|tabs| !tabs.tabs.is_empty())
+                    .map(|tabs| tabs.active);
                 match result {
                     Ok(sessions) => {
                         for session in sessions {
@@ -699,7 +724,7 @@ impl TerminalPanel {
                             panel.attach_reserved_session(&chat, key, session, target.clone(), cx);
                         }
                         if panel.chats.get(&chat).is_none_or(|tabs| tabs.tabs.is_empty()) {
-                            panel.open_tab(chat, cx);
+                            panel.open_tab(chat.clone(), cx);
                         }
                     }
                     Err(error) => {
@@ -708,6 +733,11 @@ impl TerminalPanel {
                             "Could not load retained terminals: {error}. Close this tab and reopen the terminal panel to retry."
                         ), cx);
                     }
+                }
+                if let Some(active) = active
+                    && let Some(tabs) = panel.chats.get_mut(&chat)
+                {
+                    tabs.active = active;
                 }
                 cx.notify();
             });
