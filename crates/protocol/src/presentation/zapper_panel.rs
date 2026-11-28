@@ -573,7 +573,7 @@ mod tests {
                     created_at: n as i64,
                     kind: (*kind).into(),
                     text: (*text).into(),
-                    reply_to: None,
+                    ..Default::default()
                 })
                 .collect(),
         }

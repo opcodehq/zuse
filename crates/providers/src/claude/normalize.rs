@@ -229,10 +229,14 @@ fn tag(parent: &str, event: AgentEvent) -> AgentEvent {
 /// It announces the opposite of more work.
 ///
 /// Prefix-matched: the CLI ships at least two spellings of the marker
-/// (`…by user]` and `…by user for tool use]`).
+/// (`…by user]` and `…by user for tool use]`). The image note the CLI adds
+/// after every image read is caught by text too, for frames that arrive
+/// without an `isSynthetic` stamp.
 fn is_synthetic_user_text(text: &str) -> bool {
-    let text = text.trim_start();
-    text.starts_with("<system-reminder>") || text.starts_with("[Request interrupted")
+    let trimmed = text.trim_start();
+    trimmed.starts_with("<system-reminder>")
+        || trimmed.starts_with("[Request interrupted")
+        || zuse_protocol::presentation::image_note::is_image_note(text)
 }
 
 /// Per-run normalization state.
@@ -915,11 +919,16 @@ impl Normalizer {
                     // tool results ride their own blocks, filtered above).
                     // Synthetic harness injections are not conversation, and
                     // must not read as a steer — see [`is_synthetic_user_text`].
+                    // A frame the CLI stamps `isSynthetic` is all injection:
+                    // every image a subagent Reads is followed by one carrying
+                    // an `[Image: original WxH, …]` note, which otherwise
+                    // rendered as a user bubble per screenshot.
                     out.extend(
                         f.message
                             .blocks()
                             .filter(|b: &ContentBlock| {
-                                b.kind == "text"
+                                !f.is_synthetic
+                                    && b.kind == "text"
                                     && !b.text.trim().is_empty()
                                     && !is_synthetic_user_text(&b.text)
                             })
@@ -961,11 +970,19 @@ impl Normalizer {
                 }
                 let window =
                     rate_window_label(f.rate_limit_info.rate_limit_type.as_deref().unwrap_or(""));
-                vec![AgentEvent::Error {
-                    message: format!(
-                        "Claude {window} limit reached — the turn was blocked. Try again after it resets."
-                    ),
-                }]
+                vec![
+                    AgentEvent::UsageLimit {
+                        resets_at: f
+                            .rate_limit_info
+                            .resets_at
+                            .and_then(|seconds| seconds.checked_mul(1000)),
+                    },
+                    AgentEvent::Error {
+                        message: format!(
+                            "Claude {window} limit reached — the turn was blocked. Try again after it resets."
+                        ),
+                    },
+                ]
             }
 
             Frame::Result(f) => {
@@ -1292,11 +1309,30 @@ mod tests {
     }
 
     #[test]
+    fn usage_limit_preserves_reset_time_for_resuming() {
+        let events = normalize_one(
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1800000000,"rateLimitType":"five_hour"}}"#,
+        );
+        assert!(matches!(
+            events.first(),
+            Some(AgentEvent::UsageLimit {
+                resets_at: Some(1_800_000_000_000)
+            })
+        ));
+    }
+
+    #[test]
     fn a_rejected_window_carried_by_overage_is_not_an_error() {
         let blocked = normalize_one(
             r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"five_hour","overageStatus":"rejected"}}"#,
         );
-        assert!(matches!(blocked.as_slice(), [AgentEvent::Error { .. }]));
+        assert!(matches!(
+            blocked.as_slice(),
+            [
+                AgentEvent::UsageLimit { resets_at: None },
+                AgentEvent::Error { .. }
+            ]
+        ));
         for overage in [
             r#""overageStatus":"allowed""#,
             r#""overageStatus":"allowed_warning""#,
@@ -1552,6 +1588,10 @@ mod tests {
             r#"{"type":"user","parent_tool_use_id":"toolu_sub","message":{"content":[{"type":"text","text":"<system-reminder>tick</system-reminder>"}]}}"#,
             r#"{"type":"user","parent_tool_use_id":"toolu_sub","message":{"content":[{"type":"text","text":"   "}]}}"#,
             r#"{"type":"user","message":{"content":[{"type":"text","text":"typed into the parent"}]}}"#,
+            // The CLI's meta note after every image a subagent Reads, with
+            // and without the `isSynthetic` stamp.
+            r#"{"type":"user","parent_tool_use_id":"toolu_sub","isSynthetic":true,"message":{"content":[{"type":"text","text":"[Image: original 1290x2796, displayed at 923x2000. Multiply coordinates by 1.40 to map to original image.]"}]}}"#,
+            r#"{"type":"user","parent_tool_use_id":"toolu_sub","message":{"content":[{"type":"text","text":"[Image: source: /tmp/a.png]"}]}}"#,
         ] {
             assert_eq!(normalize_one(frame), Vec::new(), "frame: {frame}");
         }

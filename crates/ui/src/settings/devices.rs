@@ -509,20 +509,25 @@ impl Render for DevicesPage {
                                     &tr(cx, msg::native::use_this_computer_from_your_phone_a_browser_or_another_computer),
                                 ))
                                 .child({
-                                    use zuse_viewport::{remote_access_style as r, settings_style as st};
                                     let empty = pairing.device_rows.is_empty() && computer_rows.is_empty();
                                     let advanced_open = pairing.advanced.is_some();
-                                    div().mt(px(20.)).flex().flex_col().gap(px(20.))
-                                        .child(super::pairing::section(&theme, "This computer", None, pairing.hero))
-                                        .child(super::pairing::section(
-                                            &theme,
-                                            "Devices",
-                                            Some(pairing.add_computer),
-                                            st::card()
-                                                .when(empty, |v| v.child(r::empty("No devices yet. Use Connect device to pair your phone.")))
-                                                .children(pairing.device_rows)
-                                                .children(computer_rows),
+                                    let devices = widgets::section_card(&theme).mt_0();
+                                    let devices = if empty {
+                                        devices.child(widgets::card_row(&theme, true).child(
+                                            div()
+                                                .text_size(crate::typography::text_xs())
+                                                .text_color(theme.text_muted)
+                                                .child("No devices yet. Use Connect device to pair your phone."),
                                         ))
+                                    } else {
+                                        devices.children(pairing.device_rows).children(computer_rows)
+                                    };
+                                    widgets::section_stack()
+                                        .child(widgets::group(&theme, "This computer", "").child(pairing.hero))
+                                        .child(
+                                            widgets::group_with_action(&theme, "Devices", "", Some(pairing.add_computer))
+                                                .child(devices),
+                                        )
                                         .child(div().flex().flex_col().gap(px(12.))
                                             .child(pairing.advanced_toggle)
                                             .when(advanced_open, |v| v

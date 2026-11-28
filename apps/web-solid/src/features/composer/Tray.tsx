@@ -13,6 +13,7 @@ import { deviceOnline, draftSpace, resolve, selectedChat } from "./catalog";
 import { attachmentsFor, clearFailure, composer, focusComposer, removeAttachment, setComposer } from "./drafts";
 import { cancelLogin, login, providerName, reopenLoginPage, signsIn, startLogin } from "./login";
 import { beginQueueEdit, cancelQueueEdit, commitQueueEdit, queueEdit, queueTitle, type QueuedMessage } from "./queueEdit";
+import { useUsageResume } from "./usageResume";
 import { draftKey, hasContent, lastPrompt, queueAction, retry, runLive } from "./send";
 
 type Tone = "default" | "warning" | "danger" | "accent";
@@ -172,6 +173,7 @@ function SendFailure() {
 function ProviderRows() {
   const chatId = () => view.selectedChatId;
   const harness = () => resolve().harness;
+  const recovery = useUsageResume(chatId);
   const error = createMemo(() => {
     const id = chatId();
     if (!id || runLive(id)) return null;
@@ -182,6 +184,11 @@ function ProviderRows() {
   const dismiss = (id: string) => {
     const chat = chatId();
     if (chat) setComposer(draft => { draft["dismissedErrors"]![chat] = id; });
+  };
+  const pending = () => recovery.status()?.pending;
+  const resetTime = () => {
+    const at = pending()?.resetsAt;
+    return at ? new Date(at).toLocaleString([], { hour: "numeric", minute: "2-digit", month: "short", day: "numeric" }) : null;
   };
   const activeLogin = () => (login()?.chatId === chatId() ? login() : null);
   const showSignIn = () => signsIn(harness()) && (activeLogin() || kind() === "signIn");
@@ -229,11 +236,21 @@ function ProviderRows() {
               role="alert"
               tone={k() === "usage" ? "warning" : k() === "reconnecting" ? "default" : "danger"}
               icon={k() === "usage" ? "dashboard-speed" : k() === "reconnecting" ? "refresh" : "alert-circle"}
-              title={ERROR_COPY[k()]}
-              subtitle={firstLine(e().message)}
+              title={k() === "usage" && pending()?.enabled && resetTime() ? `Usage limit reached. Resuming at ${resetTime()}` : ERROR_COPY[k()]}
+              subtitle={recovery.error() ?? (k() === "usage" && pending() && !resetTime() ? "The provider hasn't supplied a reset time. Resume when your limit resets." : firstLine(e().message))}
               details={e().message}
             >
-              <Show when={prompt()}>
+              <Show when={k() === "usage" && pending()}>
+                <button type="button" class="cmp-text-action" disabled={recovery.busy() || state.connection.kind !== "connected"} onClick={() => void recovery.resume()}>
+                  {recovery.busy() ? "Resuming…" : "Resume now"}
+                </button>
+                <Show when={resetTime()}>
+                  <button type="button" class="cmp-text-action" disabled={recovery.busy() || state.connection.kind !== "connected"} onClick={() => void recovery.setEnabled(!pending()?.enabled)}>
+                    {pending()?.enabled ? "Cancel auto-resume" : "Auto-resume"}
+                  </button>
+                </Show>
+              </Show>
+              <Show when={!(k() === "usage" && pending()) && prompt()}>
                 {(text) => (
                   <button
                     type="button"
@@ -250,7 +267,11 @@ function ProviderRows() {
               <Show when={k() === "usage" || k() === "signIn"}>
                 <button type="button" class="cmp-text-action" onClick={() => navigate({ kind: "settings", section: "providers" })}>Settings</button>
               </Show>
-              <CopyDismiss copy={e().message} onDismiss={() => dismiss(e().id)} />
+              <CopyDismiss copy={e().message} onDismiss={() => {
+                if (k() === "usage" && pending()?.enabled) {
+                  void recovery.setEnabled(false).then((cancelled) => { if (cancelled) dismiss(e().id); });
+                } else dismiss(e().id);
+              }} />
             </TrayPill>
           );
         }}

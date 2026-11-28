@@ -448,6 +448,7 @@ impl Zappers {
             )?;
             zapper.folders = files::folders(&db, &zapper.id)?;
             mark_queue(&db, &mut zapper)?;
+            issues::mark_deliveries(&db, &mut zapper)?;
             Ok(zapper)
         })
         .collect()

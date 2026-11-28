@@ -716,37 +716,6 @@ mod pinned_session_tests {
     }
 
     #[gpui::test]
-    fn settled_pins_leave_the_pin_drag_check(cx: &mut gpui::TestAppContext) {
-        use super::*;
-        let dir = tempfile::tempdir().unwrap();
-        let window = pin_test_shell(cx, dir.path());
-        window
-            .update(cx, |shell, _, cx| {
-                shell.state.update(cx, |state, _| {
-                    state.workspace_scope = Some(WorkspaceScope::Local);
-                    state.chats = vec![pin_test_chat("p"), pin_test_chat("q")];
-                });
-                shell.settings.space_filter = None;
-                let profile = shell.active_sidebar_pin_profile_key(cx).unwrap();
-                shell
-                    .settings
-                    .sidebar_pins_mut(profile.clone())
-                    .extend(["p".into(), "q".into()]);
-                shell.set_sidebar_thread_settled(profile.clone(), "p".into(), true, cx);
-                // The active rows show only Q among the pins, so a drag of Q
-                // carries just Q; settled P must not make it look stale.
-                let payload = SidebarSessionDrag {
-                    chat_id: "q".into(),
-                    visible_ids: std::sync::Arc::new(vec!["q".into()]),
-                    filter: None,
-                    profile_key: profile,
-                };
-                assert!(shell.sidebar_session_transfer_is_valid(&payload, cx));
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
     fn sidebar_menu_and_drop_both_reject_unknown_remote_preferences(cx: &mut gpui::TestAppContext) {
         use super::*;
         let dir = tempfile::tempdir().unwrap();
@@ -1396,13 +1365,13 @@ mod pinned_session_tests {
             let row = cx.debug_bounds("chat-older").unwrap();
             let title = cx.debug_bounds("chat-title-older").unwrap();
             cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::default());
-            // Hover puts Settle just left of Archive without overlapping it.
+            // Hover puts Archive just left of More without overlapping it.
             // The title gives up only that room, and the corner keeps its
             // right edge and status column.
             assert!(cx.debug_bounds("chat-title-older").unwrap().size.width <= title.size.width);
-            let settle = cx.debug_bounds("chat-settle-older").unwrap();
+            let more = cx.debug_bounds("chat-more-older").unwrap();
             let archive = cx.debug_bounds("chat-archive-older").unwrap();
-            assert!(settle.right() + px(SIDEBAR_ROW_ACTION_GAP) <= archive.left());
+            assert!(archive.right() + px(SIDEBAR_ROW_ACTION_GAP) <= more.left());
             assert_eq!(cx.debug_bounds("chat-status-older"), status);
             assert_eq!(
                 cx.debug_bounds("chat-time-older").unwrap().right(),
@@ -2110,6 +2079,35 @@ struct ActiveChatRow {
     branch: Option<String>,
     change_request: Option<zuse_protocol::ChangeRequestSummary>,
     group: Option<(String, String)>,
+}
+
+/// Threads a project shows before "Show more".
+pub(super) const PROJECT_THREAD_PREVIEW: usize = 4;
+/// Threads the single list shows before its first measure; after that it
+/// shows as many as fit above the sidebar footer ([`super::sidebar_fit`]).
+const ALL_THREAD_PREVIEW: usize = 7;
+const ALL_THREADS_KEY: &str = "all";
+pub(super) const SHOW_MORE_THREADS_HEIGHT: f32 = 32.0;
+
+fn cloud_thread_sort_time(sort: SidebarSort, row: &serde_json::Value) -> i64 {
+    let field = match sort {
+        SidebarSort::Created => "createdAt",
+        SidebarSort::LastUpdated => "updatedAt",
+    };
+    row[field]
+        .as_i64()
+        .or_else(|| row["createdAt"].as_i64())
+        .unwrap_or_default()
+}
+
+type CloudThreadGroups<'a> = std::collections::HashMap<Option<&'a str>, Vec<&'a serde_json::Value>>;
+
+pub(super) struct SidebarThreadPage<'a> {
+    pub(super) local_count: usize,
+    pub(super) clouds: Vec<&'a serde_json::Value>,
+    /// The list's key and whether it is expanded, when it is long enough
+    /// to offer "Show more" / "Show less".
+    pub(super) toggle: Option<(String, bool)>,
 }
 
 /// The time a chat sorts by in the sidebar, in epoch milliseconds.
@@ -3390,12 +3388,9 @@ impl Shell {
             return false;
         }
         let state = self.state.read(cx);
-        // Settled threads leave the active rows, so they leave this check too.
-        let choices = self.sidebar_settlement_choices(Some(payload.profile_key.as_str()));
         let visible: HashSet<String> = self
             .computer_sidebar_chats(state, Utc::now(), payload.filter.as_deref())
             .into_iter()
-            .filter(|(_, chat)| !Self::local_thread_is_settled(state, chat, choices))
             .map(|(_, chat)| chat.id.clone())
             .collect();
         if !visible.contains(&payload.chat_id) {
@@ -5296,6 +5291,191 @@ impl Shell {
             .into_any_element()
     }
 
+    fn sidebar_cloud_thread_groups<'a>(
+        &self,
+        groups: &'a [super::cloud_sidebar::CloudSidebarGroup],
+        cx: &App,
+    ) -> CloudThreadGroups<'a> {
+        let mut indexed = CloudThreadGroups::new();
+        for group in groups {
+            let key = group.group.as_ref().map(|(key, _)| key.as_str());
+            indexed
+                .entry(key)
+                .or_default()
+                .extend(group.rows.iter().filter(|row| {
+                    row["pendingLaunch"].is_string() || self.cloud_row_target(row, cx).is_some()
+                }));
+        }
+        indexed
+    }
+
+    /// The rows a thread list shows: a short preview of the combined
+    /// local/cloud order, or all of it once expanded. Each source keeps a
+    /// prefix of its own sorted rows, so drag indices don't change.
+    fn sidebar_thread_page<'a, 'b>(
+        &self,
+        key: Option<&str>,
+        local: impl IntoIterator<Item = (i64, &'b str)>,
+        cloud: &[&'a serde_json::Value],
+        cx: &App,
+    ) -> SidebarThreadPage<'a> {
+        let page = match self.settings.sidebar_organization {
+            SidebarOrganization::InOneList => Some((
+                ALL_THREADS_KEY.to_owned(),
+                self.sidebar_fit.limit(ALL_THREAD_PREVIEW),
+            )),
+            // Projects and devices preview their first few threads.
+            SidebarOrganization::ByProject | SidebarOrganization::ByDevice => {
+                key.map(|key| (self.sidebar_group_collapse_key(key), PROJECT_THREAD_PREVIEW))
+            }
+        };
+        self.thread_page_with(page, local, cloud, cx)
+    }
+
+    /// [`Self::sidebar_thread_page`] for an explicit `(list key, preview
+    /// size)`; `None` shows every row with no toggle.
+    pub(super) fn thread_page_with<'a, 'b>(
+        &self,
+        page: Option<(String, usize)>,
+        local: impl IntoIterator<Item = (i64, &'b str)>,
+        cloud: &[&'a serde_json::Value],
+        cx: &App,
+    ) -> SidebarThreadPage<'a> {
+        let fit_list = page.as_ref().is_some_and(|(key, _)| key == ALL_THREADS_KEY);
+        let mut clouds = cloud.to_vec();
+        clouds.sort_by_key(|row| {
+            std::cmp::Reverse(cloud_thread_sort_time(self.settings.sidebar_sort, row))
+        });
+        let local = local.into_iter().collect::<Vec<_>>();
+        let total = local.len() + clouds.len();
+        let (key, limit) = match page {
+            Some((key, limit)) if total > limit => (key, limit),
+            _ => {
+                if fit_list {
+                    self.sidebar_fit.record(total, total, false);
+                }
+                return SidebarThreadPage {
+                    local_count: local.len(),
+                    clouds,
+                    toggle: None,
+                };
+            }
+        };
+        if self.sidebar_threads_expanded.contains(&key) {
+            if fit_list {
+                self.sidebar_fit.record(total, total, true);
+            }
+            return SidebarThreadPage {
+                local_count: local.len(),
+                clouds,
+                toggle: Some((key, true)),
+            };
+        }
+
+        let state = self.state.read(cx);
+        let selected = state.selected_chat_row().map(|chat| chat.thread_id());
+        let drag = self
+            .sidebar_session_transfer
+            .as_ref()
+            .or_else(|| {
+                self.sidebar_session_return
+                    .as_ref()
+                    .map(|ret| &ret.transfer)
+            })
+            .map(|drag| drag.payload.chat_id.as_str());
+        let rename = self
+            .chat_rename
+            .as_ref()
+            .map(|rename| rename.chat_id.as_str());
+        let keep_local = |id: &str| [selected, drag, rename].contains(&Some(id));
+
+        let mut merged = local.iter().peekable();
+        let mut remote = clouds.iter().peekable();
+        let mut local_count = 0;
+        let mut cloud_count = 0;
+        let mut shown = limit;
+        for index in 0..total {
+            let next_local = match (merged.peek(), remote.peek()) {
+                (Some((time, _)), Some(row)) => {
+                    *time >= cloud_thread_sort_time(self.settings.sidebar_sort, row)
+                }
+                (Some(_), None) => true,
+                _ => false,
+            };
+            let keep = if next_local {
+                let &(_, id) = merged.next().expect("local row");
+                keep_local(id)
+            } else {
+                let row = remote.next().expect("cloud row");
+                self.cloud_row_selected(row, cx)
+            };
+            if index < shown {
+                if next_local {
+                    local_count += 1;
+                } else {
+                    cloud_count += 1;
+                }
+            } else if keep {
+                // Include the whole prefix so other rows stay in place when
+                // search, keyboard navigation or a drag reveals an older chat.
+                shown = index + 1;
+                local_count = local.len() - merged.len();
+                cloud_count = shown - local_count;
+            }
+        }
+        clouds.truncate(cloud_count);
+        if fit_list {
+            self.sidebar_fit.record(shown.min(total), total, false);
+        }
+        SidebarThreadPage {
+            local_count,
+            clouds,
+            toggle: (shown < total).then_some((key, false)),
+        }
+    }
+
+    pub(super) fn render_sidebar_show_more(
+        &self,
+        key: String,
+        expanded: bool,
+        theme: &Theme,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let id = format!("sidebar-show-more:{key}");
+        div()
+            .id(SharedString::from(id.clone()))
+            .debug_selector(move || id.clone())
+            .role(gpui::Role::Button)
+            .tab_index(0)
+            .flex_none()
+            .w_full()
+            .h(px(SHOW_MORE_THREADS_HEIGHT))
+            .flex()
+            .items_center()
+            // Lines up with the thread titles above it.
+            .pl(px(Theme::SPACE_SM))
+            .rounded(px(7.))
+            .text_size(crate::typography::text_sm())
+            .text_color(theme.text_muted)
+            .hover(|el| el.bg(theme.glass_hover()).text_color(theme.text))
+            .cursor_pointer()
+            .child(if expanded { "Show less" } else { "Show more" })
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                if expanded {
+                    this.sidebar_threads_expanded.remove(&key);
+                } else {
+                    this.sidebar_threads_expanded.insert(key.clone());
+                }
+                // Revealing or hiding the tail doesn't move the rows above it.
+                this.sidebar_prev_order.clear();
+                this.sidebar_resort.clear();
+                this.sidebar_new_keys.clear();
+                cx.notify();
+            }))
+            .into_any_element()
+    }
+
     /// Flat top-to-bottom chat ids exactly as [`Self::render_active_rows`]
     /// draws them: pins first, then the user's sort, device grouping,
     /// and local-device promotion. Jump shortcuts and session cycling read
@@ -5315,12 +5495,10 @@ impl Shell {
             .as_ref()
             .map_or(saved_pins.as_slice(), |ids| ids.as_slice());
         let state = self.state.read(cx);
-        let choices = self.sidebar_settlement_choices(profile_key.as_deref());
-        let mut chats: Vec<zuse_protocol::Chat> = self
+        let mut chats: Vec<&zuse_protocol::Chat> = self
             .computer_sidebar_chats(state, Utc::now(), filter.as_deref())
             .into_iter()
-            .filter(|(_, chat)| !Self::local_thread_is_settled(state, chat, choices))
-            .map(|(_, chat)| chat.clone())
+            .map(|(_, chat)| chat)
             .collect();
         chats.sort_by(|left, right| compare_sidebar_chats(self.settings.sidebar_sort, left, right));
         let (pinned_chats, chats): (Vec<_>, Vec<_>) = chats
@@ -5348,37 +5526,69 @@ impl Shell {
                     .any(|section| section.session_ids.contains(&chat.id))
             })
             .collect();
-        let ordered = if self.settings.sidebar_organization != SidebarOrganization::InOneList {
-            let mut groups: Vec<(Option<(String, String)>, Vec<zuse_protocol::Chat>)> = Vec::new();
-            for chat in chats {
-                let key = Some((
-                    if self.settings.sidebar_organization == SidebarOrganization::ByProject {
-                        sidebar_project_group(state, &chat).0
-                    } else {
-                        chat.device_id.clone()
-                    },
-                    String::new(),
-                ));
-                if let Some((_, existing)) = groups.iter_mut().find(|(group, _)| group == &key) {
-                    existing.push(chat);
-                } else {
-                    groups.push((key, vec![chat]));
-                }
+        let cloud_groups = self.cloud_sidebar_groups(cx);
+        let cloud = self.sidebar_cloud_thread_groups(&cloud_groups, cx);
+        let mut groups: Vec<(Option<(String, String)>, Vec<&zuse_protocol::Chat>)> = Vec::new();
+        let mut indices = std::collections::HashMap::new();
+        for chat in chats {
+            let group = self.sidebar_group_key(state, chat);
+            let index = *indices.entry(group.clone()).or_insert_with(|| {
+                let index = groups.len();
+                groups.push((group.map(|key| (key, String::new())), Vec::new()));
+                index
+            });
+            groups[index].1.push(chat);
+        }
+        // Groups holding only cloud threads follow, as the sidebar draws them.
+        for cloud_group in &cloud_groups {
+            let key = cloud_group.group.as_ref().map(|(key, _)| key.clone());
+            if !cloud_group.rows.is_empty() && !indices.contains_key(&key) {
+                indices.insert(key.clone(), groups.len());
+                groups.push((key.map(|key| (key, String::new())), Vec::new()));
             }
-            if self.settings.sidebar_organization == SidebarOrganization::ByDevice {
-                promote_local_device_group(&mut groups, state.local_device_id.as_deref());
+        }
+        if self.settings.sidebar_organization == SidebarOrganization::ByDevice {
+            promote_local_device_group(&mut groups, state.local_device_id.as_deref());
+        }
+        let ordered = groups.into_iter().flat_map(|(group, rows)| {
+            let key = group.as_ref().map(|(key, _)| key.as_str());
+            if key.is_some_and(|key| {
+                self.sidebar_collapsed_groups
+                    .contains(&self.sidebar_group_collapse_key(key))
+            }) {
+                return Vec::new();
             }
-            groups
+            let page = self.sidebar_thread_page(
+                key,
+                rows.iter().map(|chat| {
+                    (
+                        sidebar_sort_time(self.settings.sidebar_sort, chat),
+                        chat.id.as_str(),
+                    )
+                }),
+                cloud.get(&key).map_or(&[], Vec::as_slice),
+                cx,
+            );
+            // Local and cloud rows interleave by time, as the group draws them.
+            let sort = self.settings.sidebar_sort;
+            let mut ids: Vec<(i64, String)> = rows
                 .into_iter()
-                .flat_map(|(_, rows)| rows)
-                .map(|chat| chat.id)
-                .collect::<Vec<_>>()
-        } else {
-            chats.into_iter().map(|chat| chat.id).collect()
-        };
+                .take(page.local_count)
+                .map(|chat| (sidebar_sort_time(sort, chat), chat.id.clone()))
+                .collect();
+            ids.extend(page.clouds.iter().filter_map(|row| {
+                let workspace = row["workspaceId"].as_str()?;
+                Some((
+                    cloud_thread_sort_time(sort, row),
+                    format!("{CLOUD_ROW_PREFIX}{workspace}"),
+                ))
+            }));
+            ids.sort_by_key(|(time, _)| std::cmp::Reverse(*time));
+            ids.into_iter().map(|(_, id)| id).collect::<Vec<_>>()
+        });
         let ordered = pinned_chats
             .into_iter()
-            .map(|chat| chat.id)
+            .map(|chat| chat.id.clone())
             .chain(custom_order.iter().cloned())
             .chain(ordered)
             .collect::<Vec<_>>();
@@ -5447,14 +5657,7 @@ impl Shell {
             );
             return false;
         };
-        let profile = self.sidebar_settlement_profile(false, cx);
-        if Self::local_thread_is_settled(
-            self.state.read(cx),
-            &chat,
-            self.sidebar_settlement_choices(profile.as_deref()),
-        ) {
-            self.settled_open = true;
-        } else if self.active_sidebar_pins(cx).contains(&chat.id) {
+        if self.active_sidebar_pins(cx).contains(&chat.id) {
             if !self.pinned_open {
                 self.pinned_open = true;
                 self.queue_sidebar_reveal("pinned");
@@ -5577,8 +5780,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> SidebarSessionRows {
         let mut projects = std::collections::HashMap::new();
-        let mut cloud_groups = self.cloud_sidebar_groups(cx);
-        let settled_cloud = self.take_settled_cloud_rows(&mut cloud_groups, cx);
+        let cloud_groups = self.cloud_sidebar_groups(cx);
         let group_labels = {
             let state = self.state.read(cx);
             state.project_labels(&state.cloud_sidebar_projects())
@@ -5594,25 +5796,16 @@ impl Shell {
                 drag.filter == filter && profile_key.as_deref() == Some(&drag.profile_key)
             })
             .map(|drag| drag.visible_ids.clone());
-        let (mut rows, settled_local) = {
+        let mut rows = {
             let state = self.state.read(cx);
-            let choices = self.sidebar_settlement_choices(profile_key.as_deref());
-            let (settled, mut chats): (Vec<_>, Vec<_>) = self
-                .computer_sidebar_chats(state, now, filter.as_deref())
-                .into_iter()
-                .partition(|(_, chat)| Self::local_thread_is_settled(state, chat, choices));
+            let mut chats = self.computer_sidebar_chats(state, now, filter.as_deref());
             chats.sort_by(|left, right| {
                 compare_sidebar_chats(self.settings.sidebar_sort, &left.1, &right.1)
             });
-            let active = chats
+            chats
                 .into_iter()
                 .map(|(status, chat)| self.sidebar_chat_data(status, chat.clone(), state))
-                .collect::<Vec<_>>();
-            let settled = settled
-                .into_iter()
-                .map(|(status, chat)| (status, chat.clone()))
-                .collect::<Vec<_>>();
-            (active, settled)
+                .collect::<Vec<_>>()
         };
         let pinned_order = frozen_pinned
             .as_ref()
@@ -5856,19 +6049,23 @@ impl Shell {
         // Flat top-to-bottom slot across groups: the same order
         // `sidebar_visible_order` hands the jump shortcuts and cycling, so a
         // chip always names the key that opens its row.
-        let visible_slots: std::collections::HashMap<_, _> =
+        let visible_slots: std::collections::HashMap<_, _> = if jump_hints {
             self.computer_jump_slots.clone().unwrap_or_else(|| {
                 self.sidebar_visible_order(cx)
                     .into_iter()
                     .enumerate()
                     .map(|(index, id)| (id, index))
                     .collect()
-            });
+            })
+        } else {
+            Default::default()
+        };
+        let cloud_by_group = self.sidebar_cloud_thread_groups(&cloud_groups, cx);
         let mut slot = 0usize;
         let mut rendered = Vec::new();
         let mut moving_row = None;
-        for (group, rows) in sections {
-            let pinned_group = slot < pinned_count;
+        for (section_index, (group, rows)) in sections.into_iter().enumerate() {
+            let pinned_group = section_index == 0 && pinned_count > 0;
             let drag_group = if pinned_group {
                 "pinned".to_owned()
             } else {
@@ -5893,10 +6090,29 @@ impl Shell {
             let header_icon_chat = (project_group && self.settings.sidebar_show_project_icon)
                 .then(|| rows.first().map(|row| row.chat.id.clone()))
                 .flatten();
-            let mut rendered_rows = Vec::with_capacity(rows.len());
-            // Each local row's sort time, so cloud tasks interleave by it.
-            let mut row_times: Vec<i64> = Vec::with_capacity(rows.len());
-            for (group_index, row) in rows.into_iter().enumerate() {
+            let key = group.as_ref().map(|(key, _)| key.as_str());
+            let custom = key.is_some_and(|key| key.starts_with("section:"));
+            let page = (!pinned_group && !custom).then(|| {
+                self.sidebar_thread_page(
+                    key,
+                    rows.iter().map(|row| {
+                        (
+                            sidebar_sort_time(self.settings.sidebar_sort, &row.chat),
+                            row.chat.id.as_str(),
+                        )
+                    }),
+                    cloud_by_group.get(&key).map_or(&[], Vec::as_slice),
+                    cx,
+                )
+            });
+            let total_rows = rows.len()
+                + cloud_by_group
+                    .get(&key)
+                    .filter(|_| page.is_some())
+                    .map_or(0, Vec::len);
+            let local_count = page.as_ref().map_or(rows.len(), |page| page.local_count);
+            let mut rendered_rows = Vec::with_capacity(local_count);
+            for (group_index, row) in rows.into_iter().take(local_count).enumerate() {
                 let ActiveChatRow {
                     status,
                     chat,
@@ -5992,7 +6208,6 @@ impl Shell {
                     jump_label,
                     self.settings.sidebar_show_project_icon && !nested_rows,
                     nested_rows,
-                    false,
                     None,
                     theme,
                     cx,
@@ -6059,41 +6274,52 @@ impl Shell {
                         },
                     ))
                     .into_any_element();
-                row_times.push(sidebar_sort_time(self.settings.sidebar_sort, &chat));
-                rendered_rows.push((format!("c:{}", chat.id), slot_height, element));
+                rendered_rows.push((
+                    sidebar_sort_time(self.settings.sidebar_sort, &chat),
+                    (format!("c:{}", chat.id), slot_height, element),
+                ));
             }
-
-            if !pinned_group {
-                for cloud in cloud_groups
-                    .iter()
-                    .filter(|cloud| match (&cloud.group, &group) {
-                        (Some((a, _)), Some((b, _))) => a == b,
-                        (None, None) => true,
-                        _ => false,
-                    })
-                {
-                    for row in &cloud.rows {
-                        let time = match self.settings.sidebar_sort {
-                            SidebarSort::Created => row["createdAt"].as_i64(),
-                            SidebarSort::LastUpdated => row["updatedAt"].as_i64(),
-                        }
-                        .or_else(|| row["createdAt"].as_i64())
-                        .unwrap_or_default();
-                        if let Some(row) =
-                            self.render_cloud_sidebar_row(row.clone(), false, theme, cx)
-                        {
-                            // Newest first, alongside local chats of the same
-                            // group, rather than after all of them.
-                            let at = row_times
-                                .iter()
-                                .position(|other| *other < time)
-                                .unwrap_or(row_times.len());
-                            row_times.insert(at, time);
-                            rendered_rows.insert(at, row);
-                        }
+            let mut show_more = None;
+            if let Some(page) = page {
+                for row in page.clouds {
+                    let jump_label = row["workspaceId"].as_str().and_then(|workspace| {
+                        let slot = visible_slots
+                            .get(&format!("{CLOUD_ROW_PREFIX}{workspace}"))
+                            .copied()?;
+                        let combo = keymap.get(ShortcutId::JumpSession(slot));
+                        (jump_hints && slot < JUMP_SLOTS && !combo.is_empty())
+                            .then(|| badge_combo(combo).into())
+                    });
+                    if let Some(row_element) =
+                        self.render_cloud_sidebar_row(row, jump_label, theme, cx)
+                    {
+                        rendered_rows.push((
+                            cloud_thread_sort_time(self.settings.sidebar_sort, row),
+                            row_element,
+                        ));
                     }
                 }
+                rendered_rows.sort_by_key(|(time, _)| std::cmp::Reverse(*time));
+                show_more = page.toggle.map(|(key, expanded)| {
+                    // The single list's collapsed button sits on the footer line.
+                    let margin = if key == ALL_THREADS_KEY && !expanded {
+                        self.sidebar_fit.toggle_margin()
+                    } else {
+                        0.
+                    };
+                    (
+                        format!("more:{key}"),
+                        SHOW_MORE_THREADS_HEIGHT + margin,
+                        div()
+                            .w_full()
+                            .pt(px(margin))
+                            .child(self.render_sidebar_show_more(key, expanded, theme, cx))
+                            .into_any_element(),
+                    )
+                });
             }
+            let mut rendered_rows: Vec<_> = rendered_rows.into_iter().map(|(_, row)| row).collect();
+            rendered_rows.extend(show_more);
             // Two repositories with one name read as `owner/repo`.
             let group = group.map(|(key, label)| {
                 let label = group_labels.local.get(&key).cloned().unwrap_or(label);
@@ -6284,7 +6510,7 @@ impl Shell {
                     theme,
                     group_icon,
                     visible_label,
-                    collapsed.then_some(row_count),
+                    collapsed.then_some(total_rows),
                     actions,
                     chevron,
                     group_name.clone(),
@@ -6310,7 +6536,7 @@ impl Shell {
                             .into_any_element(),
                     ),
                     visible_label,
-                    collapsed.then_some(row_count),
+                    collapsed.then_some(total_rows),
                     Vec::new(),
                     chevron,
                     group_name.clone(),
@@ -6320,7 +6546,7 @@ impl Shell {
                     theme,
                     group_icon,
                     visible_label,
-                    collapsed.then_some(row_count),
+                    collapsed.then_some(total_rows),
                     None,
                     chevron,
                 )
@@ -6350,9 +6576,9 @@ impl Shell {
                 body_height,
                 body.into_any_element(),
             );
-            // Projects stack as a compact list; other groups keep the
-            // section rhythm.
-            let section_gap = if project_group {
+            // Projects and devices stack as a compact list under their
+            // heading; other groups keep the section rhythm.
+            let section_gap = if project_group || device_group {
                 SIDEBAR_PROJECT_GAP
             } else {
                 SIDEBAR_SECTION_GAP
@@ -6370,74 +6596,11 @@ impl Shell {
                 .into_any_element();
             rendered.push((format!("g:{collapse_key}"), height, element));
         }
-        let settled_count = settled_local.len() + settled_cloud.len();
-        let mut settled_rows = Vec::new();
-        if self.settled_open {
-            for (status, chat) in settled_local {
-                let time = sidebar_sort_time(self.settings.sidebar_sort, &chat);
-                let is_selected = selected.as_deref() == Some(chat.id.as_str());
-                let time_ago =
-                    format_time_ago(chat.last_message_at.unwrap_or(chat.created_at), now);
-                let harness = if self.settings.sidebar_show_harness {
-                    chat.config.as_ref().map(|config| config.harness)
-                } else {
-                    None
-                };
-                let ActiveChatRow {
-                    chat,
-                    folder,
-                    branch,
-                    change_request,
-                    ..
-                } = self.sidebar_chat_data(status, chat, self.state.read(cx));
-                let row = self.render_chat_row(
-                    chat.id,
-                    transcript::single_line(chat.title.as_deref().unwrap_or("New session")).into(),
-                    time_ago.into(),
-                    folder.into(),
-                    branch.map(SharedString::from),
-                    change_request,
-                    harness,
-                    status,
-                    is_selected,
-                    false,
-                    false,
-                    None,
-                    None,
-                    self.settings.sidebar_show_project_icon,
-                    false,
-                    true,
-                    None,
-                    theme,
-                    cx,
-                );
-                settled_rows.push((time, row));
-            }
-            for row in settled_cloud {
-                let time = match self.settings.sidebar_sort {
-                    SidebarSort::Created => row["createdAt"].as_i64(),
-                    SidebarSort::LastUpdated => row["updatedAt"].as_i64(),
-                }
-                .or_else(|| row["createdAt"].as_i64())
-                .unwrap_or_default();
-                if let Some((_, _, row)) = self.render_cloud_sidebar_row(row, true, theme, cx) {
-                    settled_rows.push((time, row));
-                }
-            }
-            settled_rows.sort_by(|(a, _), (b, _)| b.cmp(a));
-        }
-        let settled_section = self.render_settled_section(
-            settled_count,
-            settled_rows.into_iter().map(|(_, row)| row).collect(),
-            theme,
-            cx,
-        );
         SidebarSessionRows {
             projects,
             custom_count,
             rows: rendered,
             pinned_count,
-            settled_section,
             moving_row,
         }
     }

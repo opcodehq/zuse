@@ -609,8 +609,7 @@ impl WorkspaceView {
         });
         let input_text =
             cx.new(|cx| input::TextInput::multiline("Type your own answer…", window, cx));
-        let secret_text =
-            cx.new(|cx| input::TextInput::password("Enter bearer token…", window, cx));
+        let secret_text = cx.new(|cx| input::TextInput::password("Enter secret…", window, cx));
         cx.subscribe_in(
             &input_text,
             window,
@@ -2236,4 +2235,5 @@ pub fn initialize(cx: &mut App) {
 }
 
 pub mod zapper_avatar;
+pub mod zapper_issue_timeline;
 pub mod zapper_issues;

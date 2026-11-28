@@ -159,6 +159,10 @@ pub(crate) struct MessageFrame {
     pub uuid: Option<String>,
     #[serde(default)]
     pub parent_tool_use_id: Option<String>,
+    /// The CLI's own meta messages (`isMeta` in its transcript): image-resize
+    /// notes, attachment context and the like — never something a person typed.
+    #[serde(default, rename = "isSynthetic")]
+    pub is_synthetic: bool,
     #[serde(default)]
     pub message: MessageBody,
     /// Terse assistant-level error code (`rate_limit`, `billing_error`, …).
@@ -216,6 +220,8 @@ pub(crate) struct RateLimitFrame {
 
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct RateLimitInfo {
+    #[serde(rename = "resetsAt", default)]
+    pub resets_at: Option<i64>,
     #[serde(default)]
     pub status: String,
     #[serde(rename = "rateLimitType", default)]

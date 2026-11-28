@@ -74,6 +74,10 @@ impl RunJournal {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
+    pub(crate) fn usage_resume_path(&self) -> PathBuf {
+        self.dir.join("usage-resume.json")
+    }
+
     pub(crate) fn permission_rules_path(&self) -> PathBuf {
         self.dir.join("permission-rules.sqlite")
     }

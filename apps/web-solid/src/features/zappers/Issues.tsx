@@ -21,6 +21,7 @@ import type {
 import { Button, Dialog } from "@/ui/primitives";
 import { Markdown } from "@/features/transcript/Markdown";
 import { WorkerDialog } from "./Threads";
+import { Conversation, ThreadsControl } from "./Conversation";
 import { act, command, commandState, threadTitle } from "./state";
 const statuses: Record<IssueStatus, string> = {
   backlog: "Backlog",
@@ -270,8 +271,6 @@ function IssueDetail(props: {
   onOpen?: (id:string)=>void;
   onOpenPr?: (url:string,chatId:string)=>void;
 }) {
-  const [comment, setComment] = createSignal("");
-  const [reply, setReply] = createSignal<string | null>(null);
   const [link, setLink] = createSignal("");
   const [url, setUrl] = createSignal("");
   const [delegating, setDelegating] = createSignal(false);
@@ -281,6 +280,7 @@ function IssueDetail(props: {
   const [outcome,setOutcome]=createSignal<"merged"|"dropped">("merged");
   return (
     <div class="zp-issue-detail">
+      <ThreadsControl zapper={props.zapper} issue={props.issue} />
       <div class="zp-section-heading">
         <span>
           {issueStatus(props.zapper,props.issue)} ·{" "}
@@ -402,68 +402,8 @@ function IssueDetail(props: {
           Link PR
         </Button>
       </form>
-      <h3>Activity</h3>
-      <For each={props.issue.activity}>
-        {(entry) => (
-          <div
-            class="zp-activity"
-            data-reply={entry.replyTo ? "true" : undefined}
-          >
-            <small class="zp-muted">
-              {entry.actor || "Zapper"} · {entry.kind}
-              {entry.replyTo ? " · Reply" : ""}
-            </small>
-            <Markdown text={entry.text} live={false} />
-            <button class="zp-link" onClick={() => setReply(entry.id)}>
-              Reply
-            </button>
-          </div>
-        )}
-      </For>
-      <form
-        class="zp-form"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          if (!comment().trim()) return;
-          try {
-            await command(props.zapper.id, {
-              type: "commentIssue",
-              issueId: props.issue.id,
-              text: comment().trim(),
-              replyTo: reply(),
-            });
-            setComment("");
-            setReply(null);
-          } catch {
-            /* shared alert */
-          }
-        }}
-      >
-        <Show when={reply()}>
-          <span>
-            Replying to a comment{" "}
-            <button type="button" onClick={() => setReply(null)}>
-              Cancel reply
-            </button>
-          </span>
-        </Show>
-        <label>
-          Comment
-          <textarea
-            required
-            value={comment()}
-            onInput={(e) => setComment(e.currentTarget.value)}
-          />
-        </label>
-        <Show when={commandState.error}>
-          <p role="alert" class="zp-error">
-            {commandState.error}
-          </p>
-        </Show>
-        <Button type="submit" disabled={commandState.busy || !comment().trim()}>
-          Post comment
-        </Button>
-      </form>
+      <h3>Conversation</h3>
+      <Conversation zapper={props.zapper} issue={props.issue} onOpenPr={props.onOpenPr} />
       <Dialog open={!!action()} onOpenChange={open=>{if(!open)setAction(null);}} title={action() === "ask" ? "Ask you" : "Close issue"}>
         <form class="zp-form" onSubmit={async event=>{event.preventDefault();if(action() === "ask" && !note().trim())return;try {await command(props.zapper.id,action() === "ask" ? {type:"askUser",issueId:props.issue.id,question:note().trim(),recommendation:recommendation().trim() || undefined} : {type:"closeIssue",issueId:props.issue.id,outcome:outcome(),note:note().trim()});setAction(null);}catch{/* shared command alert */}}}>
           <Show when={action() === "close"}><label>Outcome<ZapperSelect label="Close outcome" value={outcome()} onChange={value=>setOutcome(value as "merged"|"dropped")} options={[{value:"merged",label:"Completed / merged"},{value:"dropped",label:"Dropped"}]} /></label></Show>

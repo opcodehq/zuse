@@ -22,8 +22,8 @@ try{
  await click(24,182);page.wait('window.__remoteAccess.methods.includes("ListPairings")');page.screenshot('settings-layout-browser-remote-760.png');
  await click(24,121);await sleep(150);page.screenshot('settings-layout-browser-defaults-760.png');
  await click(24,242);page.run(['set','viewport','1280','1000']);await sleep(250);page.screenshot('settings-layout-browser-shortcuts-wide.png');
- const wide=samples('settings-layout-browser-shortcuts-wide.png',[[232,128],[231,128]],1280);assert.ok(wide[0][0]>=20&&wide[1][0]<20,'Shortcuts uses the available wide column');
+ const shortcuts=samples('settings-layout-browser-shortcuts-wide.png',[[360,179],[359,179]],1280);assert.ok(shortcuts[0][0]>=25&&shortcuts[1][0]<20,'Shortcuts uses the shared settings column');
  await click(125,17);await click(570,891);key('Control+a');key('Control+c');page.wait(`window.__remoteAccess.copied===${JSON.stringify(draft)}`);page.screenshot('settings-layout-browser-draft-preserved.png');assert.equal((await host.call('WatchChats')).length,0);
- artifact('settings-layout-browser-acceptance.json',{compiledGpui:true,realEngine:true,layouts,breakpointExclusive:true,preferencePointerAndKeyboard:true,popupEscapeKeepsSettings:true,compactRemoteAndDefaults:true,wideShortcuts:true,draftPreserved:true,chats:0});console.log('Settings layout acceptance passed: breakpoint geometry, compact preference/keyboard/popup actions, navigation, wide shortcuts and exact draft preservation.');
+ artifact('settings-layout-browser-acceptance.json',{compiledGpui:true,realEngine:true,layouts,breakpointExclusive:true,preferencePointerAndKeyboard:true,popupEscapeKeepsSettings:true,compactRemoteAndDefaults:true,sharedShortcutsColumn:true,draftPreserved:true,chats:0});console.log('Settings layout acceptance passed: breakpoint geometry, compact preference/keyboard/popup actions, navigation, shared shortcuts column and exact draft preservation.');
 }catch(error){try{page?.screenshot('settings-layout-browser-failure.png');}catch{}console.error('Settings layout acceptance failed: '+error.message);process.exitCode=1;}
 finally{page?.close();await host?.close();}

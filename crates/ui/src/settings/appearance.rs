@@ -3448,26 +3448,7 @@ impl AppearancePage {
         }
 
         if let Some(error) = error {
-            main = main.child(
-                div()
-                    .mt(px(12.0))
-                    .p(px(10.0))
-                    .rounded(px(8.0))
-                    .bg(theme.danger.opacity(0.08))
-                    .flex()
-                    .items_start()
-                    .gap(px(7.0))
-                    .text_size(crate::typography::text_xs())
-                    .line_height(px(16.0))
-                    .text_color(theme.danger)
-                    .child(
-                        icons::icon(icons::DANGER_TRIANGLE)
-                            .size(px(13.0))
-                            .flex_none()
-                            .mt(px(1.0)),
-                    )
-                    .child(div().flex_1().min_w_0().child(error)),
-            );
+            main = main.child(widgets::inline_error(theme, error).mt(px(12.0)));
         }
 
         let header = div()

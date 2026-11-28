@@ -1784,6 +1784,9 @@ fn forward_deadline(method: &str) -> std::time::Duration {
             Duration::from_secs(15 * 60)
         }
         methods::REQUEST_PRIVATE_OPERATION => Duration::from_secs(11 * 60),
+        // The GitHub download may take its full 40 seconds, then the
+        // checkout's filesystem work and the relayed response follow.
+        methods::PROJECT_SKILL_CATALOG => Duration::from_secs(75),
         methods::INSTALL_HARNESS => Duration::from_secs(15 * 60),
         // A full fleet of enabled providers is checked two at a time; each
         // provider may need both a CLI probe and a network request.
@@ -1857,6 +1860,9 @@ fn forwardable(method: &str) -> bool {
             | zuse_protocol::custom_acp::catalog::ICON
             | methods::SET_CUSTOM_ACP_AGENT
             | methods::DELETE_CUSTOM_ACP_AGENT
+            | methods::GET_USAGE_RESUME
+            | methods::SET_USAGE_RESUME
+            | methods::RESUME_USAGE_LIMIT
             | methods::GET_TITLE_SETTINGS
             | methods::GET_CHAT_ARCHIVE_STATUS
             | methods::GET_THREAD_CONVERSATION
@@ -1868,6 +1874,7 @@ fn forwardable(method: &str) -> bool {
             | methods::INSPECT_RECOVERY
             | methods::RESOLVE_RECOVERY
             | methods::LIST_SKILLS
+            | methods::PROJECT_SKILL_CATALOG
             | methods::LIST_COMMANDS
             | methods::QUEUE_COMMAND
             | methods::SUBMIT_PRIVATE_SECRET
@@ -2910,12 +2917,17 @@ impl EngineRpc {
         }
 
         let mut params = params;
-        if method == methods::GET_CHAT_ARCHIVE_STATUS
-            || (method == methods::MUTATE
-                && matches!(
-                    params["op"].as_str(),
-                    Some("setChatArchived" | "forceDeleteChat")
-                ))
+        if matches!(
+            method,
+            methods::GET_CHAT_ARCHIVE_STATUS
+                | methods::GET_USAGE_RESUME
+                | methods::SET_USAGE_RESUME
+                | methods::RESUME_USAGE_LIMIT
+        ) || (method == methods::MUTATE
+            && matches!(
+                params["op"].as_str(),
+                Some("setChatArchived" | "forceDeleteChat")
+            ))
         {
             if let Some(id) = params["chatId"].as_str() {
                 if let Some(chat) = self.workspace.chat(id).map_err(failed)? {
@@ -4068,6 +4080,45 @@ impl EngineRpc {
                     .map_err(RpcError::Failed)?;
                 RpcReply::value(&snapshot)
             }
+            methods::GET_USAGE_RESUME | methods::SET_USAGE_RESUME | methods::RESUME_USAGE_LIMIT => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct UsageResumeParams {
+                    chat_id: Option<String>,
+                    enabled: Option<bool>,
+                }
+                let p: UsageResumeParams = parse_params(params)?;
+                if let Some(chat) = p.chat_id.as_deref() {
+                    let row = self
+                        .workspace
+                        .chat(chat)
+                        .map_err(failed)?
+                        .ok_or_else(|| RpcError::Failed("Thread not found.".into()))?;
+                    if row.device_id != self.doc_host.device_id() {
+                        return Err(RpcError::Failed(
+                            "Resume belongs to another computer.".into(),
+                        ));
+                    }
+                }
+                if method == methods::SET_USAGE_RESUME {
+                    let enabled = p
+                        .enabled
+                        .ok_or_else(|| RpcError::BadParams("enabled is required".into()))?;
+                    self.sessions
+                        .set_usage_resume(p.chat_id.as_deref(), enabled)
+                        .map_err(failed)?;
+                } else if method == methods::RESUME_USAGE_LIMIT {
+                    let chat = p
+                        .chat_id
+                        .as_deref()
+                        .ok_or_else(|| RpcError::BadParams("chatId is required".into()))?;
+                    self.sessions
+                        .resume_usage_limit(chat)
+                        .await
+                        .map_err(failed)?;
+                }
+                RpcReply::value(&self.sessions.usage_resume_status(p.chat_id.as_deref()))
+            }
             methods::GET_TITLE_SETTINGS => RpcReply::value(&self.registry.title_settings()),
             methods::SET_TITLE_SETTINGS => {
                 let p: crate::registry::TitleSettings = parse_params(params)?;
@@ -4191,11 +4242,23 @@ impl EngineRpc {
                 .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&view)
             }
+            methods::PROJECT_SKILL_CATALOG => {
+                use zuse_protocol::skill_catalog::{CatalogAction, CatalogRequest};
+                let request: CatalogRequest = parse_params(params)?;
+                let _admission = if matches!(&request.action, CatalogAction::List) {
+                    None
+                } else {
+                    Some(self.sessions.filesystem_admission().await)
+                };
+                RpcReply::value(&self.workspace_files.project_skill_catalog(request).await?)
+            }
             methods::LIST_SKILLS => {
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase")]
                 struct Params {
                     harness: HarnessId,
+                    #[serde(default)]
+                    project_only: bool,
                     #[serde(default)]
                     chat_id: Option<String>,
                     #[serde(default)]
@@ -4204,6 +4267,9 @@ impl EngineRpc {
                     path: Option<String>,
                 }
                 let p: Params = parse_params(params)?;
+                if p.project_only && p.chat_id.is_none() && p.space_id.is_none() {
+                    return RpcReply::value(&Vec::<zuse_protocol::invocation::Skill>::new());
+                }
                 let root = self
                     .catalog_root(&FileSearchParams {
                         query: String::new(),
@@ -4212,11 +4278,16 @@ impl EngineRpc {
                         path: p.path,
                     })
                     .await?;
-                let skills = self
+                let mut skills = self
                     .registry
                     .discover_skills(p.harness, &root)
                     .await
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
+                if p.project_only
+                    && let Some(skills) = &mut skills
+                {
+                    skills.retain(|skill| std::path::Path::new(&skill.path).starts_with(&root));
+                }
                 RpcReply::value(&skills)
             }
             methods::LIST_COMMANDS => {

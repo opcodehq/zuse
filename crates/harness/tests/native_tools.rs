@@ -897,3 +897,29 @@ async fn tail_reads_select_final_lines_and_hash_the_whole_current_file() {
     assert_eq!(empty["offset"], 0);
     fixture.tools.close().await;
 }
+
+#[tokio::test]
+async fn private_operation_schemas_route_https_and_command_metadata_unchanged() {
+    struct PrivateCallbacks(Mutex<Vec<Value>>);
+    #[async_trait]
+    impl NativeCallbacks for PrivateCallbacks {
+        fn questions(&self) -> bool {
+            true
+        }
+        async fn secret(&self, input: Value, _: ToolContext) -> Result<String, Error> {
+            self.0.lock().unwrap().push(input);
+            Ok("Private operation completed".into())
+        }
+    }
+    let callbacks = Arc::new(PrivateCallbacks(Mutex::new(vec![])));
+    let fixture = Fixture::new(Some(callbacks.clone())).await;
+    let https = json!({"label":"Token", "reason":"Check access", "url":"https://example.com", "method":"GET"});
+    let command = json!({"mode":"command", "label":"Token", "reason":"Configure CLI", "program":"/usr/bin/cli", "args":["login"], "cwd":fixture.checkout, "delivery":"stdin"});
+    fixture.call("request_secret", https.clone()).await.unwrap();
+    fixture
+        .call("request_secret", command.clone())
+        .await
+        .unwrap();
+    assert_eq!(*callbacks.0.lock().unwrap(), vec![https, command]);
+    fixture.tools.close().await;
+}

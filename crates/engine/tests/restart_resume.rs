@@ -221,7 +221,9 @@ async fn update_restart_resumes_unfinished_turn_without_duplicate_user_message()
         assert_eq!(requests.len(), 1);
         assert!(requests[0].prompt.contains("finish this task"));
         assert!(
-            requests[0].prompt.contains("interrupted your last turn"),
+            requests[0]
+                .prompt
+                .contains("Your last turn was interrupted before it finished."),
             "a resumed turn must not read as a brand new request"
         );
         assert!(
@@ -1322,5 +1324,372 @@ async fn steer_after_restart_dispatches_new_turn_with_resume() {
             "steer-turned-run must resume the stored harness session"
         );
     }
+    core.shutdown().await;
+}
+
+struct UsageLimitedHarness {
+    requests: RequestLog,
+    reset: Option<i64>,
+}
+#[async_trait]
+impl Harness for UsageLimitedHarness {
+    fn id(&self) -> HarnessId {
+        HarnessId::Mock
+    }
+    fn display_name(&self) -> &str {
+        "Usage limited"
+    }
+    fn supports_steering(&self) -> bool {
+        false
+    }
+    fn steering_mode(&self) -> SteeringMode {
+        SteeringMode::TurnBoundary
+    }
+    fn reasoning_levels(&self) -> &[ReasoningLevel] {
+        &[ReasoningLevel::Medium]
+    }
+    async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+        Ok(vec![])
+    }
+    async fn run(
+        &self,
+        request: RunRequest,
+        controls: RunControls,
+    ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+        let first = self.requests.lock().unwrap().is_empty();
+        if !first {
+            return RecordingHarness {
+                requests: self.requests.clone(),
+                session_id: "limited-session".into(),
+                fail_starts: Default::default(),
+            }
+            .run(request, controls)
+            .await;
+        }
+        self.requests.lock().unwrap().push(request.clone());
+        Ok(futures::stream::iter(vec![
+            Ok(AgentEvent::SessionStarted {
+                harness: HarnessId::Mock,
+                model: "mock-1".into(),
+                tools: vec![],
+                cwd: request.cwd,
+                session_id: "limited-session".into(),
+                assistant_message_id: "limited-assistant".into(),
+            }),
+            Ok(AgentEvent::UsageLimit {
+                resets_at: self.reset,
+            }),
+            Ok(AgentEvent::Done {
+                status: DoneStatus::Errored,
+                result: None,
+                error: Some("Usage limit reached".into()),
+                session_id: Some("limited-session".into()),
+            }),
+        ])
+        .boxed())
+    }
+}
+fn assemble_usage_limited(
+    dir: &std::path::Path,
+    requests: RequestLog,
+    reset: Option<i64>,
+) -> EngineCore {
+    let registry = HarnessRegistry::new();
+    registry.register(Arc::new(UsageLimitedHarness { requests, reset }));
+    EngineCore::assemble(dir, Arc::new(registry), HarnessId::Mock, None).unwrap()
+}
+async fn wait_usage_limit(core: &EngineCore) {
+    wait_for(
+        || {
+            core.sessions.usage_resume_status(Some(CHAT))["pending"].is_object()
+                && !core.sessions.has_run(CHAT)
+        },
+        "usage limit continuation",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn usage_limit_manual_resume_keeps_session_and_user_message() {
+    let tmp = tempfile::tempdir().unwrap();
+    let requests: RequestLog = Default::default();
+    let core = assemble_usage_limited(tmp.path(), requests.clone(), None);
+    pre_title(&core);
+    core.sessions.set_usage_resume(None, true).unwrap();
+    queue_run(&core, "finish the task", "/tmp", "limited-user");
+    wait_usage_limit(&core).await;
+    assert!(core.sessions.usage_resume_status(Some(CHAT))["pending"]["resetsAt"].is_null());
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert_eq!(
+        requests.lock().unwrap().len(),
+        1,
+        "unknown reset must not auto-resume"
+    );
+    core.sessions.resume_usage_limit(CHAT).await.unwrap();
+    wait_for(
+        || requests.lock().unwrap().len() == 2 && !core.sessions.has_run(CHAT),
+        "manual continuation",
+    )
+    .await;
+    let resumed = requests.lock().unwrap()[1].clone();
+    assert_eq!(resumed.resume.as_deref(), Some("limited-session"));
+    assert!(resumed.prompt.contains("finish only what is still undone"));
+    assert_eq!(
+        entries_now(&core)
+            .iter()
+            .filter(|e| e.role == MessageRole::User)
+            .count(),
+        1
+    );
+    assert!(core.sessions.resume_usage_limit(CHAT).await.is_err());
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn usage_limit_auto_resume_survives_engine_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+    let requests: RequestLog = Default::default();
+    let reset = chrono::Utc::now().timestamp_millis() + 3000;
+    let core = assemble_usage_limited(tmp.path(), requests.clone(), Some(reset));
+    pre_title(&core);
+    core.sessions.set_usage_resume(None, true).unwrap();
+    queue_run(&core, "finish after reset", "/tmp", "limited-user");
+    wait_usage_limit(&core).await;
+    assert_eq!(
+        core.sessions.usage_resume_status(Some(CHAT))["pending"]["enabled"],
+        true
+    );
+    core.shutdown().await;
+    drop(core);
+    let core = assemble_usage_limited(tmp.path(), requests.clone(), Some(reset));
+    wait_for(
+        || requests.lock().unwrap().len() == 2 && !core.sessions.has_run(CHAT),
+        "scheduled continuation after restart",
+    )
+    .await;
+    assert!(chrono::Utc::now().timestamp_millis() >= reset);
+    assert_eq!(
+        requests.lock().unwrap()[1].resume.as_deref(),
+        Some("limited-session")
+    );
+    assert_eq!(
+        entries_now(&core)
+            .iter()
+            .filter(|e| e.role == MessageRole::User)
+            .count(),
+        1
+    );
+    assert!(core.sessions.usage_resume_status(Some(CHAT))["pending"].is_null());
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn usage_limit_stop_cancels_its_schedule() {
+    let tmp = tempfile::tempdir().unwrap();
+    let requests: RequestLog = Default::default();
+    let core = assemble_usage_limited(
+        tmp.path(),
+        requests.clone(),
+        Some(chrono::Utc::now().timestamp_millis() + 60_000),
+    );
+    pre_title(&core);
+    core.sessions.set_usage_resume(None, true).unwrap();
+    queue_run(&core, "stop this", "/tmp", "limited-user");
+    wait_usage_limit(&core).await;
+    core.sessions.interrupt(CHAT).await.unwrap();
+    assert!(core.sessions.usage_resume_status(Some(CHAT))["pending"].is_null());
+    assert_eq!(requests.lock().unwrap().len(), 1);
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn usage_limit_validation_failure_keeps_manual_continuation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let requests: RequestLog = Default::default();
+    let core = assemble_usage_limited(tmp.path(), requests.clone(), None);
+    pre_title(&core);
+    queue_run(&core, "keep this request", "/tmp", "limited-user");
+    wait_usage_limit(&core).await;
+    core.workspace
+        .set_chat_cwd(CHAT, "/different-folder")
+        .unwrap();
+    let error = core.sessions.resume_usage_limit(CHAT).await.unwrap_err();
+    assert!(error.to_string().contains("working directory changed"));
+    assert!(core.sessions.usage_resume_status(Some(CHAT))["pending"].is_object());
+    assert_eq!(requests.lock().unwrap().len(), 1);
+    core.workspace.set_chat_cwd(CHAT, "/tmp").unwrap();
+    core.sessions.resume_usage_limit(CHAT).await.unwrap();
+    wait_for(
+        || requests.lock().unwrap().len() == 2 && !core.sessions.has_run(CHAT),
+        "resume after restoring the folder",
+    )
+    .await;
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn usage_limit_projectless_chat_resumes_with_resolved_scratch_cwd() {
+    for automatic in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let requests: RequestLog = Default::default();
+        let reset = automatic.then(|| chrono::Utc::now().timestamp_millis() + 2_000);
+        let core = assemble_usage_limited(tmp.path(), requests.clone(), reset);
+        pre_title(&core);
+        let cwd = "~/.zuse/scratch/usage-resume";
+        core.workspace.set_chat_cwd(CHAT, cwd).unwrap();
+        core.sessions.set_usage_resume(None, automatic).unwrap();
+        queue_run(&core, "continue in scratch", cwd, "scratch-user");
+        wait_usage_limit(&core).await;
+        let resolved = requests.lock().unwrap()[0].cwd.clone();
+        assert_ne!(resolved, cwd);
+        assert!(std::path::Path::new(&resolved).is_dir());
+        if !automatic {
+            core.sessions.resume_usage_limit(CHAT).await.unwrap();
+        }
+        wait_for(
+            || requests.lock().unwrap().len() == 2 && !core.sessions.has_run(CHAT),
+            "projectless usage-limit resume",
+        )
+        .await;
+        assert_eq!(requests.lock().unwrap()[1].cwd, resolved);
+        assert!(core.sessions.usage_resume_status(Some(CHAT))["pending"].is_null());
+        core.shutdown().await;
+    }
+}
+
+struct WarmUsageLimitedHarness {
+    requests: RequestLog,
+}
+#[async_trait]
+impl Harness for WarmUsageLimitedHarness {
+    fn id(&self) -> HarnessId {
+        HarnessId::Mock
+    }
+    fn display_name(&self) -> &str {
+        "Warm usage limit"
+    }
+    fn supports_steering(&self) -> bool {
+        true
+    }
+    fn steering_mode(&self) -> SteeringMode {
+        SteeringMode::StepBoundary
+    }
+    fn reasoning_levels(&self) -> &[ReasoningLevel] {
+        &[ReasoningLevel::Medium]
+    }
+    async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+        Ok(vec![])
+    }
+    async fn run(
+        &self,
+        request: RunRequest,
+        controls: RunControls,
+    ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+        let first = self.requests.lock().unwrap().is_empty();
+        self.requests.lock().unwrap().push(request.clone());
+        let (tx, rx) = tokio::sync::mpsc::channel(16);
+        tokio::spawn(async move {
+            for event in [
+                AgentEvent::SessionStarted {
+                    harness: HarnessId::Mock,
+                    model: "mock-1".into(),
+                    tools: vec![],
+                    cwd: request.cwd,
+                    session_id: "warm-limit".into(),
+                    assistant_message_id: "warm-first".into(),
+                },
+                AgentEvent::TextDelta {
+                    text: "Turn complete".into(),
+                },
+                AgentEvent::Done {
+                    status: DoneStatus::Completed,
+                    result: None,
+                    error: None,
+                    session_id: Some("warm-limit".into()),
+                },
+            ] {
+                if tx.send(Ok(event)).await.is_err() {
+                    return;
+                }
+            }
+            if first {
+                let mut steering = controls.steering;
+                if let Some(steer) = steering.recv().await {
+                    for event in [
+                        AgentEvent::Steered {
+                            assistant_message_id: None,
+                            next_assistant_message_id: Some("warm-followup".into()),
+                            message_id: steer.message_id.clone(),
+                        },
+                        AgentEvent::UsageLimit { resets_at: None },
+                        AgentEvent::Done {
+                            status: DoneStatus::Errored,
+                            result: None,
+                            error: Some(format!("Usage limit reached: {}", steer.prompt)),
+                            session_id: Some("warm-limit".into()),
+                        },
+                    ] {
+                        if tx.send(Ok(event)).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+        Ok(futures::stream::unfold(
+            rx,
+            |mut rx| async move { rx.recv().await.map(|ev| (ev, rx)) },
+        )
+        .boxed())
+    }
+}
+
+#[tokio::test]
+async fn usage_limit_after_warm_followup_resumes_the_consumed_request() {
+    let tmp = tempfile::tempdir().unwrap();
+    let requests: RequestLog = Default::default();
+    let registry = HarnessRegistry::new();
+    registry.register(Arc::new(WarmUsageLimitedHarness {
+        requests: requests.clone(),
+    }));
+    let core = EngineCore::assemble(tmp.path(), Arc::new(registry), HarnessId::Mock, None).unwrap();
+    pre_title(&core);
+    queue_run(&core, "earlier request", "/tmp", "warm-user");
+    wait_for(|| complete_assistant_count(&core) == 1, "first warm turn").await;
+    core.sessions
+        .dispatch(
+            CHAT,
+            HarnessId::Mock,
+            run_request("finish the follow-up instead", "/tmp"),
+            Some("followup-user".into()),
+        )
+        .await
+        .unwrap();
+    wait_usage_limit(&core).await;
+    assert_eq!(
+        requests.lock().unwrap().len(),
+        1,
+        "follow-up uses the warm runtime"
+    );
+    assert_eq!(
+        core.sessions.last_request(CHAT).unwrap().prompt,
+        "earlier request"
+    );
+    core.sessions.resume_usage_limit(CHAT).await.unwrap();
+    wait_for(
+        || requests.lock().unwrap().len() == 2 && !core.sessions.has_run(CHAT),
+        "follow-up continuation",
+    )
+    .await;
+    let resumed = requests.lock().unwrap()[1].clone();
+    assert!(resumed.prompt.contains("finish the follow-up instead"));
+    assert!(!resumed.prompt.contains("earlier request"));
+    assert_eq!(resumed.resume.as_deref(), Some("warm-limit"));
+    let users: Vec<_> = entries_now(&core)
+        .into_iter()
+        .filter(|entry| entry.role == MessageRole::User)
+        .collect();
+    assert_eq!(users.len(), 2);
+    assert_eq!(users[1].id, "followup-user");
     core.shutdown().await;
 }
