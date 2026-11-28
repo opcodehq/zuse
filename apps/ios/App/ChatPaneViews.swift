@@ -158,36 +158,33 @@ struct PaneSelectionView: View {
   }
 
   var body: some View {
-    // Two tiles across a phone, more on wider pages.
-    let columns = [GridItem(.adaptive(minimum: 160, maximum: 250), spacing: 14)]
     GeometryReader { proxy in
       ScrollView {
-        tileGrid(columns)
-          .padding(.horizontal, 20).padding(.vertical, 20)
-          .frame(maxWidth: 760).frame(maxWidth: .infinity)
-          // A short grid sits in the middle of the page, as the cards do in the overview.
+        rows
+          .padding(.horizontal, 20).padding(.vertical, 24)
+          .frame(maxWidth: 560).frame(maxWidth: .infinity)
+          // The list sits centred on the page, as the cards do in the overview.
           .frame(minHeight: proxy.size.height)
       }
       .scrollIndicators(.hidden)
     }
   }
 
-  private func tileGrid(_ columns: [GridItem]) -> some View {
-    VStack(alignment: .leading, spacing: 14) {
-      LazyVGrid(columns: columns, spacing: 14) {
-        ForEach(tiles) { tile in
-          Button {
-            open(tile)
-          } label: {
-            PaneTile(symbol: tile.kind.symbol, title: tile.title, count: tile.count)
-          }
-          .buttonStyle(PaneTileButtonStyle())
-          .accessibilityIdentifier("pane-tile-\(tile.kind.rawValue)")
+  private var rows: some View {
+    VStack(spacing: 10) {
+      ForEach(tiles) { tile in
+        Button {
+          open(tile)
+        } label: {
+          PaneTile(symbol: tile.kind.symbol, title: tile.title, count: tile.count)
         }
+        .buttonStyle(PaneTileButtonStyle())
+        .accessibilityIdentifier("pane-tile-\(tile.kind.rawValue)")
       }
-      // Under the grid, like desktop's "+ New tab": start a fresh thread off this chat.
+      // Like desktop's "+ New tab": start a fresh thread off this chat.
       if context.connected || context.preview {
-        NewThreadRow { context.newThread() }
+        PaneTile(symbol: "plus", title: "New thread", accent: true) { context.newThread() }
+          .accessibilityIdentifier("pane-new-thread")
       }
       if tiles.isEmpty && !(context.connected || context.preview) {
         Text("Connect to your computer to open terminals and files beside this chat.")
@@ -215,42 +212,44 @@ struct PaneSelectionView: View {
   }
 }
 
-/// One picker tile: icon top-left, count top-right, name bottom-left.
+/// One full-width picker row: an accent-tinted icon, the name, and an optional count.
+/// With `action`, the row is its own button (the "+ New thread" action); otherwise the
+/// grid wraps it in one.
 struct PaneTile: View {
   let symbol: String
   let title: String
   var count: Int?
+  var accent = false
+  var action: (() -> Void)?
   var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      HStack(alignment: .top) {
-        AppIcon(name: symbol, size: 18, weight: .semibold).foregroundStyle(AppTheme.accent)
-          .frame(width: 40, height: 40)
-          .background(
-            AppTheme.accent.opacity(0.14),
-            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        Spacer(minLength: 4)
-        if let count {
-          Text("\(count)").font(.system(size: 13, weight: .semibold)).monospacedDigit()
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 8).frame(minWidth: 24, minHeight: 22)
-            .background(Color.primary.opacity(0.08), in: Capsule())
-        }
-      }
-      Spacer(minLength: 20)
-      Text(title).font(.system(size: 18, weight: .semibold)).foregroundStyle(.primary)
-        .lineLimit(2).minimumScaleFactor(0.8).multilineTextAlignment(.leading)
+    if let action {
+      Button(action: action) { content }.buttonStyle(PaneTileButtonStyle())
+    } else {
+      content
     }
-    .padding(18)
-    .frame(maxWidth: .infinity, minHeight: 140, alignment: .leading)
-    .aspectRatio(1, contentMode: .fit)
+  }
+  private var content: some View {
+    HStack(spacing: 14) {
+      AppIcon(name: symbol, size: 18, weight: .semibold).foregroundStyle(AppTheme.accent)
+        .frame(width: 40, height: 40)
+        .background(
+          AppTheme.accent.opacity(0.14),
+          in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+      Text(title).font(.system(size: 17, weight: .semibold))
+        .foregroundStyle(accent ? AppTheme.accent : .primary).lineLimit(1)
+      Spacer(minLength: 8)
+      if let count {
+        Text("\(count)").font(.system(size: 14, weight: .semibold)).monospacedDigit()
+          .foregroundStyle(.secondary)
+          .padding(.horizontal, 8).frame(minWidth: 24, minHeight: 22)
+          .background(Color.primary.opacity(0.08), in: Capsule())
+      }
+    }
+    .padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
     .background(
-      Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+      Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 18, style: .continuous)
     )
-    .overlay(
-      RoundedRectangle(cornerRadius: 24, style: .continuous)
-        .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
-    )
-    .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+    .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(count.map { "\(title), \($0)" } ?? title)
     .accessibilityAddTraits(.isButton)
@@ -263,32 +262,6 @@ private struct PaneTileButtonStyle: ButtonStyle {
       .scaleEffect(configuration.isPressed ? 0.96 : 1)
       .opacity(configuration.isPressed ? 0.85 : 1)
       .animation(.snappy(duration: 0.18), value: configuration.isPressed)
-  }
-}
-
-/// The full-width action under the picker grid that starts a new thread off this chat.
-private struct NewThreadRow: View {
-  let action: () -> Void
-  var body: some View {
-    Button(action: action) {
-      HStack(spacing: 10) {
-        Image(systemName: "plus").font(.system(size: 15, weight: .bold))
-          .foregroundStyle(AppTheme.accent).frame(width: 28, height: 28)
-          .background(
-            AppTheme.accent.opacity(0.14),
-            in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-        Text("New thread").font(.system(size: 16, weight: .semibold)).foregroundStyle(.primary)
-        Spacer(minLength: 0)
-      }
-      .padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
-      .background(
-        Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 18, style: .continuous)
-      )
-      .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    }
-    .buttonStyle(PaneTileButtonStyle())
-    .accessibilityIdentifier("pane-new-thread")
-    .accessibilityLabel("New thread")
   }
 }
 
