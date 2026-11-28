@@ -119,9 +119,13 @@ fn renewed(mut request: Value, reupload: bool, sleeping: bool) -> Value {
         if queue {
             if let Some(input) = request["action"]["input"].as_object_mut() {
                 input.remove("computerFiles");
+                input.remove("attachments");
             }
         } else if request["action"]["payload"]["request"].is_object() {
             request["action"]["payload"]["request"]["attachments"] = json!([]);
+            if let Some(action) = request["action"].as_object_mut() {
+                action.remove("attachments");
+            }
         }
     }
     request

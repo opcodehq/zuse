@@ -5,12 +5,19 @@ import { rpc } from "@/core/connection";
 import { M } from "@/core/methods";
 import { RpcError } from "@/core/rpc";
 import { state } from "@/core/store";
+import { openChat, view } from "@/core/view";
+import { zapperForChat } from "@/core/zappers";
+import { draftFor, focusComposer, setDraft } from "@/features/composer/drafts";
+import { chatReferences, decorateReferences, referenceClick } from "@/features/transcript/ReferenceMarkdown";
+import { issueLabel, type ReferenceCatalog } from "@/features/transcript/references";
 import { Icon } from "@/ui/Icon";
 import { TerminalSpinner } from "@/ui/loaders";
 import { providerMarkdownHtml } from "@/ui/markdown";
-import { Button, IconButton, Menu, Spinner, Tabs, type MenuItem } from "@/ui/primitives";
+import { Button, IconButton, Menu, Spinner, Tabs, toast, type MenuItem } from "@/ui/primitives";
+import { type JSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
 import { parsePatch } from "./diff";
+import { addPrompt, checksSummary, checksTone, checkTone, cleanBody, fixAllPrompt, fixPrompt, groupFeedback, sortChecks, statusLine, type CheckTone, type FeedbackItem } from "./feedback";
 import { DiffView } from "./DiffView";
 import { Banner, DiffStat, Empty, PrStateIcon } from "./parts";
 import { errorText, liveSubscribe, readErrorText, workspace, type Target } from "./store";
@@ -373,7 +380,21 @@ function PullRequestDetail(props: { target: Target; url: string; own: boolean; o
       .filter((c) => (c.id ? !seen.has(c.id) && (seen.add(c.id), true) : true))
       .sort((a, b) => Date.parse(a.submittedAt || a.createdAt) - Date.parse(b.submittedAt || b.createdAt));
   });
-  const checks = () => detail()?.statusCheckRollup ?? [];
+  const references = chatReferences({ get chatId() { return props.target.chatId; } });
+  const chat = () => state.chats[props.target.chatId];
+  const issue = () => {
+    const url = detail()?.url.replace(/\/$/, "");
+    return zapperForChat(props.target.chatId)?.issues.find((i) => i.pullRequests.some((pr) => pr.url.replace(/\/$/, "") === url));
+  };
+
+  /** Puts a fix prompt into the linked chat's composer, or the current chat's, without sending it. */
+  const addToChat = (text: string, what: string, replaces: string[] = []) => {
+    const chatId = chat() ? props.target.chatId : view.selectedChatId ?? "";
+    setDraft(chatId, { text: addPrompt(draftFor(chatId).text, text, replaces) });
+    if (chatId && view.selectedChatId !== chatId) openChat(chatId);
+    focusComposer();
+    toast(`${what} added to the chat`);
+  };
 
   const statusItems = (): MenuItem[] => {
     const d = detail();
@@ -405,6 +426,9 @@ function PullRequestDetail(props: { target: Target; url: string; own: boolean; o
         <Show when={updating()}>
           <span class="ws-muted ws-small">{updating()}…</span>
         </Show>
+        <Show when={open() && detail()}>
+          {(d) => <MergeControl detail={d()} busy={!!updating()} onMerge={(method) => update({ kind: "merge", method }, "Merging")} onReady={() => update({ kind: "markReady" }, "Marking ready")} />}
+        </Show>
         <Show when={loading()} fallback={<IconButton icon="refresh" label="Refresh pull request" size="sm" iconSize={14} onClick={() => read()} />}>
           <span class="ws-icon-slot"><Spinner label="Loading pull request" /></span>
         </Show>
@@ -429,26 +453,6 @@ function PullRequestDetail(props: { target: Target; url: string; own: boolean; o
       <Show when={detail()} fallback={<Show when={!error()}><div class="ws-empty"><Spinner label="Loading pull request" /></div></Show>}>
         {(d) => (
           <div class="ws-pr-detail">
-            <div class="ws-pr-head">
-              <h3 class="ws-pr-title">{d().title}</h3>
-              <div class="ws-pr-meta ws-small ws-muted">
-                <span>{d().author.login}</span>
-                <span class="ws-faint">wants to merge into</span>
-                <span class="ws-chip ws-mono">{d().baseRefName}</span>
-                <span class="ws-faint">from</span>
-                <span class="ws-chip ws-mono" title={d().headRefName}>{d().headRefName}</span>
-                <Show when={props.own}>
-                  <span class="ws-chip">This branch</span>
-                </Show>
-              </div>
-              <div class="ws-pr-meta ws-small">
-                <DiffStat additions={d().additions} deletions={d().deletions} />
-                <span class="ws-faint">· {plural(d().files.length, "file")}</span>
-                <Show when={d().reviewDecision}>
-                  <span class="ws-faint">· {reviewLabel(d().reviewDecision)}</span>
-                </Show>
-              </div>
-            </div>
             <div class="ws-subbar">
               <Tabs
                 label="Pull request sections"
@@ -464,21 +468,55 @@ function PullRequestDetail(props: { target: Target; url: string; own: boolean; o
             <Switch>
               <Match when={tab() === "overview"}>
                 <div class="ws-pr-scroll">
-                  <Show when={open()}>
-                    <MergeBox detail={d()} busy={!!updating()} onMerge={(method) => update({ kind: "merge", method }, "Merging")} onReady={() => update({ kind: "markReady" }, "Marking ready")} />
-                  </Show>
-                  <Show when={checks().length}>
-                    <section class="ws-pr-section" aria-label="Checks">
-                      <div class="ws-section-label">Checks</div>
-                      <For each={checks()}>{(check) => <CheckRow check={check} />}</For>
-                    </section>
-                  </Show>
-                  <section class="ws-pr-section" aria-label="Description">
-                    <div class="ws-section-label">Description</div>
-                    <Show when={d().body.trim()} fallback={<div class="ws-faint ws-small">No description provided.</div>}>
-                      <MarkdownBody text={d().body} />
+                  <div class="ws-pr-head">
+                    <h3 class="ws-pr-title">{d().title}</h3>
+                    <div class="ws-pr-meta">
+                      <Avatar login={d().author.login} />
+                      <span class="ws-pr-author">{d().author.login}</span>
+                      <span class="ws-faint">· #{d().number}</span>
+                      <Show when={props.own}>
+                        <span class="ws-chip">This branch</span>
+                      </Show>
+                    </div>
+                  </div>
+                  <dl class="ws-pr-props">
+                    <Property icon="git-branch" label="Branch">
+                      <span class="ws-truncate ws-pr-branch" title={d().headRefName}>{d().headRefName}</span>
+                      <Icon name="alt-arrow-right" size={12} class="ws-faint" />
+                      <span class="ws-pr-branch">{d().baseRefName}</span>
+                      <span class="ws-faint ws-nowrap">{plural(d().files.length, "file")}</span>
+                      <DiffStat additions={d().additions} deletions={d().deletions} />
+                    </Property>
+                    <Property icon="pull-request" label="Status">
+                      <StatusText detail={d()} />
+                    </Property>
+                    <Property icon="eye" label="Reviews">
+                      <span class="ws-truncate">{reviewsText(d())}</span>
+                    </Property>
+                    <Show when={d().statusCheckRollup.length}>
+                      <Property icon="pr-checks" label="Checks">
+                        <CheckMark tone={checksTone(d().statusCheckRollup)} />
+                        <span class="ws-truncate">{checksSummary(d().statusCheckRollup)}</span>
+                      </Property>
                     </Show>
-                  </section>
+                    <Show when={chat()}>
+                      <Property icon="chat-round-line" label="Thread">
+                        <ReferenceText text={props.target.chatId} references={references()} chatId={props.target.chatId} />
+                      </Property>
+                    </Show>
+                    <Show when={issue()}>
+                      {(found) => (
+                        <Property icon="checklist" label="Issue">
+                          <ReferenceText text={`${issueLabel(found().number)} ${found().details.title}`} references={references()} chatId={props.target.chatId} />
+                        </Property>
+                      )}
+                    </Show>
+                  </dl>
+                  <Description body={d().body} references={references()} chatId={props.target.chatId} />
+                  <Show when={d().statusCheckRollup.length}>
+                    <ChecksSection checks={d().statusCheckRollup} />
+                  </Show>
+                  <FeedbackSection detail={d()} onAdd={addToChat} />
                 </div>
               </Match>
               <Match when={tab() === "activity"}>
@@ -552,33 +590,47 @@ function reviewLabel(decision: string) {
   }
 }
 
-function MergeBox(props: { detail: ChangeRequestDetail; busy: boolean; onMerge: (method: Method) => void; onReady: () => void }) {
-  const failing = () => props.detail.statusCheckRollup.filter((c) => /FAILURE|ERROR|TIMED_OUT|ACTION_REQUIRED|CANCELLED|STARTUP_FAILURE/.test(checkStatus(c))).length;
-  const pending = () => props.detail.statusCheckRollup.filter((c) => /PENDING|QUEUED|IN_PROGRESS|EXPECTED|WAITING|REQUESTED/.test(checkStatus(c))).length;
-  const conflicted = () => props.detail.mergeable.toUpperCase() === "CONFLICTING";
-  const blocked = () => props.detail.isDraft || conflicted();
-  const summary = () => {
-    if (props.detail.isDraft) return "This pull request is still a draft.";
-    if (conflicted()) return "This branch has conflicts that must be resolved.";
-    if (props.detail.autoMergeRequest) return `Auto-merge is on (${props.detail.autoMergeRequest.mergeMethod.toLowerCase()}).`;
-    if (failing()) return `${plural(failing(), "check")} failing.`;
-    if (pending()) return `${plural(pending(), "check")} still running.`;
-    if (props.detail.reviewDecision.toUpperCase() === "CHANGES_REQUESTED") return "Changes were requested.";
-    if (props.detail.reviewDecision.toUpperCase() === "REVIEW_REQUIRED") return "A review is required before merging.";
-    return "Ready to merge.";
-  };
+function reviewsText(detail: ChangeRequestDetail) {
+  const reviewers = [...new Set(detail.reviews.filter((r) => r.author.login && r.author.login !== detail.author.login).map((r) => r.author.login))];
+  const decision = reviewLabel(detail.reviewDecision);
+  if (!reviewers.length) return decision || "No reviews";
+  return decision ? `${decision} · ${reviewers.join(", ")}` : reviewers.join(", ");
+}
+
+function Property(props: { icon: string; label: string; children: JSX.Element }) {
   return (
-    <section class="ws-pr-merge" aria-label="Merge">
-      <Icon name={blocked() || failing() ? "danger-triangle" : "git-merge"} size={14} class={blocked() || failing() ? "ws-warn" : "ws-muted"} />
-      <span class="ws-grow ws-small">{summary()}</span>
-      <Show
-        when={!props.detail.isDraft}
-        fallback={<Button size="sm" disabled={props.busy} onClick={() => props.onReady()}>Ready for review</Button>}
-      >
+    <div class="ws-pr-prop">
+      <dt><Icon name={props.icon} size={14} class="ws-pr-prop-icon" />{props.label}</dt>
+      <dd>{props.children}</dd>
+    </div>
+  );
+}
+
+function StatusText(props: { detail: ChangeRequestDetail }) {
+  const status = () => statusLine(props.detail);
+  return (
+    <span class="ws-pr-status ws-truncate">
+      <PrStateIcon state={props.detail.state} draft={props.detail.isDraft} />
+      <span class="ws-pr-state" data-tone={status().tone}>{status().state}</span>
+      <Show when={status().detail}>
+        <span class="ws-faint">·</span>
+        <span class="ws-muted">{status().detail}</span>
+      </Show>
+    </span>
+  );
+}
+
+/** A quiet merge button that turns primary only once the pull request is ready to merge. */
+function MergeControl(props: { detail: ChangeRequestDetail; busy: boolean; onMerge: (method: Method) => void; onReady: () => void }) {
+  const conflicted = () => props.detail.mergeable.toUpperCase() === "CONFLICTING";
+  return (
+    <div class="ws-pr-merge">
+      <Show when={!props.detail.isDraft} fallback={<Button size="sm" disabled={props.busy} onClick={() => props.onReady()}>Ready for review</Button>}>
         <Menu
           placement="bottom-end"
           trigger={(p) => (
-            <button {...p} type="button" class="btn" data-variant="primary" data-size="sm" disabled={props.busy || conflicted()}>
+            <button {...p} type="button" class="btn" data-variant={statusLine(props.detail).ready ? "primary" : "default"} data-size="sm" disabled={props.busy || conflicted()}>
+              <Icon name="git-merge" size={14} />
               Merge
               <Icon name="alt-arrow-down" size={12} />
             </button>
@@ -586,37 +638,203 @@ function MergeBox(props: { detail: ChangeRequestDetail; busy: boolean; onMerge: 
           items={METHODS.map((m) => ({ label: m.label, onSelect: () => props.onMerge(m.value) }))}
         />
       </Show>
+    </div>
+  );
+}
+
+const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+/** Plain text with issue, pull request and thread references drawn as the transcript's chips. */
+function ReferenceText(props: { text: string; references: ReferenceCatalog; chatId: string }) {
+  return (
+    // eslint-disable-next-line solid/no-innerhtml -- escaped text; decorateReferences only adds chip anchors
+    <span class="ws-pr-ref ws-truncate" innerHTML={decorateReferences(escapeHtml(props.text), props.references)} onClick={(event) => referenceClick(event, props.references, props.chatId)} />
+  );
+}
+
+function Description(props: { body: string; references: ReferenceCatalog; chatId: string }) {
+  const [expanded, setExpanded] = createSignal(false);
+  const long = () => props.body.length > 360 || props.body.split("\n").length > 8;
+  return (
+    <section class="ws-pr-section" aria-label="Description">
+      <div class="ws-section-label">Description</div>
+      <Show when={props.body.trim()} fallback={<div class="ws-faint ws-small">No description provided.</div>}>
+        <div class="ws-pr-desc" data-clamped={long() && !expanded() ? "" : undefined}>
+          <MarkdownBody text={props.body} references={props.references} chatId={props.chatId} />
+        </div>
+        <Show when={long()}>
+          <button type="button" class="ws-pr-link" aria-expanded={expanded() ? "true" : "false"} onClick={() => setExpanded(!expanded())}>{expanded() ? "Show less" : "Show more"}</button>
+        </Show>
+      </Show>
     </section>
   );
 }
 
-function checkStatus(check: ChangeRequestCheck) {
-  return (check.conclusion || check.state || check.status || "").toUpperCase();
+function SectionHead(props: { label: string; count: number; open: boolean; onToggle: () => void; children?: JSX.Element }) {
+  return (
+    <div class="ws-pr-section-head">
+      <button type="button" class="ws-pr-section-toggle" aria-expanded={props.open ? "true" : "false"} onClick={() => props.onToggle()}>
+        {props.label}
+        <span class="ws-faint ws-count">{props.count}</span>
+        <Icon name={props.open ? "alt-arrow-down" : "alt-arrow-right"} size={12} class="ws-faint" />
+      </button>
+      <div class="ws-grow" />
+      {props.children}
+    </div>
+  );
+}
+
+const CHECK_LABELS: Record<CheckTone, string> = { running: "Running", failed: "Failed", passed: "Passed", skipped: "Skipped" };
+
+function CheckMark(props: { tone: CheckTone }) {
+  return (
+    <span class="ws-check-mark" data-tone={props.tone}>
+      <Switch fallback={<Icon name="check" size={14} label={CHECK_LABELS[props.tone]} />}>
+        <Match when={props.tone === "running"}><TerminalSpinner size={13} label={CHECK_LABELS.running} /></Match>
+        <Match when={props.tone === "failed"}><Icon name="close" size={14} label={CHECK_LABELS.failed} /></Match>
+        <Match when={props.tone === "skipped"}><span class="ws-check-skip" role="img" aria-label={CHECK_LABELS.skipped} /></Match>
+      </Switch>
+    </span>
+  );
+}
+
+function ChecksSection(props: { checks: ChangeRequestCheck[] }) {
+  const [open, setOpen] = createSignal(true);
+  return (
+    <section class="ws-pr-section" aria-label="Checks">
+      <SectionHead label="Checks" count={props.checks.length} open={open()} onToggle={() => setOpen(!open())} />
+      <Show when={open()}>
+        <For each={sortChecks(props.checks)}>{(check) => <CheckRow check={check} />}</For>
+      </Show>
+    </section>
+  );
 }
 
 function CheckRow(props: { check: ChangeRequestCheck }) {
-  const status = () => checkStatus(props.check);
-  const tone = () =>
-    /FAILURE|ERROR|TIMED_OUT|ACTION_REQUIRED|CANCELLED|STARTUP_FAILURE/.test(status())
-      ? "danger"
-      : /SUCCESS|NEUTRAL|SKIPPED/.test(status())
-        ? "success"
-        : "pending";
+  const tone = () => checkTone(props.check);
+  const name = () => props.check.name || props.check.context;
   const link = () => props.check.detailsUrl || props.check.targetUrl;
-  const label = () => (tone() === "danger" ? "Failed" : tone() === "success" ? (status() === "SKIPPED" ? "Skipped" : "Passed") : "Running");
   return (
-    <div class="ws-check-row">
-      <span class="ws-check-mark">
-        <Show when={tone() === "pending"} fallback={<span class="ws-dot" data-tone={tone()} role="img" aria-label={label()} />}>
-          <TerminalSpinner size={14} tone="warning" label={label()} />
-        </Show>
-      </span>
-      <span class="ws-truncate ws-grow">{props.check.name || props.check.context}</span>
-      <span class="ws-faint ws-small">{label()}</span>
-      <Show when={link()}>
-        {(href) => <IconButton icon="arrow-up-right" label={`Open ${props.check.name || props.check.context}`} size="sm" iconSize={12} onClick={() => openExternal(href())} />}
+    <div class="ws-check-row" data-tone={tone()}>
+      <CheckMark tone={tone()} />
+      <span class="ws-truncate ws-grow">{name()}</span>
+      <span class="ws-faint">{CHECK_LABELS[tone()]}</span>
+      <Show when={link()} fallback={<span class="ws-check-link" />}>
+        {(href) => <IconButton class="ws-check-link" icon="arrow-up-right" label={`Open ${name()}`} size="sm" iconSize={12} onClick={() => openExternal(href())} />}
       </Show>
     </div>
+  );
+}
+
+function FeedbackSection(props: { detail: ChangeRequestDetail; onAdd: (text: string, what: string, replaces?: string[]) => void }) {
+  const groups = createMemo(() => groupFeedback(props.detail));
+  const [open, setOpen] = createSignal(true);
+  const [showClosed, setShowClosed] = createSignal(false);
+  return (
+    <Show when={groups().open.length || groups().closed.length}>
+      <section class="ws-pr-section" aria-label="Feedback">
+        <SectionHead label="Feedback" count={groups().open.length} open={open()} onToggle={() => setOpen(!open())}>
+          <Show when={groups().open.length}>
+            <Button size="sm" variant="ghost" icon="pr-add-to-chat" class="ws-fb-add-all" onClick={() => props.onAdd(fixAllPrompt(groups().open, props.detail), plural(groups().open.length, "comment"), groups().open.map(fixPrompt))}>Add all</Button>
+          </Show>
+        </SectionHead>
+        <Show when={open()}>
+          <Show when={groups().open.length}>
+            <div class="ws-fb-list" role="list" aria-label="Open feedback">
+              <For each={groups().open}>{(item) => <FeedbackRow item={item} onAdd={(text) => props.onAdd(text, "Comment")} />}</For>
+            </div>
+          </Show>
+          <Show when={groups().closed.length}>
+            <button type="button" class="ws-pr-link ws-fb-closed-toggle" aria-expanded={showClosed() ? "true" : "false"} onClick={() => setShowClosed(!showClosed())}>
+              <Icon name="check" size={12} />
+              {groups().closed.length} resolved
+              <Icon name={showClosed() ? "alt-arrow-down" : "alt-arrow-right"} size={12} />
+            </button>
+            <Show when={showClosed()}>
+              <div class="ws-fb-list" role="list" aria-label="Resolved feedback">
+                <For each={groups().closed}>{(item) => <FeedbackRow item={item} onAdd={(text) => props.onAdd(text, "Comment")} />}</For>
+              </div>
+            </Show>
+          </Show>
+        </Show>
+      </section>
+    </Show>
+  );
+}
+
+function FeedbackRow(props: { item: FeedbackItem; onAdd: (text: string) => void }) {
+  const [expanded, setExpanded] = createSignal(false);
+  const closed = () => props.item.resolved || props.item.outdated;
+  const prompt = () => fixPrompt(props.item);
+  const toggle = () => setExpanded(!expanded());
+  return (
+    <article class="ws-fb" role="listitem" data-closed={closed() ? "" : undefined} data-expanded={expanded() ? "" : undefined}>
+      <div class="ws-fb-row">
+        <button type="button" class="ws-fb-toggle" aria-expanded={expanded() ? "true" : "false"} onClick={toggle}>
+          <Show when={closed()} fallback={<Avatar login={props.item.author} />}>
+            <Icon name="check" size={14} class="ws-fb-check" label={props.item.resolved ? "Resolved" : "Outdated"} />
+          </Show>
+          <span class="ws-fb-main">
+            <span class="ws-fb-line">
+              <span class="ws-fb-author ws-truncate">{props.item.author}</span>
+              <span class="ws-faint ws-nowrap">{timeAgo(props.item.createdAt)}</span>
+              <Show when={props.item.outdated && !props.item.resolved}>
+                <span class="ws-faint ws-nowrap">· Outdated</span>
+              </Show>
+            </span>
+            <span class="ws-fb-summary ws-truncate">
+              <Show when={props.item.severity}>
+                <span class="ws-fb-severity">{props.item.severity}</span>
+                <span class="ws-faint"> · </span>
+              </Show>
+              <span class="ws-fb-title">{props.item.title || "Comment"}</span>
+            </span>
+          </span>
+        </button>
+        <div class="ws-fb-actions">
+          <IconButton icon="pr-add-to-chat" label="Add to chat" size="sm" iconSize={14} onClick={() => props.onAdd(prompt())} />
+          <Show when={props.item.url}>
+            <IconButton icon="arrow-up-right" label="Open on GitHub" size="sm" iconSize={12} onClick={() => openExternal(props.item.url)} />
+          </Show>
+        </div>
+      </div>
+      <Show when={expanded()}>
+        <div class="ws-fb-body">
+          <Show when={props.item.path}>
+            <div class="ws-fb-path ws-mono ws-faint ws-truncate">{props.item.line ? `${props.item.path}:${props.item.line}` : props.item.path}</div>
+          </Show>
+          <Show when={props.item.diffHunk}>
+            <pre class="ws-comment-hunk">{props.item.diffHunk.split("\n").slice(-6).join("\n")}</pre>
+          </Show>
+          <MarkdownBody text={cleanBody(props.item.body)} />
+          <Show when={props.item.replies}>
+            <div class="ws-faint ws-small">{plural(props.item.replies, "reply", "replies")} on GitHub</div>
+          </Show>
+          <div class="ws-fb-prompt">
+            <div class="ws-fb-prompt-head">
+              <Icon name="bot" size={12} />
+              <span class="ws-grow">Prompt to fix</span>
+              <IconButton icon="copy" label="Copy prompt" size="sm" iconSize={12} onClick={() => void copyText(prompt(), "Prompt copied")} />
+            </div>
+            <pre class="ws-fb-prompt-text">{prompt()}</pre>
+          </div>
+        </div>
+      </Show>
+    </article>
+  );
+}
+
+/** A GitHub avatar over the login's initial, which stays when the image cannot load. */
+function Avatar(props: { login: string }) {
+  const [failed, setFailed] = createSignal(false);
+  const owner = () => props.login.replace(/\[bot\]$/, "");
+  return (
+    <span class="ws-avatar" aria-hidden="true">
+      {(owner()[0] ?? "?").toUpperCase()}
+      <Show when={owner() && !failed()}>
+        <img src={`https://github.com/${encodeURIComponent(owner())}.png?size=40`} alt="" loading="lazy" onError={() => setFailed(true)} />
+      </Show>
+    </span>
   );
 }
 
@@ -649,7 +867,13 @@ function CommentView(props: { comment: ChangeRequestComment }) {
 }
 
 /** Provider markdown is written by anyone who can open a PR or comment: raw HTML shows as text and images become links. */
-function MarkdownBody(props: { text: string }) {
-  // eslint-disable-next-line solid/no-innerhtml -- providerMarkdownHtml output is DOMPurify-sanitized
-  return <div class="ws-markdown" innerHTML={providerMarkdownHtml(props.text)} />;
+function MarkdownBody(props: { text: string; references?: ReferenceCatalog; chatId?: string }) {
+  const html = () => {
+    const safe = providerMarkdownHtml(props.text);
+    return props.references ? decorateReferences(safe, props.references) : safe;
+  };
+  return (
+    // eslint-disable-next-line solid/no-innerhtml -- providerMarkdownHtml output is DOMPurify-sanitized; decorateReferences only adds chip anchors
+    <div class="ws-markdown" innerHTML={html()} onClick={(event) => props.references && props.chatId !== undefined && referenceClick(event, props.references, props.chatId)} />
+  );
 }

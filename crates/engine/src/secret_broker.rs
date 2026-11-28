@@ -1,4 +1,4 @@
-//! Transient broker primitive. Never expose this service to generic shell tools.
+//! Transient broker. Values are delivered only to explicitly approved consumers.
 //! Values deliberately implement neither Debug nor Serialize.
 use std::{
     collections::HashMap,
@@ -69,7 +69,7 @@ impl Broker {
         entry.value = Some(value);
         Ok(())
     }
-    // Only a trusted fixed backend operation may receive this value. No RPC or
+    // Only an approved backend consumer may receive this value. No RPC or
     // tool result may serialize it. Removing before execution makes failures one-use.
     pub fn consume(&mut self, id: &str, scope: &Scope) -> Result<Zeroizing<String>, Error> {
         self.sweep();
@@ -255,7 +255,14 @@ where
     use zuse_harness::Error;
     use zuse_protocol::UserInputQuestion;
 
-    use crate::secret_broker::{self, Scope};
+    match input.get("mode") {
+        Some(serde_json::Value::String(mode)) if mode == "command" => {
+            return command::execute(input, context, ask).await;
+        }
+        None => {}
+        Some(serde_json::Value::String(mode)) if mode == "https" => {}
+        _ => return Err(Error::Tool("Invalid private operation mode".into())),
+    }
     if context.read_only
         || !matches!(
             input["method"].as_str(),
@@ -302,15 +309,10 @@ where
         run: context.call_id.clone(),
         operation: format!("{method} {url}"),
     };
-    let id = secret_broker::shared()
-        .request(scope.clone(), std::time::Duration::from_secs(600))
-        .map_err(|_| fail())?;
-    let _lease = secret_broker::Lease(id.clone());
-    let question_id = format!("private-secret:{id}");
     let question = UserInputQuestion {
         approval_prompt: None,
         approval: None,
-        id: question_id,
+        id: String::new(),
         header: "Private secret".into(),
         question: format!(
             "{}\n{}\n\nApprove one request: {} {}\nBody: {}\n\nBearer token is used once by the backend. Only HTTP status is returned. Expires in 10 minutes. No file or shell access.",
@@ -325,18 +327,9 @@ where
         prefill: None,
         multiline: false,
     };
-    let answer = tokio::time::timeout(std::time::Duration::from_secs(600), ask(question))
-        .await
-        .map_err(|_| fail())??;
-    if answer != ["saved"] {
+    let Some(token) = approve(scope, context.clone(), question, ask).await? else {
         return Ok("Secret request declined".into());
-    }
-    if context.cancel.is_cancelled() {
-        return Err(Error::Interrupted);
-    }
-    let token = secret_broker::shared()
-        .consume(&id, &scope)
-        .map_err(|_| fail())?;
+    };
     let bearer = Zeroizing::new(format!("Bearer {}", token.as_str()));
     let mut auth = reqwest::header::HeaderValue::from_str(bearer.as_str()).map_err(|_| fail())?;
     auth.set_sensitive(true);
@@ -350,11 +343,7 @@ where
         _ = context.cancel.cancelled() => return Err(Error::Interrupted),
         result = tokio::time::timeout(std::time::Duration::from_secs(10), tokio::net::lookup_host((host.as_str(), port))) => result.map_err(|_| fail())?.map_err(|_| fail())?.collect(),
     };
-    if addresses.is_empty()
-        || addresses
-            .iter()
-            .any(|a| !secret_broker::public_address(a.ip()))
-    {
+    if addresses.is_empty() || addresses.iter().any(|a| !public_address(a.ip())) {
         return Err(Error::Tool(
             "Private secret operations require a public HTTPS destination".into(),
         ));
@@ -382,6 +371,40 @@ where
         response.status().as_u16()
     ))
 }
+
+// No value is returned to the question callback or serialized into a tool result.
+async fn approve<F, Fut>(
+    scope: Scope,
+    context: zuse_harness::ToolContext,
+    mut question: zuse_protocol::UserInputQuestion,
+    ask: F,
+) -> Result<Option<Zeroizing<String>>, zuse_harness::Error>
+where
+    F: FnOnce(zuse_protocol::UserInputQuestion) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<String>, zuse_harness::Error>>,
+{
+    use zuse_harness::Error;
+    let fail = || Error::Tool("Private secret operation failed".into());
+    let id = shared()
+        .request(scope.clone(), Duration::from_secs(600))
+        .map_err(|_| fail())?;
+    let _lease = Lease(id.clone());
+    question.id = format!("private-secret:{id}");
+    let answer = tokio::select! {
+        biased;
+        _ = context.cancel.cancelled() => return Err(Error::Interrupted),
+        result = tokio::time::timeout(Duration::from_secs(600), ask(question)) => result.map_err(|_| fail())??,
+    };
+    if answer != ["saved"] {
+        return Ok(None);
+    }
+    if context.cancel.is_cancelled() {
+        return Err(Error::Interrupted);
+    }
+    shared().consume(&id, &scope).map(Some).map_err(|_| fail())
+}
+
+mod command;
 
 #[cfg(test)]
 mod operation_tests {

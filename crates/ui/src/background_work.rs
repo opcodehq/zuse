@@ -121,6 +121,59 @@ pub(crate) fn running_work(
         .collect()
 }
 
+/// The hover note on a chat's background work mark in the sidebar and tabs:
+/// "Background work · 2 tasks".
+pub(crate) fn tooltip(count: u32, cx: &gpui::App) -> SharedString {
+    use crate::localization::message as tr;
+    use zuse_i18n::messages as msg;
+    let title = tr(cx, msg::chat::background_tasks_title);
+    let count = tr(cx, |l| {
+        msg::native::background_work_tasks_plural(l, count as usize)
+    });
+    format!("{title} · {count}").into()
+}
+
+/// The background mark's loader in a tab: the tab's working spinner size.
+pub(crate) const TAB_LOADER: f32 = 8.0;
+
+/// The quiet mark a chat with background work wears in place of the working
+/// loader: the same loader in the muted tint at lower emphasis, with
+/// [`tooltip`] on hover. `size` is the slot, `loader` the loader's own
+/// size (the working loader's in that place).
+pub(crate) fn mark(
+    id: impl Into<SharedString>,
+    size: f32,
+    loader: f32,
+    count: u32,
+    theme: &crate::theme::Theme,
+    cx: &gpui::App,
+) -> gpui::AnyElement {
+    use crate::tooltip::TooltipExt as _;
+    use gpui::{div, prelude::*, px};
+    let id: SharedString = id.into();
+    let tip = tooltip(count, cx);
+    div()
+        .id(id.clone())
+        .debug_selector({
+            let id = id.clone();
+            move || id.to_string()
+        })
+        .size(px(size))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .opacity(0.7)
+        .aria_label(tip.clone())
+        .tip(tip)
+        .child(crate::loaders::retro_mono_loader(
+            format!("{id}-loader"),
+            loader,
+            theme.text_muted,
+        ))
+        .into_any_element()
+}
+
 /// The earliest start among the items: the row's overall elapsed time.
 pub(crate) fn oldest_start(items: &[WorkItem]) -> Option<DateTime<Utc>> {
     items.iter().filter_map(|item| item.started_at).min()

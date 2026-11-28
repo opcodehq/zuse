@@ -783,12 +783,14 @@ pub use zuse_protocol::view::{
 };
 
 /// What a session row shows that ticks with the clock rather than with its
-/// content: the staleness-checked indicator and running-subagent count. A
-/// change in either must repaint even when the row itself is untouched.
-fn session_presence(session: &Session, now: DateTime<Utc>) -> (Indicator, u32) {
+/// content: the staleness-checked indicator, running-subagent count and
+/// background work count. A change in any must repaint even when the row
+/// itself is untouched.
+fn session_presence(session: &Session, now: DateTime<Utc>) -> (Indicator, u32, u32) {
     (
         effective_indicator(Some(session), now),
         running_subagents(Some(session), now),
+        zuse_protocol::view::background_work(Some(session), now),
     )
 }
 
@@ -994,7 +996,7 @@ pub struct AppState {
     device_presentation: Option<Vec<(Device, bool, String)>>,
     // Presence ticks also retire stale remote session indicators. Remember
     // their last published appearance even when the device rows stay online.
-    session_presence_presentation: Vec<(Indicator, u32)>,
+    session_presence_presentation: Vec<(Indicator, u32, u32)>,
     /// Live edge posture (WatchConnectivity): drives the connection pill,
     /// composer honesty ("will queue"), and the Queued send badges.
     pub connectivity: zuse_protocol::Connectivity,
@@ -1022,6 +1024,9 @@ pub struct AppState {
     /// computer's own list has it, so its selection survives attaching.
     pub(crate) pending_cloud_conversation: Option<Chat>,
     pub sessions: Vec<Session>,
+    /// Chats whose background work finished while they were not open: they
+    /// read as done until opened, like a turn that finished out of sight.
+    background_settled: HashSet<String>,
     /// Synced user/org sidebar pin state. Local workspaces deliberately ignore
     /// this and continue reading their device-local settings entry.
     pub sidebar_preferences: SidebarPreferencesState,
@@ -1212,7 +1217,7 @@ fn is_text_append(frame: &TranscriptFrame) -> bool {
 }
 
 /// Each session's presence at `now` (the lease-dependent part of a frame).
-fn session_presence_at(sessions: &[Session], now: DateTime<Utc>) -> Vec<(Indicator, u32)> {
+fn session_presence_at(sessions: &[Session], now: DateTime<Utc>) -> Vec<(Indicator, u32, u32)> {
     sessions
         .iter()
         .map(|session| session_presence(session, now))
@@ -1273,6 +1278,7 @@ impl AppState {
             unsaved_side_chat: false,
             pending_cloud_conversation: None,
             sessions: Vec::new(),
+            background_settled: HashSet::new(),
             sidebar_preferences: SidebarPreferencesState::default(),
             session_presentation: None,
             selected_space: None,
@@ -1801,12 +1807,47 @@ impl AppState {
                 metadata
             })
             .collect();
-        let changed = self.session_presentation.as_ref() != Some(&presentation)
+        let mut changed = self.session_presentation.as_ref() != Some(&presentation)
             || self.session_presence_presentation != presence;
+        // Background work that ended out of sight reads as done, like a turn
+        // that did. A row gone stale is a dead engine, not finished work.
+        for previous in &self.sessions {
+            if zuse_protocol::view::background_work(Some(previous), now) == 0
+                || self.selected_chat.as_deref() == Some(previous.chat_id.as_str())
+            {
+                continue;
+            }
+            let settled = sessions
+                .iter()
+                .find(|session| session.chat_id == previous.chat_id)
+                .is_some_and(|session| {
+                    now.signed_duration_since(session.updated_at)
+                        .num_milliseconds()
+                        <= SESSION_STALE_MS
+                        && zuse_protocol::view::background_work(Some(session), now) == 0
+                });
+            if settled {
+                changed |= self.background_settled.insert(previous.chat_id.clone());
+            }
+        }
         self.session_presentation = Some(presentation);
         self.session_presence_presentation = presence;
         self.sessions = sessions;
         changed
+    }
+
+    /// How much background work `chat_id` holds beside its turn (see
+    /// [`zuse_protocol::view::background_work`]). The open chat also counts
+    /// its transcript's running subagents, as its Background work row does.
+    pub fn background_work_for(&self, chat_id: &str, now: DateTime<Utc>) -> u32 {
+        let session = self.session_for(chat_id);
+        let listed = zuse_protocol::view::background_work(session, now);
+        if self.selected_chat.as_deref() != Some(chat_id) {
+            return listed;
+        }
+        let tasks = zuse_protocol::view::background_tasks(session, now);
+        let shown = crate::background_work::running_work(&self.transcript, tasks).len() as u32;
+        listed.max(shown)
     }
 
     /// Returns whether the list or the healed selection changed.
@@ -3163,7 +3204,12 @@ impl AppState {
         if self.send_pending(&chat.id, now) {
             return ChatIndicator::Working;
         }
-        display_status(chat, self.session_for(&chat.id), now)
+        match display_status(chat, self.session_for(&chat.id), now) {
+            ChatIndicator::Idle if self.background_settled.contains(&chat.id) => {
+                ChatIndicator::Completed
+            }
+            status => status,
+        }
     }
 
     /// The sidebar's Sessions list: every non-archived chat of a LIVE space,
@@ -3345,7 +3391,8 @@ impl AppState {
                     session.status,
                     zuse_protocol::SessionStatus::Working
                         | zuse_protocol::SessionStatus::AwaitingInput
-                )
+                ) || session.running_subagents > 0
+                    || session.background_tasks.iter().any(|task| task.running())
             })
             // `age_ms > SESSION_STALE_MS` first holds one millisecond past it.
             .map(|session| {
@@ -3766,6 +3813,7 @@ impl AppState {
         self.pending_side_chat = None;
         self.unsaved_side_chat = false;
         self.sessions.clear();
+        self.background_settled.clear();
         self.sidebar_preferences = SidebarPreferencesState::default();
         self.session_presentation = None;
         self.selected_space = None;
@@ -4527,6 +4575,9 @@ impl AppState {
     }
 
     pub fn mark_chat_seen(&mut self, chat_id: &str, cx: &mut Context<Self>) {
+        if self.background_settled.remove(chat_id) {
+            cx.notify();
+        }
         let Some(chat) = self.chats.iter_mut().find(|c| c.id == chat_id) else {
             return;
         };
@@ -5981,6 +6032,109 @@ mod tests {
             continuation_of: None,
             duration_ms: None,
         }
+    }
+
+    fn with_background(mut session: Session, running: bool) -> Session {
+        let now = session.updated_at;
+        session.background_tasks = vec![zuse_protocol::BackgroundTask {
+            id: "watch".into(),
+            kind: zuse_protocol::BackgroundTaskKind::Shell,
+            description: "Watch CI".into(),
+            command: None,
+            started_at: now - TimeDelta::seconds(84),
+            ended_at: (!running).then_some(now),
+            outcome: None,
+            stoppable: true,
+        }];
+        session
+    }
+
+    #[gpui::test]
+    fn background_work_outliving_the_turn_counts_and_settles_as_done(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let state = cx.new(|_| AppState::new());
+        let now = Utc::now();
+        state.update(cx, |state, cx| {
+            // Both chats were seen: no finished turn to report.
+            let seen = |id| {
+                let mut chat = chat(id, 0, Some(1));
+                chat.last_seen_at = chat.last_message_at;
+                chat
+            };
+            state.chats = vec![seen("open"), seen("away")];
+            state.select_chat(Some("open".into()), cx);
+            // The turns ended; each left a shell running.
+            state.apply_sessions_at(
+                vec![
+                    with_background(session("open", SessionStatus::Idle, 0, now), true),
+                    with_background(session("away", SessionStatus::Idle, 0, now), true),
+                ],
+                now,
+            );
+            for id in ["open", "away"] {
+                assert_eq!(state.background_work_for(id, now), 1, "{id}");
+                let chat = state.chats.iter().find(|c| c.id == id).unwrap().clone();
+                assert_eq!(state.display_status_for(&chat, now), ChatIndicator::Idle);
+            }
+            // A running turn is Working, whatever background work it holds.
+            state.apply_sessions_at(
+                vec![
+                    with_background(session("open", SessionStatus::Working, 0, now), true),
+                    with_background(session("away", SessionStatus::Idle, 0, now), true),
+                ],
+                now,
+            );
+            let open = state.chats[0].clone();
+            assert_eq!(state.display_status_for(&open, now), ChatIndicator::Working);
+            // The work ends: out of sight it reads done, in front it does not.
+            assert!(state.apply_sessions_at(
+                vec![
+                    with_background(session("open", SessionStatus::Idle, 0, now), false),
+                    with_background(session("away", SessionStatus::Idle, 0, now), false),
+                ],
+                now,
+            ));
+            let (open, away) = (state.chats[0].clone(), state.chats[1].clone());
+            assert_eq!(state.background_work_for("away", now), 0);
+            assert_eq!(state.display_status_for(&open, now), ChatIndicator::Idle);
+            assert_eq!(
+                state.display_status_for(&away, now),
+                ChatIndicator::Completed
+            );
+            // Opening it is seeing it.
+            state.select_chat(Some("away".into()), cx);
+            assert_eq!(state.display_status_for(&away, now), ChatIndicator::Idle);
+        });
+    }
+
+    #[gpui::test]
+    fn background_work_lost_with_its_engine_is_not_done(cx: &mut gpui::TestAppContext) {
+        let state = cx.new(|_| AppState::new());
+        let now = Utc::now();
+        state.update(cx, |state, _| {
+            let mut away = chat("away", 0, Some(1));
+            away.last_seen_at = away.last_message_at;
+            state.chats = vec![away.clone()];
+            state.apply_sessions_at(
+                vec![with_background(
+                    session("away", SessionStatus::Idle, 0, now),
+                    true,
+                )],
+                now,
+            );
+            // The engine stopped refreshing the row: its work is gone, not
+            // finished.
+            let later = now + TimeDelta::milliseconds(SESSION_STALE_MS + 1_000);
+            assert_eq!(
+                state.next_clock_transition(now),
+                Some(now + TimeDelta::milliseconds(SESSION_STALE_MS + 1)),
+                "the row going stale repaints the mark away"
+            );
+            state.apply_sessions_at(state.sessions.clone(), later);
+            assert_eq!(state.background_work_for("away", later), 0);
+            assert_eq!(state.display_status_for(&away, later), ChatIndicator::Idle);
+        });
     }
 
     #[gpui::test]

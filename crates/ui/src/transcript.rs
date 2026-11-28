@@ -4079,6 +4079,9 @@ pub enum TranscriptEvent {
     /// The not-sent line's Retry (see [`Transcript::set_external_not_sent`]):
     /// send the messages the server never took again.
     RetryNotSent,
+    /// The not-sent line's Remove: the first message the server never took
+    /// leaves the chat and goes back to the draft with its files.
+    RemoveNotSent,
 }
 
 /// Where a reply's Fork menu sends the copy.
@@ -9419,13 +9422,19 @@ impl Transcript {
     /// asks the owner to send those messages again.
     fn render_not_sent_line(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();
+        let action = |id: &'static str, label: &'static str, aria: &'static str| {
+            div()
+                .id(id)
+                .debug_selector(move || id.into())
+                .role(gpui::Role::Button)
+                .aria_label(aria)
+                .tab_index(0)
+                .focus_visible(|style| style.underline())
+                .cursor_pointer()
+                .hover(|style| style.underline())
+                .child(SharedString::from(label))
+        };
         div()
-            .id("not-sent-retry")
-            .debug_selector(|| "not-sent-retry".into())
-            .role(gpui::Role::Button)
-            .aria_label("Not sent. Retry sending")
-            .tab_index(0)
-            .focus_visible(|style| style.underline())
             .flex()
             .flex_row()
             .items_center()
@@ -9433,9 +9442,20 @@ impl Transcript {
             .pt(px(Theme::SPACE_LG))
             .text_size(crate::typography::text_xs())
             .text_color(theme.danger)
-            .cursor_pointer()
-            .on_click(cx.listener(|_, _, _, cx| cx.emit(TranscriptEvent::RetryNotSent)))
-            .child(SharedString::from("Not sent — Retry"))
+            .child(SharedString::from("Not sent —"))
+            .child(
+                action("not-sent-retry", "Retry", "Not sent. Retry sending")
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(TranscriptEvent::RetryNotSent))),
+            )
+            .child(SharedString::from("·"))
+            .child(
+                action(
+                    "not-sent-remove",
+                    "Remove",
+                    "Not sent. Remove the message and keep it as a draft",
+                )
+                .on_click(cx.listener(|_, _, _, cx| cx.emit(TranscriptEvent::RemoveNotSent))),
+            )
             .into_any_element()
     }
 

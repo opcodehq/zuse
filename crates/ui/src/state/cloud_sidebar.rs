@@ -94,6 +94,20 @@ pub(crate) struct CloudLiveActivity {
     pub awaiting_input: bool,
     /// It sees its computer up.
     pub online: bool,
+    /// Background work its agent left running (subagents, shells, dev
+    /// servers), what its Background work row lists.
+    pub background: u32,
+}
+impl CloudLiveActivity {
+    /// A turn is running or waiting on the user.
+    fn turn(&self) -> bool {
+        self.working || self.awaiting_input
+    }
+    /// Anything still running for the chat, turn or background work: the
+    /// conversation stays alive and reporting while it is.
+    pub(crate) fn busy(&self) -> bool {
+        self.turn() || self.background > 0
+    }
 }
 /// A cloud chat's status for its sidebar row and tab, across every open
 /// conversation of its computer.
@@ -452,9 +466,12 @@ impl AppState {
             Some(report) => entry.live.insert(view, report),
             None => entry.live.remove(&view),
         };
-        let was_busy = previous.is_some_and(|live| live.working || live.awaiting_input);
-        let busy = report.is_some_and(|live| live.working || live.awaiting_input);
-        if was_busy && !busy && !in_front {
+        // A turn or the background work it left ending out of sight reads
+        // as done until the chat is opened.
+        let (was, now) = (previous.unwrap_or_default(), report.unwrap_or_default());
+        let turn_ended = was.turn() && !now.turn();
+        let background_ended = was.background > 0 && now.background == 0;
+        if (turn_ended || background_ended) && !in_front {
             entry.unseen = true;
         }
         if entry.live.is_empty() && !entry.unseen {
@@ -487,6 +504,8 @@ impl AppState {
                     working: all.working || one.working,
                     awaiting_input: all.awaiting_input || one.awaiting_input,
                     online: all.online || one.online,
+                    // Each conversation reports its own session's work.
+                    background: all.background + one.background,
                 }),
             unseen: entry.unseen,
         }

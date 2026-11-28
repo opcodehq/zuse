@@ -11,6 +11,7 @@
 
 ### Changed
 
+- Zapper characters are drawn as smooth, clean shapes on desktop and web, and their faces now show what the Zapper is doing: idle, working, threads working, needs you, a failed turn, done, paused or offline. Changes blend smoothly, idle faces hold still between blinks and glances, and reduced motion shows a still face for each state.
 - The desktop transcript's agent activity is back to the live layout: the group header names and shimmers the step running now ("Running command…") instead of a static "Ran 1 command", and the "Working for…" / "Worked for…" line above replies is gone. Thoughts show a brain icon; commands read "Running" / "Ran".
 - Desktop read, edit and write rows show the file in a soft pill with its file-type icon and `+N −N`; patches across several files read "Edited N files". File types the tree icon set lacks (`.toml`, `.env`, …) use the full theme's icon instead of a blank page.
 - The web app's working line rotates through a refreshed set of anime loading phrases.
