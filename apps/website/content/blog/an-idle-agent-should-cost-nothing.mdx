@@ -1,0 +1,102 @@
+---
+title: "An idle agent should cost nothing"
+description: "Most of an agent's life is spent waiting. We built Zuse so that waiting is close to free on your computer and free in the cloud: a small floor, a quarter of a megabyte per open agent, tools that start only when called, and cloud computers that sleep."
+date: "2026-11-28"
+category: "Note"
+timeToRead: "7 min read"
+authorName: "Zuse (Beta) team"
+authorRole: "Engineering notes"
+authorAvatar: "/app-icon.png"
+labels:
+  [
+    { name: "Architecture", hex: "#84CC16" },
+    { name: "Cloud", hex: "#38BDF8" },
+  ]
+---
+
+import { IdleFigure } from "@/components/blogs/idle-agent/figure";
+import { FloorChart, LazyTools, SleepMonth } from "@/components/blogs/idle-agent/widgets";
+
+Watch a coding agent for an afternoon and you'll see that it mostly waits. It waits for the model to answer, for the test suite, for you to read its diff, for you to come back from lunch. Run five agents and the effect compounds, because you can only review one thing at a time. At any moment, most of your agents are doing nothing at all.
+
+So while building Zuse we kept asking a question that sounds backwards: what does an agent cost while it does nothing? Speed matters, but an agent spends most of its life idle, and the idle cost decides how many you can keep open, whether you close them out of guilt, and what your cloud bill looks like at the end of the month.
+
+Our answer is that an idle agent should cost nothing. On your own computer we can't reach zero, so the goal is a number small enough that you never think about it. In the cloud we can reach zero, and we do. This post is how we measured both.
+
+---
+
+## Twenty pilot lights
+
+An old gas stove keeps a pilot light burning in each burner. It's a tiny flame that uses almost no gas and means the burner lights the moment you turn the knob. That's the behaviour we wanted from an open agent: ready the instant you write to it, and burning almost nothing in the meantime.
+
+The figure is a rack of twenty of them. Each burner is one agent on a shared host. Tap it to wake the agents one at a time and watch the meter: the solid needle is the memory our agents hold, and the dashed one is a reference agent server measured in the same test. Then leave it alone for a while.
+
+<IdleFigure />
+
+The numbers come from a test we ran on a Linux cloud machine. One host process opened 1, 2, 5, 10 and then 20 idle agents of the Zuse agent, the coding agent built into Zuse. Each was a real agent, with its own journal on disk, its native file and process tools, and a seat on the host's shared connection to model providers. We sent no prompts. We ran every size three times, alternating which server went first, and recorded settled memory as PSS, which splits shared pages between the processes that use them, so the same library isn't counted twenty times.
+
+With twenty idle agents open, our host settled at 8.89 MiB. The reference server settled at 42.97 MiB. Ours is about 79% lower.
+
+That number is about idle agents and nothing else. An agent in the middle of a task reads files, runs commands and holds a long conversation, and this test didn't measure any of that. The reference server also runs services ours doesn't, so this compares what idle costs, not which server does more.
+
+---
+
+## The floor matters more than the step
+
+When we first looked at the results, we expected the gap to come from each agent being lighter. It doesn't. Pick a size below and look at where the memory goes.
+
+<FloorChart />
+
+Each agent after the first costs us about 251 KiB. The reference server adds even less per agent, about 76 KiB. If you only looked at the step, you'd call it the leaner design.
+
+The difference is the floor. One open agent on our host costs 4.23 MiB in total. The same agent on the reference costs 41.56 MiB before a second one is even opened. More agents don't close that gap quickly: at a quarter of a megabyte each, it would take about 150 more of ours to reach the reference's starting point.
+
+The floor is small because the host is small. The Zuse agent runs on a Rust core in one native process, with no JavaScript runtime or bridge underneath it. Agents on the same host share one connection to the model providers rather than each holding its own. And when you close them, the memory comes back: after we closed all twenty, the host settled at 4.74 MiB, close to where it started with one.
+
+This is why we care about the floor more than the step. Most people run a handful of agents, not hundreds, and for a handful the floor is nearly the whole cost.
+
+---
+
+## Nothing runs that nobody asked for
+
+Memory isn't the only thing an idle agent can hold. Agents connect to tools: a docs search, an issue tracker, a browser, a database. Each of those is a server, often a separate process, and the easy design starts every configured server when an agent opens, in case it's needed.
+
+We went the other way. A configured tool server costs nothing until an agent calls it.
+
+<LazyTools />
+
+No process and no network client exist for a server nobody has used. The first call starts it. Agents on the same host share a connection when they work in the same checkout with the same credentials and the same permissions, so ten agents using the same tracker don't start ten copies of it. A connection that goes quiet is retired, and the next call starts it again.
+
+Every process a tool server starts belongs to a process group the host owns. When an agent closes, or the host shuts down, the whole group ends with it. Nothing is left running in the background for you to find and kill yourself.
+
+Skills work the same way. An agent knows which skills exist, but it loads one only when it uses it.
+
+---
+
+## A computer that sleeps
+
+On your own computer, an idle agent costs a quarter of a megabyte and some disk for its journal. In the cloud, the unit of cost changes. There you pay for a computer, and a computer that's awake costs the same whether its agents are working or waiting.
+
+So we made cloud computers sleep. A cloud computer that has been quiet for about ten minutes goes to sleep, and a sleeping computer uses no machine minutes. Its storage, and any saved machine images, are included in the plan, so your chats, checkouts and installed tools are still there. When you send a message, it wakes, and the chat shows how: **Woke from memory** or **Restarted on wake**, with the time it took. Archiving a chat puts its computer to sleep right away.
+
+That makes an idle cloud agent cost exactly nothing once its computer has had its ten quiet minutes. Here is what that does to a month.
+
+<SleepMonth />
+
+We count cloud time in machine minutes. A machine minute is one minute of a 1 vCPU, 4 GB computer, so the standard 4 vCPU, 16 GB computer uses 4 machine minutes per awake minute. Cloud is $20 a month and includes 33,600 machine minutes, about 140 hours on a standard computer, and extra minutes cost the same as included ones.
+
+With the defaults, four hours of agent work a day, stepping away three times, 22 days a month, the computer is awake about 99 hours and uses 23,760 machine minutes. That fits inside the plan. Left on around the clock for the same 22 days, it would use 126,720.
+
+The ten minutes are a trade we made on purpose. A computer that slept the instant its agent finished would wake every time you paused to read a diff, and you'd wait on every wake. Ten minutes covers a short pause. Past that you're probably away, and you shouldn't pay for a computer to wait for you.
+
+---
+
+## What nothing still costs
+
+We said "nothing", so we want to be precise about where it's only nearly nothing.
+
+An open agent on your computer still holds about a quarter of a megabyte and its journal on disk. A cloud computer still runs for its ten quiet minutes before it sleeps, and waking it takes a moment. The memory figures above are for the Zuse agent. Zuse also runs other coding agents through their own command-line tools, and those are separate processes with their own costs that this test didn't measure. And none of this says what an agent costs while it works. That depends on the model, the task and the repository, and an idle test can't tell you.
+
+What it does tell you is the part we control. Waiting is the normal state of an agent, so we built the waiting to be cheap: a small floor, a small step, tools that start when they're called and stop when they're not, and computers that sleep when nobody needs them.
+
+You can still close agents when you're done with them, if you like a tidy sidebar. You don't need to for your memory or your bill.
