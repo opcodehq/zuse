@@ -693,6 +693,9 @@ pub(crate) struct TrayState {
     expanded_error: Option<String>,
     /// Per chat: the transcript error the user dismissed.
     dismissed_errors: HashMap<String, String>,
+    /// Auth failures whose sign-in landed while their chat wasn't open here
+    /// to pick back up: they offer Retry instead of another sign-in.
+    signed_in_errors: std::collections::HashSet<String>,
     annotations: AnnotationPreview,
     login: Option<TrayLogin>,
     login_attempts: u64,
@@ -1780,7 +1783,10 @@ impl Composer {
             .as_ref()
             .map(|(_, message)| classify_provider_error(message));
         let can_sign_in = harness.is_some_and(crate::settings::accounts::signs_in);
-        if kind == Some(ProviderErrorKind::SignIn) && can_sign_in {
+        let signed_in = error
+            .as_ref()
+            .is_some_and(|(id, _)| self.tray.signed_in_errors.contains(id));
+        if kind == Some(ProviderErrorKind::SignIn) && can_sign_in && !signed_in {
             let error_id = error.as_ref().map(|(id, _)| id.clone());
             return (self.sign_in_row(error_id, harness, label, theme, cx), None);
         }
@@ -1827,12 +1833,22 @@ impl Composer {
         }
         let dismiss_chat = chat.clone();
         let dismiss_id = error_id.clone();
+        let (title, subtitle) = if signed_in {
+            let next = if actions.is_empty() {
+                "Send a message"
+            } else {
+                "Retry"
+            };
+            ("Signed in", format!("{next} to pick this chat back up."))
+        } else {
+            (provider_error_copy(kind), first_line(&message).to_string())
+        };
         let pill = self.error_pill(
             "tray-provider-error",
             tone,
             glyph,
-            provider_error_copy(kind),
-            Some(first_line(&message).to_string()),
+            title,
+            Some(subtitle),
             message,
             actions,
             theme,
@@ -2152,11 +2168,12 @@ impl Composer {
         let finished = match result {
             Ok(poll) => match poll.status {
                 AgentLoginStatus::Done => {
-                    // Signed in: the auth failure is resolved.
+                    // Signed in: the auth failure is resolved, so the chat
+                    // carries on without waiting for another send.
                     if let Some(login) = self.tray.login.take()
                         && let Some(error_id) = login.error_id
                     {
-                        self.tray.dismissed_errors.insert(login.chat, error_id);
+                        self.resume_after_sign_in(login.chat, error_id, cx);
                     }
                     true
                 }
@@ -2185,6 +2202,68 @@ impl Composer {
         };
         cx.notify();
         finished
+    }
+
+    /// Send the prompt an auth failure stopped again once its sign-in lands.
+    /// Only while that chat is still open here and its last turn still ends
+    /// in that failure; otherwise the failure stays, offering Retry.
+    fn resume_after_sign_in(&mut self, chat: String, error_id: String, cx: &mut Context<Self>) {
+        let prompt = {
+            let state = self.state.read(cx);
+            let current = state.selected_chat.as_deref() == Some(chat.as_str())
+                && latest_transcript_error(&state.transcript).is_some_and(|(id, _)| id == error_id);
+            current
+                .then(|| last_prompt_text(&state.transcript))
+                .flatten()
+        };
+        let resumed =
+            prompt.is_some_and(|prompt| !self.run_live(cx) && self.send_reply(prompt, cx));
+        if resumed {
+            self.tray.dismissed_errors.insert(chat, error_id);
+        } else {
+            self.tray.signed_in_errors.insert(error_id);
+        }
+    }
+
+    /// A sign-in landed from Settings: when it is the open chat's agent on
+    /// the chat's device, and the chat's last turn ended signed out, carry on.
+    pub(super) fn on_sign_in_landed(&mut self, cx: &mut Context<Self>) {
+        let Some(landed) = cx.try_global::<crate::settings::accounts::SignInLanded>() else {
+            return;
+        };
+        let (harness, target) = (landed.harness, landed.target_device.clone());
+        if harness.is_none()
+            || harness != self.pickers.read(cx).resolved(cx).harness
+            || target != self.login_target(cx)
+        {
+            return;
+        }
+        let (chat, error) = {
+            let state = self.state.read(cx);
+            let Some(chat) = state.selected_chat.clone() else {
+                return;
+            };
+            (chat, latest_transcript_error(&state.transcript))
+        };
+        let Some((error_id, message)) = error else {
+            return;
+        };
+        if classify_provider_error(&message) != ProviderErrorKind::SignIn
+            || self.tray.dismissed_errors.get(&chat) == Some(&error_id)
+        {
+            return;
+        }
+        // A tray sign-in still waiting on this chat is moot now.
+        if self
+            .tray
+            .login
+            .as_ref()
+            .is_some_and(|login| login.chat == chat)
+        {
+            self.cancel_tray_login(cx);
+        }
+        self.resume_after_sign_in(chat, error_id, cx);
+        cx.notify();
     }
 
     fn cancel_tray_login(&mut self, cx: &mut Context<Self>) {
