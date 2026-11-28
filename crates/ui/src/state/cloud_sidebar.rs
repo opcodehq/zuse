@@ -301,6 +301,33 @@ impl AppState {
             })
             .flatten()
     }
+    pub(crate) fn set_cloud_sidebar_title(
+        &mut self,
+        target: &CloudTarget,
+        workspace: &Value,
+        cx: &mut Context<Self>,
+    ) {
+        if self.cloud_user_id() != Some(target.subject.as_str())
+            || self.cloud_organization_id() != target.organization.as_deref()
+        {
+            return;
+        }
+        for row in self.cloud_sidebar.workspaces.iter_mut().chain(
+            self.cloud_sidebar
+                .created
+                .iter_mut()
+                .map(|created| &mut created.row),
+        ) {
+            if row["workspaceId"].as_str() == Some(target.workspace.as_str())
+                && row["revision"].as_i64() <= workspace["revision"].as_i64()
+            {
+                row["title"] = workspace["title"].clone();
+                row["renamedTitle"] = workspace["renamedTitle"].clone();
+                row["revision"] = workspace["revision"].clone();
+            }
+        }
+        cx.notify();
+    }
     /// The sidebar refreshes silently; tests still observe its phases.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn cloud_sidebar_loading(&self) -> bool {

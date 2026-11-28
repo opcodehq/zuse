@@ -337,6 +337,7 @@ pub const CLOUD_COMPUTER_RECREATION: &str = "CloudComputerRecreation";
 /// ([`crate::cloud_runtime_updates::UpdateStatus`]) while a message waits on it.
 pub const CLOUD_RUNTIME_UPDATE_STATUS: &str = "CloudRuntimeUpdateStatus";
 pub const CLOUD_WORKSPACE: &str = "CloudWorkspace";
+pub const CLOUD_WORKSPACE_RENAME: &str = "CloudWorkspaceRename";
 pub const CLOUD_ACCOUNT_STATUS: &str = "CloudAccountStatus";
 pub const CLOUD_ACCOUNT_SIGN_IN: &str = "CloudAccountSignIn";
 pub const CLOUD_ACCOUNT_SIGN_OUT: &str = "CloudAccountSignOut";

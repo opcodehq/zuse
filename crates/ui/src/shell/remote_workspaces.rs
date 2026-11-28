@@ -858,7 +858,6 @@ impl Shell {
         let SidebarSessionItems {
             list: local,
             moving_row: moving,
-            settled_section: local_settled,
         } = self.render_sidebar_session_items(theme, cx);
         if !self.local_computer_collapsed {
             self.computer_navigation
@@ -885,7 +884,7 @@ impl Shell {
                     cx,
                 ))
                 .when(!self.local_computer_collapsed, |el| {
-                    el.child(local).children(moving).children(local_settled)
+                    el.child(local).children(moving)
                 })
                 .into_any_element(),
         ];
@@ -905,7 +904,7 @@ impl Shell {
             .collect();
         for (index, label, collapsed, shell) in computers {
             let key = self.remote_workspaces[index].key.clone();
-            let (label, status, items, moving, settled) = shell.update(cx, |shell, cx| {
+            let (label, status, items, moving) = shell.update(cx, |shell, cx| {
                 let label = {
                     let state = shell.state.read(cx);
                     state
@@ -920,7 +919,6 @@ impl Shell {
                 let SidebarSessionItems {
                     list: items,
                     moving_row: moving,
-                    settled_section: settled,
                 } = shell.render_sidebar_session_items(theme, cx);
                 if !collapsed {
                     self.computer_navigation.extend(
@@ -933,7 +931,7 @@ impl Shell {
                             }),
                     );
                 }
-                (label, status, items, moving, settled)
+                (label, status, items, moving)
             });
             groups.push(
                 div()
@@ -942,9 +940,7 @@ impl Shell {
                     .flex()
                     .flex_col()
                     .child(self.computer_heading(Some(index), label, collapsed, status, theme, cx))
-                    .when(!collapsed, |el| {
-                        el.child(items).children(moving).children(settled)
-                    })
+                    .when(!collapsed, |el| el.child(items).children(moving))
                     .into_any_element(),
             );
         }

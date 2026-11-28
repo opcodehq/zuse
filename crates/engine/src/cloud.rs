@@ -421,6 +421,7 @@ pub fn handles(method: &str) -> bool {
             | zuse_protocol::methods::CLOUD_BILLING_CHECKOUT
             | zuse_protocol::methods::CLOUD_BILLING_PORTAL
             | UNARCHIVE
+            | zuse_protocol::methods::CLOUD_WORKSPACE_RENAME
             | ARCHIVE
             | DELETE
             | CLEANUP_MIRROR
@@ -2162,6 +2163,24 @@ impl CloudApi {
                 self.local_cleanup(&account, &mut row, true);
                 value["localMirrorCleanup"] = serde_json::to_value(row.local_mirror_cleanup)?;
                 json!({"accountId": account, "workspace": value})
+            }
+            zuse_protocol::methods::CLOUD_WORKSPACE_RENAME => {
+                let id = params["workspaceId"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Select a workspace."))?;
+                let title = params["title"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Enter a chat name."))?;
+                let workspace = self
+                    .request_scoped(
+                        &token,
+                        &["v1", "cloud", "workspaces", id, "rename"],
+                        Some(json!({"title":title})),
+                        organization.as_deref(),
+                        &[],
+                    )
+                    .await?;
+                json!({"accountId":account,"workspace":workspace})
             }
             UNARCHIVE | ARCHIVE | DELETE => {
                 let id = params["workspaceId"]
