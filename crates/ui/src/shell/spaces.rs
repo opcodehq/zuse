@@ -5542,7 +5542,10 @@ impl Shell {
         // Groups holding only cloud threads follow, as the sidebar draws them.
         for cloud_group in &cloud_groups {
             let key = cloud_group.group.as_ref().map(|(key, _)| key.clone());
-            if !cloud_group.rows.is_empty() && !indices.contains_key(&key) {
+            let openable = cloud
+                .get(&key.as_deref())
+                .is_some_and(|rows| !rows.is_empty());
+            if openable && !indices.contains_key(&key) {
                 indices.insert(key.clone(), groups.len());
                 groups.push((key.map(|key| (key, String::new())), Vec::new()));
             }
@@ -5876,9 +5879,14 @@ impl Shell {
                 regular_groups.push((row.group.clone(), vec![row]));
             }
         }
+        // A cloud project with no chats to open stays out of the sidebar, like
+        // a local project without sessions; the project pickers still list it.
+        let cloud_by_group = self.sidebar_cloud_thread_groups(&cloud_groups, cx);
         for cloud in &cloud_groups {
-            if (self.settings.sidebar_organization == SidebarOrganization::ByProject
-                || !cloud.rows.is_empty())
+            let key = cloud.group.as_ref().map(|(key, _)| key.as_str());
+            if cloud_by_group
+                .get(&key)
+                .is_some_and(|rows| !rows.is_empty())
                 && !regular_groups
                     .iter()
                     .any(|(group, _)| match (group, &cloud.group) {
@@ -6060,7 +6068,6 @@ impl Shell {
         } else {
             Default::default()
         };
-        let cloud_by_group = self.sidebar_cloud_thread_groups(&cloud_groups, cx);
         let mut slot = 0usize;
         let mut rendered = Vec::new();
         let mut moving_row = None;
@@ -6420,10 +6427,22 @@ impl Shell {
                             })
                             .cloned()
                     };
+                    // Cloud-only projects have no checkout here: their own
+                    // repository's artwork, not the project-less tile.
+                    let cloud = cloud_groups
+                        .iter()
+                        .find(|cloud| cloud.group.as_ref().is_some_and(|(id, _)| id == &key))
+                        .map(|cloud| cloud.project.clone());
+                    let art = match (space, cloud) {
+                        (space, Some(project)) if space.is_none() || header_icon_chat.is_none() => {
+                            self.cloud_project_artwork(&project, false, cx).1
+                        }
+                        (space, _) => self.project_artwork(space.as_ref(), false, cx),
+                    };
                     div()
                         .size(px(SIDEBAR_PROJECT_AVATAR_SIZE))
                         .flex_none()
-                        .child(self.project_artwork(space.as_ref(), false, cx))
+                        .child(art)
                         .into_any_element()
                 });
             // A real project's heading reveals its actions on hover: the
