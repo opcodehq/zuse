@@ -559,24 +559,29 @@ fn decode_entities(text: &str) -> Cow<'_, str> {
     while let Some(at) = rest.find('&') {
         out.push_str(&rest[..at]);
         let tail = &rest[at..];
-        let decoded = tail.find(';').filter(|&end| end <= 10).and_then(|end| {
-            let name = &tail[1..end];
-            let ch = match name {
-                "amp" => Some('&'),
-                "lt" => Some('<'),
-                "gt" => Some('>'),
-                "quot" => Some('"'),
-                "apos" => Some('\''),
-                "nbsp" => Some('\u{a0}'),
-                _ => name
-                    .strip_prefix("#x")
-                    .or_else(|| name.strip_prefix("#X"))
-                    .and_then(|hex| u32::from_str_radix(hex, 16).ok())
-                    .or_else(|| name.strip_prefix('#').and_then(|dec| dec.parse().ok()))
-                    .and_then(char::from_u32),
-            }?;
-            Some((ch, end + 1))
-        });
+        let decoded = tail
+            .as_bytes()
+            .iter()
+            .take(11)
+            .position(|&byte| byte == b';')
+            .and_then(|end| {
+                let name = &tail[1..end];
+                let ch = match name {
+                    "amp" => Some('&'),
+                    "lt" => Some('<'),
+                    "gt" => Some('>'),
+                    "quot" => Some('"'),
+                    "apos" => Some('\''),
+                    "nbsp" => Some('\u{a0}'),
+                    _ => name
+                        .strip_prefix("#x")
+                        .or_else(|| name.strip_prefix("#X"))
+                        .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+                        .or_else(|| name.strip_prefix('#').and_then(|dec| dec.parse().ok()))
+                        .and_then(char::from_u32),
+                }?;
+                Some((ch, end + 1))
+            });
         match decoded {
             Some((ch, len)) => {
                 out.push(ch);
@@ -590,4 +595,18 @@ fn decode_entities(text: &str) -> Cow<'_, str> {
     }
     out.push_str(rest);
     Cow::Owned(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_entities;
+
+    #[test]
+    fn entity_decoding_preserves_unknown_and_unterminated_text() {
+        let text = "é &unknown; &unfinished &&amp; &#x1F680; &#0000000065;";
+        assert_eq!(
+            decode_entities(text),
+            "é &unknown; &unfinished && 🚀 &#0000000065;"
+        );
+    }
 }

@@ -1,6 +1,6 @@
 //! Preserve workspace paths with spaces in Markdown link destinations.
 
-use std::ops::Range;
+use std::{collections::HashSet, ops::Range};
 
 /// Byte positions, in the rewritten text, of the angle brackets the rewrite
 /// inserted. A rewritten offset maps back to the original by subtracting the
@@ -34,6 +34,7 @@ pub(super) fn rewrite_absolute_destinations(source: &str) -> Option<(String, Ins
     let bytes = source.as_bytes();
     let mut rewritten: Option<String> = None;
     let mut insertions = Insertions::default();
+    let mut unclosed = HashSet::new();
     // Bytes before this are already in `rewritten`; skipped regions advance
     // it without copying, so the next splice stays contiguous.
     let mut copied = 0usize;
@@ -64,12 +65,21 @@ pub(super) fn rewrite_absolute_destinations(source: &str) -> Option<(String, Ins
                 at = end;
             }
             b']' if bytes.get(at + 1) == Some(&b'(') && !is_escaped(bytes, at) => {
-                let start = skip_destination_spaces(bytes, at + 2);
-                let Some(close) = destination_close(bytes, start) else {
+                let open = at + 1;
+                let start = skip_destination_spaces(bytes, open + 1);
+                // Still pass over complete relative links so any literal link
+                // syntax in their titles is not rewritten as a workspace path.
+                // An immediate next candidate cannot be a path in our extension.
+                if unclosed.contains(&open) || bytes[start..].starts_with(b"](") {
+                    at += 2;
+                    continue;
+                }
+                let Some((path_end, close)) = destination_ends(bytes, open, start, &mut unclosed)
+                else {
                     at += 2;
                     continue;
                 };
-                let destination = source[start..close].trim_end_matches(' ');
+                let destination = source[start..path_end].trim_end_matches(' ');
                 if absolute_destination_with_spaces(destination) {
                     let out = match &mut rewritten {
                         Some(out) => out,
@@ -242,25 +252,93 @@ fn skip_destination_spaces(bytes: &[u8], at: usize) -> usize {
     at
 }
 
-/// The first unescaped `)` at paren depth zero — the destination's end. `)`
-/// inside balanced parentheses belongs to the path, an escaped `)` does not
-/// close, and a control character (a newline mid-destination, a tab) leaves
-/// the link alone rather than guessing at its shape.
-fn destination_close(bytes: &[u8], start: usize) -> Option<usize> {
-    let mut depth = 0usize;
+/// Find the end of the path and the closing link delimiter. Remember the
+/// openers left unmatched at the end of a scan, so later candidates in that
+/// suffix do not repeat it. Balanced inner candidates can still be rewritten.
+fn destination_ends(
+    bytes: &[u8],
+    open: usize,
+    start: usize,
+    unclosed: &mut HashSet<usize>,
+) -> Option<(usize, usize)> {
+    let mut nested = Vec::new();
     let mut at = start;
-    while at < bytes.len() {
-        match bytes[at] {
+    while let Some(&byte) = bytes.get(at) {
+        match byte {
             b'\\' => at += 2,
             b'(' => {
-                depth += 1;
+                nested.push(at);
                 at += 1;
             }
-            b')' if depth == 0 => return Some(at),
             b')' => {
-                depth -= 1;
+                if nested.pop().is_none() {
+                    return Some((at, at));
+                }
                 at += 1;
             }
+            b' ' | b'\t' => {
+                let tail = skip_title_spaces(bytes, at);
+                let link_level = nested
+                    .last()
+                    .is_none_or(|&open| open > 0 && bytes[open - 1] == b']');
+                if link_level && let Some(close) = title_end(bytes, tail) {
+                    if nested.pop().is_none() {
+                        return Some((at, close));
+                    }
+                    at = close + 1;
+                } else if bytes[at..tail].contains(&b'\t') {
+                    break;
+                } else {
+                    at = tail;
+                }
+            }
+            byte if byte.is_ascii_control() => break,
+            _ => at += 1,
+        }
+    }
+    unclosed.insert(open);
+    unclosed.extend(nested);
+    None
+}
+
+fn skip_title_spaces(bytes: &[u8], at: usize) -> usize {
+    at + bytes[at..]
+        .iter()
+        .take_while(|byte| matches!(byte, b' ' | b'\t'))
+        .count()
+}
+
+/// A title is separate from the filename only when it is delimited and
+/// followed by the link's closing paren. This leaves apostrophes and balanced
+/// parentheses that are part of the path alone.
+fn title_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let delimiter = *bytes.get(start)?;
+    let closing = match delimiter {
+        b'(' => b')',
+        b'\'' | b'"' => delimiter,
+        _ => return None,
+    };
+    let mut at = start + 1;
+    while let Some(&byte) = bytes.get(at) {
+        match byte {
+            b'\\' => at += 2,
+            byte if byte == closing => {
+                let close = skip_title_spaces(bytes, at + 1);
+                let close = if bytes.get(close) == Some(&b'\n') {
+                    skip_title_spaces(bytes, close + 1)
+                } else {
+                    close
+                };
+                return (bytes.get(close) == Some(&b')')).then_some(close);
+            }
+            b'(' if delimiter == b'(' => return None,
+            b'\n' => {
+                at = skip_title_spaces(bytes, at + 1);
+                if bytes.get(at) == Some(&b'\n') {
+                    return None;
+                }
+            }
+            b'\t' => at += 1,
             byte if byte.is_ascii_control() => return None,
             _ => at += 1,
         }
@@ -307,6 +385,54 @@ mod destination_rewrite_tests {
         assert_eq!(
             image.map(|image| image.source.as_str()),
             Some("/tmp/pics/two words.png")
+        );
+    }
+
+    #[test]
+    fn titles_stay_separate_from_absolute_paths() {
+        for title in [
+            r#""With ) in the title""#,
+            "'Single quotes'",
+            "(Parentheses)",
+        ] {
+            let link = format!("[x](/tmp/a.md {title})");
+            assert!(rewrite_absolute_destinations(&link).is_none(), "{link}");
+            assert_eq!(link_of(&paragraph(&link)), Some("/tmp/a.md"));
+
+            let image = format!("![x](/tmp/a picture.png {title})");
+            let (rewritten, _) = rewrite_absolute_destinations(&image).unwrap();
+            assert_eq!(rewritten, format!("![x](</tmp/a picture.png> {title})"));
+            let runs = paragraph(&image);
+            let image = runs
+                .iter()
+                .find_map(|run| run.style.image.as_ref())
+                .unwrap();
+            assert_eq!(image.source, "/tmp/a picture.png");
+            assert_eq!(image.title, &title[1..title.len() - 1]);
+        }
+    }
+
+    #[test]
+    fn titles_can_contain_link_spelling_and_line_breaks() {
+        let source = r#"[x](relative.md "A literal [y](/tmp/a b.md)")"#;
+        assert!(rewrite_absolute_destinations(source).is_none());
+
+        let source = "[x](/tmp/a.md \"Title with )\nand a second line\")";
+        assert!(rewrite_absolute_destinations(source).is_none());
+        assert_eq!(link_of(&paragraph(source)), Some("/tmp/a.md"));
+    }
+
+    #[test]
+    fn unmatched_openers_are_recorded_without_losing_balanced_links() {
+        let source = "[outer](/tmp/unfinished [inner](/tmp/a b.md) [tail](/tmp/unfinished";
+        let open = source.find('(').unwrap();
+        let mut unclosed = HashSet::new();
+        assert!(destination_ends(source.as_bytes(), open, open + 1, &mut unclosed).is_none());
+        let tail = source.rfind('(').unwrap();
+        assert_eq!(unclosed, HashSet::from([open, tail]));
+        assert_eq!(
+            rewrite_absolute_destinations(source).unwrap().0,
+            "[outer](/tmp/unfinished [inner](</tmp/a b.md>) [tail](/tmp/unfinished"
         );
     }
 
