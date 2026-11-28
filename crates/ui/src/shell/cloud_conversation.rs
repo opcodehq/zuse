@@ -278,12 +278,18 @@ impl CloudConversation {
                 }),
                 _ => {}
             }),
-            cx.subscribe(&transcript, |this: &mut Self, _, event, cx| {
-                if matches!(event, crate::transcript::TranscriptEvent::RetryNotSent) {
+            cx.subscribe(&transcript, |this: &mut Self, _, event, cx| match event {
+                crate::transcript::TranscriptEvent::RetryNotSent => {
                     this.composer.update(cx, |composer, cx| {
                         composer.retry_cloud_messages_not_sent(cx)
                     });
                 }
+                crate::transcript::TranscriptEvent::RemoveNotSent => {
+                    this.composer.update(cx, |composer, cx| {
+                        composer.remove_cloud_message_not_sent(cx)
+                    });
+                }
+                _ => {}
             }),
             cx.observe(&composer, |_: &mut Self, _, cx| cx.notify()),
             cx.observe(&state, |this: &mut Self, state, cx| {

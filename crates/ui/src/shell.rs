@@ -5316,7 +5316,7 @@ impl Shell {
                 self.run_ui_block_plugin_action(action.clone(), cx)
             }
             // A cloud chat's own conversation answers its not-sent line.
-            TranscriptEvent::RetryNotSent => {}
+            TranscriptEvent::RetryNotSent | TranscriptEvent::RemoveNotSent => {}
         }
     }
 
