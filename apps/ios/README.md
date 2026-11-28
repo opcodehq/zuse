@@ -104,3 +104,47 @@ the work behind each turn, and `--transcript-top` to start at the first message.
 `--large-transcript` loads 10,000 messages in the older record shape. With a paired computer
 (`SIMCTL_CHILD_ZUSE_PAIR_LINK`), `--open-chat=<id>` opens one of its chats and `--show-changes`
 then opens its changes.
+
+## Chat panes
+
+Every chat page is a row of pages: the conversation first, opened panes after it and the
+pane picker last (`App/ChatPanePager.swift`, `App/ChatPaneViews.swift`; the page rules are
+`ChatPaneDeck` in `Sources/ZuseCore/ChatPanes.swift`). Swipe sideways between pages. Pinch,
+or press the header's panes button, to zoom out to cards: tap a card to bring it back, swipe
+a card up to close it (the Mac shows a close button on each card). The chat and the picker
+can't be closed. Panes are saved per chat; terminals keep running on the computer and
+reattach after a relaunch.
+
+| Pane | Shown for | Engine methods |
+| --- | --- | --- |
+| Threads, Pull requests, Issues, Docs, Overview | A Zapper's conversation | `WatchZappers`, `ZapperFiles` |
+| Changes, Pull request | An ordinary chat with a checkout (pull request only when it has one) | `GetCheckoutDiff`, pull request methods |
+| Terminals | Any chat on a current engine | `ListTerminals`, `OpenTerminal`, `SubscribeTerminal`, `WriteTerminal`, `ResizeTerminal`, `CloseTerminal` |
+| Files, and each file opened from it | Any chat on a current engine | `ListWorkspaceDirectory`, `SearchWorkspaceFiles`, `ReadWorkspaceFile` |
+
+Under the picker grid, a **New thread** action (like desktop's "+ New tab") starts a fresh
+chat parented to this one (`parentChatId`), in the same project, folder and branch and with
+the same agent configuration, then opens it (`createChat` via `Mutate`).
+
+The terminal (`App/TerminalPane.swift`, `TerminalScreen` in ZuseCore) handles SGR colours
+and attributes, cursor movement and erasing, scroll regions, the alternate screen, bracketed
+paste, application cursor keys and cursor and device queries. It doesn't draw line-drawing
+charsets, report the mouse or rewrap lines on resize.
+
+Debug arguments for every state, offline with `--native-preview` (add `--zapper-preview
+--zapper-detail-preview --zapper-chat-preview` for a Zapper's conversation, or
+`--conversation-preview` for an ordinary chat), or with a paired computer and
+`--open-chat=<id>`:
+
+| Argument | Shows |
+| --- | --- |
+| `--panes-preview` | Sample panes beside the chat (live terminals and files with a computer) |
+| `--pane=<kind>` | That pane in front: `threads`, `pullRequests`, `issues`, `terminal`, `files`, `docs`, `overview`, `changes`, `pullRequest`, `file` or `document`; `selection` for the picker, `main` for the chat |
+| `--pane-overview` | The cards overview |
+| `--pane-keyboard` | The terminal's keyboard and key bar |
+| `--terminal-type=<command>` | Types a command and Return into the terminal once it is live |
+| `--pane-hint` | The one-time "Swipe or pinch" hint, which `--panes-preview` otherwise skips |
+
+`ChatPanesTests` covers paging, the overview, closing a pane and the picker offline;
+`testLiveFilesAndTerminal` runs against a computer when `TEST_RUNNER_ZUSE_PANES_PAIR_LINK`
+and `TEST_RUNNER_ZUSE_PANES_CHAT` are set.

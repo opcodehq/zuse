@@ -6,6 +6,9 @@ struct ZapperDocumentView: View {
   let store: ZapperStore
   let zapperID: String
   let path: String
+  /// Shown as a pane beside the chat: history and editing sit above the text instead of in the
+  /// navigation bar, which belongs to the chat.
+  var embedded = false
   @State private var versions: [ZapperFile] = []
   @State private var shown: Int?
   @State private var problem: String?
@@ -21,6 +24,13 @@ struct ZapperDocumentView: View {
     let zapper = store.zapper(zapperID)
     ScrollView {
       VStack(alignment: .leading, spacing: 12) {
+        if embedded && latest != nil {
+          HStack(spacing: 14) {
+            Spacer()
+            actions(zapper)
+          }
+          .labelStyle(.titleAndIcon).font(.subheadline)
+        }
         if let file = current {
           if let latest, file.version != latest.version {
             HStack(spacing: 10) {
@@ -52,30 +62,9 @@ struct ZapperDocumentView: View {
       .padding(.horizontal, 20).padding(.vertical, 16)
     }
     .background(AppTheme.surface)
-    .navigationTitle(ZapperDrive.title(path))
-    .compactNavigationTitle()
-    .toolbar {
-      ToolbarItemGroup(placement: .primaryAction) {
-        if versions.count > 1 {
-          Menu {
-            Picker("Version", selection: $shown) {
-              ForEach(versions.sorted { $0.version > $1.version }) { file in
-                Text(
-                  file.version == latest?.version
-                    ? "Version \(file.version) · Latest" : "Version \(file.version)"
-                )
-                .tag(file.version == latest?.version ? nil : Optional(file.version))
-              }
-            }
-          } label: {
-            Label("History", systemImage: "clock.arrow.circlepath")
-          }
-          .accessibilityIdentifier("zapper-document-history")
-        }
-        Button("Edit", systemImage: "square.and.pencil") { editing = true }
-          .disabled(latest == nil || zapper == nil)
-      }
-    }
+    .modifier(
+      DocumentHeader(title: ZapperDrive.title(path), enabled: !embedded) { actions(zapper) }
+    )
     .task(id: "\(zapperID)|\(zapper?.revision ?? 0)") { await load() }
     .sheet(isPresented: $editing) {
       if let latest, let zapper {
@@ -120,12 +109,50 @@ struct ZapperDocumentView: View {
     }
   }
 
+  @ViewBuilder private func actions(_ zapper: Zapper?) -> some View {
+    if versions.count > 1 {
+      Menu {
+        Picker("Version", selection: $shown) {
+          ForEach(versions.sorted { $0.version > $1.version }) { file in
+            Text(
+              file.version == latest?.version
+                ? "Version \(file.version) · Latest" : "Version \(file.version)"
+            )
+            .tag(file.version == latest?.version ? nil : Optional(file.version))
+          }
+        }
+      } label: {
+        Label("History", systemImage: "clock.arrow.circlepath")
+      }
+      .accessibilityIdentifier("zapper-document-history")
+    }
+    Button("Edit", systemImage: "square.and.pencil") { editing = true }
+      .disabled(latest == nil || zapper == nil)
+  }
+
   private func load() async {
     do {
       versions = try await store.files(zapperID, history: true).filter { $0.path == path }
       problem = versions.isEmpty ? "This document has no saved versions." : nil
     } catch {
       problem = error.localizedDescription
+    }
+  }
+}
+
+/// The document's title and actions in the navigation bar, unless the page is a pane.
+private struct DocumentHeader<Actions: View>: ViewModifier {
+  let title: String
+  let enabled: Bool
+  @ViewBuilder let actions: Actions
+  func body(content: Content) -> some View {
+    if enabled {
+      content
+        .navigationTitle(title)
+        .compactNavigationTitle()
+        .toolbar { ToolbarItemGroup(placement: .primaryAction) { actions } }
+    } else {
+      content
     }
   }
 }

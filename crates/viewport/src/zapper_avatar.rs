@@ -1,20 +1,23 @@
 //! Profile pictures for Zappers and the people working with them.
 //!
-//! A Zapper is either the user's own picture or one of the soft pixel
-//! mascots in [`zapper_mascots`], drawn on a transparent ground as runs of flat
-//! quads snapped to device pixels. Mascots turn their heads toward the
-//! pointer, sway, blink and glance around. A shared sampler re-poses every
-//! live mascot a few times a second and re-renders a view only when one of
-//! its mascots' pixels actually changed, so a still screen costs no paints.
-//! Under reduced motion mascots face forward and hold still. People get a
-//! quiet monogram disc; an unassigned slot is a dashed ring.
+//! A Zapper is either the user's own picture or one of the flat mascots in
+//! [`zapper_mascots`], drawn on a transparent ground as smooth filled
+//! outlines. Mascots turn their heads toward the pointer, blink, glance
+//! around and show their mood; a change of mood blends over a few hundred
+//! milliseconds instead of jumping. A shared sampler re-poses every live
+//! mascot thirty times a second and re-renders a view only when one of its
+//! mascots would draw differently, so quiet mascots cost no paints between
+//! blinks. Mascots that stop being painted (scrolled away, hidden, closed)
+//! drop out of the sampler. Under reduced motion mascots hold a still pose
+//! that still shows their mood, and moods change without blending. People
+//! get a quiet monogram disc; an unassigned slot is a dashed ring.
 use base64::Engine as _;
 use gpui::{prelude::*, *};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use zuse_protocol::presentation::zapper_mascots::{self, Cell, Mascot, Mood, Pose};
+use zuse_protocol::presentation::zapper_mascots::{self, Animator, Mascot, Mood, Outline, Pose};
 use zuse_protocol::zappers::{AVATAR_IMAGE_MAX_LEN, Zapper, ZapperAvatar, avatar_image_ok};
 
 /// Everything needed to draw one Zapper: its mascot, which is also the
@@ -77,14 +80,15 @@ pub fn zapper_face(face: &ZapperFace, size: f32) -> Div {
         canvas(
             |_, _, _| {},
             move |bounds, _, window, cx| {
-                let grid = zapper_mascots::grid_for(size);
                 let pose = if cx.reduce_motion() {
                     zapper_mascots::still_pose(mood)
                 } else {
                     live_pose(mascot, mood, size, bounds, window, cx)
                 };
-                let cells = zapper_mascots::raster(mascot, grid, pose);
-                paint_cells(&cells, grid, body, bounds, window);
+                let shape = zapper_mascots::outline(mascot, pose, zapper_mascots::line_for(size));
+                // Offline Zappers fade, so a stale face never reads as present.
+                let alpha = if mood == Mood::Offline { 0.5 } else { 1. };
+                paint_outline(&shape, body, alpha, bounds, window);
             },
         )
         .size(px(size)),
@@ -236,11 +240,13 @@ fn decode_url(url: &str) -> Option<Image> {
 
 /// How far the pointer must be, in logical pixels, for a full turn.
 const LOOK_REACH: f32 = 360.;
-/// How often live mascots are re-posed.
-const SAMPLE: Duration = Duration::from_millis(50);
+/// How often live mascots are re-posed: thirty times a second.
+const SAMPLE: Duration = Duration::from_millis(33);
 /// A view that was asked to repaint and didn't is no longer showing the
 /// mascot; forget it after this long.
 const GONE_AFTER: Duration = Duration::from_millis(400);
+/// Mascots painted this close together belong to the same frame.
+const SAME_FRAME: Duration = Duration::from_millis(100);
 
 /// One mascot on screen, keyed by its view and where it sits.
 struct Live {
@@ -248,12 +254,15 @@ struct Live {
     window: AnyWindowHandle,
     centre: Point<Pixels>,
     mascot: &'static Mascot,
-    mood: Mood,
-    grid: usize,
+    animator: Animator,
+    size: f32,
+    scale: f32,
     /// Smoothed look targets: the eyes lead, the head follows.
     eyes: (f32, f32),
     head: (f32, f32),
     sampled: Instant,
+    /// When it was last painted.
+    painted: Instant,
     drawn: u64,
     asked: Option<Instant>,
 }
@@ -262,6 +271,10 @@ struct Live {
 struct Motion {
     epoch: Option<Instant>,
     live: HashMap<(EntityId, u64), Live>,
+    /// When each view last painted any mascot. A view that paints again
+    /// without one of its mascots no longer shows it: quiet mascots never
+    /// ask for a repaint, so this is how they leave the sampler.
+    views: HashMap<EntityId, Instant>,
     running: bool,
     /// A stand-in pointer for visual fixtures, in window coordinates.
     pointer: Option<Point<Pixels>>,
@@ -290,7 +303,26 @@ fn digest(value: impl std::hash::Hash) -> u64 {
 }
 
 fn pose_of(live: &Live, ms: u64) -> Pose {
-    zapper_mascots::idle_pose(live.mascot, live.mood, ms, live.eyes, live.head)
+    live.animator.pose(live.mascot, ms, live.eyes, live.head)
+}
+
+/// What a mascot would draw, to a third of a device pixel: equal keys
+/// paint identical frames.
+fn drawn(live: &Live, ms: u64) -> u64 {
+    let shape = zapper_mascots::outline(
+        live.mascot,
+        pose_of(live, ms),
+        zapper_mascots::line_for(live.size),
+    );
+    let unit = live.size / 2. * live.scale * 3.;
+    digest(
+        shape
+            .body
+            .iter()
+            .chain(shape.eyes.iter().flatten())
+            .map(|p| ((p.0 * unit).round() as i32, (p.1 * unit).round() as i32))
+            .collect::<Vec<_>>(),
+    )
 }
 
 /// Pose a mascot being painted, registering it with the sampler.
@@ -313,23 +345,32 @@ fn live_pose(
     let window_handle = window.window_handle();
     let motion = cx.default_global::<Motion>();
     let ms = now_ms(motion);
+    let scale = window.scale_factor();
     let live = motion.live.entry((view, slot)).or_insert_with(|| Live {
         view,
         window: window_handle,
         centre,
         mascot,
-        mood,
-        grid: zapper_mascots::grid_for(size),
+        animator: Animator::new(mood),
+        size,
+        scale,
         eyes: (0., 0.),
         head: (0., 0.),
         sampled: Instant::now(),
+        painted: Instant::now(),
         drawn: 0,
         asked: None,
     });
     live.asked = None;
-    live.mood = mood;
+    live.painted = Instant::now();
+    let painted = live.painted;
+    live.scale = scale;
+    // A new mood blends in from the pose on screen; the same mood again is
+    // a no-op, so re-renders never restart anything.
+    live.animator.set(mascot, mood, ms, live.eyes, live.head);
     let pose = pose_of(live, ms);
-    live.drawn = digest(zapper_mascots::raster(mascot, live.grid, pose));
+    live.drawn = drawn(live, ms);
+    motion.views.insert(view, painted);
     if !motion.running {
         motion.running = true;
         cx.spawn(async move |cx| {
@@ -349,9 +390,17 @@ fn live_pose(
 /// mascots would draw differently. Returns whether to keep sampling.
 fn sample(cx: &mut App) -> bool {
     if cx.reduce_motion() {
+        // Repaint once more so every mascot settles into its still pose
+        // instead of freezing mid-gesture.
         let motion = cx.default_global::<Motion>();
-        motion.live.clear();
+        let mut views: Vec<EntityId> = motion.live.drain().map(|(_, live)| live.view).collect();
+        motion.views.clear();
         motion.running = false;
+        views.sort_unstable();
+        views.dedup();
+        for view in views {
+            cx.notify(view);
+        }
         return false;
     }
     // Where the pointer is in each window holding a mascot.
@@ -379,12 +428,19 @@ fn sample(cx: &mut App) -> bool {
     let ms = now_ms(motion);
     let now = Instant::now();
     let mut repaint = Vec::new();
+    let views = &motion.views;
     motion.live.retain(|_, live| {
         let Some(pointer) = pointers.get(&live.window.window_id()).copied().flatten() else {
             // The window closed.
             return false;
         };
         if live.asked.is_some_and(|at| now - at > GONE_AFTER) {
+            return false;
+        }
+        if views
+            .get(&live.view)
+            .is_some_and(|at| *at > live.painted + SAME_FRAME)
+        {
             return false;
         }
         let target = match pointer {
@@ -406,17 +462,14 @@ fn sample(cx: &mut App) -> bool {
         };
         live.eyes = ease(live.eyes, zapper_mascots::EYES_FOLLOW_MS);
         live.head = ease(live.head, zapper_mascots::HEAD_FOLLOW_MS);
-        let drawn = digest(zapper_mascots::raster(
-            live.mascot,
-            live.grid,
-            pose_of(live, ms),
-        ));
-        if drawn != live.drawn && live.asked.is_none() {
+        if drawn(live, ms) != live.drawn && live.asked.is_none() {
             live.asked = Some(now);
             repaint.push(live.view);
         }
         true
     });
+    let shown: std::collections::HashSet<EntityId> = motion.live.values().map(|l| l.view).collect();
+    motion.views.retain(|view, _| shown.contains(view));
     let keep = !motion.live.is_empty();
     motion.running = keep;
     repaint.sort_unstable();
@@ -427,45 +480,40 @@ fn sample(cx: &mut App) -> bool {
     keep
 }
 
-fn paint_cells(
-    cells: &[Option<Cell>],
-    grid: usize,
+/// Fill a posed mascot's outlines into `bounds`: the body in its colour,
+/// then the eyes.
+fn paint_outline(
+    shape: &Outline,
     body: u32,
+    alpha: f32,
     bounds: Bounds<Pixels>,
     window: &mut Window,
 ) {
     let side = f32::from(bounds.size.width.min(bounds.size.height));
-    let scale = window.scale_factor();
     let origin = bounds.origin;
-    // Cell edges land on whole device pixels, so every pixel stays sharp.
-    let edge = |base: Pixels, i: usize| -> f32 {
-        ((f32::from(base) + side * i as f32 / grid as f32) * scale).round() / scale
+    let at = |p: &(f32, f32)| {
+        point(
+            origin.x + px((p.0 + 1.) / 2. * side),
+            origin.y + px((p.1 + 1.) / 2. * side),
+        )
     };
-    for y in 0..grid {
-        let (top, bottom) = (edge(origin.y, y), edge(origin.y, y + 1));
-        let mut x = 0;
-        while x < grid {
-            let Some(cell) = cells[y * grid + x] else {
-                x += 1;
-                continue;
-            };
-            let start = x;
-            while x < grid && cells[y * grid + x] == Some(cell) {
-                x += 1;
-            }
-            let (left, right) = (edge(origin.x, start), edge(origin.x, x));
-            let color = match cell {
-                Cell::Body => body,
-                Cell::Eye => zapper_mascots::EYE,
-            };
-            window.paint_quad(fill(
-                Bounds::new(
-                    point(px(left), px(top)),
-                    size(px(right - left), px(bottom - top)),
-                ),
-                rgb(color),
-            ));
+    let fill_with = |points: &[(f32, f32)], color: u32, window: &mut Window| {
+        let Some(first) = points.first() else {
+            return;
+        };
+        let mut path = PathBuilder::fill();
+        path.move_to(at(first));
+        for p in &points[1..] {
+            path.line_to(at(p));
         }
+        path.close();
+        if let Ok(path) = path.build() {
+            window.paint_path(path, rgba(color << 8 | (alpha * 255.).round() as u32));
+        }
+    };
+    fill_with(&shape.body, body, window);
+    for eye in &shape.eyes {
+        fill_with(eye, zapper_mascots::EYE, window);
     }
 }
 
@@ -587,5 +635,68 @@ mod tests {
         zapper.config.avatar_image = None;
         remember_zappers([&zapper]);
         assert_eq!(known_face("z1", &avatar).image, None);
+    }
+
+    /// A strip of mascots, one per mood.
+    struct Roster(Vec<Mood>);
+
+    impl Render for Roster {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let avatar = ZapperAvatar {
+                mascot: "hex".into(),
+                color: "teal".into(),
+            };
+            div().flex().children(
+                self.0.iter().map(|mood| {
+                    zapper_face(&ZapperFace::mascot(avatar.clone()).with_mood(*mood), 24.)
+                }),
+            )
+        }
+    }
+
+    fn live(cx: &mut TestAppContext) -> Vec<Mood> {
+        cx.update(|cx| {
+            let mut moods: Vec<Mood> = cx
+                .default_global::<Motion>()
+                .live
+                .values()
+                .map(|l| l.animator.mood())
+                .collect();
+            moods.sort_by_key(|m| format!("{m:?}"));
+            moods
+        })
+    }
+
+    #[gpui::test]
+    fn mascots_join_the_sampler_when_painted_and_leave_when_gone(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| Roster(vec![Mood::Resting, Mood::Working]));
+        let handle: AnyWindowHandle = window.into();
+        let draw = |cx: &mut TestAppContext| {
+            handle
+                .update(cx, |_, window, cx| {
+                    window.refresh();
+                    window.draw(cx).clear();
+                })
+                .unwrap();
+        };
+        draw(cx);
+        assert_eq!(live(cx), [Mood::Resting, Mood::Working]);
+        // A new mood on the same mascot keeps its sampler entry and blends.
+        window
+            .update(cx, |roster, _, _| {
+                roster.0 = vec![Mood::Resting, Mood::Done]
+            })
+            .unwrap();
+        draw(cx);
+        assert_eq!(live(cx), [Mood::Done, Mood::Resting]);
+        // The resting mascot never moves, so it never asks for a repaint; it
+        // still leaves once its view paints without it.
+        window
+            .update(cx, |roster, _, _| roster.0 = vec![Mood::Done])
+            .unwrap();
+        std::thread::sleep(SAME_FRAME * 2);
+        draw(cx);
+        cx.update(sample);
+        assert_eq!(live(cx).len(), 1);
     }
 }

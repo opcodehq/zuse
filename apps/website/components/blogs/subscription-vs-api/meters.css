@@ -1,0 +1,126 @@
+.svm {
+	--svm-glass: #ecece9;
+	--svm-digit: #1a1a1c;
+	--svm-needle: #26262a;
+	--svm-lamp-top: oklch(0.88 0.2 122);
+	--svm-lamp-side: oklch(0.78 0.19 122);
+	--svm-lamp-edge: oklch(0.45 0.12 122);
+	cursor: pointer;
+	border-radius: 10px;
+	touch-action: manipulation;
+	-webkit-tap-highlight-color: transparent;
+	user-select: none;
+}
+
+:is(.dark, [data-theme="dark"]) .svm {
+	--svm-glass: #0c0c0c;
+	--svm-digit: #f4f4f4;
+	--svm-needle: #e6e6e6;
+	--svm-lamp-top: oklch(0.92 0.19 122);
+	--svm-lamp-side: oklch(0.7 0.17 122);
+	--svm-lamp-edge: oklch(0.96 0.12 122);
+}
+
+.svm [data-lamp] > .iso-solid[data-lit] > :is(.iso-top, .iso-fill),
+.svm [data-light] > .iso-solid[data-lit] > :is(.iso-top, .iso-fill) {
+	fill: var(--svm-lamp-top);
+}
+
+.svm [data-lamp] > .iso-solid[data-lit] > .iso-shade,
+.svm [data-light] > .iso-solid[data-lit] > .iso-shade {
+	fill: var(--svm-lamp-side);
+}
+
+.svm [data-lamp] > .iso-solid[data-lit] > .iso-edge,
+.svm [data-light] > .iso-solid[data-lit] > .iso-edge {
+	stroke: var(--svm-lamp-edge);
+}
+
+.svm:focus-visible {
+	outline: 1px solid var(--anatomy-muted);
+	outline-offset: 6px;
+}
+
+.svm rect {
+	vector-effect: non-scaling-stroke;
+}
+
+.svm-bezel {
+	fill: var(--anatomy-shade-1);
+	stroke: var(--anatomy-lo);
+	stroke-width: var(--anatomy-weight);
+}
+
+.svm-glass {
+	fill: var(--svm-glass);
+	stroke: var(--anatomy-mid);
+	stroke-width: var(--anatomy-weight);
+}
+
+.svm-wall {
+	fill: var(--anatomy-shade-0);
+	opacity: 0.7;
+}
+
+.svm-digits {
+	fill: var(--svm-digit);
+	font-family: var(--anatomy-mono);
+	font-variant-numeric: tabular-nums;
+	letter-spacing: 0.02em;
+}
+
+.svm-slot {
+	fill: var(--anatomy-shade-0);
+	stroke: var(--anatomy-lo);
+	stroke-width: var(--anatomy-weight);
+}
+
+.svm-dial {
+	fill: var(--anatomy-face);
+	stroke: var(--anatomy-mid);
+	stroke-width: var(--anatomy-weight);
+	vector-effect: non-scaling-stroke;
+}
+
+.svm-needle {
+	fill: var(--svm-needle);
+}
+
+.svm-hub {
+	fill: var(--anatomy-paper);
+	stroke: var(--anatomy-hi);
+	stroke-width: var(--anatomy-weight);
+}
+
+.svm [data-flag] {
+	transition: opacity 260ms var(--anatomy-ease);
+}
+
+.svm .iso-solid > path {
+	transition: fill 220ms var(--anatomy-ease), stroke 220ms var(--anatomy-ease);
+}
+
+.iso-figure.svm-figure {
+	margin: 2rem 0 2.5rem;
+}
+
+.article-body .iso-figure figcaption {
+	font-size: 0.8125rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.svm * {
+		transition: none !important;
+	}
+}
+
+@media (max-width: 640px) {
+	.svm {
+		overflow: hidden;
+	}
+
+	.iso-plate .svm .iso-svg {
+		width: 108%;
+		margin: -2% -4% -1%;
+	}
+}

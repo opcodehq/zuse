@@ -294,12 +294,17 @@ impl Render for Board {
         // Every mood on one mascot, at header and sidebar size.
         let mut moods = div().flex().gap(px(22.)).items_end();
         for (mood, name) in [
-            (Mood::Resting, "Resting"),
-            (Mood::Working, "Working"),
-            (Mood::Delegating, "Threads working"),
-            (Mood::NeedsYou, "Needs you"),
-            (Mood::Awake, "Awake"),
-        ] {
+            Mood::Awake,
+            Mood::Working,
+            Mood::Delegating,
+            Mood::NeedsYou,
+            Mood::Blocked,
+            Mood::Done,
+            Mood::Resting,
+            Mood::Offline,
+        ]
+        .map(|mood| (mood, mood.label()))
+        {
             let face = ZapperFace::mascot(ZapperAvatar {
                 mascot: "bolt".into(),
                 color: "violet".into(),

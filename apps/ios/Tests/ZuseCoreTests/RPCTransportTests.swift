@@ -349,6 +349,26 @@ struct RPCTransportTests {
     await client.close()
   }
 
+  @Test func quietSubscriptionsWaitForTheirFirstItemWithoutADeadline() async throws {
+    let fixture = MemoryRPC()
+    let client = RPCClient(transport: fixture.transport, requestTimeout: .milliseconds(100))
+    try await client.connect()
+    let stream = try await client.subscribe("SubscribeTerminal")
+    let request = try await fixture.next(tag: "SubscribeTerminal")
+    // A shell with nothing to say stays subscribed past the reply deadline.
+    try await Task.sleep(for: .milliseconds(250))
+    try fixture.push(
+      .object([
+        "_tag": .string("Chunk"), "requestId": request["id"], "values": .array([.number(7)]),
+      ]))
+    _ = try await fixture.next(tag: "Ack")
+    try fixture.push(MemoryRPC.success(request))
+    var values: [Int] = []
+    for try await value in stream { if let number = value.int { values.append(number) } }
+    #expect(values == [7])
+    await client.close()
+  }
+
   @Test func establishedStreamsKeepRunningBeyondTheInitialReplyDeadline() async throws {
     let fixture = MemoryRPC()
     let client = RPCClient(transport: fixture.transport, requestTimeout: .milliseconds(100))
