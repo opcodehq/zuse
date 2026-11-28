@@ -6,6 +6,7 @@ pub use cloud_projects::{
     project_labels, repository_key, repository_owner_and_name,
 };
 pub mod git_history;
+pub mod image_note;
 mod model_config;
 pub mod motion;
 pub mod zapper_files;
