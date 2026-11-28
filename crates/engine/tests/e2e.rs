@@ -3552,6 +3552,16 @@ async fn publish_visual_lands_in_the_live_turn() {
 
 #[tokio::test]
 async fn private_secret_submission_never_enters_durable_chat_data() {
+    private_submission_privacy(false).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn private_command_submission_never_enters_durable_chat_data() {
+    private_submission_privacy(true).await;
+}
+
+async fn private_submission_privacy(command: bool) {
     use serde_json::json;
     use zuse_rpc::methods;
     let dir = tempfile::tempdir().unwrap();
@@ -3576,10 +3586,20 @@ async fn private_secret_submission_never_enters_durable_chat_data() {
     wait_for(|| core.sessions.turn_in_flight(CHAT), "active turn").await;
     let client = Arc::new(zuse_rpc::memory_client(core.rpc_service()));
     let operation_client = client.clone();
+    let operation_input = if command {
+        json!({"mode":"command", "label":"CLI token", "reason":"Authenticate test CLI",
+            "program":"/bin/sh", "args":["-c", "cat; printf '%s' done > completed"],
+            "cwd":dir.path(), "delivery":"stdin"})
+    } else {
+        json!({"label":"API token","reason":"Check account access","method":"GET","url":"https://api.github.com/user"})
+    };
     let operation = tokio::spawn(async move {
-        operation_client.call(methods::REQUEST_PRIVATE_OPERATION, json!({"chatId":CHAT,"operation":{
-            "label":"API token","reason":"Check account access","method":"GET","url":"https://api.github.com/user"
-        }})).await
+        operation_client
+            .call(
+                methods::REQUEST_PRIVATE_OPERATION,
+                json!({"chatId":CHAT,"operation":operation_input}),
+            )
+            .await
     });
     wait_for(
         || {
@@ -3624,14 +3644,22 @@ async fn private_secret_submission_never_enters_durable_chat_data() {
         )
         .await
         .unwrap();
-    // Invalid header stops before network access, with a value-free error.
-    let error = tokio::time::timeout(Duration::from_secs(5), operation)
+    let result = tokio::time::timeout(Duration::from_secs(5), operation)
         .await
         .unwrap()
-        .unwrap()
-        .unwrap_err()
-        .to_string();
-    assert!(!error.contains("sentinel"));
+        .unwrap();
+    if command {
+        let output = serde_json::to_string(&result.unwrap()).unwrap();
+        assert!(output.contains("completed successfully"));
+        assert!(!output.contains("sentinel"));
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("completed")).unwrap(),
+            "done"
+        );
+    } else {
+        // Invalid header stops before network access, with a value-free error.
+        assert!(!result.unwrap_err().to_string().contains("sentinel"));
+    }
     wait_for(
         || {
             entries_now(&core).iter().any(|e| {
