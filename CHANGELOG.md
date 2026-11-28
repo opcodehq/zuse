@@ -11,13 +11,15 @@
 
 ### Changed
 
-- The desktop transcript keeps the live "Working for…" timer and loader below the reply for the whole turn instead of moving it above the reply; "Worked for…" still appears above the reply once the turn finishes.
+- The desktop transcript's agent activity is back to the live layout: the group header names and shimmers the step running now ("Running command…") instead of a static "Ran 1 command", and the "Working for…" / "Worked for…" line above replies is gone. Thoughts show a brain icon; commands read "Running" / "Ran".
+- Desktop read, edit and write rows show the file in a soft pill with its file-type icon and `+N −N`; patches across several files read "Edited N files". File types the tree icon set lacks (`.toml`, `.env`, …) use the full theme's icon instead of a blank page.
 - The web app's working line rotates through a refreshed set of anime loading phrases.
 - Steering a running Devin turn sends your message straight into it instead of cancelling and re-prompting, and an idle Devin chat stays warm for 30 minutes so the next message skips a full conversation reload.
 
 ### Fixed
 
 - Desktop: the agent-updates card draws above the conversation again instead of underneath it, so chat bubbles, dividers and the scroll rail no longer show through it and it no longer looks faded.
+- Desktop: Claude `MultiEdit` and `NotebookEdit` calls show as edits of their file, with a diff for MultiEdit, instead of a generic tool row.
 - Desktop: clicking a subagent in a cloud chat (its spawn chip or the composer's background-work tray) opens its conversation in the right pane again, read from the cloud computer.
 - Devin chats no longer show a stray "Waiting for 1 subagent" from the lead's own usage updates, and sidekick chips settle before the turn ends.
 - A steered Devin turn no longer leaves the running command's chip stuck before the steer.

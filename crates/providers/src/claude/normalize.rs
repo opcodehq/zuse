@@ -68,7 +68,8 @@ fn opt_str_field(input: &Value, key: &str) -> Option<String> {
 }
 
 /// The diff a Write/Edit call's input describes: a Write is the whole new
-/// file, an Edit its replaced span. Capped like the other harnesses' diffs.
+/// file, an Edit its replaced span, a MultiEdit its spans one after another.
+/// Capped like the other harnesses' diffs.
 fn file_diff(name: &str, input: &Value) -> Option<ToolDiff> {
     const LIMIT: usize = 64 * 1024;
     let cap = |text: &str| match text.char_indices().nth(LIMIT) {
@@ -90,6 +91,24 @@ fn file_diff(name: &str, input: &Value) -> Option<ToolDiff> {
             old_text: Some(cap(input.get("old_string")?.as_str()?)),
             new_text: cap(input.get("new_string")?.as_str()?),
         }),
+        "MultiEdit" => {
+            let edits = input.get("edits")?.as_array()?;
+            if edits.is_empty() {
+                return None;
+            }
+            let side = |key: &str| -> Option<String> {
+                let spans = edits
+                    .iter()
+                    .map(|edit| edit.get(key).and_then(Value::as_str))
+                    .collect::<Option<Vec<_>>>()?;
+                Some(cap(&spans.join("\n")))
+            };
+            Some(ToolDiff {
+                path,
+                old_text: Some(side("old_string")?),
+                new_text: side("new_string")?,
+            })
+        }
         _ => None,
     }
 }
@@ -111,6 +130,18 @@ pub(crate) fn decode_tool_use(name: &str, input: &Value) -> ToolCall {
             path: str_field(input, "file_path"),
             old_string: opt_str_field(input, "old_string"),
             new_string: opt_str_field(input, "new_string"),
+        },
+        // Several replacements in one file, or a notebook cell: still an
+        // edit of that file (the diff, when there is one, rides separately).
+        "MultiEdit" => ToolCall::EditFile {
+            path: str_field(input, "file_path"),
+            old_string: None,
+            new_string: None,
+        },
+        "NotebookEdit" => ToolCall::EditFile {
+            path: str_field(input, "notebook_path"),
+            old_string: None,
+            new_string: None,
         },
         "Grep" => ToolCall::Search {
             pattern: str_field(input, "pattern"),
@@ -1295,6 +1326,34 @@ mod tests {
                 server: "linear".into(),
                 tool: "search".into(),
                 input: Some(json!({"q": "bug"}))
+            }
+        );
+        let multi = json!({"file_path": "/src/lib.rs", "edits": [
+            {"old_string": "a", "new_string": "b"},
+            {"old_string": "c", "new_string": "d\ne"},
+        ]});
+        assert_eq!(
+            decode_tool_use("MultiEdit", &multi),
+            ToolCall::EditFile {
+                path: "/src/lib.rs".into(),
+                old_string: None,
+                new_string: None
+            }
+        );
+        assert_eq!(
+            file_diff("MultiEdit", &multi),
+            Some(ToolDiff {
+                path: "/src/lib.rs".into(),
+                old_text: Some("a\nc".into()),
+                new_text: "b\nd\ne".into(),
+            })
+        );
+        assert_eq!(
+            decode_tool_use("NotebookEdit", &json!({"notebook_path": "/n.ipynb"})),
+            ToolCall::EditFile {
+                path: "/n.ipynb".into(),
+                old_string: None,
+                new_string: None
             }
         );
         assert!(matches!(
