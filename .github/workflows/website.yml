@@ -27,7 +27,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: boat-large
     timeout-minutes: 20
     defaults:
       run:

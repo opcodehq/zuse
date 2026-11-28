@@ -216,6 +216,20 @@ opt-level = 3
 [profile.dev.package.zuse-visual-gpu]
 opt-level = 3
 
+# CI exercises behavior and build compatibility; avoid optimizing every dependency
+# before running tests. Distribution and local desktop profiles stay independent.
+[profile.ci]
+inherits = "dev"
+
+[profile.ci.package."*"]
+opt-level = 0
+
+[profile.ci.package.zuse-visual]
+opt-level = 0
+
+[profile.ci.package.zuse-visual-gpu]
+opt-level = 0
+
 # Mobile core (scripts/ios/build-core.sh). Always optimized — layout and sync
 # run on the phone's hot paths, so even Debug app builds link an -O core.
 [profile.mobile]

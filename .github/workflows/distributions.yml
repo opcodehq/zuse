@@ -40,7 +40,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-24.04
+          - os: boat-large
             platform: linux
             arch: x86_64
           - os: ubuntu-24.04-arm
@@ -154,7 +154,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-24.04
+          - os: boat-large
             platform: linux
             arch: x86_64
           - os: ubuntu-24.04-arm
@@ -245,7 +245,7 @@ jobs:
   publish:
     if: inputs.staged != true
     needs: formats
-    runs-on: ubuntu-24.04
+    runs-on: boat-large
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4

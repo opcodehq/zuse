@@ -184,6 +184,44 @@ async fn fixture() -> (PgPool, PgPool, String) {
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
+async fn borrowed_catalog_probes_respect_the_connection_schema() {
+    let (admin, pool, schema) = fixture().await;
+    let (other_admin, other_pool, other_schema) = fixture().await;
+    sqlx::query("CREATE TABLE catalog_probe_fixture (id integer)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    const PROBE: &str = "SELECT to_regclass('catalog_probe_fixture') IS NOT NULL";
+    let mut connection = pool.acquire().await.unwrap();
+    assert!(
+        zuse_cloud::db::schema::present_in(&mut connection, PROBE)
+            .await
+            .unwrap()
+    );
+    // Integration tests link the production library, including its caches.
+    // Another schema must not inherit the first connection's catalog result.
+    let mut other = other_pool.acquire().await.unwrap();
+    assert!(
+        !zuse_cloud::db::schema::present_in(&mut other, PROBE)
+            .await
+            .unwrap()
+    );
+    drop(connection);
+    drop(other);
+    pool.close().await;
+    other_pool.close().await;
+    sqlx::raw_sql(&format!(
+        "DROP SCHEMA {schema} CASCADE; DROP SCHEMA {other_schema} CASCADE"
+    ))
+    .execute(&admin)
+    .await
+    .unwrap();
+    admin.close().await;
+    other_admin.close().await;
+}
+
+#[tokio::test]
 #[ignore = "requires explicit isolated localhost PostgreSQL"]
 async fn personal_computer_discovery_is_account_scoped_and_excludes_host_secrets() {
     let (admin, pool, schema) = fixture().await;

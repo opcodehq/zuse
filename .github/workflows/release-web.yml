@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   web:
-    runs-on: ubuntu-24.04
+    runs-on: boat-large
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target/browser
       HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}

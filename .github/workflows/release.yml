@@ -35,7 +35,7 @@ env:
 jobs:
   verify:
     if: inputs.formats_only != true
-    runs-on: ubuntu-24.04
+    runs-on: boat-large
     timeout-minutes: 130
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -96,7 +96,7 @@ jobs:
     uses: ./.github/workflows/native-compile.yml
     with:
       ref: ${{ inputs.tag || github.ref_name }}
-      os: ubuntu-24.04
+      os: boat-large
       platform: linux
       arch: x86_64
       target: x86_64-unknown-linux-gnu
@@ -112,7 +112,7 @@ jobs:
     uses: ./.github/workflows/native-package.yml
     with:
       ref: ${{ inputs.tag || github.ref_name }}
-      os: ubuntu-24.04
+      os: boat-large
       platform: linux
       arch: x86_64
       version: ${{ needs.verify.outputs.version }}
@@ -255,7 +255,7 @@ jobs:
         needs.package-macos-x64.result == 'success' &&
         needs.package-windows-x64.result == 'success' &&
         needs.distributions.result == 'success' }}
-    runs-on: ubuntu-24.04
+    runs-on: boat-large
     steps:
       - uses: actions/checkout@v4
         with:

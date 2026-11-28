@@ -33,7 +33,7 @@ concurrency:
 
 jobs:
   release:
-    runs-on: ubuntu-24.04
+    runs-on: boat-large
     # Pushes to main publish to staging; production is an explicit manual run.
     # Secrets are environment-scoped with the same names in both environments.
     environment: ${{ inputs.environment || 'staging' }}
