@@ -131,6 +131,8 @@ struct ChatPanePager<Page: View>: View {
         CardAccessibility(
           // The picker's tiles stay their own buttons in the overview.
           overview: overview && page != .selection, closable: page.isClosable,
+          // Full screen, only the page in front is read; the others are off screen.
+          hidden: !overview && page.id != store.deck(chatID).focus,
           title: label(page)?.title ?? "Pane picker", id: page.id,
           open: { bringForward(page.id) }, close: { close(page.id) }))
   }
@@ -326,12 +328,14 @@ private struct PinchToZoomOut: ViewModifier {
 private struct CardAccessibility: ViewModifier {
   let overview: Bool
   let closable: Bool
+  let hidden: Bool
   let title: String
   let id: String
   let open: () -> Void
   let close: () -> Void
   func body(content: Content) -> some View {
     content
+      .accessibilityHidden(hidden)
       .accessibilityElement(children: overview ? .ignore : .contain)
       .accessibilityLabel(overview ? title : "")
       .accessibilityAddTraits(overview ? .isButton : [])
