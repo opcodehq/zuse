@@ -213,6 +213,15 @@ pub fn status_line(state: &CardState) -> String {
     }
 }
 
+/// The status line of a card the agent made to ask for signing in again:
+/// a connection that looks fine still fails the agent's calls.
+fn reconnect_status_line(state: &CardState) -> String {
+    match state {
+        CardState::Connected(_) => "Access stopped working · sign in again".into(),
+        state => status_line(state),
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Look {
     /// Filled pill: the one action the card exists for.
@@ -293,12 +302,14 @@ impl UiBlockView {
             .into_any_element()
     }
 
-    /// The buttons a card offers in `state`.
+    /// The buttons a card offers in `state`. `reconnect` (the agent asked the
+    /// user to sign in again) leads a connected card with Reconnect.
     fn card_actions(
         &self,
         path: &str,
         query: &str,
         resolved: &Resolved,
+        reconnect: bool,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let id = resolved
@@ -313,6 +324,18 @@ impl UiBlockView {
                 "Manage",
                 Look::Secondary,
                 PluginAction::Manage {
+                    plugin_id: id.clone(),
+                },
+                cx,
+            )
+        };
+        let reconnect_button = |this: &Self, cx: &mut Context<Self>| {
+            this.plugin_button(
+                path,
+                "reconnect",
+                "Reconnect",
+                Look::Primary,
+                PluginAction::Connect {
                     plugin_id: id.clone(),
                 },
                 cx,
@@ -348,6 +371,9 @@ impl UiBlockView {
                 cx,
             )],
             CardState::Connecting => vec![manage(self, cx)],
+            CardState::Connected(_) if reconnect => {
+                vec![reconnect_button(self, cx), manage(self, cx)]
+            }
             CardState::Connected(_) => vec![
                 self.plugin_button(
                     path,
@@ -361,19 +387,7 @@ impl UiBlockView {
                 ),
                 manage(self, cx),
             ],
-            CardState::NeedsAttention => vec![
-                self.plugin_button(
-                    path,
-                    "reconnect",
-                    "Reconnect",
-                    Look::Primary,
-                    PluginAction::Connect {
-                        plugin_id: id.clone(),
-                    },
-                    cx,
-                ),
-                manage(self, cx),
-            ],
+            CardState::NeedsAttention => vec![reconnect_button(self, cx), manage(self, cx)],
             // Nothing to decide yet; the catalog page always works.
             CardState::Loading => vec![self.plugin_button(
                 path,
@@ -389,11 +403,12 @@ impl UiBlockView {
         }
     }
 
-    /// A `Connect(plugin, reason?)` card.
+    /// A `Connect(plugin, reason?, reconnect?)` card.
     pub(super) fn connect_card(
         &mut self,
         query: &str,
         reason: Option<&str>,
+        reconnect: bool,
         path: &str,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -403,13 +418,18 @@ impl UiBlockView {
             || (query.to_string(), String::new()),
             |definition| (definition.name.clone(), definition.domain.clone()),
         );
-        let connected = matches!(resolved.state, CardState::Connected(_));
+        let connected = matches!(resolved.state, CardState::Connected(_)) && !reconnect;
+        let status = if reconnect {
+            reconnect_status_line(&resolved.state)
+        } else {
+            status_line(&resolved.state)
+        };
         let footnote = reason.map(str::to_owned).unwrap_or_else(|| {
             format!(
                 "You sign in with {name} directly; the agent never sees your credentials. Disconnect any time."
             )
         });
-        let actions = self.card_actions(path, query, &resolved, cx);
+        let actions = self.card_actions(path, query, &resolved, reconnect, cx);
         let card = div()
             .flex()
             .items_center()
@@ -460,7 +480,7 @@ impl UiBlockView {
                             .text_size(px(13.))
                             .line_height(px(18.))
                             .text_color(p.muted_foreground)
-                            .child(status_line(&resolved.state)),
+                            .child(status.clone()),
                     ),
             )
             .child(
@@ -478,10 +498,7 @@ impl UiBlockView {
             .min_w_0()
             .id(eid(path, "connect"))
             .role(Role::Group)
-            .aria_label(SharedString::from(format!(
-                "{name}: {}",
-                status_line(&resolved.state)
-            )))
+            .aria_label(SharedString::from(format!("{name}: {status}")))
             .child(card)
             .child(
                 div()

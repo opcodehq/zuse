@@ -285,11 +285,15 @@ pub enum Component {
     },
     /// A live connection card for one Zuse plugin: the renderer looks the
     /// plugin up (id, name or domain) and offers Connect, or Add account and
-    /// Manage once connected. Credentials never pass through the agent.
+    /// Manage once connected. `reconnect` asks the user to sign in again even
+    /// when it looks connected (the agent's calls fail for lack of access).
+    /// Credentials never pass through the agent.
     Connect {
         plugin: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        reconnect: bool,
     },
     /// One of the agent's own MCP servers, as its harness reported it when
     /// the card was made (`/mcp`). Not advertised.
