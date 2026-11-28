@@ -19,82 +19,93 @@ struct DiffView: View {
     let error: String?
   }
   @State private var collapsed: Set<String> = []
+  /// Shown as a pane beside the chat rather than in its own sheet or inspector.
+  var embedded = false
   var body: some View {
-    NavigationStack {
-      VStack(spacing: 0) {
-        Picker("Changes", selection: $scope) {
-          Text("Working tree").tag("unstaged")
-          Text("Staged").tag("staged")
-          Text("Branch").tag("branch")
-        }.pickerStyle(.segmented).padding(.horizontal, 16).padding(.vertical, 10)
-        if loading { ProgressView("Loading changes…").padding() }
-        if let error {
-          Text(error).font(.callout).foregroundStyle(.red).padding()
-          Button("Retry") { Task { await load() } }
-        }
-        if !loading && patches.isEmpty && error == nil {
-          ContentUnavailableView("No changes", systemImage: "checkmark.circle")
-        }
-        ScrollView {
-          LazyVStack(spacing: 16, pinnedViews: [.sectionHeaders]) {
-            ForEach(patches) { patch in
-              Section {
-                if !collapsed.contains(patch.id) {
-                  if let error = patch.error {
-                    Text(error).font(.caption).foregroundStyle(.red).padding(12)
-                  } else if patch.mode == "binary" {
-                    Label("Binary file changed", systemImage: "doc").font(.caption).padding(12)
-                  } else {
-                    LazyVStack(spacing: 0) {
-                      ForEach(patch.lines.filter { $0.kind != .header || $0.text.hasPrefix("@@") })
-                      { line in
-                        diffLine(line)
-                      }
-                    }.textSelection(.enabled)
-                    if patch.truncated {
-                      Label("Patch truncated by server", systemImage: "exclamationmark.triangle")
-                        .font(.caption).foregroundStyle(.orange).padding(10)
+    if embedded {
+      content
+    } else {
+      NavigationStack {
+        content.navigationTitle("Changes").compactNavigationTitle()
+          .toolbar {
+            ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+          }
+      }
+    }
+  }
+  private var content: some View {
+    VStack(spacing: 0) {
+      Picker("Changes", selection: $scope) {
+        Text("Working tree").tag("unstaged")
+        Text("Staged").tag("staged")
+        Text("Branch").tag("branch")
+      }.pickerStyle(.segmented).padding(.horizontal, 16).padding(.vertical, 10)
+      if loading { ProgressView("Loading changes…").padding() }
+      if let error {
+        Text(error).font(.callout).foregroundStyle(.red).padding()
+        Button("Retry") { Task { await load() } }
+      }
+      if !loading && patches.isEmpty && error == nil {
+        ContentUnavailableView("No changes", systemImage: "checkmark.circle")
+      }
+      ScrollView {
+        LazyVStack(spacing: 16, pinnedViews: [.sectionHeaders]) {
+          ForEach(patches) { patch in
+            Section {
+              if !collapsed.contains(patch.id) {
+                if let error = patch.error {
+                  Text(error).font(.caption).foregroundStyle(.red).padding(12)
+                } else if patch.mode == "binary" {
+                  Label("Binary file changed", systemImage: "doc").font(.caption).padding(12)
+                } else {
+                  LazyVStack(spacing: 0) {
+                    ForEach(patch.lines.filter { $0.kind != .header || $0.text.hasPrefix("@@") }) {
+                      line in
+                      diffLine(line)
                     }
+                  }.textSelection(.enabled)
+                  if patch.truncated {
+                    Label("Patch truncated by server", systemImage: "exclamationmark.triangle")
+                      .font(.caption).foregroundStyle(.orange).padding(10)
                   }
                 }
-              } header: {
-                HStack(spacing: 8) {
-                  Button {
-                    if !collapsed.insert(patch.id).inserted { collapsed.remove(patch.id) }
-                  } label: {
-                    HStack(spacing: 8) {
-                      Image(
-                        systemName: collapsed.contains(patch.id) ? "chevron.right" : "chevron.down"
-                      )
-                      .font(.system(size: 9, weight: .semibold))
-                      Image(systemName: "doc.text").foregroundStyle(.secondary)
-                      Text(patch.id).font(.system(size: 14, weight: .medium, design: .monospaced))
-                        .lineLimit(1).truncationMode(.middle)
-                    }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                  }.buttonStyle(.plain)
-                  Text("+\(patch.lines.filter { $0.kind == .addition }.count)").foregroundStyle(
-                    .green)
-                  Text("−\(patch.lines.filter { $0.kind == .deletion }.count)").foregroundStyle(
-                    .red)
-                  Button {
-                    file = patch
-                  } label: {
-                    Image(systemName: "arrow.up.right.square")
-                  }
-                  .buttonStyle(.plain).accessibilityLabel("View working-copy file")
-                }.font(.system(size: 13, weight: .medium, design: .monospaced))
-                  .padding(.horizontal, 12).frame(minHeight: 40)
-                  .background(.bar)
               }
+            } header: {
+              HStack(spacing: 8) {
+                Button {
+                  if !collapsed.insert(patch.id).inserted { collapsed.remove(patch.id) }
+                } label: {
+                  HStack(spacing: 8) {
+                    Image(
+                      systemName: collapsed.contains(patch.id) ? "chevron.right" : "chevron.down"
+                    )
+                    .font(.system(size: 9, weight: .semibold))
+                    Image(systemName: "doc.text").foregroundStyle(.secondary)
+                    Text(patch.id).font(.system(size: 14, weight: .medium, design: .monospaced))
+                      .lineLimit(1).truncationMode(.middle)
+                  }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                }.buttonStyle(.plain)
+                Text("+\(patch.lines.filter { $0.kind == .addition }.count)").foregroundStyle(
+                  .green)
+                Text("−\(patch.lines.filter { $0.kind == .deletion }.count)").foregroundStyle(
+                  .red)
+                Button {
+                  file = patch
+                } label: {
+                  Image(systemName: "arrow.up.right.square")
+                }
+                .buttonStyle(.plain).accessibilityLabel("View working-copy file")
+              }.font(.system(size: 13, weight: .medium, design: .monospaced))
+                .padding(.horizontal, 12).frame(minHeight: 40)
+                .background(.bar)
             }
-          }.padding(.bottom, 24).frame(maxWidth: 960).frame(maxWidth: .infinity)
-        }
-      }.background(AppTheme.surface).navigationTitle("Changes").compactNavigationTitle()
-        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-        .task(id: scope) { await load() }
-        .sheet(item: $file) { patch in FileContentsView(rpc: rpc, session: session, path: patch.id)
-        }
-    }
+          }
+        }.padding(.bottom, 24).frame(maxWidth: 960).frame(maxWidth: .infinity)
+      }
+    }.background(embedded ? Color.clear : AppTheme.surface)
+      .task(id: scope) { await load() }
+      .sheet(item: $file) { patch in FileContentsView(rpc: rpc, session: session, path: patch.id)
+      }
   }
   private func diffLine(_ line: DiffLine) -> some View {
     let tint: Color = line.kind == .addition ? .green : line.kind == .deletion ? .red : .secondary

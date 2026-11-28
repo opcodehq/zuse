@@ -595,6 +595,8 @@
 .zp-avatar {
   flex-shrink: 0;
 }
+.zp-mascot { overflow: visible; }
+.zp-mascot[data-mood="offline"] { opacity: 0.5; }
 
 .zp-inspector {
   background: color-mix(in srgb, var(--bg) 90%, var(--shell));

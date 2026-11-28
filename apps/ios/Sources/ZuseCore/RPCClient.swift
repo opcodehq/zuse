@@ -246,8 +246,16 @@ public actor RPCClient {
   {
     try await request(method, payload, timeout: nil)
   }
+  /// A stream that may stay quiet indefinitely, like a terminal's output: no deadline for its
+  /// first item.
+  public func subscribe(_ method: String, _ payload: [String: JSONValue] = [:]) async throws
+    -> AsyncThrowingStream<JSONValue, Error>
+  {
+    try await request(method, payload, timeout: nil, waitsForFirstItem: false)
+  }
   private func request(
-    _ method: String, _ payload: [String: JSONValue], timeout: Duration?, reservedID: String? = nil
+    _ method: String, _ payload: [String: JSONValue], timeout: Duration?, reservedID: String? = nil,
+    waitsForFirstItem: Bool = true
   )
     async throws
     -> AsyncThrowingStream<JSONValue, Error>
@@ -262,12 +270,14 @@ public actor RPCClient {
       bufferingPolicy: .bufferingOldest(512))
     pending[id] = continuation
     continuation.onTermination = { [weak self] _ in Task { await self?.cancel(id) } }
-    if timeout == nil { startingStreams.insert(id) }
-    let deadline = timeout ?? requestTimeout
-    timers[id] = Task { [weak self] in
-      try? await Task.sleep(for: deadline)
-      guard !Task.isCancelled else { return }
-      await self?.expire(id)
+    if timeout == nil && waitsForFirstItem { startingStreams.insert(id) }
+    if timeout != nil || waitsForFirstItem {
+      let deadline = timeout ?? requestTimeout
+      timers[id] = Task { [weak self] in
+        try? await Task.sleep(for: deadline)
+        guard !Task.isCancelled else { return }
+        await self?.expire(id)
+      }
     }
     let frame: JSONValue =
       canonical
