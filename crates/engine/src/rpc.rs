@@ -1784,6 +1784,9 @@ fn forward_deadline(method: &str) -> std::time::Duration {
             Duration::from_secs(15 * 60)
         }
         methods::REQUEST_PRIVATE_OPERATION => Duration::from_secs(11 * 60),
+        // The GitHub download may take its full 40 seconds, then the
+        // checkout's filesystem work and the relayed response follow.
+        methods::PROJECT_SKILL_CATALOG => Duration::from_secs(75),
         methods::INSTALL_HARNESS => Duration::from_secs(15 * 60),
         // A full fleet of enabled providers is checked two at a time; each
         // provider may need both a CLI probe and a network request.

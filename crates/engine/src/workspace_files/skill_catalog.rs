@@ -105,37 +105,81 @@ impl WorkspaceFiles {
     }
 }
 
+/// A private folder beside the installed skills, removed when dropped.
+///
+/// On Unix it keeps the folder's open handle, so files are written through
+/// handles that were opened without following links rather than by path.
+struct Staging {
+    path: PathBuf,
+    relative: PathBuf,
+    #[cfg(unix)]
+    dir: fs::File,
+    kept: bool,
+}
+
+impl Staging {
+    fn create(root: &Path, area: &Path) -> Result<Self, WorkspaceFilesError> {
+        let area_relative = area
+            .strip_prefix(root)
+            .map_err(|_| checkout_changed())?
+            .to_path_buf();
+        #[cfg(unix)]
+        let area_dir =
+            mutations::open_parent(root, &area_relative.join("staging")).map_err(io_error)?;
+        for _ in 0..8 {
+            let name = format!(".zuse-skill-{}", uuid::Uuid::new_v4().simple());
+            #[cfg(unix)]
+            let created = at::mkdir(&area_dir, name.as_ref(), 0o700);
+            #[cfg(not(unix))]
+            let created = fs::create_dir(area.join(&name));
+            match created {
+                Ok(()) => {
+                    return Ok(Self {
+                        path: area.join(&name),
+                        relative: area_relative.join(&name),
+                        #[cfg(unix)]
+                        dir: at::open_dir(&area_dir, name.as_ref()).map_err(io_error)?,
+                        kept: false,
+                    });
+                }
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(io_error(error)),
+            }
+        }
+        Err(WorkspaceFilesError::Io(
+            "Could not create a staging folder for the skill.".into(),
+        ))
+    }
+
+    /// Leave the folder in place and return where it is.
+    fn keep(mut self) -> PathBuf {
+        self.kept = true;
+        self.path.clone()
+    }
+}
+
+impl Drop for Staging {
+    fn drop(&mut self) {
+        if !self.kept {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
 fn install(
     root: &Path,
     entry: CatalogEntry,
     files: &[(&SkillFile, Vec<u8>)],
 ) -> Result<(), WorkspaceFilesError> {
     let area = skill_area(root, true)?.ok_or_else(checkout_changed)?;
-    let staging = tempfile::Builder::new()
-        .prefix(".zuse-skill-")
-        .tempdir_in(&area)
-        .map_err(io_error)?;
-    let staged = staging.path().join("package");
-    fs::create_dir(&staged).map_err(io_error)?;
-    for (file, bytes) in files {
-        let relative = package_path(file)?;
-        let destination = staged.join(relative);
-        if let Some(parent) = destination.parent() {
-            fs::create_dir_all(parent).map_err(io_error)?;
-        }
-        // Resource files are data here. Installing a skill never runs them.
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        if file.executable {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o755);
-        }
-        let mut output = options.open(destination).map_err(io_error)?;
-        output.write_all(bytes).map_err(io_error)?;
-    }
-    let source = staged.strip_prefix(root).map_err(|_| checkout_changed())?;
-    move_directory(root, source, Path::new(&entry.install_path())).map_err(|error| {
+    let staging = Staging::create(root, &area)?;
+    write_package(&staging, files)?;
+    move_directory(
+        root,
+        &staging.relative.join("package"),
+        Path::new(&entry.install_path()),
+    )
+    .map_err(|error| {
         if error.kind() == ErrorKind::AlreadyExists {
             existing_skill()
         } else {
@@ -146,20 +190,74 @@ fn install(
     Ok(())
 }
 
+/// Writes the downloaded files into `staging/package`. Resource files are data
+/// here: installing a skill never runs them.
+#[cfg(unix)]
+fn write_package(
+    staging: &Staging,
+    files: &[(&SkillFile, Vec<u8>)],
+) -> Result<(), WorkspaceFilesError> {
+    at::mkdir(&staging.dir, "package".as_ref(), 0o755).map_err(io_error)?;
+    let package = at::open_dir(&staging.dir, "package".as_ref()).map_err(io_error)?;
+    for (file, bytes) in files {
+        let relative = package_path(file)?;
+        let name = relative
+            .file_name()
+            .ok_or_else(|| bad_path("Invalid path in GitHub skill package"))?;
+        // Every folder is opened from its parent's handle without following
+        // links, so a folder swapped for a symlink fails instead of
+        // redirecting the write.
+        let mut directory = package.try_clone().map_err(io_error)?;
+        for component in relative.parent().unwrap_or(Path::new("")).components() {
+            let std::path::Component::Normal(part) = component else {
+                return Err(bad_path("Invalid path in GitHub skill package"));
+            };
+            match at::mkdir(&directory, part, 0o755) {
+                Ok(()) => {}
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(io_error(error)),
+            }
+            directory = at::open_dir(&directory, part).map_err(io_error)?;
+        }
+        at::create_file(&directory, name, file.executable)
+            .and_then(|mut output| output.write_all(bytes))
+            .map_err(io_error)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_package(
+    staging: &Staging,
+    files: &[(&SkillFile, Vec<u8>)],
+) -> Result<(), WorkspaceFilesError> {
+    let staged = staging.path.join("package");
+    fs::create_dir(&staged).map_err(io_error)?;
+    for (file, bytes) in files {
+        let destination = staged.join(package_path(file)?);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).map_err(io_error)?;
+        }
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(destination)
+            .and_then(|mut output| output.write_all(bytes))
+            .map_err(io_error)?;
+    }
+    Ok(())
+}
+
 fn remove(root: &Path, entry: CatalogEntry) -> Result<(), WorkspaceFilesError> {
     let area = skill_area(root, false)?.ok_or_else(checkout_changed)?;
-    let staging = tempfile::Builder::new()
-        .prefix(".zuse-skill-")
-        .tempdir_in(&area)
-        .map_err(io_error)?;
-    let staged = staging.path().join("package");
-    let target = staged.strip_prefix(root).map_err(|_| checkout_changed())?;
+    let staging = Staging::create(root, &area)?;
+    let target = staging.relative.join("package");
     let relative = entry.install_path();
-    move_directory(root, Path::new(&relative), target).map_err(io_error)?;
+    move_directory(root, Path::new(&relative), &target).map_err(io_error)?;
     // If files changed just before the move, keep the checkout's work.
-    let matches = package_matches(&staged, entry);
+    let matches = package_matches(&staging.path.join("package"), entry);
     if !matches!(matches, Ok(true)) {
-        if let Err(error) = move_directory(root, target, Path::new(&relative)) {
+        if let Err(error) = move_directory(root, &target, Path::new(&relative)) {
             let preserved = staging.keep();
             return Err(WorkspaceFilesError::Io(format!(
                 "Could not restore the edited skill: {error}. Its files are in {}.",
@@ -184,17 +282,23 @@ fn move_directory(root: &Path, source: &Path, destination: &Path) -> std::io::Re
     match mutations::move_no_replace(root, source, destination) {
         #[cfg(unix)]
         Err(error) if exclusive_rename_unsupported(&error) => {
-            claim_and_rename(&root.join(source), &root.join(destination))
+            claim_and_rename(root, source, destination)
         }
         result => result,
     }
 }
 
+/// The fallback move, anchored like the exclusive rename to parent handles
+/// opened without following links, so no ancestor is resolved again by path.
 #[cfg(unix)]
-fn claim_and_rename(from: &Path, to: &Path) -> std::io::Result<()> {
-    fs::create_dir(to)?;
-    fs::rename(from, to).inspect_err(|_| {
-        let _ = fs::remove_dir(to);
+fn claim_and_rename(root: &Path, source: &Path, destination: &Path) -> std::io::Result<()> {
+    let from = mutations::open_parent(root, source)?;
+    let to = mutations::open_parent(root, destination)?;
+    let source = source.file_name().ok_or(ErrorKind::InvalidInput)?;
+    let destination = destination.file_name().ok_or(ErrorKind::InvalidInput)?;
+    at::mkdir(&to, destination, 0o755)?;
+    at::rename(&from, source, &to, destination).inspect_err(|_| {
+        let _ = at::rmdir(&to, destination);
     })
 }
 
@@ -207,6 +311,85 @@ fn exclusive_rename_unsupported(error: &std::io::Error) -> bool {
             || code == libc::ENOTSUP
             || code == libc::EOPNOTSUPP
     )
+}
+
+/// Single-component filesystem calls relative to an open directory handle.
+#[cfg(unix)]
+mod at {
+    use std::ffi::{CString, OsStr};
+    use std::fs::File;
+    use std::io;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    fn name(value: &OsStr) -> io::Result<CString> {
+        Ok(CString::new(value.as_bytes())?)
+    }
+
+    fn check(result: libc::c_int) -> io::Result<libc::c_int> {
+        if result < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(result)
+        }
+    }
+
+    pub(super) fn mkdir(parent: &File, child: &OsStr, mode: libc::mode_t) -> io::Result<()> {
+        let child = name(child)?;
+        // SAFETY: a live directory handle and a NUL-terminated single component.
+        check(unsafe { libc::mkdirat(parent.as_raw_fd(), child.as_ptr(), mode) }).map(drop)
+    }
+
+    pub(super) fn open_dir(parent: &File, child: &OsStr) -> io::Result<File> {
+        let child = name(child)?;
+        // SAFETY: as above; O_NOFOLLOW refuses a symlink in place of the folder.
+        let fd = check(unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                child.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        })?;
+        // SAFETY: openat returned a newly owned descriptor.
+        Ok(unsafe { File::from_raw_fd(fd) })
+    }
+
+    pub(super) fn create_file(parent: &File, child: &OsStr, executable: bool) -> io::Result<File> {
+        let child = name(child)?;
+        let mode: libc::c_uint = if executable { 0o755 } else { 0o644 };
+        // SAFETY: as above; O_CREAT | O_EXCL | O_NOFOLLOW creates a new file only.
+        let fd = check(unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                child.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                mode,
+            )
+        })?;
+        // SAFETY: openat returned a newly owned descriptor.
+        Ok(unsafe { File::from_raw_fd(fd) })
+    }
+
+    pub(super) fn rename(from: &File, source: &OsStr, to: &File, target: &OsStr) -> io::Result<()> {
+        let (source, target) = (name(source)?, name(target)?);
+        // SAFETY: live directory handles and NUL-terminated single components.
+        check(unsafe {
+            libc::renameat(
+                from.as_raw_fd(),
+                source.as_ptr(),
+                to.as_raw_fd(),
+                target.as_ptr(),
+            )
+        })
+        .map(drop)
+    }
+
+    pub(super) fn rmdir(parent: &File, child: &OsStr) -> io::Result<()> {
+        let child = name(child)?;
+        // SAFETY: as above; removes only an empty directory.
+        check(unsafe { libc::unlinkat(parent.as_raw_fd(), child.as_ptr(), libc::AT_REMOVEDIR) })
+            .map(drop)
+    }
 }
 
 fn status(root: &Path, entry: CatalogEntry) -> Result<Option<Installation>, WorkspaceFilesError> {
@@ -251,10 +434,9 @@ fn package_matches(root: &Path, entry: CatalogEntry) -> Result<bool, WorkspaceFi
                 directories.push(relative);
                 continue;
             }
-            let Some(file) = expected
-                .get(&relative)
-                .filter(|file| meta.is_file() && meta.len() == file.bytes as u64)
-            else {
+            let Some(file) = expected.get(&relative).filter(|file| {
+                meta.is_file() && meta.len() == file.bytes as u64 && executable_matches(&meta, file)
+            }) else {
                 return Ok(false);
             };
             let mut options = OpenOptions::new();
@@ -276,6 +458,18 @@ fn package_matches(root: &Path, entry: CatalogEntry) -> Result<bool, WorkspaceFi
         }
     }
     Ok(found == expected.len())
+}
+
+/// A permission change counts as an edit: the package is kept, not removed.
+#[cfg(unix)]
+fn executable_matches(meta: &fs::Metadata, file: &SkillFile) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    (meta.permissions().mode() & 0o111 != 0) == file.executable
+}
+
+#[cfg(not(unix))]
+fn executable_matches(_: &fs::Metadata, _: &SkillFile) -> bool {
+    true
 }
 
 fn package_path(file: &SkillFile) -> Result<&Path, WorkspaceFilesError> {
@@ -338,19 +532,42 @@ mod tests {
     #[test]
     fn fallback_move_never_replaces_an_existing_skill_folder() {
         let root = tempfile::tempdir().unwrap();
-        let (from, to) = (root.path().join("staged"), root.path().join("skill"));
-        fs::create_dir(&from).unwrap();
-        fs::write(from.join("SKILL.md"), "new").unwrap();
+        let (from, to) = (Path::new("staged"), Path::new("skill"));
+        fs::create_dir(root.path().join(from)).unwrap();
+        fs::write(root.path().join("staged/SKILL.md"), "new").unwrap();
 
-        fs::create_dir(&to).unwrap();
-        fs::write(to.join("SKILL.md"), "mine").unwrap();
-        let error = claim_and_rename(&from, &to).unwrap_err();
+        fs::create_dir(root.path().join(to)).unwrap();
+        fs::write(root.path().join("skill/SKILL.md"), "mine").unwrap();
+        let error = claim_and_rename(root.path(), from, to).unwrap_err();
         assert_eq!(error.kind(), ErrorKind::AlreadyExists);
-        assert_eq!(fs::read_to_string(to.join("SKILL.md")).unwrap(), "mine");
+        assert_eq!(
+            fs::read_to_string(root.path().join("skill/SKILL.md")).unwrap(),
+            "mine"
+        );
 
-        fs::remove_dir_all(&to).unwrap();
-        claim_and_rename(&from, &to).unwrap();
-        assert_eq!(fs::read_to_string(to.join("SKILL.md")).unwrap(), "new");
-        assert!(!from.exists());
+        fs::remove_dir_all(root.path().join(to)).unwrap();
+        claim_and_rename(root.path(), from, to).unwrap();
+        assert_eq!(
+            fs::read_to_string(root.path().join("skill/SKILL.md")).unwrap(),
+            "new"
+        );
+        assert!(!root.path().join(from).exists());
+    }
+
+    #[test]
+    fn staged_writes_refuse_a_folder_swapped_for_a_symlink() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let area = root.path().join(".agents/skills");
+        fs::create_dir_all(&area).unwrap();
+        let staging = Staging::create(root.path(), &area).unwrap();
+        fs::create_dir(staging.path.join("package")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), staging.path.join("package/scripts")).unwrap();
+        let package = at::open_dir(&staging.dir, "package".as_ref()).unwrap();
+        assert!(at::open_dir(&package, "scripts".as_ref()).is_err());
+        assert!(fs::read_dir(outside.path()).unwrap().next().is_none());
+        let path = staging.path.clone();
+        drop(staging);
+        assert!(!path.exists());
     }
 }

@@ -132,7 +132,11 @@ impl Global for SharedSkillsPage {}
 
 impl SkillsPage {
     pub(crate) fn shared(state: Entity<AppState>, cx: &mut App) -> Entity<Self> {
-        if let Some(shared) = cx.try_global::<SharedSkillsPage>() {
+        // One page per app keeps search and scroll across visits, but only
+        // while it reads the same app state the caller owns.
+        if let Some(shared) = cx.try_global::<SharedSkillsPage>()
+            && shared.0.read(cx).state == state
+        {
             return shared.0.clone();
         }
         let page = cx.new(|cx| {
@@ -564,6 +568,7 @@ impl SkillsPage {
                 })
                 .collect::<Vec<_>>();
             div()
+                .id(title.unwrap_or("skill-results"))
                 .flex()
                 .flex_col()
                 .gap(px(4.))

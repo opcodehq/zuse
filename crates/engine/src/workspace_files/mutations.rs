@@ -401,7 +401,7 @@ fn is_case_alias(root: &Path, source: &Path, destination: &Path) -> bool {
 
 /// Open every ancestor without following links, and anchor the native rename to those handles.
 #[cfg(unix)]
-fn open_parent(root: &Path, relative: &Path) -> std::io::Result<std::fs::File> {
+pub(super) fn open_parent(root: &Path, relative: &Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
     use std::os::{
         fd::{AsRawFd, FromRawFd},

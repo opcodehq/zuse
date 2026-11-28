@@ -9505,10 +9505,15 @@ impl Composer {
             }
             return;
         };
-        let recent_key = format!(
+        let mut recent_key = format!(
             "{skill}:{project_skills}:{include_skills}:{commands_allowed}:{preferences:?}:{harness:?}:{}",
             self.completion_connection_context(cx),
         );
+        // `/skills:` lists one checkout's files: another checkout's warm rows
+        // would insert paths that don't exist here.
+        if project_skills {
+            recent_key = format!("{recent_key}:{}", self.slash.catalog_context);
+        }
         if !self.slash_cache.contains_key(&context)
             && let Some((_, rows)) = self
                 .slash_recent
