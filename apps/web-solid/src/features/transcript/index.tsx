@@ -14,7 +14,9 @@ import { FindBar, type FindHost } from "./Find";
 import { InputDock } from "./Input";
 import { TurnStatus, WorkingTrailer } from "./parts";
 import { Rail, RAIL_MIN_WIDTH, railTicks } from "./Rail";
-import { chatReferences, WaitingBar } from "./ReferenceMarkdown";
+import { ActivityGroup } from "./Activity";
+import { activityEvents, slotEvents } from "./events";
+import { chatReferences, ownerZapper, WaitingBar } from "./ReferenceMarkdown";
 import { ConversationTabs } from "./Tabs";
 import "./transcript.css";
 
@@ -246,6 +248,7 @@ function ChatTranscript(props: { chatId: string }) {
 
   const chat = () => state.chats[props.chatId];
   const references = chatReferences(props);
+  const activity = createMemo(() => slotEvents(activityEvents(ownerZapper(props.chatId), props.chatId), messages()));
   const ctxFor = (index: () => number): EntryContext => ({
     chatId: props.chatId,
     device: () => chat()?.deviceId ?? null,
@@ -299,6 +302,7 @@ function ChatTranscript(props: { chatId: string }) {
                     <div ref={row} class="t-row" data-index={index()} data-entry={key}>
                       <div class="t-column">
                         <Show when={entry()}>{(e) => <Entry entry={e()} ctx={ctxFor(index)} />}</Show>
+                        <Show when={entry() && activity().get(entry()!.id)}>{(events) => <ActivityGroup events={events()} chatId={props.chatId} references={references()} />}</Show>
                         <Show when={index() === messages().length - 1}>
                           <WorkingTrailer chatId={props.chatId} />
                           <Show when={entry()?.role === "assistant" && entry()?.status !== "streaming" && state.sessions[props.chatId]?.status !== "working"}>

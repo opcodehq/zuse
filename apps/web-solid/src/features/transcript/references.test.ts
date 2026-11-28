@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { Zapper, ZapperIssue } from "@/core/zapper-types";
-import { findReferences, openAsks, parsePrUrl, REFERENCE_LIMIT, referenceCatalog, type ReferenceSources } from "./references";
+import { decodeFileHref, findCommits, findReferences, openAsks, parseCommitUrl, parsePrUrl, REFERENCE_LIMIT, referenceCatalog, type ReferenceSources } from "./references";
 
 const sources: ReferenceSources = {
   issues: [{ id: "i12", number: 12, title: "Inline references", status: "needsYou" }, { id: "i3", number: 3, title: "Old work", status: "done" }],
@@ -90,5 +90,56 @@ describe("openAsks", () => {
     assert.deepEqual(openAsks(zapper, "worker").map(ask => ask.key), ["question:q2", "decision:d1"]);
     assert.deepEqual(openAsks(zapper, "elsewhere"), []);
     assert.deepEqual(openAsks(undefined, "coord"), []);
+  });
+});
+
+describe("new reference kinds", () => {
+  const rich = referenceCatalog({
+    issues: [], pullRequests: [], threads: [], agents: [],
+    files: [{ path: "src/auth.ts", icon: "ts.svg" }, { path: "reports/ZUSA-16.md" }, { path: "docs/" , directory: true }, { path: "a/index.ts" }, { path: "b/index.ts" }, { path: "/etc/passwd" }],
+    branches: [{ name: "main", chatId: "c1" }, { name: "inline-reference-chips", chatId: "c1" }, { name: "zuse/fix-billing", chatId: "c2" }],
+    attachments: [{ name: "screenshot.png", path: "/tmp/x/screenshot.png" }, { name: "notes", path: "/tmp/notes" }],
+    zappers: [{ id: "z1", name: "Website", status: "active" }, { id: "z2", name: "QA", status: "paused" }],
+  });
+  const found = (text: string) => findReferences(text, rich).map(match => [text.slice(match.start, match.end), match.reference.kind, match.reference.line ?? null]);
+  test("files resolve by path, unique basename and optional line", () => {
+    assert.deepEqual(found("See src/auth.ts:42, auth.ts, reports/ZUSA-16.md and docs."), [["src/auth.ts:42", "file", 42], ["auth.ts", "file", null], ["reports/ZUSA-16.md", "file", null]]);
+    assert.deepEqual(found("src/auth.ts#L7 then src/auth.ts:12:3"), [["src/auth.ts#L7", "file", 7], ["src/auth.ts:12:3", "file", 12]]);
+    assert.equal(rich.index.get("auth.ts")?.target, "src/auth.ts");
+    const repeated = referenceCatalog({ issues: [], pullRequests: [], threads: [], agents: [], files: [{ path: "src/auth.ts" }, { path: "./src/auth.ts" }] });
+    assert.equal(repeated.index.get("auth.ts")?.target, "src/auth.ts", "the same file listed twice keeps its basename");
+    assert.deepEqual(found("Top-level folders need their slash: docs/ but not docs"), [["docs/", "file", null]]);
+    const overlap = referenceCatalog({ issues: [], pullRequests: [], threads: [], agents: [], files: [{ path: "src/auth.ts" }], branches: [{ name: "123", chatId: "c1" }] });
+    assert.deepEqual(findReferences("src/auth.ts:123 and 123", overlap).map(match => [match.start, match.end, match.reference.kind]), [[0, 15, "file"], [20, 23, "branch"]], "a line suffix is never matched again");
+  });
+  test("unknown, absolute and ambiguous paths stay plain", () => {
+    assert.deepEqual(found("src/other.ts index.ts /etc/passwd lib/src/auth.ts"), []);
+    assert.equal(rich.index.has("/etc/passwd"), false);
+  });
+  test("branches need a distinctive name; attachments need a file name; zappers need three letters", () => {
+    assert.deepEqual(found("merge main into inline-reference-chips and zuse/fix-billing"), [["inline-reference-chips", "branch", null], ["zuse/fix-billing", "branch", null]]);
+    assert.deepEqual(found("screenshot.png, notes"), [["screenshot.png", "attachment", null]]);
+    assert.deepEqual(found("Website asked QA"), [["Website", "zapper", null]]);
+    assert.equal(rich.index.get("Website")?.status, "active");
+  });
+});
+
+describe("findCommits", () => {
+  const shas = (text: string, repo: string | null) => findCommits(text, repo).map(match => [text.slice(match.start, match.end), match.reference.target, match.reference.text]);
+  test("bare hashes need a repository from context", () => {
+    assert.deepEqual(shas("CI is green at 39d73fe.", "opcodehq/zuse"), [["39d73fe", "https://github.com/opcodehq/zuse/commit/39d73fe", "39d73fe"]]);
+    assert.deepEqual(shas("CI is green at 39d73fe.", null), []);
+  });
+  test("owner/repo@sha carries its own repository", () => {
+    assert.deepEqual(shas("landed as opcodehq/zuse@e4166aaf12", null), [["opcodehq/zuse@e4166aaf12", "https://github.com/opcodehq/zuse/commit/e4166aaf12", "zuse@e4166aa"]]);
+  });
+  test("words, numbers and short or embedded hex stay plain", () => {
+    assert.deepEqual(shas("deadbeef 1234567 abc12 x39d73fe 39d73fe0z #39d73fe", "o/r"), []);
+  });
+  test("commit URLs and mention links parse", () => {
+    assert.deepEqual(parseCommitUrl("https://github.com/opcodehq/zuse/commit/e4166aaf"), { repo: "opcodehq/zuse", sha: "e4166aaf" });
+    assert.equal(parseCommitUrl("https://evil.com/opcodehq/zuse/commit/e4166aaf"), null);
+    assert.equal(decodeFileHref("zuse-file:src/a%20b.ts"), "src/a b.ts");
+    assert.equal(decodeFileHref("src/a.ts"), null);
   });
 });
