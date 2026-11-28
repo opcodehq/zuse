@@ -56,7 +56,7 @@ concurrency:
 jobs:
   test:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
+    runs-on: boat
     steps:
       - uses: actions/checkout@v4
       - run: python3 infra/cloud/tests/harness-bundle.py
@@ -64,7 +64,7 @@ jobs:
   bundle:
     if: github.event_name == 'workflow_dispatch'
     # The --version probe runs the CLI, so build on the target architecture.
-    runs-on: ${{ inputs.architecture == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    runs-on: ${{ inputs.architecture == 'aarch64' && 'ubuntu-24.04-arm' || 'boat' }}
     environment: ${{ inputs.environment }}
     defaults:
       run:
