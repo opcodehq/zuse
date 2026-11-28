@@ -1,0 +1,196 @@
+.tkx {
+	--tkx-glass: #ecece9;
+	--tkx-digit: #1a1a1c;
+	--tkx-lamp-top: oklch(0.88 0.2 122);
+	--tkx-lamp-side: oklch(0.78 0.19 122);
+	--tkx-lamp-edge: oklch(0.45 0.12 122);
+	--tkx-pane: oklch(0.93 0.01 200 / 0.28);
+	--tkx-mouth: oklch(0.66 0 0);
+	user-select: none;
+}
+
+:is(.dark, [data-theme="dark"]) .tkx {
+	--tkx-glass: #0c0c0c;
+	--tkx-digit: #f4f4f4;
+	--tkx-lamp-top: oklch(0.92 0.19 122);
+	--tkx-lamp-side: oklch(0.7 0.17 122);
+	--tkx-lamp-edge: oklch(0.96 0.12 122);
+	--tkx-pane: oklch(0.75 0.02 200 / 0.12);
+	--tkx-mouth: oklch(0.08 0 0);
+}
+
+.tkx-art {
+	touch-action: manipulation;
+	-webkit-tap-highlight-color: transparent;
+}
+
+.tkx [data-switch] {
+	cursor: pointer;
+}
+
+.tkx [data-fill] > .iso-solid > :is(.iso-top, .iso-fill),
+.tkx [data-lamp] > .iso-solid[data-lit] > :is(.iso-top, .iso-fill) {
+	fill: var(--tkx-lamp-top);
+}
+
+.tkx [data-fill] > .iso-solid > .iso-shade,
+.tkx [data-lamp] > .iso-solid[data-lit] > .iso-shade {
+	fill: var(--tkx-lamp-side);
+}
+
+.tkx [data-fill] > .iso-solid > .iso-edge,
+.tkx [data-lamp] > .iso-solid[data-lit] > .iso-edge {
+	stroke: var(--tkx-lamp-edge);
+}
+
+.tkx .tkx-pane > :is(.iso-fill, .iso-top, .iso-shade) {
+	fill: var(--tkx-pane);
+}
+
+.tkx-mouth {
+	fill: var(--tkx-mouth);
+	stroke: var(--anatomy-lo);
+	stroke-width: var(--anatomy-weight);
+	vector-effect: non-scaling-stroke;
+}
+
+.tkx-level {
+	fill: none;
+	stroke: var(--anatomy-hi);
+	stroke-width: var(--anatomy-weight);
+	stroke-dasharray: 1.4 1.6;
+	vector-effect: non-scaling-stroke;
+}
+
+.tkx rect {
+	vector-effect: non-scaling-stroke;
+}
+
+.tkx-bezel {
+	fill: var(--anatomy-shade-1);
+	stroke: var(--anatomy-lo);
+	stroke-width: var(--anatomy-weight);
+}
+
+.tkx-glass {
+	fill: var(--tkx-glass);
+	stroke: var(--anatomy-mid);
+	stroke-width: var(--anatomy-weight);
+}
+
+.tkx-wall {
+	fill: var(--anatomy-shade-0);
+	opacity: 0.7;
+}
+
+.tkx-digits {
+	fill: var(--tkx-digit);
+	font-family: var(--anatomy-mono);
+	font-variant-numeric: tabular-nums;
+	letter-spacing: 0.02em;
+}
+
+.tkx-slot {
+	fill: var(--anatomy-shade-0);
+	stroke: var(--anatomy-lo);
+	stroke-width: var(--anatomy-weight);
+}
+
+.tkx .iso-solid > path {
+	transition: fill 220ms var(--anatomy-ease), stroke 220ms var(--anatomy-ease);
+}
+
+.tkx [data-fill] .iso-solid > path {
+	transition: none;
+}
+
+.tkx-bins {
+	display: grid;
+	grid-template-columns: repeat(5, minmax(0, 1fr));
+	gap: 0.5rem;
+	margin: 0.25rem 0.75rem 0;
+	font-family: var(--anatomy-mono);
+	font-size: 10.5px;
+	line-height: 1.35;
+	color: var(--anatomy-muted);
+}
+
+.tkx-bins > span {
+	display: grid;
+	gap: 0.1rem;
+	border-top: 1px dotted var(--anatomy-lo);
+	padding-top: 0.35rem;
+}
+
+.tkx-bin-cost {
+	color: var(--anatomy-text, currentColor);
+	font-variant-numeric: tabular-nums;
+}
+
+.tkx-switches {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.375rem;
+	margin: 0.75rem 0.75rem 0.25rem;
+	font-family: var(--anatomy-mono);
+	font-size: 11px;
+}
+
+.tkx-switches button {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4rem;
+	border: 1px solid var(--anatomy-lo);
+	padding: 0.25rem 0.55rem;
+	color: var(--anatomy-muted);
+	transition: background-color 160ms var(--anatomy-ease), color 160ms var(--anatomy-ease), border-color 160ms var(--anatomy-ease);
+}
+
+.tkx-switches button[aria-pressed="true"] {
+	border-color: var(--anatomy-hi);
+	background: var(--anatomy-hi);
+	color: var(--anatomy-paper);
+}
+
+.tkx-switches button:disabled {
+	border-style: dashed;
+	cursor: not-allowed;
+	opacity: 0.75;
+}
+
+.tkx-switches button:focus-visible {
+	outline: 1px solid var(--anatomy-muted);
+	outline-offset: 2px;
+}
+
+.tkx-switch-key {
+	opacity: 0.6;
+}
+
+.iso-figure.tkx-figure,
+.tkx-figure .iso-figure {
+	margin: 2rem 0 2.5rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.tkx * {
+		transition: none !important;
+	}
+}
+
+@media (max-width: 640px) {
+	.tkx-art {
+		overflow: hidden;
+	}
+
+	.iso-plate .tkx-art .iso-svg {
+		width: 118%;
+		margin: -4% -9% -2%;
+	}
+
+	.tkx-bins {
+		font-size: 9.5px;
+		gap: 0.3rem;
+		margin-inline: 0.25rem;
+	}
+}
