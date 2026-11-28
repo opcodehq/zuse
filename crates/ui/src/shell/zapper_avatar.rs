@@ -116,6 +116,12 @@ impl Shell {
 /// 6. Only its threads running: delegating.
 /// 7. Its own turn finished and not seen yet: done.
 /// 8. Otherwise, including a coordinator chat not synced yet: awake.
+///
+/// A message just sent already reads as working (see
+/// `AppState::display_status_for`), so the mascot greets it with the hop
+/// that starts work. There is no separate loading mood on purpose: nothing
+/// marks a Zapper as starting, and a thread's "Starting" label only means no
+/// data has arrived yet, which a stuck thread looks the same as.
 pub(super) fn mood_of(
     zapper: &Zapper,
     home_online: bool,
