@@ -1316,12 +1316,31 @@ mod tests {
         assert!(cx.debug_bounds("multi-computer-sidebar-list").is_some());
         assert!(cx.debug_bounds("chat-local-chat").is_some());
         assert!(cx.debug_bounds("chat-server-chat").is_some());
-        let point = cx.debug_bounds("chat-local-chat").unwrap().center();
+        let reveal_chat = |selector, cx: &mut gpui::VisualTestContext| {
+            // The full shell has a shorter viewport than the sidebar-only host.
+            // A debug selector also reports rows clipped below its scroll area.
+            let row = cx.debug_bounds(selector).unwrap();
+            root.update(cx, |root, cx| {
+                let viewport = root.sidebar_scroll.bounds();
+                let offset = root.sidebar_scroll.offset();
+                let delta = row.center().y - viewport.center().y;
+                let y = (offset.y - delta).clamp(-root.sidebar_scroll.max_offset().y, px(0.));
+                root.sidebar_scroll.set_offset(gpui::point(offset.x, y));
+                cx.notify();
+            });
+            redraw(cx);
+            let point = cx.debug_bounds(selector).unwrap().center();
+            root.read_with(cx, |root, _| {
+                assert!(root.sidebar_scroll.bounds().contains(&point));
+            });
+            point
+        };
+        let point = reveal_chat("chat-local-chat", cx);
         cx.simulate_click(point, gpui::Modifiers::default());
         redraw(cx);
         root.read_with(cx, |root, _| assert_eq!(root.active_remote_workspace, None));
         assert!(cx.debug_bounds("multi-computer-sidebar-list").is_some());
-        let point = cx.debug_bounds("chat-server-chat").unwrap().center();
+        let point = reveal_chat("chat-server-chat", cx);
         cx.simulate_click(point, gpui::Modifiers::default());
         redraw(cx);
         root.read_with(cx, |root, _| {

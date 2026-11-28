@@ -40,7 +40,10 @@ case "$suite" in
         -E '!(package(zuse-cloud) | package(zuse-cloud-runtime))'
       cargo test "${build[@]}" "${args[@]}" --doc
     else
-      cargo nextest run "${tests[@]}" "${args[@]}" --run-ignored only \
+      # Only the PostgreSQL integration binary runs against released guests;
+      # don't compile unrelated package and unit-test harnesses for this matrix.
+      cargo nextest run "${tests[@]}" -p zuse-cloud --test postgres \
+        --features zuse-cloud/runtime-acceptance,zuse-cloud-runtime/engine --run-ignored only \
         -E 'package(zuse-cloud) & binary(postgres) & (test(rust_cloud) | test(recovery_acceptance)) & !test(rust_cloud_composer_launch_close_and_reopen)'
     fi
     ;;
