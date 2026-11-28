@@ -14266,6 +14266,9 @@ impl Shell {
                 this.capture_navigation_focus(false, false, window, cx);
             }))
             .on_key_down(|event, _, cx| navigation_focus::copy_transcript_selection(event, cx))
+            .on_action(cx.listener(|this, _: &crate::composer::Copy, window, cx| {
+                navigation_focus::copy_transcript_action(&this.navigation_focus.main, window, cx);
+            }))
             .relative()
             .flex_1()
             .min_w_0()
@@ -14883,6 +14886,9 @@ impl Shell {
                 this.capture_navigation_focus(true, false, window, cx);
             }))
             .on_key_down(|event, _, cx| navigation_focus::copy_transcript_selection(event, cx))
+            .on_action(cx.listener(|this, _: &crate::composer::Copy, window, cx| {
+                navigation_focus::copy_transcript_action(&this.navigation_focus.right, window, cx);
+            }))
             .size_full()
             .flex()
             .flex_col()

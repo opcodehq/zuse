@@ -525,6 +525,29 @@ fn copy_shortcut_copies_side_chat_selection_from_the_right_pane(cx: &mut TestApp
 }
 
 #[gpui::test]
+fn native_copy_action_copies_transcript_selection_in_either_pane(cx: &mut TestAppContext) {
+    let _selection = crate::markdown::selection::test_state_lock();
+    let (shell, cx) = setup(cx);
+    for right in [false, true] {
+        cx.update(|window, cx| {
+            let focus = if right {
+                shell.read(cx).navigation_focus.right.clone()
+            } else {
+                shell.read(cx).navigation_focus.main.clone()
+            };
+            window.focus(&focus, cx);
+        });
+        cx.update(|window, cx| window.draw(cx).clear());
+        select_transcript_text(cx);
+        cx.update(|window, cx| {
+            window.dispatch_action(Box::new(crate::composer::Copy), cx);
+        });
+        assert_eq!(clipboard_text(cx).as_deref(), Some("selected"));
+        clear_transcript_selection();
+    }
+}
+
+#[gpui::test]
 fn copy_shortcut_prefers_the_focused_composer_selection(cx: &mut TestAppContext) {
     let _selection = crate::markdown::selection::test_state_lock();
     let (shell, cx) = setup(cx);
@@ -533,6 +556,11 @@ fn copy_shortcut_prefers_the_focused_composer_selection(cx: &mut TestAppContext)
     cx.simulate_input("draft text");
     select_transcript_text(cx);
     cx.simulate_keystrokes("ctrl-a ctrl-c");
+    assert_eq!(clipboard_text(cx).as_deref(), Some("draft text"));
+    select_transcript_text(cx);
+    cx.update(|window, cx| {
+        window.dispatch_action(Box::new(crate::composer::Copy), cx);
+    });
     assert_eq!(clipboard_text(cx).as_deref(), Some("draft text"));
     clear_transcript_selection();
 }
@@ -552,6 +580,10 @@ fn ctrl_c_in_a_terminal_is_not_taken_by_a_transcript_selection(cx: &mut TestAppC
     cx.update(|window, cx| window.draw(cx).clear());
     select_transcript_text(cx);
     cx.simulate_keystrokes("ctrl-c");
+    assert_eq!(clipboard_text(cx).as_deref(), Some("sentinel"));
+    cx.update(|window, cx| {
+        window.dispatch_action(Box::new(crate::composer::Copy), cx);
+    });
     assert_eq!(clipboard_text(cx).as_deref(), Some("sentinel"));
     clear_transcript_selection();
 }
