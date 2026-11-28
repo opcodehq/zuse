@@ -1,0 +1,220 @@
+.cp {
+	--cp-glass: #e9e9e6;
+	--cp-screen: #fbfbfa;
+	--cp-ink: #1a1a1c;
+	--cp-soft: #6e6e73;
+	--cp-log: #8a8a8f;
+	--cp-ask: #c2410c;
+	--cp-lamp-top: oklch(0.86 0.17 70);
+	--cp-lamp-side: oklch(0.76 0.16 65);
+	--cp-lamp-edge: oklch(0.5 0.13 55);
+	cursor: pointer;
+	border-radius: 10px;
+	touch-action: manipulation;
+	-webkit-tap-highlight-color: transparent;
+	user-select: none;
+}
+
+:is(.dark, [data-theme="dark"]) .cp {
+	--cp-glass: #0b0b0b;
+	--cp-screen: #0e0e0e;
+	--cp-ink: #f1f1f1;
+	--cp-soft: #8d8d8d;
+	--cp-log: #6c6c6c;
+	--cp-ask: #fb923c;
+	--cp-lamp-top: oklch(0.9 0.16 75);
+	--cp-lamp-side: oklch(0.72 0.15 65);
+	--cp-lamp-edge: oklch(0.95 0.1 80);
+}
+
+.cp:focus-visible {
+	outline: 1px solid var(--anatomy-muted);
+	outline-offset: 6px;
+}
+
+.cp [data-lamp] > .iso-solid[data-lit] > :is(.iso-top, .iso-fill),
+.cp [data-dock-lamp] > .iso-solid[data-lit] > :is(.iso-top, .iso-fill) {
+	fill: var(--cp-lamp-top);
+}
+
+.cp [data-lamp] > .iso-solid[data-lit] > .iso-shade,
+.cp [data-dock-lamp] > .iso-solid[data-lit] > .iso-shade {
+	fill: var(--cp-lamp-side);
+}
+
+.cp [data-lamp] > .iso-solid[data-lit] > .iso-edge,
+.cp [data-dock-lamp] > .iso-solid[data-lit] > .iso-edge {
+	stroke: var(--cp-lamp-edge);
+}
+
+.cp rect,
+.cp circle {
+	vector-effect: non-scaling-stroke;
+}
+
+.cp-bezel {
+	fill: var(--anatomy-shade-1);
+	stroke: var(--anatomy-lo);
+	stroke-width: var(--anatomy-weight);
+}
+
+.cp-glass {
+	fill: var(--cp-glass);
+	stroke: var(--anatomy-mid);
+	stroke-width: var(--anatomy-weight);
+}
+
+.cp-phone-glass {
+	fill: var(--cp-screen);
+	stroke: var(--anatomy-hi);
+	stroke-width: var(--anatomy-weight);
+}
+
+.cp-wall {
+	fill: var(--anatomy-shade-0);
+	opacity: 0.7;
+}
+
+.cp-log {
+	fill: var(--cp-log);
+	opacity: 0;
+	transition: opacity 240ms var(--anatomy-ease), fill 240ms var(--anatomy-ease);
+}
+
+.cp-log[data-shown] {
+	opacity: 0.85;
+}
+
+.cp-log[data-ask] {
+	fill: var(--cp-ask);
+	opacity: 1;
+}
+
+.cp-cursor {
+	fill: var(--cp-log);
+	animation: cp-blink 1.1s steps(1) infinite;
+}
+
+.cp-ui {
+	fill: var(--cp-soft);
+	font-family: var(--font-geist), ui-sans-serif, system-ui, sans-serif;
+	letter-spacing: 0.01em;
+}
+
+.cp-strong {
+	fill: var(--cp-ink);
+	font-weight: 600;
+}
+
+.cp-mono {
+	fill: var(--cp-ink);
+	font-family: var(--anatomy-mono);
+}
+
+.cp-notch,
+.cp-home {
+	fill: var(--anatomy-mid);
+}
+
+.cp-rule {
+	fill: var(--anatomy-faint);
+}
+
+.cp-card {
+	fill: var(--anatomy-shade-2);
+	stroke: var(--anatomy-lo);
+	stroke-width: var(--anatomy-weight);
+}
+
+.cp-button {
+	fill: var(--anatomy-paper);
+	stroke: var(--anatomy-mid);
+	stroke-width: var(--anatomy-weight);
+}
+
+.cp-button[data-primary] {
+	fill: var(--cp-ink);
+	stroke: var(--cp-ink);
+}
+
+.cp-deny {
+	fill: var(--anatomy-red);
+	font-weight: 600;
+}
+
+.cp-on-primary {
+	fill: var(--cp-screen);
+	font-weight: 600;
+}
+
+.cp-composer {
+	fill: var(--anatomy-paper);
+	stroke: var(--anatomy-lo);
+	stroke-width: var(--anatomy-weight);
+}
+
+.cp-send {
+	fill: var(--cp-ink);
+}
+
+.cp-spin {
+	fill: none;
+	stroke: var(--cp-soft);
+	stroke-width: 0.5;
+	stroke-dasharray: 5 3.2;
+	transform-box: fill-box;
+	transform-origin: center;
+}
+
+.cp-spin[data-on] {
+	animation: cp-turn 1s linear infinite;
+}
+
+.cp-lift-halo {
+	opacity: 0;
+}
+
+.cp [data-card],
+.cp [data-summary] {
+	transition: opacity 220ms var(--anatomy-ease);
+}
+
+.cp .iso-solid > path {
+	transition: fill 220ms var(--anatomy-ease), stroke 220ms var(--anatomy-ease);
+}
+
+@keyframes cp-blink {
+	50% {
+		opacity: 0;
+	}
+}
+
+@keyframes cp-turn {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+.iso-figure.cp-figure,
+.cp-figure .iso-figure {
+	margin: 2rem 0 2.5rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.cp *,
+	.cp-cursor {
+		transition: none !important;
+		animation: none !important;
+	}
+}
+
+@media (max-width: 640px) {
+	.cp {
+		overflow: hidden;
+	}
+
+	.iso-plate .cp .iso-svg {
+		width: 110%;
+		margin: -3% -5% -1%;
+	}
+}
