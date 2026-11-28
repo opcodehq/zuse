@@ -103,7 +103,7 @@ fn heading_word_width(flat: &FlatText, font_size: Pixels, window: &Window) -> f3
 }
 
 /// Element/cache discriminator for a table cell (row-major under the block ix).
-fn table_cell_ix(ix: usize, r: usize, c: usize) -> usize {
+pub(in crate::markdown) fn table_cell_ix(ix: usize, r: usize, c: usize) -> usize {
     nested_ix((ix, 2u8, r, c))
 }
 

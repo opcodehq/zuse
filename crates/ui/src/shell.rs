@@ -94,6 +94,7 @@ mod panel_layout;
 mod panel_menu;
 mod pr_watch;
 mod project_setup;
+mod pull_request_links;
 mod remote_workspaces;
 mod ssh_open;
 mod update_notes;
@@ -2561,6 +2562,7 @@ pub struct Shell {
     /// Independent watches retain device identity across selection changes.
     harness_update_devices: std::collections::BTreeMap<String, harness_updates::DeviceUpdates>,
     pr_watch_devices: std::collections::HashMap<String, pr_watch::DeviceWatch>,
+    pull_request_links: pull_request_links::PullRequestLinks,
     harness_update_expanded: bool,
     harness_update_transition: Option<WidthTween>,
     harness_update_geometry: [Option<WidthTween>; 2],
@@ -3224,6 +3226,7 @@ impl Shell {
             harness_update_banner_task: None,
             harness_update_devices: Default::default(),
             pr_watch_devices: Default::default(),
+            pull_request_links: Default::default(),
             harness_update_expanded: false,
             harness_update_transition: None,
             harness_update_geometry: [None; 2],
@@ -3492,6 +3495,7 @@ impl Shell {
 
     fn on_state_changed(&mut self, state: &Entity<AppState>, cx: &mut Context<Self>) {
         self.refresh_pr_watches(cx);
+        self.refresh_pull_request_links(cx);
         self.open_pending_chat(cx);
         // Voice is an orchestrator over every thread: navigation keeps it,
         // only losing the engine that hosts it ends the session.
@@ -14344,6 +14348,9 @@ impl Shell {
                 this.capture_navigation_focus(false, false, window, cx);
             }))
             .on_key_down(|event, _, cx| navigation_focus::copy_transcript_selection(event, cx))
+            .on_action(cx.listener(|this, _: &crate::composer::Copy, window, cx| {
+                navigation_focus::copy_transcript_action(&this.navigation_focus.main, window, cx);
+            }))
             .relative()
             .flex_1()
             .min_w_0()
@@ -14961,6 +14968,9 @@ impl Shell {
                 this.capture_navigation_focus(true, false, window, cx);
             }))
             .on_key_down(|event, _, cx| navigation_focus::copy_transcript_selection(event, cx))
+            .on_action(cx.listener(|this, _: &crate::composer::Copy, window, cx| {
+                navigation_focus::copy_transcript_action(&this.navigation_focus.right, window, cx);
+            }))
             .size_full()
             .flex()
             .flex_col()

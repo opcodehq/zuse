@@ -660,13 +660,22 @@ impl Shell {
         });
         // The branch's pull request, with its menu (view, repair, merge,
         // add to chat, status, GitHub) and its next step.
-        let pull_request_rows = match change_request {
+        let branch_url = change_request.as_ref().map(|summary| summary.url.clone());
+        let mut pull_request_rows = match change_request {
             Some(summary) => {
                 let target = (!local).then(|| chat.device_id.clone());
                 self.render_summary_pull_request(summary, target, &theme, cx)
             }
             None => Vec::new(),
         };
+        // The other pull requests linked to this chat.
+        pull_request_rows.extend(self.render_linked_pull_requests(
+            &chat,
+            (!local).then(|| chat.device_id.clone()),
+            branch_url.as_deref(),
+            &theme,
+            cx,
+        ));
 
         // ── What runs for it: background processes, then the chat's
         // subagents, running ones first.

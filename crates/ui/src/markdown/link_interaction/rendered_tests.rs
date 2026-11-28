@@ -510,8 +510,9 @@ fn rendered_truncation_resizes_and_selects_the_original_url() {
         cx.update_window(window.into(), |_, window, cx| {
             window.refresh();
             let _ = window.draw(cx);
+            let cell = super::super::render::table_cell_ix(0, 0, 0);
             let (original, layout, offsets) =
-                super::super::render::selection_test_snapshot("link-fixture:0");
+                super::super::render::selection_test_snapshot(&format!("link-fixture:{cell}"));
             assert_eq!(original.as_ref(), url);
             assert_eq!(offsets.unwrap().omissions.len(), 1);
             assert!(layout.bounds().size.width < px(220.));

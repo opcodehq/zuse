@@ -1108,6 +1108,8 @@ pub const SKILL_COMPLETION_HARNESSES: [(zuse_protocol::HarnessId, &str); 11] = [
 pub struct UiSettings {
     pub language: zuse_i18n::LanguagePreference,
     pub desktop_import_dismissed: bool,
+    /// The one-time "Reconnect your plugins" list was dismissed.
+    pub plugins_moved_dismissed: bool,
     pub desktop_import_pending: Option<serde_json::Value>,
     pub desktop_import_applied: Vec<String>,
     /// First-run onboarding finished, was skipped, or wasn't needed because
@@ -1364,6 +1366,7 @@ impl Default for UiSettings {
             language: Default::default(),
             display_name: String::new(),
             desktop_import_dismissed: false,
+            plugins_moved_dismissed: false,
             desktop_import_pending: None,
             desktop_import_applied: Vec::new(),
             onboarding_completed: false,
@@ -2272,6 +2275,7 @@ impl UiSettings {
         merge!(
             language,
             desktop_import_dismissed,
+            plugins_moved_dismissed,
             desktop_import_pending,
             desktop_import_applied,
             onboarding_completed,
@@ -3274,6 +3278,7 @@ mod tests {
             language: zuse_i18n::LanguagePreference::Explicit(zuse_i18n::Locale::Fr),
             display_name: "Avery Parker".into(),
             desktop_import_dismissed: false,
+            plugins_moved_dismissed: true,
             desktop_import_pending: None,
             desktop_import_applied: Vec::new(),
             onboarding_completed: false,

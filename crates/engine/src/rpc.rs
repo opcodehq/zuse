@@ -747,6 +747,7 @@ pub struct EngineRpc {
     direct_access: Option<crate::direct_access::DirectAccess>,
     zappers: Option<crate::zappers::Zappers>,
     slack_links: Option<crate::slack_links::SlackLinks>,
+    pull_request_links: Option<crate::pull_request_links::PullRequestLinks>,
     model_connections: Option<crate::model_connections::ModelConnections>,
     model_api_keys: Option<crate::harness_vendors::ApiKeys>,
     account: Option<crate::account::Account>,
@@ -817,6 +818,7 @@ impl EngineRpc {
             direct_access: None,
             zappers: None,
             slack_links: None,
+            pull_request_links: None,
             model_connections: None,
             model_api_keys: None,
             account: None,
@@ -967,6 +969,14 @@ impl EngineRpc {
 
     /// Starts the Slack mirror for this engine's account as soon as the
     /// service exists, so linked chats keep syncing with no window open.
+    pub fn with_pull_request_links(
+        mut self,
+        links: crate::pull_request_links::PullRequestLinks,
+    ) -> Self {
+        self.pull_request_links = Some(links);
+        self
+    }
+
     pub fn with_slack_links(mut self, links: crate::slack_links::SlackLinks) -> Self {
         if let Some(auth) = &self.auth {
             links.attach(
@@ -1955,6 +1965,11 @@ fn forwardable(method: &str) -> bool {
             | methods::OBSERVE_PR_WATCH
             | methods::SET_PR_WATCH
             | methods::WATCH_PR_WATCHES
+            // Pull request ownership is kept by the engine hosting the chat.
+            | methods::WATCH_PULL_REQUEST_LINKS
+            | methods::CLAIM_PULL_REQUEST
+            | methods::RELEASE_PULL_REQUEST
+            | methods::SET_PULL_REQUEST_POLICY
             | methods::GET_CHANGE_REQUEST_DIFF
             | methods::POST_CHANGE_REQUEST_COMMENT
             | methods::UPDATE_CHANGE_REQUEST
@@ -2026,6 +2041,7 @@ fn is_stream_method(method: &str) -> bool {
             | methods::UPDATE_STATUS
             | methods::WATCH_HARNESS_UPDATES
             | methods::WATCH_PR_WATCHES
+            | methods::WATCH_PULL_REQUEST_LINKS
     )
 }
 
@@ -3086,6 +3102,16 @@ impl EngineRpc {
         }
         if voice_remote::handles(method) {
             return self.voice_remote(method, params).await;
+        }
+        if crate::pull_request_links::handles(method) {
+            let links = self.pull_request_links.as_ref().ok_or_else(|| {
+                RpcError::Failed("Pull request links are unavailable here.".into())
+            })?;
+            let value = links
+                .handle(method, params)
+                .await
+                .map_err(crate::cloud::rpc_error)?;
+            return RpcReply::value(&value);
         }
         if crate::slack_links::handles(method) {
             let links = self
@@ -5314,6 +5340,12 @@ impl EngineRpc {
                         .set(request)
                         .map_err(|e| RpcError::Failed(e.to_string()))?,
                 )
+            }
+            methods::WATCH_PULL_REQUEST_LINKS => {
+                let links = self.pull_request_links.as_ref().ok_or_else(|| {
+                    RpcError::Failed("Pull request links are unavailable here.".into())
+                })?;
+                Ok(RpcReply::Stream(watch_stream(links.subscribe())))
             }
             methods::WATCH_PR_WATCHES => {
                 let watches = self

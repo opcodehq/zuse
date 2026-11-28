@@ -68,6 +68,19 @@ pub(super) fn copy_transcript_selection(event: &gpui::KeyDownEvent, cx: &mut App
     }
 }
 
+/// Native Edit > Copy dispatches the composer's action instead of a key event.
+/// Only answer for the pane itself: a focused editor or terminal owns its copy
+/// behavior and must not copy an old transcript selection instead.
+pub(super) fn copy_transcript_action(scope: &FocusHandle, window: &Window, cx: &mut App) {
+    if scope.is_focused(window)
+        && let Some(text) = crate::markdown::selection::selected_text()
+    {
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+    } else {
+        cx.propagate();
+    }
+}
+
 impl Shell {
     pub(super) fn capture_navigation_focus(
         &mut self,

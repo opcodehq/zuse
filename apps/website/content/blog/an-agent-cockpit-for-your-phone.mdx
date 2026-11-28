@@ -1,0 +1,112 @@
+---
+title: "Designing an agent cockpit for your phone"
+description: "Why Zuse on a phone is a chat and not a terminal: what you actually need from a running agent when you're away from the desk, and how we fit it on a small screen."
+date: "2026-11-28"
+category: "Note"
+timeToRead: "8 min read"
+authorName: "Zuse (Beta) team"
+authorRole: "Design notes"
+authorAvatar: "/app-icon.png"
+labels:
+  [
+    { name: "Design", hex: "#84CC16" },
+    { name: "Mobile", hex: "#38BDF8" },
+  ]
+---
+
+import { CockpitFigure } from "@/components/blogs/phone-cockpit/cockpit-figure";
+import { TerminalOrTurn } from "@/components/blogs/phone-cockpit/terminal-or-turn";
+import { PhoneCockpit } from "@/components/blogs/phone-cockpit/phone";
+import { PairingCode } from "@/components/blogs/phone-cockpit/pairing-code";
+
+One of our users described what it's like to follow a coding agent's terminal on a phone: you can't read it, you zoom in and out, and you can't type. He was describing the obvious design, and he was right about it.
+
+The obvious design is to mirror the screen. The agent runs in a terminal on your computer, so put that terminal on the phone. Nothing is lost in translation, and it's unusable. A terminal assumes a wide screen, a keyboard and your full attention. A phone in your hand offers none of the three.
+
+So we started from a different question. When an agent is working on your computer and you're somewhere else, what do you actually need from it? Our answer turned out to be short. You need to know how it's doing, answer it when it asks, check what it changed, and redirect it without starting over. Everything in the Zuse mobile app is one of those four things, plus a way to pair the phone in the first place.
+
+We kept one picture in mind while we designed it. A pilot doesn't fly from a copy of the main console strapped to one knee. They carry a small handheld unit that shows the same state and has only the controls that matter away from the seat.
+
+<CockpitFigure />
+
+The console is your computer. It runs the agent and prints everything it does. The handheld is the phone, and it never runs anything. It shows one line for what the agent is doing, one lamp that comes on when the agent needs you, and the two keys you would press. Lift it out of the cradle and nothing changes except where you're standing.
+
+---
+
+## One copy of the work
+
+That picture settled the first decision, which is what runs where. The phone doesn't clone repositories and doesn't run agent CLIs. Projects, agents and chats stay on the computer you connected, or on a Zuse Cloud computer, and the phone shows them and sends back your messages and decisions. The agents you can pick on the phone are the ones installed and signed in on that computer, so two computers can offer different agents.
+
+This keeps the phone honest. There is one copy of the work and one place where it happens, so the phone can't drift away from the computer. A chat you start from the couch is the same chat when you sit back down at the desk, and chats from every computer you've paired sit together in one list.
+
+---
+
+## A terminal is the wrong instrument
+
+Go back to the complaint. A terminal line is laid out for 80 columns. On a 390-point phone, 80 columns of monospace fit only at about 7 pixels a character. Zoom in to a comfortable size and you see a bit more than half of each line, then scroll sideways for the rest, one line after another. Try it.
+
+<TerminalOrTurn />
+
+We didn't try to make the terminal fit. We changed what a turn looks like. While an agent works, the phone shows one line: what it's doing right now, such as *Reading client.ts* or *Running bun test*, and how long it has been working. When the turn ends, the line settles into a summary of what happened, like *Read 2 files · edited 2 files · ran 1 command*, closed by how long it took. The steps are still there if you tap, but the default is the sentence you'd want from a colleague.
+
+The app does have a terminal. It sits one swipe to the side of the chat, with a key bar for arrows, escape, control and tab, for the moment you really need a shell on that computer. It just isn't how you follow the agent.
+
+The connection gets the same treatment. Each computer says one thing about itself, such as *Connected · Local network · 12 ms* or *Can't reach · last connected 5 min ago*, and an unreachable one gets a one-line suggestion based on the route it last used. You find out how things stand by glancing, without reading anything.
+
+---
+
+## Approvals are the reason to look
+
+Most of the time you don't need the phone at all. The agent reads, edits and thinks, and none of that needs you. The moment that matters is when it stops and asks. When you start a chat you choose how much the agent may do on its own, from *Ask before changes* up to *Full access*, and below full access some actions wait for a yes.
+
+So the permission request is the one thing we make loud. It rises above the composer and shows the exact command or tool in monospace, so you approve what will actually run instead of a description of it, and it gives you two keys: *Deny* and *Allow once*.
+
+<PhoneCockpit scene="approve" fig="Fig 3" title="Approve a command" />
+
+*Allow once* is deliberately narrow. It answers this request and no other, so the next command that needs permission asks again. Agent questions and plans work the same way: pick your answers and send them, or read the plan and choose *Approve plan* to let the agent continue.
+
+Two small rules keep this safe on a weak connection. If your answer leaves the phone but the computer doesn't confirm it, the phone says the delivery is unconfirmed and offers to retry the answer you already chose, never a different one. And if the agent has stopped waiting, the card says it's no longer accepting a response instead of letting you answer into nothing.
+
+---
+
+## Reading a diff on a small screen
+
+An agent's last message is a summary, and a summary can be wrong. Before you approve the next step or reply, you want to see what actually changed on the computer. Every finished turn ends with a card listing the files it touched, and tapping it, or swiping sideways, opens *Changes* as a pane beside the chat. It asks the computer for the diff in one of three scopes: the working tree, what's staged, or everything on the branch compared with its base.
+
+A desktop diff viewer puts the old and new versions side by side. On a phone that would leave each side about 180 points wide, so we use one column.
+
+<PhoneCockpit scene="diff" fig="Fig 4" title="Open the diff" />
+
+Each file is its own section, with its path, its added and removed line counts and a header that stays pinned while you scroll through it. Tap a header to fold the file away once you've read it. Line numbers take two narrow columns, and long lines wrap instead of scrolling sideways, for the same reason the terminal didn't work. Binary files say *Binary file changed* rather than pretending to be text. When a patch is too large, the computer cuts it short, the phone says so, and it offers to open the whole working-copy file. Pinch out and every pane on the chat shows as a card, so the changes, a terminal and the files are one tap from the conversation.
+
+We're also plain about what the phone can't tell you. It shows the changes the computer reports. A clean explanation isn't proof that a build or a test ran, unless that evidence is in the chat.
+
+---
+
+## Steering without stopping
+
+Sometimes you can see the agent heading the wrong way. At a desk you'd interrupt it and type a correction. On a phone, stopping a turn and writing a whole new prompt with your thumbs is exactly the kind of work you were trying to avoid.
+
+So the send button does two jobs. While a turn runs and the composer is empty, it's a stop button. Start typing and it turns back into send, and what you write becomes a follow-up. The computer queues it, and agents that support it take it in at their next step without abandoning the turn.
+
+<PhoneCockpit scene="steer" fig="Fig 5" title="Send a steer" />
+
+Phones lose signal, so the composer can't assume a live connection. A message you send while the phone is reconnecting is saved on the phone, encrypted, and waits above the composer marked *Queued* until the computer confirms it. The phone holds up to 100 of them per chat. A message that was sent but never confirmed is marked *Delivery unconfirmed* instead of being quietly sent twice.
+
+---
+
+## Pairing once
+
+None of this matters if connecting the phone is a chore. On the computer, open **Settings → Remote access** and choose **Connect device**. A computer without a screen prints the same code from the command line. On the phone, tap **Add computer** and point the camera at the code. That's the whole setup.
+
+<PairingCode />
+
+The code is a private link that holds a random pairing ID and a secret. It works once and expires after ten minutes, so a code left on a screen, or photographed after you paired, is worth nothing. A computer keeps up to 32 paired devices, and revoking one on the computer ends its access whatever the phone still holds. If the camera isn't an option, you can paste the link instead, sign in to the computer over SSH and let Zuse set it up, or use your Zuse account. After that, the phone finds the computer by itself, on the same Wi-Fi or from across town.
+
+---
+
+## The handheld test
+
+Every screen in the app had to pass one test: would you want this control in your hand, away from the console? Status passes, and so do approvals, the diff, a way to redirect the agent and a way to pair. Most of what makes a workstation a workstation doesn't pass, so it stays on the computer, where the work already is.
+
+That's why Zuse on a phone is a chat and not a terminal. It shows the same turn, in a form you can read with one glance and answer with one thumb.

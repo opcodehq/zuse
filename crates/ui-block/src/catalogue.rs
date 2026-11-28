@@ -494,7 +494,7 @@ pub(crate) static CATALOGUE: &[ComponentDef] = &[
     ),
     def(
         "Connect",
-        "Live card that lets the user connect a Zuse plugin (or add an account / manage it once connected). plugin is its id or name, e.g. \"linear\". The user signs in from the card; you never see credentials.",
+        "Live card that lets the user connect a Zuse plugin (or add an account / manage it once connected). plugin is its id or name, e.g. \"linear\". Pass reconnect = true when it is connected but your calls fail for lack of access, so the card asks the user to sign in again. The user signs in from the card; you never see credentials.",
         &[
             req(
                 "plugin",
@@ -510,6 +510,7 @@ pub(crate) static CATALOGUE: &[ComponentDef] = &[
                     max: Some(300),
                 },
             ),
+            opt("reconnect", Ty::Bool),
         ],
     ),
     ComponentDef {

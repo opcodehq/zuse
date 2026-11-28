@@ -24,7 +24,12 @@ pub struct Pending {
 /// Event kinds added after clients shipped with a fixed allow-list. Older
 /// clients drop a whole batch on an unknown kind, so these are only sent to
 /// sockets whose ticket names them.
-pub const OPT_IN_KINDS: [&str; 3] = ["machine-image", "billing", "computer-request"];
+pub const OPT_IN_KINDS: [&str; 4] = [
+    "machine-image",
+    "billing",
+    "computer-request",
+    "pull-request",
+];
 /// Known opt-in kinds from a ticket request, deduplicated. Unknown names are
 /// ignored so a newer client still connects to an older server.
 pub fn opt_in(requested: &[String]) -> Vec<&'static str> {

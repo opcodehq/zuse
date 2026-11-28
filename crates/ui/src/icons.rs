@@ -282,6 +282,9 @@ pub const PR_CHECKS: &str = "icons/pr-checks.svg";
 pub const PR_CONFLICTS: &str = "icons/pr-conflicts.svg";
 pub const PR_ADD_TO_CHAT: &str = "icons/pr-add-to-chat.svg";
 pub const PR_GITHUB: &str = "icons/pr-github.svg";
+/// A thought in the agent's activity.
+pub const BRAIN: &str = "icons/brain.svg";
+
 /// The cloud computer card's machine rows.
 pub const CLOUD_CPU: &str = "icons/cloud-cpu.svg";
 pub const CLOUD_MEMORY: &str = "icons/cloud-memory.svg";

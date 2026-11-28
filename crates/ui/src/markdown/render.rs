@@ -47,6 +47,8 @@ pub(crate) use selection_paint::{
 pub use selection_paint::{
     selection_frame_reset, selection_frame_reset_for, selection_surface_reset,
 };
+#[cfg(all(test, any(target_os = "linux", windows)))]
+pub(super) use table::table_cell_ix;
 pub use table::{
     TABLE_CELL_PADDING, TABLE_HEADER_WEIGHT, TABLE_MIN_COLUMN_CONTENT, TABLE_MIN_COLUMN_WIDTH,
     TableColumns, table_columns, table_hairline,

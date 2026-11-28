@@ -140,19 +140,18 @@ async fn slow_input_admissions_leave_a_bounded_control_lane_open() {
     assert_eq!(admitted, 1, "blocked inputs have no false admission ACK");
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn input_deadline_preserves_unknown_and_never_repeats_admission() {
     let key = CommandKey::parse(&B64.encode([19; 32])).unwrap();
     let mut delivery = lease(&key, "expired-input", false);
-    delivery.lease_deadline = now_ms() + 25;
     let dir = tempfile::tempdir().unwrap();
     let database = dir.path().join("receipts.sqlite3");
     drop(Connection::open(&database).unwrap());
     let bootstrap:CloudRuntimeBootstrap=serde_json::from_value(json!({"workspaceId":"workspace","zuseAccountId":"owner","chatId":"thread","initialSessionId":"session","runtimeCredential":"synthetic","runtimeGeneration":1,"gatewayEpoch":1,"runtimeCredentialExpiresAt":9007199254740000i64,"gatewayUrl":"wss://fixture.invalid","gatewayProtocol":"fixture","sealedTranscriptKey":"synthetic","runtimeStorage":{"format":"zuse-rust-engine-v1","storageIncarnationId":"disk"},"providerSandboxId":"machine","commandAdmissionVersion":2,"commandDeliveryMode":"server-admitted-v2"})).unwrap();
     let executor = Arc::new(SlowInputs::default());
     let mailbox = Mailbox::new(&database, &bootstrap, key, executor.clone()).unwrap();
-    delivery.lease_deadline = now_ms() + 50;
-    let ack = tokio::time::timeout(Duration::from_secs(1), mailbox.apply(&delivery))
+    delivery.lease_deadline = now_ms() + 60_000;
+    let ack = tokio::time::timeout(Duration::from_secs(120), mailbox.apply(&delivery))
         .await
         .unwrap()
         .unwrap()

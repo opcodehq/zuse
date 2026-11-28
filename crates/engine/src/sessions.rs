@@ -331,6 +331,9 @@ struct Inner {
     provider_context: OnceLock<ProviderContext>,
     execution_observer: OnceLock<crate::execution_progress::Observer>,
     zappers: OnceLock<crate::zappers::Zappers>,
+    /// Text to put before a chat's next prompt (pull request activity kept
+    /// as context); taken once it is handed to a run.
+    prompt_context: OnceLock<PromptContext>,
     /// This engine hosts cloud chats that can run commands on the owner's
     /// computers; their agents get the computer tools up front.
     cloud_computers: std::sync::atomic::AtomicBool,
@@ -396,6 +399,9 @@ fn redact_permission_display(
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
+
+/// Text a feature wants in front of a chat's next prompt, taken when read.
+pub(crate) type PromptContext = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
 #[derive(Clone)]
 pub struct SessionsEngine {
@@ -535,6 +541,7 @@ impl SessionsEngine {
                 provider_context: OnceLock::new(),
                 execution_observer: OnceLock::new(),
                 zappers: OnceLock::new(),
+                prompt_context: OnceLock::new(),
                 cloud_computers: std::sync::atomic::AtomicBool::new(false),
                 machine_setup: std::sync::atomic::AtomicBool::new(false),
                 request_stamp: OnceLock::new(),
@@ -548,6 +555,10 @@ impl SessionsEngine {
 
     pub fn set_zappers(&self, zappers: crate::zappers::Zappers) {
         let _ = self.inner.zappers.set(zappers);
+    }
+
+    pub(crate) fn set_prompt_context(&self, context: PromptContext) {
+        let _ = self.inner.prompt_context.set(context);
     }
 
     /// Record the loopback IPC port this engine serves. Runs started after
@@ -1088,6 +1099,11 @@ impl SessionsEngine {
         let _activity = self.claim_filesystem_admission(chat_id);
         drop(admission);
         let mut turn_source = None;
+        if let Some(context) = self.inner.prompt_context.get()
+            && let Some(text) = context(chat_id)
+        {
+            request.prompt = format!("{text}\n\n{}", request.prompt);
+        }
         if let Some(zappers) = self.inner.zappers.get() {
             let original = request.prompt.clone();
             zappers

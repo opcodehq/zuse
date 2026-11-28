@@ -209,12 +209,26 @@ pub fn asset_path(identity: FileIconIdentity<'_>, appearance: Appearance) -> Sha
 /// polychrome image, preserving the VS Code theme artwork.
 pub fn icon(identity: FileIconIdentity<'_>, appearance: Appearance) -> Img {
     let path = if matches!(identity.kind, FileIconKind::File | FileIconKind::Symlink) {
-        SharedString::from(zuse_icons::file_icon_path(identity.name))
+        file_icon_asset(identity, appearance)
     } else {
         asset_path(identity, appearance)
     };
     img(path).flex_none()
 }
+
+/// A file's glyph from the tree icon set, or from the complete theme when the
+/// tree set has only its generic page for it (`.toml`, `.java`, `.env`, …).
+fn file_icon_asset(identity: FileIconIdentity<'_>, appearance: Appearance) -> SharedString {
+    let tree = zuse_icons::file_icon_path(identity.name);
+    if tree == TREE_GENERIC_FILE && has_specific_file_icon(identity.name) {
+        asset_path(identity, appearance)
+    } else {
+        SharedString::from(tree)
+    }
+}
+
+/// The tree icon set's page for a file it has no identity for.
+const TREE_GENERIC_FILE: &str = "file-icons/tree/default.svg";
 
 /// A file-theme icon rasterized for painting straight into a text layout,
 /// where no [`Img`] element can sit. Rasterized once per asset path.
@@ -412,6 +426,17 @@ mod tests {
             path(FileIconIdentity::file("docs/claude.md")),
             "file-icons/files/claude.svg"
         );
+    }
+
+    #[test]
+    fn files_the_tree_set_lacks_use_the_complete_theme() {
+        let path = |name| file_icon_asset(FileIconIdentity::file(name), Appearance::Light);
+        assert_eq!(path("crates/ui/Cargo.toml"), "file-icons/files/gear.svg");
+        assert_eq!(
+            path("src/main.rs"),
+            zuse_icons::file_icon_path("src/main.rs")
+        );
+        assert_eq!(path("notes/unknown.zzz"), TREE_GENERIC_FILE);
     }
 
     #[test]

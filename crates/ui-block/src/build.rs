@@ -703,6 +703,7 @@ impl<'p> Builder<'p> {
             "Connect" => Component::Connect {
                 plugin: req_str(self, 0).trim().to_owned(),
                 reason: opt_str(self, 1).filter(|reason| !reason.trim().is_empty()),
+                reconnect: arg(2).is_some_and(|n| self.bool(n)),
             },
             "McpServer" => Component::McpServer {
                 name: req_str(self, 0),
