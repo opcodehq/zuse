@@ -74,6 +74,7 @@ export function TerminalOrTurn() {
 				<div className="pw-col">
 					<p className="pw-head">As a turn</p>
 					<div className="pw-turn">
+						<p className="pw-bubble">The retry test fails about one run in five. Fix it.</p>
 						<button type="button" className="pw-fold" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
 							<span className="pw-chev" data-open={open ? "" : undefined} aria-hidden="true" />
 							<span className="pw-fold-title">Read 2 files · edited 2 files · ran 1 command</span>
@@ -87,15 +88,8 @@ export function TerminalOrTurn() {
 								))}
 							</ul>
 						) : null}
-						<p className="pw-done">Worked for 1m 5s</p>
-						<div className="pw-card">
-							<p className="pw-card-title">Approval required</p>
-							<code>bun test api/client.test.ts</code>
-							<div className="pw-card-keys">
-								<span className="pw-deny">Deny</span>
-								<span className="pw-allow">Allow once</span>
-							</div>
-						</div>
+						<p className="pw-reply">The test timed real sleeps, so a slow machine pushed it past its 250 ms budget. Retries now back off inside a private helper, and the test uses fake timers.</p>
+						<p className="pw-done">Worked for 1m 5s · 9:41 AM</p>
 					</div>
 					<p className="pw-readout">13 px and up, nothing to scroll sideways. Tap the line for the steps.</p>
 				</div>

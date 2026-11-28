@@ -73,7 +73,7 @@ export function CockpitLive({ ex, up, step, lift, children }: { ex: Flat; up: Fl
 		if (found.card) found.card.style.opacity = phase.lamp === "needs" ? "1" : "0";
 		if (found.summary) found.summary.style.opacity = phase.lamp === "done" ? "1" : "0";
 		const denied = current.decision === "deny";
-		const changes = denied ? "Test run denied" : "+20 −13 · 2 files";
+		const changes = denied ? "denied" : "+20 −13";
 		if (found.changes && found.changes.textContent !== changes) found.changes.textContent = changes;
 		found.spin?.toggleAttribute("data-on", phase.lamp === "working");
 		const rise = current.height * lift;

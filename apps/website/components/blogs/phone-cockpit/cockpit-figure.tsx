@@ -26,64 +26,84 @@ function ConsoleScreen() {
 
 function PhoneScreen() {
 	const { transform, width, height } = PHONE_ART.screen;
-	const pad = 3.2;
+	const pad = 3;
+	const mid = width / 2;
 	return (
 		<g transform={transform}>
 			<rect className="cp-bezel" x={-1.2} y={-1.2} width={width + 2.4} height={height + 2.4} rx={4.4} />
 			<rect className="cp-phone-glass" x={0} y={0} width={width} height={height} rx={3.6} />
-			<text className="cp-ui" x={pad} y={4.2} fontSize={2.4}>
+			<text className="cp-ui cp-strong" x={pad + 1} y={3.6} fontSize={2.1}>
 				9:41
 			</text>
-			<text className="cp-ui cp-strong" x={pad} y={11.6} fontSize={3.3}>
+			<rect className="cp-island" x={mid - 5} y={1.4} width={10} height={2.8} rx={1.4} />
+			<circle className="cp-glass-button" cx={pad + 2.2} cy={9.4} r={2.2} />
+			<circle className="cp-glass-button" cx={width - pad - 2.2} cy={9.4} r={2.2} />
+			<text className="cp-ui cp-strong" x={mid} y={8.6} fontSize={2.5} textAnchor="middle">
 				Fix the flaky retry
 			</text>
-			<text className="cp-ui" x={pad} y={15.8} fontSize={2.2}>
-				Connected · Local network · 12 ms
+			<text className="cp-ui" x={mid} y={11.4} fontSize={1.7} textAnchor="middle">
+				api · fix-retry
 			</text>
-			<rect className="cp-rule" x={pad} y={18.4} width={width - pad * 2} height={0.35} />
-			<circle className="cp-spin" data-spin="" cx={pad + 1.4} cy={26.2} r={1.3} />
-			<text className="cp-ui cp-strong" data-slot="phone-live" x={pad + 4.2} y={27.4} fontSize={3.3}>
+			<circle className="cp-dot" data-current="" cx={mid - 1.6} cy={13.2} r={0.42} />
+			<circle className="cp-dot" cx={mid} cy={13.2} r={0.34} />
+			<circle className="cp-dot" cx={mid + 1.6} cy={13.2} r={0.34} />
+			<rect className="cp-bubble" x={13} y={16} width={width - pad - 13} height={9.6} rx={2.4} />
+			<text className="cp-ui cp-bubble-text" x={15} y={19.8} fontSize={2.2}>
+				The retry test fails
+			</text>
+			<text className="cp-ui cp-bubble-text" x={15} y={23} fontSize={2.2}>
+				one run in five. Fix it.
+			</text>
+			<circle className="cp-spin" data-spin="" cx={pad + 1.2} cy={30} r={1.1} />
+			<text className="cp-ui" data-slot="phone-live" x={pad + 3.6} y={30.8} fontSize={2.3}>
 				{still.phone}
 			</text>
+			<g data-summary="" style={{ opacity: still.lamp === "done" ? 1 : 0 }}>
+				<rect className="cp-reply" x={pad} y={35} width={width - pad * 2} height={1.1} rx={0.4} />
+				<rect className="cp-reply" x={pad} y={37.8} width={width - pad * 2 - 4} height={1.1} rx={0.4} />
+				<rect className="cp-reply" x={pad} y={40.6} width={width - pad * 2 - 12} height={1.1} rx={0.4} />
+				<rect className="cp-changes" x={pad} y={44} width={width - pad * 2} height={7} rx={1.6} />
+				<text className="cp-ui cp-strong" x={pad + 2} y={48.3} fontSize={2.1}>
+					2 files changed
+				</text>
+				<text className="cp-ui cp-mono cp-counts" data-slot="phone-changes" x={width - pad - 2} y={48.3} fontSize={2} textAnchor="end">
+					+20 −13
+				</text>
+				<text className="cp-ui" x={pad} y={55.2} fontSize={1.8}>
+					Worked for 1m 5s · 9:41 AM
+				</text>
+			</g>
 			<g data-card="" style={{ opacity: still.lamp === "needs" ? 1 : 0 }}>
-				<rect className="cp-card" x={pad - 0.6} y={34} width={width - pad * 2 + 1.2} height={29} rx={2.2} />
-				<text className="cp-ui cp-strong" x={pad + 2} y={40.4} fontSize={2.8}>
+				<rect className="cp-panel" x={0} y={height - 33} width={width} height={33} />
+				<rect className="cp-rule" x={0} y={height - 33} width={width} height={0.3} />
+				<text className="cp-ui cp-strong" x={pad + 0.4} y={height - 30} fontSize={2.4}>
 					Approval required
 				</text>
-				<text className="cp-ui cp-mono" x={pad + 2} y={45.6} fontSize={2.2}>
+				<text className="cp-ui cp-mono" x={pad + 0.4} y={height - 26.4} fontSize={1.85}>
 					{COMMAND}
 				</text>
 				<g data-key="deny">
-					<rect className="cp-button" x={pad + 2} y={51} width={15.5} height={7.6} rx={1.8} />
-					<text className="cp-ui cp-deny" x={pad + 9.75} y={55.8} fontSize={2.6} textAnchor="middle">
+					<rect className="cp-hit" x={pad} y={height - 24.8} width={14} height={6} />
+					<text className="cp-ui cp-deny" x={pad + 0.4} y={height - 20.8} fontSize={2.4}>
 						Deny
 					</text>
 				</g>
 				<g data-key="allow">
-					<rect className="cp-button" data-primary="" x={pad + 19.5} y={51} width={21.4} height={7.6} rx={1.8} />
-					<text className="cp-ui cp-on-primary" x={pad + 30.2} y={55.8} fontSize={2.6} textAnchor="middle">
+					<rect className="cp-allow" x={width - pad - 17} y={height - 24.8} width={17} height={6} rx={3} />
+					<text className="cp-ui cp-on-accent" x={width - pad - 8.5} y={height - 20.9} fontSize={2.3} textAnchor="middle">
 						Allow once
 					</text>
 				</g>
 			</g>
-			<g data-summary="" style={{ opacity: still.lamp === "done" ? 1 : 0 }}>
-				<text className="cp-ui" data-slot="phone-summary" x={pad} y={38} fontSize={2.6}>
-					Read 2 files · edited client.ts
-				</text>
-				<text className="cp-ui" x={pad} y={43} fontSize={2.6}>
-					ran 1 command
-				</text>
-				<rect className="cp-card" x={pad - 0.6} y={48} width={width - pad * 2 + 1.2} height={10} rx={2.2} />
-				<text className="cp-ui cp-mono" data-slot="phone-changes" x={pad + 2} y={54.2} fontSize={2.4}>
-					+20 −13 · 2 files
-				</text>
-			</g>
-			<rect className="cp-composer" x={pad - 0.6} y={height - 11} width={width - pad * 2 + 1.2} height={7.4} rx={3.7} />
-			<text className="cp-ui" x={pad + 2} y={height - 6.4} fontSize={2.4}>
+			<rect className="cp-composer" x={pad - 1.4} y={height - 11.4} width={width - pad * 2 + 2.8} height={7.6} rx={3.8} />
+			<text className="cp-ui cp-plus" x={pad + 1.4} y={height - 6.6} fontSize={3.4} textAnchor="middle">
+				+
+			</text>
+			<text className="cp-ui cp-faint" x={pad + 4.2} y={height - 6.8} fontSize={2.2}>
 				Send a follow-up…
 			</text>
-			<circle className="cp-send" cx={width - pad - 3.4} cy={height - 7.3} r={2.6} />
-			<rect className="cp-home" x={width / 2 - 8} y={height - 2} width={16} height={0.8} rx={0.4} />
+			<circle className="cp-send" cx={width - pad - 2} cy={height - 7.6} r={2.6} />
+			<rect className="cp-home" x={mid - 8} y={height - 2} width={16} height={0.8} rx={0.4} />
 		</g>
 	);
 }

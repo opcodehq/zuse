@@ -49,6 +49,8 @@ Go back to the complaint. A terminal line is laid out for 80 columns. On a 390-p
 
 We didn't try to make the terminal fit. We changed what a turn looks like. While an agent works, the phone shows one line: what it's doing right now, such as *Reading client.ts* or *Running bun test*, and how long it has been working. When the turn ends, the line settles into a summary of what happened, like *Read 2 files · edited 2 files · ran 1 command*, closed by how long it took. The steps are still there if you tap, but the default is the sentence you'd want from a colleague.
 
+The app does have a terminal. It sits one swipe to the side of the chat, with a key bar for arrows, escape, control and tab, for the moment you really need a shell on that computer. It just isn't how you follow the agent.
+
 The connection gets the same treatment. Each computer says one thing about itself, such as *Connected · Local network · 12 ms* or *Can't reach · last connected 5 min ago*, and an unreachable one gets a one-line suggestion based on the route it last used. You find out how things stand by glancing, without reading anything.
 
 ---
@@ -57,7 +59,7 @@ The connection gets the same treatment. Each computer says one thing about itsel
 
 Most of the time you don't need the phone at all. The agent reads, edits and thinks, and none of that needs you. The moment that matters is when it stops and asks. When you start a chat you choose how much the agent may do on its own, from *Ask before changes* up to *Full access*, and below full access some actions wait for a yes.
 
-So the permission request is the one thing we make loud. It shows the exact command or tool in monospace, so you approve what will actually run instead of a description of it, and it gives you two keys: *Deny* and *Allow once*.
+So the permission request is the one thing we make loud. It rises above the composer and shows the exact command or tool in monospace, so you approve what will actually run instead of a description of it, and it gives you two keys: *Deny* and *Allow once*.
 
 <PhoneCockpit scene="approve" fig="Fig 3" title="Approve a command" />
 
@@ -69,13 +71,13 @@ Two small rules keep this safe on a weak connection. If your answer leaves the p
 
 ## Reading a diff on a small screen
 
-An agent's last message is a summary, and a summary can be wrong. Before you approve the next step or reply, you want to see what actually changed on the computer. *Changes* asks the computer for the diff in one of three scopes: the working tree, what's staged, or everything on the branch compared with its base.
+An agent's last message is a summary, and a summary can be wrong. Before you approve the next step or reply, you want to see what actually changed on the computer. Every finished turn ends with a card listing the files it touched, and tapping it, or swiping sideways, opens *Changes* as a pane beside the chat. It asks the computer for the diff in one of three scopes: the working tree, what's staged, or everything on the branch compared with its base.
 
 A desktop diff viewer puts the old and new versions side by side. On a phone that would leave each side about 180 points wide, so we use one column.
 
 <PhoneCockpit scene="diff" fig="Fig 4" title="Open the diff" />
 
-Each file is its own section, with its path, its added and removed line counts and a header that stays pinned while you scroll through it. Tap a header to fold the file away once you've read it. Line numbers take two narrow columns, and long lines wrap instead of scrolling sideways, for the same reason the terminal didn't work. Binary files say *Binary file changed* rather than pretending to be text. When a patch is too large, the computer cuts it short, the phone says so, and it offers to open the whole working-copy file.
+Each file is its own section, with its path, its added and removed line counts and a header that stays pinned while you scroll through it. Tap a header to fold the file away once you've read it. Line numbers take two narrow columns, and long lines wrap instead of scrolling sideways, for the same reason the terminal didn't work. Binary files say *Binary file changed* rather than pretending to be text. When a patch is too large, the computer cuts it short, the phone says so, and it offers to open the whole working-copy file. Pinch out and every pane on the chat shows as a card, so the changes, a terminal and the files are one tap from the conversation.
 
 We're also plain about what the phone can't tell you. It shows the changes the computer reports. A clean explanation isn't proof that a build or a test ran, unless that evidence is in the chat.
 
@@ -89,7 +91,7 @@ So the send button does two jobs. While a turn runs and the composer is empty, i
 
 <PhoneCockpit scene="steer" fig="Fig 5" title="Send a steer" />
 
-Phones lose signal, so the composer can't assume a live connection. A message you send while the phone is reconnecting is saved on the phone, encrypted, and marked *Queued* until the computer confirms it. The phone holds up to 100 of them per chat. A message that was sent but never confirmed is marked *Delivery unconfirmed* instead of being quietly sent twice.
+Phones lose signal, so the composer can't assume a live connection. A message you send while the phone is reconnecting is saved on the phone, encrypted, and waits above the composer marked *Queued* until the computer confirms it. The phone holds up to 100 of them per chat. A message that was sent but never confirmed is marked *Delivery unconfirmed* instead of being quietly sent twice.
 
 ---
 
