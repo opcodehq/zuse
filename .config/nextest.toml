@@ -16,10 +16,19 @@ path = "junit.xml"
 [test-groups.cloud-postgres]
 max-threads = 1
 
+[test-groups.cloud-staging]
+max-threads = 1
+
 [[profile.ci.overrides]]
 # Start long timing and recovery scenarios early so they overlap short tests.
 filter = 'test(sync_keeps_git_available_with_256_file_descriptors) | test(delayed_registry_survives_blackout_and_reset_without_losing_writes) | test(cold_jobs_get_a_real_timed_turn_without_any_writer_ending) | test(multimodal_results_remain_structured_and_oversized_frames_pause_without_retry)'
 priority = 100
+
+[[profile.ci.overrides]]
+# These fixtures intentionally recreate the same schema and restricted role.
+# Their in-process STAGING_SCHEMA_LOCK cannot serialize nextest processes.
+filter = 'package(zuse-cloud) & (test(managed_bases::admission::) | test(runtime::admission_batch::))'
+test-group = 'cloud-staging'
 
 [[profile.ci.overrides]]
 # Real guests reuse fixture workspace IDs in their shared provider-effect guard.

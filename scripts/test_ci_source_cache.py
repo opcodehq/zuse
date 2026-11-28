@@ -14,8 +14,10 @@ class SourceCacheTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory(prefix="zuse-ci-cache-")
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
+        # Preserve the runner's Rust installation location and selected toolchain.
         self.env = {k: v for k, v in os.environ.items()
-                    if not k.startswith(("CARGO_", "RUST"))}
+                    if not k.startswith("CARGO_")
+                    and k not in ("RUSTFLAGS", "RUSTC_WORKSPACE_WRAPPER")}
         self.env["RUSTC_WRAPPER"] = ""
         (self.root / "Cargo.toml").write_text(
             '[package]\nname="source-cache-fixture"\nversion="0.1.0"\nedition="2024"\n')
@@ -30,7 +32,8 @@ class SourceCacheTests(unittest.TestCase):
                               cwd=self.root, env=self.env, capture_output=True, text=True)
 
     def test_unchanged_checkout_reuses_compiled_artifacts(self):
-        self.assertEqual(self.cargo().returncode, 0)
+        initial = self.cargo()
+        self.assertEqual(initial.returncode, 0, initial.stderr)
         ci_source_cache.save(self.root)
         before = self.source.stat().st_mtime_ns
         os.utime(self.source, ns=(before + 2_000_000_000, before + 2_000_000_000))
@@ -44,7 +47,8 @@ class SourceCacheTests(unittest.TestCase):
         self.assertTrue(all(artifact["fresh"] for artifact in artifacts))
 
     def test_changed_source_still_rebuilds_and_catches_errors(self):
-        self.assertEqual(self.cargo().returncode, 0)
+        initial = self.cargo()
+        self.assertEqual(initial.returncode, 0, initial.stderr)
         ci_source_cache.save(self.root)
         self.source.write_text('compile_error!("changed source must compile");\n')
         before = self.source.stat().st_mtime_ns
