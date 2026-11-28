@@ -1,0 +1,113 @@
+---
+title: Keybindings
+icon: Keyboard
+navTitle: "Keybindings"
+description: Every default keyboard shortcut and how to change them.
+section: reference
+order: 92
+platforms: [desktop]
+providers: []
+prerequisites: []
+related: [/desktop/navigation, /reference/settings]
+next: /reference/schemas
+lastVerified: "2026-11-27"
+---
+
+
+Open **Settings → Keyboard shortcuts** to record a new shortcut, reset one row, or choose **Restore defaults**. Zuse refuses a recording that conflicts with another shortcut and names the shortcut that already uses it. Press `⌘/` anywhere to see the shortcut reference.
+
+Your shortcuts are saved with your other preferences. See [User settings](/reference/settings#where-preferences-are-stored).
+
+## Default shortcuts
+
+The table lists macOS defaults. On Windows and Linux, `⌘` is `Ctrl` and `⌥` is `Alt`; rows marked † have a different default there, listed under the table.
+
+### Application
+
+| Action | Default |
+| --- | --- |
+| New chat | `⌘N` |
+| New chat without a project | `⌘⌥N` |
+| Open project | `⌘O` |
+| Settings | `⌘,` |
+| Close tab | `⌘W` |
+| Toggle projects panel | `⌘B` |
+| Toggle files sidebar | `⌘⌥B` |
+| Toggle terminal | `⌘J` |
+| Focus composer | `⌘L` |
+| Open chat switcher | `⌘K` |
+| Show keyboard shortcuts | `⌘/` |
+| Find in chat | `⌘F` |
+| Switch model | `⌥P` |
+| Change reasoning effort | `⌥T` |
+| Toggle fast mode | `⌥O` |
+| Expand or collapse tool details † | `Ctrl+O` |
+| Show or hide task list † | `Ctrl+T` |
+| Stop background tasks | `⌘⇧K` |
+
+### Navigation
+
+| Action | Default |
+| --- | --- |
+| Next tab / Previous tab | `⌘⇧]` / `⌘⇧[` |
+| Go to tab 1–8 | `⌘1` … `⌘8` |
+| Go to last tab | `⌘9` |
+| New tab | `⌘T` |
+| Next chat / Previous chat | `Ctrl+Tab` / `Ctrl+⇧Tab` |
+| Next panel / Previous panel | `⌘⌥]` / `⌘⌥[` |
+| Focus next pane / Focus previous pane | `Ctrl+\`` / `Ctrl+⇧\`` |
+
+### Composer
+
+These work only while the composer has focus.
+
+| Action | Default |
+| --- | --- |
+| Send message | `Enter` |
+| Insert newline | `⇧Enter` |
+| Send message now | `⌘Enter` |
+| Queue message | `⌥Enter` |
+| Toggle plan mode | `⇧Tab` |
+| Previous sent message / Next sent message | `↑` / `↓` |
+| Delete to line start † | `Ctrl+U` |
+| Delete to line end † | `Ctrl+K` |
+| Delete previous word † | `Ctrl+Backspace` |
+| Stop agent (press twice) | `Esc` |
+| Paste deleted text † | `Ctrl+Y` |
+| Cycle deleted text | `⌥Y` |
+| Stash draft † | `Ctrl+S` |
+| Search sent messages † | `Ctrl+R` |
+| Hold to dictate | `⌘D` |
+
+### Files, panels, and other
+
+| Action | Default |
+| --- | --- |
+| Search files | `⌘P` |
+| Save file | `⌘S` |
+| Annotate selection | `⌘⇧A` |
+| Toggle files panel | `⌘E` |
+| Reload browser page | `⌘⇧R` |
+| Random wallpaper | `⌘U` |
+| Capture Appshot † | `Ctrl+⌥Space` |
+| Archive session | Unbound |
+| Jump to session 1–9 | Unbound |
+
+† Windows and Linux defaults:
+
+| Action | Default |
+| --- | --- |
+| Expand or collapse tool details | `Ctrl+Shift+O` |
+| Show or hide task list | `Ctrl+Shift+T` |
+| Delete to line start / Delete to line end | Unbound |
+| Delete previous word | `Ctrl+Backspace` |
+| Paste deleted text | `Ctrl+Y` |
+| Stash draft | `Ctrl+S` |
+| Search sent messages | `Alt+R` |
+| Capture Appshot (Linux) | `Ctrl+Alt+Space` |
+
+## Composer behavior
+
+By default, `Enter` sends a message, and a message sent while the agent is working joins the queue. `⌘Enter` sends it into the running turn right away, and `⌥Enter` always queues. Turn on **Direct steer** in **Settings → General** to make `Enter` send to a running agent right away.
+
+`Esc` stops the agent only when you press it twice. **Settings → General** also lets you choose whether `Enter` or the modifier key sends messages and whether `Esc` stops the active agent when no dialog or menu is open.

@@ -32,18 +32,14 @@ struct ComputerAccessView: View {
                     .padding(12).background(.white, in: RoundedRectangle(cornerRadius: 8))
                     .accessibilityLabel("Pairing QR code")
                 }
-                LabeledContent("Code", value: invitation.code).font(
-                  .system(.body, design: .monospaced)
-                )
-                .textSelection(.enabled).frame(height: 28)
                 HStack {
                   Text("Expires").font(.caption).foregroundStyle(.secondary)
                   Text(invitation.expiresAt, style: .relative).font(.caption).foregroundStyle(
                     .secondary)
                   Spacer()
-                  Button("Copy link") { NativePlatform.copy(invitation.browserURL.absoluteString) }
+                  Button("Copy link") { NativePlatform.copy(invitation.link.absoluteString) }
                     .frame(height: 28)
-                  ShareLink(item: invitation.browserURL) {
+                  ShareLink(item: invitation.link) {
                     Image(systemName: "square.and.arrow.up")
                   }
                   .accessibilityLabel("Share pairing link").frame(height: 28)
@@ -60,8 +56,10 @@ struct ComputerAccessView: View {
         ) {
           Task { await generate() }
         }.disabled(busy).frame(height: 28)
-        Text("Scan this code in Zuse on your other device, or share the pairing link privately.")
-          .font(.caption).foregroundStyle(.secondary)
+        Text(
+          "Scan this code with Zuse on your other device, or share the link privately. It works once and expires in 10 minutes."
+        )
+        .font(.caption).foregroundStyle(.secondary)
       }
       Section("Paired devices") {
         if busy { ProgressView("Working…") }
@@ -69,11 +67,9 @@ struct ComputerAccessView: View {
           HStack {
             VStack(alignment: .leading, spacing: 3) {
               Text(device.displayName)
-              if let value = device.lastUsedAt, let date = ServerTimestamp.parse(value) {
-                Text("Last used \(date, style: .relative)").font(.caption).foregroundStyle(
+              if let date = device.pairedDate {
+                Text("Paired \(date, style: .relative) ago").font(.caption).foregroundStyle(
                   .secondary)
-              } else {
-                Text("Not used yet").font(.caption).foregroundStyle(.secondary)
               }
             }
             Spacer()
@@ -123,9 +119,9 @@ struct ComputerAccessView: View {
     failure = nil
     defer { if requestID == request { busy = false } }
     do {
-      let devices = try await rpc.call("pairing.listTokens").decode([PairedDevice].self)
+      let devices = try await rpc.call("ListPairings").decode([PairedDevice].self)
       guard active, requestID == request, !Task.isCancelled else { return }
-      self.devices = devices.filter { $0.revokedAt == nil }
+      self.devices = devices.filter(\.isPaired).sorted { $0.createdAt > $1.createdAt }
     } catch is CancellationError {} catch {
       if requestID == request { failure = error.localizedDescription }
     }
@@ -138,12 +134,17 @@ struct ComputerAccessView: View {
     failure = nil
     defer { if requestID == request { busy = false } }
     do {
-      let result = try await rpc.call("pairing.start")
+      // Like desktop, a new invitation replaces the previous unredeemed one.
+      if let previous = invitation, !devices.contains(where: { $0.id == previous.pairID }) {
+        _ = try? await rpc.call("RevokePairing", ["pairId": .string(previous.pairID)])
+      }
+      let result = try await rpc.call(
+        "CreatePairing", ["label": .string(PairingInvitation.label())])
       guard active, requestID == request, !Task.isCancelled else { return }
       let invitation = try PairingInvitation(result)
       self.invitation = invitation
       let filter = CIFilter.qrCodeGenerator()
-      filter.message = Data(invitation.browserURL.absoluteString.utf8)
+      filter.message = Data(invitation.link.absoluteString.utf8)
       filter.correctionLevel = "M"
       if let output = filter.outputImage,
         let image = CIContext().createCGImage(output, from: output.extent)
@@ -166,7 +167,7 @@ struct ComputerAccessView: View {
     failure = nil
     defer { if requestID == request { busy = false } }
     do {
-      _ = try await rpc.call("pairing.revokeToken", ["tokenId": .string(device.id)])
+      _ = try await rpc.call("RevokePairing", ["pairId": .string(device.id)])
       guard active, requestID == request, !Task.isCancelled else { return }
       devices.removeAll { $0.id == device.id }
     } catch is CancellationError {} catch {

@@ -1,0 +1,52 @@
+name: Website
+
+# Checks and builds the marketing site (apps/website, www.zuse.sh) for
+# Cloudflare Workers with the OpenNext adapter. Runs that touch nothing the site
+# is built from are skipped. Deploys come from Cloudflare Workers Builds, not
+# from this workflow.
+on:
+  push:
+    branches: [main]
+    paths:
+      - apps/website/**
+      - CHANGELOG.md
+      - .github/workflows/website.yml
+  pull_request:
+    paths:
+      - apps/website/**
+      - CHANGELOG.md
+      - .github/workflows/website.yml
+  workflow_dispatch:
+
+concurrency:
+  group: website-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/website
+    env:
+      NEXT_TELEMETRY_DISABLED: 1
+      NEXT_PUBLIC_POSTHOG_KEY: ${{ vars.NEXT_PUBLIC_POSTHOG_KEY }}
+      NEXT_PUBLIC_POSTHOG_HOST: ${{ vars.NEXT_PUBLIC_POSTHOG_HOST }}
+      NEXT_PUBLIC_SITE_URL: ${{ vars.NEXT_PUBLIC_SITE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      - run: bun run check-types
+      - run: bun run test
+      - name: Build for Cloudflare Workers
+        run: bun run cf:build

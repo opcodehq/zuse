@@ -1,0 +1,121 @@
+import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { build, createServer, preview } from "vite";
+import { openBrowser } from "./harness.mjs";
+const app = fileURLToPath(new URL("..", import.meta.url));
+let out;
+let server;
+if (process.env.HTML_PREVIEW_PRODUCTION === '1') {
+  out = mkdtempSync(join(tmpdir(), 'zuse-html-preview-'));
+  await build({ root: app, configFile: `${app}/vite.config.ts`, logLevel: 'error', build: { outDir: out, rolldownOptions: { input: `${app}/e2e/html-preview/fixture.html` } } });
+  const built = await preview({ root: app, configFile: `${app}/vite.config.ts`, build: { outDir: out }, preview: { host: '127.0.0.1', port: 0, open: false } });
+  server = { httpServer: built.httpServer, close: () => new Promise(resolve => built.httpServer.close(resolve)) };
+} else {
+  server = await createServer({ root: app, configFile: `${app}/vite.config.ts`, server: { host: "127.0.0.1", port: 0, open: false } });
+  await server.listen();
+}
+const page = await openBrowser(`http://127.0.0.1:${server.httpServer.address().port}/e2e/html-preview/fixture.html`, { args: ["--disable-site-isolation-trials"] });
+// Find the iframe's execution world via its frame ID, independent of origin formatting.
+const contexts = new Map();
+page.on("Runtime.executionContextCreated", ({ context }) => { if (context.auxData?.isDefault) contexts.set(context.auxData.frameId, context.id); });
+async function inside(expression) {
+  const tree = await page.call("Page.getFrameTree");
+  const id = tree.result.frameTree.childFrames?.[0]?.frame.id;
+  const contextId = contexts.get(id);
+  if (!contextId) return undefined;
+  const result = await page.call("Runtime.evaluate", { expression, contextId, returnByValue: true, awaitPromise: true });
+  if (result.result?.exceptionDetails) throw new Error(result.result.exceptionDetails.exception?.description ?? "iframe evaluation failed");
+  return result.result?.result?.value;
+}
+try {
+  await page.waitFor("!!window.previewFixture && !!document.querySelector('.html-preview')");
+  assert.equal(await page.eval("!!document.querySelector('.html-preview iframe')"), false, "unfinished source must not execute");
+  assert.equal(await page.eval("window.previewFixture.hasClosedFence('```html\\n<div>\\n``')"), false);
+  await page.eval("window.previewFixture.complete()");
+  await page.waitFor("!!document.querySelector('.html-preview iframe')");
+  // Poll the actual frame for author script execution, not just iframe presence.
+  for (let i = 0; i < 50 && !await inside("typeof window.loadId === 'number'"); i++) await new Promise(r => setTimeout(r, 100));
+  assert.equal(await inside("typeof window.loadId"), "number", "inline scripts execute");
+  const chartPixels = await inside("(() => { const c=document.createElement('canvas'); c.width=64;c.height=32;const ctx=c.getContext('2d');window.zuseCharts.paintAreas(ctx,64,32,100,[[30],[80],[50]],[[53,143,243]]);return Array.from(ctx.getImageData(0,0,64,32).data);})()");
+  assert.deepEqual(chartPixels, await page.eval("window.previewFixture.chartReference()"), "inline raster must match the Settings renderer pixel for pixel");
+  assert.equal(await page.eval("document.querySelector('iframe').getAttribute('sandbox')"), "allow-scripts");
+  assert.equal(await inside("(() => { try { return parent.document.title; } catch { return 'blocked'; } })()"), "blocked", "parent DOM denied");
+  assert.equal(await inside("(() => { try { return localStorage.length; } catch { return 'blocked'; } })()"), "blocked", "host storage denied");
+  await inside("document.querySelector('#counter').click()");
+  const loadId = await inside("window.loadId");
+  await page.click('.html-preview-switch button:last-child');
+  assert.equal(await page.eval("document.querySelector('.html-preview-source').hidden"), false);
+  await page.click('.html-preview-switch button:first-child');
+  await page.click('[aria-label="Expand preview"]');
+  assert.equal(await page.eval("document.querySelector('dialog').matches(':modal')"), true);
+  assert.equal(await inside("window.loadId"), loadId, "expand preserves frame state");
+  await page.click('[aria-label="Collapse preview"]');
+  assert.equal(await page.eval("document.querySelector('dialog').matches(':modal')"), false);
+  await page.eval("window.previewFixture.theme('light')");
+  for(let i=0;i<30 && await inside("getComputedStyle(document.documentElement).colorScheme") !== 'light';i++) await new Promise(r=>setTimeout(r,50));
+  assert.equal(await inside("getComputedStyle(document.documentElement).colorScheme"), 'light');
+  assert.equal(await inside("window.loadId"), loadId, "theme change preserves state");
+  assert.equal(await inside("document.querySelector('#counter').textContent"), 'Run a workload · 1');
+  await page.click('[aria-label="Restart preview"]');
+  await new Promise(r=>setTimeout(r,300));
+  assert.notEqual(await inside("window.loadId"), loadId, "restart creates fresh state");
+  const sanitized = await page.eval(`window.previewFixture.build('<meta http-equiv="refresh" content="0;url=https://example.com"><base href="https://example.com"><iframe srcdoc="x"></iframe><script src="https://example.com/x.js"></script><button onclick="parent.evil=1">X</button><img src="https://example.com/x"><a href="javascript:alert(1)">X</a>', 'test', 'dark')`);
+  assert(!sanitized.includes('http-equiv="refresh"'));
+  assert(!sanitized.includes('<base'));
+  assert(!sanitized.includes('<iframe'));
+  assert(sanitized.includes('onclick='), 'inline handlers retained only inside the isolated document');
+  assert(!sanitized.includes('src="https://'));
+  assert(!sanitized.includes('javascript:'));
+  assert(sanitized.indexOf('Content-Security-Policy') < sanitized.indexOf('<script>'));
+  assert.equal(await inside("fetch('https://example.com').then(()=> 'allowed',()=> 'blocked')"), 'blocked', "CSP blocks fetch");
+  // Unrelated windows cannot resize this preview by guessing its message channel.
+  const before = await page.eval("document.querySelector('iframe').style.height");
+  await page.eval("(() => { const src=document.querySelector('iframe').srcdoc; const channel=src.match(/const channel = (\"[^\"]+\")/)[1]; window.postMessage({channel:JSON.parse(channel),type:'size',height:600}, '*'); })()");
+  await new Promise(r=>setTimeout(r,100));
+  assert.equal(await page.eval("document.querySelector('iframe').style.height"),before);
+  mkdirSync('/tmp/zuse-html-preview', { recursive: true });
+  await page.screenshot('/tmp/zuse-html-preview/light.png');
+  await page.eval("window.previewFixture.theme('dark')");
+  await new Promise(r=>setTimeout(r,150));
+  await page.screenshot('/tmp/zuse-html-preview/dark.png');
+  await page.call('Emulation.setDeviceMetricsOverride', {width:390,height:844,deviceScaleFactor:1,mobile:true});
+  assert.equal(await page.eval("document.documentElement.scrollWidth <= window.innerWidth"),true,'mobile must not overflow');
+  await page.screenshot('/tmp/zuse-html-preview/mobile.png');
+  await page.call('Emulation.setDeviceMetricsOverride', {width:1440,height:900,deviceScaleFactor:1,mobile:false});
+  await page.eval(`window.previewFixture.replace('<!doctype html><html><head><title>Full document</title><style>h2 { color: rgb(12, 34, 56); }</style></head><body><h2>Full document works</h2><button id="inline" onclick="this.textContent=String(42)">Go</button></body></html>')`);
+  await new Promise(r=>setTimeout(r,200));
+  assert.equal(await inside("document.title"), 'Full document');
+  assert.equal(await inside("getComputedStyle(document.querySelector('h2')).color"), 'rgb(12, 34, 56)');
+  await inside("document.querySelector('#inline').click()");
+  assert.equal(await inside("document.querySelector('#inline').textContent"),'42');
+  await page.click('[aria-label="Expand preview"]');
+  await inside("document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape',bubbles:true}))");
+  await page.waitFor("!document.querySelector('dialog').matches(':modal')");
+  assert.equal(await page.eval("document.activeElement.getAttribute('aria-label')"),'Expand preview');
+  const svgExample = `<svg id="plot" viewBox="0 0 100 100"></svg><script>document.querySelector("#plot").innerHTML = '<rect width="40" height="60"><title>Chart data</title></rect>';</script>`;
+  await page.eval(`window.previewFixture.replace(${JSON.stringify(svgExample)})`);
+  await new Promise(r=>setTimeout(r,200));
+  assert.equal(await inside("document.querySelector('#plot rect title')?.textContent"), 'Chart data', 'SVG markup strings in scripts must survive sanitization');
+  await page.eval(`window.previewFixture.replace('<script>throw new Error("example failure")</script><h2>Still visible</h2>')`);
+  await page.waitFor("!!document.querySelector('.html-preview-error')");
+  // This author error is expected; it must not throw in the host application.
+  page.errors.splice(0, page.errors.length, ...page.errors.filter(error => !error.includes('example failure')));
+  await page.eval("window.previewFixture.replace('x'.repeat(256001))");
+  await page.waitFor("!document.querySelector('iframe')");
+  assert.equal(await page.eval("document.querySelector('.html-preview-placeholder b').textContent"),'This document is too large to preview');
+  assert.equal(await page.eval("!!document.querySelector('.html-preview-error')"),false);
+  await page.eval("window.previewFixture.plain()");
+  await page.waitFor("!document.querySelector('.html-preview')");
+  assert.equal(await page.eval("!!document.querySelector('#raw-injection')"),false,'ordinary raw HTML stays text');
+  assert.equal(await page.eval("document.querySelector('.code-lang').textContent"),'js');
+  await page.eval(`window.previewFixture.replace('<b>Reference-enabled preview</b><script>window.referencePreview = true;</script>'); window.previewFixture.useReferences()`);
+  for (let i = 0; i < 50 && !await inside("window.referencePreview === true"); i++) await new Promise(r => setTimeout(r, 100));
+  assert.equal(await inside("window.referencePreview"), true, "assistant reference decoration must preserve inline previews");
+  await page.eval("window.previewFixture.disablePreviews()");
+  await page.waitFor("!document.querySelector('.html-preview') && document.querySelector('.code-lang')?.textContent === 'html'");
+  assert.deepEqual(page.errors, []);
+  console.log('Inline HTML checks passed: streaming, scripts, opaque origin, sanitizer/CSP, message validation, source, expand, theme, restart, mobile, ordinary markdown.');
+} finally { await page.close(); await server.close(); if (out) rmSync(out, { recursive: true, force: true }); }

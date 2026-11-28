@@ -1,0 +1,44 @@
+---
+title: Browser data and privacy
+icon: Lock
+navTitle: "Data and privacy"
+description: Understand what the in-app browser stores, how to clear it, and how to keep evidence from authenticated pages safe.
+section: workspace
+order: 67
+platforms: [desktop]
+providers: []
+prerequisites: [/workspace/browser]
+related: [/concepts/local-first, /workspace/browser-evidence, /workspace/browser-troubleshooting]
+next: /workspace/browser-troubleshooting
+lastVerified: "2026-11-27"
+---
+
+
+The in-app browser is separate from your everyday browser. It does not read your everyday browser's cookies or saved passwords; you sign in to a site inside the in-app browser when you need to.
+
+## Understand what persists
+
+The in-app browser keeps its cookies, site storage, cache, and **Recently visited** list in a browser profile on this device. The profile does not belong to a chat or repository, so every browser tab in it shares the same sign-ins: switching tasks does not give you a separate account sandbox.
+
+On macOS 14 and later, sign-ins persist after you restart Zuse. On earlier macOS versions, Zuse shows **Logins are temporary on this macOS version. Use macOS 14 or later, or open this page in your default browser, to keep them.**
+
+Use a dedicated development or staging account whenever you can. A signed-in session in the in-app browser carries the same authority as anywhere else.
+
+## Clear browser data
+
+Open **Browser options** and choose the narrowest reset that solves the problem:
+
+- **Clear cookies** clears cookies for all tabs in this browser profile and may sign you out of websites.
+- **Clear cache** clears cached website files for all tabs in this browser profile.
+
+Both ask for confirmation, and neither changes your everyday browser. To remove the list of recent pages, use **Clear recently visited pages** on the browser's home page.
+
+## Downloads and permissions
+
+The in-app browser is meant for previews, so it does not download files. On macOS and Windows, opening an address that turns out to be a file shows **This file can’t be previewed here. Open it in your default browser.** On Windows and Linux, it also denies requests for the camera, microphone, location, and notifications.
+
+## Capture authenticated pages carefully
+
+Console output, network details, screenshots, and annotations can expose application data from a signed-in page. Keep evidence scoped to the bug, review it before sending, and avoid capturing production accounts when a seeded test account can reproduce the issue.
+
+See [Troubleshoot the in-app browser](/workspace/browser-troubleshooting) for sign-in and loading problems.

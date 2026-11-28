@@ -1872,3 +1872,18 @@ chat-worktree_offline = 无法连接远程仓库 · 使用本地 { $branch }
 
 # Native and browser history pagination; translations remain draft.
 chat-cloud_history_load_earlier = 加载更早的消息
+
+# Variables: count
+chat-tool_activity_summary_edited_files = 编辑了 { $count } 个文件
+# Variables: count
+chat-tool_group_updates = { $count } 条进度更新
+chat-tool_command_label = 命令
+chat-tool_output_label = 输出
+
+# Elapsed work for the current assistant turn or a settled turn.
+# Variables: duration
+chat-turn_working_for = 已工作 { $duration }，仍在进行
+# Variables: duration
+chat-turn_worked_for = 工作了 { $duration }
+chat-turn_thought = 思考
+chat-tool_shell_label = Shell

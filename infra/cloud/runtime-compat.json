@@ -1,4 +1,15 @@
 {
-  "_comment": "Previous stable runtime releases (newest first, at most 3) that CI runs the current server suite against. Entries are {sha256, version, architecture} of releases already uploaded by infra/cloud/runtime-release.py. Empty until the first releases exist. See infra/cloud/RUNTIME_RELEASES.md.",
-  "releases": []
+  "_comment": "Previous runtime releases (newest first, at most 3) that CI runs the current server suite against. Entries are {sha256, version, architecture} of releases already uploaded by infra/cloud/runtime-release.py. List what computers actually run, not only what is promoted: the runtime baked into the base in use and any release computers updated to in place stay here until no computer runs them, even after the release is retired. See infra/cloud/RUNTIME_RELEASES.md.",
+  "releases": [
+    {
+      "sha256": "e687c5de25ea492e9c985f6d068011ff9e0f7746e0eafda6cb776c2f69f5858d",
+      "version": "0.27.8+g32bfcb0652bd",
+      "architecture": "x86_64"
+    },
+    {
+      "sha256": "a60ce8d9fdee05dc63fbfa8f1d2a438f988825bcc9fc547b9697c3474e2fcb5d",
+      "version": "0.26.0+gccca87b76e11",
+      "architecture": "x86_64"
+    }
+  ]
 }

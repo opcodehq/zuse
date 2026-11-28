@@ -9,41 +9,47 @@ import ZuseCore
   import QuickLook
 #endif
 
+/// Thumbnails decoded once per attachment, shared by recycled transcript cells.
+@MainActor private enum ThumbnailCache {
+  static let images = NSCache<NSString, NativeImage>()
+}
+
+/// A file in a message: images as a thumbnail, other files as a pill. Tapping opens a preview.
 struct AttachmentView: View {
-  let reference: JSONValue
+  let attachment: TimelineAttachment
   let sessionID: String
   let rpc: RPCClient?
+  /// A lone image gets more room than one in a row of several.
+  var large = false
   @State private var preview: PreviewFile?
   @State private var loading = false
   @State private var error: String?
+  @State private var thumbnail: NativeImage?
   private struct PreviewFile: Identifiable {
     let id = UUID()
     let url: URL
   }
+  private var side: CGFloat { large ? 200 : 104 }
   var body: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      Button {
-        Task { await open() }
-      } label: {
-        HStack {
-          if loading {
-            ProgressView()
-          } else {
-            Image(
-              systemName: reference["mimeType"].string?.hasPrefix("image/") == true
-                ? "photo" : "doc")
-          }
-          Text(reference["originalName"].string ?? "Attachment").lineLimit(2)
-          Spacer()
-          Image(systemName: "arrow.up.right")
-        }.padding(10).background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
-      }.buttonStyle(.plain).disabled(loading || rpc == nil)
-      if let error { Text(error).font(.caption).foregroundStyle(.red) }
+    Button {
+      Task { await open() }
+    } label: {
+      if attachment.isImage {
+        tile
+      } else {
+        pill
+      }
     }
+    .buttonStyle(.plain)
+    .disabled(loading || (rpc == nil && thumbnail == nil))
+    .accessibilityLabel(attachment.name)
+    .accessibilityHint(error ?? "Opens a preview")
+    // Restarts when the connection appears, so a tile loaded while offline fills in later.
+    .task(id: "\(attachment.id)|\(rpc != nil)") { await loadThumbnail() }
     .sheet(item: $preview, onDismiss: cleanup) { file in
       NavigationStack {
         FilePreview(url: file.url).ignoresSafeArea(edges: .bottom)
-          .navigationTitle(reference["originalName"].string ?? "Attachment")
+          .navigationTitle(attachment.name)
           .compactNavigationTitle()
           .toolbar {
             ToolbarItem(placement: .primaryAction) { ShareLink(item: file.url) }
@@ -52,19 +58,104 @@ struct AttachmentView: View {
       }.nativeSheetSize(width: 640, height: 480)
     }
   }
-  @State private var temporaryDirectory: URL?
-  private func open() async {
-    guard let rpc, let id = reference["id"].string else { return }
+  private var tile: some View {
+    ZStack {
+      RoundedRectangle(cornerRadius: 16, style: .continuous).fill(AppTheme.bubble)
+      if let thumbnail {
+        Image(nativeImage: thumbnail).resizable().scaledToFill()
+      } else {
+        VStack(spacing: 6) {
+          if loading {
+            ProgressView()
+          } else {
+            Image(systemName: error == nil ? "photo" : "exclamationmark.triangle")
+              .font(.system(size: 22)).foregroundStyle(.secondary)
+          }
+          Text(attachment.name).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            .padding(.horizontal, 8)
+        }
+      }
+    }
+    .frame(width: side, height: side)
+    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    .overlay(
+      RoundedRectangle(cornerRadius: 16, style: .continuous)
+        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+    )
+    .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+  }
+  private var pill: some View {
+    HStack(spacing: 8) {
+      Group {
+        if loading {
+          ProgressView().controlSize(.small)
+        } else {
+          Image(systemName: error == nil ? "doc.text" : "exclamationmark.triangle")
+            .font(.system(size: 14))
+        }
+      }.frame(width: 18).foregroundStyle(.secondary)
+      Text(attachment.name).font(.system(size: 14)).lineLimit(1).truncationMode(.middle)
+    }
+    .padding(.horizontal, 12).frame(height: 36)
+    .background(AppTheme.bubble, in: Capsule())
+    .overlay(Capsule().strokeBorder(Color.primary.opacity(0.06), lineWidth: 1))
+  }
+  /// Host paths repeat across computers and chats, so the cache is keyed per chat too.
+  private var cacheKey: NSString { "\(sessionID)|\(attachment.id)" as NSString }
+  private func loadThumbnail() async {
+    guard attachment.isImage, thumbnail == nil else { return }
+    if let cached = ThumbnailCache.images.object(forKey: cacheKey) {
+      thumbnail = cached
+      return
+    }
+    #if DEBUG
+      if let sample = PreviewImages.image(for: attachment.id) {
+        thumbnail = sample
+        return
+      }
+    #endif
+    guard let rpc else { return }
     loading = true
     error = nil
     defer { loading = false }
     do {
-      let (data, mime, _) = try await Attachments.read(id, sessionID: sessionID, rpc: rpc)
+      let (data, _, _) = try await Attachments.read(attachment.id, sessionID: sessionID, rpc: rpc)
+      guard let image = NativeImage(data: data) else { return }
+      ThumbnailCache.images.setObject(image, forKey: cacheKey)
+      thumbnail = image
+    } catch {
+      self.error = error.localizedDescription
+    }
+  }
+  @State private var temporaryDirectory: URL?
+  private func open() async {
+    loading = true
+    error = nil
+    defer { loading = false }
+    do {
+      var data: Data
+      var mime = attachment.mimeType
+      if let rpc {
+        (data, mime, _) = try await Attachments.read(attachment.id, sessionID: sessionID, rpc: rpc)
+      } else if let thumbnail, let png = thumbnail.pngData() {
+        data = png
+        mime = "image/png"
+      } else {
+        return
+      }
       let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
         UUID().uuidString)
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-      let file = directory.appendingPathComponent("Attachment").appendingPathExtension(
-        UTType(mimeType: mime)?.preferredFilenameExtension ?? "bin")
+      // The name comes from the host: keep only its last component so it stays in `directory`.
+      let name = (attachment.name as NSString).lastPathComponent
+      let stem = (name as NSString).deletingPathExtension
+      let named = (name as NSString).pathExtension
+      let fileExtension =
+        UTType(mimeType: mime)?.preferredFilenameExtension
+        ?? (named.isEmpty ? "bin" : named)
+      let file = directory.appendingPathComponent(
+        stem.isEmpty || stem == "." || stem == ".." ? "Attachment" : stem
+      ).appendingPathExtension(fileExtension)
       try data.write(to: file, options: [.atomic, .completeFileProtection])
       cleanup()
       temporaryDirectory = directory
@@ -76,6 +167,17 @@ struct AttachmentView: View {
     temporaryDirectory = nil
   }
 }
+
+#if os(macOS)
+  extension NSImage {
+    fileprivate func pngData() -> Data? {
+      guard let tiff = tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff) else {
+        return nil
+      }
+      return bitmap.representation(using: .png, properties: [:])
+    }
+  }
+#endif
 
 #if os(iOS)
   private struct FilePreview: UIViewControllerRepresentable {

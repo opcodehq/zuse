@@ -258,11 +258,54 @@ fn incompatible_bundles_stay_pinned_and_cold_start_adopts_staged() {
     let staged = install(&h, "claude", "2.1.312", "u1", &["image-tested-v1"]);
     assert!(h.has_staged());
     drop(h);
-    // A restart is a boundary: no harness process exists yet.
+    // Lifecycle invariant: a bundle staged before a cold start is not adopted
+    // until an offer still names it; the server may have pulled it meanwhile.
+    let offer = |sha: Option<&str>| HarnessOffer {
+        directives: sha
+            .map(|_| {
+                let tar = bundle_tar("claude", "2.1.312", &[]);
+                let (bundle, signature) = signed("claude", "2.1.312", &tar, &["image-tested-v1"]);
+                HarnessDirective {
+                    update_id: "u1".into(),
+                    artifact: HarnessArtifact {
+                        bundle,
+                        signature,
+                        url: "https://example.invalid/b".into(),
+                        compressed_size_bytes: 1,
+                        url_expires_at: i64::MAX,
+                    },
+                }
+            })
+            .into_iter()
+            .collect(),
+    };
     let reopened = Harnesses::open(f.config.clone());
     assert!(!reopened.has_staged());
+    assert!(reopened.adopt_staged().unwrap().is_empty());
+    assert!(!reopened.state().active.contains_key("claude"));
+    reopened.confirm_staged(&offer(Some(&staged))).unwrap();
+    assert!(reopened.has_staged());
+    assert_eq!(reopened.adopt_staged().unwrap(), vec!["claude".to_owned()]);
     assert_eq!(reopened.state().active["claude"].sha256, staged);
     assert_eq!(reopened.pending_attestations().len(), 1);
+}
+
+#[test]
+fn a_staged_bundle_the_server_pulled_is_never_adopted_after_a_cold_start() {
+    let f = fixture();
+    let h = Harnesses::open(f.config.clone());
+    install(&h, "claude", "2.1.312", "u1", &["image-tested-v1"]);
+    drop(h);
+    let reopened = Harnesses::open(f.config.clone());
+    reopened
+        .confirm_staged(&HarnessOffer { directives: vec![] })
+        .unwrap();
+    assert!(reopened.state().staged.is_empty());
+    assert!(reopened.adopt_staged().unwrap().is_empty());
+    assert!(!reopened.state().active.contains_key("claude"));
+    // Bundles staged by this process (after the offer) adopt as before.
+    install(&reopened, "claude", "2.1.313", "u2", &["image-tested-v1"]);
+    assert!(reopened.has_staged());
 }
 
 #[test]

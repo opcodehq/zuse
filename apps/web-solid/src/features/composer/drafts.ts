@@ -1,3 +1,4 @@
+import { frameId } from "@/features/connection/multi/model";
 // Composer-local state: drafts per chat (persisted), staged attachments, failures and in-flight work.
 
 // Composer-local state: drafts per chat (persisted), staged attachments, failures and in-flight work.
@@ -29,7 +30,7 @@ export interface Attachment {
   error?: string;
 }
 
-const DRAFTS = "zuse.web.composer.drafts.v1";
+const DRAFTS = "zuse.web.composer.drafts.v1" + (frameId() ? `:computer:${frameId()}` : "");
 const emptyDraft = (): Draft => ({ text: "", mentions: [], skills: [] });
 
 function loadDrafts(): Record<string, Draft> {

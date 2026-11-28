@@ -6,6 +6,13 @@ impl Shell {
     pub(super) fn create_devices_page(&mut self, cx: &mut Context<Self>) -> Entity<DevicesPage> {
         let state = self.state.clone();
         let page = cx.new(|cx| DevicesPage::new(state, cx));
+        cx.subscribe(
+            &page,
+            |this, _, event: &settings::devices::ComputerRemoved, cx| {
+                this.account_computer_removed(&event.environment, &event.subject, cx);
+            },
+        )
+        .detach();
         cx.subscribe(&page, |this, _, event, cx| match event {
             StorageEvent::Action => {
                 if this.state.read(cx).engine().is_none() {

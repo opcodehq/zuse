@@ -6,7 +6,7 @@ use crate::{Data, TokenCounts};
 use serde::de::{Deserialize, Deserializer, MapAccess, Visitor};
 use serde_json::Value;
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fmt,
     sync::{Arc, OnceLock},
 };
@@ -24,8 +24,13 @@ const PREFIXES: &[&str] = &[
     "vertex_ai/",
     "mistral/",
     "deepseek/",
+    "moonshot/",
+    "zai/",
     "openrouter/",
 ];
+/// Rates for the Zuse agent's built-in API connections, published by the
+/// vendors. The public catalogue's own entries win when it lists a model.
+const PROVIDER_PRICES: &[u8] = include_bytes!("../data/provider-prices.json");
 const FIELDS: [&str; 4] = [
     "input_cost_per_token",
     "output_cost_per_token",
@@ -125,7 +130,18 @@ impl<'de> Deserialize<'de> for Catalogue {
 }
 impl Catalogue {
     pub fn parse(json: &[u8]) -> Result<Self, serde_json::Error> {
-        serde_json::from_slice(json)
+        let mut table: Self = serde_json::from_slice(json)?;
+        let provider: BTreeMap<String, Value> =
+            serde_json::from_slice(PROVIDER_PRICES).expect("provider pricing must be valid");
+        for (name, raw) in provider {
+            if !table.index.contains_key(&name)
+                && let Some(rates) = Rates::parse(raw)
+            {
+                table.index.insert(name.clone(), table.entries.len());
+                table.entries.push((name, rates));
+            }
+        }
+        Ok(table)
     }
     pub fn bundled() -> Arc<Self> {
         static BUNDLED: OnceLock<Arc<Catalogue>> = OnceLock::new();
@@ -143,6 +159,12 @@ impl Catalogue {
         if name.is_empty() || name == "unknown" {
             return None;
         }
+        // Zuse agent ids carry their route: `api/<connection>/<model>`.
+        let name = ["api/", "local/"]
+            .iter()
+            .find_map(|route| name.strip_prefix(route))
+            .and_then(|rest| rest.split_once('/'))
+            .map_or(name, |(_, model)| model);
         let name = if name == "grok-build" {
             "grok-code-fast-1"
         } else {

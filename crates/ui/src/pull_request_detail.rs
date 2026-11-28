@@ -2839,7 +2839,6 @@ fn rich_text(
 ) -> AnyElement {
     let diagram = diagram_handler(diagrams, owner.clone(), responsive_diagrams);
     let options = crate::markdown::render::RenderOptions {
-        tasks: None,
         media: Some(crate::markdown::render::MediaUi {
             diagram: Some(diagram),
             ..super::pull_request_media::media(
@@ -2849,19 +2848,13 @@ fn rich_text(
                 }),
             )
         }),
-        row_key: key.into(),
-        veil: None,
-        cache: None,
-        now: Instant::now(),
-        link: None,
-        workspace_root: None,
-        code: None,
         copy: Some(crate::markdown::render::CopyUi {
             handler: Rc::new(|_, code, _, cx| {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(code.to_string()))
             }),
             copied_ix: None,
         }),
+        ..crate::markdown::render::RenderOptions::settled(key.into())
     };
     div()
         .debug_selector(|| "pr-rich-text".into())

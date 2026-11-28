@@ -57,18 +57,36 @@ private final class MockHTTP: URLProtocol, @unchecked Sendable {
   }
   override func stopLoading() {}
 }
-private func fixture(_ handler: @escaping @Sendable (URLRequest) -> (Int, JSONValue)) -> (
-  CloudClient, URLSession, String
-) {
+private func fixture(
+  organization: String? = nil, _ handler: @escaping @Sendable (URLRequest) -> (Int, JSONValue)
+) -> (CloudClient, URLSession, String) {
   let host = UUID().uuidString.lowercased() + ".test"
   MockHTTP.configure(host, handler: handler)
   let configuration = URLSessionConfiguration.ephemeral
   configuration.protocolClasses = [MockHTTP.self]
   let session = URLSession(configuration: configuration)
   return (
-    CloudClient(baseURL: URL(string: "https://" + host)!, session: session) { "access-token" },
+    CloudClient(
+      baseURL: URL(string: "https://" + host)!, organizationID: organization, session: session
+    ) { "access-token" },
     session, host
   )
+}
+private func body(_ request: URLRequest) throws -> JSONValue {
+  var bytes = request.httpBody
+  if bytes == nil, let stream = request.httpBodyStream {
+    stream.open()
+    defer { stream.close() }
+    var data = Data()
+    var buffer = [UInt8](repeating: 0, count: 4096)
+    while true {
+      let count = stream.read(&buffer, maxLength: buffer.count)
+      if count <= 0 { break }
+      data.append(contentsOf: buffer.prefix(count))
+    }
+    bytes = data
+  }
+  return try JSONDecoder().decode(JSONValue.self, from: #require(bytes))
 }
 
 @Test func cloudProofBindsTheDeviceAuthorizationToken() async throws {
@@ -149,7 +167,7 @@ private func fixture(_ handler: @escaping @Sendable (URLRequest) -> (Int, JSONVa
     Issue.record("Expected access failure")
   } catch let error as ClientError {
     #expect(error.requiresUserAction)
-    #expect(error.message == "Cloud Entitlement Required")
+    #expect(error.message == "Cloud entitlement required")
   }
 }
 
@@ -320,8 +338,116 @@ private func fixture(_ handler: @escaping @Sendable (URLRequest) -> (Int, JSONVa
   let retired = CloudClient(baseURL: base.baseURL, session: session) { throw CancellationError() }
   await #expect(throws: CancellationError.self) {
     _ = try await retired.request(
-      "/v1/cloud/provider-connections", method: "POST",
-      body: .object(["apiKey": .string("private-key")]))
+      "/v1/cloud/agents/configure", method: "POST",
+      body: .object(["secret": .string("private-key")]))
   }
   #expect(probe.snapshot().isEmpty)
+}
+
+@Test func organizationScopeIsSentOnlyToCloudRoutes() async throws {
+  let probe = RequestProbe()
+  let (client, session, host) = fixture(organization: "org_team") { request in
+    probe.record(request)
+    return (200, .object(["workspaces": .array([]), "environments": .array([])]))
+  }
+  defer {
+    session.invalidateAndCancel()
+    MockHTTP.configure(host, handler: nil)
+  }
+  _ = try await client.chats()
+  _ = try await client.environments()
+  let requests = probe.snapshot()
+  #expect(requests[0].value(forHTTPHeaderField: "x-zuse-workspace") == "organization:org_team")
+  // Personal computers refuse an organization scope (`environment_scope_not_supported`).
+  #expect(requests[1].value(forHTTPHeaderField: "x-zuse-workspace") == nil)
+  let (personal, personalSession, personalHost) = fixture { request in
+    probe.record(request)
+    return (200, .object(["workspaces": .array([])]))
+  }
+  defer {
+    personalSession.invalidateAndCancel()
+    MockHTTP.configure(personalHost, handler: nil)
+  }
+  _ = try await personal.chats()
+  #expect(probe.snapshot().last?.value(forHTTPHeaderField: "x-zuse-workspace") == nil)
+}
+
+private final class Counter: @unchecked Sendable {
+  private let lock = NSLock()
+  private var value = 0
+  func next() -> Int {
+    lock.lock()
+    defer { lock.unlock() }
+    value += 1
+    return value - 1
+  }
+}
+
+@Test func connectionWaitsForTheRuntimeAndStopsOnArchivedOrFailedWorkspaces() async throws {
+  let probe = RequestProbe()
+  let reads = Counter()
+  let (client, session, host) = fixture { request in
+    probe.record(request)
+    let state = reads.next() < 2 ? "provisioning" : "ready"
+    return (200, .object(["workspaceId": .string("w"), "state": .string(state)]))
+  }
+  defer {
+    session.invalidateAndCancel()
+    MockHTTP.configure(host, handler: nil)
+  }
+  let ready = try await client.waitForRuntime(
+    workspaceID: "w", prepared: .object(["state": .string("queued")]), interval: .milliseconds(1))
+  #expect(ready["state"].string == "ready")
+  #expect(probe.snapshot().count == 3)
+  // Runtime ingress being up is enough, as on desktop.
+  let early = try await client.waitForRuntime(
+    workspaceID: "w",
+    prepared: .object(["state": .string("setup"), "runtimeIngressReady": .bool(true)]))
+  #expect(early["state"].string == "setup")
+  let stopped: [JSONValue] = [
+    .object(["state": .string("archived")]),
+    .object(["state": .string("ready"), "desiredState": .string("archived")]),
+    .object(["state": .string("failed"), "statusCode": .string("environment_setup_failed")]),
+  ]
+  for prepared in stopped {
+    await #expect(throws: ClientError.self) {
+      _ = try await client.waitForRuntime(workspaceID: "w", prepared: prepared)
+    }
+  }
+  #expect(probe.snapshot().count == 3)
+}
+
+@Test func workspaceCreationSendsTheSavedBodyAndReadsBothIdentities() async throws {
+  let probe = RequestProbe()
+  let (client, session, host) = fixture { request in
+    probe.record(request)
+    return (
+      200,
+      .object([
+        "workspace": .object([
+          "workspaceId": .string("ws_1"), "chatId": .string("chat_1"),
+          "initialSessionId": .string("session_1"),
+        ]),
+        "chatId": .string("chat_1"), "initialSessionId": .string("session_1"),
+        "initialMessageDelivery": .string("server-admitted-v2"),
+      ])
+    )
+  }
+  defer {
+    session.invalidateAndCancel()
+    MockHTTP.configure(host, handler: nil)
+  }
+  let request = CloudWorkspaceCreateRequest(
+    projectId: "proj", providerId: "e2b", baseRef: "refs/heads/main", agent: "claude-code",
+    model: "claude-sonnet-5", agentConnectionId: "conn_1", sizeId: "default",
+    firstMessage: "Fix the build",
+    initialMessageDelivery: CloudWorkspaceCreateRequest.serverAdmitted)
+  let created = try await client.createWorkspace(
+    body: request.body.setting("idempotencyKey", to: .string("stable-key")))
+  #expect(created.workspaceId == "ws_1" && created.initialSessionId == "session_1")
+  #expect(created.chatId == "chat_1" && created.initialMessageDelivery == "server-admitted-v2")
+  let sent = try body(#require(probe.snapshot().first))
+  #expect(sent["idempotencyKey"].string == "stable-key")
+  #expect(sent["agentConnectionId"].string == "conn_1")
+  #expect(probe.snapshot().first?.url?.path == "/v1/cloud/workspaces")
 }

@@ -1631,9 +1631,19 @@ impl FilesSurface {
                 match result {
                     Ok(WriteWorkspaceFileOutcome::Written { file }) => {
                         let hash = file.content_hash.clone();
+                        // The saved text becomes the loaded snapshot, so a
+                        // remote HTML preview renders what was just written.
+                        let saved_text = document
+                            .pending_save
+                            .as_ref()
+                            .filter(|save| save.revision == revision)
+                            .map(|save| save.text.clone());
                         if document.finish_save(revision, hash.clone())
                             && let Some(loaded) = document.file.as_mut()
                         {
+                            if saved_text.is_some() {
+                                loaded.text = saved_text;
+                            }
                             loaded.content_hash = Some(hash);
                             loaded.size = file.size;
                             loaded.modified_at = file.modified_at;
@@ -2347,12 +2357,97 @@ impl FilesSurface {
 
     /// Where the system's default app can open `path`. Only a workspace on
     /// this device shares the viewport's filesystem; remote spaces live on
-    /// another device, so they get no path.
-    pub(super) fn system_open_path(&self, path: &str) -> Option<std::path::PathBuf> {
+    /// another device, so they get no path. A cloud computer's chat names
+    /// its engine's own device, yet its files are still on that computer.
+    pub(super) fn system_open_path(&self, path: &str, cx: &App) -> Option<std::path::PathBuf> {
+        if self.state.read(cx).hosted_on_cloud_computer {
+            return None;
+        }
         self.request_context
             .as_ref()
             .filter(|context| context.target_device_id.is_none())
             .map(|context| std::path::Path::new(&context.cwd).join(path))
+    }
+
+    /// The text of an HTML document on another machine, ready to preview:
+    /// it was read through the workspace file service. `None` while it is
+    /// still loading or could not be read — the tab then shows that state.
+    fn remote_html(&self, path: &str, cx: &App) -> Option<(String, Option<String>)> {
+        if !super::web_preview::is_html(path)
+            || super::path_is_outside(path)
+            || self.request_context.is_none()
+            || self.system_open_path(path, cx).is_some()
+        {
+            return None;
+        }
+        let document = self.preview.documents.get(path)?;
+        if matches!(
+            document.phase,
+            DocumentPhase::Loading | DocumentPhase::Error(_)
+        ) {
+            return None;
+        }
+        let file = document.file.as_ref()?;
+        Some((file.text.clone()?, file.content_hash.clone()))
+    }
+
+    /// Whether `path` has a rendered web preview here: a file on this disk,
+    /// or an HTML page read from the chat's machine.
+    fn web_preview_available(&self, path: &str, cx: &App) -> bool {
+        self.system_open_path(path, cx).is_some()
+            || (super::web_preview::is_html(path)
+                && !super::path_is_outside(path)
+                && self.request_context.is_some())
+    }
+
+    /// Serve a remote HTML page from its text, reading its relative assets
+    /// from the same machine. A page that was renamed or whose source
+    /// changed is rebuilt.
+    fn ensure_remote_web(
+        &mut self,
+        path: &str,
+        html: String,
+        content_hash: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if self
+            .preview
+            .documents
+            .get(path)
+            .and_then(|d| d.web.as_ref())
+            .is_some_and(|web| web.serves(path, content_hash.as_deref()))
+        {
+            return Ok(());
+        }
+        let context = self
+            .request_context
+            .clone()
+            .ok_or_else(|| "Workspace service is still starting.".to_string())?;
+        let engine = self
+            .state
+            .read(cx)
+            .engine()
+            .cloned()
+            .ok_or_else(|| "Workspace service is still starting.".to_string())?;
+        let client = WorkspaceFilesClient::new(engine, context.clone());
+        let missing = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (fetch, bridge) =
+            super::web_preview::remote_fetch(client, context, missing.clone(), cx);
+        let web = super::web_preview::WebPreview::remote(
+            path,
+            html,
+            content_hash,
+            fetch,
+            missing,
+            bridge,
+            window,
+            cx,
+        )?;
+        if let Some(d) = self.preview.documents.get_mut(path) {
+            d.web = Some(web);
+        }
+        Ok(())
     }
 
     fn render_breadcrumb(
@@ -2368,7 +2463,8 @@ impl FilesSurface {
             .get(path)
             .is_some_and(|d| d.show_markdown);
         let reveal_path = path.to_string();
-        let system_path = self.system_open_path(path);
+        let system_path = self.system_open_path(path, cx);
+        let web_preview_available = self.web_preview_available(path, cx);
         let tooltip_path: SharedString = path.to_string().into();
         let can_save = !self.target_change_pending
             && self
@@ -2419,7 +2515,7 @@ impl FilesSurface {
             .flex_1()
             .truncate()
             .font_family(theme.font_sans.clone())
-            .text_size(px(11.0))
+            .text_size(crate::typography::text_sm())
             .text_color(theme.text_muted)
             .child(path.to_string());
         crumbs = crumbs
@@ -2442,7 +2538,7 @@ impl FilesSurface {
             .border_color(theme.border)
             .child(crumbs)
             .when(
-                super::web_preview::is_html(path) && system_path.is_some(),
+                super::web_preview::is_html(path) && web_preview_available,
                 |el| {
                     el.child(
                         toolbar_button("files-web-preview", "Toggle preview and source")
@@ -2473,50 +2569,62 @@ impl FilesSurface {
                     )
                 },
             )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .border_1()
-                    .border_color(theme.border)
-                    .rounded(px(5.0))
-                    .children(
-                        [
-                            (true, "Diff", "files-show-diff"),
-                            (false, "Edit", "files-show-edit"),
-                        ]
-                        .into_iter()
-                        .map(|(diff, label, id)| {
-                            let selected = self
-                                .preview
-                                .documents
-                                .get(path)
-                                .is_some_and(|d| d.show_diff)
-                                == diff;
-                            toolbar_button(id, label)
-                                .w(px(36.0))
-                                .h(px(22.0))
-                                .text_size(px(11.0))
-                                .when(selected, |el| el.bg(crate::theme::wash(0.12)))
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.suspend_images(cx);
-                                    if let Some(path) = this.preview.active.clone() {
-                                        if let Some(d) = this.preview.documents.get_mut(&path) {
-                                            d.show_diff = diff;
-                                            if !diff {
-                                                d.show_web = false;
-                                                d.show_markdown = false;
+            // Diff/Edit only means something for a text file git can compare:
+            // images, untracked files and files without changes leave it out.
+            .when(
+                !super::image_preview::is_image(path)
+                    && self
+                        .git_decoration(path, false, cx)
+                        .is_some_and(|decoration| decoration.has_history()),
+                |el| {
+                    el.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .border_1()
+                            .border_color(theme.border)
+                            .rounded(px(5.0))
+                            .children(
+                                [
+                                    (true, "Diff", "files-show-diff"),
+                                    (false, "Edit", "files-show-edit"),
+                                ]
+                                .into_iter()
+                                .map(|(diff, label, id)| {
+                                    let selected = self
+                                        .preview
+                                        .documents
+                                        .get(path)
+                                        .is_some_and(|d| d.show_diff)
+                                        == diff;
+                                    toolbar_button(id, label)
+                                        .w(px(36.0))
+                                        .h(px(22.0))
+                                        .text_size(px(11.0))
+                                        .when(selected, |el| el.bg(crate::theme::wash(0.12)))
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.suspend_images(cx);
+                                            if let Some(path) = this.preview.active.clone() {
+                                                if let Some(d) =
+                                                    this.preview.documents.get_mut(&path)
+                                                {
+                                                    d.show_diff = diff;
+                                                    if !diff {
+                                                        d.show_web = false;
+                                                        d.show_markdown = false;
+                                                    }
+                                                }
                                             }
-                                        }
-                                    }
-                                    if !diff {
-                                        this.focus_editor(window, cx);
-                                    }
-                                    cx.notify();
-                                }))
-                                .child(label)
-                        }),
-                    ),
+                                            if !diff {
+                                                this.focus_editor(window, cx);
+                                            }
+                                            cx.notify();
+                                        }))
+                                        .child(label)
+                                }),
+                            ),
+                    )
+                },
             )
             .when(markdown, |element| {
                 element.child(
@@ -2805,27 +2913,45 @@ impl FilesSurface {
         }
         if super::web_preview::supported(path)
             && self.preview.documents.get(path).is_some_and(|d| d.show_web)
-            && let Some(local_path) = self.system_open_path(path)
-            && let Some(context) = self.request_context.as_ref()
         {
-            if self
-                .preview
-                .documents
-                .get(path)
-                .is_some_and(|d| d.web.is_none())
+            // A file on this disk is served from it; an HTML page on the
+            // chat's machine (a cloud computer) from the text read through
+            // the workspace file service. Anything else — still loading,
+            // missing, a computer asleep — falls through to the document's
+            // own state, never a raw disk error.
+            if let Some(local_path) = self.system_open_path(path, cx)
+                && let Some(context) = self.request_context.as_ref()
             {
-                match super::web_preview::WebPreview::new(
-                    std::path::Path::new(&context.cwd),
-                    &local_path,
-                    window,
-                    cx,
-                ) {
-                    Ok(web) => {
-                        if let Some(d) = self.preview.documents.get_mut(path) {
-                            d.web = Some(web);
+                if self
+                    .preview
+                    .documents
+                    .get(path)
+                    .is_some_and(|d| d.web.is_none())
+                {
+                    match super::web_preview::WebPreview::new(
+                        std::path::Path::new(&context.cwd),
+                        &local_path,
+                        window,
+                        cx,
+                    ) {
+                        Ok(web) => {
+                            if let Some(d) = self.preview.documents.get_mut(path) {
+                                d.web = Some(web);
+                            }
+                        }
+                        Err(error) => {
+                            tracing::debug!(path, %error, "local web preview unavailable");
                         }
                     }
-                    Err(error) => return centered_state(error, theme.text_muted),
+                }
+            } else {
+                // A newer version staged from the chat's machine is
+                // installed first, so the page shows it (as the source does).
+                self.apply_pending_external_reload(path, window, cx);
+                if let Some((html, content_hash)) = self.remote_html(path, cx)
+                    && let Err(error) = self.ensure_remote_web(path, html, content_hash, window, cx)
+                {
+                    tracing::debug!(path, %error, "remote web preview unavailable");
                 }
             }
             if let Some(web) = self
@@ -2837,7 +2963,27 @@ impl FilesSurface {
                 web.browser.update(cx, |v, cx| {
                     v.set_presentation(crate::browser::model::Presentation::Live, cx)
                 });
-                return web.browser.clone().into_any_element();
+                let browser = web.browser.clone().into_any_element();
+                if !web.missing_assets() {
+                    return browser;
+                }
+                return div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .id("files-web-missing-assets")
+                            .flex_none()
+                            .px(px(10.0))
+                            .py(px(4.0))
+                            .text_size(px(11.0))
+                            .text_color(theme.text_faint)
+                            .child("Some files this page uses could not be loaded."),
+                    )
+                    .child(div().flex_1().min_h_0().min_w_0().child(browser))
+                    .into_any_element();
             }
         }
         if let Some(view) = self
@@ -5047,8 +5193,8 @@ mod markdown_buffer_tests {
             let state = cx.new(|_| crate::state::AppState::new());
             FilesSurface::new(state, "chat".into(), false, 1000, 13.0, false, false, cx)
         });
-        surface.update(cx, |surface, _| {
-            assert_eq!(surface.system_open_path("src/lib.rs"), None);
+        surface.update(cx, |surface, cx| {
+            assert_eq!(surface.system_open_path("src/lib.rs", cx), None);
             let local = FilesRequestContext {
                 target: zuse_protocol::WorkspaceTarget {
                     chat_id: Some("chat".into()),
@@ -5061,14 +5207,170 @@ mod markdown_buffer_tests {
             };
             surface.request_context = Some(local.clone());
             assert_eq!(
-                surface.system_open_path("src/lib.rs"),
+                surface.system_open_path("src/lib.rs", cx),
                 Some(std::path::PathBuf::from("/workspace/src/lib.rs"))
             );
             surface.request_context = Some(FilesRequestContext {
                 target_device_id: Some("other-device".into()),
                 ..local
             });
-            assert_eq!(surface.system_open_path("src/lib.rs"), None);
+            assert_eq!(surface.system_open_path("src/lib.rs", cx), None);
+        });
+    }
+
+    fn html_file(path: &str, text: &str) -> zuse_protocol::WorkspaceFileText {
+        serde_json::from_value(serde_json::json!({
+            "checkoutId": "checkout", "path": path, "text": text,
+            "contentHash": "hash-1", "size": text.len(), "encoding": "utf8",
+            "truncated": false
+        }))
+        .unwrap()
+    }
+
+    #[gpui::test]
+    fn cloud_html_previews_the_remote_document_never_this_disk(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+        });
+        let path = "sandbox-guide/index.html";
+        for cloud in [true, false] {
+            let surface = cx.new(|cx| {
+                let state = cx.new(|_| {
+                    let mut state = crate::state::AppState::new();
+                    state.hosted_on_cloud_computer = cloud;
+                    state
+                });
+                FilesSurface::new(state, "chat".into(), false, 1000, 13.0, false, false, cx)
+            });
+            surface.update(cx, |surface, cx| {
+                // A cloud computer's chat names its engine's own device, so
+                // the request context looks local; its files still are not.
+                surface.request_context = Some(FilesRequestContext {
+                    target: zuse_protocol::WorkspaceTarget {
+                        chat_id: Some("chat".into()),
+                        space_id: None,
+                        checkout_path: None,
+                    },
+                    target_device_id: None,
+                    cwd: "/home/zuse/project".into(),
+                    checkout_id: Some("checkout".into()),
+                });
+                let key = document_key(surface.request_context.as_ref().unwrap(), path.into());
+                surface
+                    .preview
+                    .documents
+                    .insert(path.into(), FileDocument::loading(key));
+                assert!(surface.web_preview_available(path, cx));
+                // Still loading: the tab shows its loading state, not a page.
+                assert_eq!(surface.remote_html(path, cx), None);
+                if !cloud {
+                    // A local chat keeps serving the page from this disk.
+                    assert_eq!(
+                        surface.system_open_path(path, cx),
+                        Some(std::path::PathBuf::from(
+                            "/home/zuse/project/sandbox-guide/index.html"
+                        ))
+                    );
+                    surface
+                        .preview
+                        .documents
+                        .get_mut(path)
+                        .unwrap()
+                        .set_loaded(html_file(path, "<h1>Guide</h1>"));
+                    assert_eq!(surface.remote_html(path, cx), None);
+                    return;
+                }
+                assert_eq!(surface.system_open_path(path, cx), None);
+                surface
+                    .preview
+                    .documents
+                    .get_mut(path)
+                    .unwrap()
+                    .set_loaded(html_file(path, "<h1>Guide</h1>"));
+                assert_eq!(
+                    surface.remote_html(path, cx),
+                    Some(("<h1>Guide</h1>".into(), Some("hash-1".into())))
+                );
+                // A file that is gone shows the document's quiet missing
+                // state with Retry, never a disk error.
+                surface
+                    .preview
+                    .documents
+                    .get_mut(path)
+                    .unwrap()
+                    .set_error("File not found.");
+                assert_eq!(surface.remote_html(path, cx), None);
+                assert_eq!(
+                    surface.preview.documents.get(path).unwrap().phase,
+                    DocumentPhase::Error("File not found.".into())
+                );
+            });
+        }
+    }
+
+    #[gpui::test]
+    fn cloud_html_tab_renders_missing_file_state_not_an_os_error(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+        });
+        let path = "sandbox-guide/index.html";
+        let (surface, cx) = cx.add_window_view(|_, cx| {
+            let state = cx.new(|_| {
+                let mut state = crate::state::AppState::new();
+                state.hosted_on_cloud_computer = true;
+                state
+            });
+            let mut surface =
+                FilesSurface::new(state, "chat".into(), false, 1000, 13.0, false, false, cx);
+            surface.request_context = Some(FilesRequestContext {
+                target: zuse_protocol::WorkspaceTarget {
+                    chat_id: Some("chat".into()),
+                    space_id: None,
+                    checkout_path: None,
+                },
+                target_device_id: None,
+                cwd: "/definitely/not/on/this/disk".into(),
+                checkout_id: Some("checkout".into()),
+            });
+            let key = document_key(surface.request_context.as_ref().unwrap(), path.into());
+            let mut document = FileDocument::loading(key);
+            document.set_error("File not found.");
+            surface.preview.documents.insert(path.into(), document);
+            surface
+        });
+        // Render just the tab body inside a view, as the editor does.
+        struct Body(Entity<FilesSurface>);
+        impl Render for Body {
+            fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                self.0.update(cx, |surface, cx| {
+                    surface.render_document_body(
+                        "sandbox-guide/index.html",
+                        &Theme::dark(),
+                        window,
+                        cx,
+                    )
+                })
+            }
+        }
+        let body = cx.update(|_, cx| cx.new(|_| Body(surface.clone())));
+        cx.draw(
+            gpui::point(px(0.0), px(0.0)),
+            gpui::size(px(600.0), px(400.0)),
+            move |_, _| body.clone().into_any_element(),
+        );
+        // The body is the document's missing-file state with Retry: no web
+        // preview was built from this desktop's disk.
+        assert!(cx.debug_bounds("files-document-retry").is_some());
+        surface.read_with(cx, |surface, _| {
+            let document = surface.preview.documents.get(path).unwrap();
+            assert!(document.show_web);
+            assert!(document.web.is_none());
+            assert_eq!(
+                document.phase,
+                DocumentPhase::Error("File not found.".into())
+            );
         });
     }
 

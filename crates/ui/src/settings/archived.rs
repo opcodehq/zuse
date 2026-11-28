@@ -4,13 +4,14 @@
 
 use crate::localization::message as tr;
 use gpui::{
-    AnyElement, Context, Entity, SharedString, Subscription, Task, Window, div, prelude::*, px,
+    AnyElement, App, Context, Entity, SharedString, Subscription, Task, Window, div, prelude::*, px,
 };
 use zuse_i18n::messages as msg;
 
 use zuse_protocol::Chat;
 use zuse_rpc::methods;
 
+use crate::icons::{self, icon};
 use crate::popover;
 use crate::settings::widgets;
 use crate::state::AppState;
@@ -51,6 +52,48 @@ fn archive_page(total: usize, requested: usize) -> usize {
     requested.min(total.saturating_sub(1) / ARCHIVE_PAGE_SIZE)
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum SourceFilter {
+    #[default]
+    All,
+    Saved,
+    Cloud,
+}
+
+impl SourceFilter {
+    fn label(self) -> &'static str {
+        match self {
+            Self::All => "All chats",
+            Self::Saved => "Saved chats",
+            Self::Cloud => "Cloud chats",
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum ArchiveMenu {
+    Source,
+    Project,
+    Group(String),
+}
+
+enum ArchiveRow {
+    Saved(zuse_viewport::archive_cards::Entry),
+    Cloud(zuse_model::cloud::Workspace),
+}
+
+impl ArchiveRow {
+    fn date(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        match self {
+            Self::Saved(entry) => Some(entry.date()),
+            Self::Cloud(row) => row
+                .updated_at
+                .or(row.created_at)
+                .and_then(chrono::DateTime::from_timestamp_millis),
+        }
+    }
+}
+
 pub struct ArchivedPage {
     state: Entity<AppState>,
     scroll: widgets::PageScroll,
@@ -65,6 +108,10 @@ pub struct ArchivedPage {
     page: usize,
     search: Option<Entity<zuse_viewport::input::TextInput>>,
     query: String,
+    source: SourceFilter,
+    project: Option<String>,
+    menu: Option<ArchiveMenu>,
+    cloud_details: Option<String>,
     _search: Option<Subscription>,
     task: Option<Task<()>>,
     _observe: Subscription,
@@ -132,6 +179,10 @@ impl ArchivedPage {
             page: 0,
             search: None,
             query: String::new(),
+            source: SourceFilter::default(),
+            project: None,
+            menu: None,
+            cloud_details: None,
             _search: None,
             task: None,
             _observe: observe,
@@ -635,50 +686,6 @@ impl ArchivedPage {
         }
         cx.notify();
     }
-    fn cloud_section(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !zuse_viewport::cloud_gate::enabled() {
-            return None;
-        }
-        let account = self.state.read(cx).cloud_account.as_ref();
-        let access = match account {
-            None => cloud_cards::Access::Loading,
-            Some(value) if !value["user"].is_object() => cloud_cards::Access::SignedOut,
-            Some(value) if !value["orgId"].is_null() => cloud_cards::Access::PersonalAccount,
-            _ => cloud_cards::Access::Ready,
-        };
-        zuse_viewport::palette::set_light(Theme::of(cx).appearance.is_light());
-        Some(
-            div()
-                .mt(px(24.))
-                .child(cloud_cards::panel(
-                    &self.cloud.rows,
-                    &self.query,
-                    cloud_cards::State {
-                        access,
-                        loading: self.cloud.loading && self.cloud.selected.is_none(),
-                        busy: self.cloud.busy,
-                        opening: self
-                            .cloud
-                            .loading
-                            .then_some(self.cloud.selected.as_deref())
-                            .flatten(),
-                        pending: self
-                            .cloud
-                            .busy
-                            .then_some(self.cloud_action.as_ref())
-                            .flatten(),
-                        error: self.cloud.error.as_deref(),
-                        error_target: self
-                            .cloud_action
-                            .as_ref()
-                            .and_then(cloud_cards::Action::target),
-                    },
-                    Self::cloud_card_action,
-                    cx,
-                ))
-                .into_any_element(),
-        )
-    }
     fn unarchive(&mut self, chat_id: String, cx: &mut Context<Self>) {
         if self.busy.is_some() || self.delete_all_task.is_some() {
             return;
@@ -760,21 +767,24 @@ impl ArchivedPage {
             _ => {}
         }
     }
+    #[cfg(test)]
     fn request_delete_all(&mut self, cx: &mut Context<Self>) {
-        if self.delete_all_task.is_some() || self.busy.is_some() {
-            return;
-        }
         let ids: Vec<String> = archived_chats(&self.state.read(cx).chats)
             .into_iter()
             .map(|chat| chat.id.clone())
             .collect();
-        if !ids.is_empty() {
+        self.request_delete_saved(ids, cx);
+    }
+
+    fn request_delete_saved(&mut self, ids: Vec<String>, cx: &mut Context<Self>) {
+        if self.delete_all_task.is_none() && self.busy.is_none() && !ids.is_empty() {
             self.delete_all_confirm = Some(ids);
             cx.notify();
         }
     }
 
     pub(crate) fn on_hidden(&mut self, cx: &mut Context<Self>) {
+        self.menu = None;
         if let Some(preview) = self.preview.take() {
             preview.update(cx, |preview, cx| preview.on_hidden(cx));
         }
@@ -785,6 +795,10 @@ impl ArchivedPage {
     /// first, so it never closes Settings under the dialog (this page
     /// outlives Settings, and the dialog would reopen with it).
     pub(crate) fn dismiss_on_escape(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.menu.take().is_some() {
+            cx.notify();
+            return true;
+        }
         if let Some(preview) = self.preview.take() {
             preview.update(cx, |preview, cx| preview.on_hidden(cx));
             self.preview_events = None;
@@ -854,7 +868,11 @@ impl ArchivedPage {
         let card = popover::dialog_card(&theme)
             .child(popover::dialog_title(
                 &theme,
-                "Delete all archived sessions?",
+                if count == 1 {
+                    "Delete archived chat?"
+                } else {
+                    "Delete archived chats?"
+                },
             ))
             .child(
                 div()
@@ -876,13 +894,591 @@ impl ArchivedPage {
                         })),
                     )
                     .child(
-                        popover::btn_danger(&theme, "Delete all")
+                        popover::btn_danger(&theme, "Delete permanently")
                             .id("delete-archived-confirm")
                             .on_click(cx.listener(|this, _, _, cx| this.delete_all(cx))),
                     ),
             )
             .into_any_element();
         Some(popover::modal("delete-archived-dialog", viewport, card))
+    }
+
+    fn reset_archive_filters(&mut self, cx: &mut Context<Self>) {
+        self.menu = None;
+        self.page = 0;
+        self.scroll.reset();
+        cx.notify();
+    }
+
+    fn archive_groups(
+        &self,
+        cx: &App,
+    ) -> std::collections::BTreeMap<(String, String), Vec<ArchiveRow>> {
+        let state = self.state.read(cx);
+        let cloud_projects = state.cloud_sidebar_projects();
+        let labels = state.project_labels(&cloud_projects);
+        let cloud_groups = cloud_projects
+            .iter()
+            .filter_map(|project| {
+                zuse_protocol::presentation::cloud_project_group(project, &state.spaces)
+            })
+            .map(|group| (group.project_id.clone(), group))
+            .collect::<std::collections::HashMap<_, _>>();
+        let unknown = || ("Unassigned project".to_owned(), "unassigned".to_owned());
+        let mut groups = std::collections::BTreeMap::<_, Vec<_>>::new();
+        for chat in archived_chats(&state.chats) {
+            let (name, key) = state
+                .spaces
+                .iter()
+                .find(|space| Some(space.id.as_str()) == chat.space_id.as_deref())
+                .map(|space| {
+                    let key = zuse_protocol::view::project_key(space);
+                    let name = labels
+                        .local
+                        .get(&key)
+                        .cloned()
+                        .unwrap_or_else(|| space.display_name().to_owned());
+                    (name, key)
+                })
+                .or_else(|| {
+                    let path = chat.cwd.as_deref()?.trim_end_matches(['/', '\\']);
+                    let name = path
+                        .rsplit(['/', '\\'])
+                        .next()
+                        .filter(|name| !name.is_empty())?;
+                    Some((name.to_owned(), format!("folder:{}:{path}", chat.device_id)))
+                })
+                .unwrap_or_else(unknown);
+            let computer = state
+                .devices
+                .iter()
+                .find(|device| device.id == chat.device_id)
+                .map(|device| device.name.clone());
+            groups
+                .entry((name.clone(), key))
+                .or_default()
+                .push(ArchiveRow::Saved(zuse_viewport::archive_cards::Entry {
+                    chat: chat.clone(),
+                    project: name,
+                    computer,
+                }));
+        }
+        if self.cloud_owner.is_some() {
+            for row in self.cloud.rows.iter().filter(|row| row.archive_visible()) {
+                let (name, key) = row
+                    .project_id
+                    .as_ref()
+                    .map(|id| {
+                        if let Some(group) = cloud_groups.get(id) {
+                            let name = labels
+                                .cloud
+                                .get(id)
+                                .cloned()
+                                .unwrap_or_else(|| group.name.clone());
+                            (name, group.key.clone())
+                        } else {
+                            ("Cloud project".to_owned(), format!("cloud:{id}"))
+                        }
+                    })
+                    .unwrap_or_else(unknown);
+                groups
+                    .entry((name, key))
+                    .or_default()
+                    .push(ArchiveRow::Cloud(row.clone()));
+            }
+        }
+        groups
+    }
+
+    fn archive_menu(
+        &self,
+        id: ArchiveMenu,
+        rows: Vec<AnyElement>,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let theme = Theme::of(cx).for_popup();
+        let menu = popover::popover_card(&theme)
+            .w(px(218.))
+            .child(
+                div()
+                    .id("archive-menu-options")
+                    .flex()
+                    .flex_col()
+                    .max_h(px(280.))
+                    .overflow_y_scroll()
+                    .children(rows),
+            )
+            .on_mouse_down_out(cx.listener(move |this, _, _, cx| {
+                if this.menu.as_ref() == Some(&id) {
+                    this.menu = None;
+                    cx.notify();
+                }
+            }));
+        popover::anchored_menu_below_end("archive-settings-menu", menu.into_any_element(), None)
+    }
+
+    fn archive_dropdown(
+        &self,
+        id: ArchiveMenu,
+        glyph: &'static str,
+        label: SharedString,
+        rows: Vec<AnyElement>,
+        theme: &Theme,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let open = self.menu.as_ref() == Some(&id);
+        let key = if id == ArchiveMenu::Source {
+            "archive-source-filter"
+        } else {
+            "archive-project-filter"
+        };
+        let open_menu = open.then(|| self.archive_menu(id.clone(), rows, cx));
+        div()
+            .relative()
+            .flex_none()
+            .child(
+                widgets::action_button(theme, widgets::ActionTone::Outlined)
+                    .id(key)
+                    .role(gpui::Role::Button)
+                    .aria_expanded(open)
+                    .tab_index(0)
+                    .h(px(28.))
+                    .min_w(px(118.))
+                    .max_w(px(186.))
+                    .px(px(10.))
+                    .bg(widgets::block_fill(theme))
+                    .child(
+                        icon(glyph)
+                            .size(px(14.))
+                            .flex_none()
+                            .text_color(theme.text_muted),
+                    )
+                    .child(div().flex_1().truncate().child(label))
+                    .child(
+                        icon(icons::ALT_ARROW_DOWN)
+                            .size(px(12.))
+                            .flex_none()
+                            .text_color(theme.text_muted),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.menu = (!open).then(|| id.clone());
+                        cx.notify();
+                    })),
+            )
+            .children(open_menu)
+            .into_any_element()
+    }
+
+    fn archive_group(
+        &self,
+        (name, key): (String, String),
+        rows: &[ArchiveRow],
+        visible: std::ops::Range<usize>,
+        blocked: bool,
+        theme: &Theme,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let saved = rows
+            .iter()
+            .filter_map(|row| match row {
+                ArchiveRow::Saved(entry) => Some(entry.chat.id.clone()),
+                ArchiveRow::Cloud(_) => None,
+            })
+            .collect::<Vec<_>>();
+        let count = rows.len();
+        let menu_id = ArchiveMenu::Group(key.clone());
+        let open = self.menu.as_ref() == Some(&menu_id);
+        let group_menu = (!saved.is_empty()).then(|| {
+            let count = saved.len();
+            let label = format!(
+                "Delete {count} saved chat{}",
+                if count == 1 { "" } else { "s" }
+            );
+            let menu = open.then(|| {
+                self.archive_menu(
+                    menu_id.clone(),
+                    vec![
+                        popover::menu_row(theme, false, label.clone())
+                            .id("archive-delete-group")
+                            .text_color(theme.danger)
+                            .child(
+                                icon(icons::TRASH_BIN_MINIMALISTIC)
+                                    .size(px(15.))
+                                    .text_color(theme.danger),
+                            )
+                            .child(label)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.menu = None;
+                                this.request_delete_saved(saved.clone(), cx);
+                            }))
+                            .into_any_element(),
+                    ],
+                    cx,
+                )
+            });
+            div()
+                .relative()
+                .child(
+                    widgets::action_button(theme, widgets::ActionTone::Quiet)
+                        .id("archived-group-more")
+                        .role(gpui::Role::Button)
+                        .aria_label("Project archive actions")
+                        .aria_expanded(open)
+                        .tab_index(0)
+                        .px(px(7.))
+                        .child(
+                            icon(icons::MORE_HORIZONTAL)
+                                .size(px(16.))
+                                .text_color(theme.text_muted),
+                        )
+                        .when(blocked, |el| el.opacity(0.5).cursor_default())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if !blocked {
+                                this.menu = (!open).then(|| menu_id.clone());
+                                cx.notify();
+                            }
+                        })),
+                )
+                .children(menu)
+        });
+        let heading = div()
+            .flex()
+            .items_center()
+            .gap(px(7.))
+            .child(
+                icon(icons::FOLDER)
+                    .size(px(14.))
+                    .text_color(theme.text_muted),
+            )
+            .child(widgets::row_title(theme, name).truncate());
+        let actions = div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .text_size(crate::typography::text_xs())
+            .text_color(theme.text_muted)
+            .child(format!("{count} chat{}", if count == 1 { "" } else { "s" }))
+            .children(group_menu)
+            .into_any_element();
+        zuse_viewport::settings_style::frame()
+            .id(SharedString::from(format!("archived-group-{key}")))
+            .bg(theme.settings_frame_bg())
+            .child(zuse_viewport::settings_style::header_bar(
+                heading,
+                Some(actions),
+            ))
+            .child(
+                widgets::section_card(theme)
+                    .mt_0()
+                    .children(
+                        rows[visible]
+                            .iter()
+                            .enumerate()
+                            .map(|(index, row)| match row {
+                                ArchiveRow::Saved(entry) => {
+                                    self.saved_archive_row(entry, index == 0, blocked, theme, cx)
+                                }
+                                ArchiveRow::Cloud(row) => {
+                                    self.cloud_archive_row(row, index == 0, theme, cx)
+                                }
+                            }),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn saved_archive_row(
+        &self,
+        entry: &zuse_viewport::archive_cards::Entry,
+        first: bool,
+        blocked: bool,
+        theme: &Theme,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let id = entry.chat.id.clone();
+        let title = entry
+            .chat
+            .title
+            .as_deref()
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or("Untitled chat");
+        let preview = id.clone();
+        let restore = id.clone();
+        let delete = id.clone();
+        archive_line(theme, first, "saved", &id)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(
+                        widgets::row_title(theme, crate::transcript::single_line(title))
+                            .id("archive-preview")
+                            .truncate()
+                            .cursor_pointer()
+                            .text_color(theme.text_strong)
+                            .hover(|el| el.text_color(theme.accent))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.archive_card_action(
+                                    zuse_viewport::archive_cards::Action::Open(preview.clone()),
+                                    window,
+                                    cx,
+                                );
+                            })),
+                    )
+                    .child(archive_date(Some(entry.date()), theme)),
+            )
+            .child(
+                archive_button(
+                    "archive-restore",
+                    if self.busy.as_deref() == Some(id.as_str()) {
+                        "Restoring…"
+                    } else {
+                        "Unarchive"
+                    },
+                    false,
+                    blocked,
+                    theme,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| this.unarchive(restore.clone(), cx))),
+            )
+            .child(
+                archive_button("archive-delete", "Delete", true, blocked, theme).on_click(
+                    cx.listener(move |this, _, _, cx| {
+                        if !blocked {
+                            this.request_delete_saved(vec![delete.clone()], cx);
+                        }
+                    }),
+                ),
+            )
+            .into_any_element()
+    }
+
+    fn cloud_archive_row(
+        &self,
+        row: &zuse_model::cloud::Workspace,
+        first: bool,
+        theme: &Theme,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        use cloud_cards::Action;
+        let id = &row.workspace_id;
+        let blocked = self.cloud.loading || self.cloud.busy;
+        let pending = self
+            .cloud_action
+            .as_ref()
+            .filter(|action| self.cloud.busy && action.target() == Some(id.as_str()));
+        let enabled = !row.deleting() && row.state != "deleted";
+        let (status, description, attention) = cloud_cards::status(row);
+        let show_details = self.cloud_details.as_deref() == Some(id.as_str());
+        let error =
+            self.cloud.error.as_deref().filter(|_| {
+                self.cloud_action.as_ref().and_then(Action::target) == Some(id.as_str())
+            });
+        let action = |key, label, danger, blocked, action: Action| {
+            archive_button(key, label, danger, blocked, theme).on_click(cx.listener(
+                move |this, _, window, cx| {
+                    if !blocked {
+                        this.cloud_card_action(action.clone(), window, cx);
+                    }
+                },
+            ))
+        };
+        let open = Action::Open(id.clone());
+        let toggle = id.clone();
+        let date = row
+            .updated_at
+            .or(row.created_at)
+            .and_then(chrono::DateTime::from_timestamp_millis);
+        let line = archive_line(theme, first, "cloud", id)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(
+                        widgets::row_title(theme, crate::transcript::single_line(row.label()))
+                            .id("cloud-archive-open")
+                            .truncate()
+                            .text_color(theme.text_strong)
+                            .when(enabled && !blocked, |el| {
+                                el.cursor_pointer().hover(|el| el.text_color(theme.accent))
+                            })
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                if enabled {
+                                    this.cloud_card_action(open.clone(), window, cx);
+                                }
+                            })),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(7.))
+                            .child(archive_date(date, theme))
+                            .child(
+                                icon(icons::DITHER_CLOUD)
+                                    .size(px(13.))
+                                    .text_color(theme.text_muted),
+                            )
+                            .child(
+                                div()
+                                    .id("cloud-archive-details")
+                                    .role(gpui::Role::Button)
+                                    .aria_expanded(show_details)
+                                    .tab_index(0)
+                                    .cursor_pointer()
+                                    .text_size(px(11.))
+                                    .text_color(if attention {
+                                        theme.danger
+                                    } else {
+                                        theme.text_muted
+                                    })
+                                    .hover(|el| el.text_color(theme.text))
+                                    .child(status)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.cloud_details =
+                                            (!show_details).then(|| toggle.clone());
+                                        cx.notify();
+                                    })),
+                            ),
+                    ),
+            )
+            .when(enabled, |el| {
+                el.child(action(
+                    "cloud-archive-restore",
+                    if matches!(pending, Some(Action::Restore(_))) {
+                        "Restoring…"
+                    } else {
+                        "Unarchive"
+                    },
+                    false,
+                    blocked || row.state != "archived",
+                    Action::Restore(id.clone()),
+                ))
+            })
+            .when(row.state != "deleted", |el| {
+                let retry = row.delete_failed();
+                el.child(action(
+                    "cloud-archive-delete",
+                    if retry {
+                        "Retry deletion"
+                    } else if row.deleting() || matches!(pending, Some(Action::Delete(_))) {
+                        "Deleting…"
+                    } else {
+                        "Delete"
+                    },
+                    true,
+                    blocked || (row.deleting() && !retry),
+                    if retry {
+                        Action::RetryDelete(id.clone())
+                    } else {
+                        Action::Delete(id.clone())
+                    },
+                ))
+            });
+        div()
+            .child(line)
+            .when(
+                show_details || error.is_some() || row.cleanup_failed(),
+                |el| {
+                    el.child(
+                        div()
+                            .px(px(12.))
+                            .pb(px(9.))
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.))
+                            .text_size(px(12.))
+                            .text_color(theme.text_muted)
+                            .child(description)
+                            .when(!row.branch.is_empty(), |el| {
+                                el.child(format!("Branch {}", row.branch))
+                            })
+                            .children(cloud_cards::recovery_details(row))
+                            .children(row.cleanup_label().map(str::to_owned))
+                            .children(error.map(|message| {
+                                div().text_color(theme.danger).child(message.to_owned())
+                            }))
+                            .when(row.cleanup_failed(), |el| {
+                                el.child(
+                                    action(
+                                        "cloud-archive-cleanup",
+                                        "Retry local cleanup",
+                                        false,
+                                        blocked,
+                                        Action::Cleanup(id.clone()),
+                                    )
+                                    .w_auto(),
+                                )
+                            }),
+                    )
+                },
+            )
+            .into_any_element()
+    }
+
+    fn archive_cloud_status(&self, theme: &Theme, cx: &Context<Self>) -> Option<AnyElement> {
+        if !zuse_viewport::cloud_gate::enabled() || self.source == SourceFilter::Saved {
+            return None;
+        }
+        let message: Option<String> = if let Some(error) =
+            self.cloud.error.as_deref().filter(|_| {
+                self.cloud_action
+                    .as_ref()
+                    .and_then(cloud_cards::Action::target)
+                    .is_none()
+            }) {
+            Some(error.to_owned())
+        } else if self.source == SourceFilter::Cloud && self.cloud_owner.is_none() {
+            let state = self.state.read(cx);
+            Some(
+                if state.cloud_account.is_none() {
+                    "Loading your cloud account…"
+                } else if state.cloud_user_id().is_none() {
+                    "Sign in through General settings to view cloud archives."
+                } else {
+                    "Switch to your personal account to view cloud archives."
+                }
+                .into(),
+            )
+        } else {
+            None
+        };
+        // Refresh stays available whenever cloud archives are loaded: a row
+        // can ask for it (a missing archive source) without any page error.
+        if message.is_none() && self.cloud_owner.is_none() {
+            return None;
+        }
+        Some(
+            div()
+                .pt(px(8.))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .text_size(px(12.))
+                .text_color(theme.text_muted)
+                .children(message)
+                .when(self.cloud_owner.is_some(), |el| {
+                    el.child(
+                        archive_button(
+                            "cloud-archive-refresh",
+                            "Refresh",
+                            false,
+                            self.cloud.loading || self.cloud.busy,
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.cloud_card_action(cloud_cards::Action::Refresh, window, cx);
+                        })),
+                    )
+                })
+                .into_any_element(),
+        )
     }
 
     fn on_scroll_hovered(&mut self, hovered: &bool, _: &mut Window, cx: &mut Context<Self>) {
@@ -913,6 +1509,7 @@ impl Render for ArchivedPage {
             return history.clone().into_any_element();
         }
         crate::toast::take_error(&mut self.error, cx);
+        zuse_viewport::palette::set_light(Theme::of(cx).appearance.is_light());
         let dialog = self
             .render_cloud_delete_dialog(window.viewport_size(), cx)
             .or_else(|| self.render_delete_all_dialog(window.viewport_size(), cx));
@@ -920,11 +1517,7 @@ impl Render for ArchivedPage {
         use zuse_viewport::archive_cards as cards;
         if self.search.is_none() {
             let search = cx.new(|cx| {
-                zuse_viewport::input::TextInput::new(
-                    zuse_viewport::cloud_gate::archive_search_placeholder(),
-                    window,
-                    cx,
-                )
+                zuse_viewport::input::TextInput::new("Search archived chats", window, cx)
             });
             self._search = Some(cx.observe(&search, |_, _, cx| cx.notify()));
             self.search = Some(search);
@@ -936,155 +1529,160 @@ impl Render for ArchivedPage {
             self.page = 0;
             self.scroll.reset();
         }
-        let (rows, count, total) = {
-            let state = self.state.read(cx);
-            let all = archived_chats(&state.chats);
-            let total = all.len();
-            let mut entries = all
-                .into_iter()
-                .map(|chat| {
-                    let project = state
-                        .spaces
-                        .iter()
-                        .find(|space| Some(space.id.as_str()) == chat.space_id.as_deref())
-                        .map(|space| space.display_name().to_string())
-                        .or_else(|| {
-                            chat.cwd
-                                .as_deref()
-                                .and_then(|p| {
-                                    p.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next()
-                                })
-                                .map(str::to_owned)
-                        })
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or_else(|| "Unassigned project".into());
-                    cards::Entry {
-                        chat: chat.clone(),
-                        project,
-                        computer: state
-                            .devices
-                            .iter()
-                            .find(|device| device.id == chat.device_id)
-                            .map(|device| device.name.clone()),
-                    }
-                })
-                .filter(|entry| entry.matches(&query))
-                .collect::<Vec<_>>();
-            entries.sort_by(|a, b| {
-                b.date()
-                    .cmp(&a.date())
-                    .then_with(|| a.chat.id.cmp(&b.chat.id))
-            });
-            let count = entries.len();
-            let current = archive_page(count, self.page);
-            if current != self.page {
-                self.page = current;
-                self.scroll.reset();
-            }
-            (
-                entries
-                    .into_iter()
-                    .skip(self.page * ARCHIVE_PAGE_SIZE)
-                    .take(ARCHIVE_PAGE_SIZE)
-                    .collect::<Vec<_>>(),
-                count,
-                total,
-            )
-        };
-        let blocked = self.busy.is_some()
-            || self.delete_all_task.is_some()
-            || self.state.read(cx).engine().is_none();
-        let items = rows
-            .into_iter()
-            .enumerate()
-            .map(|(index, entry)| {
-                let restoring = self.busy.as_deref() == Some(entry.chat.id.as_str());
-                cards::card(
-                    entry,
-                    index,
-                    cards::State {
-                        preview: true,
-                        menu: false,
-                        restoring,
-                        blocked,
-                    },
-                    Self::archive_card_action,
-                    cx,
-                )
-            })
-            .collect::<Vec<_>>();
-        let body: AnyElement = if items.is_empty() {
-            div()
-                .py(px(32.))
-                .flex()
-                .flex_col()
-                .items_center()
-                .gap(px(8.))
-                .text_color(theme.text_muted)
-                .child(crate::icons::icon(crate::icons::ARCHIVE_MINIMALISTIC).size(px(28.)))
-                .child(if query.is_empty() {
-                    "No saved chats"
-                } else {
-                    "No matching saved chats"
-                })
-                .child(div().text_size(px(11.)).child(if query.is_empty() {
-                    "Archived chats will appear here."
-                } else {
-                    "Try another title, project, branch or computer."
-                }))
-                .into_any_element()
-        } else {
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(8.))
-                .children(items)
-                .into_any_element()
-        };
-        let pagination = cards::pagination(count, self.page, Self::archive_card_action, cx);
+        let projects = self.archive_groups(cx);
+        // A project whose last archive went away stops filtering, so it
+        // can't silently come back when that project archives again.
+        let project_filter = self
+            .project
+            .clone()
+            .filter(|key| projects.keys().any(|(_, id)| id == key));
+        // A list still loading can't prove the project gone.
+        if project_filter != self.project && !self.cloud.loading {
+            self.project = project_filter.clone();
+            self.page = 0;
+            self.scroll.reset();
+        }
         let search_bar = div()
-            .w_full()
-            .h(px(32.))
-            .max_w(px(576.))
-            .mb(px(12.))
+            .flex_1()
+            .min_w(px(140.))
+            .h(px(28.))
             .px(px(10.))
             .flex()
             .items_center()
             .gap(px(8.))
-            .rounded(px(7.))
+            .rounded(px(8.))
             .border_1()
             .border_color(theme.border)
-            .bg(zuse_viewport::settings_style::card_bg())
+            .bg(widgets::block_fill(&theme))
             .child(
-                crate::icons::icon(crate::icons::MAGNIFER)
-                    .size(px(16.))
+                icon(icons::MAGNIFER)
+                    .size(px(15.))
                     .text_color(theme.text_muted),
             )
             .child(search);
-        let deleting = self.delete_all_task.is_some();
-        let delete_all = (total > 0).then(|| {
-            widgets::action_button(&theme, widgets::ActionTone::Quiet)
-                .text_color(theme.danger)
-                .id("archived-delete-all")
-                .flex_none()
-                .when(deleting || self.busy.is_some(), |el| {
-                    el.opacity(0.5).cursor_default()
+        let source_menu = self.archive_dropdown(
+            ArchiveMenu::Source,
+            icons::DITHER_SLIDERS,
+            self.source.label().into(),
+            [SourceFilter::All, SourceFilter::Saved, SourceFilter::Cloud]
+                .into_iter()
+                .filter(|source| {
+                    *source != SourceFilter::Cloud || zuse_viewport::cloud_gate::enabled()
                 })
-                .tab_index(0)
-                .role(gpui::Role::Button)
-                .focus_visible(|s| s.border_2().border_color(theme.accent))
-                .on_click(cx.listener(|this, _, _, cx| this.request_delete_all(cx)))
-                .child(
-                    crate::icons::icon(crate::icons::TRASH_BIN_MINIMALISTIC)
-                        .size(px(14.0))
-                        .text_color(theme.danger),
+                .map(|source| {
+                    popover::menu_row(&theme, self.source == source, source.label())
+                        .id(source.label())
+                        .child(source.label())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.source = source;
+                            this.reset_archive_filters(cx);
+                        }))
+                        .into_any_element()
+                })
+                .collect(),
+            &theme,
+            cx,
+        );
+        let project_menu = self.archive_dropdown(
+            ArchiveMenu::Project,
+            icons::FOLDER,
+            projects
+                .keys()
+                .find(|(_, key)| Some(key) == project_filter.as_ref())
+                .map(|(name, _)| name.clone())
+                .unwrap_or_else(|| "All projects".into())
+                .into(),
+            std::iter::once(("All projects".to_owned(), None))
+                .chain(
+                    projects
+                        .keys()
+                        .map(|(name, key)| (name.clone(), Some(key.clone()))),
                 )
-                .child(SharedString::from(if deleting {
-                    "Deleting…"
-                } else {
-                    "Delete all saved chats"
-                }))
-        });
+                .map(|(name, project)| {
+                    let label = SharedString::from(name);
+                    let id = SharedString::from(format!(
+                        "archive-project-{}",
+                        project.as_deref().unwrap_or("all")
+                    ));
+                    popover::menu_row(&theme, project_filter == project, id.clone())
+                        .id(id)
+                        .child(div().truncate().child(label))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.project = project.clone();
+                            this.reset_archive_filters(cx);
+                        }))
+                        .into_any_element()
+                })
+                .collect(),
+            &theme,
+            cx,
+        );
+        let blocked = self.busy.is_some()
+            || self.delete_all_task.is_some()
+            || self.state.read(cx).engine().is_none();
+        let mut groups = Vec::new();
+        for ((name, key), mut rows) in projects {
+            if project_filter.as_ref().is_some_and(|filter| filter != &key) {
+                continue;
+            }
+            rows.retain(|row| match row {
+                ArchiveRow::Saved(entry) => {
+                    self.source != SourceFilter::Cloud && entry.matches(&query)
+                }
+                ArchiveRow::Cloud(row) => {
+                    self.source != SourceFilter::Saved
+                        && (query.is_empty()
+                            || name.to_lowercase().contains(&query)
+                            || cloud_cards::matches(row, &query))
+                }
+            });
+            if !rows.is_empty() {
+                rows.sort_by_key(|row| std::cmp::Reverse(row.date()));
+                groups.push(((name, key), rows));
+            }
+        }
+        let total = groups.iter().map(|(_, rows)| rows.len()).sum();
+        let current = archive_page(total, self.page);
+        if self.page != current {
+            self.page = current;
+            self.scroll.reset();
+        }
+        let first = self.page * ARCHIVE_PAGE_SIZE;
+        let mut offset = 0;
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .children(groups.into_iter().filter_map(|(name, rows)| {
+                let start = first.saturating_sub(offset);
+                let end = (first + ARCHIVE_PAGE_SIZE)
+                    .saturating_sub(offset)
+                    .min(rows.len());
+                offset += rows.len();
+                (start < end)
+                    .then(|| self.archive_group(name, &rows, start..end, blocked, &theme, cx))
+            }))
+            .when(total == 0, |el| {
+                el.child(div().py(px(24.)).text_color(theme.text_muted).child(
+                    if self.source == SourceFilter::Cloud && self.cloud.loading {
+                        "Loading cloud chats…"
+                    } else if query.is_empty()
+                        && self.project.is_none()
+                        && self.source == SourceFilter::All
+                    {
+                        "No archived chats yet"
+                    } else {
+                        "No archived chats match these filters"
+                    },
+                ))
+            })
+            .children(cards::pagination(
+                total,
+                self.page,
+                Self::archive_card_action,
+                cx,
+            ));
+        let cloud_status = self.archive_cloud_status(&theme, cx);
         let scrollbar = popover::rail(self, "archived-page-scrollbar", &theme, cx);
         div()
             .id("archived-page-host")
@@ -1103,31 +1701,16 @@ impl Render for ArchivedPage {
                         .track_scroll(&self.scroll.scroll)
                         .child(
                             widgets::settings_page_column(window)
-                                .child(widgets::section_title_with_action(
+                                .child(widgets::section_title(
                                     &theme,
                                     "Archived chats",
-                                    None,
-                                    "Saved conversations across your projects and computers.",
-                                    None,
+                                    "Find archived chats and restore the ones you want to keep using.",
                                 ))
-                                .child(
-                                    widgets::section_stack().child(
-                                        widgets::group_with_action(
-                                            &theme,
-                                            format!("Saved chats · {count}"),
-                                            "Search by title, preview, branch, project or computer.",
-                                            delete_all.map(IntoElement::into_any_element),
-                                        )
-                                        .child(
-                                            widgets::section_card(&theme)
-                                                .mt_0()
-                                                .child(search_bar)
-                                                .child(body)
-                                                .children(pagination),
-                                        ),
-                                    ),
-                                )
-                                .children(self.cloud_section(cx)),
+                                .child(widgets::section_stack()
+                                    .child(div().flex().flex_wrap().items_center()
+                                        .gap(px(8.)).child(search_bar).child(source_menu).child(project_menu))
+                                    .child(body)
+                                    .children(cloud_status)),
                         ),
                 )
                 .fade_overflow_y(&self.scroll.scroll),
@@ -1136,6 +1719,43 @@ impl Render for ArchivedPage {
             .children(dialog)
             .into_any_element()
     }
+}
+
+fn archive_line(theme: &Theme, first: bool, source: &str, id: &str) -> gpui::Stateful<gpui::Div> {
+    widgets::card_row(theme, first)
+        .id(SharedString::from(format!("archived-{source}-{id}")))
+        .py(px(6.))
+}
+
+fn archive_date(date: Option<chrono::DateTime<chrono::Utc>>, theme: &Theme) -> gpui::Div {
+    div()
+        .text_size(px(11.))
+        .text_color(theme.text_muted)
+        .children(date.map(|date| {
+            date.with_timezone(&chrono::Local)
+                .format("%-d %b %Y, %H:%M")
+                .to_string()
+        }))
+}
+
+fn archive_button(
+    id: &'static str,
+    label: &'static str,
+    destructive: bool,
+    blocked: bool,
+    theme: &Theme,
+) -> gpui::Stateful<gpui::Div> {
+    widgets::action_button(theme, widgets::ActionTone::Filled)
+        .id(id)
+        .role(gpui::Role::Button)
+        .when(!blocked, |el| el.tab_index(0))
+        .flex_none()
+        .px(px(10.))
+        .when(destructive, |el| {
+            el.bg(theme.danger.opacity(0.12)).text_color(theme.danger)
+        })
+        .when(blocked, |el| el.opacity(0.5).cursor_default())
+        .child(label)
 }
 
 fn delete_all_body(count: usize) -> String {

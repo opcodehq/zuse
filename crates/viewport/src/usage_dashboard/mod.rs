@@ -62,6 +62,7 @@ enum Action {
 pub struct UsageDashboard {
     properties: Properties,
     /// Inside Settings: the page supplies the title, so the bar is omitted.
+    embedded: bool,
     visible: bool,
     project_scope: bool,
     period: i64,
@@ -126,6 +127,7 @@ impl UsageDashboard {
                 target: None,
                 project: None,
             },
+            embedded: false,
             visible: false,
             project_scope: false,
             period: 7,
@@ -163,6 +165,15 @@ impl UsageDashboard {
             root_focus: cx.focus_handle(),
             _query: observe,
         }
+    }
+    pub fn set_embedded(&mut self, embedded: bool, cx: &mut Context<Self>) {
+        if self.embedded != embedded {
+            self.embedded = embedded;
+            cx.notify();
+        }
+    }
+    pub fn embedded(&self) -> bool {
+        self.embedded
     }
     pub fn set_properties(&mut self, properties: Properties, cx: &mut Context<Self>) {
         if self.properties == properties {
@@ -207,6 +218,7 @@ impl UsageDashboard {
         cx.notify();
     }
     pub fn open(&mut self, properties: Properties, project: bool, cx: &mut Context<Self>) {
+        let previous_report_key = self.report_key();
         self.hide(cx);
         if self.properties.owner != properties.owner || self.properties.target != properties.target
         {
@@ -225,6 +237,9 @@ impl UsageDashboard {
             .update(cx, |input, cx| input.set_value(String::new(), cx));
         self.properties = properties;
         self.project_scope = project && self.properties.project.is_some();
+        if self.report_key() != previous_report_key {
+            self.report = None;
+        }
         cx.emit(Event::ScopeChanged(self.project_scope));
         self.page = None;
         self.report_error = None;

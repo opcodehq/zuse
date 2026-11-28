@@ -1,0 +1,113 @@
+---
+title: Install and connect Zuse
+icon: Download
+navTitle: "Install"
+description: Install Zuse on macOS, Windows, or Linux and make a supported coding agent available.
+section: start
+order: 2
+platforms: [desktop]
+providers: [claude, codex, grok, cursor, opencode, kiro, pi]
+prerequisites: []
+related: [/start/first-chat, /providers, /reference/diagnostics]
+next: /start/first-chat
+lastVerified: "2026-11-27"
+---
+
+
+Zuse ships for macOS (Apple silicon and Intel), Windows x64, and Linux (x64 and ARM64). It runs the coding agents already installed on your computer, so first-run setup checks which agents it can find.
+
+Every release is published on [GitHub Releases](https://github.com/opcodehq/zuse/releases/latest). Each release includes a `SHA256SUMS` file that covers every download.
+
+## Install the app
+
+### macOS
+
+1. Download the DMG for your Mac: `macos-aarch64` for Apple silicon or `macos-x86_64` for Intel.
+2. Open the disk image and drag **Zuse** into **Applications**.
+3. Launch Zuse. First-run setup opens on a fresh installation.
+
+The app and the disk image are signed and notarized.
+
+### Windows
+
+Download the Setup EXE and run it. It installs Zuse for the current user in `%LOCALAPPDATA%\Programs\Zuse` without administrator rights and adds a Start menu shortcut. Uninstall it from Windows Settings.
+
+You can also extract the portable ZIP anywhere you can write to and run `zuse.exe`. A ZIP install does not update itself.
+
+Windows downloads are not code-signed yet, so SmartScreen warns on first launch: choose **More info**, then **Run anyway**. The built-in browser needs the WebView2 Evergreen Runtime, which Windows 10 and 11 usually already include. If Windows reports a missing `MSVCP140.dll` or `VCRUNTIME140.dll`, install the Microsoft Visual C++ v14 Redistributable (x64).
+
+### Linux
+
+Install the DEB or RPM for your architecture (`x86_64` or `aarch64`) with your package manager. On Debian and Ubuntu:
+
+```bash
+sudo apt install ./zuse-VERSION-linux-ARCH.deb
+```
+
+On Fedora and other RPM-based distributions:
+
+```bash
+sudo dnf install ./zuse-VERSION-linux-ARCH.rpm
+```
+
+The packages install under `/opt/zuse`, add the `zuse` command, and register the desktop entry. Remove them with `sudo apt remove zuse` or `sudo dnf remove zuse`; your profile stays in place.
+
+To install for the current user without `sudo`, use the terminal installer from the release:
+
+```bash
+(
+  set -e
+  installer=$(mktemp)
+  trap 'rm -f "$installer"' EXIT
+  curl -fsSL https://github.com/opcodehq/zuse/releases/latest/download/install.sh -o "$installer"
+  sh "$installer"
+)
+```
+
+The installer needs Python 3.11 or newer. It picks your architecture, verifies the download checksums, installs into `~/.local/share/zuse`, and adds launchers to `~/.local/bin`. Without `--version`, it selects the latest stable release. Run the same command with `--uninstall` to remove its launchers.
+
+Linux builds use Ubuntu 24.04 (glibc 2.39) as their baseline and need WebKitGTK 4.1 and a working Vulkan GPU driver. The DEB and RPM packages pull in their runtime dependencies.
+
+### Open Zuse from a terminal
+
+Open the app from your dock, Start menu, or app launcher. In a terminal, run `zuse app`. A bare `zuse` prints help instead of opening a window.
+
+For a computer without a display, download the `zuse-cli` archive instead. See [Serve](/serve).
+
+## Connect an agent
+
+Zuse runs the agent apps installed on the computer, including Claude Code, Codex, Cursor, Grok, OpenCode, Kiro, and Pi. See [Providers](/providers) for the full list. You need at least one agent installed and signed in.
+
+On a fresh installation, setup walks you through these steps:
+
+1. **Welcome**, where you can also choose the interface language.
+2. **Your agents**, which lists the agents Zuse found on this computer.
+3. **Sign in to Zuse**. An account is optional; local agents work without one.
+4. **Bring your MCP servers**, shown when you sign in. It offers the MCP servers already configured in your agent apps.
+5. **Bring your chats**, which imports recent chats from the previous version of Zuse and from supported agent apps.
+6. **Make it yours**, where you choose the appearance and the access new chats start with.
+7. **You're all set**, where you can add a project or start a chat right away.
+
+Choose **Skip setup** on the first step to go straight to the app.
+
+Open **Settings → Providers & accounts** at any time to check what is installed and signed in, sign in to an agent, add accounts, or apply updates.
+
+## Add a project
+
+Choose **New project** in the sidebar (`⌘O`, or `Ctrl+O` on Windows and Linux). From there you can:
+
+- open a folder that is already on disk;
+- clone a repository, either by searching your GitHub repositories or by pasting a Git URL;
+- create an **Empty**, **Next.js**, or **Turborepo** project, optionally published as a private GitHub repository.
+
+GitHub browsing and private repository creation use `gh auth login` on the computer. The Next.js and Turborepo starters need Bun. Cloning and scaffolding run in the background, so you can write your first prompt while progress appears above the composer.
+
+## If an agent is not ready
+
+1. Open **Settings → Providers & accounts** and check the agent's status.
+2. Confirm that its CLI runs from your normal shell.
+3. Complete the agent's sign-in flow.
+4. Apply an offered update if Zuse reports one.
+5. Return to the project and start a new chat.
+
+Agent sign-in and model availability can change outside Zuse. Use the refresh control on the providers page after you change an installation or an account.

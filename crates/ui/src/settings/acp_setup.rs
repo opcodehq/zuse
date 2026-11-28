@@ -887,25 +887,15 @@ impl HarnessesPage {
             Status::Failed(error) => Some(
                 div()
                     .flex()
-                    .items_start()
-                    .gap(px(8.))
-                    .rounded(px(8.))
-                    .border_1()
-                    .border_color(theme.danger.opacity(0.25))
-                    .bg(theme.danger.opacity(0.06))
-                    .px(px(12.))
-                    .py(px(8.))
-                    .child(crate::icons::icon(crate::icons::DANGER_TRIANGLE).size(px(14.)).text_color(theme.danger_muted))
+                    .flex_col()
+                    .gap(px(3.))
+                    .child(crate::settings::widgets::inline_error(theme, SharedString::from(error.clone())))
                     .child(
                         div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap(px(2.))
-                            .text_size(px(11.5))
-                            .child(div().text_color(theme.danger_muted).child(SharedString::from(error.clone())))
-                            .child(div().text_color(theme.text_muted).child("Fix it above and try again. The agent is saved, so you can also come back to it from the list.")),
+                            .pl(px(19.))
+                            .text_size(px(12.))
+                            .text_color(theme.text_muted)
+                            .child("Fix it above and try again. The agent is saved, so you can also come back to it from the list."),
                     )
                     .into_any_element(),
             ),

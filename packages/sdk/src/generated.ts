@@ -61,15 +61,46 @@ outOfScope: string,
  */
 parent?: string, };
 export type ZapperIssuePullRequest = { url: string, title: string, };
-export type ZapperIssueActivity = { actor: string | null, id: string, createdAt: number, kind: string, text: string, replyTo?: string, };
+export type ZapperIssueDeliveryState = "queued" | "retrying" | "sent" | "answered" | "cancelled" | "held";
+export type ZapperIssueDelivery = { chatId: string, state: ZapperIssueDeliveryState, detail?: string,
+/**
+ * The thread's report whose turn this message started.
+ */
+reply?: string, };
+export type ZapperIssueChange = { field: string, before?: string, after?: string, };
+export type ZapperIssueActivity = { actor: string | null, id: string, createdAt: number, kind: string, text: string, replyTo?: string,
+/**
+ * A person's comment routed straight to one thread, and how far it got.
+ */
+delivery?: ZapperIssueDelivery,
+/**
+ * The live thread a question was asked for; its answer goes there.
+ */
+thread?: string,
+/**
+ * What an update changed, before and after. Older entries only have text.
+ */
+changes?: Array<ZapperIssueChange>, };
 export type ZapperIssue = { id: string, number: number, details: ZapperIssueDetails, createdAt: number, updatedAt: number, threads: Array<string>, pullRequests: Array<ZapperIssuePullRequest>, activity: Array<ZapperIssueActivity>, };
-export type Zapper = { id: string, revision: number, activityRevision: number, config: ZapperConfig, status: ZapperStatus, coordinatorChatId: string, previousCoordinatorChats: Array<string>, workers: Array<ZapperWorker>, decisions: Array<ZapperDecision>, issues: Array<ZapperIssue>, };
-export type ZapperFile = { path: string, version: number, content: string, };
+export type Zapper = { id: string, revision: number, activityRevision: number, config: ZapperConfig, status: ZapperStatus, coordinatorChatId: string, previousCoordinatorChats: Array<string>, workers: Array<ZapperWorker>, decisions: Array<ZapperDecision>, issues: Array<ZapperIssue>,
+/**
+ * Folders created in the Zapper's files, empty ones included, sorted.
+ * A folder also exists while any file sits under it. The engine derives
+ * this when it reports the Zapper and ignores it on commands.
+ */
+folders: Array<string>, };
+export type ZapperFile = { path: string, version: number, content: string,
+/**
+ * This version deleted the file. Only file histories list deletions;
+ * restoring an earlier version brings the file back.
+ */
+deleted?: boolean, };
+export type ZapperFileVersion = { path: string, version: number, };
 export type ZapperAction = { "type": "create", config: ZapperConfig, } | { "type": "configure", config: ZapperConfig, } | { "type": "setStatus", status: ZapperStatus, } | { "type": "adoptWorker", worker: ZapperWorker, } | { "type": "delegate",
 /**
  * Atomically link the new thread and mark this issue in progress.
  */
-issueId?: string, worker: ZapperWorker, model: ZapperModel, base: string, } | { "type": "messageWorker", chatId: string, text: string, automatic: boolean, } | { "type": "stopWorker", chatId: string, } | { "type": "archiveWorker", chatId: string, } | { "type": "releaseWorker", chatId: string, } | { "type": "decide", decision: ZapperDecision, } | { "type": "writeFile", path: string, content: string, expectedVersion: number, } | { "type": "restoreFile", path: string, version: number, expectedVersion: number, } | { "type": "createIssue", issueId: string, details: ZapperIssueDetails, } | { "type": "editIssue", issueId: string, details: ZapperIssueDetails, } | { "type": "linkIssueThread", issueId: string, chatId: string, } | { "type": "linkIssuePullRequest", issueId: string, url: string, title: string, } | { "type": "unlinkIssueThread", issueId: string, chatId: string, } | { "type": "unlinkIssuePullRequest", issueId: string, url: string, } | { "type": "commentIssue", issueId: string, text: string,
+issueId?: string, worker: ZapperWorker, model: ZapperModel, base: string, } | { "type": "messageWorker", chatId: string, text: string, automatic: boolean, } | { "type": "stopWorker", chatId: string, } | { "type": "archiveWorker", chatId: string, } | { "type": "releaseWorker", chatId: string, } | { "type": "decide", decision: ZapperDecision, } | { "type": "writeFile", path: string, content: string, expectedVersion: number, } | { "type": "restoreFile", path: string, version: number, expectedVersion: number, } | { "type": "deleteFile", path: string, expectedVersion: number, } | { "type": "moveFile", path: string, to: string, expectedVersion: number, } | { "type": "createFolder", path: string, } | { "type": "moveFolder", path: string, to: string, files: Array<ZapperFileVersion>, } | { "type": "deleteFolder", path: string, files: Array<ZapperFileVersion>, } | { "type": "createIssue", issueId: string, details: ZapperIssueDetails, } | { "type": "editIssue", issueId: string, details: ZapperIssueDetails, } | { "type": "linkIssueThread", issueId: string, chatId: string, } | { "type": "linkIssuePullRequest", issueId: string, url: string, title: string, } | { "type": "unlinkIssueThread", issueId: string, chatId: string, } | { "type": "unlinkIssuePullRequest", issueId: string, url: string, } | { "type": "commentIssue", issueId: string, text: string,
 /**
  * Activity entry this comment answers; shown nested under it.
  */

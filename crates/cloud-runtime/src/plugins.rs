@@ -24,6 +24,58 @@ impl RuntimePluginClient {
 }
 #[async_trait::async_trait]
 impl zuse_engine::plugins::RuntimePlugins for RuntimePluginClient {
+    async fn computer_tasks(
+        &self,
+        chat: &str,
+        request: &zuse_protocol::computer_tasks::Request,
+    ) -> anyhow::Result<serde_json::Value> {
+        anyhow::ensure!(
+            self.credentials.has_changed().is_ok(),
+            "Runtime supervisor closed"
+        );
+        let bootstrap = self.credentials.borrow().clone();
+        anyhow::ensure!(
+            bootstrap.workspace_id == self.workspace
+                && bootstrap.zuse_account_id == self.owner
+                && bootstrap.runtime_generation == self.generation
+                && bootstrap.runtime_credential_expires_at > crate::now_ms(),
+            "Runtime identity changed or expired"
+        );
+        self.authority
+            .post(
+                &bootstrap.workspace_id,
+                &["runtime", "computer-tasks"],
+                &bootstrap.runtime_credential,
+                &serde_json::json!({"chatId":chat,"request":request}),
+            )
+            .await
+    }
+    async fn machine_setup(
+        &self,
+        chat: &str,
+        request: &zuse_protocol::machine_setup::Request,
+    ) -> anyhow::Result<serde_json::Value> {
+        anyhow::ensure!(
+            self.credentials.has_changed().is_ok(),
+            "Runtime supervisor closed"
+        );
+        let bootstrap = self.credentials.borrow().clone();
+        anyhow::ensure!(
+            bootstrap.workspace_id == self.workspace
+                && bootstrap.zuse_account_id == self.owner
+                && bootstrap.runtime_generation == self.generation
+                && bootstrap.runtime_credential_expires_at > crate::now_ms(),
+            "Runtime identity changed or expired"
+        );
+        self.authority
+            .post(
+                &bootstrap.workspace_id,
+                &["runtime", "machine-setup"],
+                &bootstrap.runtime_credential,
+                &serde_json::json!({"chatId":chat,"request":request}),
+            )
+            .await
+    }
     async fn tools(&self, request: &PluginToolRequest) -> anyhow::Result<serde_json::Value> {
         anyhow::ensure!(
             self.credentials.has_changed().is_ok(),
@@ -88,5 +140,70 @@ mod tests {
         assert!(client.tools(&PluginToolRequest::List).await.is_err());
         assert_eq!(seen.lock().unwrap().len(), 2);
         task.abort();
+    }
+}
+
+#[cfg(test)]
+mod computer_task_tests {
+    use super::*;
+    use axum::{Json, Router, extract::State, http::HeaderMap, routing::post};
+    use serde_json::{Value, json};
+    use std::sync::{Arc, Mutex};
+    use zuse_engine::plugins::RuntimePlugins;
+
+    #[tokio::test]
+    async fn computer_tools_bind_chat_and_use_renewed_runtime_credential() {
+        let seen = Arc::new(Mutex::new(Vec::<(String, Value)>::new()));
+        async fn receive(
+            State(seen): State<Arc<Mutex<Vec<(String, Value)>>>>,
+            headers: HeaderMap,
+            Json(body): Json<Value>,
+        ) -> Json<Value> {
+            seen.lock()
+                .unwrap()
+                .push((headers["authorization"].to_str().unwrap().into(), body));
+            Json(json!([]))
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let router = Router::new()
+            .route(
+                "/v1/cloud/workspaces/workspace/runtime/computer-tasks",
+                post(receive),
+            )
+            .with_state(seen.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let bootstrap:CloudRuntimeBootstrap=serde_json::from_value(json!({"workspaceId":"workspace","zuseAccountId":"owner","chatId":"thread","initialSessionId":"chat","runtimeCredential":"first","runtimeGeneration":1,"gatewayEpoch":1,"runtimeCredentialExpiresAt":crate::now_ms()+60000,"gatewayUrl":"wss://api.example","gatewayProtocol":"fixture","rpcProtocol":"zuse-rpc-v1","sealedTranscriptKey":"fixture"})).unwrap();
+        let (updates, rx) = watch::channel(bootstrap.clone());
+        let client = RuntimePluginClient::new(Authority::new(&origin).unwrap(), rx);
+        client
+            .computer_tasks("chat", &zuse_protocol::computer_tasks::Request::List)
+            .await
+            .unwrap();
+        let mut renewed = bootstrap.clone();
+        renewed.runtime_credential = "second".into();
+        updates.send_replace(renewed.clone());
+        client
+            .computer_tasks("chat", &zuse_protocol::computer_tasks::Request::Results)
+            .await
+            .unwrap();
+        assert_eq!(
+            seen.lock().unwrap()[0],
+            (
+                "Bearer first".into(),
+                json!({"chatId":"chat","request":{"action":"list"}})
+            )
+        );
+        assert_eq!(seen.lock().unwrap()[1].0, "Bearer second");
+        renewed.zuse_account_id = "another-owner".into();
+        updates.send_replace(renewed);
+        assert!(
+            client
+                .computer_tasks("chat", &zuse_protocol::computer_tasks::Request::List)
+                .await
+                .is_err()
+        );
+        assert_eq!(seen.lock().unwrap().len(), 2);
+        server.abort();
     }
 }

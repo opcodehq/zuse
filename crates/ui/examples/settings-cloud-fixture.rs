@@ -450,6 +450,22 @@ impl Controller {
 #[async_trait::async_trait]
 impl RpcService for Controller {
     async fn handle(&self, method: &str, _params: Value) -> Result<RpcReply, RpcError> {
+        // Settings → Devices → Cloud chat computers.
+        match (method, _params["action"].as_str()) {
+            ("ComputerBridgeStatus", _) => {
+                return RpcReply::value(&json!({"state":"online","deviceId":"fixture-mac",
+                    "name":"Studio Mac","error":null,"running":0}));
+            }
+            ("CloudComputerControl", Some("list")) => {
+                return RpcReply::value(&json!([
+                    {"deviceId":"fixture-mac","name":"Studio Mac","platform":"macos","connected":true,"alwaysAllowed":false},
+                    {"deviceId":"fixture-linux","name":"Build box","platform":"linux","connected":true,"alwaysAllowed":true},
+                    {"deviceId":"fixture-pc","name":"Studio PC","platform":"windows","connected":false,"alwaysAllowed":false}
+                ]));
+            }
+            ("CloudComputerControl", _) => return RpcReply::value(&Value::Null),
+            _ => {}
+        }
         match method {
             methods::CLOUD_AGENT_LOGIN => return self.login("authorizing"),
             methods::CLOUD_AGENT_LOGIN_STATUS => {

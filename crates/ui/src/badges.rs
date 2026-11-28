@@ -7,7 +7,7 @@
 //! agent reads. Nothing here knows what a diff comment is.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use gpui::{AnyElement, App, Entity, SharedString, Task, Window, div, prelude::*, px};
 
@@ -372,18 +372,8 @@ fn card(
                         })
                         .clone()
                 });
-                let options = crate::markdown::render::RenderOptions {
-                    tasks: None,
-                    media: None,
-                    row_key: format!("{id}-md").into(),
-                    veil: None,
-                    cache: None,
-                    now: Instant::now(),
-                    copy: None,
-                    link: None,
-                    workspace_root: None,
-                    code: None,
-                };
+                let options =
+                    crate::markdown::render::RenderOptions::settled(format!("{id}-md").into());
                 div()
                     .min_w_0()
                     .px(px(4.0))

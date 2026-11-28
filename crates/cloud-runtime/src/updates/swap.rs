@@ -65,7 +65,15 @@ pub struct RootResult {
     pub error_code: Option<String>,
 }
 pub fn root_result(path: &Path, update_id: &str) -> Option<RootResult> {
-    read_json::<RootResult>(path).filter(|r| r.update_id == update_id)
+    // Newer helpers keep each update's own outcome next to the shared slot,
+    // so a later attempt cannot hide one this runtime still has to attest.
+    let own = super::valid_update_id(update_id)
+        .then(|| path.parent())
+        .flatten()
+        .map(|dir| dir.join("results").join(format!("{update_id}.json")))
+        .and_then(|own| read_json::<RootResult>(&own));
+    own.or_else(|| read_json::<RootResult>(path))
+        .filter(|r| r.update_id == update_id)
 }
 
 /// SHA-256 of the image this process is running, even after a rename.
@@ -603,7 +611,11 @@ pub fn install(
     }
 }
 
-/// Cold-boot boundary (before enrollment). Never downloads.
+/// Cold-boot boundary (before enrollment). Never downloads and never installs
+/// a staged release: it only finishes or rolls back a swap that is already in
+/// flight. A staged release is installed only after the server confirms it is
+/// still this computer's target (see [`super::agent::Updater`]), so retiring a
+/// release also stops computers that staged it before they slept.
 pub fn cold_boot(config: &Config, own: &str, wait: Duration) -> Result<Option<PathBuf>> {
     if let Layout::Owned { journal } = &config.layout {
         if let Some(binary) = start_recovery(config, journal, own)? {
@@ -615,26 +627,14 @@ pub fn cold_boot(config: &Config, own: &str, wait: Duration) -> Result<Option<Pa
             return Ok(Some(binary));
         }
     }
-    if config.layout == Layout::Unsupported {
-        return Ok(None);
+    // A rejected release never waits for a confirmation it cannot get.
+    if let Some(staged) = stage::latest(config) {
+        if State::load(config)
+            .rejected
+            .contains(&staged.file.update_id)
+        {
+            stage::discard(config, &staged.file.release.sha256);
+        }
     }
-    let Some(staged) = stage::latest(config) else {
-        return Ok(None);
-    };
-    let release = &staged.file.release;
-    if release.sha256 == own {
-        return Ok(None);
-    }
-    if State::load(config)
-        .rejected
-        .contains(&staged.file.update_id)
-    {
-        stage::discard(config, &release.sha256);
-        return Ok(None);
-    }
-    // One attempt per staged release: an earlier request awaits attestation.
-    if stage::read_pending(config).is_some_and(|p| p.sha256 == release.sha256) {
-        return Ok(None);
-    }
-    install(config, &staged, own, wait, &|| false)
+    Ok(None)
 }

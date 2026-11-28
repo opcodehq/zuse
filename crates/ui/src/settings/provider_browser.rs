@@ -3,8 +3,8 @@
 //! right with its Accounts, Models and Settings.
 use super::*;
 use zuse_protocol::{
-    AgentAccountsSnapshot, ClaudeConnection, ClaudeConnectionMode, CustomModel, ProviderModel,
-    ProviderModelPrefs, ProxyHealth,
+    AgentAccountsSnapshot, ClaudeConnection, ClaudeConnectionMode, CustomModel, ModelApiKey,
+    ProviderModel, ProviderModelPrefs, ProxyHealth,
 };
 
 /// The selected provider's tabs.
@@ -47,6 +47,13 @@ pub(super) struct BrowserState {
     pub proxy_editing: bool,
     pub proxy_url_input: Entity<ComposerInput>,
     pub proxy_key_input: Entity<ComposerInput>,
+    /// The Zuse agent's built-in Kimi and GLM key connections.
+    pub api_keys: Loadable<Vec<ModelApiKey>>,
+    pub api_keys_task: Option<Task<()>>,
+    pub api_key_editing: Option<String>,
+    pub api_key_input: Entity<ComposerInput>,
+    pub api_key_error: Option<String>,
+    pub api_key_busy: bool,
     pub _subscriptions: Vec<gpui::Subscription>,
 }
 
@@ -55,7 +62,13 @@ impl BrowserState {
         let model_input = cx.new(|cx| ComposerInput::new("Model ID, e.g. claude-opus-5-5", cx));
         let proxy_url_input = cx.new(|cx| ComposerInput::new("http://127.0.0.1:8317", cx));
         let proxy_key_input = cx.new(|cx| ComposerInput::new("Access key (optional)", cx));
+        let api_key_input = cx.new(|cx| ComposerInput::new("Paste your API key", cx));
         let subscriptions = vec![
+            cx.subscribe(&api_key_input, |page: &mut HarnessesPage, _, event, cx| {
+                if matches!(event, ComposerInputEvent::Submitted) {
+                    page.save_api_key(cx);
+                }
+            }),
             cx.subscribe(&model_input, |page: &mut HarnessesPage, _, event, cx| {
                 if matches!(event, ComposerInputEvent::Submitted) {
                     page.add_model(cx);
@@ -93,6 +106,12 @@ impl BrowserState {
             proxy_editing: false,
             proxy_url_input,
             proxy_key_input,
+            api_keys: Loadable::Idle,
+            api_keys_task: None,
+            api_key_editing: None,
+            api_key_input,
+            api_key_error: None,
+            api_key_busy: false,
             _subscriptions: subscriptions,
         }
     }
@@ -180,6 +199,12 @@ impl HarnessesPage {
                     && matches!(self.browser.connection, Loadable::Idle) =>
             {
                 self.load_connection(cx)
+            }
+            ProviderTab::Accounts
+                if harness == HarnessId::Zuse
+                    && matches!(self.browser.api_keys, Loadable::Idle) =>
+            {
+                self.load_api_keys(cx)
             }
             _ => {}
         }
@@ -419,6 +444,83 @@ impl HarnessesPage {
             params["apiKey"] = serde_json::json!(key);
         }
         self.set_connection(params, true, cx);
+    }
+
+    fn load_api_keys(&mut self, cx: &mut Context<Self>) {
+        self.browser.api_keys = Loadable::Loading;
+        self.browser.api_keys_task = self.browser_call(
+            methods::GET_MODEL_API_KEYS,
+            serde_json::json!({}),
+            cx,
+            |page, result, _| page.apply_api_keys(result),
+        );
+    }
+
+    fn apply_api_keys(&mut self, result: Result<serde_json::Value, String>) {
+        match result.and_then(|v| serde_json::from_value(v).map_err(|e| e.to_string())) {
+            Ok(rows) => {
+                self.browser.api_keys = Loadable::Ready(rows);
+                self.browser.api_key_error = None;
+            }
+            Err(error) => {
+                if !matches!(self.browser.api_keys, Loadable::Ready(_)) {
+                    self.browser.api_keys = Loadable::Error(error.clone());
+                }
+                self.browser.api_key_error = Some(error);
+            }
+        }
+    }
+
+    fn edit_api_key(&mut self, id: Option<String>, cx: &mut Context<Self>) {
+        // A pending save owns the editor until it lands.
+        if self.browser.api_key_busy {
+            return;
+        }
+        self.browser.api_key_editing = id;
+        self.browser.api_key_error = None;
+        self.browser
+            .api_key_input
+            .update(cx, |input, cx| input.set_text("", cx));
+        cx.notify();
+    }
+
+    fn save_api_key(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.browser.api_key_editing.clone() else {
+            return;
+        };
+        let key = self.browser.api_key_input.read(cx).text().trim().to_owned();
+        if key.is_empty() {
+            self.browser.api_key_error = Some("Paste an API key first.".into());
+            cx.notify();
+            return;
+        }
+        self.write_api_key(id, key, cx);
+    }
+
+    fn write_api_key(&mut self, id: String, key: String, cx: &mut Context<Self>) {
+        if self.browser.api_key_busy {
+            return;
+        }
+        self.browser.api_key_busy = true;
+        self.browser.api_keys_task = self.browser_call(
+            methods::SET_MODEL_API_KEY,
+            serde_json::json!({ "id": id, "apiKey": key }),
+            cx,
+            |page, result, cx| {
+                page.browser.api_key_busy = false;
+                let saved = result.is_ok();
+                page.apply_api_keys(result);
+                if saved {
+                    page.browser.api_key_editing = None;
+                    page.browser
+                        .api_key_input
+                        .update(cx, |input, cx| input.set_text("", cx));
+                    // New models appear in the composer without a restart.
+                    crate::pickers::bump_harness_catalog(cx);
+                }
+            },
+        );
+        cx.notify();
     }
 
     fn set_fallback(&mut self, on: bool, cx: &mut Context<Self>) {
@@ -1047,6 +1149,7 @@ impl HarnessesPage {
             .flex_col()
             .gap(px(18.))
             .when(harness == HarnessId::ClaudeCode, |el| el.child(self.connection_block(theme, cx)))
+            .when(harness == HarnessId::Zuse, |el| el.child(self.api_keys_block(theme, cx)))
             .child(
                 div()
                     .flex()
@@ -1073,6 +1176,8 @@ impl HarnessesPage {
                             .when(proxied, |el| el.opacity(0.55))
                             .child(self.accounts_panel(harness, theme, cx))
                             .into_any_element()
+                    } else if harness == HarnessId::Zuse {
+                        div().into_any_element()
                     } else {
                         div()
                             .text_size(px(12.))
@@ -1082,6 +1187,177 @@ impl HarnessesPage {
                     }),
             )
             .into_any_element()
+    }
+
+    fn api_keys_block(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let mut block = div().flex().flex_col().gap(px(12.)).child(Self::block_title(
+            theme,
+            "API keys",
+            "Run Kimi and GLM models in the Zuse agent with your own key. Keys are saved on this device and only sent to their provider.",
+        ));
+        let rows = match &self.browser.api_keys {
+            Loadable::Ready(rows) => rows.clone(),
+            Loadable::Error(error) => {
+                return block
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_size(px(11.5))
+                                    .text_color(theme.danger_muted)
+                                    .child(SharedString::from(error.clone())),
+                            )
+                            .child(
+                                widgets::text_action(theme, widgets::ActionTone::Outlined, "Retry")
+                                    .id("api-keys-retry")
+                                    .on_click(cx.listener(|page, _, _, cx| page.load_api_keys(cx))),
+                            ),
+                    )
+                    .into_any_element();
+            }
+            _ => {
+                return block
+                    .child(popover::skeleton_rows(
+                        "api-keys-skeleton",
+                        theme,
+                        3,
+                        cx.entity_id(),
+                        cx,
+                    ))
+                    .into_any_element();
+            }
+        };
+        let mut card = widgets::section_card(theme).mt_0();
+        for (ix, row) in rows.into_iter().enumerate() {
+            let editing = self.browser.api_key_editing.as_deref() == Some(row.id.as_str());
+            let status = if row.has_key {
+                "Key saved".to_owned()
+            } else if row.from_environment {
+                format!("Using {} from the environment", row.environment_variable)
+            } else {
+                "No key".to_owned()
+            };
+            let dot = if row.has_key || row.from_environment {
+                theme.success
+            } else {
+                theme.text_muted
+            };
+            let id = row.id.clone();
+            let console = row.console_url.clone();
+            card = card.child(
+                widgets::card_row(theme, ix == 0)
+                    .child(div().flex_none().size(px(7.)).rounded_full().bg(dot))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(widgets::row_title(theme, row.label.clone()))
+                            .child(div().text_size(px(11.)).text_color(theme.text_muted).child(
+                                SharedString::from(format!("{status} · {}", row.models.join(", "))),
+                            ))
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(theme.text_muted)
+                                    .child(SharedString::from(row.description.clone())),
+                            ),
+                    )
+                    .child(
+                        widgets::text_action(theme, widgets::ActionTone::Quiet, "Get a key")
+                            .id(("api-key-console", ix))
+                            .on_click(move |_, _, cx| cx.open_url(&console)),
+                    )
+                    .when(row.has_key && !editing, |el| {
+                        let id = id.clone();
+                        el.child(
+                            widgets::text_action(theme, widgets::ActionTone::Quiet, "Remove")
+                                .id(("api-key-remove", ix))
+                                .on_click(cx.listener(move |page, _, _, cx| {
+                                    page.write_api_key(id.clone(), String::new(), cx)
+                                })),
+                        )
+                    })
+                    .when(!editing, |el| {
+                        let id = id.clone();
+                        el.child(
+                            widgets::text_action(
+                                theme,
+                                widgets::ActionTone::Outlined,
+                                if row.has_key { "Replace" } else { "Add key" },
+                            )
+                            .id(("api-key-edit", ix))
+                            .on_click(cx.listener(
+                                move |page, _, _, cx| page.edit_api_key(Some(id.clone()), cx),
+                            )),
+                        )
+                    }),
+            );
+            if editing {
+                card = card.child(
+                    widgets::card_row(theme, false)
+                        .flex_col()
+                        .items_stretch()
+                        .gap(px(10.))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(4.))
+                                .child(widgets::field_label(theme, "API key"))
+                                .child(popover::dialog_field(
+                                    self.browser.api_key_input.clone().into_any_element(),
+                                )),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .justify_end()
+                                .gap(px(8.))
+                                .child(
+                                    widgets::text_action(
+                                        theme,
+                                        widgets::ActionTone::Quiet,
+                                        "Cancel",
+                                    )
+                                    .id("api-key-cancel")
+                                    .on_click(
+                                        cx.listener(|page, _, _, cx| page.edit_api_key(None, cx)),
+                                    ),
+                                )
+                                .child(
+                                    widgets::text_action(
+                                        theme,
+                                        widgets::ActionTone::Filled,
+                                        if self.browser.api_key_busy {
+                                            "Saving…"
+                                        } else {
+                                            "Save"
+                                        },
+                                    )
+                                    .id("api-key-save")
+                                    .on_click(cx.listener(|page, _, _, cx| page.save_api_key(cx))),
+                                ),
+                        ),
+                );
+            }
+        }
+        block = block.child(card);
+        if let Some(error) = &self.browser.api_key_error {
+            block = block.child(
+                div()
+                    .text_size(px(11.5))
+                    .text_color(theme.danger_muted)
+                    .child(SharedString::from(error.clone())),
+            );
+        }
+        block.into_any_element()
     }
 
     fn segmented(

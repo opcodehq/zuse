@@ -1,0 +1,32 @@
+---
+title: Oh My Pi
+icon: Infinity
+description: Run Oh My Pi's omp agent over ACP in Zuse.
+section: providers
+order: 43
+platforms: [desktop, browser, mobile]
+providers: [omp]
+prerequisites: [/start/install, /providers/setup]
+related: [/providers/pi, /composer/modes-permissions, /reference/diagnostics]
+next: /providers/antigravity
+lastVerified: "2026-11-27"
+---
+
+Zuse runs Oh My Pi through your installed `omp` CLI over ACP (`omp acp`). It's separate from the [Pi](/providers/pi) integration.
+
+## Install and sign in
+
+```bash
+curl -fsSL https://omp.sh/install | sh
+omp login
+```
+
+Zuse looks for `omp` on your PATH, in `~/.local/bin`, in mise's shims, and in `/opt/homebrew/bin` and `/usr/local/bin`. Set `OMP_EXECUTABLE` to use another installation. Update with `omp update`, or from the Oh My Pi row.
+
+## Workflows in Zuse
+
+- Choose from the models Oh My Pi offers in the session.
+- Choose a thinking level from Minimal to XHigh.
+- Steer a running turn; your message is delivered mid-turn.
+- Discover skills from `.agents/skills`.
+- Use Plan mode, **Ask for approval**, and **Full access**.

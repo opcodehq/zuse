@@ -136,9 +136,10 @@ impl RuntimeControl {
                     return Err(effect_error());
                 }
                 phase(&mut tx, &row, &op, "paused", clock_ms()).await?;
-                sqlx::query("UPDATE api_cloud_workspaces SET state=$2,runtime_state='offline',status_code=$3,next_action_at=COALESCE(archive_delete_at,9007199254740991) WHERE workspace_id=$1")
+                // `phase` above already made this operation current in the row.
+                sqlx::query(&format!("UPDATE api_cloud_workspaces SET state=$2,runtime_state='offline',status_code=CASE WHEN $3 THEN 'archived-retained' ELSE {} END,next_action_at=COALESCE(archive_delete_at,9007199254740991) WHERE workspace_id=$1", super::PAUSED_STATUS_SQL))
                     .bind(&job.resource_id).bind(if d.action==Action::Archive {"archived"} else {"paused"})
-                    .bind(if d.action==Action::Archive {"archived-retained"} else {"paused"}).execute(&mut *tx).await?;
+                    .bind(d.action==Action::Archive).execute(&mut *tx).await?;
                 complete = true;
             } else if let Some(next) = next {
                 if (next == "launching" && d.action != Action::Resume)
@@ -651,9 +652,8 @@ impl RuntimeControl {
                 .await;
         }
         provider
-            .launch_retained(&current, &job.resource_id, &self.signer.issuer())
-            .await
-            .map_err(provider_error)?;
+            .launch_retained_checked(&current, &job.resource_id, &self.signer.issuer())
+            .await?;
         self.lifecycle_save_with(
             connection.as_mut().map(|c| &mut **c),
             job,

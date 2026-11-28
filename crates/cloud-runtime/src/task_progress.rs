@@ -302,7 +302,11 @@ impl Publisher {
                 .await;
             match result {
                 Ok(response) => self.acknowledged(&report, &response)?,
-                Err(error) if crate::supervisor::retryable(&error) => {
+                // A fence while the runtime renews its credential (a report
+                // already carrying the previous one) is retried with the
+                // credential it holds now, like the mailbox's requests. Ending
+                // here ended the whole runtime and lost the turn it reports.
+                Err(error) if crate::supervisor::retryable(&error) || renewal_fence(&error) => {
                     tokio::select! {_=cancel.cancelled()=>return Ok(()),_=tokio::time::sleep(Duration::from_secs(1))=>{}}
                 }
                 Err(error) => return Err(error),
@@ -310,6 +314,8 @@ impl Publisher {
         }
     }
     pub async fn flush(&self, authority: &Authority, boot: &CloudRuntimeBootstrap) -> Result<()> {
+        // Run before a memory sleep with the credential just checked; a
+        // fence here still stops the sleep rather than parking unreported.
         while let Some(report) = self.next()? {
             let response = authority
                 .post(
@@ -325,9 +331,42 @@ impl Publisher {
     }
 }
 
+/// The authority refused the credential a report carried. Right after the
+/// runtime renews (a memory-sleep wake renews at once) a report already on
+/// its way still carries the previous credential; the next attempt reads the
+/// current one. A runtime that is truly fenced ends its cycle through the
+/// gateway and the generation check above.
+fn renewal_fence(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<crate::authority::Failure>()
+        .is_some_and(|failure| {
+            matches!(
+                failure.code,
+                "workspace_runtime_fenced" | "runtime_authority_fenced"
+            )
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_report_fenced_by_a_credential_renewal_is_retried() {
+        use crate::authority::Failure;
+        for code in ["workspace_runtime_fenced", "runtime_authority_fenced"] {
+            assert!(renewal_fence(&anyhow::Error::new(Failure {
+                code,
+                retryable: false
+            })));
+        }
+        assert!(!renewal_fence(&anyhow::Error::new(Failure {
+            code: "workspace_runtime_revoked",
+            retryable: false
+        })));
+        assert!(!renewal_fence(&anyhow::anyhow!(
+            "task_progress_response_invalid"
+        )));
+    }
     use zuse_engine::{EngineProfile, HarnessRegistry};
     use zuse_protocol::{AgentEvent, DoneStatus, HarnessId, methods};
     use zuse_rpc::RpcService;

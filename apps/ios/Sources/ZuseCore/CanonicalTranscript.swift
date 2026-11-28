@@ -67,14 +67,26 @@ public struct CanonicalTranscript: Sendable {
     }
   }
 
+  /// One row per visible part. Each keeps its canonical `kind` as `_tag` (tools become
+  /// `tool_use`) plus its entry's identity, status, start and duration under `_entry*` keys, so
+  /// `ChatTimeline` can rebuild turns. Questions travel separately as `interactions`.
   public func messages(sessionID: String) -> [ChatMessage] {
     entries.flatMap { entry in
-      entry["parts"].array.compactMap { part -> ChatMessage? in
-        guard let kind = part["kind"].string, !["agentContext", "input"].contains(kind),
+      let stamp = entry["createdAt"].int.map {
+        Date(timeIntervalSince1970: Double($0) / 1000).formatted(.iso8601)
+      }
+      return entry["parts"].array.compactMap { part -> ChatMessage? in
+        guard let kind = part["kind"].string, !["input", "messageSource"].contains(kind),
           let entryID = entry["id"].string, let partID = part["id"].string,
           case .object(var content) = part
         else { return nil }
+        // Dispatch metadata only matters when the agent changed.
+        if kind == "agentContext", part["previousAgent"]["harness"].string == nil { return nil }
         content["_tag"] = .string(kind)
+        content["_entryId"] = .string(entryID)
+        content["_entryStatus"] = entry["status"]
+        content["_durationMs"] = entry["durationMs"]
+        content["_createdAt"] = entry["createdAt"]
         if kind == "tool" {
           let call = part["call"]
           content["_tag"] = .string("tool_use")
@@ -89,7 +101,8 @@ public struct CanonicalTranscript: Sendable {
         }
         return ChatMessage(
           id: "\(entryID):\(partID)", sessionId: sessionID,
-          role: entry["role"].string ?? "assistant", content: .object(content), createdAt: "")
+          role: entry["role"].string ?? "assistant", content: .object(content),
+          createdAt: stamp ?? "")
       }
     }
   }

@@ -1,0 +1,52 @@
+---
+title: Zuse agent
+icon: Zap
+description: Run ChatGPT and SuperGrok models with your subscription, or Kimi and GLM models with your own API key, in Zuse's own agent, with no CLI to install.
+section: providers
+order: 32
+platforms: [desktop, browser, mobile]
+providers: [zuse]
+prerequisites: [/providers/setup]
+related: [/composer/modes-permissions, /composer/skills-mcp, /reference/diagnostics]
+next: /providers/claude-code
+lastVerified: "2026-11-27"
+---
+
+The Zuse agent is the coding agent built into Zuse. It talks to the model provider directly, uses Zuse's native coding tools, and needs no agent CLI. It appears as **Zuse** in the model picker on macOS and Linux computers.
+
+## Connect a subscription
+
+The Zuse agent runs models from a ChatGPT or SuperGrok subscription that you connect to Zuse:
+
+- **ChatGPT** signs in through OpenAI in your browser. Eligible requests then use your ChatGPT plan, separately from any Zuse subscription.
+- **SuperGrok** uses xAI's device login: copy the code, open the verification page, and approve the login. Only approve a login you started in Zuse.
+
+A SuperGrok connection can be saved to this computer or to your Zuse account, so it can be reused locally and in cloud runtimes. ChatGPT execution stays on the computer you connected it from.
+
+When an account reaches its usage limit, the Zuse agent can switch to another connected account. Project context may then pass through a different connected ChatGPT workspace.
+
+## Use a Kimi or GLM API key
+
+The Zuse agent can also run Kimi (Moonshot AI) and GLM (Z.ai) models with your own key. Open **Settings → Providers → Zuse → Accounts**, choose **Add key** on a connection, paste the key, and choose **Save**. The models then appear under **Zuse** in the model picker.
+
+| Connection | Key from | Models | Context |
+| --- | --- | --- | --- |
+| **Kimi API** | [Kimi API Platform](https://platform.kimi.ai/docs/get-your-api-key), pay as you go | Kimi K3.1 Pro, Kimi K3.1 Pro Highspeed, Kimi K3 | 1M tokens |
+| **Kimi Code** | [Kimi Code](https://www.kimi.com/code/docs/en/) console, billed to your Kimi membership | Kimi K3.1 Pro, Kimi K3.1 Pro Highspeed, Kimi K3 | 256K tokens |
+| **GLM (Z.ai)** | [Z.ai API keys](https://z.ai/manage-apikey/apikey-list): a Standard API Key or a GLM Coding Plan key | GLM-5.4, GLM-5.3, GLM-5.3 Flash | 1M tokens |
+
+- Z.ai bills by key type: a Standard API Key uses your account balance, and a Coding Plan key uses your plan quota. GLM-5.4 is only available with a Coding Plan key for now.
+- Kimi Code plans below Pro cap requests at 256K tokens, so Zuse uses that window for every Kimi Code model.
+- GLM-5.3 accepts text only; attach images to a Kimi model, GLM-5.4, or GLM-5.3 Flash instead.
+- Keys are saved on the computer that runs the agent, readable only by your user, and sent only to their provider. **Remove** deletes a saved key.
+- Without a saved key, Zuse reads `MOONSHOT_API_KEY`, `KIMI_CODE_API_KEY`, or `ZAI_API_KEY` from the environment of the Zuse process, which is handy for `zuse serve`.
+- Usage reports price these models at the vendor's published per-token rates. Coding-plan usage shows as an estimate, not a charge.
+
+## What it supports
+
+- Native coding tools, supervised commands, and recovery review for tools whose outcome is uncertain after an interruption.
+- Bounded child agents for delegated work.
+- Steering: messages you send during a turn are delivered at the agent's next step.
+- Skills from `.agents/skills` and `.zuse/skills` in your home folder and project.
+- MCP tools from your connected [plugins](/how-to/local-configure-mcp/).
+- Plan mode, **Ask for approval**, and **Full access**. **Approve for me** is not available for the Zuse agent.

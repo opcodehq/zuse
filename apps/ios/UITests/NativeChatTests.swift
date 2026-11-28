@@ -33,7 +33,7 @@ final class NativeChatTests: XCTestCase {
     sonnet.tap()
     app.buttons["Close"].tap()
     XCTAssertTrue(app.buttons["Current model: sample-sonnet"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.buttons["3 tool calls"].exists)
+    XCTAssertTrue(app.buttons["tool-group-turn-2:t0:activity"].exists)
     XCTAssertFalse(app.buttons["Send message"].isEnabled)
   }
 
@@ -43,29 +43,25 @@ final class NativeChatTests: XCTestCase {
     app.launch()
     let transcript = app.collectionViews["chat-transcript"]
     XCTAssertTrue(transcript.waitForExistence(timeout: 15))
-    let heading = app.buttons["3 tool calls"]
+    // The latest turn folds its work behind one line saying what it did; how long it took
+    // closes the turn beside the reply's actions.
+    let heading = app.buttons["tool-group-turn-2:t0:activity"]
     XCTAssertTrue(heading.waitForExistence(timeout: 10))
+    XCTAssertTrue(heading.label.hasPrefix("Ran 2 commands · searched once"))
+    XCTAssertTrue(
+      app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked for 21s"))
+        .firstMatch.exists)
+    XCTAssertFalse(app.buttons["activity-reply-2:x2"].exists)
     heading.tap()
-    XCTAssertFalse(app.buttons["activity-conversation-7"].exists)
-    heading.tap()
-    let run = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "swift test"))
-      .firstMatch
-    if !run.exists { transcript.swipeDown() }
+    let run = app.buttons["activity-reply-2:x2"]
     XCTAssertTrue(run.waitForExistence(timeout: 5))
     XCTAssertLessThanOrEqual(run.frame.height, 36)
     run.tap()
     XCTAssertTrue(
       app.descendants(matching: .any).matching(
-        NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "command", "command")
-      )
-      .firstMatch
-      .waitForExistence(timeout: 5))
-    XCTAssertFalse(app.buttons["Completed"].exists)
-    XCTAssertTrue(
-      app.descendants(matching: .any).matching(
         NSPredicate(
-          format: "label CONTAINS %@ OR value CONTAINS %@", "Sample test output",
-          "Sample test output")
+          format: "label CONTAINS %@ OR value CONTAINS %@", "Executed 214 tests",
+          "Executed 214 tests")
       ).firstMatch.waitForExistence(timeout: 5))
     let screenshot = XCTAttachment(screenshot: app.screenshot())
     screenshot.name = "Expanded tool call and composer"
@@ -100,8 +96,9 @@ final class NativeChatTests: XCTestCase {
     add(draft)
 
     app.terminate()
-    app.launchArguments = ["--native-preview", "--home-preview"]
+    app.launchArguments = ["--native-preview", "--home-preview", "--tab=chats"]
     app.launch()
+    app.buttons["New chat options"].tap()
     app.buttons["New chat"].tap()
     XCTAssertTrue(app.navigationBars["New Chat"].waitForExistence(timeout: 5))
     let newPrompt = app.textFields["new-chat-prompt"]
@@ -120,7 +117,7 @@ final class NativeChatTests: XCTestCase {
 
   @MainActor func testHomePreviewOpensConversation() throws {
     let app = XCUIApplication()
-    app.launchArguments = ["--native-preview", "--home-preview"]
+    app.launchArguments = ["--native-preview", "--home-preview", "--tab=chats"]
     app.launch()
     let row = app.staticTexts["Polish the mobile navigation"]
     XCTAssertTrue(row.waitForExistence(timeout: 15))
@@ -129,33 +126,53 @@ final class NativeChatTests: XCTestCase {
     XCTAssertFalse(app.buttons["Send message"].isEnabled)
   }
 
-  @MainActor func testHomeKeepsSettingsSeparateAndSearchesChats() throws {
+  /// iPad lists fill the window in landscape too, under a tab bar centred along the bottom, and
+  /// a chat opens over the whole window with the bar out of the way.
+  @MainActor func testTabletListFillsWindowAndPushesChatInLandscape() throws {
+    guard UIDevice.current.userInterfaceIdiom == .pad else {
+      throw XCTSkip("Checks the iPad layout.")
+    }
     let app = XCUIApplication()
-    app.launchArguments = ["--native-preview", "--home-preview"]
+    app.launchArguments = ["--native-preview", "--home-preview", "--tab=chats"]
+    app.launch()
+    addTeardownBlock { @MainActor in XCUIDevice.shared.orientation = .portrait }
+    XCUIDevice.shared.orientation = .landscapeLeft
+    let row = app.staticTexts["Polish the mobile navigation"]
+    XCTAssertTrue(row.waitForExistence(timeout: 15))
+    Thread.sleep(forTimeInterval: 1)
+    let window = app.windows.firstMatch.frame
+    let middleTab = app.buttons["tab-prs"]
+    XCTAssertTrue(middleTab.exists)
+    XCTAssertGreaterThan(middleTab.frame.minY, window.midY, "Tab bar sits along the bottom")
+    XCTAssertLessThan(abs(middleTab.frame.midX - window.midX), 4, "Tab bar is centred")
+    XCTAssertFalse(app.staticTexts["Your work, wherever you are"].exists, "No page beside the list")
+    row.tap()
+    XCTAssertTrue(app.collectionViews["chat-transcript"].waitForExistence(timeout: 10))
+    XCTAssertFalse(app.buttons["tab-prs"].exists, "The chat covers the tab bar")
+  }
+
+  @MainActor func testTabsFilterChatsAndReachComputers() throws {
+    let app = XCUIApplication()
+    app.launchArguments = ["--native-preview", "--home-preview", "--tab=chats"]
     app.launch()
     XCTAssertTrue(app.staticTexts["Polish the mobile navigation"].waitForExistence(timeout: 15))
     XCTAssertFalse(app.buttons["Sign in to Zuse"].exists)
     XCTAssertFalse(app.buttons["Connect a computer"].exists)
-    let search = app.textFields["Search chats"]
-    search.tap()
-    search.typeText("authentication")
-    XCTAssertTrue(app.staticTexts["Review authentication changes"].exists)
-    XCTAssertFalse(app.staticTexts["Polish the mobile navigation"].exists)
-    app.buttons["Clear search"].tap()
     let archivedRow = app.buttons["Try the old sidebar, archived"]
     XCTAssertFalse(archivedRow.exists)
     app.buttons["archive-filter"].tap()
     app.buttons["Archived"].firstMatch.tap()
     XCTAssertTrue(archivedRow.waitForExistence(timeout: 5))
     XCTAssertFalse(app.staticTexts["Polish the mobile navigation"].exists)
-    app.buttons["archive-filter"].tap()
-    app.buttons["Active"].firstMatch.tap()
+    app.buttons["Show all chats"].tap()
     XCTAssertTrue(app.staticTexts["Polish the mobile navigation"].waitForExistence(timeout: 5))
-    app.buttons["Open settings"].tap()
-    XCTAssertTrue(app.buttons["Sign in to Zuse"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.staticTexts["Not signed in"].exists)
-    XCTAssertFalse(app.staticTexts["Archived chats"].exists)
-    app.buttons["settings-computers"].tap()
+    // iPad draws its own tab bar; iPhone's is the system one.
+    let tablet = UIDevice.current.userInterfaceIdiom == .pad
+    app.buttons[tablet ? "tab-more" : "More"].firstMatch.tap()
+    XCTAssertTrue(app.buttons["more-account"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts["Sign in"].exists)
+    XCTAssertTrue(app.staticTexts["Archived chats"].exists)
+    app.buttons["settings-computers"].firstMatch.tap()
     XCTAssertTrue(app.staticTexts["Connect your computer"].waitForExistence(timeout: 5))
     let computers = XCTAttachment(screenshot: app.screenshot())
     computers.name = "Computer connections"
@@ -166,6 +183,25 @@ final class NativeChatTests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Connect with SSH"].exists)
     XCTAssertFalse(app.secureTextFields["Connection token"].exists)
     XCTAssertFalse(app.staticTexts["Nearby computers"].exists)
+  }
+
+  @MainActor func testSearchFindsChatsAndZappers() throws {
+    let app = XCUIApplication()
+    app.launchArguments = [
+      "--native-preview", "--home-preview", "--zapper-preview", "--search=authentication",
+    ]
+    app.launch()
+    XCTAssertTrue(app.staticTexts["Review authentication changes"].waitForExistence(timeout: 15))
+    XCTAssertFalse(app.staticTexts["Polish the mobile navigation"].exists)
+    // iPad searches from its own full-width field; iPhone from the system one.
+    let tablet = UIDevice.current.userInterfaceIdiom == .pad
+    let search = tablet ? app.textFields["search-field"] : app.searchFields.firstMatch
+    XCTAssertTrue(search.waitForExistence(timeout: 5))
+    search.tap()
+    (tablet ? app.buttons["Clear text"] : search.buttons["Clear text"]).tap()
+    search.typeText("Release")
+    let zapper = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Release lead'"))
+    XCTAssertTrue(zapper.firstMatch.waitForExistence(timeout: 5))
   }
 
   @MainActor func testTranscriptScrollsWithKeyboardAndDraftRestsCompactly() throws {
@@ -187,6 +223,31 @@ final class NativeChatTests: XCTestCase {
     XCTAssertTrue(resting.waitForExistence(timeout: 5))
     XCTAssertLessThanOrEqual(resting.frame.height, 48)
     XCTAssertEqual(input.value as? String, "Keep this draft")
+  }
+
+  /// Self-sized rows keep the height they measured at the old width; after the column changes
+  /// width they must measure again or they stack on top of each other.
+  @MainActor func testTranscriptRowsStayApartWhenTheColumnChangesWidth() throws {
+    let app = XCUIApplication()
+    app.launchArguments = ["--native-preview", "--conversation-preview", "--expand-activity"]
+    app.launch()
+    let transcript = app.collectionViews["chat-transcript"]
+    XCTAssertTrue(transcript.waitForExistence(timeout: 15))
+    addTeardownBlock { @MainActor in XCUIDevice.shared.orientation = .portrait }
+    for orientation in [UIDeviceOrientation.landscapeLeft, .portrait] {
+      XCUIDevice.shared.orientation = orientation
+      Thread.sleep(forTimeInterval: 1.5)
+      let frames = transcript.cells.allElementsBoundByIndex
+        .map(\.frame).filter { !$0.isEmpty }.sorted { $0.minY < $1.minY }
+      XCTAssertGreaterThan(frames.count, 1)
+      for (upper, lower) in zip(frames, frames.dropFirst()) {
+        XCTAssertLessThanOrEqual(upper.maxY, lower.minY + 1, "Rows overlap after rotating")
+      }
+    }
+    let screenshot = XCTAttachment(screenshot: app.screenshot())
+    screenshot.name = "Transcript after rotating"
+    screenshot.lifetime = .keepAlways
+    add(screenshot)
   }
 
   @MainActor func testLargeTranscriptOpensAtLatestMessageAndScrolls() throws {
@@ -223,7 +284,7 @@ final class NativeChatTests: XCTestCase {
       throw XCTSkip("Run scripts/test-simulator.sh to start the local RPC fixture.")
     }
     let app = XCUIApplication()
-    app.launchArguments = ["--rpc-fixture"]
+    app.launchArguments = ["--rpc-fixture", "--tab=chats"]
     app.launchEnvironment["ZUSE_IOS_FIXTURE_URL"] = url
     app.launch()
     let chat = app.buttons["Fixture conversation"]
@@ -234,18 +295,20 @@ final class NativeChatTests: XCTestCase {
       XCTAssertTrue(link.waitForExistence(timeout: 10))
       link.tap()
     }
-    // Changes is enabled only once the chat is connected.
+    let composer = app.textFields["chat-composer"]
+    XCTAssertTrue(composer.waitForExistence(timeout: 15))
+    composer.tap()
+    composer.typeText("Hello from native UI")
+    app.buttons["Send message"].tap()
+    XCTAssertTrue(app.staticTexts["Received: Hello from native UI"].waitForExistence(timeout: 10))
+    // Changes lives in the chat's ··· sheet and is enabled once the chat is connected.
+    app.buttons["chat-actions"].tap()
     let changes = app.buttons["Changes"]
     XCTAssertTrue(changes.waitForExistence(timeout: 15))
     wait(
       for: [expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: changes)],
       timeout: 15)
-    let composer = app.textFields["chat-composer"]
-    composer.tap()
-    composer.typeText("Hello from native UI")
-    app.buttons["Send message"].tap()
-    XCTAssertTrue(app.staticTexts["Received: Hello from native UI"].waitForExistence(timeout: 10))
-    app.buttons["Changes"].tap()
+    changes.tap()
     XCTAssertTrue(app.staticTexts["example.swift"].waitForExistence(timeout: 10))
     XCTAssertTrue(app.staticTexts["+let value = 2"].exists)
     let diffCapture = XCTAttachment(screenshot: app.screenshot())
@@ -270,11 +333,12 @@ final class NativeChatTests: XCTestCase {
       throw XCTSkip("Run scripts/test-simulator.sh to start the local RPC fixture.")
     }
     let app = XCUIApplication()
-    app.launchArguments = ["--rpc-fixture"]
+    app.launchArguments = ["--rpc-fixture", "--tab=chats"]
     app.launchEnvironment["ZUSE_IOS_FIXTURE_URL"] = url
     app.launch()
     XCTAssertTrue(app.staticTexts["Fixture conversation"].firstMatch.waitForExistence(timeout: 15))
     XCTAssertTrue(app.staticTexts["#42"].waitForExistence(timeout: 10))
+    app.buttons["chats-more"].tap()
     app.buttons["New chat"].tap()
     XCTAssertTrue(app.buttons["new-chat-destination"].waitForExistence(timeout: 5))
     let create = app.buttons["new-chat-create"]
@@ -293,5 +357,4 @@ final class NativeChatTests: XCTestCase {
     app.buttons["Send message"].tap()
     XCTAssertTrue(app.staticTexts["Received: A fresh native chat"].waitForExistence(timeout: 10))
   }
-
 }

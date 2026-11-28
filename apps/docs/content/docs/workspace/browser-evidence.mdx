@@ -1,0 +1,39 @@
+---
+title: Browser screenshots and annotations
+icon: Camera
+navTitle: "Screenshots and annotations"
+description: Capture and mark up a page, or annotate it directly, to give the agent precise visual feedback.
+section: workspace
+order: 66
+platforms: [desktop]
+providers: []
+prerequisites: [/workspace/browser]
+related: [/workspace/browser-debugging, /composer/context-attachments, /workspace/browser-troubleshooting]
+next: /workspace/browser-sessions-privacy
+lastVerified: "2026-11-27"
+---
+
+
+Use browser evidence when a visual result matters: a layout regression, a misaligned control, or a UI detail that is hard to describe in prose. Zuse offers two tools. A screenshot saves an image you can mark up and share. An annotation turns marks on the live page into precise context for the agent.
+
+## Take a screenshot
+
+1. Open the page and wait for fonts, images, and loading states to settle.
+2. Choose **Browser options → Take screenshot**. The page freezes and the markup editor opens over it.
+3. Mark it up with **Pen**, **Box**, or **Arrow**, choose an **Ink colour**, and use **Select region** to keep only part of the page. **Undo** removes the last mark.
+4. Click **Save**, or **Cancel** to discard it.
+
+Zuse saves the image as a PNG in `Downloads/Zuse Screenshots` in your home folder. The **Screenshot saved** notice offers **Copy image**, **Copy path**, and **Reveal in Finder** (**Show in folder** on Windows and Linux). To give the screenshot to the agent, paste the copied image into the composer or attach the file; see [Context and attachments](/composer/context-attachments).
+
+## Annotate a page
+
+1. Open the page and click **Annotate page** in the browser toolbar.
+2. Use **Select** to pick an element, **Region** to mark an area, or **Draw** for a freehand mark. **Erase** removes a mark, **Undo annotation** steps back, and **Clear annotation targets** starts over.
+3. In **Describe a change…**, write the outcome you want.
+4. Click **Add to composer**, or press `Enter`. Add more notes the same way, then click **Done**.
+
+Each note becomes an annotation in the composer's **Annotations** tray for the current chat, where you can edit or remove it before sending. It carries the page URL and title, your comment, the selected elements with their selectors and text, the viewport size and scroll position, and the coordinates of any regions and drawings. It does not include an image, so take a screenshot as well when the agent needs to see the page.
+
+Prefer outcome-focused comments such as "Keep this button visible above the keyboard" over vague notes such as "fix this." If the wrong local server is open, finish annotating and navigate to the correct port before you add notes.
+
+Treat captured pages as potentially sensitive. Review [Browser data and privacy](/workspace/browser-sessions-privacy) before capturing authenticated pages, and remove private evidence from a prompt when it is not needed.

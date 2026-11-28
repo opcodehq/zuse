@@ -20,7 +20,9 @@ use crate::settings::widgets;
 use crate::state::AppState;
 use crate::theme::Theme;
 mod workspace_storage;
+pub(crate) use super::managed_access::ComputerRemoved;
 pub(crate) use workspace_storage::{StorageEvent, WorkspaceStorage};
+impl gpui::EventEmitter<ComputerRemoved> for DevicesPage {}
 
 /// A device that pinged within this window shows a presence dot (engines
 /// heartbeat every 15s; 70s tolerates a couple of missed beats).
@@ -90,6 +92,10 @@ impl DevicesPage {
         let pairing = cx.new(|cx| crate::settings::pairing::PairingCard::new(state.clone(), cx));
         let managed =
             cx.new(|cx| crate::settings::managed_access::ManagedAccessCard::new(state.clone(), cx));
+        cx.subscribe(&managed, |_: &mut Self, _, event: &ComputerRemoved, cx| {
+            cx.emit(event.clone())
+        })
+        .detach();
         let managed_events = cx.subscribe(
             &managed,
             |this: &mut Self, _, _: &crate::settings::managed_access::AccessChanged, cx| {
@@ -115,6 +121,11 @@ impl DevicesPage {
             workspace_storage: None,
             storage_focus: cx.focus_handle().tab_stop(true),
         }
+    }
+
+    pub(crate) fn refresh_computers(&mut self, cx: &mut Context<Self>) {
+        self.pairing.update(cx, |pairing, cx| pairing.refresh(cx));
+        self.managed.update(cx, |managed, cx| managed.refresh(cx));
     }
 
     pub(crate) fn open_rename(
@@ -498,20 +509,25 @@ impl Render for DevicesPage {
                                     &tr(cx, msg::native::use_this_computer_from_your_phone_a_browser_or_another_computer),
                                 ))
                                 .child({
-                                    use zuse_viewport::{remote_access_style as r, settings_style as st};
                                     let empty = pairing.device_rows.is_empty() && computer_rows.is_empty();
                                     let advanced_open = pairing.advanced.is_some();
-                                    div().mt(px(20.)).flex().flex_col().gap(px(20.))
-                                        .child(super::pairing::section(&theme, "This computer", None, pairing.hero))
-                                        .child(super::pairing::section(
-                                            &theme,
-                                            "Devices",
-                                            Some(pairing.add_computer),
-                                            st::card()
-                                                .when(empty, |v| v.child(r::empty("No devices yet. Use Connect device to pair your phone.")))
-                                                .children(pairing.device_rows)
-                                                .children(computer_rows),
+                                    let devices = widgets::section_card(&theme).mt_0();
+                                    let devices = if empty {
+                                        devices.child(widgets::card_row(&theme, true).child(
+                                            div()
+                                                .text_size(crate::typography::text_xs())
+                                                .text_color(theme.text_muted)
+                                                .child("No devices yet. Use Connect device to pair your phone."),
                                         ))
+                                    } else {
+                                        devices.children(pairing.device_rows).children(computer_rows)
+                                    };
+                                    widgets::section_stack()
+                                        .child(widgets::group(&theme, "This computer", "").child(pairing.hero))
+                                        .child(
+                                            widgets::group_with_action(&theme, "Devices", "", Some(pairing.add_computer))
+                                                .child(devices),
+                                        )
                                         .child(div().flex().flex_col().gap(px(12.))
                                             .child(pairing.advanced_toggle)
                                             .when(advanced_open, |v| v

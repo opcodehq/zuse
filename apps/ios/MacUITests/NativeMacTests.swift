@@ -8,9 +8,10 @@ final class NativeMacTests: XCTestCase {
     let composer = app.descendants(matching: .any).matching(identifier: "chat-composer").firstMatch
     XCTAssertTrue(composer.waitForExistence(timeout: 20))
     XCTAssertFalse(app.buttons["Send message"].isEnabled)
+    // Command-comma opens Settings.
     app.typeKey(",", modifierFlags: .command)
-    XCTAssertTrue(app.buttons["Sign in to Zuse"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.staticTexts["Appearance"].exists)
+    XCTAssertTrue(app.staticTexts["Appearance"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts["Sign in"].exists)
     let screenshot = XCTAttachment(screenshot: app.screenshot())
     screenshot.name = "Native Mac settings"
     screenshot.lifetime = .keepAlways
@@ -23,7 +24,8 @@ final class NativeMacTests: XCTestCase {
     app.launch()
     let transcript = app.tables["chat-transcript"]
     XCTAssertTrue(transcript.waitForExistence(timeout: 15))
-    let last = transcript.rows.element(boundBy: 9_999)
+    // 3,334 messages you sent, each but the last followed by one reply and the actions under it.
+    let last = transcript.tableRows.element(boundBy: 9_999)
     XCTAssertTrue(last.waitForExistence(timeout: 10))
     XCTAssertTrue(last.isHittable, "The transcript must open at its latest message")
     XCTAssertTrue(last.staticTexts["Review the changes for task 9999."].exists)

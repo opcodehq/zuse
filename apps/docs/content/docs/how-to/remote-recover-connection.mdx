@@ -1,0 +1,62 @@
+---
+title: "Recover a remote connection"
+icon: RefreshCw
+navTitle: "Recover a connection"
+description: "Work out why a phone, browser, or other computer cannot reach Zuse and restore access without pairing again unnecessarily."
+section: how-to
+order: 50
+platforms: [desktop, browser, mobile, serve]
+providers: []
+prerequisites: [/remote/recovery]
+related: [/serve/troubleshooting, /how-to/remote-connect-device, /how-to/remote-local-browser, /how-to/serve-operate-host]
+next: /remote/recovery
+lastVerified: "2026-11-27"
+---
+
+Restore access to a computer without throwing away a pairing that still works.
+
+## Applicability
+
+Use this guide for phones, browsers, and desktop apps connected to a computer over Wi-Fi, Tailscale, or your account. It does not cover agent sign-in problems inside a working connection.
+
+## Prerequisites
+
+- Access to the computer, or someone who can operate it.
+- The message or state the device shows.
+
+## Steps
+
+1. Read what the device says before you change anything. Reconnecting messages mean it is already retrying. A message that the computer no longer accepts the pairing means retrying cannot help.
+2. Confirm the computer is awake, online, and running the desktop app or `zuse serve`.
+3. Check that a connection is on. In **Settings → Remote access**, the status must not read **Only this computer can use Zuse**. On a headless computer, run:
+
+   ```sh
+   zuse status
+   ```
+
+   The **Remote access** section lists the network routes and the linked computer. `Network: this computer only` means no route is on; restart `zuse serve` with `--lan` or `--account`.
+4. Let the device retry, or use its retry action.
+5. Pair again only when the pairing was revoked, is invalid, or the computer's identity changed. Create a new code with **Connect device** or `zuse pair`. In the web client, forget the old computer in **Settings → Remote access** first.
+6. If an account-linked computer shows **Update Zuse on this computer to connect.**, update Zuse there.
+
+## Verification
+
+The device connects again and an existing chat shows its latest messages. On the computer, the device is still listed under **Devices**.
+
+## Troubleshooting and recovery
+
+### Tailscale shows "On · waiting for Tailscale"
+
+Tailscale is not running or has no address. Start it on the computer and on the device.
+
+### "Network access could not start"
+
+Turn **Wi-Fi** or **Tailscale** off and on again in **Settings → Remote access**.
+
+### The device keeps retrying without progress
+
+Stop retrying. A stopped computer cannot be fixed by pairing again, and restarting the computer does not repair a revoked pairing. Check the computer first, then the pairing.
+
+### An action may have completed
+
+If the connection dropped during an action, Zuse does not repeat it. Check the current state before you try again.

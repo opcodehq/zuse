@@ -900,12 +900,13 @@
     "chat-tool_activity_using": "045fab4c53034f0f57d81d74eca976ff232c8065bdfa0adb9a05ce1cb1f717ce",
     "chat-tool_group_thinking": "a20d12c5e9c428c398b9d25e4dded1d6d3e599184e38b4d37bcb9d2d595ff8f7",
     "chat-tool_group_agents_running": "3fbaa333f16d42a901cb8cc9ccf833fd9130723476f98f88cde4699947648273",
-    "chat-tool_activity_summary_separator": "12d7d02910d393c7af7064a1acfe4e71369650a8f7fb2f1db7c5225a74bf7808",
+    "chat-tool_activity_summary_separator": "2651082d2edbfa35668a7f3bc24c995b4e0664fcf9f9cfcc10f72443c8caaa59",
     "chat-tool_group_status_separator": "2651082d2edbfa35668a7f3bc24c995b4e0664fcf9f9cfcc10f72443c8caaa59",
     "chat-tool_activity_summary_commands": "71b30eb51077fccaeb425809b26e8c1c76c9221f6c0330161b2ca9af392b3584",
     "chat-tool_activity_summary_reads": "377fdf00da4c59457e530e0840381eccc80d4043ecb069a03909dd8528da2077",
     "chat-tool_activity_summary_searches": "2945f8aec8777ddb6ae385881ff2b339c5821ba6f3b9c99545f999edb89a2ef0",
     "chat-tool_activity_summary_edits": "9f0646663cb29935b1512d3463ec76567eb2b40a3979010aa4f5c4ebd42204c1",
+    "chat-tool_activity_summary_edited_files": "22d722c1e03e1278bb67a444c8626ae30cb2dca019fa293e0c0836f08807827e",
     "chat-tool_activity_summary_writes": "a24aa630d9c64a68ebe1718ce930bf1fe118773ea29c6a7ff901fa8fbf0a2283",
     "chat-tool_activity_summary_web_searches": "7be128b958425f2e1035a40e703d356130ad3911d2c26e97313773aaaaefcf6a",
     "chat-tool_activity_summary_fetches": "3683b68384ffc36e5a95e6dcb804e201bba528833a024bfdd178f91c103dbf72",
@@ -915,6 +916,9 @@
     "chat-tool_group_notes": "bacaa28f2dcf7e6ea96a03323005ab24c0d39bc5e1ffa3b17bb6fea0bce1c34f",
     "chat-tool_group_tool_calls": "db2a649a0e4032715e29d017299adfe08ba423c97b6a0510b0d270fbc4c0d17b",
     "chat-tool_group_messages": "e3f20e6f43855d7b967085d3c2722a16c0d3d54b848da2819635c6e59b39ae52",
+    "chat-tool_group_updates": "14fac4a15fa810c70f33327bfa884b77c37cb0f44209ded81344bd4b0cd593c3",
+    "chat-tool_command_label": "713166971d730f81fcf8b757f2ea239d1a0360d9f74e8f5afe60fba97105879c",
+    "chat-tool_output_label": "b2439bcb8dee14b685f137f294b0e0cb62f5aadf45143ce01d79777d435a93b4",
     "chat-find_in_chat_placeholder": "df9554cb01902ce23765ff9352c3b69cd5b023ca05c820405746103b41c416b1",
     "chat-find_in_chat_count": "bc1f62d15048d711851f15289fd3c4345ea7c7f169853d6f971309d4a95d36c3",
     "chat-find_in_chat_no_results": "a43619f321175f57a27f2a38da381fd367f6806093031b1f82960bcbf542729d",
@@ -938,6 +942,10 @@
     "chat-worktree_creating": "f7db0f9c35c569e4e9cef53953f1b9fb572a3578255a3ecf21146012a3ded6ea",
     "chat-worktree_offline": "315d5c1130ea1fc36297533a835d4914db099561a9a1e5008563e969e3f510e2",
     "chat-cloud_history_load_earlier": "33fd46b9e7798283b42a66fe595d088ea3afb0badac619e86951ffd740d0caca",
+    "chat-turn_working_for": "409701b3bf20ec366b90369a2fc0aa1d534d43b88ec07f5e30a34421bc56aa35",
+    "chat-turn_worked_for": "6611befc8a45934001f1c465ef35323c642a3438486bcdca5fd183aab772cf6e",
+    "chat-turn_thought": "deb04a0d6701070379c7abf5d14e0f0c7afbc74a5be15398fc336168268d3c04",
+    "chat-tool_shell_label": "a733285486d5438327c37af6e6e84a69a6c6f22aae74b94d33cf88c6eeda93cc",
     "cli-about": "11bfc94f0dc03ae84b806e1999eb72462cc4bca680060aa2d5a02e2ea146a600",
     "cli-usage": "8d59829c1e15afe1a7fae93e8e5e32d8511bec5fd598a09f4fea6033b31e8a66",
     "cli-options": "d0db8b5e364b6989e4b8f38a2b3846b87d99a51c1592ebf35d21cc66405a8e39",
@@ -1785,6 +1793,7 @@
     "native-whats_new_summary": "f2f4a8b45019cc902697b0fe6885338f4883b425aad062b7a35a1e0fd431d5ec",
     "native-whats_new_got_it": "5ad3dbd1242a4cea217e8b68a9fd2c8187f2c337258279193f6d9a31a9f1a69c",
     "native-whats_new_all_releases": "3b8c94fdc381d39290c2545f91db072b7a8ae3e12b22bf54b1da598ed684f271",
+    "native-whats_new_full_release": "9c5fb076fd94e8bfeabf65d04c4add71e1bed47424a7ba3b45651434ad075933",
     "native-whats_new_next": "1ff57a29d7c9d11bdf61c1b80f2b289b44c1ea844824d4b94a0d52b6ba5fc858",
     "native-whats_new_previous": "a57b08a480b822a0a572b993391c292ede593bf8000b406675b180bbb16260fa",
     "native-whats_new_more_plural": "f43639d75358bf1eec9e2488df45dd691c0d20cd8e9e5594686ea04138324a9c",
@@ -4554,6 +4563,10 @@
       "cli-local_only": {
         "status": "needs-review",
         "sourceHash": "b5f85c26352cb0f0bf59cae3f1c4666e48ec4df6956e6de00da1d324e777d661"
+      },
+      "chat-tool_activity_summary_separator": {
+        "status": "needs-review",
+        "sourceHash": "12d7d02910d393c7af7064a1acfe4e71369650a8f7fb2f1db7c5225a74bf7808"
       }
     },
     "zh-Hant": {
@@ -4656,6 +4669,10 @@
       "cli-local_only": {
         "status": "needs-review",
         "sourceHash": "b5f85c26352cb0f0bf59cae3f1c4666e48ec4df6956e6de00da1d324e777d661"
+      },
+      "chat-tool_activity_summary_separator": {
+        "status": "needs-review",
+        "sourceHash": "12d7d02910d393c7af7064a1acfe4e71369650a8f7fb2f1db7c5225a74bf7808"
       }
     },
     "ja": {
@@ -4758,6 +4775,10 @@
       "cli-local_only": {
         "status": "needs-review",
         "sourceHash": "b5f85c26352cb0f0bf59cae3f1c4666e48ec4df6956e6de00da1d324e777d661"
+      },
+      "chat-tool_activity_summary_separator": {
+        "status": "needs-review",
+        "sourceHash": "12d7d02910d393c7af7064a1acfe4e71369650a8f7fb2f1db7c5225a74bf7808"
       }
     },
     "de": {
@@ -4860,6 +4881,10 @@
       "cli-local_only": {
         "status": "needs-review",
         "sourceHash": "b5f85c26352cb0f0bf59cae3f1c4666e48ec4df6956e6de00da1d324e777d661"
+      },
+      "chat-tool_activity_summary_separator": {
+        "status": "needs-review",
+        "sourceHash": "12d7d02910d393c7af7064a1acfe4e71369650a8f7fb2f1db7c5225a74bf7808"
       }
     },
     "ko": {
@@ -4962,6 +4987,10 @@
       "cli-local_only": {
         "status": "needs-review",
         "sourceHash": "b5f85c26352cb0f0bf59cae3f1c4666e48ec4df6956e6de00da1d324e777d661"
+      },
+      "chat-tool_activity_summary_separator": {
+        "status": "needs-review",
+        "sourceHash": "12d7d02910d393c7af7064a1acfe4e71369650a8f7fb2f1db7c5225a74bf7808"
       }
     },
     "fr": {
@@ -5064,6 +5093,10 @@
       "cli-local_only": {
         "status": "needs-review",
         "sourceHash": "b5f85c26352cb0f0bf59cae3f1c4666e48ec4df6956e6de00da1d324e777d661"
+      },
+      "chat-tool_activity_summary_separator": {
+        "status": "needs-review",
+        "sourceHash": "12d7d02910d393c7af7064a1acfe4e71369650a8f7fb2f1db7c5225a74bf7808"
       }
     }
   }

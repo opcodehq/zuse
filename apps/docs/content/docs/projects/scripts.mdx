@@ -1,0 +1,93 @@
+---
+title: Project actions
+icon: SquareTerminal
+navTitle: "Actions"
+description: Save the commands you run in a project, run them in a chat's checkout, and prepare new worktrees automatically.
+section: projects
+order: 42
+platforms: [desktop, browser]
+providers: []
+prerequisites: [/projects/worktrees]
+related: [/projects/worktrees, /projects/repository-settings, /workspace/terminal-browser]
+next: /projects/repository-settings
+lastVerified: "2026-11-27"
+---
+
+Project actions are saved commands for a project: start the dev server, run the tests, lint, build. You run them from a chat, and each run opens in its own terminal tab in that chat's checkout. One action can also prepare every new worktree.
+
+## Where actions live
+
+Actions are stored by the Zuse host that owns the project, outside the repository and outside synced workspace data. They are not committed with your code. To share a starting set with your team, commit a [`zuse.json` file](/projects/repository-settings) that everyone can import.
+
+Actions run on the computer that owns the chat's project. When you manage a project on another connected computer, its actions are saved and run there.
+
+## Add an action
+
+1. Open a chat in the project.
+2. Open the environment summary from the list button in the chat's titlebar (**Toggle environment summary**) and expand **Actions**.
+3. Choose **Add action**.
+4. Fill in **Name**, **Command**, and **Icon** (Play, Test, Lint, Configure, Build, or Debug).
+5. Turn on **Run automatically on worktree creation** if this is the project's setup command.
+6. Choose **Save action**.
+
+The section header shows how many actions the project has. In the browser app, the same list appears as **Project actions**, with **Run**, **Edit**, and **Add action**.
+
+| Limit | Value |
+| --- | --- |
+| Actions per project | 50 |
+| Name | Required, up to 80 characters |
+| Command | Required, up to 16 KiB |
+
+## Run an action
+
+Click an action in the **Actions** list. Zuse opens the terminal panel with a new tab named after the action and runs the command in the selected chat's checkout: the worktree for a worktree chat, or the project folder for a local chat. Zuse remembers the last action you ran in each project.
+
+To change or remove an action, use its **Edit action** button. The editor also has **Delete action**, which asks you to confirm.
+
+## Environment variables
+
+Every run receives:
+
+| Variable | Value |
+| --- | --- |
+| `ZUSE_PROJECT_ROOT` | The project folder |
+| `ZUSE_WORKTREE_PATH` | The checkout the action runs in. Set when that checkout is not the project folder, and always for the setup action |
+
+Use these instead of assuming a fixed folder layout, especially when you have a [custom worktree location](/projects/worktrees#where-worktrees-live).
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$ZUSE_WORKTREE_PATH"
+bun install --frozen-lockfile
+bun run generate
+```
+
+## Prepare new worktrees
+
+One action per project can have **Run automatically on worktree creation** turned on. Turning it on for one action turns it off for the others. When Zuse creates a new worktree for the project, it starts that action in the new checkout and opens its output in a terminal tab named `<action name> (setup)`.
+
+Setup runs in a terminal, so treat it as a repeatable bootstrap rather than a one-time migration. Good setup commands:
+
+- use the checked-in lockfile, for example `bun install --frozen-lockfile`, `pnpm install --frozen-lockfile`, or `npm ci`
+- exit with a non-zero status when a required tool or generation step fails
+- preserve developer-owned local files
+- avoid prompts that need an interactive answer
+
+When preparation needs several steps or platform checks, point the action at a script in the repository, such as `./scripts/setup-worktree.sh`. It can be tested outside Zuse and reviewed with the rest of the codebase.
+
+Ignored local files, such as `.env`, are not copied into new worktrees. If a worktree needs them, have your setup script create or copy them, for example from `$ZUSE_PROJECT_ROOT`.
+
+## Diagnose a failed setup
+
+If the setup action cannot start, Zuse shows **Setup action failed** with the reason. If it starts but the command fails, the output stays in its terminal tab. In either case:
+
+1. Read the output in the setup terminal tab.
+2. Run the command yourself in a terminal in the affected worktree.
+3. Fix missing tools, permissions, network access, or repository state.
+4. Run the action again from the **Actions** list.
+
+A failed setup does not delete the worktree. Do not recreate the chat unless you no longer want the checkout.
+
+See [Worktrees](/projects/worktrees) for the full create, archive, and restore lifecycle.

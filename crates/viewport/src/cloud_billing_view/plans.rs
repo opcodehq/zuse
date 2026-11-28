@@ -160,10 +160,10 @@ fn warning_tone() -> Hsla {
     hsla(21.6 / 360., 0.982, 0.567, 1.)
 }
 fn lime() -> Hsla {
-    palette::tone(
+    palette::accent_or(palette::tone(
         hsla(83. / 360., 0.72, 0.46, 1.),
         hsla(83. / 360., 0.74, 0.40, 1.),
-    )
+    ))
 }
 pub(super) fn hold_banner<T: 'static>(
     summary: &BillingSummary,

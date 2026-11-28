@@ -6,6 +6,74 @@
 
 - Add opt-in Slack cloud tasks with threaded status/results, sender/channel attribution, and a workspace/repository connection flow in Cloud settings. Server credentials stay encrypted; enablement requires the Slack migration and a rebuilt compatible runtime image.
 - Link a chat or a Zapper to a Slack channel from its right-click menu. Finished replies post into a Slack thread, your replies in that thread come back to the chat, and Zappers post under their own name and avatar. Their worker threads get their own threads in the same channel. Requires the new Slack migration and re-authorizing the Slack app for its added scopes.
+- Devin Fusion's sidekick shows up as a subagent: each handoff gets a Sidekick chip you can open to watch its commands and edits, instead of its work mixing into the lead's.
+- Settings → General → Composer: turn off the runner game that plays above the composer while an agent works.
+
+### Changed
+
+- The desktop transcript keeps the live "Working for…" timer and loader below the reply for the whole turn instead of moving it above the reply; "Worked for…" still appears above the reply once the turn finishes.
+- The web app's working line rotates through a refreshed set of anime loading phrases.
+- Steering a running Devin turn sends your message straight into it instead of cancelling and re-prompting, and an idle Devin chat stays warm for 30 minutes so the next message skips a full conversation reload.
+
+### Fixed
+
+- Desktop: clicking a subagent in a cloud chat (its spawn chip or the composer's background-work tray) opens its conversation in the right pane again, read from the cloud computer.
+- Devin chats no longer show a stray "Waiting for 1 subagent" from the lead's own usage updates, and sidekick chips settle before the turn ends.
+- A steered Devin turn no longer leaves the running command's chip stuck before the steer.
+- Devin retries reopening a conversation another process still holds for about five seconds before starting a fresh session; if it stays locked, the new session starts without the earlier context.
+
+## 0.27.10 - 2026-11-27
+
+### Added
+
+- Cloud chats can run commands on your own computers. The computer you are typing on is used by default, another one only when the agent names it, and every command asks you first in place of the composer (Allow once, for this chat, or always). The agent waits for the result and continues in the same turn; requests appear instantly and output streams as the command runs. Manage computers in Settings → Cloud computer → Your computers.
+- Sync a cloud chat's files into your own local checkout: your branch and changes are saved first and restored when you turn it off, edits on your Mac pause sync instead of being overwritten, and commands on your Mac start in that folder.
+- Expandable agent activity in the transcript ("Working for…" / "Worked for…") and issue, PR, conversation and subagent references shown as status chips.
+- Steer an agent's sidekicks mid-turn and see them as subagents; open subagents from the web app.
+- A Cloud / Tokens toggle on the Usage page, and a redesigned release dialog with full release notes.
+
+### Changed
+
+- Easier-to-read chats with softer contrast and clearer spacing, and a green glyph loader with rotating status text.
+- Sidebar threads are two-line cards with project or branch, PR state, diff size and where the thread runs, plus a Settled section.
+- New chats open on the project you choose from the sidebar, and New thread remembers your last pick (Local, Worktree or Cloud) across restarts.
+- The model detail card opens on the right when it fits; newly opened files appear first among file tabs; cloud chat tabs show your first message until the title arrives.
+
+### Fixed
+
+- Claude models in cloud chats show the reasoning slider and 1M context again when a chat starts from a sidebar project.
+- A sent message leaves the cloud queue exactly once instead of lingering there.
+- File and image tabs on a running cloud computer load immediately instead of waiting on a wake.
+- HTML files from cloud chats preview from the cloud computer.
+- The new chat page keeps your unsent draft when you switch chats and come back.
+
+## 0.27.9 - 2026-11-25
+
+### Added
+
+- Watch a cloud computer's desktop live with the new Monitor view.
+
+### Changed
+
+- The start screen fills the main area edge to edge, and tabs only appear inside a chat.
+- Connected computers share one sidebar section.
+- New cloud chats with attachments start their computer right away; files upload alongside with progress, automatic retries, and Retry or Remove if they fail.
+
+### Fixed
+
+- When Codex loses its connection to the model and retries, the chat shows a quiet "Reconnecting to the model… 2/5" status instead of a stack of red errors, and it clears once Codex is streaming again. If the retries run out, the turn ends with one error and a Retry.
+- A Codex turn that goes silent for 15 minutes with no command or question open now ends with "Codex stopped responding" and a Retry instead of showing "working" forever.
+- An open cloud chat whose connection silently dropped (after sleep or a network change) now reconnects and catches up instead of freezing partway.
+- Files on a message waiting for its cloud computer upload correctly even when they are larger than about 0.5 MB, with Retry or Remove if the upload fails.
+
+## 0.27.8 - 2026-11-24
+
+### Fixed
+
+- Each cloud chat keeps its own tab bar: switching chats shows only that chat's conversations, and no stray "New chat" tab follows you around. New thread opens a clean new chat (a new computer) instead of a tab; the tab bar's plus still opens a conversation on the same computer.
+- The cloud tab bar's plus and close icons are visible again.
+- Image links show their photo icon and normal link style again. In a cloud chat whose computer is asleep, clicking an image or file link opens a tab right away, wakes the computer and shows the file, with Retry if it fails.
+- The Diff/Edit switch only appears for changed files git can compare, not for images, untracked files or unchanged files.
 
 ## 0.27.7 - 2026-11-23
 

@@ -657,7 +657,8 @@ impl Harness for PersistentHarness {
                 n += 1;
                 let boundary = AgentEvent::Steered {
                     assistant_message_id: None,
-                    next_assistant_message_id: steer.message_id.map(|id| format!("a-{id}")),
+                    next_assistant_message_id: steer.message_id.clone().map(|id| format!("a-{id}")),
+                    message_id: steer.message_id.clone(),
                 };
                 if tx.send(Ok(boundary)).await.is_err() {
                     return;

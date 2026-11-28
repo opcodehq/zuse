@@ -1,4 +1,14 @@
-//! Explicit cloud tabs retain conversation entities and scoped canvas drafts.
+//! A cloud chat's tab strip and the cloud new-chat canvas.
+//!
+//! The strip belongs to one cloud chat (one computer) and lists only its open
+//! conversations, as a local thread's strip lists its own: plus adds a
+//! conversation on the same computer. A new chat (New thread, the sidebar's
+//! new-chat entries) is a standalone canvas without a strip, whose send
+//! creates a new cloud chat on a new computer. A canvas whose chat is still
+//! being created is set aside when the user moves on: the chat keeps being
+//! created, keeps its sidebar row and reopens from it. An unsent canvas
+//! stays as it was left (text, files, destination and choices) until it is
+//! sent: New thread comes back to it from any chat or page.
 use super::cloud_conversation::CloudConversation;
 use super::*;
 
@@ -22,55 +32,74 @@ impl Default for CloudDraft {
 }
 #[derive(Default)]
 pub(super) struct CloudTabs {
-    views: Vec<Option<Entity<CloudConversation>>>,
-    drafts: Vec<CloudDraft>,
-    active: usize,
+    /// Open cloud conversations, each listed in its own chat's strip. A chat
+    /// left with a single tab is forgotten once another chat opens (its row
+    /// opens it again as it was); one with tabs added keeps them.
+    views: Vec<Entity<CloudConversation>>,
     scope: Option<(String, Option<String>)>,
+    /// The cloud new-chat canvas, in front when no chat is.
+    canvas: Option<CloudDraft>,
+    /// Canvases whose new chat is still being created, set aside.
+    launches: Vec<CloudDraft>,
+    /// The unsent canvas, set aside while a set-aside launch is in front;
+    /// New thread brings it back.
+    parked: Option<CloudDraft>,
+    /// Where the new-chat canvas was headed when the user last left it.
+    left_on: Option<CanvasDestination>,
+}
+/// A new-chat canvas's destination: a local project or a Cloud repository.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum CanvasDestination {
+    Local,
+    Cloud(serde_json::Value),
 }
 impl CloudTabs {
-    pub(super) fn is_empty(&self) -> bool {
-        self.views.is_empty()
-    }
-    pub(super) fn set_current(&mut self, view: Entity<CloudConversation>, cx: &App) {
-        let target = &view.read(cx).target;
-        self.scope = Some((target.subject.clone(), target.organization.clone()));
-        if self.views.is_empty() {
-            self.views.push(None);
-            self.drafts.push(CloudDraft::default());
-        }
-        self.views[self.active] = Some(view);
-    }
     pub(super) fn retained_index(
         &self,
         target: &crate::state::CloudTarget,
         cx: &App,
     ) -> Option<usize> {
         self.views.iter().position(|view| {
-            view.as_ref().is_some_and(|view| {
-                let current = &view.read(cx).target;
-                current.subject == target.subject
-                    && current.organization == target.organization
-                    && current.workspace == target.workspace
-                    && current.initial_session == target.initial_session
-            })
+            let current = &view.read(cx).target;
+            current.subject == target.subject
+                && current.organization == target.organization
+                && current.workspace == target.workspace
+                && current.initial_session == target.initial_session
         })
     }
     pub(super) fn composer_for_session(&self, key: &str, cx: &App) -> Option<Entity<Composer>> {
-        self.views.iter().flatten().find_map(|view| {
+        self.views.iter().find_map(|view| {
             let view = view.read(cx);
             (view.target.initial_session == key).then(|| view.composer.clone())
         })
     }
     fn foreign_scope(&self, scope: Option<&(String, Option<String>)>, cx: &App) -> bool {
-        self.views.iter().flatten().any(|view| {
+        self.views.iter().any(|view| {
             let t = &view.read(cx).target;
             scope != Some(&(t.subject.clone(), t.organization.clone()))
         })
     }
-    pub(super) fn clear_current(&mut self) {
-        if let Some(slot) = self.views.get_mut(self.active) {
-            *slot = None;
+    /// Indices of `workspace`'s open conversations, in tab order.
+    fn chat_tabs(&self, workspace: &str, cx: &App) -> Vec<usize> {
+        self.views
+            .iter()
+            .enumerate()
+            .filter(|(_, view)| view.read(cx).target.workspace == workspace)
+            .map(|(index, _)| index)
+            .collect()
+    }
+    /// Another chat is opening: forget the chats left with a single tab.
+    pub(super) fn forget_single_tab_chats(&mut self, opening: &str, cx: &App) {
+        let mut counts = std::collections::HashMap::<String, usize>::new();
+        for view in &self.views {
+            *counts
+                .entry(view.read(cx).target.workspace.clone())
+                .or_default() += 1;
         }
+        self.views.retain(|view| {
+            let workspace = &view.read(cx).target.workspace;
+            workspace == opening || counts.get(workspace).copied().unwrap_or_default() > 1
+        });
     }
 }
 impl Shell {
@@ -79,31 +108,41 @@ impl Shell {
             composer.cloud_canvas_navigation_ready(cx)
         })
     }
+    /// Whether the new-chat canvas is in front (not a chat).
+    fn cloud_canvas_in_front(&self, cx: &App) -> bool {
+        self.cloud_conversation.is_none() && self.state.read(cx).selected_chat.is_none()
+    }
     fn stash_cloud_canvas(&mut self, cx: &mut Context<Self>) {
-        if self.cloud_tabs.active >= self.cloud_tabs.drafts.len()
-            || self.cloud_conversation.is_some()
-            || self.state.read(cx).selected_chat.is_some()
-        {
+        if self.cloud_tabs.canvas.is_none() || !self.cloud_canvas_in_front(cx) {
             return;
         }
         let canvas_key = self
             .composer
             .update(cx, |composer, cx| composer.ensure_cloud_canvas_key(cx));
-        if let Some(draft) = self.cloud_tabs.drafts.get_mut(self.cloud_tabs.active) {
+        if let Some(draft) = self.cloud_tabs.canvas.as_mut() {
             let state = self.state.read(cx);
             draft.project = state.cloud_project.clone();
             draft.device = state.selected_device.clone();
             draft.space = state.selected_space.clone();
+            let cloud = state.cloud_project.is_some();
             let composer = self.composer.read(cx);
             draft.key = canvas_key;
-            draft.choice = Some(composer.pickers().read(cx).cloud_canvas_choices(cx));
+            // On Local the pickers hold local choices; its Cloud ones stay.
+            if cloud {
+                draft.choice = Some(composer.pickers().read(cx).cloud_canvas_choices(cx));
+            }
         }
     }
     pub(super) fn track_current_cloud_canvas(&mut self, cx: &mut Context<Self>) {
-        if self.cloud_conversation.is_some()
-            || self.state.read(cx).selected_chat.is_some()
-            || self.state.read(cx).cloud_project.is_none()
-        {
+        if !self.cloud_canvas_in_front(cx) {
+            return;
+        }
+        self.cloud_tabs.left_on = Some(match self.state.read(cx).cloud_project.clone() {
+            Some(project) => CanvasDestination::Cloud(project),
+            None => CanvasDestination::Local,
+        });
+        // A canvas switched to Local keeps its key; it notes that too.
+        if self.state.read(cx).cloud_project.is_none() && self.cloud_tabs.canvas.is_none() {
             return;
         }
         let scope = {
@@ -118,54 +157,170 @@ impl Shell {
         if scope.is_none() {
             return;
         }
-        if self.cloud_tabs.views.is_empty() {
-            self.cloud_tabs.views.push(None);
-            self.cloud_tabs.drafts.push(CloudDraft::default());
+        if self.cloud_tabs.canvas.is_none() {
+            self.cloud_tabs.canvas = Some(CloudDraft::default());
         }
         self.cloud_tabs.scope = scope;
         self.stash_cloud_canvas(cx);
     }
     pub(super) fn retains_cloud_canvas(&self, key: &str) -> bool {
-        self.cloud_tabs.drafts.iter().any(|draft| draft.key == key)
+        self.cloud_tabs
+            .canvas
+            .iter()
+            .chain(&self.cloud_tabs.launches)
+            .chain(&self.cloud_tabs.parked)
+            .any(|draft| draft.key == key)
     }
+    /// The key the unsent new-chat canvas drafts under: its cloud canvas
+    /// (in front or parked), or the local `""` draft.
+    fn unsent_canvas_key(&self, cx: &App) -> String {
+        let composer = self.composer.read(cx);
+        self.cloud_tabs
+            .canvas
+            .iter()
+            .chain(&self.cloud_tabs.parked)
+            .find(|draft| !composer.has_cloud_launch(&draft.key))
+            .map(|draft| draft.key.clone())
+            .unwrap_or_default()
+    }
+    /// Where New thread goes back to: the destination the new-chat canvas
+    /// was left on, while it still holds an unsent draft. Read once.
+    pub(super) fn take_unsent_canvas_destination(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<CanvasDestination> {
+        let key = self.unsent_canvas_key(cx);
+        let destination = match self.cloud_tabs.parked.as_ref() {
+            // The unsent draft is the parked one: it has its own destination.
+            Some(parked) if parked.key == key => {
+                self.cloud_tabs.left_on = None;
+                match parked.project.clone() {
+                    Some(project) => CanvasDestination::Cloud(project),
+                    None => CanvasDestination::Local,
+                }
+            }
+            _ => {
+                // Leaving from the canvas itself (or a page over it) notes it now.
+                self.track_current_cloud_canvas(cx);
+                self.cloud_tabs.left_on.take()?
+            }
+        };
+        self.composer
+            .read(cx)
+            .key_has_draft(&key, cx)
+            .then_some(destination)
+    }
+    /// The canvas makes way for another: a chat it is still creating goes on
+    /// in the background (its sidebar row reopens it); an unsent draft is
+    /// parked for New thread to bring back.
+    fn set_cloud_canvas_aside(&mut self, cx: &mut Context<Self>) {
+        // Only the choices are read here: the new canvas's project, device
+        // and space may already be in the state.
+        let choice = self.cloud_canvas_in_front(cx).then(|| {
+            self.composer
+                .read(cx)
+                .pickers()
+                .read(cx)
+                .cloud_canvas_choices(cx)
+        });
+        let Some(mut draft) = self.cloud_tabs.canvas.take() else {
+            return;
+        };
+        if choice.is_some() {
+            draft.choice = choice;
+        }
+        if self.composer.read(cx).has_cloud_launch(&draft.key) {
+            self.cloud_tabs.launches.push(draft);
+        } else if let Some(old) = self.cloud_tabs.parked.replace(draft) {
+            self.composer.update(cx, |composer, cx| {
+                composer.discard_cloud_canvas_keys(&[old.key], cx)
+            });
+        }
+    }
+    /// The new-chat canvas: the unsent one as it was left, or a fresh one
+    /// once the last was sent. With Cloud as its destination, its send
+    /// creates a new cloud chat on a new computer.
     pub(super) fn initialize_new_cloud_canvas(&mut self, cx: &mut Context<Self>) {
+        // A canvas still creating its chat goes aside; an unsent one stays.
+        let launching = self
+            .cloud_tabs
+            .canvas
+            .as_ref()
+            .is_some_and(|draft| self.composer.read(cx).has_cloud_launch(&draft.key));
+        if launching {
+            self.set_cloud_canvas_aside(cx);
+        }
+        if self.cloud_tabs.canvas.is_none()
+            && let Some(parked) = self.cloud_tabs.parked.take()
+        {
+            // A launch reopened meanwhile set its own project and device.
+            let (device, space) = (parked.device.clone(), parked.space.clone());
+            self.state.update(cx, |state, cx| {
+                if let Some(device) = device {
+                    state.select_device(device, cx);
+                }
+                state.select_space(space, cx);
+            });
+            self.cloud_tabs.canvas = Some(parked);
+        }
         let state = self.state.read(cx);
+        let Some(project) = state.cloud_project.clone() else {
+            // Local: an unsent canvas keeps its key (and draft) while Local.
+            let key = self
+                .cloud_tabs
+                .canvas
+                .as_ref()
+                .map(|draft| draft.key.clone());
+            self.composer
+                .update(cx, |composer, cx| composer.set_cloud_canvas_key(key, cx));
+            return;
+        };
         let scope = state.cloud_user_id().map(|id| {
             (
                 id.to_owned(),
                 state.cloud_organization_id().map(str::to_owned),
             )
         });
-        if self.cloud_tabs.views.is_empty() && state.cloud_project.is_none() {
-            self.composer
-                .update(cx, |composer, cx| composer.set_cloud_canvas_key(None, cx));
-            return;
-        }
-        let project = state.cloud_project.clone();
         let device = state.selected_device.clone();
         let space = state.selected_space.clone();
-        if self.cloud_tabs.views.is_empty() {
-            self.cloud_tabs.views.push(None);
-            self.cloud_tabs.drafts.push(CloudDraft::default());
-        }
         self.cloud_tabs.scope = scope;
-        // A tab creating a chat keeps it; the new canvas gets its own tab.
-        self.ensure_free_cloud_tab(cx);
-        let old = std::mem::take(&mut self.cloud_tabs.drafts[self.cloud_tabs.active]);
-        self.composer.update(cx, |composer, cx| {
-            composer.discard_cloud_canvas_keys(&[old.key], cx)
-        });
-        let draft = &mut self.cloud_tabs.drafts[self.cloud_tabs.active];
-        draft.project = project;
-        draft.device = device;
-        draft.space = space;
-        let key = draft.key.clone();
-        let project = draft.project.clone();
+        let (key, choice) = match self.cloud_tabs.canvas.as_mut() {
+            Some(draft) => {
+                // Its choices apply while it stays on the same repository.
+                let same = draft.project.as_ref().is_some_and(|left| {
+                    left["projectId"] == project["projectId"]
+                        && left["accountId"] == project["accountId"]
+                });
+                let choice = draft.choice.clone().filter(|_| same);
+                draft.project = Some(project.clone());
+                draft.device = device;
+                draft.space = space;
+                (draft.key.clone(), choice)
+            }
+            None => {
+                // A local draft typed on this canvas moves with it to Cloud.
+                let key = if self.composer.read(cx).cloud_canvas_key().is_none() {
+                    self.composer
+                        .update(cx, |composer, cx| composer.adopt_new_chat_draft(cx))
+                } else {
+                    CloudDraft::default().key
+                };
+                self.cloud_tabs.canvas = Some(CloudDraft {
+                    key: key.clone(),
+                    project: Some(project.clone()),
+                    device,
+                    space,
+                    choice: None,
+                });
+                (key, None)
+            }
+        };
         self.composer.update(cx, |composer, cx| {
             composer.set_cloud_canvas_key(Some(key), cx);
-            composer
-                .pickers()
-                .update(cx, |pickers, cx| pickers.start_cloud_canvas(project, cx));
+            composer.pickers().update(cx, |pickers, cx| match choice {
+                Some(choice) => pickers.restore_cloud_canvas(Some(project), Some(choice), cx),
+                None => pickers.start_cloud_canvas(Some(project), cx),
+            });
         });
     }
     pub(super) fn sync_cloud_tab_scope(&mut self, cx: &mut Context<Self>) {
@@ -191,12 +346,15 @@ impl Shell {
         if foreign {
             let keys = self
                 .cloud_tabs
-                .drafts
+                .canvas
                 .iter()
+                .chain(&self.cloud_tabs.launches)
+                .chain(&self.cloud_tabs.parked)
                 .map(|draft| draft.key.clone())
                 .collect::<Vec<_>>();
             let active = self.cloud_conversation.is_some();
             self.cloud_conversation_events = None;
+            self.cloud_transcript_events = None;
             self.cloud_conversation = None;
             self.cloud_tabs = CloudTabs::default();
             self.cloud_activity.clear();
@@ -212,10 +370,9 @@ impl Shell {
             cx.notify();
         }
     }
-    /// Only explicit plus adds a tab. Pending creation keeps its original
-    /// surface. In a cloud chat, plus opens another conversation on the same
+    /// Plus. In a cloud chat it opens another conversation on the same
     /// computer (its checkout, branch and files), as plus does in a local
-    /// thread; it never starts another computer.
+    /// thread; it never starts another computer. Elsewhere it is New chat.
     pub(super) fn open_new_conversation_tab(&mut self, cx: &mut Context<Self>) {
         self.sync_cloud_tab_scope(cx);
         if !self.cloud_tab_navigation_ready(cx) {
@@ -225,19 +382,23 @@ impl Shell {
             self.add_cloud_conversation(view, cx);
             return;
         }
-        if self.state.read(cx).cloud_project.is_none() && self.cloud_tabs.views.is_empty() {
-            self.open_new_session(None, cx);
-            return;
-        }
-        if self.cloud_tabs.views.is_empty() {
-            self.cloud_tabs.views.push(None);
-            self.cloud_tabs.drafts.push(CloudDraft::default());
-        }
-        self.stash_cloud_canvas(cx);
-        self.cloud_tabs.views.push(None);
-        self.cloud_tabs.drafts.push(CloudDraft::default());
-        self.cloud_tabs.active = self.cloud_tabs.views.len() - 1;
         self.open_new_session(None, cx);
+    }
+    /// `view` is opening in front: it joins its own chat's strip, and a chat
+    /// opened before with a single tab is forgotten.
+    pub(super) fn retain_cloud_tab(
+        &mut self,
+        view: &Entity<CloudConversation>,
+        cx: &mut Context<Self>,
+    ) {
+        self.stash_cloud_canvas(cx);
+        let target = view.read(cx).target.clone();
+        self.cloud_tabs.scope = Some((target.subject.clone(), target.organization.clone()));
+        self.cloud_tabs
+            .forget_single_tab_chats(&target.workspace, cx);
+        if self.cloud_tabs.retained_index(&target, cx).is_none() {
+            self.cloud_tabs.views.push(view.clone());
+        }
     }
     /// Open a new conversation on `origin`'s computer as the active tab at
     /// once, from local state: it is the same running computer, so nothing
@@ -301,7 +462,7 @@ impl Shell {
         let Some(view) = self
             .cloud_tabs
             .retained_index(&opened, cx)
-            .and_then(|index| self.cloud_tabs.views[index].clone())
+            .map(|index| self.cloud_tabs.views[index].clone())
         else {
             return;
         };
@@ -344,8 +505,7 @@ impl Shell {
                         self.new_cloud_conversation_view(target, row, serde_json::Value::Null, cx)
                     }
                 };
-                self.cloud_tabs.views.push(Some(view));
-                self.cloud_tabs.drafts.push(CloudDraft::default());
+                self.cloud_tabs.views.push(view);
                 self.cloud_tabs.views.len() - 1
             }
         };
@@ -366,7 +526,6 @@ impl Shell {
             .cloud_tabs
             .views
             .iter()
-            .flatten()
             .map(|tab| &tab.read(cx).target)
             .filter(|target| target.workspace == view.target.workspace)
             .map(|target| target.initial_session.clone())
@@ -392,7 +551,7 @@ impl Shell {
             return;
         }
         let view = self.cloud_tabs.views[index].clone();
-        if let Some(view) = &view {
+        {
             let target = &view.read(cx).target;
             let state = self.state.read(cx);
             if state.cloud_user_id() != Some(target.subject.as_str())
@@ -402,89 +561,80 @@ impl Shell {
             }
         }
         self.stash_cloud_canvas(cx);
-        self.cloud_tabs.active = index;
         self.cloud_conversation_events = None;
-        self.cloud_conversation = view.clone();
+        self.cloud_transcript_events = None;
+        self.cloud_conversation = Some(view.clone());
         self.state
             .update(cx, |state, cx| state.select_chat(None, cx));
-        if let Some(view) = view {
-            self.active_chat = view.read(cx).target.initial_session.clone();
-            self.subscribe_cloud_conversation(&view, cx);
-        } else {
-            self.active_chat.clear();
-            let draft = &self.cloud_tabs.drafts[index];
-            let project = draft.project.clone();
-            let choice = draft.choice.clone();
-            let key = draft.key.clone();
-            let device = draft.device.clone();
-            let space = draft.space.clone();
-            self.state.update(cx, |state, cx| {
-                if let Some(device) = device {
-                    state.select_device(device, cx);
-                }
-                state.select_space(space, cx);
-            });
-            self.composer.update(cx, |composer, cx| {
-                composer.set_cloud_canvas_key(Some(key), cx);
-                composer
-                    .pickers()
-                    .update(cx, |p, cx| p.restore_cloud_canvas(project, choice, cx));
-                // Its own pending chat creation, if any, locks its choices again.
-                composer.refreeze_cloud_launch(cx);
-            });
-        }
+        self.active_chat = view.read(cx).target.initial_session.clone();
+        self.subscribe_cloud_conversation(&view, cx);
         self.set_route(Route::Chat, cx);
         self.focus_composer(cx);
         cx.notify();
     }
-    /// The tab in front is creating a cloud chat: whatever opens next gets a
-    /// tab of its own, so that chat keeps its tab.
-    pub(super) fn ensure_free_cloud_tab(&mut self, cx: &mut Context<Self>) {
-        let active = self.cloud_tabs.active;
-        let launching = self
+    /// Bring back the new-chat canvas whose chat is being created under
+    /// `key`, standing alone: the canvas in front (if another) makes way.
+    pub(super) fn select_cloud_launch(&mut self, key: &str, cx: &mut Context<Self>) {
+        self.sync_cloud_tab_scope(cx);
+        let is_canvas = self
             .cloud_tabs
-            .views
-            .get(active)
-            .is_some_and(Option::is_none)
-            && self
-                .cloud_tabs
-                .drafts
-                .get(active)
-                .is_some_and(|draft| self.composer.read(cx).has_cloud_launch(&draft.key));
-        if !launching {
+            .canvas
+            .as_ref()
+            .is_some_and(|draft| draft.key == key);
+        let set_aside = self
+            .cloud_tabs
+            .launches
+            .iter()
+            .position(|draft| draft.key == key);
+        if !is_canvas && set_aside.is_none() {
             return;
         }
-        self.stash_cloud_canvas(cx);
-        self.cloud_tabs.views.push(None);
-        self.cloud_tabs.drafts.push(CloudDraft::default());
-        self.cloud_tabs.active = self.cloud_tabs.views.len() - 1;
-    }
-    /// The draft tab whose key a new chat launched under.
-    fn launch_tab(&self, key: &str) -> Option<usize> {
-        self.cloud_tabs
-            .drafts
-            .iter()
-            .position(|draft| draft.key == key)
-            .filter(|index| self.cloud_tabs.views[*index].is_none())
-    }
-    /// Bring the tab creating the chat drafted under `key` to the front.
-    pub(super) fn select_cloud_launch(&mut self, key: &str, cx: &mut Context<Self>) {
-        if let Some(index) = self.launch_tab(key) {
-            if index == self.cloud_tabs.active
-                && matches!(self.route, Route::Chat)
-                && self.cloud_conversation.is_none()
-                && self.state.read(cx).selected_chat.is_none()
-            {
-                return;
-            }
-            // The tab in front is stashed first (its unsaved choices stay),
-            // then the launch's tab comes back on the chat route.
-            self.select_cloud_tab(index, cx);
+        if is_canvas && matches!(self.route, Route::Chat) && self.cloud_canvas_in_front(cx) {
+            return;
         }
+        if !self.cloud_tab_navigation_ready(cx) {
+            return;
+        }
+        if let Some(position) = set_aside {
+            let draft = self.cloud_tabs.launches.remove(position);
+            self.set_cloud_canvas_aside(cx);
+            self.cloud_tabs.canvas = Some(draft);
+        }
+        let Some(draft) = self.cloud_tabs.canvas.as_ref() else {
+            return;
+        };
+        let project = draft.project.clone();
+        let choice = draft.choice.clone();
+        let key = draft.key.clone();
+        let device = draft.device.clone();
+        let space = draft.space.clone();
+        self.cloud_conversation_events = None;
+        self.cloud_transcript_events = None;
+        self.cloud_conversation = None;
+        self.active_chat.clear();
+        self.state.update(cx, |state, cx| {
+            state.select_chat(None, cx);
+            state.cloud_project = project.clone();
+            if let Some(device) = device {
+                state.select_device(device, cx);
+            }
+            state.select_space(space, cx);
+        });
+        self.composer.update(cx, |composer, cx| {
+            composer.set_cloud_canvas_key(Some(key), cx);
+            composer
+                .pickers()
+                .update(cx, |p, cx| p.restore_cloud_canvas(project, choice, cx));
+            // Its pending chat creation locks its choices again.
+            composer.refreeze_cloud_launch(cx);
+        });
+        self.set_route(Route::Chat, cx);
+        self.focus_composer(cx);
+        cx.notify();
     }
-    /// The server admitted the chat drafted under `key`. Its tab becomes the
-    /// conversation: opened in front when the user is on it, otherwise in
-    /// place, without taking the user away from where they are.
+    /// The server admitted the chat drafted under `key`. Its canvas becomes
+    /// the conversation when the user is on it; otherwise the sidebar lists
+    /// the chat, without taking the user away from where they are.
     pub(super) fn open_admitted_cloud_chat(
         &mut self,
         key: &str,
@@ -493,22 +643,32 @@ impl Shell {
         launch: serde_json::Value,
         cx: &mut Context<Self>,
     ) {
-        let index = self.launch_tab(key);
-        let in_front = index.is_none_or(|index| index == self.cloud_tabs.active)
-            && self.cloud_conversation.is_none()
-            && self.state.read(cx).selected_chat.is_none()
-            && self.composer.read(cx).current_key == key;
-        if in_front || index.is_none() {
-            if index.is_none() && !in_front {
-                // Its tab was closed meanwhile; the sidebar lists the chat.
-                return;
-            }
+        self.cloud_tabs.launches.retain(|draft| draft.key != key);
+        let is_canvas = self
+            .cloud_tabs
+            .canvas
+            .as_ref()
+            .is_some_and(|draft| draft.key == key);
+        let in_front = self.cloud_canvas_in_front(cx) && self.composer.read(cx).current_key == key;
+        if is_canvas {
+            // The chat replaces its canvas; its key stays for the composer.
+            self.cloud_tabs.canvas = None;
+        }
+        if !in_front {
+            return;
+        }
+        if matches!(self.route, Route::Chat) {
             self.open_cloud_conversation(target, row, launch, cx);
             return;
         }
-        let Some(index) = index else { return };
+        // The user is elsewhere (Settings, say): the chat takes its canvas's
+        // place behind, without bringing them back.
+        let session = target.initial_session.clone();
         let view = self.new_cloud_conversation_view(target, row, launch, cx);
-        self.cloud_tabs.views[index] = Some(view);
+        self.retain_cloud_tab(&view, cx);
+        self.subscribe_cloud_conversation(&view, cx);
+        self.cloud_conversation = Some(view);
+        self.active_chat = session;
         cx.notify();
     }
     fn close_cloud_tab(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -516,32 +676,43 @@ impl Shell {
         if index >= self.cloud_tabs.views.len() || !self.cloud_tab_navigation_ready(cx) {
             return;
         }
-        let active = index == self.cloud_tabs.active;
-        if active {
-            self.stash_cloud_canvas(cx);
-        }
-        let draft = self.cloud_tabs.drafts.remove(index);
-        self.cloud_tabs.views.remove(index);
-        self.composer.update(cx, |composer, cx| {
-            composer.discard_cloud_canvas_keys(&[draft.key], cx)
-        });
-        if self.cloud_tabs.views.is_empty() {
-            self.cloud_tabs.active = 0;
-            self.open_new_session(None, cx);
-        } else if active {
-            self.cloud_tabs.active = usize::MAX;
-            self.select_cloud_tab(index.min(self.cloud_tabs.views.len() - 1), cx);
-        } else if index < self.cloud_tabs.active {
-            self.cloud_tabs.active -= 1;
+        let view = self.cloud_tabs.views.remove(index);
+        let in_front = self
+            .cloud_conversation
+            .as_ref()
+            .is_some_and(|front| front.entity_id() == view.entity_id());
+        if in_front {
+            let workspace = view.read(cx).target.workspace.clone();
+            let siblings = self.cloud_tabs.chat_tabs(&workspace, cx);
+            // The neighbour in the same chat comes to the front, as closing a
+            // local thread's tab does; closing the last one leaves the chat.
+            match siblings
+                .iter()
+                .find(|sibling| **sibling >= index)
+                .or(siblings.last())
+            {
+                Some(next) => self.select_cloud_tab(*next, cx),
+                None => {
+                    let id = format!("{CLOUD_ROW_PREFIX}{workspace}");
+                    if !self.close_sidebar_thread_tab(&id, cx) {
+                        self.open_new_session(None, cx);
+                    }
+                }
+            }
         }
         cx.notify();
     }
     pub(super) fn render_cloud_tabs(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         self.sync_cloud_tab_scope(cx);
-        if !matches!(self.route, Route::Chat)
-            || self.cloud_tabs.views.is_empty()
-            || (self.cloud_conversation.is_none() && self.state.read(cx).selected_chat.is_some())
-        {
+        // Only a cloud chat has a strip, listing its own conversations; the
+        // new-chat canvas stands alone.
+        let front = self.cloud_conversation.clone()?;
+        if !matches!(self.route, Route::Chat) {
+            return None;
+        }
+        let workspace = front.read(cx).target.workspace.clone();
+        let indices = self.cloud_tabs.chat_tabs(&workspace, cx);
+        if indices.is_empty() {
             return None;
         }
         let theme = Theme::of(cx).clone();
@@ -549,36 +720,35 @@ impl Shell {
         // a local chat: the chat tab stays listed but not selected.
         let main_tab_active = self.active_main_tab(cx).is_some();
         let main_chips = self.render_main_tab_chips(cx);
-        let tabs = self
-            .cloud_tabs
-            .views
-            .iter()
-            .enumerate()
-            .map(|(index, view)| {
-                let draft = view.is_none().then(|| self.cloud_draft_label(index, cx));
-                let title = view
-                    .as_ref()
-                    .map(|view| view.read(cx).title.clone())
-                    .or_else(|| draft.as_ref().and_then(|(title, _)| title.clone()))
-                    .unwrap_or_else(|| "New chat".into());
-                let harness = view
-                    .as_ref()
-                    .and_then(|view| {
-                        let view = view.read(cx);
-                        view.harness(
-                            self.state
-                                .read(cx)
-                                .cloud_sidebar_workspace(&view.target.workspace),
-                        )
-                    })
-                    .or_else(|| draft.and_then(|(_, harness)| harness));
-                let current = index == self.cloud_tabs.active;
+        let thread_chips = self.sidebar_thread_tab_chips(&theme, cx);
+        let tabs = indices
+            .into_iter()
+            .map(|index| {
+                let view = &self.cloud_tabs.views[index];
+                let title = {
+                    let view = view.read(cx);
+                    let row = self
+                        .state
+                        .read(cx)
+                        .cloud_sidebar_workspace(&view.target.workspace);
+                    row.filter(|row| row["initialSessionId"] == view.target.initial_session)
+                        .and_then(|row| row["renamedTitle"].as_str())
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| view.tab_title(cx))
+                };
+                let harness = {
+                    let view = view.read(cx);
+                    view.harness(
+                        self.state
+                            .read(cx)
+                            .cloud_sidebar_workspace(&view.target.workspace),
+                    )
+                };
+                let current = view.entity_id() == front.entity_id();
                 let active = current && !main_tab_active;
                 // Mid-turn, the tab trades its agent icon for the activity
                 // glyph, like a local chat's tab.
-                let working = view
-                    .as_ref()
-                    .is_some_and(|view| view.read(cx).agent_working(cx));
+                let working = view.read(cx).agent_working(cx);
                 crate::surface_chrome::workspace_tab(
                     ("cloud-conversation-tab", index),
                     active,
@@ -645,11 +815,10 @@ impl Shell {
             .collect::<Vec<_>>();
         // In a cloud chat, plus adds a conversation on the same computer and
         // the clock lists the computer's conversations no tab shows.
-        let conversation = self.cloud_conversation.is_some();
-        let history = conversation.then(|| {
+        let history = {
             let closed = self.closed_cloud_conversations(cx);
-            self.render_conversation_history_button(&closed, &theme, cx)
-        });
+            Some(self.render_conversation_history_button(&closed, &theme, cx))
+        };
         let strip = div()
             .id("cloud-conversation-tabs")
             .flex()
@@ -657,17 +826,14 @@ impl Shell {
             .overflow_x_scroll()
             .items_center()
             .gap(px(4.))
+            .children(thread_chips)
             .children(tabs)
             .child(
                 div()
                     .id("cloud-new-tab")
                     .debug_selector(|| "cloud-new-tab".into())
                     .role(gpui::Role::Button)
-                    .aria_label(if conversation {
-                        "New chat on this computer"
-                    } else {
-                        "New cloud tab"
-                    })
+                    .aria_label("New chat on this computer")
                     .cursor_pointer()
                     .p(px(5.))
                     .rounded(px(7.))
@@ -720,40 +886,6 @@ impl Shell {
             .cloud_chat_activity(workspace)
             .live
             .map(|live| (live.working, live.online))
-    }
-    /// A draft tab's provisional title (its first message, once sent) and
-    /// agent (the one its launch uses, else the one chosen in front), so a
-    /// new cloud chat's tab reads like a local chat's from the first frame.
-    fn cloud_draft_label(
-        &self,
-        index: usize,
-        cx: &App,
-    ) -> (Option<String>, Option<zuse_protocol::HarnessId>) {
-        let composer = self.composer.read(cx);
-        let Some(draft) = self.cloud_tabs.drafts.get(index) else {
-            return (None, None);
-        };
-        let in_front = index == self.cloud_tabs.active
-            && self.cloud_conversation.is_none()
-            && self.state.read(cx).selected_chat.is_none();
-        let launch = composer.cloud_launch_summary(&draft.key).or_else(|| {
-            in_front
-                .then(|| composer.cloud_launch_summary(&composer.current_key))
-                .flatten()
-        });
-        let title = launch
-            .as_ref()
-            .map(|launch| launch.first_message.trim())
-            .filter(|text| !text.is_empty())
-            .map(|text| {
-                transcript::single_line(&zuse_protocol::file_mentions::mention_display_text(text))
-            });
-        let harness = launch.and_then(|launch| launch.harness).or_else(|| {
-            in_front
-                .then(|| composer.pickers().read(cx).resolved(cx).harness)
-                .flatten()
-        });
-        (title, harness)
     }
 }
 
@@ -872,7 +1004,7 @@ mod tests {
         })
     }
     #[gpui::test]
-    fn blank_tabs_keep_distinct_full_drafts_projects_models_and_clear_on_scope_change(
+    fn canvas_plus_keeps_the_unsent_new_chat_and_scope_change_clears_its_draft(
         cx: &mut TestAppContext,
     ) {
         let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -915,8 +1047,11 @@ mod tests {
                 let first_key = shell.composer.read(cx).current_key.clone();
                 shell.open_new_conversation_tab(cx);
                 let second_key = shell.composer.read(cx).current_key.clone();
-                assert_ne!(first_key, second_key);
-                assert!(shell.composer.read(cx).input.read(cx).text().is_empty());
+                assert_eq!(first_key, second_key, "plus on the canvas keeps its draft");
+                assert_eq!(
+                    shell.composer.read(cx).input.read(cx).text(),
+                    "First unsent draft"
+                );
                 shell.composer.update(cx, |c, cx| {
                     c.pickers().update(cx, |p, cx| {
                         p.seed_cloud_creation_for_test(
@@ -945,49 +1080,16 @@ mod tests {
                         )],
                     );
                 });
-                shell.select_cloud_tab(0, cx);
-                let c = shell.composer.read(cx);
-                assert_eq!(c.current_key, first_key);
-                assert_eq!(c.input.read(cx).text(), "First unsent draft");
-                assert_eq!(c.attachments[&first_key][0].name, "first.txt");
-                assert_eq!(c.appshots[&first_key].len(), 1);
-                assert_eq!(
-                    shell.state.read(cx).cloud_project.as_ref().unwrap()["projectId"],
-                    "p"
-                );
-                assert_eq!(
-                    c.pickers().read(cx).resolved(cx).model.as_deref(),
-                    Some("boxd-model")
-                );
-                assert_eq!(
-                    c.pickers().read(cx).source_cloud_ref("main", cx).0,
-                    "refs/heads/first"
-                );
-                shell.select_cloud_tab(1, cx);
-                let c = shell.composer.read(cx);
-                assert_eq!(c.current_key, second_key);
-                assert_eq!(c.input.read(cx).text(), "Second unsent draft");
-                assert_eq!(c.attachments[&second_key][0].name, "second.txt");
-                assert_eq!(
-                    shell.state.read(cx).cloud_project.as_ref().unwrap()["projectId"],
-                    "q"
-                );
-                // The server picks where new computers run, not the
-                // project, so both drafts use the default provider's model.
-                assert_eq!(
-                    c.pickers().read(cx).resolved(cx).model.as_deref(),
-                    Some("boxd-model")
-                );
-                assert_eq!(
-                    c.pickers().read(cx).source_cloud_ref("main", cx).0,
-                    "refs/heads/second"
+                assert!(
+                    shell.cloud_tabs.views.is_empty() && shell.render_cloud_tabs(cx).is_none(),
+                    "plus on the new-chat canvas starts another new chat, never a tab"
                 );
                 shell.composer.update(cx, |c, cx| {
                     c.pickers().update(cx, |p, cx| {
                         p.seed_cloud_source_for_test(
                             zuse_protocol::creation_source::Resolution::Issue {
                                 number: 23,
-                                title: "Issue in second tab".into(),
+                                title: "Issue in second draft".into(),
                                 attachment_path: "issue.md".into(),
                                 markdown: "Scoped issue body".into(),
                                 upload_id: None,
@@ -996,34 +1098,6 @@ mod tests {
                         )
                     })
                 });
-                shell.select_cloud_tab(0, cx);
-                assert_eq!(
-                    shell
-                        .composer
-                        .read(cx)
-                        .pickers()
-                        .read(cx)
-                        .source_cloud_ref("main", cx)
-                        .0,
-                    "refs/heads/first"
-                );
-                shell.select_cloud_tab(1, cx);
-                assert_eq!(
-                    shell
-                        .composer
-                        .read(cx)
-                        .pickers()
-                        .read(cx)
-                        .source_issue(cx)
-                        .unwrap()
-                        .0,
-                    23
-                );
-                assert_eq!(
-                    shell.composer.read(cx).input.read(cx).text(),
-                    "Second unsent draft",
-                    "restoring an issue must not replay its user-selection title into the draft"
-                );
                 shell.state.update(cx, |state, _| {
                     state.apply_cloud_account(json!({"user":{"id":"other"},"orgId":null}));
                 });
@@ -1045,12 +1119,238 @@ mod tests {
             .update(cx, |_, window, _| window.remove_window())
             .unwrap();
     }
-    /// A new cloud chat being created in tab A belongs to A: plus, New chat
-    /// and another project open beside it in tab B, which works normally;
-    /// A keeps its request, shows its first message and agent in its tab
-    /// and as a sidebar row, and comes back intact.
+    fn local_chat_row(id: &str) -> zuse_protocol::Chat {
+        serde_json::from_value(json!({
+            "id": id, "title": "Local chat", "deviceId": "local-device", "archived": false,
+            "createdAt": "2026-11-24T00:00:00Z",
+        }))
+        .unwrap()
+    }
+    fn issue_source(number: u64) -> zuse_protocol::creation_source::Resolution {
+        zuse_protocol::creation_source::Resolution::Issue {
+            number,
+            title: "Issue on the new chat".into(),
+            attachment_path: "issue.md".into(),
+            markdown: "Issue body".into(),
+            upload_id: None,
+        }
+    }
+    /// The unsent new chat (Cloud as its destination) is as it was left when
+    /// New thread comes back from a local chat, a cloud chat or a page: its
+    /// text, files, repository and choices. Each chat keeps its own draft,
+    /// and a sent new chat leaves a fresh canvas behind.
     #[gpui::test]
-    fn pending_creation_stays_in_its_tab_while_other_tabs_work(cx: &mut TestAppContext) {
+    fn new_thread_brings_back_the_unsent_cloud_new_chat(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        let window = draft_shell(cx, dir.path());
+        let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
+            std::sync::Arc::new(Pending),
+        ));
+        // Each step is its own update, so the composer follows the selection
+        // between steps as it does in the app.
+        let mut step = |f: &mut dyn FnMut(&mut Shell, &mut Context<Shell>)| {
+            window.update(cx, |shell, _, cx| f(shell, cx)).unwrap();
+        };
+        let mut key = String::new();
+        step(&mut |shell, cx| {
+            shell.state.update(cx, |state, _| {
+                // The canvas stays in front: no boot landing on the chat.
+                state.auto_selected = true;
+                state.apply_chats(vec![local_chat_row("local-a")]);
+            });
+            shell.open_new_session(None, cx);
+        });
+        step(&mut |shell, cx| {
+            shell.composer.update(cx, |c, cx| {
+                c.pickers().update(cx, |p, cx| {
+                    p.seed_cloud_creation_for_test(
+                        draft_context(),
+                        json!({"projectId":"q","accountId":"owner","providerId":"e2b"}),
+                        cx,
+                    );
+                    p.seed_cloud_source_for_test(issue_source(7), cx);
+                });
+                c.input
+                    .update(cx, |input, cx| input.set_text("Unsent cloud chat", cx));
+                c.attachments.insert(
+                    c.current_key.clone(),
+                    vec![crate::attachments::StagedAttachment::from_file(
+                        "notes.txt",
+                        b"notes".to_vec(),
+                    )],
+                );
+            });
+            key = shell.composer.read(cx).current_key.clone();
+            assert!(key.starts_with("cloud-canvas:"));
+        });
+        let assert_restored = |shell: &Shell, cx: &App, key: &str, from: &str| {
+            let c = shell.composer.read(cx);
+            assert_eq!(c.current_key, key, "{from}: same new chat");
+            assert_eq!(c.input.read(cx).text(), "Unsent cloud chat", "{from}: text");
+            assert_eq!(c.staged()[0].name, "notes.txt", "{from}: files");
+            assert_eq!(
+                shell.state.read(cx).cloud_project.as_ref().unwrap()["projectId"],
+                "q",
+                "{from}: repository"
+            );
+            assert_eq!(
+                c.pickers().read(cx).source_issue(cx).map(|(n, _)| n),
+                Some(7),
+                "{from}: choices"
+            );
+            assert!(shell.cloud_conversation.is_none());
+            assert!(shell.state.read(cx).selected_chat.is_none());
+        };
+        // A local chat, with a draft of its own.
+        step(&mut |shell, cx| shell.open_chat("local-a".into(), cx));
+        step(&mut |shell, cx| {
+            assert!(shell.composer.read(cx).input.read(cx).text().is_empty());
+            shell.composer.update(cx, |c, cx| {
+                c.input
+                    .update(cx, |input, cx| input.set_text("Local chat draft", cx))
+            });
+        });
+        step(&mut |shell, cx| shell.open_new_session(None, cx));
+        step(&mut |shell, cx| assert_restored(shell, cx, &key, "local chat"));
+        // A cloud chat.
+        step(&mut |shell, cx| {
+            shell.open_cloud_conversation(
+                crate::state::CloudTarget {
+                    controller: controller.clone(),
+                    subject: "owner".into(),
+                    organization: None,
+                    workspace: "task".into(),
+                    initial_session: "session".into(),
+                },
+                json!({"workspaceId":"task","projectId":"p"}),
+                Value::Null,
+                cx,
+            )
+        });
+        step(&mut |shell, cx| shell.open_new_session(None, cx));
+        step(&mut |shell, cx| assert_restored(shell, cx, &key, "cloud chat"));
+        // A page.
+        step(&mut |shell, cx| shell.open_settings(SettingsSection::General, cx));
+        step(&mut |shell, cx| shell.open_new_session(None, cx));
+        step(&mut |shell, cx| assert_restored(shell, cx, &key, "settings"));
+        // The local chat kept its own draft.
+        step(&mut |shell, cx| shell.open_chat("local-a".into(), cx));
+        step(&mut |shell, cx| {
+            assert_eq!(
+                shell.composer.read(cx).input.read(cx).text(),
+                "Local chat draft"
+            );
+        });
+        step(&mut |shell, cx| shell.open_new_session(None, cx));
+        step(&mut |shell, cx| assert_restored(shell, cx, &key, "local chat again"));
+        // Sent: its chat is being created; New thread is a fresh canvas.
+        step(&mut |shell, cx| {
+            shell.composer.update(cx, |c, cx| {
+                c.seed_pending_cloud_creation_for_test(json!({"firstMessage":"Unsent cloud chat"}));
+                c.attachments.remove(&c.current_key);
+                c.input.update(cx, |input, cx| input.set_text("", cx));
+            });
+        });
+        step(&mut |shell, cx| shell.open_chat("local-a".into(), cx));
+        step(&mut |shell, cx| shell.open_new_session(None, cx));
+        step(&mut |shell, cx| {
+            let c = shell.composer.read(cx);
+            assert_ne!(c.current_key, key);
+            assert!(c.input.read(cx).text().is_empty());
+            assert!(c.staged().is_empty());
+            assert!(
+                c.has_cloud_launch(&key),
+                "the sent chat is still being created"
+            );
+        });
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+    }
+    /// A new chat headed Local comes back Local with its text, though New
+    /// thread would otherwise start on Cloud here.
+    #[gpui::test]
+    fn new_thread_brings_back_the_unsent_local_new_chat(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        for switched in [false, true] {
+            let window = draft_shell(cx, dir.path());
+            let mut step = |f: &mut dyn FnMut(&mut Shell, &mut Context<Shell>)| {
+                window.update(cx, |shell, _, cx| f(shell, cx)).unwrap();
+            };
+            let mut key = String::new();
+            step(&mut |shell, cx| {
+                shell.state.update(cx, |state, _| {
+                    // The canvas stays in front: no boot landing on the chat.
+                    state.auto_selected = true;
+                    state.apply_chats(vec![local_chat_row("local-a")]);
+                });
+                if switched {
+                    // Opened on Cloud, then switched to Local.
+                    shell.open_new_session(None, cx);
+                    assert!(shell.state.read(cx).cloud_project.is_some());
+                    let pickers = shell.composer.read(cx).pickers().clone();
+                    pickers.update(cx, |p, cx| p.leave_cloud_canvas(cx));
+                }
+            });
+            step(&mut |shell, cx| {
+                assert!(shell.state.read(cx).cloud_project.is_none());
+                shell.composer.update(cx, |c, cx| {
+                    c.input
+                        .update(cx, |input, cx| input.set_text("Unsent local chat", cx));
+                    c.attachments.insert(
+                        c.current_key.clone(),
+                        vec![crate::attachments::StagedAttachment::from_file(
+                            "local.txt",
+                            b"local".to_vec(),
+                        )],
+                    );
+                });
+                key = shell.composer.read(cx).current_key.clone();
+                assert_eq!(key.is_empty(), !switched);
+            });
+            step(&mut |shell, cx| shell.open_chat("local-a".into(), cx));
+            step(&mut |shell, cx| {
+                assert!(shell.composer.read(cx).input.read(cx).text().is_empty());
+            });
+            step(&mut |shell, cx| shell.open_new_session(None, cx));
+            step(&mut |shell, cx| {
+                let c = shell.composer.read(cx);
+                assert_eq!(c.current_key, key);
+                assert_eq!(c.input.read(cx).text(), "Unsent local chat");
+                assert_eq!(c.staged()[0].name, "local.txt");
+                assert!(
+                    shell.state.read(cx).cloud_project.is_none(),
+                    "it stays Local"
+                );
+            });
+            // An empty new chat opens where New thread starts it.
+            step(&mut |shell, cx| {
+                shell.composer.update(cx, |c, cx| {
+                    c.attachments.remove(&c.current_key);
+                    c.input.update(cx, |input, cx| input.set_text("", cx));
+                });
+            });
+            step(&mut |shell, cx| shell.open_chat("local-a".into(), cx));
+            step(&mut |shell, cx| shell.open_new_session(None, cx));
+            step(&mut |shell, cx| assert!(shell.state.read(cx).cloud_project.is_some()));
+            window
+                .update(cx, |_, window, _| window.remove_window())
+                .unwrap();
+        }
+    }
+    /// New thread while a new cloud chat is still being created leaves it,
+    /// as New thread leaves a local chat: a standalone canvas (no strip, no
+    /// tab for the pending chat) whose send creates another new chat. The
+    /// pending chat keeps its request and sidebar row, and its row brings it
+    /// back, alone and intact.
+    #[gpui::test]
+    fn new_thread_leaves_a_pending_cloud_chat_running_and_its_row_reopens_it(
+        cx: &mut TestAppContext,
+    ) {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let _entered = runtime.enter();
         let dir = tempfile::tempdir().unwrap();
@@ -1058,40 +1358,48 @@ mod tests {
         window.update(cx,|shell,_,cx| {
             shell.open_new_session(None,cx);
             shell.track_current_cloud_canvas(cx);
+            assert!(shell.render_cloud_tabs(cx).is_none(),"the new-chat canvas has no tab strip");
             let key=shell.composer.read(cx).current_key.clone();
             let request=json!({"idempotencyKey":"one-original-key","projectId":"p","providerId":"e2b","firstMessage":"Keep this task","agent":"mock"});
             shell.composer.update(cx,|composer,cx|{
                 composer.seed_pending_cloud_creation_for_test(request.clone());
                 composer.pickers().update(cx,|p,cx|p.freeze_cloud_launch(true,cx));
             });
-            // Tab A reads like a local chat from the first frame.
-            assert_eq!(shell.cloud_draft_label(0,cx),(Some("Keep this task".into()),Some(zuse_protocol::HarnessId::Mock)));
             let rows=shell.pending_launch_rows(cx);
             assert_eq!(rows.len(),1,"the new chat is in the sidebar at once");
             assert_eq!(rows[0]["title"],"Keep this task");
             assert_eq!(rows[0]["projectId"],"p");
-            shell.open_new_conversation_tab(cx);
-            assert_eq!(shell.cloud_tabs.views.len(),2,"plus opens tab B beside the pending tab");
-            assert_eq!(shell.cloud_tabs.active,1);
+            // New thread: a standalone canvas for another new chat.
+            shell.open_new_session(None,cx);
+            assert!(shell.render_cloud_tabs(cx).is_none(),"no strip holds the pending chat");
+            assert!(shell.cloud_conversation.is_none());
+            assert!(shell.cloud_tabs.views.is_empty());
             let c=shell.composer.read(cx);
             assert_ne!(c.current_key,key);
-            assert!(c.pending_cloud_creation_for_test().is_none(),"tab B has its own empty draft");
-            assert!(!c.pickers().read(cx).cloud_launch_frozen(),"tab B's model picker opens");
+            assert!(c.current_key.starts_with("cloud-canvas:"),"its send creates a new cloud chat");
+            assert!(c.pending_cloud_creation_for_test().is_none(),"the canvas has its own empty draft");
+            assert!(!c.pickers().read(cx).cloud_launch_frozen(),"its model picker opens");
             assert!(c.visible_failure().is_none());
-            // New chat and another project reuse tab B, never tab A.
-            shell.open_new_session(None,cx);
+            assert_eq!(shell.state.read(cx).cloud_project.as_ref().unwrap()["projectId"],"p");
+            assert!(shell.composer.read(cx).has_cloud_launch(&key),"the pending chat is still being created");
+            // Plus on the canvas and another project are new chats too.
+            shell.open_new_conversation_tab(cx);
             shell.open_new_cloud_session(json!({"projectId":"q","accountId":"owner"}),cx);
-            assert_eq!(shell.cloud_tabs.views.len(),2);
-            assert!(shell.composer.read(cx).has_cloud_launch(&key),"tab A's launch survives");
-            assert_eq!(shell.pending_launch_rows(cx).len(),1);
-            assert_eq!(shell.cloud_draft_label(0,cx).0.as_deref(),Some("Keep this task"));
-            // The sidebar row brings tab A back with its request.
+            assert!(shell.render_cloud_tabs(cx).is_none());
+            assert!(shell.composer.read(cx).has_cloud_launch(&key),"the launch survives");
+            let rows=shell.pending_launch_rows(cx);
+            assert_eq!(rows.len(),1,"its sidebar row stays");
+            assert_eq!(rows[0]["title"],"Keep this task");
+            // The sidebar row brings it back alone, with its request.
             shell.open_cloud_sidebar_row(&format!("{}launch:{key}",crate::shell::CLOUD_ROW_PREFIX),cx);
-            assert_eq!(shell.cloud_tabs.active,0);
+            assert!(shell.render_cloud_tabs(cx).is_none());
+            assert!(shell.cloud_conversation.is_none());
             let c=shell.composer.read(cx);
             assert_eq!(c.current_key,key);
             assert_eq!(c.pending_cloud_creation_for_test(),Some(&request));
-            assert!(c.pickers().read(cx).cloud_launch_frozen(),"A's choices stay locked while it is created");
+            assert!(c.pickers().read(cx).cloud_launch_frozen(),"its choices stay locked while it is created");
+            assert_eq!(shell.state.read(cx).cloud_project.as_ref().unwrap()["projectId"],"p");
+            assert_eq!(shell.pending_launch_rows(cx).len(),1);
             shell.state.update(cx,|state,_|{state.apply_cloud_account(json!({"user":{"id":"other"},"orgId":null}));});shell.sync_cloud_tab_scope(cx);assert!(shell.composer.read(cx).pending_cloud_creation_for_test().is_none(),"scope revocation retires the prior account's authority instead of retaining it under another account");
             assert!(shell.composer.read(cx).cloud_launch_summaries().is_empty());
         }).unwrap();
@@ -1145,7 +1453,7 @@ mod tests {
                 );
                 let key = shell.composer.read(cx).current_key.clone();
                 assert!(key.starts_with("cloud-canvas:"));
-                assert_eq!(shell.cloud_tabs.drafts[0].key, key);
+                assert_eq!(shell.cloud_tabs.canvas.as_ref().unwrap().key, key);
                 assert_eq!(
                     shell.composer.read(cx).attachments[&key][0].name,
                     "private.txt"
@@ -1244,9 +1552,6 @@ mod tests {
                 shell.open_new_session(None, cx);
                 let identity = shell.appshot_capture_identity(cx);
                 let first = identity.canvas.clone().unwrap();
-                shell.open_new_conversation_tab(cx);
-                let second = shell.composer.read(cx).current_key.clone();
-                assert_ne!(first, second);
                 assert!(shell.receive_scoped_appshot(
                     identity.clone(),
                     crate::appshots::tests::shot(),
@@ -1254,14 +1559,26 @@ mod tests {
                     cx
                 ));
                 assert_eq!(shell.composer.read(cx).appshots[&first].len(), 1);
-                assert!(!shell.composer.read(cx).appshots.contains_key(&second));
-                shell.close_cloud_tab(0, cx);
+                // New thread keeps the unsent canvas and its shot.
+                shell.open_new_session(None, cx);
+                assert_eq!(shell.composer.read(cx).current_key, first);
+                assert_eq!(shell.composer.read(cx).appshots[&first].len(), 1);
+                // Once that canvas is closed, a late shot for it is refused,
+                // not staged on the new one.
+                shell.composer.update(cx, |c, cx| {
+                    c.discard_cloud_canvas_keys(std::slice::from_ref(&first), cx)
+                });
+                shell.cloud_tabs.canvas = None;
+                shell.open_new_session(None, cx);
+                let second = shell.composer.read(cx).current_key.clone();
+                assert_ne!(first, second);
                 assert!(!shell.receive_scoped_appshot(
                     identity,
                     crate::appshots::tests::shot(),
                     window,
                     cx
                 ));
+                assert!(!shell.composer.read(cx).appshots.contains_key(&second));
                 let identity = shell.appshot_capture_identity(cx);
                 shell.state.update(cx, |state, _| {
                     state.apply_cloud_account(json!({"user":{"id":"other"},"orgId":null}));
@@ -1298,9 +1615,28 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let shell_window = draft_shell(cx, dir.path());
         let shell = shell_window.entity(cx).unwrap();
+        let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
+            std::sync::Arc::new(Pending),
+        ));
         shell.update(cx, |shell, cx| {
             shell.settings.sidebar_collapsed = false;
             shell.open_new_session(None, cx);
+            assert!(
+                shell.render_cloud_tabs(cx).is_none(),
+                "the new-chat canvas has no strip"
+            );
+            shell.open_cloud_conversation(
+                crate::state::CloudTarget {
+                    controller,
+                    subject: "owner".into(),
+                    organization: None,
+                    workspace: "task1".into(),
+                    initial_session: "session1".into(),
+                },
+                json!({"workspaceId":"task1","chatId":"thread1","projectId":"p"}),
+                json!({"firstMessage":"First task"}),
+                cx,
+            );
         });
         let handle = cx.add_window(|_, _| TabsOnly {
             shell: shell.clone(),
@@ -1315,7 +1651,20 @@ mod tests {
                 .expect("single cloud tab must paint its explicit plus");
             visual.simulate_click(plus.center(), gpui::Modifiers::default());
         }
-        shell.read_with(cx, |shell, _| assert_eq!(shell.cloud_tabs.views.len(), 2));
+        shell.read_with(cx, |shell, cx| {
+            assert_eq!(shell.cloud_tabs.views.len(), 2);
+            assert_eq!(
+                shell
+                    .cloud_conversation
+                    .as_ref()
+                    .unwrap()
+                    .read(cx)
+                    .target
+                    .workspace,
+                "task1",
+                "plus adds a conversation on the same computer"
+            );
+        });
         handle
             .update(cx, |_, window, _| window.remove_window())
             .unwrap();
@@ -1324,9 +1673,88 @@ mod tests {
             .unwrap();
     }
     #[gpui::test]
-    fn plus_adds_a_conversation_new_chat_replaces_current_tab_and_scope_change_clears_titles(
-        cx: &mut TestAppContext,
-    ) {
+    fn new_cloud_tab_uses_first_prompt_then_live_title(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        let window = draft_shell(cx, dir.path());
+        let shell = window.entity(cx).unwrap();
+        let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
+            std::sync::Arc::new(Pending),
+        ));
+        let (first, added) = shell.update(cx, |shell, cx| {
+            shell.open_cloud_conversation(
+                crate::state::CloudTarget {
+                    controller: controller.clone(),
+                    subject: "owner".into(),
+                    organization: None,
+                    workspace: "task1".into(),
+                    initial_session: "session1".into(),
+                },
+                json!({"workspaceId":"task1","initialSessionId":"session1","title":"First tab"}),
+                Value::Null,
+                cx,
+            );
+            let first = shell.cloud_conversation.clone().unwrap();
+            shell.open_cloud_conversation_tab(&first, "session2".into(), true, cx);
+            (first, shell.cloud_conversation.clone().unwrap())
+        });
+        let state = added.read_with(cx, |view, cx| {
+            assert_eq!(view.tab_title(cx), "New chat");
+            view.state.clone()
+        });
+        let row = |id: &str, title: Option<&str>| {
+            serde_json::from_value::<zuse_protocol::Chat>(json!({
+                "id": id, "title": title, "deviceId": "cloud:task1", "archived": false,
+                "createdAt": "2026-11-24T00:00:00Z",
+            }))
+            .unwrap()
+        };
+        let notifications = std::rc::Rc::new(std::cell::Cell::new(0));
+        let _subscription = cx.update(|cx| {
+            let notifications = notifications.clone();
+            cx.observe(&shell, move |_, _| {
+                notifications.set(notifications.get() + 1)
+            })
+        });
+        state.update(cx, |state, cx| {
+            state.set_test_engine(controller);
+            state.apply_chats(vec![
+                row("session1", Some("First tab")),
+                row("session2", None),
+            ]);
+            state.push_echo("session2", serde_json::from_value(json!({
+                "id": "prompt", "role": "user", "createdAt": 1, "deviceId": "cloud:task1",
+                "parts": [{"id":"text", "kind":"text", "text":"Improve the sidebar\nKeep the buttons aligned"}],
+            })).unwrap());
+            cx.notify();
+        });
+        added.read_with(cx, |view, cx| {
+            assert_eq!(view.tab_title(cx), "Improve the sidebar")
+        });
+        let after_prompt = notifications.get();
+        state.update(cx, |state, cx| {
+            state.apply_chats(vec![
+                row("session1", Some("First tab")),
+                row("session2", Some("Sidebar polish")),
+            ]);
+            cx.notify();
+        });
+        added.read_with(cx, |view, cx| {
+            assert_eq!(view.tab_title(cx), "Sidebar polish")
+        });
+        first.read_with(cx, |view, cx| assert_eq!(view.tab_title(cx), "First tab"));
+        assert!(
+            notifications.get() > after_prompt,
+            "the shell redraws when the live title arrives"
+        );
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn each_cloud_chat_shows_its_own_tabs_and_new_thread_leaves_them(cx: &mut TestAppContext) {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let _entered = runtime.enter();
         let dir = tempfile::tempdir().unwrap();
@@ -1383,19 +1811,37 @@ mod tests {
                 assert_eq!(added.read(cx).target.workspace, "task1");
                 assert_ne!(added.read(cx).target.initial_session, "session1");
                 assert!(shell.state.read(cx).cloud_project.is_none());
-                // New Chat replaces the current tab with a draft.
+                let added = added.read(cx).target.initial_session.clone();
+                // New thread leaves the chat: a standalone canvas, no strip,
+                // whose send creates a new cloud chat on a new computer.
                 shell.open_new_session(None, cx);
-                assert_eq!(shell.cloud_tabs.views.len(), 2);
-                assert!(shell.cloud_tabs.views[1].is_none());
                 assert!(shell.cloud_conversation.is_none());
-                let first = shell.cloud_tabs.views[0].clone().unwrap();
-                assert_eq!(first.read(cx).target.initial_session, "session1");
-                let state = first.read(cx).state.entity_id();
-                assert!(shell.render_cloud_tabs(cx).is_some());
+                assert!(
+                    shell.render_cloud_tabs(cx).is_none(),
+                    "the new-chat canvas has no tab strip"
+                );
+                assert!(
+                    shell
+                        .composer
+                        .read(cx)
+                        .current_key
+                        .starts_with("cloud-canvas:")
+                );
+                assert_eq!(
+                    shell.state.read(cx).cloud_project.as_ref().unwrap()["projectId"],
+                    "p"
+                );
+                // The chat comes back with its own tabs and live state.
+                let state = shell.cloud_tabs.views[0].read(cx).state.entity_id();
                 shell.state.update(cx, |state, _| {
                     state.selected_chat = Some("local-selection".into())
                 });
-                shell.select_cloud_tab(0, cx);
+                shell.open_cloud_conversation(
+                    target.clone(),
+                    json!({"workspaceId":"task1","projectId":"p"}),
+                    json!({}),
+                    cx,
+                );
                 assert!(
                     shell.state.read(cx).selected_chat.is_none(),
                     "retained cloud restoration clears local selection synchronously"
@@ -1405,14 +1851,80 @@ mod tests {
                     state,
                     "switching reuses the live state and transcript"
                 );
-                shell.open_new_session(None, cx);
-                assert_eq!(
-                    shell.cloud_tabs.views.len(),
-                    2,
-                    "New Chat must not add a tab"
+                assert!(shell.render_cloud_tabs(cx).is_some());
+                assert_eq!(strip(shell, cx), vec!["session1".to_owned(), added.clone()]);
+                // Another chat shows only its own tabs, never a draft, and
+                // its plus stays on its own computer.
+                let second = crate::state::CloudTarget {
+                    workspace: "task2".into(),
+                    initial_session: "session2".into(),
+                    ..target.clone()
+                };
+                shell.open_cloud_conversation(
+                    second.clone(),
+                    json!({"workspaceId":"task2","chatId":"thread2","projectId":"p"}),
+                    json!({"firstMessage":"Second task"}),
+                    cx,
                 );
-                assert!(shell.cloud_tabs.views[0].is_none());
-                assert!(shell.cloud_conversation.is_none());
+                assert_eq!(strip(shell, cx), vec!["session2".to_owned()]);
+                shell.open_new_conversation_tab(cx);
+                let second_tabs = strip(shell, cx);
+                assert_eq!(second_tabs.len(), 2);
+                assert_eq!(
+                    shell
+                        .cloud_conversation
+                        .as_ref()
+                        .unwrap()
+                        .read(cx)
+                        .target
+                        .workspace,
+                    "task2"
+                );
+                // Back to the first chat: its two tabs, nothing of the other.
+                shell.open_cloud_conversation(
+                    target.clone(),
+                    json!({"workspaceId":"task1","projectId":"p"}),
+                    json!({}),
+                    cx,
+                );
+                assert_eq!(strip(shell, cx), vec!["session1".to_owned(), added]);
+                shell.open_cloud_conversation(
+                    second,
+                    json!({"workspaceId":"task2","projectId":"p"}),
+                    json!({}),
+                    cx,
+                );
+                assert_eq!(strip(shell, cx), second_tabs);
+                // A third chat shows just its own tab.
+                let third = crate::state::CloudTarget {
+                    workspace: "task3".into(),
+                    initial_session: "session3".into(),
+                    ..target.clone()
+                };
+                shell.open_cloud_conversation(
+                    third,
+                    json!({"workspaceId":"task3","projectId":"p"}),
+                    json!({}),
+                    cx,
+                );
+                assert_eq!(strip(shell, cx), vec!["session3".to_owned()]);
+                // Back to a chat it kept: the single-tab chat is forgotten.
+                shell.open_cloud_conversation(
+                    target.clone(),
+                    json!({"workspaceId":"task1","projectId":"p"}),
+                    json!({}),
+                    cx,
+                );
+                assert_eq!(shell.cloud_tabs.views.len(), 4);
+                assert!(
+                    shell
+                        .cloud_tabs
+                        .views
+                        .iter()
+                        .all(|view| view.read(cx).target.workspace != "task3")
+                );
+                shell.open_new_session(None, cx);
+                assert!(shell.render_cloud_tabs(cx).is_none());
                 shell.open_cloud_conversation(
                     target,
                     json!({"workspaceId":"task1","projectId":"p"}),
@@ -1438,6 +1950,79 @@ mod tests {
             })
             .unwrap();
         assert_eq!(cx.update(|cx| cx.windows().len()), windows);
+    }
+    /// A new chat admitted while the user is in Settings takes its canvas's
+    /// place without taking them back to the chat.
+    #[gpui::test]
+    fn a_chat_admitted_while_elsewhere_does_not_take_the_user_back(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| gpui_tokio::init_from_handle(cx, runtime.handle().clone()));
+        let window = draft_shell(cx, dir.path());
+        let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
+            std::sync::Arc::new(Pending),
+        ));
+        window
+            .update(cx, |shell, _, cx| {
+                shell
+                    .state
+                    .update(cx, |state, _| state.set_test_engine(controller.clone()));
+                shell.open_new_session(None, cx);
+                shell.track_current_cloud_canvas(cx);
+                let request = json!({"idempotencyKey":"k","projectId":"p","providerId":"boxd",
+                    "firstMessage":"Build it","agent":"codex","model":"m"});
+                shell.composer.update(cx, |composer, _| {
+                    composer.seed_pending_cloud_creation_for_test(request)
+                });
+                shell.set_route(Route::Settings(SettingsSection::General), cx);
+                shell.composer.update(cx, |composer, cx| {
+                    composer.admit_pending_cloud_creation_for_test(
+                        json!({"workspaceId":"fresh","initialSessionId":"fresh-session",
+                            "state":"provisioning","commandDeliveryMode":"server-admitted-v2",
+                            "commandAdmissionVersion":2}),
+                        cx,
+                    )
+                });
+            })
+            .unwrap();
+        window
+            .update(cx, |shell, _, cx| {
+                assert_eq!(shell.route, Route::Settings(SettingsSection::General));
+                let view = shell.cloud_conversation.clone().unwrap();
+                assert_eq!(view.read(cx).target.workspace, "fresh");
+                assert!(shell.cloud_tabs.canvas.is_none());
+            })
+            .unwrap();
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+    }
+    /// The sessions the strip in front lists, in tab order.
+    fn strip(shell: &Shell, cx: &App) -> Vec<String> {
+        let workspace = shell
+            .cloud_conversation
+            .as_ref()
+            .unwrap()
+            .read(cx)
+            .target
+            .workspace
+            .clone();
+        shell
+            .cloud_tabs
+            .chat_tabs(&workspace, cx)
+            .into_iter()
+            .map(|index| {
+                shell.cloud_tabs.views[index]
+                    .read(cx)
+                    .target
+                    .initial_session
+                    .clone()
+            })
+            .collect()
     }
     /// Answers a cloud chat's plus (`CreateThreadSession` through `CloudRpc`)
     /// as the server does, and records every request.
@@ -1601,7 +2186,10 @@ mod tests {
                     "the held send's notice clears once the chat is recorded"
                 );
                 assert_eq!(view.thread_id().as_deref(), Some("thread1"));
-                assert_eq!(shell.cloud_tabs.active, 1);
+                assert_eq!(
+                    shell.cloud_tabs.views[1].entity_id(),
+                    shell.cloud_conversation.as_ref().unwrap().entity_id()
+                );
                 assert!(shell.closed_cloud_conversations(cx).is_empty());
                 assert!(shell.render_cloud_tabs(cx).is_some());
 

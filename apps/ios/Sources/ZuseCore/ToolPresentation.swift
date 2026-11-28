@@ -1,83 +1,104 @@
 import Foundation
 
+/// What kind of work one tool call did, for summaries ("Ran 3 commands · edited 2 files").
+public enum ToolCategory: String, Equatable, Sendable {
+  case command, read, write, edit, search, webSearch, fetch, plan, agent, tool
+}
+
 /// One line of agent activity: what kind of work, and what it touched.
 public struct ToolStep: Equatable, Sendable {
+  /// Past tense once settled ("Ran", "Read"); present tense while running ("Running").
   public let label: String
   public let detail: String
   /// SF Symbol for this kind of work.
   public let symbol: String
+  public let category: ToolCategory
 }
 
-/// Names work the way the desktop does (`zuse_protocol::view`), so a turn reads the same on every
-/// device. Rust hosts send a typed call; legacy hosts send a tool name and its raw input.
+/// Names work the way the desktop does, so a turn reads the same on every device. Rust hosts
+/// send a typed call; legacy hosts send a tool name and its raw input.
 public enum ToolPresentation {
-  private static func oneLine(_ text: String) -> String {
+  static func oneLine(_ text: String) -> String {
     text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
   }
-  private static func step(_ label: String, _ detail: String, _ symbol: String) -> ToolStep {
-    ToolStep(label: label, detail: oneLine(detail), symbol: symbol)
+  private static func step(
+    _ label: String, _ detail: String, _ symbol: String, _ category: ToolCategory
+  ) -> ToolStep {
+    ToolStep(label: label, detail: oneLine(detail), symbol: symbol, category: category)
   }
   private static let terminal = "terminal"
   private static let read = "doc.text"
   private static let edit = "pencil"
   private static let search = "magnifyingglass"
   private static let web = "globe"
+  private static let agent = "person.2"
 
-  public static func step(_ message: ChatMessage) -> ToolStep {
-    if message.kind == "thinking" || message.kind == "reasoning" {
-      return step("Thinking", "", "brain")
-    }
-    if message.kind == "tool_result" { return step("Output", "", "text.alignleft") }
+  /// A tool call's verb and subject. `running` picks the present tense.
+  public static func step(_ message: ChatMessage, running: Bool = false) -> ToolStep {
     let input = message.content["input"]
     return input["kind"].string != nil
-      ? typed(input) : named(message.content["tool"].string ?? "Tool", input)
+      ? typed(input, running: running)
+      : named(message.content["tool"].string ?? "Tool", input, running: running)
   }
 
-  private static func typed(_ call: JSONValue) -> ToolStep {
+  private static func typed(_ call: JSONValue, running: Bool) -> ToolStep {
     func text(_ key: String) -> String { call[key].string ?? "" }
     switch call["kind"].string {
-    case "exec": return step("Run", text("command"), terminal)
-    case "readFile": return step("Read", text("path"), read)
-    case "writeFile": return step("Write", text("path"), edit)
-    case "editFile": return step("Edit", text("path"), edit)
-    case "applyPatch": return step("Patch", call["path"].string ?? "workspace", edit)
+    case "exec": return step(running ? "Running" : "Ran", text("command"), terminal, .command)
+    case "readFile": return step(running ? "Reading" : "Read", text("path"), read, .read)
+    case "writeFile": return step(running ? "Writing" : "Wrote", text("path"), edit, .write)
+    case "editFile": return step(running ? "Editing" : "Edited", text("path"), edit, .edit)
+    case "applyPatch":
+      return step(
+        running ? "Editing" : "Edited", call["path"].string ?? "workspace", edit, .edit)
     case "search":
       let pattern = text("pattern")
       return step(
-        "Search", call["path"].string.map { "\(pattern) in \($0)" } ?? pattern, search)
-    case "glob": return step("Glob", text("pattern"), search)
-    case "webFetch": return step("Fetch", text("url"), web)
-    case "webSearch": return step("Web", text("query"), web)
+        running ? "Searching" : "Searched",
+        call["path"].string.map { "\(pattern) in \($0)" } ?? pattern, search, .search)
+    case "glob":
+      return step(running ? "Finding files" : "Found files", text("pattern"), search, .search)
+    case "webFetch": return step(running ? "Fetching" : "Fetched", text("url"), web, .fetch)
+    case "webSearch":
+      return step(
+        running ? "Searching the web" : "Searched the web", text("query"), web, .webSearch)
     case "todo":
       let items = call["items"].array
       return step(
-        "Todo", "\(items.filter { $0["done"].bool }.count)/\(items.count) done", "checklist")
+        "Plan", "\(items.filter { $0["done"].bool }.count)/\(items.count) done", "checklist",
+        .plan)
     case "mcp":
-      return step("MCP", "\(text("server")) · \(text("tool"))", "puzzlepiece.extension")
+      return step("MCP", "\(text("server")) · \(text("tool"))", "puzzlepiece.extension", .tool)
     default:
       let name = text("name")
       if name.hasPrefix("Agent: ") {
-        return step("Agent", String(name.dropFirst(7)), "person.2")
+        return step("Agent", String(name.dropFirst(7)), agent, .agent)
       }
-      return name == "Agent" ? step("Agent", "", "person.2") : step("Tool", name, "wrench")
+      return name == "Agent"
+        ? step("Agent", "", agent, .agent) : step("Tool", name, "wrench", .tool)
     }
   }
 
-  private static func named(_ name: String, _ input: JSONValue) -> ToolStep {
+  private static func named(_ name: String, _ input: JSONValue, running: Bool) -> ToolStep {
     func text(_ key: String) -> String { input[key].string ?? "" }
     let path = input["file_path"].string ?? text("path")
     switch name {
-    case "Bash", "Run": return step("Run", text("command"), terminal)
-    case "Read": return step("Read", path, read)
-    case "Write": return step("Write", path, edit)
-    case "Edit", "MultiEdit": return step("Edit", path, edit)
-    case "Grep": return step("Search", text("pattern"), search)
-    case "Glob": return step("Glob", text("pattern"), search)
-    case "WebFetch": return step("Fetch", text("url"), web)
-    case "WebSearch": return step("Web", text("query"), web)
-    case "TodoWrite": return step("Todo", "", "checklist")
-    case "Task": return step("Agent", text("description"), "person.2")
-    default: return step("Tool", name, "wrench")
+    case "Bash", "Run":
+      return step(running ? "Running" : "Ran", text("command"), terminal, .command)
+    case "Read": return step(running ? "Reading" : "Read", path, read, .read)
+    case "Write": return step(running ? "Writing" : "Wrote", path, edit, .write)
+    case "Edit", "MultiEdit": return step(running ? "Editing" : "Edited", path, edit, .edit)
+    case "Grep": return step(running ? "Searching" : "Searched", text("pattern"), search, .search)
+    case "Glob":
+      return step(running ? "Finding files" : "Found files", text("pattern"), search, .search)
+    case "WebFetch": return step(running ? "Fetching" : "Fetched", text("url"), web, .fetch)
+    case "WebSearch":
+      return step(
+        running ? "Searching the web" : "Searched the web", text("query"), web, .webSearch)
+    case "TodoWrite": return step("Plan", "", "checklist", .plan)
+    case "ExitPlanMode": return step("Plan", "", "checklist", .plan)
+    case "Task": return step("Agent", text("description"), agent, .agent)
+    default: return step("Tool", name, "wrench", .tool)
     }
   }
 
@@ -85,82 +106,104 @@ public enum ToolPresentation {
     "\(count) \(count == 1 ? one : many)"
   }
 
-  /// "Ran 3 commands, edited 2 files, 1 failed", the line settled work folds behind.
-  public static func summary(_ rows: [TranscriptRow]) -> String {
-    let tools = rows.filter { $0.message.kind == "tool_use" }
-    if tools.isEmpty { return rows.contains { $0.isThinking } ? "Thought" : "Activity" }
-    var edited = Set<String>()
-    var commands = 0
-    var reads = 0
-    var searches = 0
-    var fetches = 0
-    var todos = 0
-    var other = 0
-    for row in tools {
-      let step = step(row.message)
-      switch step.label {
-      case "Run": commands += 1
-      case "Write", "Edit", "Patch": edited.insert(step.detail)
-      case "Read": reads += 1
-      case "Search", "Glob", "Web": searches += 1
-      case "Fetch": fetches += 1
-      case "Todo": todos += 1
-      default: other += 1
+  /// A path's file name, for lines that name what was touched.
+  public static func fileName(_ path: String) -> String {
+    let name = (path as NSString).lastPathComponent
+    return name.isEmpty ? path : name
+  }
+
+  /// "Ran 3 commands · edited 2 files · 1 failed": categories in order of first use. With
+  /// `names`, a category that touched one file names it ("edited calc.py").
+  public static func summary(
+    _ steps: [TimelineStep], limit: Int = 4, failures: Bool = true, names: Bool = false
+  ) -> String {
+    let tools = steps.filter { $0.kind == .tool }
+    if tools.isEmpty {
+      return steps.contains { $0.kind == .thinking } ? "Thought" : "Worked"
+    }
+    var order: [ToolCategory] = []
+    var counts: [ToolCategory: Int] = [:]
+    var paths: [ToolCategory: Set<String>] = [:]
+    for step in tools {
+      let tool = step.tool
+      // Unsettled or failed writes didn't change a file, so they count as tool calls.
+      var category = tool.category
+      if [.write, .edit].contains(category), step.failed { category = .tool }
+      if !order.contains(category) { order.append(category) }
+      if [.read, .write, .edit].contains(category), !tool.detail.isEmpty {
+        let edited = step.diffStats.map(\.path)
+        for path in edited.isEmpty ? [tool.detail] : edited {
+          paths[category, default: []].insert(path)
+        }
+      } else {
+        counts[category, default: 0] += 1
       }
     }
-    var segments: [String] = []
-    if commands > 0 { segments.append("ran \(plural(commands, "command", "commands"))") }
-    if !edited.isEmpty { segments.append("edited \(plural(edited.count, "file", "files"))") }
-    if reads > 0 { segments.append("read \(plural(reads, "file", "files"))") }
-    if searches > 0 { segments.append("searched \(plural(searches, "time", "times"))") }
-    if fetches > 0 { segments.append("fetched \(plural(fetches, "page", "pages"))") }
-    if todos > 0 { segments.append("updated todos") }
-    if other > 0 { segments.append("called \(plural(other, "tool", "tools"))") }
+    func count(_ category: ToolCategory) -> Int {
+      (counts[category] ?? 0) + (paths[category]?.count ?? 0)
+    }
+    func files(_ category: ToolCategory) -> String {
+      if names, let only = paths[category], only.count == 1, let path = only.first {
+        return fileName(path)
+      }
+      return plural(count(category), "file", "files")
+    }
+    var segments = order.map { category -> String in
+      let n = count(category)
+      switch category {
+      case .command: return "ran \(plural(n, "command", "commands"))"
+      // Reads stay a count; the files a turn changed are what you look for.
+      case .read: return "read \(plural(n, "file", "files"))"
+      case .write: return "wrote \(files(.write))"
+      case .edit: return "edited \(files(.edit))"
+      case .search: return n == 1 ? "searched once" : "searched \(n) times"
+      case .webSearch: return n == 1 ? "searched the web" : "searched the web \(n) times"
+      case .fetch: return "fetched \(plural(n, "page", "pages"))"
+      case .plan: return "updated the plan"
+      case .agent: return "started \(plural(n, "agent", "agents"))"
+      case .tool: return "used \(plural(n, "tool", "tools"))"
+      }
+    }
+    if segments.count > limit {
+      let hidden = segments.count - limit
+      segments = Array(segments.prefix(limit)) + ["+\(hidden)"]
+    }
     let failed = tools.filter(\.failed).count
-    if failed > 0 { segments.append("\(failed) failed") }
-    let line = segments.joined(separator: ", ")
+    if failures, failed > 0 { segments.append("\(failed) failed") }
+    let line = segments.joined(separator: " · ")
     return line.prefix(1).uppercased() + line.dropFirst()
   }
 
-  /// What the agent is doing right now, for the line above work still in progress.
-  public static func liveTitle(_ rows: [TranscriptRow]) -> String {
-    guard let current = rows.last(where: \.running) ?? rows.last, !current.isThinking else {
-      return "Thinking…"
+  /// What the agent is doing right now: its newest unsettled call, else what it last did.
+  public static func liveTitle(_ steps: [TimelineStep]) -> String {
+    guard let current = steps.last(where: \.running) ?? steps.last else { return "Thinking…" }
+    switch current.kind {
+    case .thinking: return "Thinking…"
+    case .narration: return "Working…"
+    case .tool:
+      let tool = current.tool
+      switch tool.category {
+      case .command: return tool.detail.isEmpty ? "Running command…" : "Running \(tool.detail)"
+      case .read: return tool.detail.isEmpty ? "Reading files…" : "Reading \(fileName(tool.detail))"
+      case .write:
+        return tool.detail.isEmpty ? "Writing files…" : "Writing \(fileName(tool.detail))"
+      case .edit: return tool.detail.isEmpty ? "Editing files…" : "Editing \(fileName(tool.detail))"
+      case .search: return "Searching files…"
+      case .webSearch: return "Searching the web…"
+      case .fetch: return "Fetching page…"
+      case .plan: return "Updating the plan…"
+      case .agent: return "Running an agent…"
+      case .tool: return tool.detail.isEmpty ? "Working…" : "Using \(tool.detail)…"
+      }
     }
-    let step = step(current.message)
-    let verb: String
-    switch step.label {
-    case "Run": verb = "Running"
-    case "Read": verb = "Reading"
-    case "Write": verb = "Writing"
-    case "Edit", "Patch": verb = "Editing"
-    case "Search", "Glob", "Web": verb = "Searching"
-    case "Fetch": verb = "Fetching"
-    case "Todo": verb = "Updating todos"
-    case "Agent": verb = "Running agent"
-    default: verb = "Working"
-    }
-    return step.label == "Todo" || step.detail.isEmpty ? "\(verb)…" : "\(verb) \(step.detail)"
   }
-}
 
-extension TranscriptRow {
-  public var isThinking: Bool { ["thinking", "reasoning"].contains(message.kind) }
-  public var failed: Bool {
-    message.content["isError"].bool || result?.content["isError"].bool == true
-  }
-  /// Rust hosts mark a call resolved; legacy hosts send a separate result.
-  public var running: Bool {
-    message.kind == "tool_use" && result == nil && message.content["resolved"] == .bool(false)
-  }
-  public var step: ToolStep { ToolPresentation.step(message) }
-}
-
-extension TranscriptGroup {
-  public var hasRunningTool: Bool { rows.contains(where: \.running) }
-  public var failed: Bool { rows.contains(where: \.failed) }
-  /// The line the group folds behind, or what it is doing while it runs.
-  public var title: String {
-    hasRunningTool ? ToolPresentation.liveTitle(rows) : ToolPresentation.summary(rows)
+  /// "9s", "1m 5s", "1h 0m", "1d 2h", as the desktop formats turn lengths.
+  public static func duration(milliseconds: Int) -> String {
+    let seconds = max(milliseconds / 1000, 1)
+    if seconds < 60 { return "\(seconds)s" }
+    if seconds < 3600 { return "\(seconds / 60)m \(seconds % 60)s" }
+    if seconds < 86_400 { return "\(seconds / 3600)h \(seconds % 3600 / 60)m" }
+    return "\(seconds / 86_400)d \(seconds % 86_400 / 3600)h"
   }
 }

@@ -1253,6 +1253,7 @@ async fn main() -> Result<()> {
                 };
             let mut grant_cleanup_at = 0;
             let mut runtime_update_expiry_at = 0;
+            let mut stale_lifecycle_at = 0;
             let allocation_cancel = tokio_util::sync::CancellationToken::new();
             let allocation_kick = Arc::new(tokio::sync::Notify::new());
             let allocation_task = if once {
@@ -1383,6 +1384,21 @@ async fn main() -> Result<()> {
                     }
                     runtime_update_expiry_at =
                         now_ms() + zuse_cloud::runtime::runtime_updates::EXPIRY_SWEEP_MS;
+                }
+                if now_ms() >= stale_lifecycle_at {
+                    // Deadline for lifecycle operations a paused computer was
+                    // left with: they must never block Archive or Resume.
+                    match runtime.settle_stale_lifecycle(now_ms()).await {
+                        Ok(0) => {}
+                        Ok(settled) => {
+                            lifecycle_priority = true;
+                            tracing::warn!(settled, "Unfinished lifecycle operations settled");
+                        }
+                        Err(error) => {
+                            tracing::warn!(code = error.code, "Lifecycle settlement sweep deferred")
+                        }
+                    }
+                    stale_lifecycle_at = now_ms() + zuse_cloud::runtime::lifecycle::stale::SWEEP_MS;
                 }
                 if now_ms() >= idle_sleep_at {
                     match runtime.idle_sleep_once(now_ms()).await {
@@ -1587,6 +1603,7 @@ async fn main() -> Result<()> {
                         Some(idle_stages_at),
                         Some(grant_cleanup_at),
                         Some(runtime_update_expiry_at),
+                        Some(stale_lifecycle_at),
                         Some(idle_sleep_at),
                         Some(asset_cleanup_at),
                     ]);

@@ -6,6 +6,9 @@
 //! window pixels) go through the window's own input dispatch, so hover and
 //! click take the same path as a real pointer; each prints `ok` once drawn.
 //! Close the window to exit.
+#[path = "support/fixture_commands.rs"]
+mod fixture_commands;
+
 use gpui::{AppContext, Bounds, WindowBounds, WindowOptions, px, size};
 use serde_json::json;
 use std::sync::Arc;
@@ -34,17 +37,45 @@ fn present(window: gpui::AnyWindowHandle, cx: &mut gpui::AsyncApp) {
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter("warn").init();
     let plain = std::env::var_os("ZUSE_FIXTURE_PLAIN").is_some();
+    // ZUSE_FIXTURE_DEVIN renders the chat as Devin with an "Agent: Sidekick"
+    // chip — the Fusion sidekick shape the pane fix targets.
+    let devin = std::env::var_os("ZUSE_FIXTURE_DEVIN").is_some();
+    // ZUSE_FIXTURE_ROUTE applies a shell fixture route (e.g.
+    // "settings/general") once the transcript is up.
+    let route = std::env::var("ZUSE_FIXTURE_ROUTE").ok();
+    // ZUSE_FIXTURE_ROOT keeps the engine and UI data dirs under a fixed path
+    // instead of a tempdir, and seeds the transcript + subagent docs into the
+    // engine's doc host so `zuse serve` on the same engine dir can serve them
+    // to the web app (WatchDocMessages reads engine docs, not the UI cache).
+    let fixture_root = std::env::var_os("ZUSE_FIXTURE_ROOT").map(std::path::PathBuf::from);
     let temp = tempfile::tempdir()?;
     let workspace = temp.path().join("workspace");
     std::fs::create_dir_all(&workspace)?;
+    let engine_dir = fixture_root
+        .as_ref()
+        .map(|root| root.join("engine"))
+        .unwrap_or_else(|| temp.path().join("engine"));
     let runtime = tokio::runtime::Runtime::new()?;
     let core = runtime.block_on(async {
-        zuse_engine::EngineCore::assemble(
-            &temp.path().join("engine"),
-            Arc::new(zuse_engine::default_registry()),
-            zuse_protocol::HarnessId::ClaudeCode,
-            None,
-        )
+        // ZUSE_FIXTURE_ROOT mode seeds the LOCAL profile store
+        // (`profiles/local`), the same root `zuse serve` uses; the default dev
+        // profile (`orgs/dev-org/dev-user`) is invisible to it.
+        if fixture_root.is_some() {
+            let profile = zuse_engine::EngineProfile::local(&engine_dir)?;
+            zuse_engine::EngineCore::assemble_with_profile(
+                profile,
+                Arc::new(zuse_engine::default_registry()),
+                zuse_protocol::HarnessId::ClaudeCode,
+                None,
+            )
+        } else {
+            zuse_engine::EngineCore::assemble(
+                &engine_dir,
+                Arc::new(zuse_engine::default_registry()),
+                zuse_protocol::HarnessId::ClaudeCode,
+                None,
+            )
+        }
     })?;
     core.workspace.create_chat(
         "coordinator",
@@ -56,8 +87,11 @@ fn main() -> anyhow::Result<()> {
     core.workspace.rename_chat("coordinator", "zappers stuff")?;
     let ipc_port = port();
     let _ipc = runtime.block_on(zuse_engine::serve_ipc(ipc_port, core.rpc_service()))?;
-    let data = temp.path().join("ui");
-    std::fs::create_dir(&data)?;
+    let data = fixture_root
+        .as_ref()
+        .map(|root| root.join("ui"))
+        .unwrap_or_else(|| temp.path().join("ui"));
+    std::fs::create_dir_all(&data)?;
     let boot = EngineBootConfig {
         target: None,
         data_dir: data.clone(),
@@ -72,7 +106,7 @@ fn main() -> anyhow::Result<()> {
     let mut chats = core.workspace.read_chats()?;
     for chat in &mut chats {
         chat.config = Some(
-            serde_json::from_value(json!({"harness": "claude-code", "model": "claude-opus-5-5",
+            serde_json::from_value(json!({"harness": if devin { "devin" } else { "claude-code" }, "model": "claude-opus-5-5",
                 "reasoning": null, "sandbox": "workspace-write"}))
             .unwrap(),
         );
@@ -96,7 +130,7 @@ fn main() -> anyhow::Result<()> {
         {"id": "a1", "role": "assistant", "createdAt": now - 149_000, "deviceId": device, "status": "complete",
          "parts": [
             {"id": "r1", "kind": "reasoning", "text": "I'm planning new child issues under ZAP-6."},
-            {"id": "s1", "kind": "tool", "call": {"kind": "unknown", "name": "Agent: Research dusk.bot onboarding", "input": {"description": "Research dusk.bot onboarding"}},
+            {"id": "s1", "kind": "tool", "call": {"kind": "unknown", "name": if devin { "Agent: Sidekick" } else { "Agent: Research dusk.bot onboarding" }, "input": {"description": "Research dusk.bot onboarding"}},
              "isError": false, "resolved": true, "subagentRef": "coordinator--sub--research", "subagentStatus": "done"},
             {"id": "c1", "kind": "tool", "call": {"kind": "exec", "command": "git status"}, "isError": false, "resolved": true},
             {"id": "c2", "kind": "tool", "call": {"kind": "exec", "command": "git log --oneline -5"}, "isError": false, "resolved": true},
@@ -112,6 +146,46 @@ fn main() -> anyhow::Result<()> {
             {"id": "x2", "kind": "text", "text": "Onboarding is three steps: pick a workspace, connect a repository, then send a first message from a short guide."},
          ]},
     ]);
+
+    // ZUSE_FIXTURE_ROOT mode: mirror the seeded transcript into the engine's
+    // doc host so a `zuse serve` on the same engine dir can serve it to the
+    // web app. The UI reads its own cache; the web app reads engine docs.
+    if fixture_root.is_some() {
+        runtime.block_on(async {
+            let chat_entries: Vec<zuse_doc::SessionMessageEntry> =
+                serde_json::from_value(entries.clone()).expect("seed chat entries decode");
+            let sub_entries: Vec<zuse_doc::SessionMessageEntry> =
+                serde_json::from_value(subagent.clone()).expect("seed subagent entries decode");
+            let chat_doc = core
+                .doc_host
+                .open("coordinator")
+                .expect("open coordinator doc");
+            for entry in &chat_entries {
+                chat_doc.doc().push_message(entry).expect("push chat entry");
+            }
+            let sub_doc = core
+                .doc_host
+                .open("coordinator--sub--research")
+                .expect("open subagent doc");
+            for entry in &sub_entries {
+                sub_doc
+                    .doc()
+                    .push_message(entry)
+                    .expect("push subagent entry");
+            }
+            core.doc_host.flush_all();
+            // The chat list lives in the workspace registry snapshot, not the
+            // doc store — flush it too or `zuse serve` sees zero chats.
+            core.workspace.flush();
+        });
+        eprintln!("[fixture] seeded engine docs for coordinator + subagent");
+        // ZUSE_FIXTURE_SEED_ONLY exits before the GUI app starts: the seeded
+        // docs are already flushed to the engine store, so `zuse serve` on the
+        // same data dir can serve them without a window to keep alive.
+        if std::env::var_os("ZUSE_FIXTURE_SEED_ONLY").is_some() {
+            return Ok(());
+        }
+    }
 
     gpui_platform::application()
         .with_assets(icons::Assets)
@@ -171,6 +245,9 @@ fn main() -> anyhow::Result<()> {
                 s.no_project = true;
                 s
             });
+            let shell_slot =
+                std::rc::Rc::new(std::cell::RefCell::new(None::<gpui::Entity<shell::Shell>>));
+            let slot = shell_slot.clone();
             let window = cx
                 .open_window(
                     WindowOptions {
@@ -181,7 +258,11 @@ fn main() -> anyhow::Result<()> {
                         ))),
                         ..Default::default()
                     },
-                    |_, cx| cx.new(|cx| shell::Shell::new(state.clone(), boot, cx)),
+                    |_, cx| {
+                        let shell = cx.new(|cx| shell::Shell::new(state.clone(), boot, cx));
+                        *slot.borrow_mut() = Some(shell.clone());
+                        shell
+                    },
                 )
                 .unwrap();
             cx.on_window_closed(|cx, _| cx.quit()).detach();
@@ -218,6 +299,14 @@ fn main() -> anyhow::Result<()> {
                 };
                 seed(cx);
                 pause(1200).await;
+                if let Some(route) = &route {
+                    if let Some(shell) = shell_slot.borrow().clone() {
+                        shell.update(cx, |s, cx| {
+                            s.fixture_review_route(route, cx);
+                        });
+                    }
+                    pause(600).await;
+                }
                 present(window.into(), cx);
                 println!("ready");
                 let (send, commands) = std::sync::mpsc::channel::<String>();
@@ -236,7 +325,53 @@ fn main() -> anyhow::Result<()> {
                     }
                     tick += 1;
                     while let Ok(line) = commands.try_recv() {
+                        // `capture PATH` renders the window to a PNG — a real
+                        // capture of the compiled fixture, no screen-recording
+                        // permission needed.
+                        if let Some(path) = fixture_commands::capture_path(&line) {
+                            let path = path.to_string();
+                            let saved = gpui::AnyWindowHandle::from(window).update(
+                                cx,
+                                |_, w, _| -> anyhow::Result<()> {
+                                    Ok(w.render_to_image()?.save(path.as_str())?)
+                                },
+                            );
+                            match saved {
+                                Ok(Ok(())) => println!("ok"),
+                                Ok(Err(e)) | Err(e) => println!("capture failed: {e:#}"),
+                            }
+                            continue;
+                        }
                         let words: Vec<&str> = line.split_whitespace().collect();
+                        // `scroll X Y DY` dispatches a wheel event so long
+                        // pages (settings) can be brought to a row.
+                        if words.first() == Some(&"scroll") && words.len() == 4 {
+                            let (Ok(x), Ok(y), Ok(dy)) = (
+                                words[1].parse::<f32>(),
+                                words[2].parse::<f32>(),
+                                words[3].parse::<f32>(),
+                            ) else {
+                                continue;
+                            };
+                            gpui::AnyWindowHandle::from(window)
+                                .update(cx, |_, window, cx| {
+                                    window.dispatch_event(
+                                        gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                                            position: gpui::point(px(x), px(y)),
+                                            delta: gpui::ScrollDelta::Pixels(gpui::point(
+                                                px(0.),
+                                                px(dy),
+                                            )),
+                                            ..Default::default()
+                                        }),
+                                        cx,
+                                    );
+                                })
+                                .ok();
+                            present(window.into(), cx);
+                            println!("ok");
+                            continue;
+                        }
                         let [verb, x, y] = words[..] else { continue };
                         let (Ok(x), Ok(y)) = (x.parse::<f32>(), y.parse::<f32>()) else {
                             continue;

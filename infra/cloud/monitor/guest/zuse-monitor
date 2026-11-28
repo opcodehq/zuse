@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""Shared guest desktop. Run serve from the agent workspace before launching GUI apps."""
+import argparse
+import fcntl
+import json
+import os
+from pathlib import Path
+import secrets
+import shutil
+import signal
+import subprocess
+import sys
+import time
+import urllib.request
+
+STATE = Path.home() / ".local/state/zuse-monitor"
+DISPLAY = ":91"
+PORT = 6901
+BASE = f"http://127.0.0.1:{PORT}"
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args):
+        return None
+
+
+LOCAL = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+
+
+def serve():
+    size = os.environ.get("POOF_DISPLAY_SIZE", "1920x1080")
+    if size not in {"1920x1080", "2560x1600"}:
+        raise ValueError("Unsupported POOF_DISPLAY_SIZE")
+    os.umask(0o077)
+    STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
+    lock = (STATE / "lock").open("a")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit(os.EX_TEMPFAIL)  # Another serve process owns startup.
+    authority = Path(os.environ["XAUTHORITY"])
+    authority.touch(mode=0o600, exist_ok=True)
+    subprocess.run(["xauth", "-f", str(authority), "source", "-"],
+                   input=f"add {DISPLAY} . {secrets.token_hex(16)}\n", text=True, check=True)
+    password = secrets.token_urlsafe(32)
+    children = []
+
+    def launch(*cmd, env=None):
+        children.append(subprocess.Popen(cmd, env=env))
+
+    def stop(*_):
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, stop)
+    try:
+        launch("Xvfb", DISPLAY, "-screen", "0", f"{size}x24",
+               "-auth", str(authority), "-nolisten", "tcp")
+        for _ in range(100):
+            if children[0].poll() is not None:
+                raise RuntimeError("virtual display exited")
+            if subprocess.run(["xdotool", "getdisplaygeometry"], stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL).returncode == 0:
+                break
+            time.sleep(0.05)
+        else:
+            raise RuntimeError("virtual display failed to start")
+        launch("openbox" if shutil.which("openbox") else "metacity")
+        launch("zuse-apps")
+        launch("zuse-display", env={**os.environ, "ZUSE_DISPLAY_PASSWORD": password,
+                                   "ZUSE_DISPLAY_PORT": str(PORT)})
+        (STATE / "password").write_text(password)
+        launch(sys.executable, "/usr/local/lib/poof/control.py")
+        while all(p.poll() is None for p in children):
+            time.sleep(0.25)
+        raise RuntimeError("monitor process exited")
+    finally:
+        (STATE / "password").unlink(missing_ok=True)
+        (STATE / "control-password").unlink(missing_ok=True)
+        for child in reversed(children):
+            child.terminate()
+            try:
+                child.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait()
+
+
+def ensure_started():
+    # Serialize concurrent opens while the detached session is starting.
+    STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with (STATE / "startup.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        process = None
+        for _ in range(80):
+            try:
+                password = (STATE / "password").read_text()
+                request = urllib.request.Request(BASE + "/ready", method="GET",
+                    headers={"Authorization": "Bearer " + password})
+                with LOCAL.open(request, timeout=1) as response:
+                    if response.status == 200:
+                        break
+            except OSError:
+                pass
+            if process is None:
+                with (STATE / "lock").open("a") as owner:
+                    try:
+                        fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        time.sleep(0.1)
+                        continue
+                with (STATE / "server.log").open("w") as log:
+                    process = subprocess.Popen([sys.executable, __file__, "serve"],
+                        stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+            elif process.poll() == os.EX_TEMPFAIL:
+                process = None
+            elif process.returncode is not None:
+                raise RuntimeError("monitor startup failed; check server.log")
+            time.sleep(0.1)
+        else:
+            raise RuntimeError("monitor startup timed out")
+    return password
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    cmds = parser.add_subparsers(dest="action", required=True)
+    cmds.add_parser("start", help="start the shared desktop if needed")
+    cmds.add_parser("launch", help="run an application on the shared display").add_argument("command", nargs=argparse.REMAINDER)
+    cmds.add_parser("serve")
+    cmds.add_parser("attach", help="start or join the monitor over a private SSH session")
+    cmds.add_parser("attach-control", help="attach an interactive desktop over private SSH")
+    cmds.add_parser("password", help="show the private viewer password in a trusted terminal")
+    shot = cmds.add_parser("screenshot")
+    shot.add_argument("png", type=Path)
+    click = cmds.add_parser("click")
+    click.add_argument("x", type=int)
+    click.add_argument("y", type=int)
+    cmds.add_parser("type").add_argument("text")
+    cmds.add_parser("key").add_argument("key")
+    cmds.add_parser("scroll").add_argument("direction", choices=["up", "down"])
+    args = parser.parse_args()
+    os.environ["DISPLAY"] = DISPLAY
+    os.environ["XAUTHORITY"] = str(STATE / "Xauthority")
+    os.umask(0o077)
+    if args.action == "serve":
+        serve()
+    elif args.action == "attach":
+        print(ensure_started(), flush=True)
+        sys.stdin.buffer.read(1)
+    elif args.action == "attach-control":
+        ensure_started()
+        for _ in range(50):
+            try:
+                key = (STATE / "control-password").read_text().strip()
+                request = urllib.request.Request("http://127.0.0.1:6912/ready",
+                    headers={"Authorization": "Bearer " + key})
+                with LOCAL.open(request, timeout=1):
+                    break
+            except OSError:
+                time.sleep(.1)
+        else:
+            raise RuntimeError("desktop controls did not start")
+        print(key, flush=True)
+        sys.stdin.buffer.read(1)
+    elif args.action == "start":
+        ensure_started()
+    elif args.action == "launch":
+        if not args.command:
+            parser.error("launch requires an application")
+        ensure_started()
+        os.execvp(args.command[0], args.command)
+    elif args.action == "password":
+        print((STATE / "password").read_text())
+    elif args.action == "screenshot":
+        req = urllib.request.Request(BASE + "/screenshot", headers={
+            "Authorization": "Bearer " + (STATE / "password").read_text()})
+        with LOCAL.open(req, timeout=10) as response:
+            data = response.read()
+        if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise ValueError("unexpected screenshot format")
+        args.png.write_bytes(data)
+        print(json.dumps(dict(path=str(args.png), width=int.from_bytes(data[16:20], "big"),
+                              height=int.from_bytes(data[20:24], "big"))))
+    else:
+        if args.action == "click":
+            width, height = map(int, subprocess.check_output(
+                ["xdotool", "getdisplaygeometry"], text=True).split())
+            if not (0 <= args.x < width and 0 <= args.y < height):
+                parser.error("click outside display")
+            command = ["mousemove", str(args.x), str(args.y), "click", "1"]
+        elif args.action == "type":
+            command = ["type", "--clearmodifiers", "--", args.text]
+        elif args.action == "key":
+            command = ["key", "--clearmodifiers", "--", args.key]
+        else:
+            command = ["click", "4" if args.direction == "up" else "5"]
+        subprocess.run(["xdotool", *command], check=True)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, RuntimeError, subprocess.CalledProcessError, ValueError) as exc:
+        sys.exit(str(exc))

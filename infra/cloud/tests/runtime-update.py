@@ -122,7 +122,9 @@ class RuntimeUpdateTest(unittest.TestCase):
         helper.probe = probe_then_withdraw; self.addCleanup(setattr, helper, 'probe', original)
         result = self.run_helper()
         self.assertEqual((result['outcome'], result['errorCode']), ('failed', 'runtime_update_request_withdrawn'))
-        self.assert_unchanged(); self.assertEqual(json.loads((self.state / 'journal.json').read_text())['phase'], 'failed')
+        # Withdrawn before anything was touched: no journal, no previous.
+        self.assert_unchanged(); self.assertFalse((self.state / 'journal.json').exists())
+        self.assertFalse((self.runtime_root / 'previous').exists())
 
     def test_request_replaced_by_another_update_is_not_removed_or_swapped(self):
         self.stage(runtime_bytes('new'))
@@ -150,9 +152,52 @@ class RuntimeUpdateTest(unittest.TestCase):
         self.assertEqual(self.installed.read_bytes(), new)
         target = self.root / 'rollback-target'; target.write_text(json.dumps({'updateId': 'update-1', 'sha256': digest}))
         (self.data / 'rollback.json').symlink_to(target)
-        self.assertEqual(self.run_helper()['errorCode'], 'runtime_update_request_invalid')
+        self.assertEqual(helper.main(['run']), 0)
+        # A failure of no update goes to error.json; result.json keeps the update's.
+        self.assertEqual(json.loads((self.state / 'error.json').read_text())['errorCode'], 'runtime_update_request_invalid')
+        self.assertEqual(json.loads((self.state / 'result.json').read_text())['updateId'], 'other')
         self.assertEqual(self.installed.read_bytes(), new); self.assertTrue(target.exists())
         self.assertFalse(os.path.lexists(self.data / 'rollback.json'))
+
+    def test_a_later_attempt_never_hides_an_unattested_commit(self):
+        # Update C is committed and its runtime is still proving itself.
+        new = runtime_bytes('new'); digest = self.stage(new); self.run_helper()
+        committed = json.loads((self.state / 'results/update-1.json').read_text())
+        self.assertEqual(committed['outcome'], 'committed')
+        # An unreadable request (no update id) must not overwrite it.
+        (self.data / 'request.json').write_text('{"not":"a request"}')
+        self.assertEqual(helper.main(['run']), 0)
+        self.assertEqual(json.loads((self.state / 'result.json').read_text()), committed)
+        # Update D, withdrawn mid-install, keeps C's journal and previous binary,
+        # so C can still roll back to what ran before it.
+        newer = runtime_bytes('newer'); self.stage(newer, update='update-2')
+        original = helper.probe
+        def probe_then_withdraw(*args):
+            original(*args); (self.data / 'request.json').unlink()
+        helper.probe = probe_then_withdraw; self.addCleanup(setattr, helper, 'probe', original)
+        self.assertEqual(helper.main(['run']), 0)
+        self.assertEqual(json.loads((self.state / 'results/update-1.json').read_text()), committed)
+        journal = json.loads((self.state / 'journal.json').read_text())
+        self.assertEqual((journal['updateId'], journal['phase']), ('update-1', 'committed'))
+        self.assertEqual((self.runtime_root / 'previous').read_bytes(), self.old)
+        helper.probe = original
+        (self.data / 'rollback.json').write_text(json.dumps({'updateId': 'update-1', 'sha256': digest}))
+        self.assertEqual(self.run_helper()['outcome'], 'rolled-back')
+        self.assertEqual(self.installed.read_bytes(), self.old)
+
+    def test_withdrawal_between_previous_and_swap_restores_the_earlier_update(self):
+        new = runtime_bytes('new'); self.stage(new); self.run_helper()
+        newer = runtime_bytes('newer'); self.stage(newer, update='update-2')
+        original = helper.keep_previous
+        def keep_then_withdraw(*args):
+            original(*args); (self.data / 'request.json').unlink()
+        helper.keep_previous = keep_then_withdraw; self.addCleanup(setattr, helper, 'keep_previous', original)
+        self.assertEqual(self.run_helper()['errorCode'], 'runtime_update_request_withdrawn')
+        journal = json.loads((self.state / 'journal.json').read_text())
+        self.assertEqual((journal['updateId'], journal['phase']), ('update-1', 'committed'))
+        self.assertEqual((self.runtime_root / 'previous').read_bytes(), self.old)
+        self.assertEqual(self.installed.read_bytes(), new)
+        self.assertFalse((self.runtime_root / '.previous-prior').exists())
 
     def test_digest_mismatch_fails_without_swap(self):
         digest = self.stage(runtime_bytes('tampered'), request_sha=sha(runtime_bytes('signed')))

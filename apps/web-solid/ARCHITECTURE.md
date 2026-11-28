@@ -49,7 +49,7 @@ Area exports, mounted by `src/shell/App.tsx`:
 - Store setters mutate drafts. Writes commit on the next microtask; perform dependent reads after that commit, or use the draft inside the same setter. Use `flush` only at imperative boundaries that require committed state, never inside an effect. Reconcile existing subtrees; assign the initial value when the subtree is null.
 - Native `data-*`, ARIA and enumerated attributes use string tokens (`"true"` / `"false"`) where the text value matters; boolean false removes attributes in Solid 2.
 - Long lists use `ui/virtualizer.ts`, a Solid 2 adapter over `@tanstack/virtual-core`. It reconciles measured rows by index so measurements preserve mounted rows. Replace it with the upstream adapter once a Solid 2-compatible version is published.
-- Markdown and agent content are sanitized before reaching the DOM, through `ui/markdown.ts` (also for provider content such as PR descriptions and review comments). Only bundled SVG icons use `innerHTML`. Streaming markdown re-renders only the growing list item, table cell or tail block, and spaces out renders that cost more than a few ms; code is tokenized in a worker and long blocks colour only the lines near the viewport.
+- Markdown and agent content are sanitized before reaching the DOM, through `ui/markdown.ts` (also for provider content such as PR descriptions and review comments). Only bundled SVG icons use `innerHTML`. Assistant HTML fences have a separate opaque-origin preview document; they never enter the host DOM as HTML (see `internal-docs/inline-html-previews.md`). Streaming markdown re-renders only the growing list item, table cell or tail block, and spaces out renders that cost more than a few ms; code is tokenized in a worker and long blocks colour only the lines near the viewport.
 - Never put engine or agent bytes behind a blob URL yourself: use `ui/imageUrl.ts`, since a blob URL opened as a page runs with this origin.
 - Every control is a labelled, keyboard-reachable element. Shortcuts go through `core/keys.ts`; a shortcut's `when` can hand the key back to the browser or the focused editor.
 - Store writes that can fail validate first: `applyTranscriptFrame` checks every tripwire before it touches the store, since a throw inside a store write leaves observers stale.
@@ -92,6 +92,10 @@ The inspector mirrors desktop Overview, Issues, Threads and Drive, with History 
 Run `node e2e/zappers.mjs` for browser checks against a disposable engine and a scripted agent (creation, ownership, adoption, delegation, decisions, issues/comments, document versions/restores, reload and release).
 
 Zapper inspector tabs follow the desktop icon/label strip. Resource reads coalesce bursts of watch updates into one active request and a trailing refresh; late responses from another Zapper are ignored. Reconnect epochs refresh the inspector even when revisions do not change. Server snapshots reconcile into existing rows, and document drafts retain their DOM identity through updates. Composer and Zapper surfaces use spacing and background tones instead of decorative borders; the composer editor overrides the global focus ring while controls retain keyboard focus indicators.
+
+## Cloudflare
+
+`bun run build:cloudflare` builds with `/` asset URLs and copies `cloudflare/_headers` into the output; `wrangler.jsonc` serves it as Workers static assets with SPA fallback. The headers match the engine's (nosniff, no referrer, cross-origin isolation); `assets/` is cached immutably and everything else revalidates. No engine runs behind this host: `cloudflare/worker.js` answers `/api/*` with 404, which the app reads as a listener without owner sessions. `bun run preview:cloudflare` runs it locally; `.github/workflows/web-solid-cloudflare.yml` deploys from main when `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are set.
 
 ## Hosted browser
 

@@ -22,6 +22,7 @@ mod analytics;
 pub mod appearance;
 pub mod archived;
 pub mod cloud_billing;
+pub mod cloud_chat_computers;
 mod command_labels;
 pub mod composer;
 pub mod defaults;
@@ -34,6 +35,7 @@ pub mod notifications;
 pub mod pairing;
 pub mod plugins;
 pub mod shortcuts;
+pub(crate) mod skills;
 mod theme_community;
 pub mod thread_naming;
 pub mod wallpaper;
@@ -503,6 +505,13 @@ pub fn current(cx: &App) -> UiSettings {
         .unwrap_or_default()
 }
 
+pub(crate) fn cloud_desktop_enabled(cx: &App) -> bool {
+    zuse_viewport::cloud_gate::enabled()
+        && cx
+            .try_global::<SettingsStore>()
+            .is_some_and(|store| store.current.cloud_desktop_enabled)
+}
+
 pub(crate) fn split_diffs(cx: &App) -> bool {
     cx.try_global::<SettingsStore>()
         .is_some_and(|store| store.current.diff_split)
@@ -527,6 +536,14 @@ pub fn default_permission_mode(cx: &App) -> zuse_protocol::presentation::Permiss
 pub fn direct_steer_enabled(cx: &App) -> bool {
     cx.try_global::<SettingsStore>()
         .is_some_and(|store| store.current.direct_steer_enabled)
+}
+
+/// Whether the runner game plays above the composer while an agent works.
+/// On by default, including before a settings store is installed.
+pub fn runner_game_enabled(cx: &App) -> bool {
+    cx.try_global::<SettingsStore>()
+        .map(|store| store.current.runner_game_enabled)
+        .unwrap_or(true)
 }
 
 pub fn quit_gesture(cx: &App) -> QuitGesture {
@@ -955,6 +972,17 @@ pub enum SidebarSort {
     Created,
 }
 
+/// How chats under a project heading draw in the Projects view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum SidebarDensity {
+    /// One-line rows.
+    Compact,
+    /// Two-line cards: title and age, then the branch.
+    #[default]
+    Detailed,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowGeometry {
@@ -1117,6 +1145,8 @@ pub struct UiSettings {
     /// session title.
     pub sidebar_show_project_label: bool,
     pub sidebar_compact: bool,
+    /// Row density under project headings in the Projects view.
+    pub sidebar_project_density: SidebarDensity,
     pub sidebar_show_project_icon: bool,
     pub sidebar_show_harness: bool,
     pub sidebar_show_branch: bool,
@@ -1183,6 +1213,8 @@ pub struct UiSettings {
     /// Desktop banners for newly discovered agent CLI releases. In-app chips
     /// remain enabled independently of this preference.
     pub agent_update_notifications: bool,
+    #[serde(default)]
+    pub cloud_desktop_enabled: bool,
     pub right_pane_width: f32,
     /// Width of the pull request pane beside the board.
     pub pull_request_pane_width: f32,
@@ -1261,6 +1293,8 @@ pub struct UiSettings {
     /// the narration between them) fold into one collapsed accordion, so only
     /// the reply text stays visible.
     pub transcript_compact_mode: bool,
+    /// Shows the runner game above the composer while an agent works.
+    pub runner_game_enabled: bool,
     /// Destination shared by PR badges and the pull-request board.
     pub pull_request_destination: PullRequestDestination,
     /// Last explicitly selected PR scope, restored when no project is selected.
@@ -1287,6 +1321,10 @@ pub struct UiSettings {
     /// only: the conversation's own config always wins once it arrives.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub cloud_workspace_agents: Vec<CloudWorkspaceAgent>,
+    /// The app a cloud chat's synced folder opens in from the computer
+    /// menu, by Open in target id; `None` uses the file manager.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub synced_folder_app: Option<String>,
     /// Interactive identity overlay; imported themes default to their own accent.
     pub accent: zuse_theme::AccentSelection,
     /// Glass policy, independent from the selected appearance, theme, and accent.
@@ -1339,6 +1377,7 @@ impl Default for UiSettings {
             sidebar_sort: SidebarSort::LastUpdated,
             sidebar_show_project_label: true,
             sidebar_compact: true,
+            sidebar_project_density: SidebarDensity::Detailed,
             sidebar_show_project_icon: true,
             sidebar_show_harness: true,
             sidebar_show_branch: true,
@@ -1364,6 +1403,7 @@ impl Default for UiSettings {
             notifications_background_only: true,
             files_panel_width: FILES_PANEL_DEFAULT,
             agent_update_notifications: false,
+            cloud_desktop_enabled: false,
             right_pane_width: RIGHT_PANE_DEFAULT,
             pull_request_pane_width: PULL_REQUEST_PANE_DEFAULT,
             right_pane_open: false,
@@ -1405,6 +1445,7 @@ impl Default for UiSettings {
             transcript_width: TRANSCRIPT_WIDTH_DEFAULT,
             open_web_links_in_zuse: true,
             transcript_compact_mode: false,
+            runner_game_enabled: true,
             pull_request_destination: PullRequestDestination::Native,
             last_pull_request_repository: None,
             last_pull_request_device: None,
@@ -1415,6 +1456,7 @@ impl Default for UiSettings {
             files_show_all: false,
             closed_thread_conversations: HashMap::new(),
             cloud_workspace_agents: Vec::new(),
+            synced_folder_app: None,
             accent: zuse_theme::AccentSelection::default(),
             surface: zuse_theme::SurfacePreference::default(),
             new_thread_composer_background: None,
@@ -2253,6 +2295,7 @@ impl UiSettings {
             sidebar_sort,
             sidebar_show_project_label,
             sidebar_compact,
+            sidebar_project_density,
             sidebar_show_project_icon,
             sidebar_show_harness,
             sidebar_show_branch,
@@ -2278,6 +2321,7 @@ impl UiSettings {
             notifications_background_only,
             files_panel_width,
             agent_update_notifications,
+            cloud_desktop_enabled,
             right_pane_width,
             pull_request_pane_width,
             right_pane_open,
@@ -2310,12 +2354,14 @@ impl UiSettings {
             transcript_width,
             open_web_links_in_zuse,
             transcript_compact_mode,
+            runner_game_enabled,
             files_autosave_enabled,
             files_autosave_delay_ms,
             files_word_wrap,
             files_show_all,
             closed_thread_conversations,
             cloud_workspace_agents,
+            synced_folder_app,
             accent,
             surface,
             new_thread_composer_background,
@@ -3249,6 +3295,7 @@ mod tests {
             sidebar_organization: SidebarOrganization::ByDevice,
             sidebar_sort: SidebarSort::Created,
             sidebar_compact: true,
+            sidebar_project_density: SidebarDensity::Compact,
             sidebar_show_project_icon: false,
             sidebar_show_project_label: false,
             sidebar_show_harness: false,
@@ -3289,6 +3336,7 @@ mod tests {
             notifications_background_only: false,
             files_panel_width: 310.0,
             agent_update_notifications: false,
+            cloud_desktop_enabled: false,
             right_pane_width: 700.0,
             pull_request_pane_width: 820.0,
             right_pane_open: true,
@@ -3353,6 +3401,7 @@ mod tests {
             transcript_width: 960.0,
             open_web_links_in_zuse: false,
             transcript_compact_mode: true,
+            runner_game_enabled: false,
             pull_request_destination: PullRequestDestination::External,
             last_pull_request_repository: Some("acme/zuse".into()),
             last_pull_request_device: Some("remote-device".into()),
@@ -3373,6 +3422,7 @@ mod tests {
                 workspace_id: "workspace".into(),
                 agent: "codex".into(),
             }],
+            synced_folder_app: Some("terminal".into()),
             accent: zuse_theme::AccentSelection::Preset(zuse_theme::AccentPreset::Cyan),
             surface: zuse_theme::SurfacePreference::Frosted,
             new_thread_composer_background: Some(NewThreadComposerBackground {
@@ -3406,6 +3456,7 @@ mod tests {
         assert_eq!(UiSettings::load(dir.path()), settings);
         assert!(json.contains(r#""codeFencesFitContent": true"#));
         assert!(json.contains(r#""openWebLinksInZuse": false"#));
+        assert!(json.contains(r#""runnerGameEnabled": false"#));
         assert!(json.contains(r#""newThreadBackgroundEffect": "scanlines""#));
         assert!(json.contains(r#""focalX": 0.25"#));
         assert!(json.contains(r#""focalY": 0.75"#));
@@ -3416,6 +3467,13 @@ mod tests {
         assert!(json.contains(r#""terminalFontSize": 15.0"#));
         assert!(json.contains(r#""codeFontFamily": "geistSans""#));
         assert!(json.contains(r#""codeFontSize": 11.0"#));
+    }
+
+    #[test]
+    fn runner_game_stays_on_for_settings_files_from_before_the_toggle() {
+        // A file written before `runnerGameEnabled` existed keeps the game.
+        let legacy: UiSettings = serde_json::from_str(r#"{"sidebarWidth":300}"#).unwrap();
+        assert!(legacy.runner_game_enabled);
     }
 
     #[test]

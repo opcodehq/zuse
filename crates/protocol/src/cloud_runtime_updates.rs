@@ -137,6 +137,13 @@ pub enum Outcome {
     RolledBack,
     /// Nothing was swapped (download, digest or signature failed).
     Failed,
+    /// Sent by the runtime that asked for the swap, once the binary on disk is
+    /// the new release and before it restarts into it. `sha256` is the
+    /// installed release, `previousSha256` the runtime sending it.
+    /// Provisional: the new runtime still reports `committed`, or the
+    /// restored one `rolled-back`. It lets the server's pin follow the binary
+    /// on disk, so a retained start in between verifies the right file.
+    Installed,
 }
 
 /// Sent by the runtime that is serving after an update attempt (the new one on

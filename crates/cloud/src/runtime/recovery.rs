@@ -1049,7 +1049,7 @@ impl RuntimeControl {
             lifecycle::require_resume_capacity(self.staging_candidate.as_deref(), tx, row, now)
                 .await?;
             if op["phase"] == "restoring" {
-                sqlx::query("UPDATE zuse_rust_jobs SET state='pending',attempts=0,due_at=$3,last_error_code=NULL,updated_at=$3 WHERE kind=$1 AND resource_id=$2 AND resource_generation=$4 AND payload->>'operationId'=$5 AND state='failed'")
+                sqlx::query("UPDATE zuse_rust_jobs SET state='pending',attempts=0,due_at=$3,last_error_code=NULL,updated_at=$3,payload=payload-'launchStartedAt' WHERE kind=$1 AND resource_id=$2 AND resource_generation=$4 AND payload->>'operationId'=$5 AND state='failed'")
                     .bind(restore::JOB_KIND).bind(required(row,"workspace_id")?).bind(now).bind(row["request_config"]["runtimeGeneration"].as_i64()).bind(row["request_config"]["rustRestoreOperationId"].as_str()).execute(&mut **tx).await?;
                 return Ok(true);
             }

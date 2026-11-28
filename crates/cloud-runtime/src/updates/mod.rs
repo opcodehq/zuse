@@ -6,7 +6,8 @@
 //! ```text
 //! poll ── UpdateOffer ──▶ verify signature + architecture (before download)
 //!      ──▶ download (presigned, no bearer) ──▶ zstd ──▶ sha256 ──▶ stage
-//! boundary (cold boot, sleep, or `now` once quiescent):
+//! boundary (`now` once quiescent; a release staged before a cold start is
+//! promoted to `now` once the server confirms it is still the target):
 //!   root base   : write request.json ──▶ root helper verifies, renames, writes result.json
 //!   owned binary: copy ──▶ verify ──▶ probe ──▶ journal ──▶ rename (keeps `previous`)
 //! ──▶ exec the installed path ──▶ new runtime starts ──▶ attest once per update id
@@ -134,6 +135,16 @@ pub(crate) fn valid_sha(value: &str) -> bool {
             .bytes()
             .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
+/// The root helper's update id alphabet (`SAFE` in runtime-update.py); never
+/// a path separator or `..` alone.
+pub(crate) fn valid_update_id(value: &str) -> bool {
+    (1..=160).contains(&value.len())
+        && value != "."
+        && value != ".."
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b':' | b'-'))
+}
 pub(crate) fn read_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
     let bytes = std::fs::read(path).ok()?;
     if bytes.len() > 64 * 1024 {
@@ -197,23 +208,93 @@ pub fn take_exec() -> Option<PathBuf> {
         .take()
 }
 
-/// Replace this process with `binary`, keeping arguments and environment, so
-/// the resident supervisor still owns the same child. Returns only on failure.
+/// The image's launcher (`infra/cloud/launch-runtime.sh`) on root bases. It
+/// runs the harness gate (`harness-release.py exec`) before it execs the binary.
+pub const LAUNCHER: &str = "/usr/local/lib/zuse/launch-rust-runtime-core";
+/// The same launcher on Home bases, relative to the install root `R`
+/// (`R/bin/zuse-cloud-runtime`, `R/lib/launch-rust-runtime`; see
+/// `infra/cloud/prized-base/install.sh`).
+const HOME_LAUNCHER: &str = "lib/launch-rust-runtime";
+
+/// The launcher installed next to `binary`, by the computer's layout.
+pub fn launcher_for(binary: &Path) -> PathBuf {
+    if binary.starts_with("/usr/local/bin") {
+        return PathBuf::from(LAUNCHER);
+    }
+    binary
+        .parent()
+        .and_then(Path::parent)
+        .map_or_else(|| PathBuf::from(LAUNCHER), |root| root.join(HOME_LAUNCHER))
+}
+/// What the launcher needs to start a runtime again without new arguments.
+const LAUNCH_ENV: [&str; 4] = [
+    "ZUSE_CLOUD_WORKSPACE_ID",
+    "ZUSE_API_URL",
+    "ZUSE_RUNTIME_GENERATION",
+    "ZUSE_STORAGE_INCARNATION_ID",
+];
+
+/// Replace this process with `binary`, so the resident supervisor still owns
+/// the same child. Returns only on failure.
 pub fn exec(binary: &Path) -> std::io::Error {
     use std::os::unix::process::CommandExt;
     stop_children();
+    let mut command = restart_command(binary, &launcher_for(binary), &|name| {
+        std::env::var_os(name)
+    });
+    tracing::info!(binary = %binary.display(), launcher = command.get_program() != binary.as_os_str(), "Restarting into the updated runtime");
+    command.exec()
+}
+
+/// How to restart into `binary`.
+///
+/// A runtime the image's launcher started restarts through that launcher, so
+/// the new binary passes the same harness gate a cold launch applies. A
+/// binary the gate refuses then fails right here, during probation, and is
+/// rolled back to the previous one, instead of serving until the computer's
+/// next cold launch and failing every launch after it (2026-11-24). Any
+/// other runtime execs `binary` directly with its own arguments.
+pub fn restart_command(
+    binary: &Path,
+    launcher: &Path,
+    var: &dyn Fn(&str) -> Option<std::ffi::OsString>,
+) -> std::process::Command {
+    use std::os::unix::process::CommandExt;
+    let token = var("ZUSE_RUNTIME_BOOT_TOKEN_FILE");
+    // Identity is already stored; a consumed boot token file must not block restart.
+    let token_consumed = token.as_ref().is_some_and(|p| !Path::new(p).is_file());
+    let via_launcher = var("ZUSE_HARNESS_ROOT").is_some_and(|v| !v.is_empty())
+        && launcher.symlink_metadata().is_ok_and(|m| m.is_file())
+        && LAUNCH_ENV
+            .iter()
+            .all(|name| var(name).is_some_and(|v| !v.is_empty()));
+    let retained = var("ZUSE_RUNTIME_RETAINED").is_some_and(|v| v == "true")
+        || token.is_none()
+        || token_consumed;
+    let identity_stored = var("ZUSE_USER_DATA")
+        .is_some_and(|d| Path::new(&d).join("cloud-runtime-identity.json").is_file());
+    if via_launcher && (!retained || identity_stored) {
+        let mut command = std::process::Command::new(launcher);
+        command
+            .arg("--foreground")
+            .env("ZUSE_RUNTIME_BINARY", binary);
+        if retained {
+            command
+                .env("ZUSE_RUNTIME_RETAINED", "true")
+                .env_remove("ZUSE_RUNTIME_BOOT_TOKEN_FILE");
+        }
+        return command;
+    }
     let mut args = std::env::args_os();
     let mut command = std::process::Command::new(binary);
     if let Some(first) = args.next() {
         command.arg0(first);
     }
     command.args(args);
-    // Identity is already stored; a consumed boot token file must not block restart.
-    if std::env::var_os("ZUSE_RUNTIME_BOOT_TOKEN_FILE").is_some_and(|p| !Path::new(&p).is_file()) {
+    if token_consumed {
         command.env_remove("ZUSE_RUNTIME_BOOT_TOKEN_FILE");
     }
-    tracing::info!(binary = %binary.display(), "Restarting into the updated runtime");
-    command.exec()
+    command
 }
 /// Engine shutdown already awaited agents, terminals and services; end any
 /// direct child that is somehow still running so none outlives the old image.
@@ -240,9 +321,10 @@ fn stop_children() {
     }
 }
 
-/// Cold-boot boundary, before enrollment: finish or roll back an owned swap,
-/// then install an already verified staged release (never downloads). Returns
-/// the binary to exec when this process must restart.
+/// Cold-boot boundary, before enrollment: finish or roll back a swap already
+/// in flight. A staged release is never installed here (the server has not
+/// confirmed it yet); see [`swap::cold_boot`]. Returns the binary to exec when
+/// this process must restart.
 pub fn cold_boot(data: &Path) -> Option<PathBuf> {
     let _ = DATA.set(data.into());
     let config = Config::detect(data).ok()?;

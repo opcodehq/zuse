@@ -20,10 +20,10 @@ pub const INSET: f32 = s::ROW_PAD_X;
 
 /// The Zuse lime, tuned per theme.
 pub fn accent() -> Hsla {
-    palette::tone(
+    palette::accent_or(palette::tone(
         hsla(83. / 360., 0.72, 0.46, 1.),
         hsla(83. / 360., 0.74, 0.40, 1.),
-    )
+    ))
 }
 
 /// The label colour on an [`accent`] fill.
@@ -243,6 +243,16 @@ pub fn title_with_tip(title: impl Into<SharedString>, tip: impl Into<SharedStrin
         .when(!tip.is_empty(), |v| v.child(info_tip(title, tip)))
 }
 
+/// A square 28px icon button, like a section's "…" trigger.
+pub fn icon_button(
+    id: impl Into<ElementId>,
+    glyph: &'static str,
+    label: impl Into<SharedString>,
+    disabled: bool,
+) -> Stateful<Div> {
+    super::style::icon_button(id, glyph, label, disabled, false)
+}
+
 /// The floating surface of an overflow ("…") menu.
 pub fn menu_surface() -> Div {
     div()
@@ -251,7 +261,9 @@ pub fn menu_surface() -> Div {
         .min_w(px(180.))
         .p(px(4.))
         .rounded(px(9.))
-        .bg(palette::tone(hsla(132. / 360., 0.05, 0.105, 1.), white()))
+        .bg(palette::settings()
+            .map(|c| c.card)
+            .unwrap_or_else(|| palette::tone(hsla(132. / 360., 0.05, 0.105, 1.), white())))
         .border_1()
         .border_color(s::card_border())
         .shadow_lg()
@@ -343,7 +355,9 @@ pub fn unsaved_bar(
                     .rounded(px(12.))
                     .border_1()
                     .border_color(hairline())
-                    .bg(palette::tone(hsla(0., 0., 0.13, 1.), hsla(0., 0., 1., 1.)))
+                    .bg(palette::settings().map(|c| c.frame).unwrap_or_else(|| {
+                        palette::tone(hsla(0., 0., 0.13, 1.), hsla(0., 0., 1., 1.))
+                    }))
                     .shadow_lg()
                     .child(
                         icon("info-circle")

@@ -1,0 +1,78 @@
+---
+title: Recover or continue a local task
+icon: RotateCcw
+navTitle: "Recover a task"
+description: Resume safely after worktree setup, provider, turn, connection, queue, or checkout failures.
+section: how-to
+order: 5
+platforms: [desktop]
+providers: []
+prerequisites: [/concepts/project-chat-session]
+related: [/projects/worktrees, /reference/diagnostics, /how-to/local-complete-pull-request]
+next: /reference/diagnostics
+lastVerified: "2026-11-27"
+---
+
+## Goal
+
+Continue a local task from its last durable state without repeating work or discarding recoverable changes.
+
+## Applicability
+
+Use this workflow in the **desktop app**. The exact ability to resume an external provider thread depends on the provider, but the Zuse chat timeline, queued messages, checkout, and Git state remain the first places to recover context.
+
+## Prerequisites
+
+- Keep the affected chat open when possible.
+- Do not delete its worktree or reset its branch while diagnosing the failure.
+- Note where the failure shows up: worktree setup, provider sign-in, the turn itself, the connection, the queue, or the checkout.
+
+## Steps
+
+1. Reselect the existing chat instead of creating a replacement immediately. Confirm its messages, branch, and **Diff** state.
+2. Identify where progress stopped. Most failures appear as a status pill above the composer:
+   - **Setup action failed** means the worktree exists but an action set to run on worktree creation failed.
+   - **Sign-in expired**, or a **Sign in** prompt, means the provider needs credentials again.
+   - **Run failed** means the last turn ended with a provider error.
+   - **Usage limit reached** means the provider account hit its limit.
+   - **Reconnecting**, or a status such as “Reconnecting to the model… 2/5”, means the agent is retrying its connection.
+   - A message that the agent stopped responding means Zuse ended a turn that went silent.
+   - **Queue paused** above the queued messages means queued follow-ups are held.
+3. Use the recovery action for that failure:
+   - Fix the setup command or dependency, then run the action again from the **Actions** section of the environment summary.
+   - Choose **Sign in** and complete the provider sign-in, then return to the same chat.
+   - For **Run failed** or a stopped turn, choose **Retry** once. With an empty composer, Retry sends your last message again. Check the timeline before retrying again so a completed side effect is not duplicated.
+   - For **Usage limit reached**, choose **Switch account** if you have another account for that provider, or wait for the limit to reset.
+   - Let automatic reconnection finish. If the retries run out, the turn ends with one error and a **Retry**.
+4. Inspect **Diff** and the terminal before sending a replacement instruction. Files or commits may have been created even when the final response failed.
+5. Continue with a short, state-aware instruction such as: “Read the current diff and test output, summarize what already completed, then continue from the first failing check.”
+6. Review queued follow-up messages. Zuse stores queued messages with the chat and sends them in order. Edit or remove stale items, then choose **Resume** to continue the queue.
+
+Hiding the terminal panel does not end its shell. Return to the same chat to reconnect to its terminal before starting a second process unnecessarily.
+
+## Verify recovery
+
+1. Confirm the chat still points to the intended checkout and branch.
+2. Run:
+
+```sh
+git status --short
+git log -3 --oneline
+```
+
+3. Compare the current files and commits with the last successful timeline message.
+4. Confirm only one agent turn is active and queued follow-ups still match the task.
+5. Rerun the last relevant test or verification command before accepting the continuation.
+
+## Troubleshooting and recovery limits
+
+- **Retry would duplicate an external action:** inspect Git, the pull request, and other affected systems first. If the action already succeeded, ask the agent to continue from that result instead of replaying it.
+- **Provider sign-in succeeds but the old provider thread cannot resume:** keep the same Zuse chat and give a concise handoff based on the timeline and current diff.
+- **The terminal looks empty after returning:** reselect the chat and terminal. If its process ended, use the preserved output and start only the necessary command again.
+- **Zuse restarted for an update mid-turn:** interrupted turns resume after an update restart. An ordinary quit or a stop you chose does not schedule a continuation.
+- **The worktree directory was deleted:** recover committed work from its branch or remote. Uncommitted files from a deleted checkout are outside Zuse's recovery boundary.
+- **The chat was archived too early:** unarchive it. Zuse recreates a managed worktree from its saved working files before the chat becomes active again.
+- **The queue contains obsolete instructions:** edit or remove them before choosing **Resume** so stale messages are not sent after the recovered turn.
+- **Failures continue across layers:** collect [diagnostics](/reference/diagnostics/) and preserve the chat and checkout until the cause is understood.
+
+Return to [parallel worktrees](/how-to/local-parallel-worktrees/) for a clean replacement workspace, or continue the existing branch through [pull-request completion](/how-to/local-complete-pull-request/).

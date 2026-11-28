@@ -29,6 +29,10 @@ pub const TASK_REJECTED_PREFIX: &str = "cloud_task_rejected:";
 /// conversation until that message is reviewed (retried or discarded).
 /// `not-found`: a review found nothing unknown left to review.
 pub const TASK_UNKNOWN_OUTCOME_PREFIX: &str = "cloud_task_unknown_outcome:";
+/// Capability error for a command the cloud service could not be reached for
+/// at all (no connection, a dropped or timed-out request). The client may send
+/// the same request again under its same command id once it can connect.
+pub const TASK_UNREACHABLE: &str = "cloud_task_unreachable";
 
 /// No implicit resume occurs merely because work was persisted.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

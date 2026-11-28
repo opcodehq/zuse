@@ -244,6 +244,57 @@ pub struct DocHostConfig {
     pub edge: Option<EdgeConfig>,
 }
 
+/// A tail exists only while a blob key has unfinished uploads. Registration
+/// links completion signals synchronously, before tasks can be scheduled out
+/// of order. Dropping a cancelled task also releases its successor.
+#[derive(Default)]
+struct SidecarUploads {
+    next: AtomicU64,
+    tails: Mutex<HashMap<String, (u64, tokio::sync::oneshot::Receiver<()>)>>,
+}
+
+struct SidecarUploadCompletion {
+    uploads: Arc<SidecarUploads>,
+    key: String,
+    id: u64,
+    _done: tokio::sync::oneshot::Sender<()>,
+}
+
+impl SidecarUploads {
+    fn register(
+        self: &Arc<Self>,
+        key: String,
+    ) -> (
+        Option<tokio::sync::oneshot::Receiver<()>>,
+        SidecarUploadCompletion,
+    ) {
+        let (done, receiver) = tokio::sync::oneshot::channel();
+        let mut tails = lock(&self.tails);
+        let id = self.next.fetch_add(1, Ordering::Relaxed);
+        let previous = tails
+            .insert(key.clone(), (id, receiver))
+            .map(|(_, previous)| previous);
+        (
+            previous,
+            SidecarUploadCompletion {
+                uploads: self.clone(),
+                key,
+                id,
+                _done: done,
+            },
+        )
+    }
+}
+
+impl Drop for SidecarUploadCompletion {
+    fn drop(&mut self) {
+        let mut tails = lock(&self.uploads.tails);
+        if tails.get(&self.key).is_some_and(|(id, _)| *id == self.id) {
+            tails.remove(&self.key);
+        }
+    }
+}
+
 struct DocHostInner {
     analytics: OnceLock<zuse_analytics::Analytics>,
     canonical_cloud_commands: AtomicBool,
@@ -270,6 +321,7 @@ struct DocHostInner {
     edge_disconnected: AtomicBool,
     /// Tracks every spawned worker so `shutdown_workers` can await them.
     tasks: TaskTracker,
+    sidecar_uploads: Arc<SidecarUploads>,
     handles: Mutex<HashMap<String, Arc<ChatDocHandle>>>,
     /// Dirty identities only; consumers recover lag with a durable snapshot scan.
     /// Unlike transcript watches, this feed does not pin documents in the LRU.
@@ -1227,6 +1279,7 @@ impl DocHost {
                 shutdown: CancellationToken::new(),
                 edge_disconnected: AtomicBool::new(false),
                 tasks: TaskTracker::new(),
+                sidecar_uploads: Arc::new(SidecarUploads::default()),
                 handles: Mutex::new(HashMap::new()),
                 document_changes: tokio::sync::broadcast::channel(256).0,
                 document_loads: AtomicU64::new(0),
@@ -5785,24 +5838,31 @@ impl DocHost {
             chat_id,
             encode_part_segment(&payload.part_id)
         );
-        self.spawn_worker_on(&runtime, async move {
-            let Ok(bearer) = edge.bearer().await else {
-                return; // token unavailable; serve the local summary
-            };
-            let mut puts: Vec<(String, &'static str, Vec<u8>)> = Vec::new();
-            if let Some(output) = &payload.output {
-                puts.push((
-                    base.clone(),
-                    "text/plain; charset=utf-8",
-                    output.clone().into_bytes(),
-                ));
-            }
-            if let Some(diff) = &payload.diff
-                && let Ok(json) = serde_json::to_vec(diff)
-            {
-                puts.push((format!("{base}.diff"), "application/json", json));
-            }
-            for (url, content_type, body) in puts {
+        let mut puts: Vec<(String, &'static str, Vec<u8>)> = Vec::new();
+        if let Some(output) = payload.output {
+            puts.push((
+                base.clone(),
+                "text/plain; charset=utf-8",
+                output.into_bytes(),
+            ));
+        }
+        if let Some(diff) = payload.diff
+            && let Ok(json) = serde_json::to_vec(&diff)
+        {
+            puts.push((format!("{base}.diff"), "application/json", json));
+        }
+        for (url, content_type, body) in puts {
+            let (previous, completion) = self.inner.sidecar_uploads.register(url.clone());
+            let http = http.clone();
+            let edge = edge.clone();
+            self.spawn_worker_on(&runtime, async move {
+                let _completion = completion;
+                if let Some(previous) = previous {
+                    let _ = previous.await;
+                }
+                let Ok(bearer) = edge.bearer().await else {
+                    return; // token unavailable; serve the local summary
+                };
                 let sent = http
                     .put(&url)
                     .bearer_auth(&bearer)
@@ -5819,8 +5879,8 @@ impl DocHost {
                         tracing::warn!(url, error = %err, "tool sidecar upload failed (best-effort)")
                     }
                 }
-            }
-        });
+            });
+        }
     }
 
     /// Fetch a sidecar blob by its doc-resident ref (`{chatId}/{partId}` or
@@ -8536,5 +8596,146 @@ mod stop_target_tests {
         assert!(stop_target_is_past(&stop, &commands, &messages, "a1"));
         // An unknown target is never past.
         assert!(!stop_target_is_past(&stop, &commands, &messages, "gone"));
+    }
+}
+
+#[cfg(test)]
+mod sidecar_upload_order_tests {
+    use super::*;
+    use axum::{
+        Router,
+        extract::{Path as RoutePath, State},
+        http::StatusCode,
+        routing::put,
+    };
+    use std::time::Duration;
+    use tokio::sync::{Notify, mpsc};
+
+    #[derive(Clone)]
+    struct ServerState {
+        started: mpsc::UnboundedSender<(String, String)>,
+        committed: mpsc::UnboundedSender<(String, String)>,
+        release: Arc<Notify>,
+        contents: Arc<Mutex<HashMap<String, String>>>,
+    }
+
+    async fn upload(
+        State(state): State<ServerState>,
+        RoutePath(part): RoutePath<String>,
+        body: String,
+    ) -> StatusCode {
+        state.started.send((part.clone(), body.clone())).unwrap();
+        if body == "initial" {
+            state.release.notified().await;
+        }
+        lock(&state.contents).insert(part.clone(), body.clone());
+        state.committed.send((part, body)).unwrap();
+        StatusCode::OK
+    }
+
+    async fn receive(rx: &mut mpsc::UnboundedReceiver<(String, String)>) -> (String, String) {
+        tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn same_key_uploads_preserve_registration_order_and_release_tracking() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (started, mut starts) = mpsc::unbounded_channel();
+        let (committed, mut commits) = mpsc::unbounded_channel();
+        let release = Arc::new(Notify::new());
+        let contents = Arc::new(Mutex::new(HashMap::new()));
+        let router = Router::new()
+            .route("/blob/chat/{part}", put(upload))
+            .with_state(ServerState {
+                started,
+                committed,
+                release: release.clone(),
+                contents: contents.clone(),
+            });
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let dir = tempfile::tempdir().unwrap();
+        let host = DocHost::new(
+            Arc::new(DocsStore::open(dir.path()).unwrap()),
+            DocHostConfig {
+                device_id: "host".into(),
+                default_harness: HarnessId::Mock,
+                edge: Some(EdgeConfig::with_static_token(
+                    format!("http://{address}"),
+                    "test",
+                )),
+            },
+        );
+        let schedule = |part: &str, text: &str| {
+            host.upload_tool_sidecar(
+                "chat",
+                zuse_doc::SidecarPayload {
+                    part_id: part.into(),
+                    output: Some(text.into()),
+                    diff: None,
+                },
+            )
+        };
+        schedule("snapshot", "initial");
+        assert_eq!(
+            receive(&mut starts).await,
+            ("snapshot".into(), "initial".into())
+        );
+        schedule("snapshot", "late-result");
+        schedule("snapshot", "newest-result");
+        schedule("other", "independent");
+        assert_eq!(
+            receive(&mut starts).await,
+            ("other".into(), "independent".into()),
+            "same-key successors must not reach HTTP while the initial upload is held"
+        );
+        assert_eq!(
+            receive(&mut commits).await,
+            ("other".into(), "independent".into())
+        );
+        assert!(starts.try_recv().is_err());
+        release.notify_one();
+        for text in ["initial", "late-result", "newest-result"] {
+            assert_eq!(
+                receive(&mut commits).await,
+                ("snapshot".into(), text.into())
+            );
+        }
+        assert_eq!(
+            lock(&contents).get("snapshot").map(String::as_str),
+            Some("newest-result")
+        );
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !lock(&host.inner.sidecar_uploads.tails).is_empty() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        // Once drained, the same key can start a new independent chain.
+        schedule("snapshot", "after-drain");
+        assert_eq!(
+            receive(&mut commits).await,
+            ("snapshot".into(), "after-drain".into())
+        );
+        host.shutdown_workers().await;
+        assert!(lock(&host.inner.sidecar_uploads.tails).is_empty());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn dropping_upload_registrations_releases_waiters_and_tracking() {
+        let uploads = Arc::new(SidecarUploads::default());
+        let (first, first_done) = uploads.register("key".into());
+        let (second, second_done) = uploads.register("key".into());
+        assert!(first.is_none());
+        drop(first_done);
+        assert_eq!(lock(&uploads.tails).len(), 1);
+        assert!(second.unwrap().await.is_err());
+        drop(second_done);
+        assert!(lock(&uploads.tails).is_empty());
     }
 }

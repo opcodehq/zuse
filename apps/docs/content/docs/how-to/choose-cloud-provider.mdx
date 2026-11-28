@@ -1,0 +1,63 @@
+---
+title: "Choose a cloud computer"
+icon: Cloud
+navTitle: "Choose a cloud computer"
+description: "Pick a computer size for new cloud chats, set up the machine image every computer boots from, and restart or replace a computer."
+section: how-to
+order: 26
+platforms: [desktop, browser]
+providers: []
+prerequisites: [/how-to/cloud-start-chat]
+related: [/how-to/cloud-plans-billing, /how-to/cloud-repository-setup, /how-to/cloud-share-chat]
+next: /how-to/cloud-repository-setup
+lastVerified: "2026-11-27"
+---
+
+Every cloud chat runs on its own cloud computer. It starts from your **machine image**, checks out the chat's repository, and starts your agent on your connected account. Zuse runs and bills the computers, so there is no provider account to connect.
+
+## Choose a size
+
+Open the computer picker in the composer and open the size under the **Cloud** row:
+
+| Size | Resources | Machine minutes per awake minute | Plans |
+| --- | --- | --- | --- |
+| Standard | 4 vCPU · 16 GB | 4 | Cloud, Cloud Max |
+| Large | 8 vCPU · 32 GB | 8 | Cloud Max |
+
+Zuse remembers the size for that project while your plan allows it, and otherwise uses Standard. A size your plan doesn't include shows **Upgrade**; choosing it opens Billing. The size applies to new computers. An existing chat's computer keeps its size. See [Choose a Cloud plan and manage billing](/how-to/cloud-plans-billing/) for how sizes use machine minutes.
+
+## Set up the machine image
+
+Open **Settings → Cloud computer → Machine**. The machine is what every cloud computer has before a repository is checked out.
+
+- **Setup script** runs once with sudo when your image builds. Install what every repository needs: apt packages, runtimes, and global CLIs. Leave it empty if your repositories need nothing extra.
+- **Instructions** are given to every agent in every new chat, alongside the repository's own `AGENTS.md`. They apply as soon as you save, with no image build.
+- **Also on your machine** lists imported skills and files, which are copied into every new chat's computer as soon as you save.
+
+Keep the setup script and instructions under 64 KiB each. Choose **Save** to apply your changes. Until your image is built, computers start from Zuse's standard machine.
+
+The **Machine image** card shows the build's progress and the version new computers use. The image rebuilds by itself when your setup script or repositories change; to start a build yourself, open **More image actions** and choose **Rebuild now**. Running computers keep the image they started with, and new computers keep using your last working image until a new build passes its boot check. Builds use cloud compute.
+
+Per-repository commands, services, and secrets belong in the repository's environment instead. See [Set up a repository for cloud chats](/how-to/cloud-repository-setup/).
+
+## Sleep and wake
+
+A cloud computer sleeps after about 10 quiet minutes. A sleeping computer uses no machine minutes and wakes as soon as you reply. The chat shows how it woke, such as **Woke from memory** or **Restarted on wake**, with the time it took.
+
+## Restart or replace a computer
+
+Open the cloud computer card in the chat:
+
+- **Restart runtime** restarts the Zuse runtime, agents, and terminals on the computer. Repository files stay on its disk. Interrupted commands are not replayed automatically.
+- **Recreate computer** replaces the computer from a verified recovery backup. Files and supported environment state are restored; running processes and terminals restart. The chat and its messages stay the same.
+- **Delete computer** permanently deletes the chat's computer, its retained disk, stored cloud history, and recovery data. Save any work you need first. This can't be undone.
+
+If a restart or recreation fails, choose **Retry runtime restart** or **Retry computer recreation**.
+
+## Troubleshooting
+
+- **Build failed:** the build output shows why. Fix the setup script and save again; computers keep using your last working image.
+- **The setup script ran past its time limit:** make it faster, or raise the limit.
+- **The setup script changed Zuse's own runtime files** or **started Zuse's computer service:** leave `/usr/local/bin/zuse-cloud-runtime`, `/usr/local/lib/zuse`, and `zuse-runtime-supervisor` alone in your script.
+- **Builds use cloud compute. Check your plan to build this image:** you need an active Cloud plan to build.
+- **Waiting for build capacity:** the build starts on its own when capacity is available.

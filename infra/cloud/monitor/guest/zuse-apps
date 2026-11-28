@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+"""A guest-side launcher. Input comes from the guest's normal X11 session."""
+from pathlib import Path
+import shutil
+import subprocess
+import gi
+
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gdk, GdkPixbuf, Gtk
+
+home = Path.home()
+documents = home / "Documents"
+documents.mkdir(exist_ok=True)
+browser = shutil.which("chromium") or shutil.which("google-chrome")
+files = shutil.which("thunar") or shutil.which("nautilus")
+editor = shutil.which("mousepad")
+apps = [
+    ("Browser", "web-browser", [browser, "--no-first-run", "--user-data-dir=" + str(home / ".local/share/zuse-monitor/chromium")]),
+    ("Files", "system-file-manager", [files, str(documents)]),
+    ("Editor", "accessories-text-editor", [editor] if editor else ["xterm", "-T", "Editor", "-e", "nano"]),
+    ("Terminal", "utilities-terminal", ["xterm", "-T", "Terminal"]),
+]
+screen = Gdk.Screen.get_default()
+width, height = screen.get_width(), screen.get_height()
+
+desktop = Gtk.Window(title="Zuse Desktop")
+desktop.set_type_hint(Gdk.WindowTypeHint.DESKTOP)
+desktop.set_decorated(False)
+desktop.set_keep_below(True)
+desktop.set_accept_focus(False)
+desktop.set_skip_taskbar_hint(True)
+wallpaper = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+    "/usr/local/share/zuse-monitor/wallpaper.jpg", width, height, False)
+desktop.add(Gtk.Image.new_from_pixbuf(wallpaper))
+desktop.move(0, 0)
+desktop.show_all()
+
+style = Gtk.CssProvider()
+style.load_from_data(b"""
+#dock { background: #252920; }
+#apps { padding: 7px; border: 1px solid #54594c; }
+#apps button { background: transparent; border: none; box-shadow: none;
+    border-radius: 7px; padding: 5px 7px; color: #f4f1e5; }
+#apps button:hover, #apps button:focus { background: #42483a; }
+#apps button:active { background: #565e4b; }
+#apps label { font: 12px Sans; }
+""")
+Gtk.StyleContext.add_provider_for_screen(screen, style, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+window = Gtk.Window(title="Applications")
+window.set_name("dock")
+window.set_type_hint(Gdk.WindowTypeHint.DOCK)
+window.set_decorated(False)
+window.set_keep_above(True)
+window.set_skip_taskbar_hint(True)
+window.set_resizable(False)
+row = Gtk.Box(spacing=4)
+row.set_name("apps")
+window.add(row)
+icons = ["web-browser-symbolic", "folder-symbolic", "document-edit-symbolic", "utilities-terminal-symbolic"]
+for (name, fallback, command), icon in zip(apps, icons):
+    if not command[0] or not shutil.which(command[0]):
+        continue
+    button = Gtk.Button()
+    button.get_accessible().set_name(name)
+    tile = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+    glyph = Gtk.Image.new_from_icon_name(
+        icon if Gtk.IconTheme.get_default().has_icon(icon) else fallback,
+        Gtk.IconSize.LARGE_TOOLBAR)
+    glyph.set_pixel_size(28)
+    tile.set_size_request(58, -1)
+    tile.pack_start(glyph, False, False, 0)
+    tile.pack_start(Gtk.Label(label=name), False, False, 0)
+    button.add(tile)
+    button.connect("clicked", lambda _, cmd=command: subprocess.Popen(cmd, cwd=documents, start_new_session=True))
+    row.add(button)
+window.connect("destroy", Gtk.main_quit)
+window.show_all()
+w, h = window.get_size()
+window.move((width-w)//2, height-h-20)
+Gtk.main()

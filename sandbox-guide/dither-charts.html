@@ -1,0 +1,74 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Settings-style inline charts</title><style>
+*{box-sizing:border-box}body{margin:0;padding:24px;background:var(--bg,#181818);color:var(--text,#e8e8e8);font:14px/1.6 system-ui,sans-serif}.header{display:flex;align-items:center;justify-content:space-between;gap:16px}.kicker{font-size:10px;letter-spacing:.11em;color:var(--muted,#a3a3a3);text-transform:uppercase}h1{font-size:22px;font-weight:600;letter-spacing:-.03em;margin:6px 0 2px}.subtitle{color:var(--muted,#a3a3a3);font-size:12px;margin:0}.tabs{display:flex;flex-shrink:0;gap:3px;border:1px solid var(--border,#323232);padding:3px;border-radius:7px}.tabs button{font:11px system-ui;white-space:nowrap;border:0;padding:5px 9px;background:transparent;color:var(--muted,#a3a3a3);border-radius:4px;cursor:pointer}.tabs button[aria-pressed=true]{background:var(--panel,#222);color:var(--text,#e8e8e8)}.stats{display:flex;gap:36px;margin:22px 0 20px}.metric strong{font-size:28px;line-height:1.2;font-weight:600;letter-spacing:-.04em;display:block;font-variant-numeric:tabular-nums}.metric span{font-size:11px;color:var(--muted,#a3a3a3)}.keys{display:flex;gap:18px;flex-wrap:wrap;font-size:11px;color:var(--muted,#a3a3a3);margin-bottom:12px}.keys span{display:flex;gap:6px;align-items:center}.keys i{width:7px;height:7px;border-radius:1px;display:inline-block}.keys b{font-weight:400;color:var(--text,#e8e8e8);font-variant-numeric:tabular-nums}canvas{display:block;width:100%;height:244px}.inspect{border-top:1px solid var(--border,#323232);margin-top:12px;padding-top:14px;display:flex;align-items:center;gap:16px;font-size:11px;color:var(--muted,#a3a3a3)}input{width:160px;accent-color:var(--accent,#89ca21)}output{margin-left:auto;color:var(--text,#e8e8e8);font-variant-numeric:tabular-nums}.foot{margin-top:18px;display:flex;justify-content:space-between;gap:12px;font-size:10px;color:var(--muted,#a3a3a3)}button:focus-visible,input:focus-visible{outline:2px solid var(--accent,#89ca21);outline-offset:3px}@media(max-width:480px){body{padding:18px}.header{align-items:flex-start;flex-direction:column}.stats{gap:28px}.inspect{gap:8px}input{width:95px}.keys{gap:12px}.foot{font-size:9px}}
+</style></head><body><div class="header"><div><div class="kicker">Compute · illustrative data</div><h1>Sandbox activity</h1><p class="subtitle">The same raster treatment as Settings → Usage.</p></div><div class="tabs" role="group" aria-label="Chart view"><button id="area" aria-pressed="true">Areas</button><button id="bars" aria-pressed="false">Columns</button></div></div>
+<div class="stats"><div class="metric"><strong id="total"></strong><span>sessions over 28 days</span></div><div class="metric"><strong id="peak"></strong><span>peak daily sessions</span></div></div><div class="keys"><span><i style="background:#358ff3"></i>Sessions <b id="sessions"></b></span><span><i style="background:#28d26e"></i>Builds <b id="builds"></b></span><span><i style="background:#966eff"></i>Tests <b id="tests"></b></span></div><canvas id="plot" role="img" aria-label="Illustrative daily sessions, builds and tests over 28 days; use the inspection slider for exact values."></canvas><div class="inspect"><label for="day">Inspect day</label><input id="day" type="range" min="0" max="27" value="20"><output id="readout" for="day" aria-live="polite">Day 21 / 28</output></div><div class="foot"><span>2px cells · density varies through the fill</span><span>28 DAYS</span></div>
+<script>/* Generated standalone fallback from src/ui/dither-chart.ts. */
+if (!window.zuseCharts) {
+function paintDitherAreas(ctx, width, height, max, values, colors, alternateDotted = true) {
+  const bayer = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+  if (!values.length || !colors.length || width <= 0 || height <= 0 || max <= 0)
+    return;
+  const cols = Math.min(520, Math.max(8, Math.round(width / 2)));
+  const rows = Math.min(200, Math.max(8, Math.round(height / 2)));
+  const cw = width / cols, ch = height / rows;
+  for (let series = 0;series < (values[0]?.length ?? 0); series++) {
+    const dotted = alternateDotted && series % 2 === 1;
+    const [r, g, b] = colors[series % colors.length];
+    for (let x = 0;x < cols; x++) {
+      const position = x / (cols - 1) * Math.max(0, values.length - 1);
+      const a = Math.min(Math.floor(position), values.length - 1);
+      const next = Math.min(a + 1, values.length - 1);
+      const t = position - a;
+      const value = (values[a]?.[series] ?? 0) * (1 - t) + (values[next]?.[series] ?? 0) * t;
+      const start = Math.min(rows, Math.max(0, Math.round((1 - value / max) * rows)));
+      const depth = rows - start;
+      for (let y = start;y < rows; y++) {
+        let alpha;
+        if (y === start)
+          alpha = 0.72;
+        else if (y === start + 1)
+          alpha = 0.36;
+        else {
+          const density = (y - start) / Math.max(1, depth);
+          const bias = (dotted ? 0.12 : 0) - series * 0.14;
+          const lit = density > (bayer[(y & 3) * 4 + (x & 3)] + 0.5) / 16 - bias;
+          if (dotted && !lit)
+            continue;
+          alpha = (0.3 + density * 0.7) * (lit ? 1 : 0.4);
+        }
+        ctx.fillStyle = `rgba(${r},${g},${b},${alpha})`;
+        ctx.fillRect(x * cw, y * ch, cw + 0.01, ch + 0.01);
+      }
+    }
+  }
+}
+function paintDitherColumns(ctx, width, height, max, values, color) {
+  const bayer = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+  if (!values.length || width <= 0 || height <= 0 || max <= 0)
+    return;
+  const band = width / values.length, rows = Math.floor(height / 2);
+  const [red, green, blue] = color;
+  for (let i = 0;i < values.length; i++) {
+    const columnWidth = Math.floor(band * 0.72 / 2) * 2;
+    const left = Math.round((i * band + (band - columnWidth) / 2) / 2) * 2;
+    const lit = Math.ceil(Math.min(1, Math.max(0, values[i] / max)) * rows);
+    for (let x = 0;x < columnWidth / 2; x++)
+      for (let row = 0;row < lit; row++) {
+        const cap = row + 1 === lit;
+        const threshold = (bayer[(row & 3) * 4 + (x & 3)] + 0.5) / 16;
+        const on = 0.3 + 0.7 * (1 - row / lit) > threshold;
+        ctx.fillStyle = `rgba(${red},${green},${blue},${cap || on ? 1 : 0.22})`;
+        ctx.fillRect(left + x * 2, height - (row + 1) * 2, 2, 2);
+      }
+  }
+}
+
+window.zuseCharts = {paintAreas: paintDitherAreas, paintColumns: paintDitherColumns};
+}
+</script>
+<script>
+const sessions=[142,168,156,260,230,310,294,410,260,344,390,355,470,432,518,390,456,620,552,486,680,598,724,638,780,688,842,756];const data=sessions.map((n,i)=>[n,Math.round(n*(.44+Math.sin(i*.8)*.09)),Math.round(n*(.19+Math.cos(i*.6)*.05))]);const colors=[[53,143,243],[40,210,110],[150,110,255]];let mode='area',selected=20;const canvas=document.getElementById('plot');
+function draw(){if(!window.zuseCharts)return;const width=Math.floor(canvas.getBoundingClientRect().width),height=244,dpr=window.devicePixelRatio||1;canvas.width=Math.round(width*dpr);canvas.height=Math.round(height*dpr);const ctx=canvas.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);const css=getComputedStyle(document.documentElement),muted=css.getPropertyValue('--muted').trim()||'#a3a3a3',border=css.getPropertyValue('--border').trim()||'#323232';const left=38,top=8,w=width-left-8,h=210,max=900;ctx.font='10px system-ui';ctx.textAlign='right';ctx.fillStyle=muted;for(const n of [0,300,600,900])ctx.fillText(String(n),left-9,top+(1-n/max)*h+3);ctx.save();ctx.translate(left,top);ctx.fillStyle=border;for(const n of [0,300,600,900])for(let x=0;x<w;x+=6)ctx.fillRect(x,Math.min(h-1,Math.round((1-n/max)*h)),3,1);
+if(mode==='area')window.zuseCharts.paintAreas(ctx,w,h,max,data,colors,true);else window.zuseCharts.paintColumns(ctx,w,h,max,sessions,colors[0]);const sx=mode==='area'?selected/(data.length-1)*w:(selected+.5)/data.length*w;ctx.fillStyle='rgba(53,143,243,.15)';ctx.fillRect(sx-1,0,2,h);const sy=(1-sessions[selected]/max)*h;ctx.fillStyle='#358ff3';ctx.fillRect(sx-2,sy-2,4,4);ctx.restore();ctx.textAlign='center';ctx.fillStyle=muted;const ticks=width<450?[0,13,27]:[0,6,13,20,27];for(const i of ticks){const x=left+(mode==='area'?i/27:(i+.5)/28)*w;ctx.fillText(i===0?'DAY 01':String(i+1).padStart(2,'0'),Math.max(30,Math.min(width-12,x)),240)}['sessions','builds','tests'].forEach((id,i)=>document.getElementById(id).textContent=data[selected][i]);document.getElementById('readout').textContent='Day '+(selected+1)+' / 28';for(const name of ['area','bars'])document.getElementById(name).setAttribute('aria-pressed',String(mode===name));}
+document.getElementById('total').textContent=sessions.reduce((a,b)=>a+b,0).toLocaleString('en-US');document.getElementById('peak').textContent=Math.max(...sessions);for(const name of ['area','bars'])document.getElementById(name).addEventListener('click',()=>{mode=name;draw()});document.getElementById('day').addEventListener('input',event=>{selected=Number(event.target.value);draw()});new ResizeObserver(draw).observe(canvas);addEventListener('zuse:theme',draw);draw();
+</script></body></html>

@@ -504,6 +504,27 @@ pub enum ProxyHealth {
     Rejected,
 }
 
+/// One built-in API-key connection of the Zuse agent (`GetModelApiKeys` /
+/// `SetModelApiKey` reply rows). The key itself never leaves the engine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelApiKey {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    /// A key is saved in Zuse for this connection.
+    #[serde(default)]
+    pub has_key: bool,
+    /// Variable read when no key is saved.
+    pub environment_variable: String,
+    /// No key is saved, but the variable is set in the engine's environment.
+    #[serde(default)]
+    pub from_environment: bool,
+    #[serde(default)]
+    pub models: Vec<String>,
+    pub console_url: String,
+}
+
 /// `GetClaudeConnection` / `SetClaudeConnection` reply. The access key never
 /// leaves the engine; `has_key` says whether one is saved.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1136,6 +1157,14 @@ pub enum AgentEvent {
     Error {
         message: String,
     },
+    /// A transient, non-error status the agent reports mid-turn — today the
+    /// model stream dropped and the agent is reconnecting on its own
+    /// ("Reconnecting to the model… 2/5"). The engine shows it on the
+    /// session's working row and clears it when the agent streams again or
+    /// the turn ends; it never reaches the transcript. `None` clears it.
+    Notice {
+        message: Option<String>,
+    },
     #[serde(rename_all = "camelCase")]
     InputRequested {
         request_id: String,
@@ -1145,11 +1174,20 @@ pub enum AgentEvent {
     InputResolved {
         request_id: String,
     },
-    /// A saved host delivery was already consumed. Retire its exact delivery
-    /// ledger entry without starting a turn or resetting streamed content.
+    /// A delivery was consumed successfully, including saved host replays.
+    /// Retire its exact ledger entry without resetting streamed content.
     #[serde(rename_all = "camelCase")]
     DeliveryAcknowledged {
         message_id: String,
+    },
+    /// Split the transcript without confirming delivery. A named boundary
+    /// selects the execution owner but leaves its recovery receipt pending.
+    /// An unnamed boundary represents autonomous background work.
+    #[serde(rename_all = "camelCase")]
+    SteerBoundary {
+        assistant_message_id: Option<String>,
+        next_assistant_message_id: Option<String>,
+        message_id: Option<String>,
     },
     /// A confirmed new assignment. When tagged as Subagent, this reopens the
     /// same child transcript even if the provider does not echo the user text.
@@ -1157,6 +1195,11 @@ pub enum AgentEvent {
     Steered {
         assistant_message_id: Option<String>,
         next_assistant_message_id: Option<String>,
+        /// The steer this boundary delivers, when the driver knows it: confirms
+        /// exactly that ledger entry (nothing, if it was already confirmed).
+        /// `None` confirms the oldest pending steer.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message_id: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
     Done {

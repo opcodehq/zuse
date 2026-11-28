@@ -30,6 +30,11 @@ public struct CanonicalWorkspace: Sendable {
         worktreeId: nil)
     }
   }
+  /// The branch a chat belongs to, as the host recorded it.
+  public func branch(chatID: String) async throws -> String? {
+    try await rpc.snapshot("WatchChats").array.first { $0["id"].string == chatID }?["branch"]
+      .string
+  }
   /// Every top-level chat from one snapshot, split into active and archived chats.
   public func chatsWithArchived() async throws -> (active: [SessionRow], archived: [SessionRow]) {
     Self.partition(try await rpc.snapshot("WatchChats").array)
@@ -159,7 +164,8 @@ public struct CanonicalWorkspace: Sendable {
           "harness": .string(creation.providerID), "model": .string(creation.model),
           "reasoning": .null,
           "modelOptions": .object((creation.modelOptions ?? [:]).mapValues(JSONValue.string)),
-          "sandbox": .string("workspace-write"),
+          "sandbox": .string(AccessLevel.sandbox(creation.runtimeMode)),
+          "plan": .bool(creation.permissionMode == "plan"),
         ]),
       ])
     let rows = try await sessions(projectID: creation.projectID)
@@ -184,18 +190,30 @@ public struct CanonicalWorkspace: Sendable {
     let harnesses = try await rpc.call("ListHarnesses").array.filter {
       $0["installed"] != .bool(false) && $0["enabled"] != .bool(false)
     }
-    let providers = try await withThrowingTaskGroup(of: (String, JSONValue).self) { group in
+    // One agent that can't list its models (signed out, missing a key) mustn't hide the rest.
+    var failure: Error?
+    let providers = await withTaskGroup(of: (String, Result<JSONValue, Error>).self) { group in
       for harness in harnesses {
         guard let id = harness["id"].string else { continue }
         group.addTask {
-          let models = try await rpc.call("ListModels", ["harness": .string(id)])
-          return (id, .object(["displayName": harness["name"], "models": models]))
+          do {
+            let models = try await rpc.call("ListModels", ["harness": .string(id)])
+            return (id, .success(.object(["displayName": harness["name"], "models": models])))
+          } catch {
+            return (id, .failure(error))
+          }
         }
       }
       var values: [String: JSONValue] = [:]
-      for try await (id, provider) in group { values[id] = provider }
+      for await (id, result) in group {
+        switch result {
+        case .success(let provider): values[id] = provider
+        case .failure(let error): failure = failure ?? error
+        }
+      }
       return values
     }
+    if providers.isEmpty, let failure { throw failure }
     return .object(["providers": .object(providers)])
   }
 
@@ -263,7 +281,8 @@ public struct CanonicalWorkspace: Sendable {
             "harness": .string(harness),
             "cwd": .string(cwd), "model": config["model"], "reasoning": config["reasoning"],
             "modelOptions": options,
-            "sandbox": .string(config["sandbox"].string ?? "workspace-write"),
+            "sandbox": .string(config["sandbox"].string ?? AccessLevel.ask),
+            "plan": .bool(config["plan"].bool),
             "autoApprove": .bool(false), "resume": chat["harnessSessionId"],
           ]),
         ]),

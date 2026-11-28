@@ -302,6 +302,7 @@ fn session(chat_id: &str, device_id: &str, status: SessionStatus) -> Session {
         running_subagents: 0,
         awaiting_input: None,
         background_tasks: Vec::new(),
+        notice: None,
         chat_id: chat_id.into(),
         device_id: device_id.into(),
         status,
@@ -369,6 +370,15 @@ fn rows_round_trip_and_upsert_refreshes() {
         state.sessions,
         vec![session("chat-1", "dev-a", SessionStatus::Working)]
     );
+
+    // A reconnect notice rides the row; clearing it reads back as none.
+    let mut reconnecting = session("chat-1", "dev-a", SessionStatus::Working);
+    reconnecting.notice = Some("Reconnecting to the model… 2/5".into());
+    doc.upsert_session(&reconnecting).unwrap();
+    assert_eq!(doc.read_sessions().unwrap(), vec![reconnecting.clone()]);
+    reconnecting.notice = None;
+    doc.upsert_session(&reconnecting).unwrap();
+    assert_eq!(doc.read_sessions().unwrap(), vec![reconnecting]);
 
     let mut updated = chat("chat-1", "dev-a");
     updated.title = None;

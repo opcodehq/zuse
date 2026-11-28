@@ -17,6 +17,15 @@ impl ConnectionMethod {
             Self::DeviceCode => "device-code",
         }
     }
+    /// Remove terminal wrapping from Claude setup tokens before submission or storage.
+    pub fn normalize_secret(self, agent: AgentId, secret: &str) -> String {
+        if agent == AgentId::Claude && self == Self::SetupToken {
+            secret.chars().filter(|c| !c.is_whitespace()).collect()
+        } else {
+            secret.trim().to_owned()
+        }
+    }
+
     pub fn supported(self, agent: AgentId) -> bool {
         match self {
             Self::ApiKey => true,
@@ -98,6 +107,21 @@ pub struct LoginOperation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn wrapped_claude_setup_token_is_normalized() {
+        assert_eq!(
+            ConnectionMethod::SetupToken.normalize_secret(
+                AgentId::Claude,
+                " \tsk-ant-oat01-fake_part\r\n second-part\u{a0}third\n",
+            ),
+            "sk-ant-oat01-fake_partsecond-partthird",
+        );
+        assert_eq!(
+            ConnectionMethod::ApiKey.normalize_secret(AgentId::Claude, " key with spaces "),
+            "key with spaces",
+        );
+    }
+
     #[test]
     fn secret_input_refuses_unexpected_unowned_fields() {
         assert!(serde_json::from_value::<ConfigureConnection>(serde_json::json!({"agent":"codex","method":"api-key","secret":"value","ownerId":"other-account"})).is_err());

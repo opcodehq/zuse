@@ -481,7 +481,7 @@ fn progress_arc(
 
 /// The retro pixel loader: the dithered 2×3 chase from the tabs, centered in
 /// a `size` box so it drops into any icon slot. Every action and working
-/// chat uses it, in the golden [`Theme::loader_glyph`] palette.
+/// chat uses it, in the green [`Theme::loader_glyph`] palette.
 pub fn retro_loader(
     key: impl Into<SharedString>,
     size: f32,

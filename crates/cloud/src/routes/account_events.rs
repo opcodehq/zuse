@@ -447,6 +447,12 @@ mod tests {
         assert!(!delivered("billing", &[]));
         assert!(!delivered("machine-image", &["billing"]));
         assert!(delivered("machine-image", &["machine-image", "billing"]));
+        // Desktop apps from before computer-request hints reject that kind.
+        assert!(!delivered(
+            "computer-request",
+            &["machine-image", "billing"]
+        ));
+        assert!(delivered("computer-request", &["computer-request"]));
         let legacy: TicketRequest =
             serde_json::from_value(json!({"deviceId":uuid::Uuid::nil(),"cursor":null})).unwrap();
         assert!(legacy.hint_kinds.is_empty());

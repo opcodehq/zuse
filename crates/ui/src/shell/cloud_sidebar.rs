@@ -59,13 +59,39 @@ impl Shell {
                             this.open_new_cloud_session(project.clone(), cx)
                         })),
                 );
+            // Each project previews its first threads, like the online sidebar.
+            let openable: Vec<&Value> = group
+                .rows
+                .iter()
+                .filter(|row| {
+                    row["pendingLaunch"].is_string() || self.cloud_row_target(row, cx).is_some()
+                })
+                .collect();
+            let page = self.thread_page_with(
+                Some((
+                    format!("offline-cloud:{id}"),
+                    spaces::PROJECT_THREAD_PREVIEW,
+                )),
+                std::iter::empty(),
+                &openable,
+                cx,
+            );
             let mut rows = Vec::new();
-            for row in group.rows {
-                if let Some((_, _, row)) = self.render_cloud_sidebar_row(row, &theme, cx) {
+            for row in page.clouds {
+                if let Some((_, _, row)) = self.render_cloud_sidebar_row(row, None, &theme, cx) {
                     rows.push(row)
                 }
             }
-            elements.push(div().child(header).children(rows).into_any_element());
+            let toggle = page
+                .toggle
+                .map(|(key, expanded)| self.render_sidebar_show_more(key, expanded, &theme, cx));
+            elements.push(
+                div()
+                    .child(header)
+                    .children(rows)
+                    .children(toggle)
+                    .into_any_element(),
+            );
         }
         div()
             .id("offline-cloud-sidebar")
@@ -166,7 +192,11 @@ impl Shell {
             .collect()
     }
     /// The conversation target for a cloud task row, when it can open.
-    fn cloud_row_target(&self, row: &Value, cx: &App) -> Option<crate::state::CloudTarget> {
+    pub(super) fn cloud_row_target(
+        &self,
+        row: &Value,
+        cx: &App,
+    ) -> Option<crate::state::CloudTarget> {
         let workspace = row["workspaceId"].as_str().filter(|id| !id.is_empty())?;
         let session = row["initialSessionId"]
             .as_str()
@@ -279,26 +309,21 @@ impl Shell {
     /// A cloud task drawn exactly like a local chat row: the project's
     /// avatar, its title and age, and the same activity corner. Only the
     /// click target differs.
-    pub(super) fn render_cloud_sidebar_row(
-        &self,
-        row: Value,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> Option<(String, f32, AnyElement)> {
-        let pending = row["pendingLaunch"].as_str().map(str::to_owned);
-        if pending.is_none() {
-            self.cloud_row_target(&row, cx)?;
-        }
-        let workspace = row["workspaceId"].as_str()?.to_owned();
+    /// Whether a cloud row is the thread in front: its open conversation,
+    /// or for a chat still being created, the composer tab creating it.
+    /// Rendering and paging share this so a selected row is never paged away.
+    pub(super) fn cloud_row_selected(&self, row: &Value, cx: &App) -> bool {
         let state = self.state.read(cx);
-        let selected = match &pending {
-            // The tab creating it is in front.
+        match row["pendingLaunch"].as_str() {
             Some(key) => {
                 self.cloud_conversation.is_none()
                     && state.selected_chat.is_none()
-                    && self.composer.read(cx).current_key == *key
+                    && self.composer.read(cx).current_key == key
             }
             None => {
+                let Some(workspace) = row["workspaceId"].as_str() else {
+                    return false;
+                };
                 self.cloud_conversation
                     .as_ref()
                     .is_some_and(|view| view.read(cx).target.workspace == workspace)
@@ -306,9 +331,25 @@ impl Shell {
                         .engine()
                         .and_then(|engine| engine.cloud_workspace())
                         .as_deref()
-                        == Some(workspace.as_str())
+                        == Some(workspace)
             }
-        };
+        }
+    }
+
+    pub(super) fn render_cloud_sidebar_row(
+        &self,
+        row: &Value,
+        jump_label: Option<SharedString>,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<(String, f32, AnyElement)> {
+        let pending = row["pendingLaunch"].as_str().map(str::to_owned);
+        if pending.is_none() {
+            self.cloud_row_target(row, cx)?;
+        }
+        let workspace = row["workspaceId"].as_str()?.to_owned();
+        let selected = self.cloud_row_selected(row, cx);
+        let state = self.state.read(cx);
         let title = transcript::single_line(&zuse_protocol::file_mentions::mention_display_text(
             row["title"]
                 .as_str()
@@ -322,15 +363,39 @@ impl Shell {
             .and_then(chrono::DateTime::from_timestamp_millis)
             .unwrap_or(now);
         let time_ago = zuse_protocol::view::format_time_ago(updated, now);
-        let status = self.cloud_row_status(&row, cx);
-        let project_group = self.settings.sidebar_organization == SidebarOrganization::ByProject;
+        let status = self.cloud_row_status(row, cx);
+        let harness = self
+            .settings
+            .sidebar_show_harness
+            .then(|| {
+                self.cloud_conversation
+                    .as_ref()
+                    .map(|view| view.read(cx))
+                    .filter(|view| view.target.workspace == workspace)
+                    .and_then(|view| view.harness(Some(row)))
+                    .or_else(|| super::cloud_conversation::cloud_harness(row))
+                    .or_else(|| settings::remembered_cloud_agent(&workspace, cx))
+            })
+            .flatten();
+        // Under a project or device heading, rows take the nested shape.
+        let project_group = self.settings.sidebar_organization != SidebarOrganization::InOneList;
         let height = sidebar_row_height(
-            self.sidebar_compact_rows(),
+            self.sidebar_row_compact(project_group),
             self.sidebar_project_labels(),
             project_group,
         );
         let id = format!("{}{workspace}", super::CLOUD_ROW_PREFIX);
-        let project = self.cloud_row_project_name(&row, cx);
+        // Under a project heading, the card names its branch, as local
+        // cards do, while Branch is shown.
+        let description = project_group.then(|| {
+            ["branch", "branchName", "headBranch"]
+                .into_iter()
+                .filter(|_| self.settings.sidebar_show_branch)
+                .find_map(|key| row[key].as_str().map(str::trim))
+                .unwrap_or_default()
+                .to_owned()
+        });
+        let project = description.unwrap_or_else(|| self.cloud_row_project_name(row, cx));
         let element = self.render_chat_row(
             id.clone(),
             title.into(),
@@ -338,13 +403,13 @@ impl Shell {
             project.into(),
             None,
             None,
-            None,
+            harness,
             status,
             selected,
             false,
             false,
             None,
-            None,
+            jump_label,
             self.settings.sidebar_show_project_icon && !project_group,
             project_group,
             None,
@@ -1037,8 +1102,8 @@ mod tests {
             );
         });
         let pill = cx
-            .debug_bounds("chat-time-cloud:task-2")
-            .expect("cloud rows show the archive pill on hover");
+            .debug_bounds("chat-archive-cloud:task-2")
+            .expect("cloud rows show Archive on hover");
         cx.simulate_click(pill.center(), gpui::Modifiers::default());
         settle(&runtime, &archiver, 2, cx);
         assert_eq!(archiver.calls.lock().unwrap().len(), 2);
@@ -1135,12 +1200,19 @@ mod tests {
     /// hover bookkeeping the row lists alone skip).
     struct FullSidebar(Entity<Shell>);
     impl Render for FullSidebar {
-        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             self.0.update(cx, |shell, cx| {
+                let sidebar = shell.render_chat_sidebar(&Theme::default(), cx);
+                let overlays = if shell.chat_menu.get().is_some() {
+                    shell.render_overlays(window.viewport_size(), window, cx)
+                } else {
+                    Vec::new()
+                };
                 div()
                     .w(px(300.0))
                     .h(px(900.0))
-                    .child(shell.render_chat_sidebar(&Theme::default(), cx))
+                    .child(sidebar)
+                    .children(overlays)
             })
         }
     }
@@ -1189,7 +1261,7 @@ mod tests {
                         &json!({"accountId":"owner","organizationId":organization,"workspaces":[{
                             "workspaceId":"task-1","projectId":"project","providerId":"boxd",
                             "chatId":"session-1","initialSessionId":"session-1",
-                            "title":"Cloud chat","branch":"task/cloud","state":"ready","desiredState":"ready",
+                            "title":"Cloud chat","agent":"codex","branch":"task/cloud","state":"ready","desiredState":"ready",
                             "createdAt":1,"updatedAt":1
                         }]})
                     ));
@@ -1287,6 +1359,14 @@ mod tests {
                 let row = cx
                     .debug_bounds(row_selector)
                     .unwrap_or_else(|| panic!("{id} paints in {layout:?}"));
+                // Checked at rest: a hovered card swaps its marks for actions.
+                // Under a machine heading the heading names the cloud instead.
+                let marked = cloud && layout != SidebarOrganization::ByDevice;
+                assert_eq!(
+                    cx.debug_bounds(mark).is_some(),
+                    marked,
+                    "{id} in {layout:?}: cloud mark only on cloud rows"
+                );
                 cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::default());
                 cx.run_until_parked();
                 cx.update(|window, cx| window.draw(cx).clear());
@@ -1303,13 +1383,167 @@ mod tests {
                         "a row without an archive action keeps its age"
                     );
                 }
-                assert_eq!(
-                    cx.debug_bounds(mark).is_some(),
-                    cloud,
-                    "{id} in {layout:?}: cloud mark only on cloud rows"
-                );
             }
         }
+    }
+
+    #[gpui::test]
+    fn thread_more_opens_actions_without_selecting_the_row(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let directory = tempfile::tempdir().unwrap();
+        let (shell, cx) = mixed_sidebar(cx, &runtime, directory.path(), None);
+        let redraw = |cx: &mut gpui::VisualTestContext| {
+            cx.run_until_parked();
+            cx.update(|window, cx| window.draw(cx).clear());
+            cx.update(|window, cx| window.draw(cx).clear());
+        };
+        redraw(cx);
+        let row = cx.debug_bounds("chat-cloud:task-1").unwrap();
+        cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::default());
+        redraw(cx);
+        let more = cx.debug_bounds("chat-more-cloud:task-1").unwrap();
+        let archive = cx.debug_bounds("chat-archive-cloud:task-1").unwrap();
+        assert!(archive.right() < more.left());
+        cx.simulate_click(more.center(), gpui::Modifiers::default());
+        redraw(cx);
+        for item in [
+            "chat-menu-share",
+            "chat-menu-new-tab",
+            "chat-menu-rename",
+            "chat-menu-archive",
+            "chat-menu-delete",
+        ] {
+            assert!(cx.debug_bounds(item).is_some(), "missing {item}");
+        }
+        shell.read_with(cx, |shell, _| assert!(shell.cloud_conversation.is_none()));
+        cx.simulate_click(more.center(), gpui::Modifiers::default());
+        redraw(cx);
+        shell.read_with(cx, |shell, _| assert!(!shell.chat_menu.is_open()));
+
+        shell.update(cx, |shell, cx| shell.open_chat("local-pin".into(), cx));
+        redraw(cx);
+        let local = cx.debug_bounds("chat-local-1").unwrap();
+        cx.simulate_mouse_move(local.center(), None, gpui::Modifiers::default());
+        redraw(cx);
+        let local_more = cx.debug_bounds("chat-more-local-1").unwrap();
+        cx.simulate_click(local_more.center(), gpui::Modifiers::default());
+        redraw(cx);
+        let open_tab = cx.debug_bounds("chat-menu-new-tab").unwrap();
+        cx.simulate_click(open_tab.center(), gpui::Modifiers::default());
+        redraw(cx);
+        shell.update(cx, |shell, cx| {
+            assert_eq!(
+                shell.state.read(cx).selected_chat.as_deref(),
+                Some("local-1")
+            );
+            assert!(shell.can_close_sidebar_thread_tab("local-1", cx));
+            shell.close_thread_conversation("local-1", cx);
+            assert_eq!(
+                shell.state.read(cx).selected_chat.as_deref(),
+                Some("local-pin")
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn a_merged_pull_request_leaves_its_thread_in_the_sidebar(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let directory = tempfile::tempdir().unwrap();
+        let (shell, cx) = mixed_sidebar(cx, &runtime, directory.path(), None);
+        let branch = "feature/merged";
+        let now = Utc::now();
+        shell.update(cx, |shell, cx| {
+            shell.settings.sidebar_show_pull_request = false;
+            shell.state.update(cx, |state, cx| {
+                let chat = state
+                    .chats
+                    .iter_mut()
+                    .find(|chat| chat.id == "local-pin")
+                    .unwrap();
+                chat.source_context = Some(zuse_protocol::ConversationSourceContext {
+                    checkout_id: "checkout".into(),
+                    repo_root: "/projects/zuse".into(),
+                    cwd: "/projects/zuse".into(),
+                    branch: branch.into(),
+                    head_sha: None,
+                    observed_at: now,
+                });
+                state.fixture_sidebar_change_request(zuse_protocol::CheckoutChangeRequestStatus {
+                    checkout_id: "checkout".into(),
+                    device_id: "local".into(),
+                    cwd: "/projects/zuse".into(),
+                    branch: branch.into(),
+                    error: None,
+                    updated_at: now,
+                    change_request: Some(zuse_protocol::ChangeRequestSummary {
+                        provider: "github".into(),
+                        number: 1,
+                        title: "Merged change".into(),
+                        url: "https://github.com/owner/zuse/pull/1".into(),
+                        state: zuse_protocol::ChangeRequestState::Merged,
+                        base_ref: "main".into(),
+                        head_ref: branch.into(),
+                        is_draft: false,
+                        review_decision: Default::default(),
+                    }),
+                });
+                cx.notify();
+            });
+            assert!(
+                shell
+                    .sidebar_visible_order(cx)
+                    .contains(&"local-pin".into())
+            );
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear());
+        assert!(cx.debug_bounds("chat-local-pin").is_some());
+    }
+
+    #[gpui::test]
+    fn project_filter_menu_opens_beside_its_icon(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let directory = tempfile::tempdir().unwrap();
+        let (shell, cx) = mixed_sidebar(cx, &runtime, directory.path(), None);
+        shell.update(cx, |shell, cx| {
+            shell.settings.sidebar_organization = SidebarOrganization::InOneList;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            shell.update(cx, |shell, cx| shell.open_spaces_menu(window, cx));
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear());
+        let button = cx
+            .debug_bounds("spaces-filter-button")
+            .expect("filter button");
+        let row = cx
+            .debug_bounds("spaces-menu-row-0")
+            .expect("project menu row");
+        let threads = cx.debug_bounds("chat-local-1").unwrap();
+        assert!(
+            row.left() > threads.center().x,
+            "the project menu opens to the right, not over the list: {row:?} vs {threads:?}"
+        );
+        assert!(
+            row.left() >= button.right() && row.left() - button.right() < px(16.0),
+            "it opens right beside its icon: {row:?} vs {button:?}"
+        );
+        assert_eq!(row.size.height, px(30.0));
     }
 
     #[gpui::test]
@@ -1386,6 +1620,92 @@ mod tests {
         cx.run_until_parked();
         cx.update(|window, cx| window.draw(cx).clear());
         assert!(cx.debug_bounds("chat-peek-card").is_none());
+    }
+
+    #[gpui::test]
+    fn project_density_shapes_rows_under_project_headings(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let directory = tempfile::tempdir().unwrap();
+        let (shell, cx) = mixed_sidebar(cx, &runtime, directory.path(), None);
+        let heights = |shell: &Entity<Shell>,
+                       cx: &mut gpui::VisualTestContext,
+                       density: settings::SidebarDensity| {
+            shell.update(cx, |shell, cx| {
+                shell.settings.sidebar_organization = SidebarOrganization::ByProject;
+                shell.settings.sidebar_project_density = density;
+                shell.sidebar_collapsed_groups.clear();
+                cx.notify();
+            });
+            cx.run_until_parked();
+            cx.update(|window, cx| window.draw(cx).clear());
+            ["chat-local-1", "chat-cloud:task-1"]
+                .map(|row| f32::from(cx.debug_bounds(row).expect(row).size.height))
+        };
+        // Detailed, the default, draws cards; Compact draws one-line rows.
+        assert_eq!(
+            heights(&shell, cx, settings::SidebarDensity::Detailed),
+            [super::super::SIDEBAR_ROW_DOUBLE_HEIGHT; 2]
+        );
+        assert_eq!(
+            heights(&shell, cx, settings::SidebarDensity::Compact),
+            [super::super::SIDEBAR_ROW_SINGLE_HEIGHT; 2]
+        );
+        // Compact rows name where they run just left of the age.
+        for (row, corner, mark) in [
+            ("local-1", "chat-time-local-1", "chat-computer-mark-local-1"),
+            (
+                "cloud:task-1",
+                "chat-time-cloud:task-1",
+                "chat-cloud-mark-cloud:task-1",
+            ),
+        ] {
+            let mark = cx.debug_bounds(mark).expect(mark);
+            let corner = cx.debug_bounds(corner).unwrap();
+            assert!(
+                corner.contains(&mark.center()),
+                "{row}: mark sits beside the age"
+            );
+        }
+        // Device groups draw the same rows, divided by machine; the heading
+        // names the machine, so rows drop their own mark.
+        shell.update(cx, |shell, cx| {
+            shell.settings.sidebar_organization = SidebarOrganization::ByDevice;
+            shell.sidebar_collapsed_groups.clear();
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear());
+        for (row, mark) in [
+            ("chat-local-1", "chat-computer-mark-local-1"),
+            ("chat-cloud:task-1", "chat-cloud-mark-cloud:task-1"),
+        ] {
+            assert_eq!(
+                f32::from(cx.debug_bounds(row).expect(row).size.height),
+                super::super::SIDEBAR_ROW_SINGLE_HEIGHT
+            );
+            assert!(cx.debug_bounds(mark).is_none(), "{mark}");
+        }
+        // Each machine's heading leads with the kind of machine it is.
+        for heading in [
+            "sidebar-device-icon-local",
+            "sidebar-device-icon-cloud-computers",
+        ] {
+            assert!(cx.debug_bounds(heading).is_some(), "{heading}");
+        }
+        // Density belongs to Projects and Devices: the Threads view keeps cards.
+        shell.update(cx, |shell, cx| {
+            shell.settings.sidebar_organization = SidebarOrganization::InOneList;
+            cx.notify();
+        });
+        cx.update(|window, cx| window.draw(cx).clear());
+        assert_eq!(
+            f32::from(cx.debug_bounds("chat-local-1").unwrap().size.height),
+            super::super::SIDEBAR_ROW_DOUBLE_HEIGHT
+        );
     }
 }
 

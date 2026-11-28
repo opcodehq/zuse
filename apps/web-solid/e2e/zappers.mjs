@@ -151,14 +151,14 @@ try {
     await clickText(".zp-tabs button", "Overview");
     await page.press('[aria-label="Zapper actions"]');
     await clickText("[role=menuitem]", "Drive");
-    await clickText(".zp-inspector button", "New document");
+    await page.click('[aria-label="New file"]');
     await fill("[role=dialog] input[required]", "notes.md");
     await fill("[role=dialog] textarea", "Version one");
     await page.click("[role=dialog] button[type=submit]");
-    await page.waitFor('!!document.querySelector(".zp-document-link") && !document.querySelector("[role=dialog]")');
-    await page.click(".zp-document-link");
+    await page.waitFor('!!document.querySelector(".zp-tree-row[data-path=\'notes.md\']") && !document.querySelector("[role=dialog]")');
+    await page.click(".zp-tree-row[data-path='notes.md']");
     await page.waitFor('document.querySelector(".zp-page-surface:not([hidden])")?.textContent.includes("Version one")');
-    await clickText(".zp-page-surface:not([hidden]) button", "Edit document");
+    await clickText(".zp-page-surface:not([hidden]) button", "Edit");
     await fill("[role=dialog] textarea", "Version two");
     await page.eval(
       "window.zapperDraftEditor=document.querySelector('[role=dialog] textarea')",
@@ -200,6 +200,33 @@ try {
       "Version one",
     );
     assert.equal(files.find((f) => f.path === "notes.md").version, 3);
+  });
+  await step("Folders nest, move and delete through the engine", async () => {
+    await clickText(".zp-tabs button", "Drive");
+    await page.waitFor('!!document.querySelector(".zp-tree-row[data-path=\'handoffs\']")');
+    await page.click('[aria-label="New folder"]');
+    await fill("[role=dialog] input[required]", "handoffs/design");
+    await page.click("[role=dialog] button[type=submit]");
+    await page.waitFor('window.__zuse.state.zappers[0].folders?.includes("handoffs/design") && !document.querySelector("[role=dialog]")');
+    await page.click('[aria-label="New file"]');
+    await page.waitFor('document.querySelector("[role=dialog] input[required]")?.value==="handoffs/design/"');
+    await fill("[role=dialog] input[required]", "handoffs/design/brief.md");
+    await fill("[role=dialog] textarea", "Brief");
+    await page.click("[role=dialog] button[type=submit]");
+    await page.waitFor('!!document.querySelector(".zp-tree-row[data-path=\'handoffs/design/brief.md\']")');
+    await page.press(".zp-tree-row[data-path='handoffs'] .zp-tree-more-button");
+    await clickText("[role=menuitem]", "Delete folder…");
+    await page.waitFor('document.querySelector("[role=dialog]")?.textContent.includes("1 file and 1 folder inside handoffs")');
+    await clickText("[role=dialog] button", "Delete 1 file");
+    await page.waitFor('!document.querySelector("[role=dialog]") && !document.querySelector(".zp-tree-row[data-path=\'handoffs\']")');
+    const live = await engine.rpc("ZapperFiles", { zapperId, history: false, targetDeviceId: deviceId });
+    assert.ok(!live.some((f) => f.path.startsWith("handoffs/")));
+    const history = await engine.rpc("ZapperFiles", { zapperId, history: true, targetDeviceId: deviceId });
+    assert.deepEqual(
+      history.filter((f) => f.path === "handoffs/design/brief.md").map((f) => [f.version, !!f.deleted, f.content]),
+      [[2, true, ""], [1, false, "Brief"]],
+    );
+    assert.deepEqual(JSON.parse(await page.eval("JSON.stringify(window.__zuse.state.zappers[0].folders)")), ["reports"]);
   });
   await step(
     "Delegation creates an isolated worker through the browser",

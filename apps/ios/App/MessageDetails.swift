@@ -125,7 +125,7 @@ struct MessageDetails: View {
           ).font(.caption)
         }
       }
-    case "ui_spec":
+    case "ui_spec", "uiBlock":
       UISpecView(spec: content["spec"].string ?? "", respond: respond)
     default:
       DisclosureGroup(message.kind.replacingOccurrences(of: "_", with: " ").capitalized) {
@@ -149,7 +149,7 @@ struct MessageDetails: View {
   }
 }
 
-private struct ToolOutput: View {
+struct ToolOutput: View {
   let value: JSONValue
   var body: some View {
     if let text = value.string {
@@ -200,172 +200,5 @@ struct TranscriptDisclosureStyle: DisclosureGroupStyle {
         configuration.content.padding(.leading, 22).padding(.bottom, 4)
       }
     }
-  }
-}
-
-struct ToolTreeRow: View {
-  let row: TranscriptRow
-  var toggleDisclosure: ((() -> Void) -> Void)? = nil
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var expanded = false
-  private var message: ChatMessage { row.message }
-  private var step: ToolStep { row.step }
-  var body: some View {
-    HStack(alignment: .top, spacing: 7) {
-      TreeConnector(previous: row.joinsPrevious, next: row.joinsNext)
-        .stroke(Color.secondary.opacity(0.23), lineWidth: 1)
-        .frame(width: 14).accessibilityHidden(true)
-      VStack(alignment: .leading, spacing: 0) {
-        Button {
-          changeExpansion()
-        } label: {
-          HStack(spacing: 7) {
-            if row.running {
-              ProgressView().controlSize(.mini).frame(width: 18)
-            } else {
-              Image(systemName: step.symbol)
-                .font(.system(size: 14)).frame(width: 18)
-                .foregroundStyle(.secondary)
-            }
-            Text(step.label).font(.system(size: 14, weight: .medium)).foregroundStyle(.primary)
-            if !step.detail.isEmpty {
-              Text(step.detail).font(.system(size: 13, design: .monospaced))
-                .lineLimit(1).truncationMode(.middle)
-                .foregroundStyle(row.failed ? Color.red : Color.secondary)
-                .padding(.horizontal, 6).padding(.vertical, 3)
-                .background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 5))
-            }
-          }.frame(minHeight: 30, alignment: .leading).contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel([title, summary].filter { !$0.isEmpty }.joined(separator: ", "))
-        .accessibilityIdentifier("activity-\(message.id)")
-        .accessibilityValue(expanded ? "Expanded" : "Collapsed")
-        if expanded {
-          ViewThatFits(in: .vertical) {
-            detailContent.fixedSize(horizontal: false, vertical: true)
-            ScrollView { detailContent }
-          }
-          .frame(maxHeight: 200)
-          .background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
-          .padding(.leading, 22).padding(.bottom, 5)
-        }
-      }
-    }
-    .fixedSize(horizontal: false, vertical: true)
-    .padding(.horizontal, 20)
-    .frame(maxWidth: 720, alignment: .leading).frame(maxWidth: .infinity)
-  }
-  private var detailContent: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      if message.kind == "thinking" {
-        if message.content["redacted"].bool {
-          Text("Reasoning is private.")
-        } else {
-          ChatMarkdown(text: message.text)
-        }
-      } else if message.kind == "tool_result" {
-        ToolOutput(value: message.content["output"])
-      } else {
-        Text(message.content["input"].string ?? message.content["input"].pretty)
-          .font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
-        if let result = row.result {
-          Divider()
-          ToolOutput(value: result.content["output"])
-        }
-      }
-    }.frame(maxWidth: .infinity, alignment: .leading).padding(10)
-  }
-  private func changeExpansion() {
-    if let toggleDisclosure {
-      toggleDisclosure { expanded.toggle() }
-    } else {
-      var transaction = Transaction(animation: nil)
-      transaction.disablesAnimations = true
-      withTransaction(transaction) { expanded.toggle() }
-    }
-  }
-
-}
-
-private struct TreeConnector: Shape {
-  let previous: Bool
-  let next: Bool
-  func path(in rect: CGRect) -> Path {
-    var path = Path()
-    let y: CGFloat = 15
-    path.move(to: CGPoint(x: 2, y: previous ? 0 : y - 10))
-    path.addLine(to: CGPoint(x: 2, y: next ? rect.height : y - 5))
-    path.move(to: CGPoint(x: 2, y: y - 5))
-    path.addQuadCurve(to: CGPoint(x: 12, y: y), control: CGPoint(x: 2, y: y))
-    return path
-  }
-}
-
-struct ToolActivityGroup: View {
-  let group: TranscriptGroup
-  var toggleDisclosure: ((() -> Void) -> Void)? = nil
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  /// Set only by a tap. Otherwise running work stays open and settled work folds.
-  @State private var choice: Bool?
-  private var expanded: Bool { choice ?? group.hasRunningTool }
-  @State private var page: Int
-  private let pageSize = 12
-  init(group: TranscriptGroup, toggleDisclosure: ((() -> Void) -> Void)? = nil) {
-    self.group = group
-    self.toggleDisclosure = toggleDisclosure
-    _page = State(initialValue: max(0, (group.rows.count - 1) / 12))
-  }
-  private var heading: String { group.title }
-  /// Up to five distinct tool symbols in order of first use.
-  private var previewSymbols: [String] {
-    var seen: [String] = []
-    for row in group.rows where !seen.contains(row.step.symbol) {
-      seen.append(row.step.symbol)
-      if seen.count == 5 { break }
-    }
-    return seen
-  }
-  private func toggle() { choice = !expanded }
-  var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      Button {
-        if let toggleDisclosure {
-          toggleDisclosure { toggle() }
-        } else {
-          toggle()
-        }
-      } label: {
-        // Desktop's header: a quiet summary and a few tool icons, no arrow and no red. Failures
-        // show on the steps and in the summary's count.
-        HStack(spacing: 6) {
-          Text(heading).font(.system(size: 14)).monospacedDigit().lineLimit(1)
-            .truncationMode(.middle)
-          ForEach(previewSymbols, id: \.self) { symbol in
-            Image(systemName: symbol).font(.system(size: 11)).opacity(0.7)
-          }
-        }.foregroundStyle(.secondary).frame(minHeight: 34).contentShape(Rectangle())
-      }.buttonStyle(.plain).padding(.horizontal, 20)
-        .accessibilityLabel(heading).accessibilityValue(expanded ? "Expanded" : "Collapsed")
-        .accessibilityIdentifier("tool-group-\(group.id)")
-      if expanded {
-        let start = min(page * pageSize, max(0, group.rows.count - 1))
-        let end = min(start + pageSize, group.rows.count)
-        ForEach(Array(group.rows[start..<end])) { row in
-          ToolTreeRow(row: row, toggleDisclosure: toggleDisclosure)
-        }
-        if group.rows.count > pageSize {
-          HStack(spacing: 12) {
-            Button("Earlier") { page = max(0, page - 1) }.disabled(page == 0)
-            Text("\(start + 1)–\(end) of \(group.rows.count)").monospacedDigit().foregroundStyle(
-              .secondary)
-            Button("Later") { page += 1 }.disabled(end >= group.rows.count)
-          }.font(.caption2).padding(.leading, 42).padding(.vertical, 6)
-        }
-      }
-    }.frame(maxWidth: 720, alignment: .leading).frame(maxWidth: .infinity)
-      .onChange(of: group.rows.count) { old, new in
-        if page == max(0, (old - 1) / pageSize) { page = max(0, (new - 1) / pageSize) }
-      }
   }
 }

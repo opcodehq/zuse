@@ -1916,3 +1916,26 @@ chat-worktree_offline = Remote nicht erreichbar · lokales { $branch } wird verw
 
 # Native and browser history pagination; translations remain draft.
 chat-cloud_history_load_earlier = Frühere Nachrichten laden
+
+# Variables: count
+chat-tool_activity_summary_edited_files =
+    { $count ->
+       [one] { $count } Datei bearbeitet
+       *[other] { $count } Dateien bearbeitet
+    }
+# Variables: count
+chat-tool_group_updates =
+    { $count ->
+       [one] { $count } Zwischenstand
+       *[other] { $count } Zwischenstände
+    }
+chat-tool_command_label = Befehl
+chat-tool_output_label = Ausgabe
+
+# Elapsed work for the current assistant turn or a settled turn.
+# Variables: duration
+chat-turn_working_for = Arbeitet seit { $duration }
+# Variables: duration
+chat-turn_worked_for = { $duration } gearbeitet
+chat-turn_thought = Überlegung
+chat-tool_shell_label = Shell

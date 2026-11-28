@@ -410,3 +410,66 @@ async fn git_snapshots_hold_full_history_or_the_tip_and_no_config() {
     assert_eq!(tip.commit, head);
     assert!(list(&tip.file).lines().any(|l| l == "shallow"));
 }
+
+#[tokio::test]
+async fn a_missing_upstream_is_a_retryable_fetch_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = super::repository_source::GitRepositorySource::for_test(
+        dir.path().join("cache"),
+        format!("file://{}", dir.path().display()),
+        64 * 1024 * 1024,
+    );
+    let image = format!("uimg_{}", "3".repeat(32));
+    let error = source
+        .snapshot(
+            &image,
+            "user-alice",
+            &repository("p1", "team/absent", "public"),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        SourceError::Retry("repository_fetch_failed")
+    ));
+}
+
+#[test]
+fn a_full_staging_disk_is_named_and_git_stderr_is_summarized_safely() {
+    use super::repository_source::{failure_reason, stderr_summary};
+    let full = b"remote: Enumerating objects\nfatal: write error: No space left on device\nfatal: fetch-pack: invalid index-pack output\n";
+    assert_eq!(failure_reason(full), "repository_staging_full");
+    assert_eq!(
+        failure_reason(b"fatal: repository 'x' not found\n"),
+        "repository_fetch_failed"
+    );
+    assert_eq!(failure_reason(b""), "repository_fetch_failed");
+    assert_eq!(
+        stderr_summary(full),
+        "fatal: fetch-pack: invalid index-pack output"
+    );
+    assert_eq!(stderr_summary(b"\n\n"), "");
+    assert_eq!(
+        stderr_summary(b"fatal: Authorization: Basic abc\n"),
+        "[withheld]"
+    );
+    assert!(stderr_summary(&[b'a'; 1000]).len() <= 240);
+    // Noisy progress ahead of the fatal line does not hide the cause.
+    let mut noisy = b"remote: Counting objects\n".repeat(4096);
+    noisy.extend_from_slice(full);
+    super::repository_source::keep_tail(&mut noisy, 16 * 1024);
+    assert_eq!(noisy.len(), 16 * 1024);
+    assert_eq!(failure_reason(&noisy), "repository_staging_full");
+}
+
+#[test]
+fn snapshots_use_the_configured_absolute_directory() {
+    use super::repository_source::snapshot_root;
+    assert_eq!(
+        snapshot_root(Some("/var/lib/zuse/repos".into())),
+        std::path::PathBuf::from("/var/lib/zuse/repos")
+    );
+    let fallback = std::env::temp_dir().join("zuse-user-image-repos");
+    assert_eq!(snapshot_root(Some("relative/dir".into())), fallback);
+    assert_eq!(snapshot_root(None), fallback);
+}

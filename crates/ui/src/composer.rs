@@ -57,6 +57,7 @@ use crate::theme::Theme;
 
 mod chip;
 pub(crate) mod cloud;
+pub(crate) mod computers;
 mod editing;
 mod message_recall;
 pub use editing::StashedPrompt;
@@ -2704,10 +2705,25 @@ impl ComposerInput {
         }
         let (trailing, advance) = reference_suffix(self.content[range.end..].chars().next());
         let inserted = format!("{replacement}{trailing}");
-        self.record_edit(&range, &inserted);
+        self.replace_completion_text(range, &inserted, advance, cx);
+    }
+
+    fn replace_completion_text(
+        &mut self,
+        range: Range<usize>,
+        inserted: &str,
+        advance: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if self.read_only {
+            return;
+        }
+        self.last_edit = None;
+        self.record_edit(&range, inserted);
+        self.last_edit = None;
         self.edit_revision = self.edit_revision.wrapping_add(1);
         self.content =
-            self.content[..range.start].to_owned() + &inserted + &self.content[range.end..];
+            self.content[..range.start].to_owned() + inserted + &self.content[range.end..];
         let cursor = range.start + inserted.len() + advance;
         self.selected_range = cursor..cursor;
         self.selection_reversed = false;
@@ -3443,6 +3459,15 @@ impl ComposerInput {
     }
 
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mention_open
+            && self.selected_range.is_empty()
+            && let Some(token) = project_skill_token(&self.content, self.cursor_offset())
+            && token.query.is_empty()
+            && token.range.end == self.cursor_offset()
+        {
+            self.replace_completion_text(token.range, "/", 0, cx);
+            return;
+        }
         if self.selected_range.is_empty() {
             let prev = self.previous_boundary(self.cursor_offset());
             if self.cursor_offset() == prev {
@@ -6160,6 +6185,12 @@ fn slash_token(text: &str, cursor: usize) -> Option<MentionToken> {
     invocation_token(text, cursor, '/')
 }
 
+fn project_skill_token(text: &str, cursor: usize) -> Option<MentionToken> {
+    let mut token = slash_token(text, cursor)?;
+    token.query = token.query.strip_prefix("skills:")?.to_owned();
+    Some(token)
+}
+
 fn invocation_token(text: &str, cursor: usize, prefix: char) -> Option<MentionToken> {
     if cursor > text.len() || !text.is_char_boundary(cursor) {
         return None;
@@ -6342,13 +6373,15 @@ pub enum WorkspaceCommand {
     Mcp,
     /// The toolbar's plugins button; not offered as a slash command.
     Plugins,
+    /// `/skills`: choose a skill from this checkout.
+    Skills,
     /// Provider accounts (the tray's Switch account); not a slash command.
     Accounts,
 }
 
 impl WorkspaceCommand {
     /// Provider command names Zuse's own commands replace.
-    const OVERRIDES: &'static [&'static str] = &["mcp", "permissions"];
+    const OVERRIDES: &'static [&'static str] = &["mcp", "permissions", "skills"];
 
     fn catalog() -> &'static [(Self, &'static str, &'static str, bool)] {
         &[
@@ -6370,6 +6403,12 @@ impl WorkspaceCommand {
                 Self::Mcp,
                 "mcp",
                 "Zuse: MCP servers and plugins, with connect and manage",
+                false,
+            ),
+            (
+                Self::Skills,
+                "skills",
+                "Zuse: choose a skill from this checkout",
                 false,
             ),
             (Self::Diff, "diff", "Zuse: open changes", true),
@@ -6438,6 +6477,10 @@ fn workspace_command_for_text(
     if !text[..token.range.start].trim().is_empty() {
         return None;
     }
+    // The catalog opens even before the provider responds with its commands.
+    if token.query == "skills" {
+        return Some(WorkspaceCommand::Skills);
+    }
     rows.iter()
         .find(|row| row.name == token.query)?
         .workspace_command
@@ -6490,6 +6533,7 @@ struct SlashState {
     catalog_context: String,
     context: String,
     skill: bool,
+    project_skills: bool,
     supported: bool,
     request: u64,
     loading: bool,
@@ -6658,6 +6702,13 @@ struct AttachmentDestination {
 }
 pub struct Composer {
     cloud: cloud::Launch,
+    /// Commands the cloud chat in front asks to run on the owner's computers.
+    computers: computers::State,
+    /// The computer-command approval while it replaces the composer.
+    computer_focus: FocusHandle,
+    focus_computer_approval: bool,
+    /// Tray notices opened to show their whole message.
+    readable_notices: tray::ReadableNotices,
     /// New cloud chats still being created in tabs that are not in front,
     /// by their draft key. Each tab owns its launch; the composer serves
     /// the tab in front.
@@ -6863,8 +6914,6 @@ pub struct Composer {
     dictation_activation: Option<Subscription>,
     dictation_blur: Option<Subscription>,
     dictation_focus: FocusHandle,
-    /// The game above the card while an agent works.
-    runner: Entity<crate::arcade::Runner>,
     /// The last live frame of the voice pill, kept so it can settle away
     /// after the transcript lands instead of vanishing.
     voice_last: Option<VoiceFrame>,
@@ -7378,11 +7427,6 @@ impl Composer {
             input
         });
         let pickers = cx.new(|cx| Pickers::new(state.clone(), cx));
-        let runner = {
-            let owner = cx.weak_entity();
-            let input_focus = input.read(cx).focus_handle.clone();
-            cx.new(|cx| crate::arcade::Runner::new(owner, input_focus, cx))
-        };
         let account_usage = cx.new(|cx| crate::account_usage::AccountUsage::new(state.clone(), cx));
         // The footer toolbar (checkout kind + ref picker) is rendered INLINE
         // by the composer from picker state — a pickers-side notify (refs
@@ -7575,6 +7619,10 @@ impl Composer {
             advance_task: None,
             send_task: None,
             cloud: Default::default(),
+            computers: Default::default(),
+            computer_focus: cx.focus_handle(),
+            focus_computer_approval: false,
+            readable_notices: Default::default(),
             parked_launches: HashMap::new(),
             parked_launch_run: false,
             unarchive_task: None,
@@ -7631,7 +7679,6 @@ impl Composer {
             dictation_activation: None,
             dictation_blur: None,
             dictation_focus: cx.focus_handle(),
-            runner,
             dictation_ready: Default::default(),
             dictation_ready_task: None,
             dictation_button_focus: cx.focus_handle(),
@@ -7842,6 +7889,48 @@ impl Composer {
             self.staged().len() + self.staged_appshots().len(),
             self.staged_note_count(cx),
         )
+    }
+
+    /// Whether the draft kept under `key` holds anything: the live editor
+    /// when `key` is in front, its saved text and staged files otherwise.
+    pub(crate) fn key_has_draft(&self, key: &str, cx: &App) -> bool {
+        if key == self.current_key {
+            return self.has_draft(cx);
+        }
+        let state = self.state.read(cx);
+        self.drafts.get(key).is_some_and(|text| !text.is_empty())
+            || self.attachments.get(key).is_some_and(|a| !a.is_empty())
+            || self.appshots.get(key).is_some_and(|a| !a.is_empty())
+            || !state.review_comments(key).is_empty()
+            || !state.context_items(key).is_empty()
+    }
+
+    /// A Cloud key for the local new-chat draft (`""`), which moves to it:
+    /// text, files, screenshots. A chat still in front keeps its own draft.
+    pub(crate) fn adopt_new_chat_draft(&mut self, cx: &mut Context<Self>) -> String {
+        if self.current_key.is_empty() {
+            return self.ensure_cloud_canvas_key(cx);
+        }
+        let key = format!("cloud-canvas:{}", uuid::Uuid::new_v4());
+        if let Some(value) = self.drafts.remove("") {
+            self.drafts.insert(key.clone(), value);
+        }
+        if let Some(value) = self.attachments.remove("") {
+            self.attachments.insert(key.clone(), value);
+        }
+        if let Some(value) = self.attachment_drafts.remove("") {
+            self.attachment_drafts.insert(key.clone(), value);
+        }
+        if let Some(value) = self.appshots.remove("") {
+            self.appshots.insert(key.clone(), value);
+        }
+        key
+    }
+
+    /// The key the new-chat canvas drafts under while Cloud is its
+    /// destination (or was, this canvas); `None` drafts under `""`.
+    pub(crate) fn cloud_canvas_key(&self) -> Option<&str> {
+        self.cloud_canvas_key.as_deref()
     }
 
     #[cfg(test)]
@@ -9328,8 +9417,13 @@ impl Composer {
         let harness = self.pickers.read(cx).resolved(cx).harness;
         let preferences =
             crate::settings::current(cx).skill_completion(harness.unwrap_or(HarnessId::Codex));
-        let (token, skill, include_skills, commands_allowed) =
-            completion_trigger(text, cursor, preferences);
+        let project_token = project_skill_token(text, cursor);
+        let project_skills = project_token.is_some();
+        let (token, skill, include_skills, commands_allowed) = if project_skills {
+            (project_token, true, true, false)
+        } else {
+            completion_trigger(text, cursor, preferences)
+        };
         // Zuse's own commands always answer `/`; the agent's are opt-out.
         let provider_commands = provider_commands_requested(preferences, skill, commands_allowed);
         if token.is_none() {
@@ -9338,7 +9432,10 @@ impl Composer {
             self.reset_slash(None, cx);
             return;
         }
-        let params = self.catalog_params(cx);
+        let mut params = self.catalog_params(cx);
+        if project_skills {
+            params["projectOnly"] = true.into();
+        }
         let catalog_context = format!(
             "{preferences:?}:{}:{params}",
             self.completion_connection_context(cx),
@@ -9376,6 +9473,7 @@ impl Composer {
         self.slash.context = context.clone();
         self.slash.harness = harness;
         self.slash.skill = skill;
+        self.slash.project_skills = project_skills;
         if context_changed {
             self.slash.supported = true;
         }
@@ -9407,10 +9505,15 @@ impl Composer {
             }
             return;
         };
-        let recent_key = format!(
-            "{skill}:{include_skills}:{commands_allowed}:{preferences:?}:{harness:?}:{}",
+        let mut recent_key = format!(
+            "{skill}:{project_skills}:{include_skills}:{commands_allowed}:{preferences:?}:{harness:?}:{}",
             self.completion_connection_context(cx),
         );
+        // `/skills:` lists one checkout's files: another checkout's warm rows
+        // would insert paths that don't exist here.
+        if project_skills {
+            recent_key = format!("{recent_key}:{}", self.slash.catalog_context);
+        }
         if !self.slash_cache.contains_key(&context)
             && let Some((_, rows)) = self
                 .slash_recent
@@ -9684,6 +9787,44 @@ impl Composer {
                 }),
             )
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.dismiss_slash(cx)));
+        if self.slash.project_skills {
+            let back = crate::popover::menu_row(theme, false, "project-skills-back")
+                .id("project-skills-back")
+                .child(crate::icons::icon(crate::icons::ARROW_LEFT).size(px(13.)))
+                .child("Back to commands")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    let Some(token) = this.slash.token.clone() else {
+                        return;
+                    };
+                    this.input.update(cx, |input, cx| {
+                        input.replace_completion_text(token.range, "/", 0, cx)
+                    });
+                }));
+            let browse = crate::popover::menu_row(theme, false, "project-skills-browse")
+                .id("project-skills-browse")
+                .child(crate::icons::icon(crate::icons::ARROW_UP_RIGHT).size(px(13.)))
+                .child("Browse GitHub skills")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if let Some(token) = this.slash.token.clone() {
+                        this.input.update(cx, |input, cx| {
+                            input.remove_completion_token(token.range, cx)
+                        });
+                    }
+                    this.dismiss_slash(cx);
+                    cx.emit(ComposerEvent::WorkspaceCommand(WorkspaceCommand::Skills));
+                }));
+            card = card
+                .child(crate::popover::menu_heading(theme, "Project skills"))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(px(8.))
+                        .child(back)
+                        .child(browse),
+                );
+        }
         if let Some(error) = self.slash.error.clone() {
             card = card.child(
                 div()
@@ -9711,13 +9852,17 @@ impl Composer {
                     .py(px(10.0))
                     .text_size(crate::typography::text_xs())
                     .text_color(theme.text_muted)
-                    .child(empty_slash_message(
-                        self.slash.skill,
-                        self.slash.supported,
-                        preferences,
-                        self.slash.harness.map(crate::pickers::harness_display_name),
-                        commands.is_empty(),
-                    )),
+                    .child(if self.slash.project_skills && commands.is_empty() {
+                        "No skills found in this checkout".to_owned()
+                    } else {
+                        empty_slash_message(
+                            self.slash.skill,
+                            self.slash.supported,
+                            preferences,
+                            self.slash.harness.map(crate::pickers::harness_display_name),
+                            commands.is_empty(),
+                        )
+                    }),
             );
         } else {
             let mut rows: Vec<gpui::AnyElement> = Vec::with_capacity(self.slash.filtered.len() + 2);
@@ -10054,6 +10199,11 @@ impl Composer {
     }
 
     pub(crate) fn run_live(&self, cx: &App) -> bool {
+        // A cloud chat's turn: its conversation's one answer, which also
+        // knows the server's command record, not just a live session.
+        if self.cloud_turn_running() {
+            return true;
+        }
         let s = self.state.read(cx);
         let Some(chat_id) = s.selected_chat.as_deref() else {
             return false;
@@ -10193,6 +10343,12 @@ impl Composer {
         range: Range<usize>,
         cx: &mut Context<Self>,
     ) {
+        if command == WorkspaceCommand::Skills {
+            self.input.update(cx, |input, cx| {
+                input.replace_completion_text(range, "/skills:", 0, cx)
+            });
+            return;
+        }
         // Actions consume only their trigger. Draft text, attachments and queued
         // edits remain in the composer; selecting a command never sends them.
         self.input
@@ -10362,11 +10518,14 @@ impl Composer {
         // Leading indentation distinguishes literal Markdown from native commands
         // and skill invocations. Only the empty-content check may trim the draft.
         let text = self.input.read(cx).text().to_string();
-        if let Some(action) = self
+        if project_skill_token(&text, self.input.read(cx).cursor_offset()).is_some() {
+            return;
+        }
+        let rows = self
             .slash_cache
             .get(&self.slash.context)
-            .and_then(|rows| workspace_command_for_text(self.input.read(cx).text(), rows))
-        {
+            .map_or(&[][..], Vec::as_slice);
+        if let Some(action) = workspace_command_for_text(&text, rows) {
             self.execute_workspace_command(action, 0..self.input.read(cx).text().len(), cx);
             return;
         }
@@ -13473,6 +13632,7 @@ impl Render for Composer {
             .selected_chat_row()
             .filter(|chat| chat.archived)
             .cloned();
+        self.sync_computers(cx);
         if let Some(chat) = archived {
             return self.render_archived_footer(&chat, cx);
         }
@@ -13541,10 +13701,6 @@ impl Render for Composer {
             self.reset_slash(None, cx);
         }
         let mode = self.button_mode(cx);
-        let agent_working = mode == SendButtonMode::Stop;
-        let runner_mounted = self
-            .runner
-            .update(cx, |runner, cx| runner.mounted(agent_working, window, cx));
         // Shape the current draft before sizing the pill. Waiting for the child
         // layout leaves the parent using the previous edit's height.
         self.input.update(cx, |input, cx| {
@@ -13630,6 +13786,14 @@ impl Render for Composer {
         if wizard_active {
             let wizard = self.render_wizard(window, cx);
             return container.child(motion::fade_quick("composer-wizard", div().child(wizard)));
+        }
+        // A cloud chat's computer command waits for approval in the
+        // composer's place, as a local permission prompt does.
+        if let Some(approval) = self.render_computer_approval(window, cx) {
+            return container.child(motion::fade_quick(
+                "composer-computer-approval",
+                div().child(approval),
+            ));
         }
 
         // What is waiting to be sent, stacked directly above the box it was
@@ -14272,18 +14436,6 @@ impl Render for Composer {
             .children(self.render_emoji_popup(&theme, cx))
             .children(self.render_composer_list(&theme, cx))
             .children(self.render_flash(&theme, cx))
-            // While the agent works, a little runner plays itself in the
-            // reserved status strip until the user clicks to take over.
-            .when(runner_mounted, |el| {
-                el.child(
-                    div()
-                        .absolute()
-                        .top(px(-crate::arcade::RUNNER_HEIGHT - 1.0))
-                        .left(px(surface_radius))
-                        .right(px(surface_radius))
-                        .child(crate::arcade::runner_strip(&self.runner)),
-                )
-            })
             .children(self.render_worktree_progress(&theme, cx));
         // The context tray: a tonal tab tucked behind the card's top edge,
         // one step narrower than the card (`w-14/15`), carrying the
@@ -15618,7 +15770,7 @@ mod tests {
             vec![],
         );
         let rows = with_workspace_commands(native, true);
-        assert_eq!(rows.len(), 13);
+        assert_eq!(rows.len(), 14);
         assert!(rows[0].workspace_command.is_none());
         assert_eq!(rows[0].input_hint.as_deref(), Some("model id"));
         assert_eq!(workspace_command_for_text("/model", &rows), None);
@@ -15632,10 +15784,14 @@ mod tests {
             workspace_command_for_text("/permissions", &rows),
             Some(WorkspaceCommand::Permissions)
         );
-        assert_eq!(with_workspace_commands(rows, true).len(), 13);
+        assert_eq!(with_workspace_commands(rows, true).len(), 14);
         let draft_rows = with_workspace_commands(vec![], false);
-        assert_eq!(draft_rows.len(), 5);
+        assert_eq!(draft_rows.len(), 6);
         assert_eq!(workspace_command_for_text("/diff", &draft_rows), None);
+        assert_eq!(
+            workspace_command_for_text("/skills", &[]),
+            Some(WorkspaceCommand::Skills)
+        );
         assert_eq!(
             workspace_command_for_text("/permissions", &draft_rows),
             None
@@ -16027,6 +16183,7 @@ mod tests {
                 running_subagents: 0,
                 awaiting_input: None,
                 background_tasks: Vec::new(),
+                notice: None,
             }];
             state.selected_chat = Some("c".into());
             state.watch_clock_transitions(cx);

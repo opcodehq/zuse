@@ -1,0 +1,92 @@
+---
+title: zuse-control CLI
+icon: Terminal
+navTitle: "zuse-control CLI"
+description: Reference for zuse-control, the small command-line client for the control API, including its MCP server mode.
+section: api
+order: 3
+platforms: [desktop, serve]
+providers: []
+prerequisites: [/api-reference]
+related: [/api-reference/quickstart, /api-reference/operations, /how-to/local-configure-mcp]
+next: /api-reference/sdk
+lastVerified: "2026-11-27"
+---
+
+`zuse-control` is a standalone client for a running local or remote Zuse engine. It never starts or embeds an engine.
+
+```text
+zuse-control [--discovery <path>] [--endpoint <url>] <command>
+```
+
+## Install
+
+On macOS and Linux, packaged Zuse apps install and update it for you at `~/.zuse/bin/zuse-control`, linked to the current version under `~/.zuse/control/`.
+
+`@zuse/sdk` also provides a `zuse-control` command. It runs the binary from `~/.zuse/bin`, or the one named by `ZUSE_CONTROL_BINARY`.
+
+## Options
+
+| Option | Environment variable | Meaning |
+| --- | --- | --- |
+| `--discovery <path>` | `ZUSE_CONTROL_FILE` | Discovery file to read. Defaults to the local profile's `zappers/control.json`. |
+| `--endpoint <url>` | `ZUSE_CONTROL_ENDPOINT` | Overrides the endpoint in the discovery file. The token still comes from the file. |
+| `--version` | | Prints the CLI version. |
+| `--help` | | Prints help. |
+
+Without `--discovery`, the CLI checks `~/.zuse/profiles/local/zappers/control.json` and then `~/.zuse-native/profiles/local/zappers/control.json`.
+
+Before running any command, the CLI checks that:
+
+- the discovery file isn't readable by group or other users (on macOS and Linux)
+- its `apiVersion` and the engine's `ControlInfo.apiVersion` both match the CLI's
+- the endpoint is `wss://`, or `ws://` on loopback, with no credentials, query, or fragment
+
+## Commands
+
+### info
+
+```bash title="Terminal"
+zuse-control info
+```
+
+Prints `ControlInfo` as formatted JSON: `apiVersion`, `appVersion`, `capabilities`, `methods`, and `schemas`.
+
+### call
+
+```bash title="Terminal"
+zuse-control call <method> [json]
+```
+
+Runs one operation and prints its result as one line of JSON. `json` defaults to `{}`. Pass `@path` to read the parameters from a file, or `-` to read them from stdin.
+
+The method must be in the [operation catalog](/api-reference/operations); otherwise the CLI stops with `unsupported operation; run info for supported methods`.
+
+### watch
+
+```bash title="Terminal"
+zuse-control watch <method> [json]
+```
+
+Starts a subscription and prints each value as one line of JSON until the subscription ends or you press Ctrl+C. Only subscriptions work here: operations whose names start with `Watch`, plus `SubscribeTerminal` and `UpdateStatus`.
+
+### mcp
+
+```bash title="Terminal"
+zuse-control mcp
+```
+
+Serves the control API as MCP tools over stdin and stdout.
+
+## Use it as an MCP server
+
+Run `zuse-control mcp` as a local stdio MCP server in any MCP client. It uses the same discovery options as every other command, so set `ZUSE_CONTROL_FILE` in the server's environment if you need a profile other than the default.
+
+- Each operation in the catalog becomes a tool with the same name, except subscriptions, which MCP tools can't stream.
+- `ZapperCommand` publishes its full JSON Schema as its input schema. Other tools accept any JSON object.
+- A tool's result is the operation's JSON result as text. A failed operation returns an error result with the message.
+- Up to 64 requests can run at once, and `notifications/cancelled` cancels one.
+
+## Exit status
+
+The CLI exits with status `0` on success and a non-zero status with an error message on any failure, including missing discovery, version mismatches, rejected endpoints, and failed operations.

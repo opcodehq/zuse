@@ -179,10 +179,47 @@ async fn state(pool: &PgPool, asset: &Value) -> (String, Option<String>) {
     sqlx::query_as("SELECT state,release_reason FROM zuse_rust_launch_assets WHERE workspace_id=$1 AND asset_id=$2").bind(WS).bind(asset["assetId"].as_str().unwrap()).fetch_one(pool).await.unwrap()
 }
 
-#[tokio::test]
-#[ignore = "requires explicit isolated localhost PostgreSQL"]
-async fn delivered_attachments_leave_object_storage_and_undelivered_ones_expire() {
-    use w::ExecutionState::{Completed, Failed, Running, Starting};
+struct Fixture {
+    control: Arc<RuntimeControl>,
+    application: PgPool,
+    pool: PgPool,
+    admin: PgPool,
+    schema: String,
+    objects: Arc<Memory>,
+    now: i64,
+    pending: Vec<zuse_protocol::cloud_assets::Asset>,
+    _staging: tokio::sync::MutexGuard<'static, ()>,
+}
+impl Fixture {
+    async fn close(self) {
+        let Fixture {
+            application,
+            pool,
+            admin,
+            schema,
+            ..
+        } = self;
+
+        application.close().await;
+        pool.close().await;
+        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query("DROP OWNED BY zuse_cloud_staging")
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query("DROP ROLE zuse_cloud_staging")
+            .execute(&admin)
+            .await
+            .unwrap();
+    }
+}
+
+/// One online server-admitted computer whose launch command holds `pending`
+/// first-message files (declared, not yet uploaded), under the restricted role.
+async fn fixture(pending: &[&str]) -> Fixture {
     let url = std::env::var("ZUSE_CLOUD_TEST_DATABASE_URL").expect("isolated PostgreSQL required");
     let parsed = reqwest::Url::parse(&url).unwrap();
     assert!(matches!(
@@ -287,6 +324,23 @@ async fn delivered_attachments_leave_object_storage_and_undelivered_ones_expire(
     let config = json!({"runtimeGeneration":1,"gatewayEpoch":1,"commandDeliveryMode":"server-admitted-v2","rustCommandAdmissionVersion":2,"runtimeRpcProtocol":zuse_protocol::cloud_gateway::RUST_RPC,"rustCommandMailboxEnabled":true,"agent":"codex","agentConnectionId":"connection","agentConnectionOwnerId":"user-test","rustRuntimeStorage":{"storageIncarnationId":DISK}});
     let row = json!({"workspace_id":WS,"account_id":"user-test","chat_id":"chat-release","initial_session_id":SESSION,"wrapped_transcript_key":wrapped,"state":"provisioning","desired_state":"ready","request_config":config});
     let intent = json!({"workspaceId":WS,"chatId":"chat-release","sessionId":SESSION,"commandId":format!("launch:{WS}"),"turnId":format!("turn:{WS}"),"runtimeMode":"approval-required","model":"fixture","reasoning":null,"modelOptions":{},"firstMessage":"Initial durable task","title":"Fixture","attachments":[]});
+    // First-message files declared before their bytes arrive: held by the
+    // launch command until they are committed.
+    let pending: Vec<zuse_protocol::cloud_assets::Asset> = pending
+        .iter()
+        .map(|name| {
+            let bytes = format!("private bytes of {name}").into_bytes();
+            zuse_protocol::cloud_assets::Asset {
+                asset_id: control.asset_id("user-test", WS, name).unwrap(),
+                mime_type: "text/plain".into(),
+                original_name: format!("{name}.txt"),
+                size_bytes: bytes.len(),
+                sha256: b64.encode(sha2::Sha256::digest(&bytes)),
+            }
+        })
+        .collect();
+    let mut intent = intent;
+    intent["attachments"] = json!(pending);
     let release = json!({"harnesses":[{"agent":"codex","catalog":{"id":"codex","name":"Codex","defaultModel":"fixture","models":[{"id":"fixture","label":"Fixture"}]}}]});
     let plan = json!({
         "workspaceId":WS,"ownerId":"user-test","projectId":"project","buildId":"legacy-image","provider":"boxd","chatId":"chat-release","sessionId":SESSION,"branch":"task/release","baseRef":"main","wrappedTranscriptKey":wrapped,"idempotencyKey":"key:release","requestConfig":config,"bootTokenHash":"fixture-hash","bootExpiresAt":now+60000,"commandId":format!("launch:{WS}"),"turnId":format!("turn:{WS}"),"launchCiphertext":"fixture-ciphertext","launchExpiresAt":now+60000,"admissionCiphertext":master.seal_api(&format!("task-admission:user-test:{WS}"),&intent.to_string()).unwrap(),"operationId":"allocate:release","snapshotId":"fixture-snapshot","machineName":"machine-release","storageIncarnationId":DISK,"sealedBootToken":"fixture-ciphertext","jobId":"job:release","now":now,
@@ -297,8 +351,54 @@ async fn delivered_attachments_leave_object_storage_and_undelivered_ones_expire(
         .fetch_one(&application)
         .await
         .unwrap();
+    if !pending.is_empty() {
+        let mut tx = application.begin().await.unwrap();
+        control
+            .reserve_pending_assets_tx(&mut tx, "user-test", WS, &pending, now)
+            .await
+            .unwrap();
+        control
+            .hold_assets_tx(
+                &mut tx,
+                WS,
+                crate::runtime::assets::Holder::Command {
+                    session: SESSION,
+                    command: &format!("launch:{WS}"),
+                },
+                &pending,
+                now,
+            )
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+    }
     let enrollment = json!({"runtimeBootstrapReceipt":{"workspaceId":WS,"generation":1,"gatewayEpoch":1},"runtimeCredentialExpiresAtMs":now+3600000,"runtimeCredentialKeyThumbprint":"key","runtimeSigningKeyThumbprint":"sign","rustStorageEnrollment":{"phase":"committed","generation":1,"sourceSandboxId":"release-machine","storageIncarnationId":DISK,"credentialKeyThumbprint":"key","signingKeyThumbprint":"sign","capabilities":["rust-session-commands-v1",w::CAPABILITY]}});
     sqlx::query("UPDATE api_cloud_workspaces SET state='ready',desired_state='ready',runtime_state='online',provider_sandbox_id='release-machine',runtime_credential_hash=$2,request_config=request_config||$3 WHERE workspace_id=$1").bind(WS).bind(hash("runtime-fixture")).bind(enrollment).execute(&application).await.unwrap();
+    Fixture {
+        control,
+        application,
+        pool,
+        admin,
+        schema,
+        objects,
+        now,
+        pending,
+        _staging,
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn delivered_attachments_leave_object_storage_and_undelivered_ones_expire() {
+    use w::ExecutionState::{Completed, Failed, Running, Starting};
+    let fixture = fixture(&[]).await;
+    let (control, application, pool, objects, now) = (
+        fixture.control.clone(),
+        fixture.application.clone(),
+        fixture.pool.clone(),
+        fixture.objects.clone(),
+        fixture.now,
+    );
     execute(
         &control,
         &format!("launch:{WS}"),
@@ -547,18 +647,66 @@ async fn delivered_attachments_leave_object_storage_and_undelivered_ones_expire(
     let remaining: i64 = sqlx::query_scalar("SELECT (SELECT count(*) FROM zuse_rust_launch_asset_holds)+(SELECT count(*) FROM zuse_rust_launch_assets)").fetch_one(&application).await.unwrap();
     assert_eq!(remaining, 0);
 
-    application.close().await;
-    pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
-        .execute(&admin)
+    fixture.close().await;
+}
+
+async fn leased(control: &RuntimeControl, now: i64) -> Vec<String> {
+    let request = zuse_protocol::cloud_commands::LeaseRequest {
+        control_only: false,
+        max_items: None,
+        storage_incarnation_id: DISK.into(),
+        wait_ms: Some(0),
+        after_revision: None,
+    };
+    control
+        .command_lease(WS, "runtime-fixture", &request, now)
         .await
-        .unwrap();
-    sqlx::query("DROP OWNED BY zuse_cloud_staging")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("DROP ROLE zuse_cloud_staging")
-        .execute(&admin)
-        .await
-        .unwrap();
+        .unwrap()
+        .leases
+        .into_iter()
+        .map(|lease| lease.command.command_id)
+        .collect()
+}
+
+/// A new chat's computer starts before its first-message file has uploaded:
+/// the first turn waits on the server and goes out once the file lands.
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn a_first_turn_waits_for_files_still_uploading() {
+    let fixture = fixture(&["shot", "notes"]).await;
+    let (control, now) = (fixture.control.clone(), fixture.now);
+    let launch = format!("launch:{WS}");
+    assert!(
+        leased(&control, now).await.is_empty(),
+        "files still uploading"
+    );
+    let wait = zuse_protocol::cloud_assets::PENDING_ASSET_WAIT_MS;
+    assert!(leased(&control, now + wait - 1).await.is_empty());
+    // The commit records exactly what the first turn declared.
+    let first = upload(&control, "shot", now + 1).await;
+    assert_eq!(first, json!(fixture.pending[0]));
+    assert!(
+        leased(&control, now + 2).await.is_empty(),
+        "still waiting for the last file"
+    );
+    let last = upload(&control, "notes", now + 3).await;
+    assert_eq!(last, json!(fixture.pending[1]));
+    assert_eq!(leased(&control, now + 4).await, vec![launch]);
+    fixture.close().await;
+}
+
+/// A file that never arrives doesn't hold the turn unseen: past the wait the
+/// computer takes the turn and reports the missing file.
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn a_first_turn_stops_waiting_for_a_file_that_never_arrives() {
+    let fixture = fixture(&["lost"]).await;
+    let (control, now) = (fixture.control.clone(), fixture.now);
+    let wait = zuse_protocol::cloud_assets::PENDING_ASSET_WAIT_MS;
+    assert!(leased(&control, now + wait - 1).await.is_empty());
+    assert_eq!(
+        leased(&control, now + wait).await,
+        vec![format!("launch:{WS}")]
+    );
+    fixture.close().await;
 }

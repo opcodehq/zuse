@@ -445,6 +445,45 @@ impl Store {
         Ok(Workspace { row })
     }
 
+    pub async fn rename_workspace(
+        &self,
+        access: &Access,
+        id: &str,
+        title: &str,
+    ) -> Result<Workspace, ApiError> {
+        let mut tx = self.pool.begin().await?;
+        let config: Option<Value> = sqlx::query_scalar(
+            "SELECT request_config FROM api_cloud_workspaces
+             WHERE account_id=$1 AND workspace_id=$2
+               AND state NOT IN ('archiving','archived','deleting','deleted')
+               AND desired_state NOT IN ('archived','deleted')
+             FOR UPDATE",
+        )
+        .bind(&access.owner_id)
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let config = config.ok_or_else(|| ApiError::not_found("cloud_workspace_not_found"))?;
+        if access.workspace_permission(&access.owner_id, &config)?
+            != crate::access::Permission::Edit
+        {
+            return Err(ApiError::forbidden("cloud_workspace_edit_required"));
+        }
+        let row = sqlx::query_scalar(
+            "UPDATE api_cloud_workspaces w
+             SET request_config=jsonb_set(request_config,'{rustChatTitle}',to_jsonb($3::text)),
+                 revision=revision+1
+             WHERE account_id=$1 AND workspace_id=$2 RETURNING to_jsonb(w)",
+        )
+        .bind(&access.owner_id)
+        .bind(id)
+        .bind(title)
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(Workspace { row })
+    }
+
     /// Read-only inspection: never claims ownership or advances a legacy job.
     pub async fn migration_report(&self) -> Result<Value, ApiError> {
         let read_only: bool =
@@ -541,7 +580,15 @@ impl Workspace {
         out["computerRecreationAvailable"] = json!(false);
         out["runtimeRepairAvailable"] = repair["runtimeRepairAvailable"].clone();
         out["runtimeRepair"] = repair["runtimeRepair"].clone();
-        out["title"] = json!(row["title"].as_str().or_else(|| config["title"].as_str()));
+        let renamed_title = config["rustChatTitle"].as_str();
+        out["title"] = json!(
+            renamed_title
+                .or_else(|| row["title"].as_str())
+                .or_else(|| config["title"].as_str())
+        );
+        if let Some(title) = renamed_title {
+            out["renamedTitle"] = json!(title);
+        }
         if matches!(row["state"].as_str(), Some("archiving" | "archived"))
             || row["desired_state"] == "archived"
         {

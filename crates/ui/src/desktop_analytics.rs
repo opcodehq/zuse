@@ -75,6 +75,7 @@ fn changes(before: &UiSettings, after: &UiSettings) -> Vec<Event> {
         escape_stops_active_agent,
         direct_steer_enabled,
         compact_model_picker,
+        runner_game_enabled,
         skills_in_slash_menu,
         skill_completion_by_harness
     );
@@ -99,6 +100,7 @@ fn changes(before: &UiSettings, after: &UiSettings) -> Vec<Event> {
         sidebar_organization,
         sidebar_sort,
         sidebar_compact,
+        sidebar_project_density,
         sidebar_show_project_label,
         sidebar_show_project_icon,
         sidebar_show_harness,

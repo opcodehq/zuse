@@ -133,6 +133,31 @@ class HarnessReleaseTest(unittest.TestCase):
         pin = self.directory / "bad-pin.json"
         pin.write_text(json.dumps({"release": "../outside"}))
         self.run_tool("exec", "--runtime-version", "0.25.1", "--pin", pin, "--", "/bin/true", okay=False)
+        # A malformed existing pin is rejected, never silently re-bound.
+        pin.write_text(json.dumps({"release": None}))
+        self.run_tool("exec", "--runtime-version", "0.25.1", "--pin", pin, "--", "/bin/true", okay=False)
+        self.assertEqual(json.loads(pin.read_text()), {"release": None})
+
+    def test_recreation_onto_a_newer_image_rebinds_a_pin_the_image_does_not_carry(self):
+        # Lifecycle invariant: the pin survives on the data disk, the release
+        # directories come with the image. A computer recreated onto an image
+        # without its pinned release must still cold start.
+        old = self.stage()
+        self.run_tool("promote", "--release", old, "--evidence", self.evidence(old))
+        pin = self.directory / "workspace/release.json"
+        args = ["exec", "--runtime-version", "0.25.1", "--pin", pin, "--", "python3", "-c",
+                "import os;print(os.environ['ZUSE_HARNESS_RELEASE'])"]
+        self.assertEqual(self.run_tool(*args).stdout.strip(), old)
+        # The newer image carries only its own release.
+        new = self.stage("1.2.4")
+        self.run_tool("promote", "--release", new, "--evidence", self.evidence(new))
+        for path in sorted((self.root / "releases" / old).rglob("*"), reverse=True):
+            path.chmod(0o755) if path.is_dir() else path.unlink()
+        (self.root / "releases" / old).rmdir()
+        self.assertEqual(self.run_tool(*args).stdout.strip(), new)
+        self.assertEqual(json.loads(pin.read_text())["release"], new)
+        # Repeated cold starts stay on the re-bound release.
+        self.assertEqual(self.run_tool(*args).stdout.strip(), new)
 
     def test_partial_candidate_cannot_activate_and_restage_is_idempotent(self):
         identifier = self.stage()

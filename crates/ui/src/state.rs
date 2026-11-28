@@ -159,6 +159,10 @@ trait EngineBackend: Send + Sync {
     fn retry_connection(&self) -> bool {
         false
     }
+    /// The connection ended for good and will not reconnect on its own.
+    fn connection_stopped(&self) -> bool {
+        false
+    }
     fn connection_revision(&self) -> u64 {
         0
     }
@@ -675,6 +679,10 @@ impl EngineHandle {
         self.inner.retry_connection()
     }
 
+    pub(crate) fn connection_stopped(&self) -> bool {
+        self.inner.connection_stopped()
+    }
+
     pub(crate) fn controller(&self) -> Self {
         self.inner.controller().unwrap_or_else(|| self.clone())
     }
@@ -929,6 +937,9 @@ struct PendingChatArchive {
 
 /// How long a row removed here stays hidden from older queue frames.
 const REMOVED_QUEUED_GRACE_MS: i64 = 10_000;
+/// How long a sent queued row stays hidden when no newer queue read
+/// confirms it is gone (a chat whose queue isn't being read).
+const DISPATCHED_QUEUED_GRACE_MS: i64 = 10 * 60_000;
 /// How long an echo a transcript frame confirmed comes back if a newer
 /// transcript copy lacks its message.
 const CONFIRMED_ECHO_GRACE_MS: i64 = 30_000;
@@ -995,6 +1006,9 @@ pub struct AppState {
     pub spaces: Vec<Space>,
     /// Sorted (see [`sort_chats`]); includes archived rows — views filter.
     pub chats: Vec<Chat>,
+    /// Created conversations awaiting their first registry watch frame.
+    pub(crate) pending_thread_conversations: HashMap<String, Chat>,
+    pub(crate) runtime_generation: u64,
     pending_chat_archives: HashMap<String, PendingChatArchive>,
     next_archive_request_id: u64,
     pub(crate) chat_configuration: crate::chat_configuration::ChatConfiguration,
@@ -1041,6 +1055,10 @@ pub struct AppState {
     /// Why the last wake did not bring the computer up; the next request
     /// clears it.
     pub(crate) cloud_wake_failure: Option<gpui::SharedString>,
+    /// The conversation that owns this cloud computer reports it running.
+    /// Its tools may still be unconnected (the connection is opening, or
+    /// closed meanwhile): a file waiting on it is loading, never waking.
+    pub(crate) cloud_computer_online: bool,
     initial_cloud_chat: Option<String>,
     pub(crate) pending_cloud_resume: Option<(String, String, bool)>,
     pub selected_chat: Option<String>,
@@ -1052,6 +1070,7 @@ pub struct AppState {
     pub chats_synced: bool,
     pub spaces_synced: bool,
     pending_deep_link: Option<crate::links::ConversationDeepLink>,
+    cloud_deep_link: Option<String>,
     deep_link_notice: Option<String>,
     /// Joined transcript of the selected chat (continuations folded engine-side).
     pub transcript: Vec<SessionMessageEntry>,
@@ -1076,6 +1095,13 @@ pub struct AppState {
     /// Rows this app just removed, by id and removal time: a queue frame
     /// read before the removal can't bring them back.
     removed_queued: HashMap<String, i64>,
+    /// The transcript message id of each row the cloud queue lists, by queue
+    /// id. A cloud row's queue id differs from the message it sends.
+    queued_message_ids: HashMap<String, String>,
+    /// Queued rows whose message reached the transcript (sent), by id and
+    /// when: they leave the queue at once and a queue read sent before that
+    /// can't list them again.
+    dispatched_queued: HashMap<String, i64>,
     /// Whether Stop holds the chat's queue, as its host reports it:
     /// `(chat id, paused)`. Hosts that don't report it leave this unset.
     queue_paused: Option<(String, bool)>,
@@ -1144,7 +1170,6 @@ pub struct AppState {
     change_request_tasks: HashMap<ChangeRequestWatchKey, Task<()>>,
     diff_stat_tasks: HashMap<Option<String>, Task<()>>,
     queue_task: Option<Task<()>>,
-    change_requests_visible: bool,
     /// SUBAGENT transcripts keyed by subagent doc id (the right pane's
     /// subagent tabs read these). Independent of `selected_chat`: a tab's
     /// feed must survive chat switches — the tab itself is what scopes it.
@@ -1239,6 +1264,8 @@ impl AppState {
             connectivity_observed: false,
             spaces: Vec::new(),
             chats: Vec::new(),
+            pending_thread_conversations: HashMap::new(),
+            runtime_generation: 0,
             pending_chat_archives: HashMap::new(),
             next_archive_request_id: 0,
             chat_configuration: Default::default(),
@@ -1256,6 +1283,7 @@ impl AppState {
             hosted_on_cloud_computer: false,
             cloud_wake_requests: 0,
             cloud_wake_failure: None,
+            cloud_computer_online: false,
             initial_cloud_chat: None,
             selected_chat: None,
             pending_cloud_resume: None,
@@ -1267,6 +1295,8 @@ impl AppState {
             host_queue_at: None,
             optimistic_queue: HashMap::new(),
             removed_queued: HashMap::new(),
+            queued_message_ids: HashMap::new(),
+            dispatched_queued: HashMap::new(),
             queue_paused: None,
             context_usage: None,
             transcript_replayed: false,
@@ -1300,7 +1330,6 @@ impl AppState {
             change_request_tasks: HashMap::new(),
             diff_stat_tasks: HashMap::new(),
             queue_task: None,
-            change_requests_visible: true,
             sub_transcripts: HashMap::new(),
             sub_history: HashMap::new(),
             sub_watch_tasks: HashMap::new(),
@@ -1308,6 +1337,7 @@ impl AppState {
             chats_synced: false,
             spaces_synced: false,
             pending_deep_link: None,
+            cloud_deep_link: None,
             deep_link_notice: None,
         }
     }
@@ -1657,11 +1687,44 @@ impl AppState {
         None
     }
 
+    /// Reconcile a pending row only with a direct read from its owning host.
+    /// An omitted watch row alone may predate creation.
+    pub(crate) fn reconcile_pending_thread_conversation(
+        &mut self,
+        id: &str,
+        current: Option<Chat>,
+    ) -> bool {
+        let Some(pending) = self.pending_thread_conversations.get(id) else {
+            return false;
+        };
+        if current
+            .as_ref()
+            .is_some_and(|chat| chat.thread_id == pending.thread_id && !chat.archived)
+        {
+            return false;
+        }
+        self.pending_thread_conversations.remove(id);
+        let mut chats = self.chats.clone();
+        chats.retain(|chat| chat.id != id);
+        if let Some(chat) = current {
+            chats.push(chat);
+        }
+        self.apply_chats(chats)
+    }
+
     /// Returns whether anything observable changed. The engine re-publishes
     /// identical lists (presence and sync churn elsewhere in the doc), and
     /// each notify re-renders the whole shell.
     pub fn apply_chats(&mut self, mut chats: Vec<Chat>) -> bool {
         let mut changed = false;
+        self.pending_thread_conversations.retain(|id, pending| {
+            if chats.iter().any(|chat| &chat.id == id) {
+                false
+            } else {
+                chats.push(pending.clone());
+                true
+            }
+        });
         if let Some(pending) = &self.pending_side_chat {
             if chats.iter().any(|chat| chat.id == pending.id) {
                 self.pending_side_chat = None;
@@ -2300,13 +2363,14 @@ impl AppState {
     }
 
     /// A queued cloud message that already reached the transcript leaves
-    /// the queue.
+    /// the queue, whether this app or the server listed it.
     fn prune_optimistic_queue(&mut self) {
-        if self
-            .selected_chat
-            .as_deref()
-            .and_then(|chat| self.optimistic_queue.get(chat))
-            .is_some_and(|rows| !rows.is_empty())
+        if !self.queued_message_ids.is_empty()
+            || self
+                .selected_chat
+                .as_deref()
+                .and_then(|chat| self.optimistic_queue.get(chat))
+                .is_some_and(|rows| !rows.is_empty())
         {
             self.rebuild_queue();
         }
@@ -2693,6 +2757,24 @@ impl AppState {
     /// after its save no longer lists it; an older read, or one whose time is
     /// unknown, never drops it.
     pub fn apply_queue_read(&mut self, items: Vec<zuse_doc::QueuedMessage>, read_at: Option<i64>) {
+        self.apply_cloud_queue_read(items, HashMap::new(), read_at);
+    }
+
+    /// [`Self::apply_queue_read`] for a cloud queue, whose rows name the
+    /// transcript message each one sends (`message_ids`, by queue id): a row
+    /// whose message is already in the transcript was sent and isn't shown,
+    /// however late the read that still lists it.
+    pub(crate) fn apply_cloud_queue_read(
+        &mut self,
+        items: Vec<zuse_doc::QueuedMessage>,
+        message_ids: HashMap<String, String>,
+        read_at: Option<i64>,
+    ) {
+        // A read that doesn't name a listed row's message (a saved snapshot)
+        // keeps what an earlier read said.
+        self.queued_message_ids.extend(message_ids);
+        self.queued_message_ids
+            .retain(|id, _| items.iter().any(|row| &row.id == id));
         if let Some(chat_id) = self.selected_chat.as_deref() {
             if let Some(echoes) = self.echoes.get_mut(chat_id) {
                 let before = echoes.len();
@@ -2717,42 +2799,73 @@ impl AppState {
     /// [`Self::queue`]: the host's rows, minus rows just removed here, then
     /// this app's queued cloud messages the host doesn't list yet, in the
     /// order they were sent. A message leaves the optimistic list once the
-    /// host lists it, or, after the server saved it, once it reached the
-    /// transcript (it was sent at once) or a queue read sent after the save
-    /// no longer has it (claimed or sent). Without such a read it stays: no
-    /// timer drops a queued message.
+    /// host lists it, or, after the server saved it, once a queue read sent
+    /// after the save no longer has it (claimed or sent). Without such a
+    /// read it stays: no timer drops a queued message.
+    ///
+    /// A queued row whose message is in the transcript was sent: it leaves
+    /// the queue at once, listed by the host or not, and stays out until a
+    /// queue read sent after that agrees. A cloud queue may only be re-read
+    /// on an interval, so its last read can still list a message its
+    /// computer is already answering.
     fn rebuild_queue(&mut self) {
         let now = chrono::Utc::now().timestamp_millis();
         self.removed_queued
             .retain(|_, at| now - *at < REMOVED_QUEUED_GRACE_MS);
+        let transcript = &self.transcript;
+        // Newest first: a message just sent is at the end.
+        let sent = |message: &str| transcript.iter().rev().any(|entry| entry.id == message);
+        for row in &self.host_queue {
+            if self
+                .queued_message_ids
+                .get(&row.id)
+                .is_some_and(|message| sent(message))
+            {
+                self.dispatched_queued.entry(row.id.clone()).or_insert(now);
+            }
+        }
+        if let Some(chat) = self.selected_chat.as_deref()
+            && let Some(rows) = self.optimistic_queue.get(chat)
+        {
+            for row in rows.iter().filter(|row| sent(&row.message_id)) {
+                self.dispatched_queued
+                    .entry(row.item.id.clone())
+                    .or_insert(now);
+            }
+        }
+        let host = &self.host_queue;
+        let host_at = self.host_queue_at;
+        // A sent row is forgotten once a read sent after it no longer lists it.
+        self.dispatched_queued.retain(|id, at| {
+            host.iter().any(|row| &row.id == id)
+                || (host_at.is_none_or(|read| read <= *at)
+                    && now - *at < DISPATCHED_QUEUED_GRACE_MS)
+        });
         let removed = &self.removed_queued;
-        let mut queue: Vec<_> = self
-            .host_queue
+        let dispatched = &self.dispatched_queued;
+        let hidden = |id: &str| removed.contains_key(id) || dispatched.contains_key(id);
+        let mut queue: Vec<_> = host
             .iter()
-            .filter(|row| !removed.contains_key(&row.id))
+            .filter(|row| !hidden(&row.id))
             .cloned()
             .collect();
         if let Some(chat) = self.selected_chat.as_deref()
             && let Some(rows) = self.optimistic_queue.get_mut(chat)
         {
-            let host = &self.host_queue;
-            let host_at = self.host_queue_at;
-            let transcript = &self.transcript;
             rows.retain(|row| {
-                if host.iter().any(|item| item.id == row.item.id) {
+                if dispatched.contains_key(&row.item.id)
+                    || host.iter().any(|item| item.id == row.item.id)
+                {
                     return false;
                 }
                 match row.state {
-                    OptimisticState::Saved(at) => {
-                        host_at.is_none_or(|read| read < at)
-                            && !transcript.iter().any(|entry| entry.id == row.message_id)
-                    }
+                    OptimisticState::Saved(at) => host_at.is_none_or(|read| read < at),
                     _ => true,
                 }
             });
             queue.extend(
                 rows.iter()
-                    .filter(|row| !removed.contains_key(&row.item.id))
+                    .filter(|row| !hidden(&row.item.id))
                     .map(|row| row.item.clone()),
             );
         }
@@ -3082,13 +3195,20 @@ impl AppState {
         let in_filter = self.project_filter(space_filter);
         let rows = self.overview_chats(now);
         // A row stands for its whole thread: a sibling conversation working
-        // (or waiting on input) in another tab lights the row too.
+        // (or waiting on input) in another tab lights the row too. A sibling's
+        // unseen finish badges its own tab only: opening the thread marks the
+        // tab in front seen, so a rolled-up check would never clear.
         let mut thread_status: HashMap<&str, ChatIndicator> = HashMap::new();
         for (status, chat) in &rows {
+            let status = if chat.thread_id.is_some() && *status == ChatIndicator::Completed {
+                ChatIndicator::Idle
+            } else {
+                *status
+            };
             thread_status
                 .entry(chat.thread_id())
-                .and_modify(|rolled| *rolled = louder_indicator(*rolled, *status))
-                .or_insert(*status);
+                .and_modify(|rolled| *rolled = louder_indicator(*rolled, status))
+                .or_insert(status);
         }
         rows.into_iter()
             .filter(|(_, chat)| chat.thread_id.is_none() && in_filter(chat))
@@ -3616,6 +3736,7 @@ impl AppState {
     /// stopped. The next bootstrap must never render rows from the previous
     /// account while the local profile is opening.
     pub fn prepare_runtime_replacement(&mut self, cx: &mut Context<Self>) {
+        self.runtime_generation = self.runtime_generation.wrapping_add(1);
         self.zappers.clear();
         self.zapper_watches.clear();
         self.zappers_loaded.clear();
@@ -3640,6 +3761,7 @@ impl AppState {
         self.session_presence_presentation.clear();
         self.spaces.clear();
         self.chats.clear();
+        self.pending_thread_conversations.clear();
         self.pending_chat_archives.clear();
         self.pending_side_chat = None;
         self.unsaved_side_chat = false;
@@ -3669,6 +3791,8 @@ impl AppState {
         self.confirmed_echoes.clear();
         self.optimistic_queue.clear();
         self.removed_queued.clear();
+        self.queued_message_ids.clear();
+        self.dispatched_queued.clear();
         self.queue_paused = None;
         self.pending_sends.clear();
         self.upload_progress = None;
@@ -4060,13 +4184,11 @@ impl AppState {
             self.change_request_tasks.clear();
             return;
         };
-        let targets = if self.change_requests_visible {
-            desired_watch_targets(&self.chats, &self.spaces, |device| {
-                !self.change_requests.is_supported(device)
-            })
-        } else {
-            HashSet::new()
-        };
+        // Watch even while the sidebar hides pull request badges: a merge
+        // is what settles a thread. The badge is hidden where rows render.
+        let targets = desired_watch_targets(&self.chats, &self.spaces, |device| {
+            !self.change_requests.is_supported(device)
+        });
 
         self.change_request_tasks
             .retain(|target, _| targets.contains(target));
@@ -4084,13 +4206,6 @@ impl AppState {
                 local_device_id.clone(),
             );
             self.change_request_tasks.insert(target, task);
-        }
-    }
-
-    pub fn set_change_requests_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
-        if self.change_requests_visible != visible {
-            self.change_requests_visible = visible;
-            self.reconcile_change_request_watches(cx);
         }
     }
 
@@ -4118,11 +4233,19 @@ impl AppState {
         let Some(link) = self.pending_deep_link.clone() else {
             return false;
         };
-        let Some(locator) = crate::links::workspace_locator(
-            self.workspace_scope,
-            self.auth.as_ref(),
-            self.local_device_id.as_deref(),
-        ) else {
+        let cloud = link.chat_id.strip_prefix("cloud:");
+        let locator = if cloud.is_some() {
+            self.cloud_user_id().map(|account| {
+                crate::links::cloud_workspace_locator(account, self.cloud_organization_id())
+            })
+        } else {
+            crate::links::workspace_locator(
+                self.workspace_scope,
+                self.auth.as_ref(),
+                self.local_device_id.as_deref(),
+            )
+        };
+        let Some(locator) = locator else {
             return false;
         };
         if locator != link.workspace {
@@ -4130,6 +4253,16 @@ impl AppState {
             self.deep_link_notice =
                 Some("This conversation link belongs to another workspace".into());
             return true;
+        }
+        if let Some(workspace) = cloud {
+            if self.cloud_sidebar_workspace(workspace).is_some() {
+                self.pending_deep_link = None;
+                self.cloud_deep_link = Some(workspace.to_owned());
+                return true;
+            }
+            if self.cloud_sidebar_stale() || self.cloud_sidebar_loading() {
+                return false;
+            }
         }
         if self.chats.iter().any(|chat| chat.id == link.chat_id) {
             self.pending_deep_link = None;
@@ -4142,6 +4275,17 @@ impl AppState {
         } else {
             false
         }
+    }
+
+    pub(crate) fn take_cloud_deep_link(&mut self, cx: &mut Context<Self>) -> Option<String> {
+        if self
+            .pending_deep_link
+            .as_ref()
+            .is_some_and(|link| link.chat_id.starts_with("cloud:"))
+        {
+            self.apply_pending_deep_link(cx);
+        }
+        self.cloud_deep_link.take()
     }
 
     pub fn take_deep_link_notice(&mut self) -> Option<String> {
@@ -4982,6 +5126,20 @@ fn spawn_queue_watch(
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
+                // A cloud row names the transcript message it sends.
+                let message_ids = value["items"]
+                    .as_array()
+                    .map(|rows| {
+                        rows.iter()
+                            .filter_map(|r| {
+                                Some((
+                                    r["id"].as_str()?.to_owned(),
+                                    r["messageId"].as_str()?.to_owned(),
+                                ))
+                            })
+                            .collect::<HashMap<_, _>>()
+                    })
+                    .unwrap_or_default();
                 let frame: QueueFrame = match serde_json::from_value(value) {
                     Ok(frame) => frame,
                     Err(err) => {
@@ -5005,7 +5163,7 @@ fn spawn_queue_watch(
                         if let Some(paused) = frame.paused {
                             state.set_queue_paused(&chat_id, paused);
                         }
-                        state.apply_queue_read(frame.items, frame.read_at);
+                        state.apply_cloud_queue_read(frame.items, message_ids, frame.read_at);
                         cx.notify();
                     }
                 });
@@ -5803,6 +5961,7 @@ mod tests {
             running_subagents: 0,
             awaiting_input: None,
             background_tasks: Vec::new(),
+            notice: None,
             chat_id: chat_id.into(),
             device_id: "dev".into(),
             status,
@@ -6110,6 +6269,7 @@ mod tests {
             running_subagents: 0,
             awaiting_input: None,
             background_tasks: Vec::new(),
+            notice: None,
             chat_id: "chat".into(),
             device_id: "host".into(),
             status: SessionStatus::Working,
@@ -6144,6 +6304,7 @@ mod tests {
             running_subagents: 0,
             awaiting_input: None,
             background_tasks: Vec::new(),
+            notice: None,
             chat_id: "chat".into(),
             device_id: "host".into(),
             status: SessionStatus::Working,
@@ -7435,6 +7596,19 @@ mod tests {
     }
 
     #[test]
+    fn a_sibling_conversations_unseen_finish_does_not_badge_the_thread_row() {
+        // Opening the thread marks only the tab in front seen, so a check
+        // rolled up from another tab would stay on the row being read.
+        let now = Utc::now();
+        let mut state = AppState::new();
+        let mut sibling = chat("sibling", 1, Some(2));
+        sibling.thread_id = Some("root".into());
+        state.apply_chats(vec![chat("root", 0, None), sibling]);
+        assert!(state.chats.iter().any(|c| c.id == "sibling" && c.unseen()));
+        assert_eq!(state.sidebar_chats(now, None)[0].0, ChatIndicator::Idle);
+    }
+
+    #[test]
     fn visible_chats_hide_spawned_children() {
         let now = Utc::now();
         let mut state = AppState::new();
@@ -7765,6 +7939,167 @@ mod tests {
         // Its message runs and the server lists only the rest.
         state.apply_queue(vec![queued_row("third", "and this")]);
         assert_eq!(queue_ids(&state), vec!["third"]);
+    }
+
+    /// The server's message id for each listed cloud row.
+    fn message_ids(ids: &[&str]) -> HashMap<String, String> {
+        ids.iter()
+            .map(|id| ((*id).to_owned(), format!("message-{id}")))
+            .collect()
+    }
+
+    fn with_files(mut row: zuse_doc::QueuedMessage) -> zuse_doc::QueuedMessage {
+        row.attachments = vec!["/home/zuse/.zuse-data/uploads/u1/loader.png".into()];
+        row
+    }
+
+    /// The owner's report: two messages queued behind a running turn. The
+    /// turn ends and the first one runs; its message is in the chat while
+    /// the last queue read (the server's queue is re-read on an interval)
+    /// still lists it. It leaves the queue at once, the second stays, and
+    /// no read sent before it ran (the interval read, the first read after
+    /// a reconnect) shows it again.
+    #[test]
+    fn a_sent_queued_message_leaves_the_queue_once_its_message_is_in_the_chat() {
+        let mut state = AppState::new();
+        state.selected_chat = Some("session".into());
+        let before = Utc::now().timestamp_millis() - 1_000;
+        let second = with_files(queued_row("second", "there should be timer"));
+        state.apply_cloud_queue_read(
+            vec![queued_row("first", "and also show image"), second.clone()],
+            message_ids(&["first", "second"]),
+            Some(before),
+        );
+        assert_eq!(queue_ids(&state), vec!["first", "second"]);
+        // The first runs: its message is in the chat before any queue read.
+        state.apply_transcript(vec![user_entry("earlier"), user_entry("message-first")]);
+        assert_eq!(queue_ids(&state), vec!["second"]);
+        assert_eq!(state.queue[0], second, "the waiting row keeps its files");
+        // A read sent before it ran, delivered late, still lists it.
+        state.apply_cloud_queue_read(
+            vec![queued_row("first", "and also show image"), second.clone()],
+            message_ids(&["first", "second"]),
+            Some(before),
+        );
+        assert_eq!(queue_ids(&state), vec!["second"]);
+        // A read with no send time (a saved snapshot) doesn't either.
+        state.apply_queue(vec![
+            queued_row("first", "and also show image"),
+            second.clone(),
+        ]);
+        assert_eq!(queue_ids(&state), vec!["second"]);
+        // The server agrees: one row, in order, and the sent one is forgotten.
+        let now = Utc::now().timestamp_millis() + 1;
+        state.apply_cloud_queue_read(vec![second.clone()], message_ids(&["second"]), Some(now));
+        assert_eq!(queue_ids(&state), vec!["second"]);
+        assert!(state.dispatched_queued.is_empty());
+        // The second runs next, the same way.
+        state.apply_transcript(vec![
+            user_entry("earlier"),
+            user_entry("message-first"),
+            user_entry("message-second"),
+        ]);
+        assert!(state.queue.is_empty());
+    }
+
+    /// The server's queue read can land before or after the message reaches
+    /// the chat; either way the row leaves once and the rest keep order.
+    #[test]
+    fn a_sent_queued_message_leaves_once_whichever_update_arrives_first() {
+        let rows = || {
+            vec![
+                queued_row("a", "a"),
+                queued_row("b", "b"),
+                queued_row("c", "c"),
+            ]
+        };
+        let after = || Some(Utc::now().timestamp_millis() + 1);
+        // The read that no longer lists it first, then the chat.
+        let mut state = AppState::new();
+        state.selected_chat = Some("session".into());
+        state.apply_cloud_queue_read(rows(), message_ids(&["a", "b", "c"]), Some(0));
+        state.apply_cloud_queue_read(rows()[1..].to_vec(), message_ids(&["b", "c"]), after());
+        assert_eq!(queue_ids(&state), vec!["b", "c"]);
+        state.apply_transcript(vec![user_entry("message-a")]);
+        assert_eq!(queue_ids(&state), vec!["b", "c"]);
+        // The chat first, then the read.
+        let mut state = AppState::new();
+        state.selected_chat = Some("session".into());
+        state.apply_cloud_queue_read(rows(), message_ids(&["a", "b", "c"]), Some(0));
+        state.apply_transcript(vec![user_entry("message-a")]);
+        assert_eq!(queue_ids(&state), vec!["b", "c"]);
+        state.apply_cloud_queue_read(rows()[1..].to_vec(), message_ids(&["b", "c"]), after());
+        assert_eq!(queue_ids(&state), vec!["b", "c"]);
+        // A queued message whose id happens to match nothing in the chat stays.
+        state.apply_transcript(vec![user_entry("message-a"), user_entry("b")]);
+        assert_eq!(queue_ids(&state), vec!["b", "c"]);
+    }
+
+    /// Queued from this app and sent by the server before this app heard it
+    /// was saved, or before any read listed it: it leaves when its message
+    /// is in the chat, and a read sent before that doesn't bring it back.
+    #[test]
+    fn a_queued_message_sent_before_its_save_was_confirmed_leaves_once() {
+        let mut state = AppState::new();
+        state.selected_chat = Some("session".into());
+        state.apply_cloud_queue_read(
+            vec![queued_row("first", "first")],
+            message_ids(&["first"]),
+            Some(0),
+        );
+        let mut mine = optimistic("mine", "with a file");
+        mine.item = with_files(mine.item);
+        state.push_optimistic_queued("session", mine);
+        assert_eq!(queue_ids(&state), vec!["first", "mine"]);
+        state.apply_transcript(vec![
+            user_entry("message-first"),
+            user_entry("message-mine"),
+        ]);
+        assert!(state.queue.is_empty(), "both ran: {:?}", queue_ids(&state));
+        // The save is confirmed afterwards, and a late read lists it.
+        state.set_optimistic_queued(
+            "session",
+            "mine",
+            OptimisticState::Saved(Utc::now().timestamp_millis()),
+        );
+        state.apply_cloud_queue_read(
+            vec![
+                queued_row("first", "first"),
+                with_files(queued_row("mine", "with a file")),
+            ],
+            message_ids(&["first", "mine"]),
+            Some(1),
+        );
+        assert!(state.queue.is_empty(), "late read: {:?}", queue_ids(&state));
+    }
+
+    /// Each conversation on a computer has its own queue: a message sent in
+    /// one doesn't take a row out of another.
+    #[test]
+    fn a_sent_queued_message_leaves_only_its_own_conversations_queue() {
+        let mut state = AppState::new();
+        state.selected_chat = Some("one".into());
+        state.apply_cloud_queue_read(
+            vec![queued_row("one-a", "a")],
+            message_ids(&["one-a"]),
+            Some(0),
+        );
+        state.apply_transcript(vec![user_entry("message-one-a")]);
+        assert!(state.queue.is_empty());
+        // The second conversation: its queue lists its own row, whose
+        // message isn't in its chat.
+        state.selected_chat = Some("two".into());
+        state.apply_transcript(vec![user_entry("message-one-a")]);
+        state.apply_cloud_queue_read(
+            vec![queued_row("two-a", "a")],
+            message_ids(&["two-a"]),
+            Some(0),
+        );
+        assert_eq!(queue_ids(&state), vec!["two-a"]);
+        state.push_optimistic_queued("two", optimistic("two-b", "b"));
+        assert_eq!(queue_ids(&state), vec!["two-a", "two-b"]);
+        state.apply_transcript(vec![user_entry("message-two-a")]);
+        assert_eq!(queue_ids(&state), vec!["two-b"]);
     }
 
     /// The pause Stop puts on a queue is shown for its own chat only.
@@ -8347,9 +8682,9 @@ pub struct CheckoutDiffStat {
     pub files: u32,
 }
 
-#[cfg(feature = "project-palette-fixture")]
+#[cfg(any(test, feature = "project-palette-fixture"))]
 impl AppState {
-    /// Seed provider metadata for the isolated native sidebar review fixture.
+    /// Seed provider metadata for native sidebar fixtures.
     pub fn fixture_sidebar_change_request(
         &mut self,
         snapshot: zuse_protocol::CheckoutChangeRequestStatus,

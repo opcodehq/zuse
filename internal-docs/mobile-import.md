@@ -26,7 +26,7 @@ The shared `crates/mobile-bridge` reuses the host's Noise channel and authentica
 - Rust scoped diff regression passed for staged versus unstaged/untracked changes.
 - Apple application syntax parsing passed earlier; full Apple SDK type checking, XCFramework generation, simulator and Mac UI/runtime tests have not run because this machine has no macOS/Xcode.
 
-Ignored local toolchains and test logs are under `.context/android-tools` and `.context/swift-tools`. Imported upstream verification scripts still reference unavailable TypeScript workspace packages and need adaptation before they can serve as complete release gates.
+Ignored local toolchains and test logs are under `.context/android-tools` and `.context/swift-tools`. The Apple scripts no longer depend on the upstream TypeScript workspace; `apps/ios/README.md` covers setup and checks. Android's `scripts/ui-parser.ts` and `scripts/generate-assets.mjs` still reference it.
 
 ## Remaining acceptance
 

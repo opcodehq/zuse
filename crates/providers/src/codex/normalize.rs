@@ -122,6 +122,57 @@ pub(crate) fn turn_error_message(params: &Value) -> Option<String> {
         })
 }
 
+/// The message of a Codex `error` notification: nested (`params.error.message`,
+/// 0.146.x) or flat (`params.message`, older builds).
+fn error_notification_message(params: &Value) -> Option<&str> {
+    params
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .or_else(|| params.get("message").and_then(Value::as_str))
+}
+
+/// Maps a Codex `error` notification. Codex reports a dropped model stream
+/// it is about to retry on its own through the same notification as a real
+/// failure, flagged `willRetry` ("Reconnecting... 2/5"). That is progress,
+/// not a failure: it becomes a transient [`AgentEvent::Notice`] for the
+/// working row. Builds that predate the flag are recognized by their
+/// reconnect wording. Everything else stays an [`AgentEvent::Error`]; when
+/// retries run out Codex ends the turn itself with the final error.
+pub(crate) fn error_notification_event(params: &Value, fallback: &str) -> AgentEvent {
+    let message = error_notification_message(params).unwrap_or(fallback);
+    let will_retry = field(params, &["willRetry", "will_retry"]).and_then(Value::as_bool);
+    if will_retry == Some(true) || (will_retry.is_none() && is_reconnect_message(message)) {
+        AgentEvent::Notice {
+            message: Some(reconnect_notice(message)),
+        }
+    } else {
+        AgentEvent::Error {
+            message: message.to_owned(),
+        }
+    }
+}
+
+/// Whether `message` is Codex's own transient reconnect line
+/// ("Reconnecting... 2/5").
+pub(crate) fn is_reconnect_message(message: &str) -> bool {
+    let lower = message.trim_start().to_ascii_lowercase();
+    lower.starts_with("reconnecting") || lower.starts_with("re-connecting")
+}
+
+/// The working-row text for a retry notice, keeping Codex's attempt count
+/// when the message carries one ("Reconnecting... 2/5",
+/// "retrying sampling request (1/5 in 200ms)").
+pub(crate) fn reconnect_notice(message: &str) -> String {
+    let attempt = message.split_whitespace().find_map(|token| {
+        let token = token.trim_matches(|c: char| !c.is_ascii_digit());
+        let (n, of) = token.split_once('/')?;
+        let n: u32 = n.parse().ok()?;
+        let of: u32 = of.parse().ok()?;
+        (n > 0 && of > 0).then(|| format!(" {n}/{of}"))
+    });
+    format!("Reconnecting to the model…{}", attempt.unwrap_or_default())
+}
+
 /// `thread/tokenUsage/updated` → a [`AgentEvent::Usage`] snapshot of the LAST
 /// turn's tokens (held by the session loop, emitted before `Done`).
 pub(crate) fn usage_event(params: &Value) -> Option<AgentEvent> {
@@ -421,9 +472,16 @@ pub(crate) fn map_item(phase: Phase, item: &Value) -> Vec<AgentEvent> {
                 .collect();
             tool_lifecycle(phase, id, ToolCall::Todo { items }, false)
         }
-        "error" => vec![AgentEvent::Error {
-            message: str_field(item, &["message"]),
-        }],
+        "error" => {
+            let message = str_field(item, &["message"]);
+            if is_reconnect_message(&message) {
+                vec![AgentEvent::Notice {
+                    message: Some(reconnect_notice(&message)),
+                }]
+            } else {
+                vec![AgentEvent::Error { message }]
+            }
+        }
         "collabAgentToolCall" | "collab_agent_tool_call" => {
             let tool = str_field(item, &["tool"]);
             let name = if is_collab_spawn(item) {
@@ -547,6 +605,7 @@ impl ChildStream {
                 return vec![AgentEvent::Steered {
                     assistant_message_id: None,
                     next_assistant_message_id: None,
+                    message_id: None,
                 }];
             }
             return Vec::new();
@@ -647,14 +706,13 @@ impl ChildStream {
                     session_id: Some(child.to_owned()),
                 }]
             }
-            "error" => vec![AgentEvent::Error {
-                message: params
-                    .pointer("/error/message")
-                    .and_then(Value::as_str)
-                    .or_else(|| params.get("message").and_then(Value::as_str))
-                    .unwrap_or("Codex subagent error")
-                    .to_owned(),
-            }],
+            // A subagent's reconnect is its own business: the parent's
+            // working row must not read as reconnecting, and the child's
+            // transcript has no live status line. Only real failures land.
+            "error" => match error_notification_event(params, "Codex subagent error") {
+                AgentEvent::Notice { .. } => Vec::new(),
+                error => vec![error],
+            },
             _ => Vec::new(),
         }
     }
@@ -1120,6 +1178,113 @@ mod tests {
         );
         assert_eq!(turn_error_message(&json!({"turn": {"id": "t"}})), None);
         assert_eq!(turn_error_message(&json!({"turn": {"error": null}})), None);
+    }
+}
+
+#[cfg(test)]
+mod reconnect_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn notice(text: &str) -> AgentEvent {
+        AgentEvent::Notice {
+            message: Some(text.into()),
+        }
+    }
+
+    /// The production capture's shape: Codex's own retry of a dropped model
+    /// stream arrives as an `error` notification flagged `willRetry`. It is
+    /// working-row status, never a transcript error.
+    #[test]
+    fn a_retrying_error_notification_is_a_transient_notice() {
+        let params = json!({
+            "threadId": "t", "turnId": "u", "willRetry": true,
+            "error": {"message": "Reconnecting... 2/5", "codexErrorInfo": null}
+        });
+        assert_eq!(
+            error_notification_event(&params, "Codex error"),
+            notice("Reconnecting to the model… 2/5")
+        );
+        // Other retry wording keeps its attempt count…
+        let params = json!({"willRetry": true, "error": {
+            "message": "stream disconnected - retrying sampling request (1/5 in 200ms)…"
+        }});
+        assert_eq!(
+            error_notification_event(&params, "Codex error"),
+            notice("Reconnecting to the model… 1/5")
+        );
+        // …or reads plainly without one.
+        let params = json!({"will_retry": true, "message": "upstream hiccup"});
+        assert_eq!(
+            error_notification_event(&params, "Codex error"),
+            notice("Reconnecting to the model…")
+        );
+        // Builds without the flag are recognized by Codex's reconnect line.
+        let params = json!({"message": "Reconnecting... 3/5"});
+        assert_eq!(
+            error_notification_event(&params, "Codex error"),
+            notice("Reconnecting to the model… 3/5")
+        );
+    }
+
+    /// Real failures stay errors — including the final one once retries run
+    /// out, which Codex flags `willRetry: false`.
+    #[test]
+    fn a_final_error_notification_stays_an_error() {
+        let params = json!({"willRetry": false, "error": {
+            "message": "stream disconnected before completion: idle timeout"
+        }});
+        assert_eq!(
+            error_notification_event(&params, "Codex error"),
+            AgentEvent::Error {
+                message: "stream disconnected before completion: idle timeout".into()
+            }
+        );
+        // An explicit false wins even over reconnect wording.
+        let params = json!({"willRetry": false, "error": {"message": "Reconnecting... 5/5"}});
+        assert!(matches!(
+            error_notification_event(&params, "Codex error"),
+            AgentEvent::Error { .. }
+        ));
+        assert_eq!(
+            error_notification_event(&json!({}), "Codex error"),
+            AgentEvent::Error {
+                message: "Codex error".into()
+            }
+        );
+    }
+
+    #[test]
+    fn a_reconnect_error_item_is_a_notice_and_other_error_items_stay_errors() {
+        let item = json!({"type": "error", "id": "e", "message": "Reconnecting... 1/5"});
+        assert_eq!(
+            map_item(Phase::Completed, &item),
+            vec![notice("Reconnecting to the model… 1/5")]
+        );
+        let item = json!({"type": "error", "id": "e", "message": "Model not found"});
+        assert_eq!(
+            map_item(Phase::Completed, &item),
+            vec![AgentEvent::Error {
+                message: "Model not found".into()
+            }]
+        );
+    }
+
+    /// A subagent's reconnect never reaches the parent's working row; its
+    /// real failures still settle its chip.
+    #[test]
+    fn a_child_reconnect_is_dropped_and_a_child_failure_kept() {
+        let mut stream = ChildStream::default();
+        let retry = json!({"threadId": "child", "willRetry": true,
+            "error": {"message": "Reconnecting... 1/5"}});
+        assert!(stream.map("child", "error", &retry).is_empty());
+        let failure = json!({"threadId": "child", "error": {"message": "boom"}});
+        assert_eq!(
+            stream.map("child", "error", &failure),
+            vec![AgentEvent::Error {
+                message: "boom".into()
+            }]
+        );
     }
 }
 

@@ -1,0 +1,61 @@
+---
+title: "zuse serve"
+icon: Server
+description: "Run the Zuse engine and browser client on a Mac, Linux, or Windows computer, with or without a display, and reach it from other devices."
+section: "Serve CLI"
+order: 1
+platforms: [serve, web, mobile]
+providers: []
+prerequisites: []
+related: [/serve/operations, /serve/command-reference, /remote, /remote/web-client]
+next: /serve/operations
+lastVerified: "2026-11-27"
+---
+
+`zuse serve` runs the Zuse engine and the browser client in one process. Use it on a computer without a display, such as a home server or a cloud VM, or when you want to open your own computer's workspace from a browser. The computer that runs `zuse serve` owns its projects, agent CLIs, credentials, terminals, and chats. Other devices only connect to it.
+
+## Get the command
+
+The desktop app's `zuse` command already includes `serve`. On a machine without a display, install the standalone command line instead. Each release of [opcodehq/zuse](https://github.com/opcodehq/zuse/releases) has a `zuse-cli` archive per platform that contains the `zuse` command and the browser app it serves, without the window and its system libraries.
+
+On Linux or macOS, the release's `install.sh` installs it for the current user:
+
+```sh
+sh install.sh --cli --version 0.27.9
+```
+
+The installer needs Python 3.11 or newer. It verifies the download against the release checksums and puts a `zuse` launcher in `~/.local/bin`. You can also extract the archive anywhere and run `bin/zuse` from it. Windows archives are portable: extract them and run `bin\zuse.exe`.
+
+Install and sign in to at least one agent CLI as the same operating-system user that runs `zuse serve`. Serve does not install agents or clone repositories.
+
+## Start it
+
+```sh
+zuse serve
+```
+
+By default the browser server listens on `127.0.0.1:27656`, so only this computer can open it. Serve prints `Open http://127.0.0.1:27656/#token=…`; open that private link in a browser on the same computer. Treat it like a password.
+
+To connect from other devices, add a way to reach the computer:
+
+| Command | Who can connect |
+| --- | --- |
+| `zuse serve --lan` | Paired phones, browsers, and computers on the same network and on your tailnet. |
+| `zuse serve --lan --tailscale-serve` | The same, plus a Tailscale HTTPS address that browsers trust without a warning. |
+| `zuse serve --account` | Devices signed in to your Zuse account, from any network. Serve signs in with a device code and links this computer. |
+
+When the computer can be reached, Serve prints a pairing link and QR code for a new device. Create more links later with [`zuse pair`](/serve/command-reference/#zuse-pair). See [Remote access](/remote/) for how each route works.
+
+If Zuse is already running for the same data directory, for example the desktop app, `zuse serve` turns on browser access in that running engine instead of starting a second one, and prints its link.
+
+## Keep it running
+
+`zuse serve` runs in the foreground. To keep it running after you log out or restart, install it as a user service:
+
+```sh
+zuse daemon install --serve --lan
+```
+
+See [Operate zuse serve](/serve/operations/) for service management, updates, and status checks.
+
+<NextStep href="/serve/operations/" label="Operate zuse serve" />

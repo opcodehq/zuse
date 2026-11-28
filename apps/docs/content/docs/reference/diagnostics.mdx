@@ -1,0 +1,57 @@
+---
+title: Troubleshooting
+icon: Stethoscope
+navTitle: "Troubleshooting"
+description: Find the failing layer and recover agents, projects, Git actions, and remote connections.
+section: reference
+order: 94
+platforms: [desktop]
+providers: [claude, codex, grok, cursor, opencode, kiro, pi]
+prerequisites: []
+related: [/providers/setup, /concepts/local-first, /workspace/terminal-browser]
+next: /reference/settings
+lastVerified: "2026-11-27"
+---
+
+
+When a chat, a connection, or the interface stops behaving predictably, first find the layer that is failing.
+
+## Start with the boundary
+
+1. **Agent**: installation, sign-in, version, rate limit, or the agent process.
+2. **Project**: a moved or deleted folder, Git state, a setup command, or permissions.
+3. **Chat**: starting, resuming, streaming, approvals, or stopping a turn.
+4. **Workspace tool**: terminal, browser, editor, Git, or GitHub sign-in.
+5. **Connection**: a paired browser, phone, or computer, or a cloud computer.
+
+The visible error and the layer you suspect should agree. Do not reinstall the app to fix a failing repository command.
+
+## Common recoveries
+
+### An agent will not start
+
+Open **Settings → Providers & accounts**, refresh the status, run the agent's CLI from a terminal, complete its sign-in, and apply any offered update. Start a new chat after changing the agent installation.
+
+### A project is unavailable
+
+Confirm that the folder or worktree still exists and is readable. If it moved, add the project again at its new path. A deleted folder cannot provide files, changes, or a terminal.
+
+### Setup failed
+
+Read the setup output, run the same command in the thread's terminal, fix dependencies or environment variables, then retry. The checkout stays available after a failure.
+
+### A Git or pull request action failed
+
+Check the branch and remote with `git status`, and verify `gh auth status`. Resolve uncommitted files or conflicts before retrying.
+
+### A remote client stopped updating
+
+Confirm that the host computer is awake and Zuse is running. On the host, run `zuse status` to see the account, linked computer, and network routes. Reopen the client, and pair it again from **Settings → Remote access** if its access was revoked.
+
+### An agent was stopped on Linux
+
+On Linux, each agent runs in its own systemd scope. If the system runs low on memory, Zuse stops the agent using the most memory and posts a notice in its chat instead of letting the whole app be killed.
+
+## Reporting a problem
+
+Reproduce the issue once and note the approximate time, the Zuse version, and the agent you used. For repository-specific failures, include the failing command and its output with any secrets removed.

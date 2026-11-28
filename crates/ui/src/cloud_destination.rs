@@ -6,6 +6,8 @@
 //! repository starts on Cloud.
 use serde_json::Value;
 
+use crate::settings::composer::NewChatDestination;
+
 /// Where "New chat" in a sidebar project starts.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum NewChat {
@@ -22,12 +24,17 @@ pub(crate) enum NewChat {
 /// A project backed by a Cloud repository starts its new chats on Cloud for
 /// a subscriber; otherwise on its local checkout. A project that only exists
 /// in Cloud always goes to Cloud (unsubscribed accounts land on Billing).
+/// Someone who last headed a new chat to a computer keeps the checkout:
+/// Cloud never overrides that pick.
 pub(crate) fn new_chat(
     cloud_project: Option<&Value>,
     local_space: Option<&str>,
     subscribed: bool,
+    remembered: Option<&NewChatDestination>,
 ) -> NewChat {
+    let keeps_computer = matches!(remembered, Some(NewChatDestination::Computer));
     match (cloud_project, local_space) {
+        (Some(_), Some(local)) if keeps_computer => NewChat::Local(Some(local.to_owned())),
         (Some(project), local) if subscribed || local.is_none() => NewChat::Cloud {
             project: project.clone(),
             local_space: local.map(str::to_owned),
@@ -247,7 +254,7 @@ mod tests {
         // A sidebar project backed by both a Cloud repository and a local
         // checkout: Cloud for a subscriber, with the checkout kept.
         assert_eq!(
-            new_chat(Some(&rows[0]), Some("space-zuse"), true),
+            new_chat(Some(&rows[0]), Some("space-zuse"), true, None),
             NewChat::Cloud {
                 project: rows[0].clone(),
                 local_space: Some("space-zuse".into())
@@ -255,21 +262,45 @@ mod tests {
         );
         // Without a subscription the checkout stays the default.
         assert_eq!(
-            new_chat(Some(&rows[0]), Some("space-zuse"), false),
+            new_chat(Some(&rows[0]), Some("space-zuse"), false, None),
             NewChat::Local(Some("space-zuse".into()))
         );
         // Cloud-only and local-only projects.
         assert!(matches!(
-            new_chat(Some(&rows[1]), None, true),
+            new_chat(Some(&rows[1]), None, true, None),
             NewChat::Cloud {
                 local_space: None,
                 ..
             }
         ));
         assert_eq!(
-            new_chat(None, Some("space"), true),
+            new_chat(None, Some("space"), true, None),
             NewChat::Local(Some("space".into()))
         );
+    }
+
+    #[test]
+    fn a_remembered_computer_keeps_a_cloud_backed_project_local() {
+        let rows = rows();
+        let computer = NewChatDestination::Computer;
+        assert_eq!(
+            new_chat(Some(&rows[0]), Some("space-zuse"), true, Some(&computer)),
+            NewChat::Local(Some("space-zuse".into()))
+        );
+        // A project that only exists in Cloud has nowhere else to go.
+        assert!(matches!(
+            new_chat(Some(&rows[1]), None, true, Some(&computer)),
+            NewChat::Cloud { .. }
+        ));
+        // Cloud last time (on any repository) still opens Cloud here.
+        let cloud = NewChatDestination::Cloud {
+            project_id: "other".into(),
+            account_id: "owner".into(),
+        };
+        assert!(matches!(
+            new_chat(Some(&rows[0]), Some("space-zuse"), true, Some(&cloud)),
+            NewChat::Cloud { .. }
+        ));
     }
 
     #[test]

@@ -1,0 +1,124 @@
+---
+title: "Command reference"
+icon: SquareTerminal
+navTitle: "Commands"
+description: "Every zuse command and option for serving, pairing, account linking, and background services."
+section: "Serve CLI"
+order: 3
+platforms: [serve, desktop]
+providers: []
+prerequisites: [/serve]
+related: [/serve/operations, /serve/troubleshooting, /serve/agent-cli]
+next: /serve/security
+lastVerified: "2026-11-27"
+---
+
+These commands come from `zuse --help` in Zuse 0.27.9. The desktop app's `zuse` adds `zuse app` (open the window) and `zuse appshot`; everything else is the same in the standalone command line.
+
+```text
+zuse serve [--listen <addr>] [--data-dir <path>] [--assets <dir>] [--token <token>]
+           [--public-origin <url>] [--tls-cert <file> --tls-key <file>]
+           [--relay-origin <url> --relay-host-token-file <file>]
+           [--lan [--lan-port <port>] [--tailscale-serve]] [--account]
+zuse headless
+zuse pair [--label <name>] [--app | --json]
+zuse link [--name <name>]
+zuse unlink
+zuse status
+zuse login [--no-browser]
+zuse logout
+zuse sync
+zuse mcp
+zuse daemon install [--serve [serve options…]]
+zuse daemon uninstall | start | stop | restart | status
+zuse update [--check]
+```
+
+`zuse bridge`, `zuse bridge-enroll`, and `zuse bridge-task` let cloud chats run approved commands on your computer; see [Run local commands from a cloud agent](/how-to/cloud-agent-local-commands/).
+
+## Global options
+
+| Option | Meaning |
+| --- | --- |
+| `--ipc-port <port>` | Loopback RPC port of the engine. Defaults to `ZUSE_IPC_PORT`, else `27654`. With `serve`, `0` picks an available port. |
+| `--language <lang>` | Interface language: `system`, `en`, `fr`, `de`, `zh-Hans`, `zh-Hant`, `ja`, or `ko`. Also read from `ZUSE_LANGUAGE`. |
+| `-h`, `--help` | Print help. |
+| `-V`, `--version` | Print the version. |
+
+## zuse serve
+
+Serve the browser client and a local agent engine.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--listen <addr>` | `127.0.0.1:27656` | Browser server address. A non-loopback address requires `--tls-cert`/`--tls-key` or `--public-origin`. |
+| `--data-dir <path>` | see below | Local data directory. Also `ZUSE_DATA_DIR`. |
+| `--assets <dir>` | installed web files | Browser client files. Also `ZUSE_WEB_ASSETS`. |
+| `--token <token>` | saved token | Browser authentication token for the owner link. Also `ZUSE_BROWSER_TOKEN`. |
+| `--public-origin <url>` | none | Public HTTPS origin, for example behind an HTTPS reverse proxy. Also `ZUSE_PUBLIC_ORIGIN`. |
+| `--tls-cert <file>` | none | PEM certificate chain for direct HTTPS. Requires `--tls-key`. Also `ZUSE_TLS_CERT`. |
+| `--tls-key <file>` | none | Matching PEM private key. Requires `--tls-cert`. Also `ZUSE_TLS_KEY`. |
+| `--relay-origin <url>` | none | Public origin of a relay you operate. Requires `--relay-host-token-file`. |
+| `--relay-host-token-file <file>` | none | Relay routing credential file. Requires `--relay-origin`. |
+| `--lan` | off | Let paired devices on this network and your tailnet connect directly, end-to-end encrypted. |
+| `--lan-port <port>` | `27657` | Port for `--lan` connections. Requires `--lan`. |
+| `--tailscale-serve` | off | Also publish `--lan` over Tailscale HTTPS for browsers. Requires `--lan`. |
+| `--account` | off | Sign in and link this computer to your account when the server starts. |
+
+On startup Serve prints the agent tools port and an `Open …/#token=…` link for this computer. With `--lan` it prints each route it offers. When another device can reach the computer, it also prints a pairing link.
+
+## zuse pair
+
+Create a private link for another device. Requires a running engine.
+
+| Option | Meaning |
+| --- | --- |
+| `--label <name>` | Name shown in the computer's device list. |
+| `--app` | Show the QR code for the Zuse app instead of a browser. |
+| `--json` | Print `{"app", "browser", "selfSigned", "localOnly"}` as one line of JSON. Cannot be combined with `--app`. |
+
+If only this computer can reach the engine, `pair` says the link only works here: start `zuse serve` with `--lan` or `--account` first.
+
+## zuse link and zuse unlink
+
+`link` makes this computer available through your Zuse account, signing in with a device code first when needed. `--name` sets the computer name shown in your account; it defaults to the hostname. `unlink` reverses it.
+
+## zuse status
+
+Show the data directory, sign-in mode, whether an engine is running, and, when one answers, its account, linked computer, routes, and browser address.
+
+## zuse login, logout, and sync
+
+`login` signs in and turns on workspace sync for the next engine start; `--no-browser` prints a sign-in link instead of opening a browser. `logout` removes the saved session so the next engine start is local only. `sync` shows live sync state from the running engine. None of these change remote access.
+
+## zuse headless and zuse mcp
+
+`headless` runs the engine without a window or browser server. `mcp` serves agent tools over stdio and forwards them to the local engine; see [Scripting and agent tools](/serve/agent-cli/).
+
+## zuse daemon
+
+Run Zuse as a user service on macOS (launchd) or Linux (systemd). `install` installs, enables, and starts it; `--serve` runs `zuse serve` with the arguments that follow instead of `zuse headless`. The other subcommands are `uninstall`, `start`, `stop`, `restart`, and `status`.
+
+## zuse update
+
+Check for a newer release and install it. `--check` only reports whether an update is available.
+
+## Data directory
+
+Without `--data-dir` or `ZUSE_DATA_DIR`, Zuse uses `~/.zuse-native` on macOS and Linux and `%LOCALAPPDATA%\Zuse` on Windows. This is the same profile the desktop app uses. Only one engine can own a data directory at a time.
+
+## Old name
+
+`zuse-server` is the old name of `zuse serve`. Packages still install it. Invoked under that name, it keeps the old interface: serve options at the top level, plus `pair`, `login`, `logout`, `link`, `unlink`, `status`, and `mcp`, where `login` and `logout` are the engine's account sign-in.
+
+## Environment variables
+
+| Variable | Effect |
+| --- | --- |
+| `ZUSE_DATA_DIR` | Data directory. |
+| `ZUSE_IPC_PORT` | Engine loopback RPC port. Default `27654`. |
+| `ZUSE_LANGUAGE` | Interface language. |
+| `ZUSE_WEB_ASSETS` | Browser client files. |
+| `ZUSE_BROWSER_TOKEN`, `ZUSE_PUBLIC_ORIGIN`, `ZUSE_TLS_CERT`, `ZUSE_TLS_KEY` | Same as the matching `serve` options. |
+
+<NextStep href="/serve/security/" label="Secure a Serve host" />

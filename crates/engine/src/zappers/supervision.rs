@@ -85,7 +85,7 @@ fn config(model: &ZapperModel, sandbox: Option<SandboxLevel>) -> Result<ChatConf
         sandbox: sandbox.unwrap_or(SandboxLevel::Auto),
     })
 }
-fn event_id(parts: &[&str]) -> String {
+pub(super) fn event_id(parts: &[&str]) -> String {
     format!("{:x}", Sha256::digest(parts.join("\0")))
 }
 
@@ -314,6 +314,25 @@ fn reconcile(
                     .unwrap_or_else(|| status.updated_at.to_rfc3339())
             };
             let report_id = event_id(&[&zapper.id, &worker.chat_id, kind, &marker]);
+            // A settled turn answers a person's routed comment only when that
+            // comment's message started it. Checked before the report is
+            // recorded, and again later if the transcript hadn't caught up.
+            if let (false, Some(turn)) = (interrupted, status.last_completed_turn.as_deref())
+                && kind == "settled"
+                && !issues::checked_turn(&report_id)
+                && zappers.unanswered(&zapper.id, &worker.chat_id)?
+                && let Some(started) = docs
+                    .open(&worker.chat_id)
+                    .ok()
+                    .and_then(|doc| doc.doc_arc().read_entries().ok())
+                    .and_then(|entries| issues::answered_message(&entries, turn))
+            {
+                // The message that started this exact turn decides, whichever
+                // routed comments are still queued behind it.
+                zappers.correlate(&zapper.id, &worker.chat_id, &report_id, started.as_deref())?;
+                // A transcript that has the turn can't change that answer.
+                issues::remember_turn(&report_id);
+            }
             if zappers
                 .events(&zapper.id)?
                 .iter()
@@ -525,6 +544,27 @@ fn reconcile(
         );
         if !stopping && zapper.status != ZapperStatus::Active {
             continue;
+        }
+        // The dispatch point for a routed comment. This whole pass holds the
+        // admission lock that every command takes, so a stop, release or
+        // close commits either before this check (and cancels it here) or
+        // after the message is queued (and then interrupts the running turn
+        // like any other stop); a queued message can't be recalled.
+        if !stopping {
+            let hold = issues::answer_hold(
+                &zappers
+                    .inner
+                    .db
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?
+                    as &Connection,
+                zapper,
+                &id,
+            )?;
+            if let Some(reason) = hold {
+                zappers.outbox_phase(&id, "cancelled", Some(&reason))?;
+                continue;
+            }
         }
         if phase == "pending" && !stopping {
             let busy = |chat: &str| {

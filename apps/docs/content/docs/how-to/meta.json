@@ -1,0 +1,31 @@
+{
+	"title": "How-to guides",
+	"description": "Step-by-step tasks",
+	"pages": [
+		"index",
+		"---Build and ship---",
+		"local-parallel-worktrees",
+		"local-delegate-agents",
+		"local-add-context",
+		"local-test-in-browser",
+		"local-review-changes",
+		"local-complete-pull-request",
+		"local-recover-task",
+		"local-configure-settings",
+		"local-configure-mcp",
+		"---Other devices---",
+		"remote-connect-device",
+		"remote-local-browser",
+		"remote-hosted-access",
+		"serve-operate-host",
+		"remote-recover-connection",
+		"---Cloud---",
+		"cloud-start-chat",
+		"cloud-plans-billing",
+		"choose-cloud-provider",
+		"cloud-repository-setup",
+		"cloud-share-chat",
+		"cloud-agent-local-commands",
+		"slack-start-task"
+	]
+}

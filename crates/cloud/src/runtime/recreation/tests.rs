@@ -12,7 +12,7 @@ impl crate::objects::Objects for NeverObjects {
     }
 }
 /// Isolated schema with one recreatable Boxd computer `ws-bob` on base `base`.
-async fn fixture() -> (PgPool, PgPool, String, RuntimeControl, i64, Value) {
+pub(in crate::runtime) async fn fixture() -> (PgPool, PgPool, String, RuntimeControl, i64, Value) {
     let url = std::env::var("ZUSE_CLOUD_TEST_DATABASE_URL").unwrap();
     assert!(matches!(
         reqwest::Url::parse(&url).unwrap().host_str(),

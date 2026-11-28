@@ -31,6 +31,7 @@ struct Fixture {
     release: Notify,
     nonces: StdMutex<HashSet<String>>,
     subjects: StdMutex<Vec<String>>,
+    removed_environments: StdMutex<HashSet<String>>,
 }
 fn validate_proof(
     headers: &HeaderMap,
@@ -101,7 +102,16 @@ async fn api(
                 state.entered.notify_one();
                 state.release.notified().await;
             }
-            json!({"environments":[{"environmentId":"env_remote","label":"Build computer","providerKind":"desktop","linkedAt":1,"endpoint":{"httpBaseUrl":"https://computer.example","wsBaseUrl":"wss://computer.example"}}]})
+            if state
+                .removed_environments
+                .lock()
+                .unwrap()
+                .contains("env_remote")
+            {
+                json!({"environments":[]})
+            } else {
+                json!({"environments":[{"environmentId":"env_remote","label":"Build computer","providerKind":"desktop","linkedAt":1,"endpoint":{"httpBaseUrl":"https://computer.example","wsBaseUrl":"wss://computer.example"}}]})
+            }
         }
         (Method::GET, "/v1/clients") => json!({"clients":[]}),
         (Method::POST, "/v1/client/environment-link-challenges") => {
@@ -149,6 +159,12 @@ async fn api(
             if state.unlink_refuse.load(Ordering::SeqCst) {
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
+            let body: Value = serde_json::from_slice(&body).unwrap();
+            state
+                .removed_environments
+                .lock()
+                .unwrap()
+                .insert(body["environmentId"].as_str().unwrap().to_owned());
             json!({"ok":true})
         }
         (Method::POST, "/v1/client/dpop-token") => {
@@ -651,6 +667,96 @@ async fn managed_invitation_origin_and_status_stream_follow_the_linked_account()
     core.shutdown().await;
     server.abort();
     let _ = server.await;
+}
+
+#[tokio::test]
+async fn remove_computer_unlinks_account_wide_and_fences_account_and_failed_requests() {
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    let (api, server) = fixture().await;
+    let account_a = Account::fixture_signed_in(first.path(), api.origin.clone(), "user_a");
+    let account_b = Account::fixture_signed_in(second.path(), api.origin.clone(), "user_a");
+    let a = AccountClient::new(account_a, first.path()).unwrap();
+    let b = AccountClient::new(account_b, second.path()).unwrap();
+    a.remember_route(
+        "user_a",
+        "env_remote",
+        "Build computer",
+        "https://computer.example",
+    )
+    .unwrap();
+    assert!(
+        a.remove_computer("wrong_account", "env_remote")
+            .await
+            .is_err()
+    );
+    assert!(api.removed_environments.lock().unwrap().is_empty());
+    api.unlink_refuse.store(true, Ordering::SeqCst);
+    assert!(a.remove_computer("user_a", "env_remote").await.is_err());
+    assert_eq!(a.saved_routes().unwrap().len(), 1);
+    assert_eq!(b.environments().await.unwrap().environments.len(), 1);
+    api.unlink_refuse.store(false, Ordering::SeqCst);
+    assert!(
+        a.remove_computer("user_a", "env_remote")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(a.environments().await.unwrap().environments.is_empty());
+    assert!(b.environments().await.unwrap().environments.is_empty());
+    assert!(
+        api.removed_environments
+            .lock()
+            .unwrap()
+            .contains("env_remote")
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn removed_computers_stay_removed_after_refresh_restart_and_account_switch() {
+    let root = tempfile::tempdir().unwrap();
+    let (api, server) = fixture().await;
+    let account = Account::fixture_signed_in(root.path(), api.origin.clone(), "user_a");
+    let client = AccountClient::new(account.clone(), root.path()).unwrap();
+    assert_eq!(client.environments().await.unwrap().environments.len(), 1);
+    // Discovered computers can be removed even if they have never been saved.
+    client.forget_route("user_a", "env_remote").unwrap();
+    assert!(client.environments().await.unwrap().environments.is_empty());
+    let restarted = AccountClient::new(account.clone(), root.path()).unwrap();
+    assert!(
+        restarted
+            .environments()
+            .await
+            .unwrap()
+            .environments
+            .is_empty()
+    );
+    account.sign_out().unwrap();
+    account.fixture_install("user_b");
+    assert_eq!(
+        restarted.environments().await.unwrap().environments.len(),
+        1
+    );
+    account.sign_out().unwrap();
+    account.fixture_install("user_a");
+    assert!(
+        restarted
+            .environments()
+            .await
+            .unwrap()
+            .environments
+            .is_empty()
+    );
+    // Explicitly connecting again restores the computer to discovery.
+    restarted
+        .remember_route("user_a", "env_remote", "Remote", "https://remote.example")
+        .unwrap();
+    assert_eq!(
+        restarted.environments().await.unwrap().environments.len(),
+        1
+    );
+    server.abort();
 }
 
 #[tokio::test]

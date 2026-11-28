@@ -58,6 +58,16 @@ impl Cloud {
         self.error = Some(error);
     }
 
+    /// Whether the launch context's row for `project` (same project and
+    /// account) says new chats on it accept reasoning and model options.
+    pub(super) fn context_supports_model_configuration(&self, project: &Value) -> bool {
+        self.rows.iter().any(|row| {
+            row["projectId"] == project["projectId"]
+                && row["accountId"] == project["accountId"]
+                && row["supportsModelConfiguration"] == true
+        })
+    }
+
     #[cfg(test)]
     pub(super) fn set_project_rows_for_test(&mut self, rows: Vec<Value>) {
         self.rows = rows;
@@ -118,9 +128,61 @@ impl Pickers {
         self.source_picker
             .update(cx, |picker, cx| picker.clear_selection(cx));
         self.config.branch = None;
+        // Cloud chosen for the user (a project or first run), not by them:
+        // the remembered destination stays as it was.
         if let Some(project) = project {
-            self.select_cloud(project, cx);
+            self.apply_cloud(project, cx);
         }
+    }
+    /// The user's own picks, as the composer's menus make them.
+    #[cfg(test)]
+    pub(crate) fn pick_space_for_test(&mut self, space: String, cx: &mut Context<Self>) {
+        self.pick_space(space, cx);
+    }
+    #[cfg(test)]
+    pub(crate) fn pick_worktree_for_test(&mut self, worktree: bool, cx: &mut Context<Self>) {
+        use super::workspace::WorkspaceChoice;
+        let choice = if worktree {
+            WorkspaceChoice::Worktree
+        } else {
+            WorkspaceChoice::Local
+        };
+        self.pick_workspace(choice, cx);
+    }
+    #[cfg(test)]
+    pub(crate) fn select_cloud_for_test(&mut self, row: Value, cx: &mut Context<Self>) {
+        self.select_cloud(row, cx);
+    }
+    #[cfg(test)]
+    pub(crate) fn on_worktree_for_test(&self) -> bool {
+        self.workspace_choice() == super::workspace::WorkspaceChoice::Worktree
+    }
+    /// Where the user last headed a new chat; `None` before their first pick.
+    pub(crate) fn remembered_destination(&self) -> Option<&NewChatDestination> {
+        self.defaults.destination.as_ref()
+    }
+    /// A new chat opened on a project the user chose (a sidebar project's
+    /// plus): it is the project the next new chat reopens on. On Cloud, a
+    /// remembered Cloud destination moves to its repository.
+    pub(crate) fn remember_new_chat_project(
+        &mut self,
+        space: Option<String>,
+        cloud: Option<&Value>,
+    ) {
+        if let Some(space) = space {
+            self.defaults.project = Some(space);
+            self.defaults.no_project = false;
+        }
+        if let Some(row) = cloud
+            && matches!(
+                self.defaults.destination,
+                Some(NewChatDestination::Cloud { .. })
+            )
+            && let Some(destination) = NewChatDestination::cloud(row)
+        {
+            self.defaults.destination = Some(destination);
+        }
+        self.save_defaults();
     }
     pub(crate) fn restore_cloud_canvas(
         &mut self,
@@ -158,6 +220,9 @@ impl Pickers {
             );
         }
         if let Some(saved) = choice {
+            // The picks belong to the canvas now in front: the selection
+            // change that brought it back must not drop them.
+            self.draft_owner = self.state.read(cx).selected_chat.clone();
             self.config = saved.draft;
             self.source_picker
                 .update(cx, |picker, cx| picker.restore_selection(saved.source, cx));
@@ -303,6 +368,12 @@ impl Pickers {
     pub(crate) fn start_without_project(&mut self, cx: &mut Context<Self>) {
         self.pick_no_project(cx);
     }
+    /// The new-chat canvas goes back to a local destination, keeping its
+    /// project and device.
+    pub(crate) fn leave_cloud_canvas(&mut self, cx: &mut Context<Self>) {
+        self.leave_cloud(cx);
+        cx.notify();
+    }
     pub(super) fn leave_cloud(&mut self, cx: &mut Context<Self>) {
         self.state.update(cx, |state, _| state.cloud_project = None);
         if let Some((branch, checkout)) = self.cloud.local_checkout.take() {
@@ -311,7 +382,18 @@ impl Pickers {
         }
         self.catalog_rev += 1;
     }
-    fn select_cloud(&mut self, mut row: Value, cx: &mut Context<Self>) {
+    /// The user picks Cloud on `row`: the next new chat reopens there.
+    fn select_cloud(&mut self, row: Value, cx: &mut Context<Self>) {
+        let destination = NewChatDestination::cloud(&row);
+        if self.apply_cloud(row, cx)
+            && let Some(destination) = destination
+        {
+            self.defaults.destination = Some(destination);
+            self.save_defaults();
+        }
+    }
+    /// Head the chat to Cloud on `row`; whether it took.
+    fn apply_cloud(&mut self, mut row: Value, cx: &mut Context<Self>) -> bool {
         let state = self.state.read(cx);
         let expected = state
             .cloud_organization_id()
@@ -321,10 +403,10 @@ impl Pickers {
             self.cloud.error =
                 Some("Your account or organization changed. Open the picker again.".into());
             cx.notify();
-            return;
+            return false;
         }
         if self.cloud.task_binding.is_some() || self.cloud_launch_frozen() {
-            return;
+            return false;
         }
         // New computers use the account's default provider; a repository's
         // own provider applies only when the context has none ready.
@@ -352,6 +434,7 @@ impl Pickers {
             cx.notify();
         });
         self.close(cx);
+        true
     }
     fn align_cloud_model(&mut self, cx: &mut Context<Self>) {
         let current = self.resolved(cx);
@@ -772,6 +855,13 @@ impl Pickers {
                     rows.iter()
                         .any(|p| p["id"] == provider && p["commandAdmissionVersion"] == 2)
                 })
+    }
+    /// The server starts a new chat's computer before its first-message
+    /// files finish uploading, and holds the first turn until they land.
+    pub(crate) fn cloud_launch_attachment_hold(&self, provider: &str) -> bool {
+        self.cloud_v2_available(provider)
+            && self.cloud.context["launchAttachmentHoldVersion"]
+                == zuse_protocol::cloud_assets::LAUNCH_ATTACHMENT_HOLD_VERSION
     }
     pub(super) fn cloud_destination(&self, cx: &App) -> Option<Value> {
         let state = self.state.read(cx);

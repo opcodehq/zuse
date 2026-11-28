@@ -1,0 +1,31 @@
+---
+title: Configuration files
+icon: Braces
+navTitle: "Configuration files"
+description: The files Zuse reads and writes for preferences, project actions, and cloud environments.
+section: reference
+order: 93
+platforms: [desktop]
+providers: []
+prerequisites: []
+related: [/reference/settings, /reference/keybindings, /projects]
+next: /reference/diagnostics
+lastVerified: "2026-11-27"
+---
+
+
+The current Zuse app is configured through its Settings UI. It does not read the `~/.zuse/settings.json`, `~/.zuse/keybindings.json`, or `.zuse/settings.toml` files that earlier versions used, so the JSON schemas for those files no longer describe how the app is configured.
+
+## Files Zuse uses
+
+| File | Where | Purpose |
+| --- | --- | --- |
+| `ui-settings.json` | Zuse data directory | App preferences and keyboard shortcuts. Written by the app; change it through Settings |
+| `worktree-settings.json` | Zuse data directory | Where this computer creates new worktrees |
+| `project-actions.json` | Zuse data directory | Saved project actions for each project on this computer |
+| `zuse.json` | Project folder | Actions you can import into a project explicitly |
+| `.zuse/setup.json` | Repository | The environment recipe for the repository's cloud computers, when present |
+
+The data directory is `~/.zuse-native` on macOS and Linux and `%LOCALAPPDATA%\Zuse` on Windows, unless `ZUSE_DATA_DIR` sets another one.
+
+For project actions and cloud environments, see [Projects and worktrees](/projects).

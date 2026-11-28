@@ -1,0 +1,82 @@
+---
+title: Control API quickstart
+icon: Zap
+navTitle: "Quickstart"
+description: Check that your engine is reachable, call an operation, watch a subscription, and do the same from TypeScript.
+section: api
+order: 2
+platforms: [desktop, serve]
+providers: []
+prerequisites: [/api-reference]
+related: [/api-reference/cli, /api-reference/sdk, /api-reference/operations]
+next: /api-reference/operations
+lastVerified: "2026-11-27"
+---
+
+You need Zuse running on this computer. On macOS and Linux, a packaged app installs `zuse-control` at `~/.zuse/bin/zuse-control`; add `~/.zuse/bin` to your `PATH` or call it by its full path.
+
+## 1. Check the connection
+
+```bash title="Terminal"
+zuse-control info
+```
+
+`zuse-control` finds the local discovery file, connects, and prints `ControlInfo`: the API version, the engine's app version, its capabilities, the operation catalog, and the `ZapperCommand` schema.
+
+If it reports `No running-engine discovery found`, start Zuse, or point it at your profile's discovery file:
+
+```bash title="Terminal"
+export ZUSE_CONTROL_FILE=/path/to/profile/zappers/control.json
+```
+
+## 2. Call an operation
+
+Pass the operation name and its parameters as JSON:
+
+```bash title="Terminal"
+zuse-control call ZapperFiles '{"zapperId":"release"}'
+```
+
+The result is printed as one line of JSON. To read parameters from a file, pass `@path`; to read them from stdin, pass `-`:
+
+```bash title="Terminal"
+zuse-control call ZapperCommand @command.json
+```
+
+## 3. Watch a subscription
+
+```bash title="Terminal"
+zuse-control watch WatchZappers
+```
+
+Each update prints as one line of JSON until you press Ctrl+C.
+
+## 4. Do the same from TypeScript
+
+`@zuse/sdk` takes an endpoint and token. For a local engine, read both from the discovery file:
+
+```ts title="watch-zappers.ts"
+import { readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { createZuseClient } from '@zuse/sdk';
+
+const discovery = JSON.parse(await readFile(
+  join(homedir(), '.zuse-native/profiles/local/zappers/control.json'), 'utf8',
+));
+
+const zuse = createZuseClient({ endpoint: discovery.endpoint, token: discovery.token });
+console.log(await zuse.info());
+
+for await (const zappers of zuse.zappers.watch()) {
+  console.log(zappers.map(zapper => zapper.config.name));
+}
+zuse.close();
+```
+
+For a remote engine, pass its `wss://.../api/control` endpoint and token instead. See [Authentication](/api-reference#authentication).
+
+## Next steps
+
+- Browse the [operation catalog](/api-reference/operations).
+- Give an agent these operations with [`zuse-control mcp`](/api-reference/cli#use-it-as-an-mcp-server).

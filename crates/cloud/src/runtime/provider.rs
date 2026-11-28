@@ -260,6 +260,7 @@ impl AllocationProvider for RuntimeProvider {
                 self.provider.execute(machine, &command),
             )
             .await?;
+        super::launch_report::record(machine, &result);
         if result.exit_code == 78 {
             return Err(ProviderError::Rejected);
         }
@@ -566,26 +567,50 @@ impl RetainedProvider for RuntimeProvider {
         api: &str,
     ) -> Result<(), ProviderError> {
         let layout = super::machine_layout::Layout::for_provider(self.provider.id());
-        let command = format!(
-            "{} ZUSE_RUNTIME_RETAINED=true ZUSE_CLOUD_WORKSPACE_ID={} ZUSE_API_URL={} ZUSE_RUNTIME_GENERATION={} ZUSE_STORAGE_INCARNATION_ID={} ZUSE_RUNTIME_RESUME_OPERATION_ID={} {}",
+        let command = super::lifecycle::retained_launch_command(
             layout.run_as_task(),
-            quote(workspace),
-            quote(api),
-            d.generation,
-            quote(&d.storage_incarnation_id),
-            quote(&d.operation_id),
-            layout.launcher()
+            layout.launcher(),
+            d,
+            workspace,
+            api,
         );
-        if self
+        let result = self
             .provider
             .execute(&d.source_machine_id, &command)
-            .await?
-            .exit_code
-            != 0
-        {
+            .await?;
+        super::launch_report::record(&d.source_machine_id, &result);
+        if result.exit_code != 0 {
             return Err(ProviderError::Unavailable);
         }
         Ok(())
+    }
+    async fn launch_retained_checked(
+        &self,
+        d: &Directive,
+        workspace: &str,
+        api: &str,
+    ) -> Result<(), crate::error::ApiError> {
+        let layout = super::machine_layout::Layout::for_provider(self.provider.id());
+        let command = super::lifecycle::retained_launch_command(
+            layout.run_as_task(),
+            layout.launcher(),
+            d,
+            workspace,
+            api,
+        );
+        super::launch_repair::launch(self, &d.source_machine_id, workspace, layout, &command)
+            .await
+            .map_err(super::lifecycle::launch_failure)
+    }
+}
+#[async_trait]
+impl super::launch_repair::Exec for RuntimeProvider {
+    async fn exec(
+        &self,
+        machine: &str,
+        command: &str,
+    ) -> Result<crate::providers::ExecResult, ProviderError> {
+        self.provider.execute(machine, command).await
     }
 }
 

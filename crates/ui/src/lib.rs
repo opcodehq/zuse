@@ -53,6 +53,7 @@ pub(crate) mod image_viewer;
 pub mod links;
 pub mod loaders;
 pub mod localization;
+pub mod machine_setup_cards;
 pub mod markdown;
 pub mod motion;
 mod new_thread_background_effects;
@@ -352,36 +353,18 @@ pub fn run_app(config: UiConfig) {
     );
 }
 
-/// A paired workspace gets its own state and connection; the current engine
-/// and its agent jobs remain owned by the original workspace.
-pub(crate) fn open_paired_window(target: zuse_remote::PairedTarget, cx: &mut App) {
-    let Some(reopen) = cx.try_global::<ReopenState>() else {
+/// Keep remote workspaces in the current window; each retains its own engine and drafts.
+pub(crate) fn open_remote_workspace(
+    target: state::RemoteTarget,
+    window: &mut gpui::Window,
+    cx: &mut App,
+) {
+    let Some(shell) = window.root::<shell::Shell>().flatten() else {
         return;
     };
-    let mut boot = reopen.boot.clone();
-    boot.target = Some(state::RemoteTarget::Paired(target));
-    let state = cx.new(|cx| {
-        let mut state = state::AppState::new();
-        state.watch_clock_transitions(cx);
-        state
+    cx.defer(move |cx| {
+        shell.update(cx, |shell, cx| shell.open_remote_workspace(target, cx));
     });
-    open_main_window(state, boot, cx);
-    cx.activate(true);
-}
-
-pub(crate) fn open_account_window(target: state::AccountTarget, cx: &mut App) {
-    let Some(reopen) = cx.try_global::<ReopenState>() else {
-        return;
-    };
-    let mut boot = reopen.boot.clone();
-    boot.target = Some(state::RemoteTarget::Account(target));
-    let state = cx.new(|cx| {
-        let mut state = state::AppState::new();
-        state.watch_clock_transitions(cx);
-        state
-    });
-    open_main_window(state, boot, cx);
-    cx.activate(true);
 }
 
 pub(crate) fn open_cloud_window(target: state::CloudTarget, cx: &mut App) {

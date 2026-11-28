@@ -236,13 +236,18 @@ impl PairingCard {
         );
         self.request(methods::CREATE_PAIRING, json!({"label":label}), cx);
     }
-    fn open_destination(&mut self, cx: &mut Context<Self>) {
+    fn open_destination(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let target = zuse_remote::PairedTarget::parse_link(self.destination.read(cx).text().trim());
         match target {
             Ok(target) => {
                 self.destination
                     .update(cx, |input, cx| input.set_text("", cx));
-                crate::open_paired_window(target, cx);
+                self.dialog = None;
+                crate::open_remote_workspace(
+                    crate::state::RemoteTarget::Paired(target),
+                    window,
+                    cx,
+                );
             }
             Err(_) => {
                 self.error =
@@ -270,36 +275,6 @@ pub(super) struct PairingParts {
     /// Browser access and Tailscale HTTPS, when the advanced settings are open.
     pub advanced: Option<AnyElement>,
     pub dialog: Option<AnyElement>,
-}
-
-/// A small label above a card, with an optional action at its end, like the phone apps.
-pub(super) fn section(
-    theme: &Theme,
-    title: &'static str,
-    action: Option<AnyElement>,
-    body: impl IntoElement,
-) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(8.))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .px(px(4.))
-                .min_h(px(24.))
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_muted)
-                        .child(title),
-                )
-                .children(action),
-        )
-        .child(body)
 }
 
 /// A scannable code on white: dot modules, rounded finder corners and the Zuse mark in the
@@ -423,6 +398,38 @@ fn qr_code(link: &str, side: f32) -> AnyElement {
 }
 
 /// A small filled dot; a soft ring around it when live.
+/// The leading column of a Remote access row, wide enough for a glyph or the status dot.
+const ROW_GLYPH_WIDTH: f32 = 20.;
+
+fn row_glyph(theme: &Theme, glyph: &str) -> Div {
+    div()
+        .w(px(ROW_GLYPH_WIDTH))
+        .flex_none()
+        .flex()
+        .justify_center()
+        .child(
+            zuse_viewport::remote_access_style::glyph(glyph)
+                .size(px(16.))
+                .text_color(theme.text_muted),
+        )
+}
+
+/// A row action in the Pull Requests Merge button's face and size.
+pub(super) fn row_button(
+    theme: &Theme,
+    tone: widgets::ActionTone,
+    id: impl Into<ElementId>,
+) -> Stateful<Div> {
+    widgets::action_button(theme, tone)
+        .id(id)
+        .role(Role::Button)
+        .tab_index(0)
+        .flex_none()
+        .min_h(px(26.))
+        .px(px(10.))
+        .py_0()
+}
+
 fn status_dot(color: Hsla, live: bool) -> Div {
     div()
         .size(px(16.))
@@ -553,7 +560,7 @@ impl PairingCard {
         account: Option<AnyElement>,
         cx: &mut Context<Self>,
     ) -> PairingParts {
-        use zuse_viewport::{remote_access_style as r, settings_style as s};
+        use zuse_viewport::remote_access_style as r;
         let theme = Theme::of(cx).for_settings_surface();
         let busy = self.busy;
         let browser_running = self.status["running"] == true;
@@ -624,8 +631,11 @@ impl PairingCard {
                 )
             }
         };
-        let way = |icon: &'static str, title: &str, description: String, first: bool| {
-            r::method_row(icon, title.to_owned(), description, first)
+        let way = |glyph: &'static str, title: &str, description: String| {
+            widgets::card_row(&theme, false)
+                .flex_nowrap()
+                .child(row_glyph(&theme, glyph))
+                .child(widgets::row_copy(&theme, title, &description))
         };
         let switch = |key: &'static str, on: bool, label: &'static str, enabled: bool| {
             widgets::toggle_switch(&theme, on, key)
@@ -650,7 +660,6 @@ impl PairingCard {
             } else {
                 "Phones and computers on the same network.".into()
             },
-            true,
         )
         .child(
             switch(
@@ -676,7 +685,6 @@ impl PairingCard {
             } else {
                 "Start Tailscale or Headscale on this computer to use it.".into()
             },
-            false,
         )
         .child(
             switch(
@@ -697,85 +705,55 @@ impl PairingCard {
             "cloud",
             "Zuse Relay",
             "Reach it from any network without setting anything up.".into(),
-            false,
         )
         .opacity(0.55)
-        .child(
-            div()
-                .px(px(8.))
-                .py(px(2.))
-                .rounded(px(6.))
-                .bg(s::frame_bg())
-                .text_size(px(11.))
-                .text_color(theme.text_muted)
-                .child("Coming soon"),
-        );
-        let hero = s::card()
+        .child(widgets::badge(&theme, "Coming soon"));
+        let status = widgets::card_row(&theme, true)
+            .flex_nowrap()
             .child(
                 div()
+                    .w(px(ROW_GLYPH_WIDTH))
+                    .flex_none()
                     .flex()
-                    .items_center()
-                    .gap(px(12.))
-                    .px(px(14.))
-                    .py(px(12.))
-                    .child(status_dot(dot, reachable))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap(px(4.))
-                            .child(
-                                div()
-                                    .text_size(px(14.))
-                                    .line_height(px(19.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme.text)
-                                    .child(SharedString::from(headline)),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .line_height(px(17.))
-                                    .text_color(theme.text_muted)
-                                    .child(SharedString::from(detail)),
-                            ),
-                    )
-                    .child(
-                        r::button("native-open-pairing", "Connect device")
-                            .when(!reachable || busy, |v| v.opacity(0.5).cursor_default())
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                if reachable && !this.busy {
-                                    this.open_pair(window, cx)
-                                }
-                            })),
-                    ),
+                    .justify_center()
+                    .child(status_dot(dot, reachable)),
             )
+            .child(widgets::row_copy(&theme, headline, &detail))
             .child(
-                div()
-                    .border_t_1()
-                    .border_color(s::card_border().opacity(0.4))
-                    .child(wifi),
-            )
+                row_button(&theme, widgets::ActionTone::Solid, "native-open-pairing")
+                    .child(
+                        crate::icons::icon(crate::icons::SMARTPHONE)
+                            .size(px(13.))
+                            .text_color(theme.text_strong),
+                    )
+                    .child("Connect device")
+                    .when(!reachable || busy, |v| v.opacity(0.5).cursor_default())
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if reachable && !this.busy {
+                            this.open_pair(window, cx)
+                        }
+                    })),
+            );
+        let hero = widgets::section_card(&theme)
+            .mt_0()
+            .child(status)
+            .child(wifi)
             .child(tailscale)
             .children(account.map(|row| {
                 div()
                     .border_t_1()
-                    .border_color(s::card_border().opacity(0.4))
+                    .border_color(widgets::row_divider(&theme))
                     .child(row)
             }))
             .child(relay)
             .when_some(connected_through, |v, line| {
                 v.child(
-                    div()
-                        .px(px(16.))
-                        .py(px(10.))
-                        .border_t_1()
-                        .border_color(s::card_border().opacity(0.4))
-                        .text_size(px(12.))
-                        .text_color(theme.text_muted)
-                        .child(SharedString::from(line)),
+                    widgets::card_row(&theme, false).child(
+                        div()
+                            .text_size(crate::typography::text_xs())
+                            .text_color(theme.text_muted)
+                            .child(SharedString::from(line)),
+                    ),
                 )
             })
             .when_some(self.direct_status["error"].as_str(), |v, error| {
@@ -806,50 +784,30 @@ impl PairingCard {
                             .format("%b %-d")
                             .to_string()
                     });
-                div()
-                    .flex()
-                    .items_center()
-                    .min_h(px(52.))
-                    .gap(px(12.))
-                    .px(px(14.))
-                    .py(px(8.))
-                    .when(index > 0, |v| {
-                        v.border_t_1().border_color(s::card_border().opacity(0.4))
-                    })
+                widgets::card_row(&theme, index == 0)
+                    .flex_nowrap()
+                    .child(row_glyph(&theme, "smartphone"))
+                    .child(widgets::row_copy(
+                        &theme,
+                        &peer.label,
+                        &if paired {
+                            when.map(|w| format!("Paired {w}"))
+                                .unwrap_or_else(|| "Paired".into())
+                        } else {
+                            "Waiting for the device to scan the code".into()
+                        },
+                    ))
                     .child(
-                        div()
-                            .size(px(30.))
-                            .flex_none()
-                            .rounded_full()
-                            .bg(s::frame_bg())
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(
-                                r::glyph("smartphone")
-                                    .size(px(15.))
-                                    .text_color(theme.text_muted),
-                            ),
-                    )
-                    .child(
-                        r::details(
-                            peer.label.clone(),
-                            if paired {
-                                when.map(|w| format!("Paired {w}"))
-                                    .unwrap_or_else(|| "Paired".into())
-                            } else {
-                                "Waiting for the device to scan the code".into()
-                            },
-                        )
-                        .flex_1(),
-                    )
-                    .child(
-                        r::small_button(
+                        row_button(
+                            &theme,
+                            widgets::ActionTone::Quiet,
                             ("native-revoke-pairing", index),
-                            crate::localization::text("settings-organizations_revoke", cx),
                         )
-                        .border_color(gpui::transparent_black())
-                        .text_color(zuse_viewport::settings_style::destructive_text())
+                        .text_color(theme.danger)
+                        .child(crate::localization::text(
+                            "settings-organizations_revoke",
+                            cx,
+                        ))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.request(methods::REVOKE_PAIRING, json!({"pairId": id}), cx);
                             cx.notify();
@@ -859,11 +817,18 @@ impl PairingCard {
             })
             .collect();
 
-        let add_computer = r::add_computer_button("native-open-paired-workspace")
-            .on_click(
-                cx.listener(|this, _, window, cx| this.open_dialog(Dialog::Computer, window, cx)),
-            )
-            .into_any_element();
+        let add_computer = row_button(
+            &theme,
+            widgets::ActionTone::Quiet,
+            "native-open-paired-workspace",
+        )
+        .child(crate::icons::icon(crate::icons::PLUS).size(px(13.)))
+        .child(crate::localization::message(
+            cx,
+            zuse_i18n::messages::chat::computer_switcher_add_computer,
+        ))
+        .on_click(cx.listener(|this, _, window, cx| this.open_dialog(Dialog::Computer, window, cx)))
+        .into_any_element();
 
         // ---- Advanced: browser access over HTTPS and Tailscale HTTPS, behind a quiet link ----
         let advanced_toggle = div()
@@ -885,7 +850,8 @@ impl PairingCard {
             }))
             .into_any_element();
         let advanced = self.advanced.then(|| {
-            s::card()
+            widgets::section_card(&theme)
+                .mt_0()
                 .child(
                     widgets::card_row(&theme, true)
                         .child(details(
@@ -969,14 +935,14 @@ impl PairingCard {
                         .track_focus(&self.dialog_focus)
                         .on_click(cx.listener(|this, _, window, cx| this.close_dialog(window, cx))),
                 )
-                .child(r::button("confirm-remote-dialog", caption).when(busy, |v| v.opacity(0.5)).on_click(cx.listener(move |this, _, _, cx| {
+                .child(r::button("confirm-remote-dialog", caption).when(busy, |v| v.opacity(0.5)).on_click(cx.listener(move |this, _, window, cx| {
                     if this.busy {
                         return;
                     }
                     match &dialog {
                         Dialog::Network if browser_running => this.request(methods::STOP_BROWSER_ACCESS, json!({}), cx),
                         Dialog::Network => this.start(cx),
-                        Dialog::Computer => this.open_destination(cx),
+                        Dialog::Computer => this.open_destination(window, cx),
                         Dialog::Pair => {}
                     }
                 })));

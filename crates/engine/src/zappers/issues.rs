@@ -12,6 +12,10 @@ pub(super) fn apply(
     let zapper_workers: Vec<String> = zapper.workers.iter().map(|w| w.chat_id.clone()).collect();
     let mut notify = false;
     let mut reply: Option<String> = None;
+    let mut changes: Vec<ZapperIssueChange> = vec![];
+    let mut delivery: Option<ZapperIssueDelivery> = None;
+    let mut asked_for: Option<String> = None;
+    let (status, coordinator_chat) = (zapper.status, zapper.coordinator_chat_id.clone());
     let (id, kind, text) = match &command.action {
         ZapperAction::CreateIssue { issue_id, details } => {
             valid_id(issue_id)?;
@@ -77,28 +81,78 @@ pub(super) fn apply(
                 return Ok(());
             }
             notify = details.assigned && !details.status.terminal();
-            let mut changes = vec![];
+            let mut summary = vec![];
             let (before, after) = (issue.details.current_owner(), details.current_owner());
             if before != after {
-                changes.push(match &after {
+                summary.push(match &after {
                     Some(owner) => format!("Owner: {}", owner_label(owner)),
                     None => "Removed owner".to_owned(),
                 });
                 if before == Some(ZapperIssueOwner::User) {
-                    changes.push("Decision received".to_owned());
+                    summary.push("Decision received".to_owned());
                 }
+                changes.push(change(
+                    "owner",
+                    before.as_ref().map(owner_value),
+                    after.as_ref().map(owner_value),
+                ));
             }
             if issue.details.status != details.status {
-                changes.push(format!("Status changed to {}", details.status.label()));
+                summary.push(format!("Status changed to {}", details.status.label()));
+                changes.push(change(
+                    "status",
+                    Some(wire(&issue.details.status)),
+                    Some(wire(&details.status)),
+                ));
             }
             if issue.details.priority != details.priority {
-                changes.push(format!("Priority changed to {}", details.priority.label()));
+                summary.push(format!("Priority changed to {}", details.priority.label()));
+                changes.push(change(
+                    "priority",
+                    Some(wire(&issue.details.priority)),
+                    Some(wire(&details.priority)),
+                ));
             }
-            if changes.is_empty() {
-                changes.push("Updated issue details".into());
+            let old = &issue.details;
+            if old.title != details.title {
+                changes.push(change(
+                    "title",
+                    Some(old.title.clone()),
+                    Some(details.title.clone()),
+                ));
+            }
+            if old.due_date != details.due_date {
+                changes.push(change(
+                    "dueDate",
+                    old.due_date.clone(),
+                    details.due_date.clone(),
+                ));
+            }
+            if old.labels != details.labels {
+                let joined = |labels: &[String]| (!labels.is_empty()).then(|| labels.join(", "));
+                changes.push(change(
+                    "labels",
+                    joined(&old.labels),
+                    joined(&details.labels),
+                ));
+            }
+            for (field, before, after) in [
+                ("description", &old.description, &details.description),
+                ("doneCriteria", &old.done_criteria, &details.done_criteria),
+                ("outOfScope", &old.out_of_scope, &details.out_of_scope),
+            ] {
+                if before != after {
+                    changes.push(change(field, None, None));
+                }
+            }
+            if summary.is_empty() {
+                summary.push("Updated issue details".into());
+                if changes.is_empty() {
+                    changes.push(change("details", None, None));
+                }
             }
             issue.details = details;
-            (issue_id, "updated", changes.join(" · "))
+            (issue_id, "updated", summary.join(" · "))
         }
         ZapperAction::LinkIssueThread { issue_id, chat_id } => {
             ensure!(
@@ -110,7 +164,8 @@ pub(super) fn apply(
                 return Ok(());
             }
             issue.threads.push(chat_id.clone());
-            (issue_id, "thread", "Linked thread".to_owned())
+            changes.push(change("thread", None, Some(chat_id.clone())));
+            (issue_id, "thread", format!("Linked thread {chat_id}"))
         }
         ZapperAction::LinkIssuePullRequest {
             issue_id,
@@ -126,6 +181,7 @@ pub(super) fn apply(
                 return Ok(());
             }
             notify = true;
+            changes.push(change("pullRequest", None, Some(url.clone())));
             issue.pull_requests.push(ZapperIssuePullRequest {
                 url: url.clone(),
                 title: title.trim().to_owned(),
@@ -142,7 +198,8 @@ pub(super) fn apply(
                 return Ok(());
             }
             issue.threads.retain(|id| id != chat_id);
-            (issue_id, "thread", "Unlinked thread".to_owned())
+            changes.push(change("thread", Some(chat_id.clone()), None));
+            (issue_id, "thread", format!("Unlinked thread {chat_id}"))
         }
         ZapperAction::UnlinkIssuePullRequest { issue_id, url } => {
             let url = canonical_pr(url)?;
@@ -151,7 +208,12 @@ pub(super) fn apply(
                 return Ok(());
             }
             issue.pull_requests.retain(|pr| pr.url != url);
-            (issue_id, "pullRequest", "Unlinked pull request".to_owned())
+            changes.push(change("pullRequest", Some(url.clone()), None));
+            (
+                issue_id,
+                "pullRequest",
+                format!("Unlinked pull request {url}"),
+            )
         }
         ZapperAction::CommentIssue {
             issue_id,
@@ -162,21 +224,76 @@ pub(super) fn apply(
                 !text.trim().is_empty() && text.len() <= 65536,
                 "comment must contain 1–65536 bytes"
             );
+            // Only the owner's authenticated scope arrives without an actor;
+            // coordinator and worker credentials always carry theirs.
+            let person = actor.is_none() && !coordinator;
+            let answered_since = issue_revision(tx, &zapper.id, issue_id)?;
             let issue = find(zapper, issue_id)?;
-            if let Some(parent) = reply_to {
-                // Replies stay one level deep: answering a reply answers its thread.
-                let target = issue
-                    .activity
-                    .iter()
-                    .find(|a| a.id == *parent)
-                    .context("reply target not found")?;
-                reply = Some(target.reply_to.clone().unwrap_or_else(|| target.id.clone()));
-            }
+            let target = match reply_to {
+                Some(parent) => Some(
+                    issue
+                        .activity
+                        .iter()
+                        .find(|a| a.id == *parent)
+                        .cloned()
+                        .context("reply target not found")?,
+                ),
+                None => None,
+            };
+            // Replies stay one level deep: answering a reply answers its thread.
+            reply = target
+                .as_ref()
+                .map(|t| t.reply_to.clone().unwrap_or_else(|| t.id.clone()));
             notify = true;
+            let waiting = issue.details.status == ZapperIssueStatus::NeedsYou;
+            if person {
+                let recipient = recipient(
+                    issue,
+                    target.as_ref(),
+                    waiting,
+                    &zapper_workers,
+                    command.expected_revision,
+                    answered_since,
+                    &coordinator_chat,
+                );
+                delivery = match recipient {
+                    Recipient::Thread(chat) => Some(route(
+                        tx,
+                        &command.zapper_id,
+                        status,
+                        issue,
+                        &zapper_workers,
+                        chat,
+                    )?),
+                    Recipient::Zapper(reason) => Some(ZapperIssueDelivery {
+                        chat_id: coordinator_chat.clone(),
+                        state: ZapperIssueDeliveryState::Queued,
+                        detail: Some(reason.into()),
+                        reply: None,
+                    }),
+                    Recipient::None => None,
+                };
+            }
             // A person answering an issue that waits on them hands it back:
             // to the thread doing the work, else to the Zapper.
-            if !coordinator && issue.details.status == ZapperIssueStatus::NeedsYou {
-                hand_back(issue, &zapper_workers);
+            if !coordinator && waiting {
+                match delivery.as_ref() {
+                    // The thread the answer went to takes the issue back.
+                    Some(d)
+                        if d.state == ZapperIssueDeliveryState::Queued
+                            && d.chat_id != coordinator_chat =>
+                    {
+                        hand_back(issue, &zapper_workers, Some(&d.chat_id))
+                    }
+                    // Held from its thread: the Zapper owns it, never that
+                    // stopped thread or another one picked in its place.
+                    Some(d) if d.state == ZapperIssueDeliveryState::Held => {
+                        issue.details.owner = Some(ZapperIssueOwner::Zapper);
+                        issue.details.normalize(!issue.threads.is_empty());
+                    }
+                    // Left to the Zapper, or no routing: the existing contract.
+                    _ => hand_back(issue, &zapper_workers, None),
+                }
             }
             (issue_id, "comment", text.trim().to_owned())
         }
@@ -194,8 +311,32 @@ pub(super) fn apply(
                 !issue.details.status.terminal(),
                 "reopen the issue before asking about it"
             );
+            // The question belongs to the thread that held the issue, if it
+            // still works for this Zapper; its answer goes straight back there.
+            asked_for = match issue.details.current_owner() {
+                Some(ZapperIssueOwner::Thread { chat_id }) if zapper_workers.contains(&chat_id) => {
+                    Some(chat_id)
+                }
+                _ => None,
+            };
+            let (before_owner, before_status) =
+                (issue.details.current_owner(), issue.details.status);
             issue.details.owner = Some(ZapperIssueOwner::User);
             issue.details.normalize(!issue.threads.is_empty());
+            if before_owner != issue.details.current_owner() {
+                changes.push(change(
+                    "owner",
+                    before_owner.as_ref().map(owner_value),
+                    Some("user".into()),
+                ));
+            }
+            if before_status != issue.details.status {
+                changes.push(change(
+                    "status",
+                    Some(wire(&before_status)),
+                    Some(wire(&issue.details.status)),
+                ));
+            }
             notify = !coordinator;
             let text = match recommendation.as_deref().map(str::trim) {
                 Some(r) if !r.is_empty() => {
@@ -225,6 +366,13 @@ pub(super) fn apply(
                 }
                 ZapperIssueOutcome::Dropped => (ZapperIssueStatus::Canceled, "Dropped"),
             };
+            if issue.details.status != status {
+                changes.push(change(
+                    "status",
+                    Some(wire(&issue.details.status)),
+                    Some(wire(&status)),
+                ));
+            }
             issue.details.status = status;
             notify = !coordinator;
             (issue_id, "closed", format!("{verb} · {}", note.trim()))
@@ -243,22 +391,57 @@ pub(super) fn apply(
                 issue.details.assigned,
                 "assign the issue to this Zapper before starting work"
             );
+            let (before_owner, before_status) =
+                (issue.details.current_owner(), issue.details.status);
             issue.threads.push(worker.chat_id.clone());
             issue.details.owner = Some(ZapperIssueOwner::Thread {
                 chat_id: worker.chat_id.clone(),
             });
             issue.details.status = ZapperIssueStatus::InProgress;
             issue.details.normalize(true);
+            changes.push(change("thread", None, Some(worker.chat_id.clone())));
+            changes.push(change(
+                "owner",
+                before_owner.as_ref().map(owner_value),
+                Some(worker.chat_id.clone()),
+            ));
+            if before_status != ZapperIssueStatus::InProgress {
+                changes.push(change(
+                    "status",
+                    Some(wire(&before_status)),
+                    Some(wire(&issue.details.status)),
+                ));
+            }
             (
                 issue_id,
                 "thread",
-                "Started thread · In progress".to_owned(),
+                format!("Started thread {} · In progress", worker.chat_id),
             )
         }
         _ => return Ok(()),
     };
     let issue = find(zapper, id)?;
     issue.updated_at = now;
+    let routed = delivery
+        .as_ref()
+        .filter(|d| d.chat_id != coordinator_chat)
+        .map(|d| (d.chat_id.clone(), d.state, d.detail.clone()));
+    if let Some((chat, ZapperIssueDeliveryState::Queued, _)) = &routed {
+        let message = answer_message(issue, &text, reply.as_deref());
+        tx.execute(
+            "INSERT INTO zapper_outbox(id,zapper,chat,action) VALUES(?1,?2,?3,?4)",
+            params![
+                answer_id(&command.command_id),
+                command.zapper_id,
+                chat,
+                serde_json::to_string(&ZapperAction::MessageWorker {
+                    chat_id: chat.clone(),
+                    text: message,
+                    automatic: false,
+                })?
+            ],
+        )?;
+    }
     issue.activity.push(ZapperIssueActivity {
         actor: actor.map(str::to_owned),
         id: command.command_id.clone(),
@@ -266,6 +449,9 @@ pub(super) fn apply(
         kind: kind.into(),
         text: text.clone(),
         reply_to: reply.clone(),
+        delivery,
+        thread: asked_for,
+        changes,
     });
     if notify && !coordinator {
         // A reply carries what it answers, so the Zapper can act without a lookup.
@@ -277,6 +463,8 @@ pub(super) fn apply(
                 format!("\nIn reply to: {quoted}")
             })
             .unwrap_or_default();
+        // Where the comment went rides the board's hidden `delivery`, not
+        // this visible summary; the guide says not to relay a delivered one.
         let summary = format!(
             "{}: {}\n{}{}",
             issue.code(),
@@ -405,26 +593,513 @@ fn transition(
     );
     Ok(())
 }
-/// The user answered: the newest linked thread still working for the Zapper
-/// takes the issue back, else the Zapper does.
-fn hand_back(issue: &mut ZapperIssue, workers: &[String]) {
-    let thread = issue
-        .threads
-        .iter()
-        .rev()
-        .find(|id| workers.contains(id))
-        .cloned();
+/// The user answered: the thread their answer went to takes the issue back,
+/// else the newest linked thread still working for the Zapper, else the Zapper.
+fn hand_back(issue: &mut ZapperIssue, workers: &[String], routed: Option<&str>) {
+    let thread = routed.map(str::to_owned).or_else(|| {
+        issue
+            .threads
+            .iter()
+            .rev()
+            .find(|id| workers.contains(id))
+            .cloned()
+    });
     issue.details.owner = Some(match thread {
         Some(chat_id) => ZapperIssueOwner::Thread { chat_id },
         None => ZapperIssueOwner::Zapper,
     });
     issue.details.normalize(!issue.threads.is_empty());
 }
-fn owner_label(owner: &ZapperIssueOwner) -> &'static str {
+fn owner_label(owner: &ZapperIssueOwner) -> String {
     match owner {
-        ZapperIssueOwner::Zapper => "Zapper",
-        ZapperIssueOwner::User => "You",
-        ZapperIssueOwner::Thread { .. } => "Thread",
+        ZapperIssueOwner::Zapper => "Zapper".into(),
+        ZapperIssueOwner::User => "You".into(),
+        // Clients swap a thread's chat id for its title.
+        ZapperIssueOwner::Thread { chat_id } => chat_id.clone(),
+    }
+}
+/// An owner as a change value: `user`, `zapper`, or the thread's chat id.
+fn owner_value(owner: &ZapperIssueOwner) -> String {
+    match owner {
+        ZapperIssueOwner::Zapper => "zapper".into(),
+        ZapperIssueOwner::User => "user".into(),
+        ZapperIssueOwner::Thread { chat_id } => chat_id.clone(),
+    }
+}
+/// A status or priority by its wire name.
+fn wire(value: &impl serde::Serialize) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+fn change(field: &str, before: Option<String>, after: Option<String>) -> ZapperIssueChange {
+    ZapperIssueChange {
+        field: field.into(),
+        before,
+        after,
+    }
+}
+
+/// Outbox and transcript message id of a person's comment sent to a thread.
+const ANSWER: &str = ":answer";
+pub(super) fn answer_id(comment: &str) -> String {
+    format!("{comment}{ANSWER}")
+}
+/// Who a person's comment goes to.
+#[derive(Debug, PartialEq, Eq)]
+enum Recipient {
+    /// One thread, named explicitly by what the person answered.
+    Thread(String),
+    /// The Zapper decides, and the comment says why.
+    Zapper(&'static str),
+    /// An ordinary comment: the Zapper hears about it as before.
+    None,
+}
+/// A comment reaches a thread directly only when it answers that thread
+/// explicitly: a reply to something the thread wrote, or an answer to the
+/// open question asked for it. Nothing else is guessed.
+fn recipient(
+    issue: &ZapperIssue,
+    target: Option<&ZapperIssueActivity>,
+    waiting: bool,
+    workers: &[String],
+    expected: Option<u32>,
+    changed: Option<u32>,
+    coordinator: &str,
+) -> Recipient {
+    let question = |q: &ZapperIssueActivity| {
+        let newest = issue.activity.iter().rev().find(|a| a.kind == "question");
+        if !waiting {
+            return Recipient::None;
+        }
+        if newest.map(|n| &n.id) != Some(&q.id) {
+            return Recipient::Zapper(
+                "A newer question replaced this one, so the Zapper routes your answer",
+            );
+        }
+        match (&q.thread, expected) {
+            (Some(_), None) => Recipient::Zapper(
+                "Routing an answer to its thread needs the issue revision you answered, so the Zapper routes this one",
+            ),
+            (Some(chat), Some(e)) if changed.is_none_or(|c| e >= c) => {
+                Recipient::Thread(chat.clone())
+            }
+            (Some(_), Some(_)) => Recipient::Zapper(
+                "The issue changed after you opened it, so the Zapper routes your answer",
+            ),
+            (None, _) => Recipient::Zapper(
+                "No single thread is tied to this question, so the Zapper routes your answer",
+            ),
+        }
+    };
+    match target {
+        Some(t) => match t.actor.as_deref() {
+            Some(actor)
+                if actor != coordinator
+                    && (t.kind == "workerReport"
+                        || issue.threads.iter().any(|c| c == actor)
+                        || workers.iter().any(|c| c == actor)) =>
+            {
+                Recipient::Thread(actor.to_owned())
+            }
+            _ if t.kind == "question" => question(t),
+            _ => Recipient::None,
+        },
+        None if waiting => match issue.activity.iter().rev().find(|a| a.kind == "question") {
+            Some(q) => question(q),
+            None => Recipient::Zapper(
+                "No single thread is tied to this question, so the Zapper routes your answer",
+            ),
+        },
+        None => Recipient::None,
+    }
+}
+/// Whether `chat` may receive a person's comment now: never a closed issue,
+/// a stopped or archived Zapper, a thread that left the Zapper or the issue,
+/// or a thread the person stopped. Held comments stay on the issue.
+fn route(
+    db: &Connection,
+    zapper_id: &str,
+    status: ZapperStatus,
+    issue: &ZapperIssue,
+    workers: &[String],
+    chat: String,
+) -> Result<ZapperIssueDelivery> {
+    let reason = hold_reason(db, zapper_id, status, issue, workers, &chat)?;
+    Ok(ZapperIssueDelivery {
+        chat_id: chat,
+        state: if reason.is_some() {
+            ZapperIssueDeliveryState::Held
+        } else {
+            ZapperIssueDeliveryState::Queued
+        },
+        detail: reason.map(str::to_owned),
+        reply: None,
+    })
+}
+fn hold_reason(
+    db: &Connection,
+    zapper_id: &str,
+    status: ZapperStatus,
+    issue: &ZapperIssue,
+    workers: &[String],
+    chat: &str,
+) -> Result<Option<&'static str>> {
+    if issue.details.status.terminal() {
+        return Ok(Some("This issue is closed"));
+    }
+    match status {
+        ZapperStatus::Stopped => return Ok(Some("The Zapper is stopped")),
+        ZapperStatus::Archived => return Ok(Some("The Zapper is archived")),
+        ZapperStatus::Active | ZapperStatus::Paused => {}
+    }
+    if !workers.iter().any(|w| w == chat) {
+        return Ok(Some("This thread no longer works for the Zapper"));
+    }
+    if !issue.threads.iter().any(|t| t == chat) {
+        return Ok(Some("This thread is no longer linked to the issue"));
+    }
+    let hold: Option<String> = db
+        .query_row(
+            "SELECT reason FROM zapper_worker_holds WHERE zapper=?1 AND chat=?2",
+            params![zapper_id, chat],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if hold.as_deref().map(HoldSource::of) == Some(HoldSource::User) {
+        return Ok(Some(
+            "You stopped this thread. Continue it from its conversation first",
+        ));
+    }
+    Ok(None)
+}
+/// The revision at which an issue's details last changed, when tracked.
+fn issue_revision(db: &Connection, zapper: &str, issue: &str) -> Result<Option<u32>> {
+    Ok(db
+        .query_row(
+            "SELECT revision FROM zapper_targets WHERE zapper=?1 AND target=?2",
+            params![zapper, issue_target(issue)],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+/// What the thread reads: who answered, where, and what they answered.
+fn answer_message(issue: &ZapperIssue, text: &str, reply: Option<&str>) -> String {
+    let quoted = reply
+        .and_then(|id| issue.activity.iter().find(|a| a.id == id))
+        .map(|a| {
+            let quoted: String = a.text.chars().take(280).collect();
+            format!("\n\nIn reply to: {quoted}")
+        })
+        .unwrap_or_default();
+    format!(
+        "The person replied on {} \"{}\":\n\n{}{}",
+        issue.code(),
+        issue.details.title,
+        text.trim(),
+        quoted
+    )
+}
+/// Refresh routed comments from the outbox: queued, retrying, sent, or
+/// answered once a report was correlated to the delivered message.
+pub(super) fn mark_deliveries(db: &Connection, zapper: &mut Zapper) -> Result<()> {
+    use std::collections::{HashMap, HashSet};
+    let coordinators: Vec<String> = std::iter::once(zapper.coordinator_chat_id.clone())
+        .chain(zapper.previous_coordinator_chats.iter().cloned())
+        .collect();
+    let routed = |d: &ZapperIssueDelivery| d.state != ZapperIssueDeliveryState::Held;
+    let entries = || {
+        zapper
+            .issues
+            .iter()
+            .flat_map(|i| &i.activity)
+            .filter(|a| a.delivery.as_ref().is_some_and(routed))
+    };
+    if entries().next().is_none() {
+        return Ok(());
+    }
+    // A fixed number of queries per Zapper, whatever its history.
+    let outbox: HashMap<String, (String, Option<String>)> = db
+        .prepare_cached(
+            "SELECT id,phase,error FROM zapper_outbox WHERE zapper=?1 AND id LIKE '%:answer'",
+        )?
+        .query_map([&zapper.id], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))?
+        .collect::<rusqlite::Result<_>>()?;
+    let to_zapper: Vec<String> = entries()
+        .filter(|a| {
+            a.delivery
+                .as_ref()
+                .is_some_and(|d| coordinators.contains(&d.chat_id))
+        })
+        .map(|a| format!("issue-{}", a.id))
+        .collect();
+    let mut acknowledged: HashSet<String> = HashSet::new();
+    let mut notified: HashSet<String> = HashSet::new();
+    if !to_zapper.is_empty() {
+        acknowledged = db
+            .prepare_cached(
+                "SELECT id FROM zapper_events WHERE zapper=?1 AND id LIKE 'issue-%' AND acknowledged<>0",
+            )?
+            .query_map([&zapper.id], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        let wanted: Vec<String> = to_zapper
+            .iter()
+            .flat_map(|event| {
+                coordinators
+                    .iter()
+                    .map(move |chat| super::supervision::event_id(&[chat, event]))
+            })
+            .collect();
+        for chunk in wanted.chunks(400) {
+            let sql = format!(
+                "SELECT id FROM zapper_notifications WHERE id IN ({})",
+                vec!["?"; chunk.len()].join(",")
+            );
+            let mut stmt = db.prepare(&sql)?;
+            for id in
+                stmt.query_map(rusqlite::params_from_iter(chunk), |r| r.get::<_, String>(0))?
+            {
+                notified.insert(id?);
+            }
+        }
+    }
+    let paused = zapper.status == ZapperStatus::Paused;
+    for issue in &mut zapper.issues {
+        let ids: HashSet<String> = issue.activity.iter().map(|a| a.id.clone()).collect();
+        for entry in &mut issue.activity {
+            let Some(delivery) = entry.delivery.as_mut().filter(|d| routed(d)) else {
+                continue;
+            };
+            if coordinators.contains(&delivery.chat_id) {
+                // The Zapper hears through its event; it's sent once the
+                // Zapper was woken with it or acknowledged it.
+                let event = format!("issue-{}", entry.id);
+                let woken = coordinators
+                    .iter()
+                    .any(|chat| notified.contains(&super::supervision::event_id(&[chat, &event])));
+                if acknowledged.contains(&event) || woken {
+                    delivery.state = ZapperIssueDeliveryState::Sent;
+                } else if paused {
+                    delivery.state = ZapperIssueDeliveryState::Queued;
+                }
+                continue;
+            }
+            let Some((phase, error)) = outbox.get(&answer_id(&entry.id)).cloned() else {
+                continue;
+            };
+            (delivery.state, delivery.detail) = match phase.as_str() {
+                "pending" => (
+                    ZapperIssueDeliveryState::Queued,
+                    paused.then(|| "Waiting for the Zapper to resume".to_owned()),
+                ),
+                "sending" if error.is_some() => (ZapperIssueDeliveryState::Retrying, error),
+                "sending" => (ZapperIssueDeliveryState::Queued, None),
+                "sent" | "settled" if delivery.reply.as_ref().is_some_and(|r| ids.contains(r)) => {
+                    (ZapperIssueDeliveryState::Answered, None)
+                }
+                "sent" | "settled" => (ZapperIssueDeliveryState::Sent, None),
+                _ => (
+                    ZapperIssueDeliveryState::Cancelled,
+                    Some(error.unwrap_or_else(|| "Stopped before it was sent".into())),
+                ),
+            };
+        }
+    }
+    Ok(())
+}
+/// Recheck a routed comment just before it goes out: the issue, Zapper or
+/// thread may have changed since it was queued.
+pub(super) fn answer_hold(
+    db: &Connection,
+    zapper: &Zapper,
+    outbox: &str,
+) -> Result<Option<String>> {
+    let Some(comment) = outbox.strip_suffix(ANSWER) else {
+        return Ok(None);
+    };
+    let workers: Vec<String> = zapper.workers.iter().map(|w| w.chat_id.clone()).collect();
+    for issue in &zapper.issues {
+        if let Some(chat) = issue
+            .activity
+            .iter()
+            .find(|a| a.id == comment)
+            .and_then(|a| a.delivery.as_ref())
+            .map(|d| d.chat_id.clone())
+        {
+            return Ok(
+                hold_reason(db, &zapper.id, zapper.status, issue, &workers, &chat)?
+                    .map(str::to_owned),
+            );
+        }
+    }
+    Ok(Some("The comment is no longer on the issue".into()))
+}
+/// The person's comment a finished turn answered: the transcript message
+/// that started the turn ending at `turn`. `None` while the transcript
+/// hasn't caught up to that turn; `Some(None)` when another message started it.
+pub(super) fn answered_message(
+    entries: &[zuse_model::SessionMessageEntry],
+    turn: &str,
+) -> Option<Option<String>> {
+    let end = entries.iter().position(|e| e.id == turn)?;
+    Some(
+        entries[..end]
+            .iter()
+            .rev()
+            .find(|e| e.role == zuse_model::MessageRole::User)
+            .map(|e| e.id.clone())
+            .filter(|id| id.ends_with(ANSWER)),
+    )
+}
+impl Zappers {
+    /// Whether `chat` was sent a routed comment that no report answers yet:
+    /// only then is a finished turn worth matching against its transcript.
+    pub(super) fn unanswered(&self, zapper: &str, chat: &str) -> Result<bool> {
+        let db = self
+            .inner
+            .db
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?;
+        let sent: Vec<String> = db
+            .prepare_cached(
+                "SELECT id FROM zapper_outbox WHERE zapper=?1 AND chat=?2 AND id LIKE '%:answer' AND phase IN ('sent','settled')",
+            )?
+            .query_map(params![zapper, chat], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        if sent.is_empty() {
+            return Ok(false);
+        }
+        let state: Option<String> = db
+            .query_row("SELECT state FROM zappers WHERE id=?1", [zapper], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        let Some(state) = state else {
+            return Ok(false);
+        };
+        let zapper: Zapper = serde_json::from_str(&state)?;
+        Ok(zapper.issues.iter().flat_map(|i| &i.activity).any(|a| {
+            sent.iter()
+                .any(|id| id.strip_suffix(ANSWER) == Some(a.id.as_str()))
+                && a.delivery.as_ref().is_some_and(|d| d.reply.is_none())
+        }))
+    }
+    /// Match a finished turn to the routed comment whose message started it,
+    /// by transcript identity alone. `Ok(false)`: it answers none.
+    pub(super) fn correlate(
+        &self,
+        zapper: &str,
+        chat: &str,
+        report: &str,
+        started: Option<&str>,
+    ) -> Result<bool> {
+        let Some(message) = started else {
+            return Ok(false);
+        };
+        let delivered = self
+            .inner
+            .db
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?
+            .query_row(
+                "SELECT 1 FROM zapper_outbox WHERE id=?1 AND zapper=?2 AND chat=?3 AND phase IN ('sent','settled')",
+                params![message, zapper, chat],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !delivered {
+            return Ok(false);
+        }
+        self.link_answer(zapper, chat, report, message)?;
+        Ok(true)
+    }
+    /// Record that `report` answers the comment delivered as `message`, and
+    /// nest the report under it if it's already posted. A recorded answer is
+    /// never replaced, so a reread or replay can't move a reply.
+    pub(super) fn link_answer(
+        &self,
+        zapper_id: &str,
+        chat: &str,
+        report: &str,
+        message: &str,
+    ) -> Result<()> {
+        let comment = message
+            .strip_suffix(ANSWER)
+            .context("not a routed comment")?;
+        let mut db = self
+            .inner
+            .db
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Zapper storage unavailable"))?;
+        let tx = db.transaction()?;
+        let delivered = tx
+            .query_row(
+                "SELECT 1 FROM zapper_outbox WHERE id=?1 AND zapper=?2 AND chat=?3 AND phase IN ('sent','settled')",
+                params![message, zapper_id, chat],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        ensure!(delivered, "that comment was not delivered to this thread");
+        let state: String =
+            tx.query_row("SELECT state FROM zappers WHERE id=?1", [zapper_id], |r| {
+                r.get(0)
+            })?;
+        let mut zapper: Zapper = serde_json::from_str(&state)?;
+        let before = zapper.clone();
+        for issue in &mut zapper.issues {
+            let Some(entry) = issue.activity.iter_mut().find(|a| a.id == comment) else {
+                continue;
+            };
+            let root = entry.reply_to.clone().unwrap_or_else(|| entry.id.clone());
+            let Some(delivery) = entry.delivery.as_mut().filter(|d| d.chat_id == chat) else {
+                continue;
+            };
+            if delivery.reply.is_some() {
+                continue;
+            }
+            delivery.reply = Some(report.to_owned());
+            if let Some(posted) = issue.activity.iter_mut().find(|a| {
+                a.id == report && a.actor.as_deref() == Some(chat) && a.reply_to.is_none()
+            }) {
+                posted.reply_to = Some(root);
+            }
+        }
+        let changed = zapper != before;
+        if changed {
+            zapper.revision = zapper
+                .revision
+                .checked_add(1)
+                .context("Zapper revision exhausted")?;
+            record_changes(&tx, &before, &zapper)?;
+            tx.execute(
+                "UPDATE zappers SET state=?2 WHERE id=?1",
+                params![zapper.id, serde_json::to_string(&zapper)?],
+            )?;
+        }
+        tx.commit()?;
+        if changed {
+            self.inner.changed.send_modify(|n| *n = n.wrapping_add(1));
+        }
+        Ok(())
+    }
+}
+/// Turns already found to answer no routed comment, so the transcript isn't
+/// reread every pass. Memory only: after a restart a turn is checked once more.
+static CHECKED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+pub(super) fn checked_turn(report: &str) -> bool {
+    CHECKED
+        .lock()
+        .is_ok_and(|seen| seen.iter().any(|r| r == report))
+}
+pub(super) fn remember_turn(report: &str) {
+    if let Ok(mut seen) = CHECKED.lock() {
+        if seen.len() >= 1024 {
+            seen.remove(0);
+        }
+        seen.push(report.to_owned());
     }
 }
 fn find<'a>(zapper: &'a mut Zapper, id: &str) -> Result<&'a mut ZapperIssue> {
@@ -554,6 +1229,17 @@ pub(super) fn report(tx: &rusqlite::Transaction<'_>, event: &ZapperEvent) -> Res
         if !issue.threads.contains(&event.worker_chat_id) {
             continue;
         }
+        // Nested under the routed comment whose message started this turn.
+        let reply_to = issue
+            .activity
+            .iter()
+            .find(|a| {
+                a.delivery.as_ref().is_some_and(|d| {
+                    d.chat_id == event.worker_chat_id
+                        && d.reply.as_deref() == Some(event.id.as_str())
+                })
+            })
+            .map(|a| a.reply_to.clone().unwrap_or_else(|| a.id.clone()));
         let now = chrono::Utc::now().timestamp_millis();
         issue.activity.push(ZapperIssueActivity {
             actor: Some(event.worker_chat_id.clone()),
@@ -571,7 +1257,8 @@ pub(super) fn report(tx: &rusqlite::Transaction<'_>, event: &ZapperEvent) -> Res
                 },
                 event.summary
             ),
-            reply_to: None,
+            reply_to,
+            ..Default::default()
         });
         issue.updated_at = now;
         let reported = report_status(&event.summary);
@@ -929,6 +1616,53 @@ mod tests {
         let zapper = store.get("release").unwrap();
         let parent = zapper.issues.iter().find(|i| i.id == "parent").unwrap();
         assert_eq!(parent.details.status, ZapperIssueStatus::InProgress);
+    }
+    #[test]
+    fn delegating_records_the_owner_it_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
+        create(&store, "release");
+        let mut todo = details();
+        todo.status = ZapperIssueStatus::Todo;
+        todo.done_criteria = "It ships".into();
+        as_zapper(
+            &store,
+            "fix",
+            ZapperAction::CreateIssue {
+                issue_id: "fix".into(),
+                details: todo,
+            },
+        )
+        .unwrap();
+        as_zapper(
+            &store,
+            "zapper-worker-start",
+            ZapperAction::Delegate {
+                issue_id: Some("fix".into()),
+                worker: ZapperWorker {
+                    chat_id: "zapper-worker-start".into(),
+                    ..worker()
+                },
+                model: config().coordinator_model,
+                base: "origin/main".into(),
+            },
+        )
+        .unwrap();
+        let zapper = store.get("release").unwrap();
+        let started = zapper.issues[0]
+            .activity
+            .iter()
+            .find(|a| a.id == "zapper-worker-start")
+            .unwrap();
+        assert!(
+            started.changes.contains(&change(
+                "owner",
+                Some("zapper".into()),
+                Some("zapper-worker-start".into())
+            )),
+            "{:?}",
+            started.changes
+        );
     }
     #[test]
     fn unknown_relations_and_parents_say_to_create_them_first() {
@@ -1350,5 +2084,779 @@ mod attribution_tests {
             .prepare_request("worker", zuse_protocol::HarnessId::ClaudeCode, &mut request)
             .unwrap();
         assert_eq!(request.prompt, once);
+    }
+}
+
+#[cfg(test)]
+mod routing_tests {
+    use super::*;
+    use crate::zappers::tests::{command, create, worker};
+    use zuse_model::{MessagePart, MessageRole, SessionMessageEntry};
+
+    fn store() -> (tempfile::TempDir, Zappers) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Zappers::open(dir.path(), "local").unwrap();
+        create(&store, "release");
+        (dir, store)
+    }
+    fn run(store: &Zappers, id: &str, action: ZapperAction) -> Zapper {
+        store
+            .command(command("release", id, action))
+            .unwrap()
+            .unwrap()
+    }
+    fn issue(store: &Zappers) -> ZapperIssue {
+        store.get("release").unwrap().issues[0].clone()
+    }
+    fn entry(store: &Zappers, id: &str) -> ZapperIssueActivity {
+        issue(store)
+            .activity
+            .into_iter()
+            .find(|a| a.id == id)
+            .unwrap()
+    }
+    /// An issue with two linked threads, each of which has reported once.
+    fn board(store: &Zappers) {
+        run(
+            store,
+            "issue",
+            ZapperAction::CreateIssue {
+                issue_id: "fix".into(),
+                details: ZapperIssueDetails {
+                    title: "Ship the fix".into(),
+                    description: String::new(),
+                    assigned: true,
+                    ..Default::default()
+                },
+            },
+        );
+        for chat in ["worker", "other"] {
+            run(
+                store,
+                &format!("adopt-{chat}"),
+                ZapperAction::AdoptWorker {
+                    worker: ZapperWorker {
+                        chat_id: chat.into(),
+                        ..worker()
+                    },
+                },
+            );
+            run(
+                store,
+                &format!("link-{chat}"),
+                ZapperAction::LinkIssueThread {
+                    issue_id: "fix".into(),
+                    chat_id: chat.into(),
+                },
+            );
+            store
+                .record_event(&ZapperEvent {
+                    id: format!("report-{chat}"),
+                    zapper_id: "release".into(),
+                    worker_chat_id: chat.into(),
+                    kind: "settled".into(),
+                    summary: format!("{chat}: A or B?"),
+                    acknowledged: false,
+                })
+                .unwrap();
+        }
+    }
+    fn reply(id: &str, to: &str) -> ZapperCommand {
+        let mut command = command(
+            "release",
+            id,
+            ZapperAction::CommentIssue {
+                issue_id: "fix".into(),
+                text: "B".into(),
+                reply_to: Some(to.into()),
+            },
+        );
+        command.expected_revision = None;
+        command
+    }
+    fn answers(store: &Zappers) -> Vec<(String, String)> {
+        store
+            .outbox()
+            .unwrap()
+            .into_iter()
+            .filter(|(id, ..)| id.ends_with(ANSWER))
+            .map(|(id, _, chat, ..)| (id, chat))
+            .collect()
+    }
+    fn delivery(store: &Zappers, id: &str) -> ZapperIssueDelivery {
+        entry(store, id).delivery.unwrap()
+    }
+
+    #[test]
+    fn a_reply_to_a_thread_reaches_exactly_that_thread_once() {
+        let (dir, store) = store();
+        board(&store);
+        let answer = reply("answer", "report-other");
+        store.command(answer.clone()).unwrap();
+        store.command(answer.clone()).unwrap();
+        assert_eq!(
+            answers(&store),
+            vec![("answer:answer".into(), "other".into())]
+        );
+        let routed = delivery(&store, "answer");
+        assert_eq!(routed.chat_id, "other");
+        assert_eq!(routed.state, ZapperIssueDeliveryState::Queued);
+        // The thread reads what it was asked and the answer.
+        let (_, _, _, action, _) = store.outbox().unwrap().pop().unwrap();
+        let ZapperAction::MessageWorker {
+            text, automatic, ..
+        } = action
+        else {
+            panic!("not a message");
+        };
+        assert!(!automatic);
+        assert!(
+            text.ends_with(":\n\nB\n\nIn reply to: Worker update\nother: A or B?"),
+            "{text}"
+        );
+        // The Zapper hears the comment; where it went stays in the board's
+        // delivery metadata, out of the visible summary.
+        let event = store
+            .events("release")
+            .unwrap()
+            .into_iter()
+            .find(|e| e.id == "issue-answer")
+            .unwrap();
+        assert!(
+            !event.summary.contains("answer:answer"),
+            "{}",
+            event.summary
+        );
+        let view = coordinator_view(&store.get("release").unwrap()).unwrap();
+        let recent = view["issues"][0]["recentActivity"].as_array().unwrap();
+        assert_eq!(recent.last().unwrap()["delivery"]["chatId"], "other");
+        // A restart replays the receipt, never a second delivery.
+        drop(store);
+        let store = Zappers::open(dir.path(), "local").unwrap();
+        store.command(answer).unwrap();
+        assert_eq!(answers(&store).len(), 1);
+        // The worker's objective is untouched by an answer.
+        assert_eq!(
+            store.get("release").unwrap().workers[1].objective,
+            worker().objective
+        );
+    }
+
+    #[test]
+    fn workers_and_the_zapper_never_route_comments_to_threads() {
+        let (_dir, store) = store();
+        board(&store);
+        store
+            .command_as(reply("from-worker", "report-other"), Some("worker"), false)
+            .unwrap();
+        store
+            .command_as(reply("from-zapper", "report-other"), Some("Release"), true)
+            .unwrap();
+        assert!(answers(&store).is_empty());
+        assert!(entry(&store, "from-worker").delivery.is_none());
+        assert!(entry(&store, "from-zapper").delivery.is_none());
+    }
+
+    #[test]
+    fn ordinary_comments_stay_with_the_zapper() {
+        let (_dir, store) = store();
+        board(&store);
+        run(
+            &store,
+            "note",
+            ZapperAction::CommentIssue {
+                issue_id: "fix".into(),
+                text: "FYI the API moved".into(),
+                reply_to: None,
+            },
+        );
+        assert!(answers(&store).is_empty());
+        assert!(entry(&store, "note").delivery.is_none());
+        assert!(
+            store
+                .events("release")
+                .unwrap()
+                .iter()
+                .any(|e| e.id == "issue-note")
+        );
+    }
+
+    fn ask(store: &Zappers, owner: Option<&str>) {
+        if let Some(chat) = owner {
+            let mut details = issue(store).details;
+            details.owner = Some(ZapperIssueOwner::Thread {
+                chat_id: chat.into(),
+            });
+            run(
+                store,
+                "own",
+                ZapperAction::EditIssue {
+                    issue_id: "fix".into(),
+                    details,
+                },
+            );
+        }
+        store
+            .command_as(
+                command(
+                    "release",
+                    "ask",
+                    ZapperAction::AskUser {
+                        issue_id: "fix".into(),
+                        question: "A or B?".into(),
+                        recommendation: None,
+                    },
+                ),
+                Some("Release"),
+                true,
+            )
+            .unwrap();
+    }
+    fn answer(store: &Zappers, id: &str, revision: Option<u32>) {
+        let mut answer = command(
+            "release",
+            id,
+            ZapperAction::CommentIssue {
+                issue_id: "fix".into(),
+                text: "B".into(),
+                reply_to: None,
+            },
+        );
+        answer.expected_revision = revision;
+        store.command(answer).unwrap();
+    }
+
+    #[test]
+    fn an_answer_goes_to_the_thread_its_question_was_asked_for() {
+        let (_dir, store) = store();
+        board(&store);
+        ask(&store, Some("worker"));
+        assert_eq!(entry(&store, "ask").thread.as_deref(), Some("worker"));
+        let revision = store.get("release").unwrap().revision;
+        answer(&store, "answer", Some(revision));
+        assert_eq!(
+            answers(&store),
+            vec![("answer:answer".into(), "worker".into())]
+        );
+        assert_eq!(
+            issue(&store).details.current_owner(),
+            Some(ZapperIssueOwner::Thread {
+                chat_id: "worker".into()
+            })
+        );
+    }
+
+    #[test]
+    fn untied_or_stale_answers_fall_back_to_the_zapper_with_a_reason() {
+        for (case, owner, revision) in [
+            ("untied", None, Some(true)),
+            ("stale", Some("worker"), Some(false)),
+            ("unversioned", Some("worker"), None),
+        ] {
+            let (_dir, store) = store();
+            board(&store);
+            ask(&store, owner);
+            let current = store.get("release").unwrap().revision;
+            answer(
+                &store,
+                "answer",
+                revision.map(|fresh| if fresh { current } else { current - 3 }),
+            );
+            assert!(answers(&store).is_empty(), "{case}");
+            let routed = delivery(&store, "answer");
+            assert_eq!(
+                routed.chat_id,
+                store.get("release").unwrap().coordinator_chat_id,
+                "{case}"
+            );
+            let detail = routed.detail.unwrap();
+            assert!(detail.contains("Zapper routes"), "{case}");
+            // A caller that sends no revision is told exactly that.
+            assert_eq!(
+                case == "unversioned",
+                detail.contains("revision you answered"),
+                "{case}: {detail}"
+            );
+        }
+    }
+
+    #[test]
+    fn closed_stopped_and_released_work_is_never_revived() {
+        type Setup = fn(&Zappers);
+        let cases: [(&str, Setup, &str); 4] = [
+            (
+                "user stopped",
+                |s| {
+                    run(
+                        s,
+                        "stop",
+                        ZapperAction::StopWorker {
+                            chat_id: "other".into(),
+                        },
+                    );
+                },
+                "You stopped this thread",
+            ),
+            (
+                "closed",
+                |s| {
+                    let mut details = issue(s).details;
+                    details.status = ZapperIssueStatus::Done;
+                    run(
+                        s,
+                        "close",
+                        ZapperAction::EditIssue {
+                            issue_id: "fix".into(),
+                            details,
+                        },
+                    );
+                },
+                "closed",
+            ),
+            (
+                "released",
+                |s| {
+                    run(
+                        s,
+                        "release",
+                        ZapperAction::ReleaseWorker {
+                            chat_id: "other".into(),
+                        },
+                    );
+                },
+                "no longer works",
+            ),
+            (
+                "zapper stopped",
+                |s| {
+                    run(
+                        s,
+                        "halt",
+                        ZapperAction::SetStatus {
+                            status: ZapperStatus::Stopped,
+                        },
+                    );
+                },
+                "Zapper is stopped",
+            ),
+        ];
+        for (case, setup, reason) in cases {
+            let (_dir, store) = store();
+            board(&store);
+            setup(&store);
+            store.command(reply("answer", "report-other")).unwrap();
+            assert!(answers(&store).is_empty(), "{case}");
+            let held = delivery(&store, "answer");
+            assert_eq!(held.state, ZapperIssueDeliveryState::Held, "{case}");
+            assert!(held.detail.unwrap().contains(reason), "{case}");
+            let event = store
+                .events("release")
+                .unwrap()
+                .into_iter()
+                .find(|e| e.id == "issue-answer")
+                .unwrap();
+            assert!(!event.summary.contains("Not delivered"), "{case}");
+        }
+    }
+
+    #[test]
+    fn queued_answers_wait_while_paused_and_are_rechecked_before_sending() {
+        let (_dir, store) = store();
+        board(&store);
+        run(
+            &store,
+            "pause",
+            ZapperAction::SetStatus {
+                status: ZapperStatus::Paused,
+            },
+        );
+        store.command(reply("answer", "report-other")).unwrap();
+        let queued = delivery(&store, "answer");
+        assert_eq!(queued.state, ZapperIssueDeliveryState::Queued);
+        assert_eq!(
+            queued.detail.as_deref(),
+            Some("Waiting for the Zapper to resume")
+        );
+        let zapper = store.get("release").unwrap();
+        let db = store.inner.db.lock().unwrap();
+        assert_eq!(answer_hold(&db, &zapper, "answer:answer").unwrap(), None);
+        drop(db);
+        // Closing the issue after it was queued stops it at dispatch.
+        let mut details = issue(&store).details;
+        details.status = ZapperIssueStatus::Canceled;
+        run(
+            &store,
+            "drop",
+            ZapperAction::EditIssue {
+                issue_id: "fix".into(),
+                details,
+            },
+        );
+        let zapper = store.get("release").unwrap();
+        let db = store.inner.db.lock().unwrap();
+        assert_eq!(
+            answer_hold(&db, &zapper, "answer:answer")
+                .unwrap()
+                .as_deref(),
+            Some("This issue is closed")
+        );
+        drop(db);
+        store
+            .outbox_phase("answer:answer", "cancelled", Some("This issue is closed"))
+            .unwrap();
+        let cancelled = delivery(&store, "answer");
+        assert_eq!(cancelled.state, ZapperIssueDeliveryState::Cancelled);
+        assert_eq!(cancelled.detail.as_deref(), Some("This issue is closed"));
+    }
+
+    fn sent(store: &Zappers, id: &str, baseline: &str) {
+        store.outbox_phase(id, "sent", None).unwrap();
+        store
+            .inner
+            .db
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT OR IGNORE INTO zapper_delivery VALUES(?1,?2,1)",
+                params![id, baseline],
+            )
+            .unwrap();
+    }
+    fn report(store: &Zappers, id: &str) {
+        store
+            .record_event(&ZapperEvent {
+                id: id.into(),
+                zapper_id: "release".into(),
+                worker_chat_id: "other".into(),
+                kind: "settled".into(),
+                summary: "B it is.".into(),
+                acknowledged: false,
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn a_report_nests_only_under_the_comment_that_started_its_turn() {
+        let (_dir, store) = store();
+        board(&store);
+        store.command(reply("answer", "report-other")).unwrap();
+        // Accepted by the thread's queue: sent, not answered.
+        sent(&store, "answer:answer", "turn-0");
+        assert_eq!(
+            delivery(&store, "answer").state,
+            ZapperIssueDeliveryState::Sent
+        );
+        assert!(store.unanswered("release", "other").unwrap());
+        // Another message started this turn: it answers nothing.
+        assert!(
+            !store
+                .correlate("release", "other", "report-1", Some("typed"))
+                .unwrap()
+        );
+        assert!(
+            !store
+                .correlate("release", "other", "report-1", None)
+                .unwrap()
+        );
+        // Linked before the report is recorded, as reconcile does.
+        assert!(
+            store
+                .correlate("release", "other", "report-2", Some("answer:answer"))
+                .unwrap()
+        );
+        report(&store, "report-2");
+        // Replies stay one level deep: it joins the card the comment is in.
+        assert_eq!(
+            entry(&store, "report-2").reply_to.as_deref(),
+            Some("report-other")
+        );
+        assert_eq!(
+            delivery(&store, "answer").state,
+            ZapperIssueDeliveryState::Answered
+        );
+        assert!(!store.unanswered("release", "other").unwrap());
+        // A replayed link or a later report never moves the reply.
+        store
+            .correlate("release", "other", "report-3", Some("answer:answer"))
+            .unwrap();
+        report(&store, "report-3");
+        assert_eq!(entry(&store, "report-3").reply_to, None);
+        assert_eq!(
+            delivery(&store, "answer").reply.as_deref(),
+            Some("report-2")
+        );
+        // Only the thread it went to can be answered from.
+        assert!(
+            !store
+                .correlate("release", "worker", "report-x", Some("answer:answer"))
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn queued_answers_each_match_their_own_turn_across_a_restart() {
+        use MessageRole::{Assistant, User};
+        let (dir, store) = store();
+        board(&store);
+        store.command(reply("a", "report-other")).unwrap();
+        store.command(reply("b", "report-other")).unwrap();
+        // A went out and its turn finished; B waited behind it.
+        sent(&store, "a:answer", "turn-0");
+        let transcript = vec![message("a:answer", User), message("turn-a", Assistant)];
+        let started = answered_message(&transcript, "turn-a").unwrap();
+        assert!(
+            store
+                .correlate("release", "other", "report-a", started.as_deref())
+                .unwrap()
+        );
+        report(&store, "report-a");
+        assert_eq!(
+            delivery(&store, "a").state,
+            ZapperIssueDeliveryState::Answered
+        );
+        assert_eq!(
+            delivery(&store, "b").state,
+            ZapperIssueDeliveryState::Queued
+        );
+        // B goes out; a restart before its turn finishes changes nothing.
+        sent(&store, "b:answer", "turn-a");
+        assert_eq!(delivery(&store, "b").state, ZapperIssueDeliveryState::Sent);
+        drop(store);
+        let store = Zappers::open(dir.path(), "local").unwrap();
+        assert_eq!(delivery(&store, "a").reply.as_deref(), Some("report-a"));
+        assert!(store.unanswered("release", "other").unwrap());
+        let transcript = vec![
+            message("a:answer", User),
+            message("turn-a", Assistant),
+            message("b:answer", User),
+            message("turn-b", Assistant),
+        ];
+        // Rereading A's turn never touches B.
+        let again = answered_message(&transcript, "turn-a").unwrap();
+        store
+            .correlate("release", "other", "report-a", again.as_deref())
+            .unwrap();
+        assert_eq!(delivery(&store, "b").state, ZapperIssueDeliveryState::Sent);
+        let started = answered_message(&transcript, "turn-b").unwrap();
+        assert!(
+            store
+                .correlate("release", "other", "report-b", started.as_deref())
+                .unwrap()
+        );
+        report(&store, "report-b");
+        assert_eq!(
+            delivery(&store, "b").state,
+            ZapperIssueDeliveryState::Answered
+        );
+        assert_eq!(delivery(&store, "a").reply.as_deref(), Some("report-a"));
+        assert_eq!(delivery(&store, "b").reply.as_deref(), Some("report-b"));
+    }
+
+    #[test]
+    fn a_report_recorded_before_its_link_is_nested_later() {
+        let (dir, store) = store();
+        board(&store);
+        store.command(reply("answer", "report-other")).unwrap();
+        sent(&store, "answer:answer", "turn-0");
+        // Interrupted between the report and its link (or the transcript
+        // hadn't caught up): the next pass links the posted report.
+        report(&store, "report-2");
+        assert_eq!(entry(&store, "report-2").reply_to, None);
+        drop(store);
+        let store = Zappers::open(dir.path(), "local").unwrap();
+        assert!(
+            store
+                .correlate("release", "other", "report-2", Some("answer:answer"))
+                .unwrap()
+        );
+        assert_eq!(
+            entry(&store, "report-2").reply_to.as_deref(),
+            Some("report-other")
+        );
+    }
+
+    #[test]
+    fn a_stop_before_dispatch_cancels_the_answer() {
+        let (_dir, store) = store();
+        board(&store);
+        store.command(reply("answer", "report-other")).unwrap();
+        run(
+            &store,
+            "stop",
+            ZapperAction::StopWorker {
+                chat_id: "other".into(),
+            },
+        );
+        let cancelled = delivery(&store, "answer");
+        assert_eq!(cancelled.state, ZapperIssueDeliveryState::Cancelled);
+        let zapper = store.get("release").unwrap();
+        let db = store.inner.db.lock().unwrap();
+        assert!(
+            answer_hold(&db, &zapper, "answer:answer")
+                .unwrap()
+                .unwrap()
+                .contains("You stopped")
+        );
+    }
+
+    #[test]
+    fn an_answer_held_from_a_stopped_thread_goes_back_to_the_zapper() {
+        let (_dir, store) = store();
+        board(&store);
+        ask(&store, Some("worker"));
+        run(
+            &store,
+            "stop",
+            ZapperAction::StopWorker {
+                chat_id: "worker".into(),
+            },
+        );
+        let revision = store.get("release").unwrap().revision;
+        answer(&store, "answer", Some(revision));
+        assert!(answers(&store).is_empty());
+        assert_eq!(
+            delivery(&store, "answer").state,
+            ZapperIssueDeliveryState::Held
+        );
+        // Neither the stopped thread nor the other linked one takes it.
+        assert_eq!(
+            issue(&store).details.current_owner(),
+            Some(ZapperIssueOwner::Zapper)
+        );
+    }
+
+    #[test]
+    fn delivery_states_project_the_same_from_one_batch() {
+        let (_dir, store) = store();
+        board(&store);
+        for n in 0..40 {
+            store
+                .command(reply(&format!("c{n}"), "report-other"))
+                .unwrap();
+        }
+        sent(&store, "c1:answer", "t");
+        sent(&store, "c2:answer", "t");
+        store
+            .outbox_phase(
+                "c3:answer",
+                "sending",
+                Some("worker conversation unavailable"),
+            )
+            .unwrap();
+        store.outbox_phase("c4:answer", "cancelled", None).unwrap();
+        store
+            .correlate("release", "other", "report-2", Some("c2:answer"))
+            .unwrap();
+        report(&store, "report-2");
+        let states: Vec<_> = (0..6)
+            .map(|n| {
+                let d = delivery(&store, &format!("c{n}"));
+                (d.state, d.detail)
+            })
+            .collect();
+        use ZapperIssueDeliveryState::*;
+        assert_eq!(
+            states,
+            vec![
+                (Queued, None),
+                (Sent, None),
+                (Answered, None),
+                (Retrying, Some("worker conversation unavailable".into())),
+                (Cancelled, Some("Stopped before it was sent".into())),
+                (Queued, None),
+            ]
+        );
+    }
+    fn message(id: &str, role: MessageRole) -> SessionMessageEntry {
+        SessionMessageEntry {
+            id: id.into(),
+            role,
+            parts: vec![MessagePart::Text {
+                id: format!("{id}-text"),
+                text: id.into(),
+            }],
+            created_at: 0,
+            device_id: "local".into(),
+            status: None,
+            continuation_of: None,
+            duration_ms: None,
+        }
+    }
+
+    #[test]
+    fn turns_are_matched_to_the_message_that_started_them() {
+        use MessageRole::{Assistant, User};
+        let transcript = vec![
+            message("kickoff", User),
+            message("turn-0", Assistant),
+            message("a:answer", User),
+            message("turn-1", Assistant),
+            message("b:answer", User),
+            message("turn-2", Assistant),
+            message("typed in chat", User),
+            message("turn-3", Assistant),
+        ];
+        assert_eq!(
+            answered_message(&transcript, "turn-1"),
+            Some(Some("a:answer".into()))
+        );
+        assert_eq!(
+            answered_message(&transcript, "turn-2"),
+            Some(Some("b:answer".into()))
+        );
+        assert_eq!(answered_message(&transcript, "turn-3"), Some(None));
+        assert_eq!(answered_message(&transcript, "turn-0"), Some(None));
+        // A transcript that hasn't caught up decides nothing yet.
+        assert_eq!(answered_message(&transcript, "turn-9"), None);
+    }
+
+    #[test]
+    fn updates_record_typed_before_and_after_values() {
+        let (_dir, store) = store();
+        board(&store);
+        let mut details = issue(&store).details;
+        details.status = ZapperIssueStatus::InReview;
+        details.owner = Some(ZapperIssueOwner::Thread {
+            chat_id: "worker".into(),
+        });
+        run(
+            &store,
+            "edit",
+            ZapperAction::EditIssue {
+                issue_id: "fix".into(),
+                details,
+            },
+        );
+        let edit = entry(&store, "edit");
+        assert!(edit.text.contains("Owner: worker"), "{}", edit.text);
+        assert_eq!(
+            edit.changes,
+            vec![
+                change("owner", Some("zapper".into()), Some("worker".into())),
+                change("status", Some("backlog".into()), Some("inReview".into())),
+            ]
+        );
+        let mut details = issue(&store).details;
+        details.labels = vec!["web".into()];
+        details.due_date = Some("2026-12-05".into());
+        run(
+            &store,
+            "details",
+            ZapperAction::EditIssue {
+                issue_id: "fix".into(),
+                details,
+            },
+        );
+        assert_eq!(
+            entry(&store, "details").changes,
+            vec![
+                change("dueDate", None, Some("2026-12-05".into())),
+                change("labels", None, Some("web".into())),
+            ]
+        );
+        assert_eq!(
+            entry(&store, "link-worker").changes,
+            vec![change("thread", None, Some("worker".into()))]
+        );
     }
 }

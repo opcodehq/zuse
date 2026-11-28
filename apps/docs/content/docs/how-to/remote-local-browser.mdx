@@ -1,0 +1,67 @@
+---
+title: "Open Zuse in a browser on another device"
+icon: Laptop
+navTitle: "Open in a browser"
+description: "Turn on network access, open a one-time browser link, verify the session, and revoke it."
+section: how-to
+order: 20
+platforms: [desktop, browser, serve]
+providers: []
+prerequisites: [/remote/local-browser]
+related: [/remote/web-client, /remote/security, /how-to/remote-recover-connection]
+next: /remote/web-client
+lastVerified: "2026-11-27"
+---
+
+Open a computer's Zuse workspace in a browser on another device, without a Zuse account.
+
+## Applicability
+
+Use this guide when the browser's device can reach the computer over the same network or your tailnet. To reach it from anywhere, see [Reach a computer away from its network](/how-to/remote-hosted-access/).
+
+## Prerequisites
+
+- Zuse is open on the computer, or `zuse serve` is running there.
+- You can open a terminal on the computer.
+- Both devices are on a network that allows device-to-device traffic, or on the same tailnet.
+
+## Steps
+
+1. On the computer, open **Settings → Remote access** and turn on **Wi-Fi** or **Tailscale**. On a headless computer, start `zuse serve --lan` instead.
+2. Optional: for an address browsers trust without a warning, open **Advanced settings** and turn on **Tailscale HTTPS** (or start `zuse serve --lan --tailscale-serve`).
+3. In a terminal on the computer, run:
+
+   ```sh
+   zuse pair --label "Work laptop"
+   ```
+
+4. Copy the **Browser** link and open it on the other device. Send it only through a channel you trust; it works once and expires after ten minutes.
+5. If the browser warns about the certificate, continue only if you trust the network.
+
+## Verification
+
+- The browser shows the same projects and chats as the computer.
+- On the computer, the browser appears under **Devices** in **Settings → Remote access** with the label you chose.
+- Reloading the browser reopens the computer without a new link.
+
+## Revoke the browser
+
+1. On the computer, open **Settings → Remote access**.
+2. Find the browser under **Devices** and choose **Revoke**.
+3. The browser can no longer connect, even though it still has the computer saved.
+
+## Troubleshooting and recovery
+
+### zuse pair says the link only works on this computer
+
+No route is on. Turn on **Wi-Fi** or **Tailscale**, or restart `zuse serve` with `--lan`, then run `zuse pair` again.
+
+### No Zuse server is running
+
+`zuse pair` needs a running engine. Open the desktop app or start `zuse serve`. If it uses another port, pass `--ipc-port`.
+
+### The browser cannot reach the computer
+
+Confirm the computer is awake and both devices are on a network that allows device-to-device traffic. Guest and office Wi-Fi often do not; use Tailscale instead.
+
+See [connection recovery](/how-to/remote-recover-connection/) for later disconnects.

@@ -1118,6 +1118,7 @@ async fn run_session(session: Session) {
                             let (prev, next) = norm.rotate_for_steer();
                             if event_tx.send(Ok(AgentEvent::Steered {
                                 assistant_message_id: Some(prev), next_assistant_message_id: Some(next),
+                                message_id: None,
                             })).await.is_err() { break 'main; }
                         }
                     }
@@ -1367,6 +1368,7 @@ async fn run_session(session: Session) {
                     let (prev, next) = norm.rotate_for_steer();
                     if event_tx.send(Ok(AgentEvent::Steered {
                         assistant_message_id: Some(prev), next_assistant_message_id: Some(next),
+                        message_id: None,
                     })).await.is_err() { break 'main; }
                 }
                 let done = held_done.take().expect("guarded by if");

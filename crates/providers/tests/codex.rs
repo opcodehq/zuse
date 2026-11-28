@@ -400,6 +400,7 @@ async fn steering_uses_turn_steer_with_expected_turn_id() {
             AgentEvent::Steered {
                 assistant_message_id,
                 next_assistant_message_id,
+                ..
             } => Some((
                 assistant_message_id.clone(),
                 next_assistant_message_id.clone(),

@@ -27,6 +27,7 @@ pub mod file_mentions;
 pub mod git_workspace;
 pub mod input_answers;
 pub mod invocation;
+pub mod machine_setup;
 pub mod managed_connection;
 pub mod methods;
 pub mod motion;
@@ -88,6 +89,7 @@ pub mod notifications;
 
 pub mod plugin_setup;
 pub mod plugin_state;
+pub mod skill_catalog;
 
 pub mod cloud_auth;
 
@@ -106,3 +108,5 @@ pub mod keybindings;
 pub mod list_delta;
 pub mod simulators;
 pub mod slack;
+
+pub mod computer_tasks;

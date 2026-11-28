@@ -12,7 +12,8 @@
 //! poll ── HarnessOffer ──▶ verify signature, agent, adapter, state format
 //!      ──▶ download (presigned, no bearer) ──▶ zstd ──▶ sha256 ──▶ extract
 //!      ──▶ probe `--version` ──▶ read-only `bundles/<sha256>/` ──▶ staged
-//! boundary (cold start, or no turn and no unacknowledged command):
+//! boundary (no turn and no unacknowledged command; a bundle staged before a
+//! cold start waits until an offer still names it):
 //!      staged ──▶ active (previous kept) ──▶ attest adopted
 //! new harness process ──▶ Harnesses::executable(agent) ──▶ bundle path
 //!                         (else the previous bundle, else the image's CLI)

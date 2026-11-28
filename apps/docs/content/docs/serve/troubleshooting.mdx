@@ -1,0 +1,60 @@
+---
+title: "Serve troubleshooting"
+icon: LifeBuoy
+navTitle: "Troubleshooting"
+description: "Fix zuse serve startup errors, missing browser files, unreachable links, account linking, and background service problems."
+section: "Serve CLI"
+order: 5
+platforms: [serve, web, mobile]
+providers: []
+prerequisites: [/serve]
+related: [/serve/operations, /remote/recovery, /serve/security]
+next: /serve/agent-cli
+lastVerified: "2026-11-27"
+---
+
+Start with a status report:
+
+```sh
+zuse status
+```
+
+It shows whether an engine is running for the data directory, which account and linked computer it uses, and which network routes it offers.
+
+## "No Zuse server is running on agent port …"
+
+`zuse pair`, `link`, and `unlink` talk to a running engine on the loopback port. Start `zuse serve` (or the desktop app) first. If the engine uses another port, pass the same `--ipc-port` to both commands.
+
+## "Browser files were not found"
+
+Serve could not find the browser app next to its executable. Browsers cannot open the server until you pass `--assets <dir>` or set `ZUSE_WEB_ASSETS`. The `zuse-cli` archive and the desktop packages include these files; a bare binary copied on its own does not.
+
+## "This profile is already running"
+
+Another Zuse process, such as the desktop app or a service, owns the same data directory. Plain `zuse serve` reuses that engine and prints its browser link. Remote-access flags like `--lan`, `--account`, `--relay-origin`, or `--token` cannot be applied to a running engine: turn those options on in its **Settings → Remote access**, stop it, or use a separate `--data-dir`.
+
+## "Non-loopback listening requires …"
+
+`--listen` on an address other than loopback needs HTTPS: pass `--tls-cert` and `--tls-key`, or `--public-origin` for an HTTPS reverse proxy. To reach the computer on your network without your own certificate, use `--lan` instead.
+
+## "Could not bind the agent RPC port"
+
+Another process uses the engine port. Choose another `--ipc-port`, or `0` to let Serve pick one.
+
+## The pairing link only works on this computer
+
+`zuse pair` prints "This link only works on this computer" when no other device can reach the engine. Start `zuse serve` with `--lan` or `--account`, or turn on **Wi-Fi** or **Tailscale** in the desktop app's **Settings → Remote access**, then create a new link.
+
+## The browser warns about the certificate
+
+Links on the local network use a certificate generated for this computer, so the browser warns the first time. Continue only on a network you trust. Addresses from earlier networks stay on the certificate, so returning to a known network does not repeat the warning. Use `--tailscale-serve` for an address browsers trust.
+
+## Account sign-in does not finish
+
+Open the printed address on any device and confirm the code before it expires. Run `zuse link` (or `zuse serve --account`) again for a new code.
+
+## The service does not start or cannot find an agent
+
+Run `zuse daemon status`, then read the log: `daemon.log` in the data directory on macOS, or `journalctl --user -u zuse.service` on Linux. On Linux, the user needs a working systemd user session. The service only sees the `PATH` captured when you ran `zuse daemon install`; reinstall it after you install an agent CLI in a new location.
+
+<NextStep href="/serve/agent-cli/" label="Script Zuse from the command line" />

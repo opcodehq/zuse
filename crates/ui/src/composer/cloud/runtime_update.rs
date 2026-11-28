@@ -446,7 +446,9 @@ impl Composer {
     /// with its own error. The ones after it return to the draft too, so
     /// nothing is lost.
     pub(super) fn release_ready_cloud_messages(&mut self, cx: &mut Context<Self>) {
-        let ready: Vec<Held> = self.cloud.runtime.ready.drain(..).collect();
+        let mut ready: Vec<Held> = self.cloud.runtime.ready.drain(..).collect();
+        // Messages written after it, still waiting to go, return as well.
+        ready.extend(self.take_waiting_cloud_messages());
         self.return_held_to_draft(ready, cx);
     }
     /// Discard: the held messages leave the chat; their text and files return
@@ -475,9 +477,18 @@ impl Composer {
                 .iter()
                 .filter_map(|held| message_id(&held.request).map(str::to_owned))
                 .collect();
+            // A queued one shows in the queue under its command id.
+            let queued: Vec<String> = held
+                .iter()
+                .filter(|held| held.request["action"]["type"] == "queue")
+                .filter_map(|held| held.request["commandId"].as_str().map(str::to_owned))
+                .collect();
             self.state.update(cx, |state, cx| {
                 for id in &ids {
                     state.remove_echo(&session, id);
+                }
+                for id in &queued {
+                    state.drop_optimistic_queued(&session, id);
                 }
                 cx.notify();
             });
@@ -636,6 +647,7 @@ pub(super) mod tests {
     ) {
         let (send, receive) = tokio::sync::mpsc::channel(16);
         let (replies_tx, replies) = tokio::sync::mpsc::channel(16);
+        let send = crate::composer::computers::answering_primary_claims(send, replies_tx.clone());
         let controller =
             crate::state::EngineHandle::from_test_client(zuse_rpc::RpcClient::new(send, replies));
         let state = cx.new(|_| {

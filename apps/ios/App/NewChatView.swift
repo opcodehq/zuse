@@ -14,7 +14,7 @@ struct NewChatView: View {
   @State private var mode = "main"
   @State private var branch = ""
   @State private var worktree = ""
-  @State private var runtimeMode = "approval-required"
+  @State private var runtimeMode = AccessLevel.ask
   @State private var permissionMode = "default"
   @State private var catalog: [ModelProvider] = []
   @State private var branches: [GitBranch] = []
@@ -157,10 +157,9 @@ struct NewChatView: View {
     NavigationStack {
       Form {
         Picker("Permissions", selection: $runtimeMode) {
-          Text("Ask before changes").tag("approval-required")
-          Text("Allow edits").tag("auto-accept-edits")
-          Text("Allow edits & commands").tag("auto-accept-edits-and-bash")
-          Text("Full access").tag("full-access")
+          ForEach(AccessLevel.choices(for: provider), id: \.self) { level in
+            Text(AccessLevel.label(level)).tag(level)
+          }
         }
         Toggle(
           "Plan mode",
@@ -302,13 +301,18 @@ struct NewChatSetupView: View {
   let showsClose: Bool
   let close: () -> Void
   init(
-    workspace: WorkspaceModel, initialCloud: Bool = false, showsClose: Bool,
-    close: @escaping () -> Void
+    workspace: WorkspaceModel, initialCloud: Bool = false, initialPrompt: String = "",
+    showsClose: Bool, close: @escaping () -> Void
   ) {
     self.workspace = workspace
     self.showsClose = showsClose
     self.close = close
-    _cloud = State(initialValue: initialCloud)
+    _draft = State(initialValue: initialPrompt)
+    #if DEBUG
+      _cloud = State(initialValue: initialCloud || CloudPreview.enabled)
+    #else
+      _cloud = State(initialValue: initialCloud)
+    #endif
   }
   @State private var cloud = false
   @State private var draft = ""
@@ -566,8 +570,8 @@ private struct NewChatProgressView: View {
         VStack(alignment: .leading, spacing: 10) {
           Text(failure).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
           if let retry = progress.retry {
-            Button("Try Again", action: retry).buttonStyle(.borderedProminent)
-              .tint(AppTheme.accent).buttonBorderShape(.capsule)
+            Button("Try Again", action: retry).brandProminentButton()
+              .buttonBorderShape(.capsule)
           }
         }
       }
@@ -600,6 +604,7 @@ struct NewChatDraftComposer: View {
   let options: AnyView
   let models: AnyView
   let submit: () -> Void
+  @Environment(\.focusesNewChatComposer) private var focusesOnAppear
   var body: some View {
     VStack(spacing: 0) {
       TextField("Ask Zuse", text: $text, axis: .vertical)
@@ -620,5 +625,11 @@ struct NewChatDraftComposer: View {
           .accessibilityIdentifier("new-chat-create").accessibilityLabel("Create chat")
       }
     }.padding(8).composerGlass()
+      .task {
+        guard focusesOnAppear, editable, !busy else { return }
+        // After the push settles, so the keyboard rises with the page in place.
+        try? await Task.sleep(for: .milliseconds(450))
+        focused = true
+      }
   }
 }

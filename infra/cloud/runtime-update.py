@@ -26,6 +26,10 @@ supervisor's watchdog (runtime-supervisor.py), which then relaunches it once.
 
 Every attempt ends with /var/lib/zuse/runtime-update/result.json (0644):
 {"updateId","outcome":"committed|rolled-back|failed","sha256","previousSha256","errorCode"}.
+Each update's own outcome is also kept in results/<updateId>.json, so a later
+attempt can never hide the outcome a runtime is still waiting to attest. A
+failure that belongs to no update (an unreadable request) goes to error.json
+and leaves an update's result.json in place.
 Journal: /var/lib/zuse/runtime-update/journal.json, phases
 staged -> swapped -> committed (or failed / rolled-back).
 
@@ -89,6 +93,10 @@ class Paths:
     def journal(self): return self.state / 'journal.json'
     @property
     def result(self): return self.state / 'result.json'
+    @property
+    def results(self): return self.state / 'results'
+    @property
+    def error(self): return self.state / 'error.json'
     @property
     def releases(self): return self.runtime_root / 'releases'
     @property
@@ -289,10 +297,28 @@ def save_journal(paths, journal, phase):
     atomic_write(paths.journal, canonical(journal) + b'\n', 0o600)
 
 
+RESULTS_KEPT = 16
+
+
+def current_result_update(paths):
+    try: return json.loads(paths.result.read_bytes()).get('updateId')
+    except (OSError, ValueError, AttributeError): return None
+
+
 def write_result(paths, update, outcome, sha, previous, code):
     assert outcome in OUTCOMES
     value = dict(updateId=update, outcome=outcome, sha256=sha, previousSha256=previous, errorCode=code)
-    atomic_write(paths.result, canonical(value) + b'\n', 0o644)
+    data = canonical(value) + b'\n'
+    if update is None:
+        # Not an update's outcome: never overwrite one a runtime may still read.
+        atomic_write(paths.error, data, 0o644)
+        if current_result_update(paths) is not None: return value
+    else:
+        root_directory(paths.results, paths, 0o755)
+        atomic_write(paths.results / (update + '.json'), data, 0o644)
+        kept = sorted(paths.results.glob('*.json'), key=lambda p: p.stat().st_mtime_ns)
+        for old in kept[:-RESULTS_KEPT]: old.unlink(missing_ok=True)
+    atomic_write(paths.result, data, 0o644)
     return value
 
 
@@ -461,6 +487,14 @@ def install(paths, sha, update):
             release = store_release(paths, sha, work, copy)
             probe(release, sha, paths)
             journal = dict(version=VERSION, updateId=update, sha256=sha, previousSha256=previous)
+            # Check before touching `previous` or the journal: a withdrawn
+            # request must leave an earlier, still unproven update intact.
+            if not still_requested(paths, sha, update):
+                return write_result(paths, update, 'failed', sha, previous, 'runtime_update_request_withdrawn')
+            prior = load_journal(paths)
+            prior_previous = paths.runtime_root / '.previous-prior'
+            prior_previous.unlink(missing_ok=True)
+            if paths.previous.exists(): os.link(paths.previous, prior_previous)
             keep_previous(paths, previous)
         except Failed as error:
             return write_result(paths, update, 'failed', sha, previous, str(error))
@@ -469,8 +503,15 @@ def install(paths, sha, update):
         save_journal(paths, journal, 'staged')
         # A runtime that stopped waiting deleted its request: never swap under it.
         if not still_requested(paths, sha, update):
-            save_journal(paths, journal, 'failed')
+            if prior is not None:
+                # Put back the earlier update's journal and previous binary.
+                atomic_write(paths.journal, canonical(prior) + b'\n', 0o600)
+                if prior_previous.exists(): os.replace(prior_previous, paths.previous)
+            else:
+                save_journal(paths, journal, 'failed')
+            prior_previous.unlink(missing_ok=True)
             return write_result(paths, update, 'failed', sha, previous, 'runtime_update_request_withdrawn')
+        prior_previous.unlink(missing_ok=True)
         save_journal(paths, journal, 'swapped')
         try: install_file(release, sha, paths, 'update')
         except (Failed, OSError):

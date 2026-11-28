@@ -11,7 +11,7 @@
 	"do_i_need_my_own_api_keys_or_subscriptions": "我需要自己的 API 密钥或订阅吗？",
 	"yes_zuse_is_bring_your_own_keys_you_plug_in_your_own_provider_keys_or": "需要。你可以接入自己的模型服务商 API 密钥或订阅，Zuse 会直接连接对应服务。Zuse 不转售 Token，也不对模型用量额外加价，模型费用直接支付给相应服务商。",
 	"local_and_ssh_chats_stay_on_the_computers_you_choose_when_you_use_the": "本地和 SSH 会话保存在你选择的计算机上。使用可选的 Zuse Cloud 公开 Beta 时，工作区运行在你选择的云服务商上，并保存加密的会话记录检查点，以便快速重新连接。模型请求只发送给你配置的模型服务商。使用情况分析采用化名标识，不包含提示词、回复、代码、路径、命令、账户详情或错误堆栈，你可以在设置中关闭。",
-	"the_zuse_desktop_beta_is_available_now_and_uses_your_own_agent_subscri": "Zuse 桌面 Beta 现已可用，使用你自己的智能体订阅或 API 密钥。Zuse Cloud 已进入公开 Beta：云端工作区每月 40 美元，包含 35 美元可归属的沙箱计算费用。超出部分按云服务商成本加收 5%，并受你设置的超额费用上限约束。",
+	"the_zuse_desktop_beta_is_available_now_and_uses_your_own_agent_subscri": "Zuse 桌面 Beta 现已可用，使用你自己的智能体订阅或 API 密钥。Zuse Cloud 已进入公开 Beta：Cloud 每月 20 美元，包含 33,600 机器分钟，在默认机器上约可运行 140 小时。Cloud Max 每月 50 美元，包含 84,000 机器分钟，并可使用更大的机器。超出额度的用量按相同费率按量计费，不加价，并受你设置的每月上限约束。你可以用 1 美元试用 Cloud 的第一周。",
 	"yes_you_can_run_several_agents_in_parallel_each_in_its_own_chat_with_i": "可以。多个智能体可以并行运行，每个任务都有独立的会话和 Git worktree，代码改动互不干扰。你可以在 PR 与代码改动面板中逐项审查和提交。",
 	"a_lead_agent_can_spawn_sub_agents_to_handle_parts_of_a_task_including": "主智能体可以启动子智能体，分担任务中的不同部分，也可以让成本较低的模型处理简单工作，让能力更强的模型专注于复杂问题，从而降低整体模型用量成本。",
 	"what_is_sub_agent_delegation": "什么是子智能体任务委派？",

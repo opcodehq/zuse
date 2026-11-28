@@ -208,6 +208,7 @@ impl BrowserContext {
 }
 
 pub struct BrowserSurface {
+    hide_toolbar: bool,
     context: BrowserContext,
     address: Entity<ComposerInput>,
     focus: FocusHandle,
@@ -313,6 +314,7 @@ impl BrowserSurface {
         #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
         let _ = window;
         Self {
+            hide_toolbar: false,
             context,
             address,
             focus: cx.focus_handle(),
@@ -368,6 +370,10 @@ impl BrowserSurface {
     pub fn title(&self) -> gpui::SharedString {
         self.page.label().into()
     }
+    pub(crate) fn hide_toolbar(&mut self) {
+        self.hide_toolbar = true;
+    }
+
     pub fn set_remote(&mut self, remote: bool) {
         self.remote = remote;
     }

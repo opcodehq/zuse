@@ -33,6 +33,8 @@ pub mod grants;
 pub mod harness_updates;
 mod internal_observations;
 pub mod keep_running;
+mod launch_repair;
+mod launch_report;
 pub mod lifecycle;
 pub(crate) mod machine_layout;
 pub mod mailbox;
@@ -157,6 +159,11 @@ pub struct RuntimeControl {
     pub(crate) mailbox_changes: tokio::sync::broadcast::Sender<()>,
     /// Set once database NOTIFY forwards mailbox changes from other processes.
     mailbox_push: std::sync::atomic::AtomicBool,
+    /// A computer request changed (made, decided, claimed, finished or
+    /// stopped); bridge long-polls in this process re-read.
+    bridge_changes: tokio::sync::broadcast::Sender<()>,
+    /// Set once database NOTIFY forwards bridge changes from other processes.
+    bridge_push: std::sync::atomic::AtomicBool,
     runtime_releases: runtime_updates::RuntimeReleaseConfig,
     harness_bundles: harness_updates::HarnessBundleConfig,
     /// Whether this worker runs the provider reconciliation pass (its due time
@@ -320,6 +327,8 @@ impl RuntimeControl {
             object_writes: Arc::new(tokio::sync::Semaphore::new(1)),
             mailbox_changes: tokio::sync::broadcast::channel(128).0,
             mailbox_push: std::sync::atomic::AtomicBool::new(false),
+            bridge_changes: tokio::sync::broadcast::channel(128).0,
+            bridge_push: std::sync::atomic::AtomicBool::new(false),
             runtime_releases: runtime_updates::RuntimeReleaseConfig::default(),
             harness_bundles: harness_updates::HarnessBundleConfig::default(),
             provider_reconciliation: std::sync::atomic::AtomicBool::new(false),
@@ -382,6 +391,83 @@ impl RuntimeControl {
     pub fn credential_authority(&self) -> Option<Arc<crate::connections::ConnectionControl>> {
         self.authority.clone()
     }
+    pub(crate) async fn computer_task_owner(
+        &self,
+        id: &str,
+        chat: &str,
+        credential: &str,
+    ) -> Result<String, ApiError> {
+        self.scope_access(id, None, true).await?;
+        let mut tx = self.pool.begin().await?;
+        let (row, _, _) = locked_workspace(&mut tx, id).await?;
+        let now = chrono::Utc::now().timestamp_millis();
+        if blocked(&row)
+            || row["desired_state"] != "ready"
+            || row["runtime_credential_hash"]
+                .as_str()
+                .is_none_or(|h| !equal(h, &hash(credential)))
+            || row["request_config"]["runtimeCredentialExpiresAtMs"]
+                .as_i64()
+                .unwrap_or(0)
+                <= now
+            || !enrollment_matches(&row)
+        {
+            return Err(ApiError::unauthorized("workspace_runtime_fenced"));
+        }
+        let owner = row["account_id"]
+            .as_str()
+            .filter(|o| !o.starts_with("organization:"))
+            .ok_or_else(|| ApiError::forbidden("bridge_personal_account_required"))?
+            .to_owned();
+        let active:bool=sqlx::query_scalar("SELECT EXISTS(SELECT FROM zuse_rust_task_command_sessions WHERE workspace_id=$1 AND session_id=$2 AND state='active')")
+            .bind(id).bind(chat).fetch_one(&mut *tx).await?;
+        if !active {
+            return Err(ApiError::forbidden("bridge_chat_unavailable"));
+        }
+        Ok(owner)
+    }
+
+    /// The account a setup computer's chat configures: the runtime
+    /// credential, the active chat and the setup mark must all match.
+    pub(crate) async fn machine_setup_owner(
+        &self,
+        id: &str,
+        chat: &str,
+        credential: &str,
+    ) -> Result<String, ApiError> {
+        self.scope_access(id, None, true).await?;
+        let mut tx = self.pool.begin().await?;
+        let (row, _, _) = locked_workspace(&mut tx, id).await?;
+        let now = chrono::Utc::now().timestamp_millis();
+        if blocked(&row)
+            || row["desired_state"] != "ready"
+            || row["runtime_credential_hash"]
+                .as_str()
+                .is_none_or(|h| !equal(h, &hash(credential)))
+            || row["request_config"]["runtimeCredentialExpiresAtMs"]
+                .as_i64()
+                .unwrap_or(0)
+                <= now
+            || !enrollment_matches(&row)
+        {
+            return Err(ApiError::unauthorized("workspace_runtime_fenced"));
+        }
+        if !setup_workspace(&row) {
+            return Err(ApiError::forbidden("machine_setup_chat_required"));
+        }
+        let owner = row["account_id"]
+            .as_str()
+            .ok_or_else(|| ApiError::unavailable("cloud_workspace_record_invalid"))?
+            .to_owned();
+        let active:bool=sqlx::query_scalar("SELECT EXISTS(SELECT FROM zuse_rust_task_command_sessions WHERE workspace_id=$1 AND session_id=$2 AND state='active')")
+            .bind(id).bind(chat).fetch_one(&mut *tx).await?;
+        if !active {
+            return Err(ApiError::forbidden("machine_setup_chat_unavailable"));
+        }
+        tx.commit().await?;
+        Ok(owner)
+    }
+
     pub fn shared_pool(&self) -> PgPool {
         self.pool.clone()
     }
@@ -395,6 +481,8 @@ impl RuntimeControl {
         let weak = Arc::downgrade(self);
         self.mailbox_push
             .store(true, std::sync::atomic::Ordering::Release);
+        self.bridge_push
+            .store(true, std::sync::atomic::Ordering::Release);
         tokio::spawn(async move {
             let _wakeups = wakeups;
             use crate::db::wake::Work;
@@ -403,19 +491,44 @@ impl RuntimeControl {
                 let work = notifications.recv().await;
                 let Some(control) = weak.upgrade() else { break };
                 match work {
-                    Ok(Work::Mailbox | Work::All) | Err(RecvError::Lagged(_)) => {
+                    Ok(Work::Mailbox) => {
                         let _ = control.mailbox_changes.send(());
+                    }
+                    Ok(Work::Bridge) => {
+                        let _ = control.bridge_changes.send(());
+                    }
+                    Ok(Work::All) | Err(RecvError::Lagged(_)) => {
+                        let _ = control.mailbox_changes.send(());
+                        let _ = control.bridge_changes.send(());
                     }
                     Ok(_) => {}
                     Err(RecvError::Closed) => {
-                        control
-                            .mailbox_push
-                            .store(false, std::sync::atomic::Ordering::Release);
+                        for push in [&control.mailbox_push, &control.bridge_push] {
+                            push.store(false, std::sync::atomic::Ordering::Release);
+                        }
                         break;
                     }
                 }
             }
         });
+    }
+    /// Wake this process's bridge long-polls after a committed change. Other
+    /// processes hear it through the tables' NOTIFY triggers.
+    pub(crate) fn bridge_changed(&self) {
+        let _ = self.bridge_changes.send(());
+    }
+    pub(crate) fn bridge_changes(&self) -> tokio::sync::broadcast::Receiver<()> {
+        self.bridge_changes.subscribe()
+    }
+    /// How often a bridge long-poll re-reads while waiting: on changes and
+    /// its deadline with pushed changes, otherwise at the connector's old
+    /// polling cadence.
+    pub(crate) fn bridge_recheck(&self) -> Duration {
+        if self.bridge_push.load(std::sync::atomic::Ordering::Acquire) {
+            Duration::from_millis(u64::from(zuse_protocol::computer_tasks::MAX_WAIT_MS) + 1000)
+        } else {
+            Duration::from_secs(zuse_protocol::computer_tasks::HEARTBEAT_SECS)
+        }
     }
     /// How often a mailbox long-poll re-reads while waiting. With pushed
     /// changes it waits for a change or its deadline; otherwise every second.
@@ -796,16 +909,29 @@ impl RuntimeControl {
                 caps.iter()
                     .any(|c| c == zuse_protocol::cloud_computers::MACHINE_DELIVERY_CAPABILITY)
             });
-            if delivers_machine
-                && let Some(delivery) = crate::computers::machine::delivery(&mut tx, owner).await?
-            {
+            let mut delivery = if delivers_machine {
+                crate::computers::machine::delivery(&mut tx, owner).await?
+            } else {
+                None
+            };
+            // A setup chat's agent configures the image; it is told how on
+            // top of the account's own instructions.
+            if config[zuse_protocol::machine_setup::BOOTSTRAP_FLAG] == true {
+                response[zuse_protocol::machine_setup::BOOTSTRAP_FLAG] = json!(true);
+                if delivers_machine {
+                    delivery = Some(crate::computers::machine_setup::with_setup_instructions(
+                        delivery,
+                    ));
+                }
+            }
+            if let Some(delivery) = delivery {
                 response["machineDelivery"] = serde_json::to_value(delivery)
                     .map_err(|_| ApiError::unavailable("machine_record_invalid"))?;
             }
             let storage: zuse_protocol::cloud::CloudRuntimeStorage =
                 serde_json::from_value(config["rustRuntimeStorage"].clone())
                     .map_err(|_| ApiError::conflict("runtime_storage_enrollment_required"))?;
-            if storage.format != zuse_protocol::cloud::RUST_RUNTIME_STORAGE_FORMAT
+            if !zuse_protocol::cloud::rust_runtime_storage_readable(&storage.format)
                 || storage.storage_incarnation_id.is_empty()
                 || storage.storage_incarnation_id.len() > 128
             {
@@ -1615,6 +1741,10 @@ pub(super) fn log_fence(site: &'static str, id: &str, row: &Value, credential: &
 }
 fn required<'a>(row: &'a Value, key: &str) -> Result<&'a str, ApiError> {
     row[key].as_str().ok_or_else(rejected)
+}
+/// A setup computer: its chat configures the account's machine image.
+pub(crate) fn setup_workspace(row: &Value) -> bool {
+    row["request_config"][zuse_protocol::machine_setup::BOOTSTRAP_FLAG] == true
 }
 fn blocked(row: &Value) -> bool {
     matches!(

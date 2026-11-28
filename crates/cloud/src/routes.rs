@@ -2,9 +2,16 @@ mod account_events;
 #[cfg(test)]
 mod account_events_test;
 pub(crate) mod body_deadline;
+mod bridge_approvals;
+mod bridge_computers;
+mod bridge_proof;
+mod bridge_tasks;
+#[cfg(test)]
+mod bridge_tests;
 #[cfg(test)]
 mod github_browser_policy_test;
 mod github_organizations;
+mod machine_setup;
 mod recreations;
 mod task_commands;
 use crate::{
@@ -255,6 +262,68 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
             "/v1/client/dpop-token",
             post(device_access_token).layer(DefaultBodyLimit::max(4096)),
         )
+        .route(
+            "/v1/cloud/workspaces/{workspace}/chats/{chat}/computer-results/{request}",
+            axum::routing::delete(bridge_tasks::cancel),
+        )
+        .route(
+            "/v1/cloud/workspaces/{workspace}/runtime/computer-tasks",
+            post(bridge_tasks::runtime_tasks).layer(DefaultBodyLimit::max(24 * 1024)),
+        )
+        .route(
+            "/v1/cloud/bridge/host-task",
+            post(bridge_tasks::host).layer(DefaultBodyLimit::max(524288)),
+        )
+        .route(
+            "/v1/cloud/workspaces/{workspace}/chats/{chat}/computer-tasks",
+            get(bridge_tasks::list)
+                .post(bridge_tasks::request)
+                .layer(DefaultBodyLimit::max(24 * 1024)),
+        )
+        .route(
+            "/v1/cloud/workspaces/{workspace}/chats/{chat}/computer-results",
+            get(bridge_tasks::results),
+        )
+        .route(
+            "/v1/cloud/bridge/computers",
+            get(bridge_computers::list)
+                .post(bridge_computers::enroll)
+                .layer(DefaultBodyLimit::max(2048)),
+        )
+        .route(
+            "/v1/cloud/bridge/computers/{device}",
+            axum::routing::delete(bridge_computers::forget)
+                .patch(bridge_computers::rename)
+                .layer(DefaultBodyLimit::max(1024)),
+        )
+        .route(
+            "/v1/cloud/workspaces/{workspace}/chats/{chat}/attached-computers",
+            get(bridge_computers::attached),
+        )
+        .route(
+            "/v1/cloud/workspaces/{workspace}/chats/{chat}/device-approvals",
+            get(bridge_approvals::pending),
+        )
+        .route(
+            "/v1/cloud/workspaces/{workspace}/chats/{chat}/device-approvals/{request}",
+            post(bridge_approvals::decide).layer(DefaultBodyLimit::max(1024)),
+        )
+        .route(
+            "/v1/cloud/workspaces/{workspace}/chats/{chat}/attached-computers/{device}",
+            axum::routing::put(bridge_computers::attach).delete(bridge_approvals::detach),
+        )
+        .route(
+            "/v1/cloud/bridge/primary",
+            post(bridge_computers::claim_primary).layer(DefaultBodyLimit::max(1024)),
+        )
+        .route(
+            "/v1/cloud/workspaces/{workspace}/chats/{chat}/primary-computer",
+            get(bridge_computers::primary).delete(bridge_computers::clear_primary),
+        )
+        .route(
+            "/v1/cloud/bridge/computers/{device}/always-allow",
+            axum::routing::delete(bridge_approvals::revoke_always),
+        )
         .route("/v1/cloud/context", get(context))
         .route("/v1/cloud/capabilities", get(computer_capabilities))
         .route(
@@ -302,6 +371,22 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
                 .layer(DefaultBodyLimit::max(1536 * 1024)),
         )
         .route("/v1/cloud/machine/rebuild", post(rebuild_machine))
+        .route(
+            "/v1/cloud/machine/setup-proposals/{id}",
+            get(machine_setup::proposal),
+        )
+        .route(
+            "/v1/cloud/machine/setup-proposals/{id}/apply",
+            post(machine_setup::apply).layer(DefaultBodyLimit::max(1024)),
+        )
+        .route(
+            "/v1/cloud/machine/setup-proposals/{id}/discard",
+            post(machine_setup::discard).layer(DefaultBodyLimit::max(1024)),
+        )
+        .route(
+            "/v1/cloud/workspaces/{workspace}/runtime/machine-setup",
+            post(machine_setup::runtime_request).layer(DefaultBodyLimit::max(160 * 1024)),
+        )
         .route(
             "/v1/cloud/machine/images/{image}/repositories/{project}/source-credential",
             post(user_image_source_credential),
@@ -439,6 +524,10 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         )
         .route("/v1/cloud/workspaces", get(workspaces))
         .route("/v1/cloud/workspaces/{id}", get(workspace))
+        .route(
+            "/v1/cloud/workspaces/{id}/rename",
+            post(workspace_rename).layer(DefaultBodyLimit::max(4096)),
+        )
         .route(
             "/v1/cloud/workspaces/{id}/task-commands",
             post(task_commands::submit).layer(DefaultBodyLimit::max(256 * 1024)),
@@ -1072,8 +1161,16 @@ async fn context(
     } else {
         None
     };
+    // A new chat's first-message files may still be uploading when it is
+    // created: its first turn waits for them (server-admitted chats only).
+    let launch_attachment_hold_version = match (&state.runtime, command_admission_version) {
+        (Some(runtime), Some(_)) if runtime.launch_attachment_hold_available().await? => {
+            Some(zuse_protocol::cloud_assets::LAUNCH_ATTACHMENT_HOLD_VERSION)
+        }
+        _ => None,
+    };
     Ok(Json(
-        json!({"actor":access.actor,"scope":access.scope,"ownerId":access.owner_id,"accountEvents":state.store.events.is_some(),"projects":projects,"agentCatalog":catalog,"providerAgentCatalogs":provider_catalogs,"computerCapabilities":capabilities,"commandAdmissionVersion":command_admission_version,"agentConnections":if connections.is_some(){json!(connection_metadata)}else{Value::Null}}),
+        json!({"actor":access.actor,"scope":access.scope,"ownerId":access.owner_id,"accountEvents":state.store.events.is_some(),"projects":projects,"agentCatalog":catalog,"providerAgentCatalogs":provider_catalogs,"computerCapabilities":capabilities,"commandAdmissionVersion":command_admission_version,"launchAttachmentHoldVersion":launch_attachment_hold_version,"agentConnections":if connections.is_some(){json!(connection_metadata)}else{Value::Null}}),
     ))
 }
 
@@ -1568,6 +1665,35 @@ async fn workspaces(
         json!({"workspaces":state.store.workspaces(&access, query.project_id.as_deref()).await?}),
     ))
 }
+async fn workspace_rename(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Result<Json<Value>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let access = state.access(&headers, AccessKind::Content).await?;
+    if state.runtime.is_none() {
+        return Err(ApiError::unavailable("cloud_runtime_writes_disabled"));
+    }
+    let Json(body) = body.map_err(|_| ApiError::bad_request("invalid_cloud_chat_title"))?;
+    let title = body["title"]
+        .as_str()
+        .map(str::trim)
+        .filter(|title| {
+            !title.is_empty()
+                && title.chars().count() <= 200
+                && !title.chars().any(char::is_control)
+        })
+        .ok_or_else(|| ApiError::bad_request("invalid_cloud_chat_title"))?;
+    Ok(Json(
+        state
+            .store
+            .rename_workspace(&access, &id, title)
+            .await?
+            .public(),
+    ))
+}
+
 async fn workspace(
     State(state): State<AppState>,
     headers: HeaderMap,

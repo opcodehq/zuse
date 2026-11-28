@@ -164,6 +164,7 @@ impl AllocationProvider for Boxd {
         self.upload(machine, &staged, launch.boot_token.as_bytes())
             .await?;
         let result = self.exec(machine, &command).await?;
+        super::launch_report::record(machine, &result);
         if result.exit_code != 0 {
             return Err(ProviderError::Unavailable);
         }
@@ -409,6 +410,9 @@ impl RuntimeControl {
             self.prepare_allocation_access(job).instrument(span)
         );
         if let Err(error) = &result {
+            if let Err(stored) = super::launch_report::persist(&self.pool, &job.resource_id).await {
+                tracing::debug!(%stored, "launch_report_not_stored");
+            }
             // Keep the original failure even if telemetry storage is unavailable.
             // Save before retry/hold releases this exact attempt's lease.
             if let Some(context) = diagnostic_context.as_ref() {
@@ -1179,6 +1183,28 @@ impl RuntimeControl {
         observations: &Value,
     ) -> Result<(), ApiError> {
         let now = clock_ms();
+        let mut tx = self.pool.begin().await?;
+        if delay_ms > 0 {
+            // A launch that succeeded is an observation, not a failed
+            // delivery. Without this, a runtime that never enrolls used up
+            // the 120 attempts in about four minutes of relaunches; an
+            // exhausted job is never claimed again, so the start deadline
+            // (checked at claim) never fired and the computer showed
+            // "Starting" forever. Bounded by the same ceiling as readiness,
+            // and committed together with the deferral below.
+            let ceiling = 120 + BOOT_TTL / 2000 + 1;
+            // Workspace before job, the order the deferral itself locks in.
+            sqlx::query("SELECT 1 FROM api_cloud_workspaces WHERE workspace_id=$1 FOR UPDATE")
+                .bind(&job.resource_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("UPDATE zuse_rust_jobs SET max_attempts=LEAST($3,max_attempts+1) WHERE job_id=$1 AND lease_token=$2 AND state='running'")
+                .bind(&job.id)
+                .bind(&job.lease_token)
+                .bind(ceiling as i32)
+                .execute(&mut *tx)
+                .await?;
+        }
         // The existing lease transition also saves measurements, in one roundtrip.
         // It grants no effect and never overwrites another runtime's config snapshot.
         sqlx::query(timings::DEFER_ALLOCATION_SQL)
@@ -1189,8 +1215,9 @@ impl RuntimeControl {
             .bind(observations)
             .bind(job.payload["operationId"].as_str())
             .bind(&job.resource_id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+        tx.commit().await?;
         Ok(())
     }
 }

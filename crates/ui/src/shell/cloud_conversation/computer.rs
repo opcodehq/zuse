@@ -113,14 +113,11 @@ enum Page {
     Summary,
     /// Every action on the computer.
     More,
-    /// Apps to open the synced folder in.
-    OpenIn,
-    /// Ways to open the computer over SSH.
-    Ssh,
 }
 /// What to do once SSH access is ready.
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum SshAction {
+pub(super) enum SshAction {
+    Monitor,
     Terminal,
     Copy,
     /// Open the repository in an installed editor or terminal.
@@ -128,7 +125,7 @@ enum SshAction {
 }
 /// One row of the "Open via SSH" list.
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum SshEntry {
+pub(super) enum SshEntry {
     /// An installed app that opens the computer over SSH.
     App(crate::shell::ssh_open::SshTarget),
     /// The system terminal, before the apps are known.
@@ -136,21 +133,21 @@ enum SshEntry {
     Copy,
 }
 impl SshEntry {
-    fn id(&self) -> &'static str {
+    pub(super) fn id(&self) -> &'static str {
         match self {
             Self::App(target) => target.app.id(),
             Self::Terminal => "terminal",
             Self::Copy => "copy",
         }
     }
-    fn label(&self) -> &'static str {
+    pub(super) fn label(&self) -> &'static str {
         match self {
             Self::App(target) => target.app.label(),
             Self::Terminal => "Terminal",
             Self::Copy => "Copy SSH command",
         }
     }
-    fn action(&self) -> SshAction {
+    pub(super) fn action(&self) -> SshAction {
         match self {
             Self::App(target) => SshAction::Open(target.clone()),
             Self::Terminal => SshAction::Terminal,
@@ -160,7 +157,7 @@ impl SshEntry {
 }
 /// The SSH list: every detected app in menu order (the system terminal
 /// until detection finishes), then "Copy SSH command".
-fn ssh_entries(targets: &[crate::shell::ssh_open::SshTarget]) -> Vec<SshEntry> {
+pub(super) fn ssh_entries(targets: &[crate::shell::ssh_open::SshTarget]) -> Vec<SshEntry> {
     let mut entries: Vec<SshEntry> = targets.iter().cloned().map(SshEntry::App).collect();
     if entries.is_empty() {
         entries.push(SshEntry::Terminal);
@@ -211,18 +208,26 @@ pub(super) struct State {
     sync: Value,
     sync_poll: Option<Task<()>>,
     sync_change: Option<Task<()>>,
-    sync_folder: Option<Task<()>>,
     sync_error: Option<String>,
+    /// This chat's files in the user's own checkout here.
+    pub(super) checkout: super::checkout_sync::Checkout,
     /// Which page of the menu shows.
     page: Page,
+    /// The app menu floating over this one (the folder's or SSH's), and
+    /// where it last painted, so a press inside it keeps this menu open.
+    pub(super) nested: popover::Popup<super::open_menu::Nested>,
+    pub(super) nested_bounds: Option<gpui::Bounds<Pixels>>,
     /// SSH access: the host once prepared, the preparation, its failure.
     ssh: Option<crate::cloud_ssh::Prepared>,
     ssh_task: Option<Task<()>>,
     ssh_error: Option<String>,
+    monitor_connecting: bool,
+    monitor: Option<super::monitor::Connection>,
+    monitor_browser: Option<Entity<crate::browser::BrowserSurface>>,
     /// The apps this computer can open a folder in (the shell detects them).
-    open_targets: Vec<crate::shell::open_in::OpenTarget>,
+    pub(super) open_targets: Vec<crate::shell::open_in::OpenTarget>,
     /// The apps this computer can open the cloud computer in over SSH.
-    ssh_targets: Vec<crate::shell::ssh_open::SshTarget>,
+    pub(super) ssh_targets: Vec<crate::shell::ssh_open::SshTarget>,
     /// The machine's last CPU, memory and disk snapshot, and the poll that
     /// keeps it current while the summary shows it.
     pub(super) resources: Value,
@@ -230,6 +235,27 @@ pub(super) struct State {
     resources_wanted: Option<std::time::Instant>,
 }
 impl State {
+    pub(super) fn monitor_view(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<CloudConversation>,
+    ) -> Option<Entity<crate::browser::BrowserSurface>> {
+        let connection = self.monitor.as_ref()?;
+        if self.monitor_browser.is_none() {
+            // An isolated browser keeps the SSH-delivered credential out of shared history.
+            let browser = cx.new(|cx| {
+                crate::browser::BrowserSurface::new(Default::default(), false, window, cx)
+            });
+            browser.update(cx, |view, cx| {
+                view.hide_toolbar();
+                view.set_presentation(crate::browser::model::Presentation::Live, cx);
+                view.navigate(&connection.url, window, cx);
+            });
+            self.monitor_browser = Some(browser);
+        }
+        self.monitor_browser.clone()
+    }
+
     #[cfg(test)]
     pub(super) fn setup_output_for_test(&self) -> &Value {
         &self.logs
@@ -420,7 +446,7 @@ fn request(mut scope: Value, action: Action, key: &str, row: &Value, check: bool
 }
 /// A bordered, monospace field with a main action and a chevron for more,
 /// like the previous Zuse summary card's SSH and synced-folder controls.
-fn split_field(theme: &Theme) -> gpui::Div {
+pub(super) fn split_field(theme: &Theme) -> gpui::Div {
     div()
         .mx(px(8.))
         .my(px(6.))
@@ -434,7 +460,7 @@ fn split_field(theme: &Theme) -> gpui::Div {
         .overflow_hidden()
         .font_family("Geist Mono")
 }
-fn split_main(theme: &Theme, id: &'static str) -> gpui::Stateful<gpui::Div> {
+pub(super) fn split_main(theme: &Theme, id: &'static str) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
         .flex_1()
@@ -446,6 +472,30 @@ fn split_main(theme: &Theme, id: &'static str) -> gpui::Stateful<gpui::Div> {
         .gap(px(8.))
         .cursor_pointer()
         .hover(|el| el.bg(theme.element_hover))
+}
+/// A split button's chevron that opens `kind`'s app menu over the computer
+/// menu (the caller adds the menu as a child).
+pub(super) fn nested_chevron(
+    theme: &Theme,
+    id: &'static str,
+    kind: super::open_menu::Kind,
+    open: bool,
+    cx: &mut Context<CloudConversation>,
+) -> gpui::Stateful<gpui::Div> {
+    split_chevron(theme, id)
+        .relative()
+        .aria_expanded(open)
+        .when(open, |chevron| chevron.bg(theme.element_hover))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, _, _| this.note_nested_press(kind)),
+        )
+        .on_click(cx.listener(move |this, _, _, cx| {
+            if kind == super::open_menu::Kind::Ssh && !this.computer_running() {
+                return;
+            }
+            this.toggle_nested(kind, cx);
+        }))
 }
 fn split_chevron(theme: &Theme, id: &'static str) -> gpui::Stateful<gpui::Div> {
     div()
@@ -472,6 +522,8 @@ impl CloudConversation {
         self.computer.open = false;
         self.computer.page = Page::Summary;
         self.computer.confirm = None;
+        self.computer.nested = Default::default();
+        self.computer.nested_bounds = None;
         if self.computer.menu.begin_close() {
             popover::reap_popup(cx, |this: &mut Self| &mut this.computer.menu);
         }
@@ -487,6 +539,8 @@ impl CloudConversation {
             // Apps installed since the last look show up in the SSH and
             // open-in lists; the last snapshot stays while this runs.
             cx.emit(CloudConversationEvent::RefreshOpenTargets);
+            #[cfg(feature = "appshots-fixture")]
+            self.open_fixture_nested(cx);
             cx.notify();
         }
     }
@@ -529,6 +583,7 @@ impl CloudConversation {
                     Ok(_) => this.revoke(cx),
                     Err(error) => this.computer.error = Some(error.to_string()),
                 }
+                this.publish_computer_online(cx);
                 if std::mem::take(&mut this.computer.refresh_again)
                     && this.computer.open
                     && this.authorized
@@ -696,70 +751,15 @@ impl CloudConversation {
             }
         }));
     }
-    fn change_sync(
-        &mut self,
-        method: &'static str,
-        enabled: bool,
-        path: Option<String>,
-        cx: &mut Context<Self>,
-    ) {
-        if self.computer.sync_change.is_some() || !self.authorized {
-            return;
-        }
-        let target = self.target.clone();
-        let mut body = self.sync_body();
-        body["enabled"] = json!(enabled);
-        body["localPath"] = json!(path);
-        self.computer.sync_error = None;
-        self.computer.sync_change = Some(cx.spawn(async move |this, cx| {
-            let result = target.controller.client().call_scoped(method, body).await;
-            let _ = this.update(cx, |this, cx| {
-                this.computer.sync_change = None;
-                match result {
-                    Ok(value) if value["accountId"] == target.subject => {
-                        this.computer.sync = value["status"].clone()
-                    }
-                    Ok(_) => {}
-                    Err(error) => this.computer.sync_error = Some(error.to_string()),
-                }
-                cx.notify();
-            });
-        }));
-        cx.notify();
-    }
-    fn choose_sync_folder(&mut self, cx: &mut Context<Self>) {
-        if self.computer.sync_change.is_some() || self.computer.sync_folder.is_some() {
-            return;
-        }
-        let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some("Choose Sync Folder".into()),
-        });
-        self.computer.sync_folder = Some(cx.spawn(async move |this, cx| {
-            let result = receiver.await;
-            let _ = this.update(cx, |this, cx| {
-                this.computer.sync_folder = None;
-                if let Ok(Ok(Some(paths))) = result
-                    && let Some(path) = paths.first()
-                {
-                    this.change_sync(
-                        methods::CLOUD_SYNC_CONFIGURE,
-                        true,
-                        Some(path.to_string_lossy().into_owned()),
-                        cx,
-                    );
-                }
-                cx.notify();
-            });
-        }));
-    }
-    /// The synced local folder, when sync is on and has one.
+    /// The folder on this computer holding this chat's files while sync to
+    /// it is on (the chat's own folder, else the older computer-wide sync).
     pub(in crate::shell) fn synced_folder(&self) -> Option<String> {
-        (self.computer.sync["enabled"] == true)
-            .then(|| self.computer.sync["localPath"].as_str().map(str::to_owned))
-            .flatten()
+        let checkout = &self.computer.checkout.status;
+        let sync = &self.computer.sync;
+        [checkout, sync]
+            .into_iter()
+            .find(|status| status["enabled"] == true && status["localPath"].is_string())
+            .and_then(|status| status["localPath"].as_str().map(str::to_owned))
     }
     /// What the summary and the menu say about this computer.
     pub(in crate::shell) fn computer_summary(&self) -> ComputerSummary {
@@ -897,7 +897,71 @@ impl CloudConversation {
         }
     }
     /// Whether the computer is up, so SSH can reach it.
-    fn computer_running(&self) -> bool {
+    pub(in crate::shell) fn desktop_view(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<crate::browser::BrowserSurface>> {
+        if !self.authorized || self.access_revoked || !self.computer_running() {
+            self.disconnect_desktop(cx);
+            return None;
+        }
+        if self.ready(cx)
+            && self.computer.monitor.is_none()
+            && self.computer.ssh_task.is_none()
+            && self.computer.ssh_error.is_none()
+        {
+            self.open_ssh(SshAction::Monitor, cx);
+        }
+        self.computer.monitor_view(window, cx)
+    }
+    pub(in crate::shell) fn connect_desktop(&mut self, cx: &mut Context<Self>) {
+        if self.authorized && !self.access_revoked {
+            if self.domain_sleeping() || self.status["state"] == "paused" {
+                self.watch_environment(true, cx);
+            } else {
+                self.open_ssh(SshAction::Monitor, cx);
+            }
+        }
+    }
+    pub(in crate::shell) fn desktop_status(&self) -> (&str, Option<&'static str>) {
+        if !self.authorized || self.access_revoked {
+            return ("Waiting for cloud access", None);
+        }
+        if !self.computer_running() {
+            let wake = (self.domain_sleeping() || self.status["state"] == "paused")
+                && self.operation.is_none()
+                && self.computer.execution_controls_enabled();
+            return (
+                "The cloud computer is offline",
+                wake.then_some("Wake computer"),
+            );
+        }
+        if self.computer.ssh_task.is_some() {
+            return ("Connecting to desktop…", None);
+        }
+        (
+            self.computer
+                .ssh_error
+                .as_deref()
+                .unwrap_or("Open this computer’s desktop"),
+            Some("Connect"),
+        )
+    }
+    pub(in crate::shell) fn disconnect_desktop(&mut self, cx: &mut Context<Self>) {
+        if self.computer.monitor_connecting {
+            self.computer.ssh_task.take();
+            self.computer.monitor_connecting = false;
+        }
+        self.computer.monitor.take();
+        if let Some(browser) = self.computer.monitor_browser.take() {
+            browser.update(cx, |v, cx| {
+                v.set_presentation(crate::browser::model::Presentation::Hidden, cx);
+                v.close(cx);
+            });
+        }
+    }
+    pub(super) fn computer_running(&self) -> bool {
         matches!(self.computer_summary().tone, Tone::Running)
     }
     /// The status line's Retry on a computer that needs attention: the
@@ -928,7 +992,27 @@ impl CloudConversation {
     }
     /// Prepare SSH access (this device's key, the computer's sshd, the host
     /// entry), then run `action`.
-    fn open_ssh(&mut self, action: SshAction, cx: &mut Context<Self>) {
+    /// The menu's recreation (or its retry) when it can run now: what
+    /// "Update computer" asks for when this computer is too old for a job.
+    pub(super) fn update_computer_action(&self) -> Option<Action> {
+        let row = &self.computer.metadata;
+        if self.operation.is_some() || self.computer.pending.is_some() {
+            return None;
+        }
+        [Action::RetryRecreate, Action::Recreate]
+            .into_iter()
+            .find(|action| allowed(row, *action))
+    }
+    /// Ask to confirm `action` in the menu, as its own row would.
+    pub(super) fn confirm_computer_action(&mut self, action: Action, cx: &mut Context<Self>) {
+        self.computer.confirm = Some(action);
+        cx.notify();
+    }
+    /// Whether SSH access is being set up.
+    pub(super) fn ssh_busy(&self) -> bool {
+        self.computer.ssh_task.is_some()
+    }
+    pub(super) fn open_ssh(&mut self, action: SshAction, cx: &mut Context<Self>) {
         if self.computer.ssh_task.is_some() {
             return;
         }
@@ -947,6 +1031,7 @@ impl CloudConversation {
         let workspace = self.target.workspace.clone();
         let port = self.boot.ipc_port;
         self.computer.ssh_error = None;
+        self.computer.monitor_connecting = action == SshAction::Monitor;
         self.computer.ssh_task = Some(cx.spawn(async move |this, cx| {
             let result: Result<crate::cloud_ssh::Prepared, String> = async {
                 let key = cx
@@ -968,6 +1053,9 @@ impl CloudConversation {
                     .unwrap_or("/home/zuse/workspace")
                     .to_owned();
                 let host_key = prepared["hostKey"].as_str().map(str::to_owned);
+                if action == SshAction::Monitor && host_key.is_none() {
+                    return Err("Monitor requires a verified SSH host key.".into());
+                }
                 let host_workspace = workspace.clone();
                 let host_user = user.clone();
                 cx.background_executor()
@@ -985,17 +1073,46 @@ impl CloudConversation {
                 })
             }
             .await;
+            let monitor = if action == SshAction::Monitor {
+                if let Ok(prepared) = &result {
+                    let host = prepared.host.clone();
+                    Some(
+                        gpui_tokio::Tokio::spawn(cx, async move {
+                            super::monitor::Connection::open(&host).await
+                        })
+                        .await
+                        .unwrap_or_else(|_| Err("Monitor connection was interrupted.".into())),
+                    )
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
             let _ = this.update(cx, |this, cx| {
                 this.computer.ssh_task = None;
+                this.computer.monitor_connecting = false;
                 match result {
                     Ok(prepared) => {
                         this.computer.ssh = Some(prepared.clone());
                         match action {
+                            SshAction::Monitor => match monitor.expect("Monitor SSH handshake") {
+                                Ok(connection) => {
+                                    this.computer.monitor = Some(connection);
+                                    this.close_computer(cx);
+                                }
+                                Err(error) => this.computer.ssh_error = Some(error),
+                            },
                             SshAction::Copy => {
                                 cx.write_to_clipboard(ClipboardItem::new_string(format!(
                                     "ssh {}",
                                     prepared.host
                                 )));
+                                crate::toast::show(
+                                    cx,
+                                    crate::toast::ToastKind::Success,
+                                    "SSH command copied",
+                                );
                                 this.close_computer(cx);
                             }
                             SshAction::Terminal => {
@@ -1023,213 +1140,6 @@ impl CloudConversation {
             });
         }));
         cx.notify();
-    }
-    /// SSH: the back row, then [`Self::render_ssh_entries`] and a hint.
-    fn render_ssh_page(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = Theme::of(cx).for_popup();
-        let busy = self.computer.ssh_task.is_some();
-        let host = crate::cloud_ssh::host_alias(&self.target.workspace);
-        let mut page = div()
-            .id("native-computer-ssh")
-            .flex()
-            .flex_col()
-            .text_size(crate::typography::text_xs())
-            .child(
-                popover::menu_row(&theme, false, "computer-ssh-back")
-                    .id("computer-ssh-back")
-                    .child(icon(icons::ALT_ARROW_LEFT).size(px(14.)).text_color(theme.text_muted))
-                    .child(div().flex_1().text_color(theme.text_muted).child("Computer"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.computer.page = Page::Summary;
-                        cx.notify();
-                    })),
-            )
-            .child(popover::menu_separator())
-            .children(self.render_ssh_entries(&theme, cx))
-            .child(popover::menu_separator())
-            .child(
-                div()
-                    .px(px(8.))
-                    .py(px(6.))
-                    .text_color(theme.text_muted)
-                    .child(if busy {
-                        "Setting up SSH access…".to_owned()
-                    } else if self.computer.ssh.is_some() {
-                        format!("Ready. Editors with Remote SSH can connect to {host}.")
-                    } else {
-                        format!("Adds the host {host} to your SSH config, for terminals and editors with Remote SSH.")
-                    }),
-            );
-        if let Some(error) = self.computer.ssh_error.clone() {
-            page = page.child(
-                div()
-                    .px(px(8.))
-                    .py(px(4.))
-                    .text_color(theme.danger)
-                    .child(error),
-            );
-        }
-        page.into_any_element()
-    }
-    /// The "Open via SSH" list on its own (no back row or hint), so it can
-    /// show in any menu: each installed app, then "Copy SSH command".
-    fn render_ssh_entries(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        // Like the SSH row itself: dimmed and inert unless the computer runs.
-        let enabled = self.computer.ssh_task.is_none() && self.computer_running();
-        let mut rows = Vec::new();
-        for entry in ssh_entries(&self.computer.ssh_targets) {
-            let id = format!("computer-ssh-{}", entry.id());
-            let glyph: AnyElement = match &entry {
-                SshEntry::App(target) => match &target.icon {
-                    Some(png) => gpui::img(png.clone()).size(px(16.)).into_any_element(),
-                    None => icon(if target.app.is_terminal() {
-                        icons::TERMINAL
-                    } else {
-                        crate::shell::open_in::fallback_glyph(target.app.id())
-                    })
-                    .size(px(14.))
-                    .text_color(theme.text_muted)
-                    .into_any_element(),
-                },
-                SshEntry::Terminal => icon(icons::TERMINAL)
-                    .size(px(14.))
-                    .text_color(theme.text_muted)
-                    .into_any_element(),
-                SshEntry::Copy => icon(icons::COPY)
-                    .size(px(14.))
-                    .text_color(theme.text_muted)
-                    .into_any_element(),
-            };
-            if entry == SshEntry::Copy {
-                rows.push(popover::menu_separator().into_any_element());
-            }
-            let label = entry.label();
-            let action = entry.action();
-            rows.push(
-                popover::menu_row(theme, false, id.clone())
-                    .id(SharedString::from(id))
-                    .role(gpui::Role::MenuItem)
-                    .aria_label(label)
-                    .opacity(if enabled { 1. } else { 0.5 })
-                    .child(
-                        div()
-                            .size(px(16.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(glyph),
-                    )
-                    .child(div().flex_1().min_w_0().truncate().child(label))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if enabled {
-                            this.open_ssh(action.clone(), cx);
-                        }
-                    }))
-                    .into_any_element(),
-            );
-        }
-        rows
-    }
-    /// The synced folder's apps: each opens it there, then copy its path.
-    fn render_open_in_page(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = Theme::of(cx).for_popup();
-        let path = self.synced_folder();
-        let sync_busy = self.computer.sync_change.is_some() || self.computer.sync_folder.is_some();
-        let mut page = div()
-            .id("native-computer-open-in")
-            .flex()
-            .flex_col()
-            .text_size(crate::typography::text_xs())
-            .child(
-                popover::menu_row(&theme, false, "computer-open-in-back")
-                    .id("computer-open-in-back")
-                    .child(
-                        icon(icons::ALT_ARROW_LEFT)
-                            .size(px(14.))
-                            .text_color(theme.text_muted),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_color(theme.text_muted)
-                            .child("Computer"),
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.computer.page = Page::Summary;
-                        cx.notify();
-                    })),
-            )
-            .child(popover::menu_separator());
-        let Some(path) = path else {
-            return page
-                .child(
-                    div()
-                        .px(px(8.))
-                        .py(px(6.))
-                        .text_color(theme.text_muted)
-                        .child("Turn on sync to open this computer's files here."),
-                )
-                .into_any_element();
-        };
-        for target in self.computer.open_targets.clone() {
-            let glyph: AnyElement = match &target.icon {
-                Some(png) => gpui::img(png.clone()).size(px(16.)).into_any_element(),
-                None => icon(crate::shell::open_in::fallback_glyph(target.id))
-                    .size(px(14.))
-                    .text_color(theme.text_muted)
-                    .into_any_element(),
-            };
-            let open_path = path.clone();
-            page = page.child(
-                popover::menu_row(&theme, false, format!("cloud-open-in-{}", target.id))
-                    .id(SharedString::from(format!("cloud-open-in-{}", target.id)))
-                    .child(
-                        div()
-                            .size(px(16.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(glyph),
-                    )
-                    .child(target.label)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.emit(CloudConversationEvent::OpenPathIn(
-                            target.clone(),
-                            open_path.clone(),
-                        ));
-                        this.close_computer(cx);
-                    })),
-            );
-        }
-        let copy = path.clone();
-        page.child(popover::menu_separator())
-            .child(
-                popover::menu_row(&theme, false, "cloud-open-in-copy")
-                    .id("cloud-open-in-copy")
-                    .child(icon(icons::COPY).size(px(14.)).text_color(theme.text_muted))
-                    .child("Copy path")
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
-                        this.close_computer(cx);
-                    })),
-            )
-            .child(
-                popover::menu_row(&theme, false, "cloud-sync-folder")
-                    .id("cloud-sync-folder")
-                    .opacity(if sync_busy { 0.5 } else { 1. })
-                    .child(
-                        icon(icons::FOLDER)
-                            .size(px(14.))
-                            .text_color(theme.text_muted),
-                    )
-                    .child("Change folder…")
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if !sync_busy {
-                            this.choose_sync_folder(cx);
-                        }
-                    })),
-            )
-            .into_any_element()
     }
     pub(super) fn render_computer(&mut self, cx: &mut Context<Self>) -> AnyElement {
         /// The width of a reading's load bar.
@@ -1562,9 +1472,24 @@ impl CloudConversation {
             );
         }
 
+        if settings::cloud_desktop_enabled(cx) {
+            more_rows.push(
+                popover::menu_row(&theme, false, "computer-monitor")
+                    .id("computer-monitor")
+                    .child("Open Desktop")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.close_computer(cx);
+                        cx.emit(CloudConversationEvent::Desktop);
+                    }))
+                    .into_any_element(),
+            );
+        }
         // SSH, while the computer runs: the main part opens a terminal, the
         // chevron lists every way in.
         let ssh_busy = self.computer.ssh_task.is_some();
+        let host = crate::cloud_ssh::host_alias(&self.target.workspace);
+        let ssh_menu = self.render_nested(super::open_menu::Kind::Ssh, &theme, cx);
+        let ssh_open = self.nested_open(super::open_menu::Kind::Ssh);
         menu = menu.child(
             split_field(&theme)
                 .opacity(if running { 1. } else { 0.45 })
@@ -1589,14 +1514,20 @@ impl CloudConversation {
                         })),
                 )
                 .child(
-                    split_chevron(&theme, "computer-ssh-more")
-                        .aria_label("Other ways to open via SSH")
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if running {
-                                this.computer.page = Page::Ssh;
-                                cx.notify();
-                            }
-                        })),
+                    nested_chevron(
+                        &theme,
+                        "computer-ssh-more",
+                        super::open_menu::Kind::Ssh,
+                        ssh_open,
+                        cx,
+                    )
+                    .aria_label("Other ways to open via SSH")
+                    .when(!ssh_open, |chevron| {
+                        chevron.tip(format!(
+                            "Open in an app over SSH. Adds the host {host} to your SSH config."
+                        ))
+                    })
+                    .children(ssh_menu),
                 ),
         );
         if let Some(error) = self.computer.ssh_error.clone() {
@@ -1609,149 +1540,10 @@ impl CloudConversation {
             );
         }
 
-        // Local sync: the switch, its state, then the folder.
-        let sync = &self.computer.sync;
-        let loaded = sync["enabled"].is_boolean();
-        let enabled = sync["enabled"] == true;
-        let sync_busy = self.computer.sync_change.is_some() || self.computer.sync_folder.is_some();
-        let phase = match sync["state"].as_str() {
-            Some("synced") => ("In sync", Tone::Running),
-            Some("syncing") => ("Syncing…", Tone::Busy),
-            Some("waiting") => ("Waiting for the computer", Tone::Idle),
-            Some("error") => ("Sync failed", Tone::Failed),
-            Some("pending") => ("Preparing sync…", Tone::Busy),
-            Some("stopping") => ("Stopping sync…", Tone::Busy),
-            _ => ("Sync off", Tone::Idle),
-        };
-        menu = menu.child(popover::menu_separator()).child(
-            div()
-                .id("cloud-sync-toggle")
-                .mt(px(4.))
-                .px(px(8.))
-                .h(px(28.))
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .cursor_pointer()
-                .role(gpui::Role::Switch)
-                .aria_label("Sync to a local directory")
-                .aria_toggled(if enabled {
-                    gpui::Toggled::True
-                } else {
-                    gpui::Toggled::False
-                })
-                .opacity(if sync_busy || !loaded { 0.5 } else { 1. })
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .child("Sync to a local directory"),
-                )
-                .child(crate::settings::widgets::toggle_switch(
-                    &theme,
-                    enabled,
-                    "cloud-sync",
-                ))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if !sync_busy && loaded {
-                        this.change_sync(methods::CLOUD_SYNC_CONFIGURE, !enabled, None, cx);
-                    }
-                })),
-        );
-        if enabled {
-            menu = menu.child(
-                div()
-                    .px(px(8.))
-                    .h(px(24.))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .text_color(theme.text_muted)
-                    .child(dot(phase.1))
-                    .child(if sync_busy {
-                        "Updating sync…"
-                    } else {
-                        phase.0
-                    }),
-            );
-            if let Some(path) = sync["localPath"].as_str().map(str::to_owned) {
-                let reveal = path.clone();
-                menu = menu.child(
-                    split_field(&theme)
-                        .child(
-                            split_main(&theme, "cloud-sync-reveal")
-                                .tip("Open folder")
-                                .child(
-                                    icon(icons::FOLDER)
-                                        .size(px(14.))
-                                        .flex_none()
-                                        .text_color(theme.text_muted),
-                                )
-                                .child(div().min_w_0().truncate().child(path))
-                                .on_click(cx.listener(move |_, _, _, cx| {
-                                    cx.reveal_path(std::path::Path::new(&reveal))
-                                })),
-                        )
-                        .child(
-                            split_chevron(&theme, "cloud-sync-open-in")
-                                .aria_label("Open synced folder in")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.computer.page = Page::OpenIn;
-                                    cx.notify();
-                                })),
-                        ),
-                );
-            } else {
-                menu = menu.child(
-                    popover::menu_row(&theme, false, "cloud-sync-folder")
-                        .id("cloud-sync-folder")
-                        .opacity(if sync_busy { 0.5 } else { 1. })
-                        .text_size(crate::typography::text_xs())
-                        .child(
-                            icon(icons::FOLDER)
-                                .size(px(14.))
-                                .text_color(theme.text_muted),
-                        )
-                        .child("Choose folder…")
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if !sync_busy {
-                                this.choose_sync_folder(cx);
-                            }
-                        })),
-                );
-            }
-            if sync["state"] == "error" {
-                menu = menu.child(
-                    popover::menu_row(&theme, false, "cloud-sync-retry")
-                        .id("cloud-sync-retry")
-                        .text_size(crate::typography::text_xs())
-                        .child(
-                            icon(icons::REFRESH)
-                                .size(px(14.))
-                                .text_color(theme.text_muted),
-                        )
-                        .child("Retry sync")
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.change_sync(methods::CLOUD_SYNC_RETRY, true, None, cx)
-                        })),
-                );
-            }
-        }
-        if let Some(error) = self
-            .computer
-            .sync_error
-            .clone()
-            .or_else(|| sync["error"].as_str().map(str::to_owned))
-        {
-            menu = menu.child(
-                div()
-                    .px(px(8.))
-                    .py(px(4.))
-                    .text_color(theme.danger)
-                    .child(error),
-            );
-        }
+        // This chat in the user's own checkout here.
+        menu = menu
+            .child(popover::menu_separator())
+            .children(self.render_checkout_rows(&theme, cx));
 
         // Repair and removal.
         let mut repair = Vec::new();
@@ -1847,12 +1639,6 @@ impl CloudConversation {
                 .on_click(cx.listener(|this, _, _, cx| this.refresh_computer(cx)))
                 .into_any_element(),
         );
-        if self.computer.page == Page::OpenIn {
-            return self.render_open_in_page(cx);
-        }
-        if self.computer.page == Page::Ssh {
-            return self.render_ssh_page(cx);
-        }
         if self.computer.page == Page::More {
             // The "More" page replaces the summary page: a way back, then
             // the actions, then whatever they report.

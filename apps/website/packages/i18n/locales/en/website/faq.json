@@ -12,7 +12,7 @@
 	"which_operating_systems_are_supported": "Which operating systems are supported?",
 	"zuse_beta_ships_for_macos_and_x64_linux_the_download_button_selects_th": "Zuse (Beta) ships for macOS and x64 Linux. The Download button selects the macOS disk image or Linux AppImage automatically, and Debian and Ubuntu users can also get the .deb package from GitHub Releases.",
 	"how_much_does_it_cost": "How much does it cost?",
-	"the_zuse_desktop_beta_is_available_now_and_uses_your_own_agent_subscri": "The Zuse desktop beta is available now and uses your own agent subscriptions or API keys. Zuse Cloud is in public beta: Cloud Workspace costs $40/month, includes $35 of attributable sandbox compute, and bills additional provider cost plus 5% up to your overage cap.",
+	"the_zuse_desktop_beta_is_available_now_and_uses_your_own_agent_subscri": "The Zuse desktop beta is available now and uses your own agent subscriptions or API keys. Zuse Cloud is in public beta: Cloud costs $20/month and includes 33,600 machine minutes, about 140 awake hours on the default machine. Cloud Max costs $50/month, includes 84,000 machine minutes, and allows larger machines. Usage past the allowance is pay as you go at the same rate, with no markup, up to your monthly cap. You can try the first week of Cloud for $1.",
 	"can_i_run_multiple_agents_at_once": "Can I run multiple agents at once?",
 	"yes_you_can_run_several_agents_in_parallel_each_in_its_own_chat_with_i": "Yes. You can run several agents in parallel, each in its own chat with its own git worktree, so their changes stay isolated. Review and commit each one from the PR and Changes pane.",
 	"what_is_sub_agent_delegation": "What is sub-agent delegation?",

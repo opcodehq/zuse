@@ -366,6 +366,7 @@ mod tests {
     ) {
         let (send, receive) = tokio::sync::mpsc::channel(16);
         let (replies_tx, replies) = tokio::sync::mpsc::channel(16);
+        let send = crate::composer::computers::answering_primary_claims(send, replies_tx.clone());
         let controller =
             crate::state::EngineHandle::from_test_client(zuse_rpc::RpcClient::new(send, replies));
         let state = cx.new(|_| {
@@ -586,5 +587,35 @@ mod tests {
         );
         assert!(next(&mut requests).is_none());
         composer.update(cx, |c, _| c.cloud.unknown.review = None);
+    }
+
+    /// A cloud turn that is running (as its conversation reports it) puts
+    /// Stop on the empty composer, and Stop sends the interrupt to the
+    /// chat's computer.
+    #[gpui::test]
+    fn stop_on_a_running_cloud_turn_sends_the_interrupt(cx: &mut gpui::TestAppContext) {
+        let runtime = runtime();
+        let _entered = runtime.enter();
+        let (composer, _state, mut requests, _replies) = composer_with_requests(cx);
+        composer.update(cx, |c, cx| {
+            assert_eq!(c.button_mode(cx), crate::composer::SendButtonMode::Send);
+            c.set_cloud_turn_running(true, cx);
+            assert_eq!(c.button_mode(cx), crate::composer::SendButtonMode::Stop);
+            c.interrupt_selected(cx);
+            assert_eq!(c.cloud_activity(), Some(("Stopping agent…", true)));
+        });
+        settle(cx, &runtime);
+        let stop = next(&mut requests).expect("interrupt sent");
+        assert_eq!(stop["method"], methods::CLOUD_TASK_COMMAND);
+        assert_eq!(stop["params"]["workspaceId"], "task");
+        assert_eq!(stop["params"]["request"]["sessionId"], "session");
+        assert_eq!(
+            stop["params"]["request"]["action"]["payload"],
+            json!({"kind":"interrupt"})
+        );
+        composer.update(cx, |c, cx| {
+            c.set_cloud_turn_running(false, cx);
+            assert!(!c.run_live(cx), "the turn ended: no Stop");
+        });
     }
 }

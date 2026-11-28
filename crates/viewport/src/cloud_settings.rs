@@ -141,10 +141,10 @@ pub fn account_gate(action: impl IntoElement, error: Option<&str>, cx: &gpui::Ap
 }
 
 pub fn sign_in_button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
-    let lime = palette::tone(
+    let lime = palette::accent_or(palette::tone(
         hsla(83. / 360., 0.72, 0.46, 1.),
         hsla(83. / 360., 0.74, 0.43, 1.),
-    );
+    ));
     let label = label.into();
     div()
         .id(id)
@@ -165,12 +165,12 @@ pub fn sign_in_button(id: impl Into<ElementId>, label: impl Into<SharedString>) 
         .line_height(px(13.3333))
         .bg(lime)
         .border_color(lime)
-        .text_color(hsla(132. / 360., 0.30, 0.07, 1.))
+        .text_color(palette::on_solid(lime))
         .on_key_down(|event: &KeyDownEvent, _, cx| {
             if matches!(event.keystroke.key.as_str(), "enter" | "space") {
                 cx.stop_propagation();
             }
         })
-        .hover(move |button| button.bg(lime.opacity(0.9)))
+        .hover(move |button| button.border_color(palette::on_solid(lime).opacity(0.5)))
         .child(label)
 }

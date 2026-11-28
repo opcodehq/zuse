@@ -4081,21 +4081,10 @@ impl Render for GitHistory {
             .flex_col()
             .on_drag_move(cx.listener(Self::on_column_resize))
             .when_some(self.fetch_error.clone(), |element, error| {
-                element.child(
-                    div()
-                        .h(px(28.0))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .px(px(8.0))
-                        .border_b_1()
-                        .border_color(theme.danger.opacity(0.16))
-                        .bg(theme.danger.opacity(0.05))
-                        .truncate()
-                        .text_size(px(11.0))
-                        .text_color(theme.danger_muted)
-                        .child(SharedString::from(format!("Fetch failed: {error}"))),
-                )
+                element.child(history_error(
+                    &theme,
+                    SharedString::from(format!("Fetch failed: {error}")),
+                ))
             })
             .when_some(
                 if self.search_active() {
@@ -4104,23 +4093,7 @@ impl Render for GitHistory {
                     self.error.clone()
                 }
                 .filter(|_| !self.visible_commits.is_empty()),
-                |element, error| {
-                    element.child(
-                        div()
-                            .h(px(28.0))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .px(px(8.0))
-                            .border_b_1()
-                            .border_color(theme.danger.opacity(0.16))
-                            .bg(theme.danger.opacity(0.05))
-                            .truncate()
-                            .text_size(px(11.0))
-                            .text_color(theme.danger_muted)
-                            .child(error),
-                    )
-                },
+                |element, error| element.child(history_error(&theme, error)),
             )
             .child(
                 container_query(move |size, window, cx| {
@@ -4936,4 +4909,27 @@ mod tests {
             2
         );
     }
+}
+
+/// A slim one-line error over the commit list: triangle and red text, with a
+/// plain divider below instead of a red band.
+fn history_error(theme: &Theme, message: impl Into<SharedString>) -> gpui::Div {
+    div()
+        .h(px(28.0))
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .px(px(8.0))
+        .border_b_1()
+        .border_color(theme.border)
+        .text_size(px(11.0))
+        .text_color(theme.danger_muted)
+        .child(
+            crate::icons::icon(crate::icons::DANGER_TRIANGLE)
+                .size(px(12.0))
+                .flex_none()
+                .text_color(theme.danger),
+        )
+        .child(div().min_w_0().truncate().child(message.into()))
 }

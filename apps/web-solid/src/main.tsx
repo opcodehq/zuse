@@ -1,3 +1,5 @@
+import { MultiComputerShell } from "@/features/connection/multi/MultiComputerShell";
+import { installComputerBridge } from "@/features/connection/multi/bridge";
 import { hostedBrowser, takeHostedCallback } from "@/core/auth";
 import { onConnected, rpc, start } from "@/core/connection";
 import { M } from "@/core/methods";
@@ -26,6 +28,7 @@ if (callback) {
 // Read-only handle for the e2e harness; the page can already read its own state.
 (window as unknown as { __zuse: unknown }).__zuse = { state, view };
 
-render(() => <App />, document.getElementById("root")!);
+installComputerBridge();
+render(() => <MultiComputerShell><App /></MultiComputerShell>, document.getElementById("root")!);
 startAnalytics();
 void start();

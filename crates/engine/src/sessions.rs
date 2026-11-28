@@ -249,6 +249,23 @@ async fn publish_steer(
     }
 }
 
+/// Retire the ledger entry a `Steered` boundary confirms. A driver that names
+/// the steer (`Some(id)`) confirms exactly that entry — nothing when it is
+/// already gone, and never the front by accident; `None` keeps the oldest
+/// pending steer semantics.
+fn take_confirmed_steer(
+    ledger: &mut std::collections::VecDeque<RoutedSteer>,
+    message_id: Option<&str>,
+) -> Option<RoutedSteer> {
+    match message_id {
+        Some(id) => ledger
+            .iter()
+            .position(|steer| steer.message_id == id)
+            .and_then(|index| ledger.remove(index)),
+        None => ledger.pop_front(),
+    }
+}
+
 struct Inner {
     analytics: OnceLock<zuse_analytics::Analytics>,
     secret_namespace: String,
@@ -314,6 +331,11 @@ struct Inner {
     provider_context: OnceLock<ProviderContext>,
     execution_observer: OnceLock<crate::execution_progress::Observer>,
     zappers: OnceLock<crate::zappers::Zappers>,
+    /// This engine hosts cloud chats that can run commands on the owner's
+    /// computers; their agents get the computer tools up front.
+    cloud_computers: std::sync::atomic::AtomicBool,
+    /// A setup chat's computer (see `zuse_protocol::machine_setup`).
+    machine_setup: std::sync::atomic::AtomicBool,
     /// Host settings a run must carry before it is routed (which Claude
     /// connection it launches against). Absent in bare tests.
     request_stamp: OnceLock<RequestStamp>,
@@ -513,6 +535,8 @@ impl SessionsEngine {
                 provider_context: OnceLock::new(),
                 execution_observer: OnceLock::new(),
                 zappers: OnceLock::new(),
+                cloud_computers: std::sync::atomic::AtomicBool::new(false),
+                machine_setup: std::sync::atomic::AtomicBool::new(false),
                 request_stamp: OnceLock::new(),
             }),
         }
@@ -536,6 +560,20 @@ impl SessionsEngine {
     }
     pub fn set_secret_filter(&self, filter: Arc<zuse_providers::credentials::redaction::Secrets>) {
         let _ = self.inner.secret_filter.set(filter);
+    }
+    /// Chats here are cloud chats that can run commands on the owner's
+    /// computers (see `zuse_mcp::McpConfig::cloud_computers`).
+    pub fn set_cloud_computers(&self) {
+        self.inner
+            .cloud_computers
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+    /// Chats here configure the account's machine image: their agents get
+    /// the image tools (see `zuse_protocol::machine_setup::MCP_ENV`).
+    pub fn set_machine_setup(&self) {
+        self.inner
+            .machine_setup
+            .store(true, std::sync::atomic::Ordering::Release);
     }
     pub fn set_ipc_port(&self, port: u16) {
         if let Some(zappers) = self.inner.zappers.get() {
@@ -2549,6 +2587,32 @@ impl Inner {
         }
     }
 
+    /// Publish (or clear, with `None`) the transient status the agent reported
+    /// mid-turn — a model reconnect — on `chat_id`'s session row, mirrored
+    /// like [`Self::set_running_subagents`]. An unchanged notice is a no-op,
+    /// so clearing on every streamed event costs one map lookup.
+    fn set_notice(&self, chat_id: &str, notice: Option<String>) {
+        let session = {
+            let mut statuses = lock(&self.statuses);
+            let Some(entry) = statuses.get_mut(chat_id) else {
+                return;
+            };
+            if entry.notice == notice {
+                return;
+            }
+            entry.notice = notice;
+            entry.updated_at = Utc::now();
+            let session = entry.clone();
+            let mut list: Vec<Session> = statuses.values().cloned().collect();
+            list.sort_by(|a, b| a.chat_id.cmp(&b.chat_id));
+            self.sessions_tx.send_replace(list);
+            session
+        };
+        if let Some(ws) = self.workspace() {
+            ws.record_session(&session);
+        }
+    }
+
     /// Publish the background tasks of `chat_id`'s runtime, mirrored like
     /// [`Self::set_running_subagents`]: a change is a status transition, an
     /// unchanged list is a no-op.
@@ -2613,9 +2677,15 @@ impl Inner {
                     running_subagents: 0,
                     awaiting_input: None,
                     background_tasks: Vec::new(),
+                    notice: None,
                 });
             if status != SessionStatus::AwaitingInput {
                 entry.awaiting_input = None;
+            }
+            // A reconnect notice belongs to the turn that reported it: a new
+            // turn, a question or a settled run never inherits it.
+            if status != SessionStatus::Working || fresh_start {
+                entry.notice = None;
             }
             // `started_at` is the elapsed-timer base and must only ever mean
             // "this turn". Entering Working from a settled state always
@@ -2706,6 +2776,21 @@ impl Inner {
                 ("ZUSE_DEVICE_ID".to_owned(), self.device_id.clone()),
             ]
             .into_iter()
+            .chain(
+                self.cloud_computers
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    .then(|| ("ZUSE_CLOUD_COMPUTERS".to_owned(), "1".to_owned())),
+            )
+            .chain(
+                self.machine_setup
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    .then(|| {
+                        (
+                            zuse_protocol::machine_setup::MCP_ENV.to_owned(),
+                            "1".to_owned(),
+                        )
+                    }),
+            )
             .chain(
                 self.zappers
                     .get()
@@ -3354,6 +3439,29 @@ fn render_parts(parts: &[MessagePart]) -> Vec<MessagePart> {
 }
 
 /// The persisted assistant text of a folded segment (workspace preview source).
+/// Whether the turn's fold shows work still in flight: an unresolved tool
+/// call (a command legitimately silent for minutes) or an open question.
+/// The live-plan chip is a singleton that never resolves, so it never counts.
+fn turn_in_flight(parts: &[MessagePart]) -> bool {
+    parts.iter().any(|p| match p {
+        MessagePart::Tool {
+            id,
+            resolved: false,
+            ..
+        } => id != zuse_protocol::LIVE_PLAN_TOOL_ID,
+        MessagePart::Input {
+            resolved: false, ..
+        } => true,
+        _ => false,
+    })
+}
+
+/// The error a stalled turn ends with. Plain words, and nothing the composer
+/// would read as a transient reconnect, so it offers Retry.
+fn stalled_turn_message(agent: &str) -> String {
+    format!("{agent} stopped responding, so this turn was ended. Retry to send your message again.")
+}
+
 fn folded_text(parts: &[MessagePart]) -> String {
     parts
         .iter()
@@ -3774,6 +3882,10 @@ async fn drive_run(
     // folding the echo would mint an orphan chip mid-text in the NEXT
     // segment — the mid-word transcript splits.
     let mut seen_tools: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Tool calls of the active turn still awaiting their result, kept apart
+    // from `folded` because a steer boundary resets the fold while a command
+    // keeps running. The stall watchdog stays disarmed while any is open.
+    let mut open_tools: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut seen_images = std::collections::HashSet::new();
     for entry in doc_ref.read_entries().unwrap_or_default() {
         for part in entry.parts {
@@ -3812,16 +3924,22 @@ async fn drive_run(
     // steerable harness parks here instead of ending the run — the child and
     // its steering mailbox stay warm, and the next user message (dispatch
     // routes into a live run) starts the next turn with zero respawn/resume
-    // latency. Release completed, unused runtimes after five minutes: each
-    // parked agent and its MCP servers can retain hundreds of MB. History and
-    // provider session identity remain durable, so the next message resumes.
+    // latency. Release completed, unused runtimes after the harness's parked
+    // window (five minutes by default; an agent whose resume replays its
+    // history, like Devin, keeps its runtime longer): each parked agent and
+    // its MCP servers can retain hundreds of MB. History and provider
+    // session identity remain durable, so the next message resumes.
     // Active turns, voice calls and reported background work hold the reaper
     // off. A call hang-up restarts its window.
     let idle_override = std::env::var("ZUSE_SESSION_IDLE_MS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .map(std::time::Duration::from_millis);
-    let session_idle = idle_override.unwrap_or(std::time::Duration::from_secs(5 * 60));
+    let session_idle = idle_override.unwrap_or_else(|| {
+        harness
+            .parked_idle_window()
+            .unwrap_or(std::time::Duration::from_secs(5 * 60))
+    });
     // Keep the existing lost-subagent grace independent of ordinary idle
     // retention. Reducing parked-process memory must not shorten the window
     // for a real subagent that is still working (4h, or 40m for voice chats).
@@ -3876,6 +3994,27 @@ async fn drive_run(
         None => Some(std::time::Duration::from_secs(120)),
     };
     let mut last_stream_activity = tokio::time::Instant::now();
+    // Last background-workflow progress report during an active turn. Only
+    // the stall watchdog reads it; the quiesce park keeps its own window.
+    let mut last_workflow_activity: Option<tokio::time::Instant> = None;
+    // TURN-STALL WATCHDOG: unlike the quiesce park above, this one ENDS the
+    // turn with an error. It is armed only for drivers that name a window
+    // (`Harness::stall_timeout`) and only while a turn is active with
+    // nothing in flight — an unresolved tool call (a long build, a subagent
+    // wait) or an open question disarms it, so legitimate long work is
+    // never cut. Any agent event, a reconnect notice included, restarts the
+    // window. When it trips, the agent stopped talking without a terminal
+    // frame: the runtime is torn down and the turn ends Errored, so the
+    // composer takes the next message (and offers Retry) instead of showing
+    // "is working" forever. `ZUSE_TURN_STALL_MS` overrides; 0 disables.
+    let stall_after: Option<std::time::Duration> = match std::env::var("ZUSE_TURN_STALL_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        Some(0) => None,
+        Some(ms) => Some(std::time::Duration::from_millis(ms)),
+        None => harness.stall_timeout(),
+    };
     // SELF-CONTINUED turns get a much SHORTER quiesce window. A turn the
     // agent starts on its own (background-task wake) can never receive a
     // harness Done: the adapter has no `session/prompt` outstanding to
@@ -3904,6 +4043,9 @@ async fn drive_run(
     // into Streaming. Only a steer (UserMessage) legitimately REOPENS a
     // settled subagent: it announces more work is coming.
     let mut settled_subagents: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut frozen_subagents = HashMap::new();
+    let mut boundary_messages = std::collections::HashSet::new();
+    let mut receipts_before_boundary = HashMap::new();
     // Live subagent sinks, parent tool-use id → transcript doc state.
     let mut subagents: std::collections::HashMap<String, SubagentSink> =
         std::collections::HashMap::new();
@@ -4106,13 +4248,7 @@ async fn drive_run(
                     && idle_since.is_none()
                     && !interrupted
                     && steerable
-                    && !folded.iter().any(|p| match p {
-                        MessagePart::Tool { id, resolved: false, .. } => {
-                            id != zuse_protocol::LIVE_PLAN_TOOL_ID
-                        }
-                        MessagePart::Input { resolved: false, .. } => true,
-                        _ => false,
-                    }) =>
+                    && !turn_in_flight(&folded) =>
                 {
                     tracing::warn!(
                         chat = %chat_id,
@@ -4149,6 +4285,7 @@ async fn drive_run(
                         inner.note_message(&chat_id, &folded_text(&folded));
                     }
                     folded.clear();
+                    open_tools.clear();
                     dirty = false;
                     entry_id = new_id();
                     segment_started = now_ms();
@@ -4159,6 +4296,38 @@ async fn drive_run(
                         &chat_id, SessionStatus::Idle, false, completed_turn,
                     );
                     continue;
+                }
+                // Turn-stall watchdog (see the knob above). Subagent and workflow traffic
+                // is the agent's own work too, so it restarts the window.
+                _ = tokio::time::sleep_until(
+                    last_stream_activity
+                        .max(last_subagent_activity.unwrap_or(last_stream_activity))
+                        .max(last_workflow_activity.unwrap_or(last_stream_activity))
+                        + stall_after.unwrap_or_default()
+                ), if stall_after.is_some()
+                    && idle_since.is_none()
+                    && !interrupted
+                    && open_tools.is_empty()
+                    && !turn_in_flight(&folded) =>
+                {
+                    tracing::warn!(
+                        chat = %chat_id,
+                        quiet_ms = stall_after.unwrap_or_default().as_millis() as u64,
+                        "turn stalled: no agent event with nothing in flight; ending the turn"
+                    );
+                    if let Some(token) = lock(&inner.runs)
+                        .get(&chat_id)
+                        .filter(|h| h.run_id == run_id)
+                        .map(|h| h.interrupt_token.clone())
+                    {
+                        token.cancel();
+                    }
+                    AgentEvent::Done {
+                        status: DoneStatus::Errored,
+                        result: None,
+                        error: Some(stalled_turn_message(harness.display_name())),
+                        session_id: None,
+                    }
                 }
             };
 
@@ -4171,6 +4340,24 @@ async fn drive_run(
                 continue;
             };
             event
+        };
+
+        // Normalize boundary-only events for the transcript/UI paths below.
+        // Delivery remains a separate, exact receipt even if the runtime dies.
+        let (event, provisional_boundary) = match event {
+            AgentEvent::SteerBoundary {
+                assistant_message_id,
+                next_assistant_message_id,
+                message_id,
+            } => (
+                AgentEvent::Steered {
+                    assistant_message_id,
+                    next_assistant_message_id,
+                    message_id,
+                },
+                true,
+            ),
+            event => (event, false),
         };
 
         // Replayed consumption is a receipt, never an assistant boundary.
@@ -4188,6 +4375,9 @@ async fn drive_run(
                 })
                 .unwrap_or((None, false));
             if let Some(confirmed) = confirmed {
+                if !boundary_messages.remove(message_id) {
+                    receipts_before_boundary.insert(message_id.clone(), confirmed.clone());
+                }
                 turn.forget_steer(message_id);
                 if confirmed.fork_history
                     && let Some(session) = lock(&inner.harness_sessions)
@@ -4235,11 +4425,38 @@ async fn drive_run(
             );
             if is_steer {
                 settled_subagents.remove(parent_tool_use_id);
+                frozen_subagents.remove(parent_tool_use_id);
             } else if settled_subagents.contains(parent_tool_use_id)
                 && !subagents.contains_key(parent_tool_use_id)
             {
-                // Straggler after the freeze: chip-only silence (the old
-                // pre-viz behavior), never a reopened doc.
+                // Only a result for an existing tool may amend the frozen
+                // transcript. It never reopens the chip or creates an entry.
+                if let Some(status) = frozen_subagents.get(parent_tool_use_id)
+                    && let Some(host) = inner.doc_host()
+                    && let AgentEvent::ToolResult { id, .. } = sub_event.as_ref()
+                {
+                    let sub_id = subagent_doc_id(&chat_id, parent_tool_use_id);
+                    if let Ok(handle) = host.open(&sub_id) {
+                        let sub_doc = handle.writer();
+                        if let Ok(entries) = sub_doc.read_entries()
+                            && let Some((ix, entry)) = entries.iter().enumerate().rev().find(|(_, entry)|
+                                entry.parts.iter().any(|part| matches!(part, MessagePart::Tool { id: known, .. } if known == id)))
+                        {
+                            let mut parts = entry.parts.clone();
+                            zuse_doc::fold_event_into_parts(&mut parts, sub_event);
+                            persist_tool_result(Some(host.clone()), &chat_id, &entry.id, &mut parts, sub_event);
+                            let writer = SegmentWriter::resume(&sub_doc, ix, render_parts(&entry.parts));
+                            if writer.finish(&render_parts(&parts), *status).is_ok()
+                                && let Ok(entries) = sub_doc.read_entries()
+                                && let Ok(json) = serde_json::to_string(&zuse_doc::join_continuation_entries(entries))
+                            {
+                                host.upload_tool_sidecar(&chat_id, zuse_doc::SidecarPayload {
+                                    part_id: sub_id, output: Some(json), diff: None,
+                                });
+                            }
+                        }
+                    }
+                }
                 continue;
             }
             let sub_id = subagent_doc_id(&chat_id, parent_tool_use_id);
@@ -4254,25 +4471,6 @@ async fn drive_run(
             // on click).
             let done_only = !sink_known && matches!(sub_event.as_ref(), AgentEvent::Done { .. });
             if chip_streaming {
-                if !sink_known && !done_only {
-                    for p in folded.iter_mut() {
-                        if let MessagePart::Tool {
-                            id,
-                            call,
-                            subagent_ref,
-                            ..
-                        } = p
-                            && id == parent_tool_use_id
-                            // Genus gate: a subagent ref may only ever bind
-                            // to a SPAWN call — mis-keyed tagged traffic
-                            // must not turn an ordinary chip into a spawn
-                            // link (empty tab on click).
-                            && call.is_subagent_spawn()
-                        {
-                            *subagent_ref = Some(sub_id.clone());
-                        }
-                    }
-                }
                 zuse_doc::fold_event_into_parts(&mut folded, &event);
                 if !dirty {
                     dirty = true;
@@ -4290,6 +4488,25 @@ async fn drive_run(
                     }
                 });
                 if let Some(sub_doc) = opened {
+                    if chip_streaming {
+                        for p in folded.iter_mut() {
+                            if let MessagePart::Tool {
+                            id,
+                            call,
+                            subagent_ref,
+                            ..
+                        } = p
+                            && id == parent_tool_use_id
+                            // Genus gate: a subagent ref may only ever bind
+                            // to a SPAWN call — mis-keyed tagged traffic
+                            // must not turn an ordinary chip into a spawn
+                            // link (empty tab on click).
+                            && call.is_subagent_spawn()
+                            {
+                                *subagent_ref = Some(sub_id.clone());
+                            }
+                        }
+                    }
                     subagents.insert(
                         parent_tool_use_id.clone(),
                         SubagentSink {
@@ -4375,6 +4592,7 @@ async fn drive_run(
                         } => MessageStatus::Aborted,
                         _ => MessageStatus::Complete,
                     };
+                    frozen_subagents.insert(parent_tool_use_id.clone(), status);
                     let sink = subagents.remove(parent_tool_use_id).expect("checked");
                     inner.set_running_subagents(&chat_id, subagents.len());
                     let doc_id = sink.doc_id.clone();
@@ -4410,6 +4628,12 @@ async fn drive_run(
         if let AgentEvent::WorkflowProgress { tool_use_id, call } = &event {
             inner.publish(&chat_id, &event);
             inner.touch_session(&chat_id);
+            // Workflow progress is the agent's own work: it restarts the
+            // stall window. A parked turn has no window, so this never
+            // reopens one.
+            if idle_since.is_none() {
+                last_workflow_activity = Some(tokio::time::Instant::now());
+            }
             let first_report = live_workflows.insert(tool_use_id.clone());
             let chip_streaming = folded
                 .iter()
@@ -4445,6 +4669,21 @@ async fn drive_run(
         // push the quiesce watchdog's window out.
         inner.touch_session(&chat_id);
         last_stream_activity = tokio::time::Instant::now();
+        // A transient notice (the agent reconnecting to its model) is live
+        // status for the working row, never transcript content. Any other
+        // event means the agent is streaming again, which clears it.
+        if let AgentEvent::Notice { message } = &event {
+            if idle_since.is_none() {
+                inner.set_notice(&chat_id, message.clone());
+            }
+            continue;
+        }
+        inner.set_notice(&chat_id, None);
+        // A result settles its call wherever it lands, even as a stale echo
+        // the filter below drops.
+        if let AgentEvent::ToolResult { id, .. } = &event {
+            open_tools.remove(id);
+        }
         // The engine's input bridge is the sole authority on input requests:
         // it mints the id and parks the resolver BEFORE emitting the event,
         // so a legitimate id is always pending here. A harness emitting its
@@ -4592,7 +4831,9 @@ async fn drive_run(
                 if !in_segment(&folded, id) && seen_tools.contains(id) {
                     continue;
                 }
-                seen_tools.insert(id.clone());
+                if seen_tools.insert(id.clone()) {
+                    open_tools.insert(id.clone());
+                }
             }
             AgentEvent::ToolResult { id, .. }
                 if !in_segment(&folded, id) && seen_tools.contains(id) =>
@@ -4662,6 +4903,7 @@ async fn drive_run(
         // A steer boundary splits the assistant entry exactly where the fold resets.
         if let AgentEvent::Steered {
             next_assistant_message_id,
+            message_id,
             ..
         } = &event
         {
@@ -4691,20 +4933,36 @@ async fn drive_run(
             // steer boundary restarts it (matches the parked-resume path and
             // the composer's optimistic overlay, which already reads 0:00).
             inner.set_status(&chat_id, SessionStatus::Working, true);
-            // The boundary confirms delivery of the oldest accepted steer —
-            // retire its at-least-once ledger entry.
+            // Boundary-only events select the owner without consuming its
+            // receipt. Legacy Steered events still confirm the named steer
+            // (or the oldest entry for drivers without identities).
             let confirmed = lock(&inner.runs)
                 .get_mut(&chat_id)
                 .filter(|h| h.run_id == run_id)
                 .and_then(|h| {
-                    let confirmed = lock(&h.routed_steers).pop_front();
+                    let confirmed = if provisional_boundary {
+                        let ledger = lock(&h.routed_steers);
+                        message_id.as_ref().and_then(|id| {
+                            let pending =
+                                ledger.iter().find(|steer| &steer.message_id == id).cloned();
+                            if pending.is_some() {
+                                boundary_messages.insert(id.clone());
+                            }
+                            pending.or_else(|| receipts_before_boundary.remove(id))
+                        })
+                    } else {
+                        take_confirmed_steer(&mut lock(&h.routed_steers), message_id.as_deref())
+                    };
                     if let Some(confirmed) = &confirmed {
                         h.active_message = Some(confirmed.message_id.clone());
                     }
                     confirmed
                 });
             if let Some(confirmed) = confirmed.as_ref() {
-                if let Some(previous) = execution_message.take() {
+                if let Some(previous) = execution_message
+                    .take()
+                    .filter(|previous| previous != &confirmed.message_id)
+                {
                     if !inner.observe_execution(
                         &chat_id,
                         &previous,
@@ -4751,9 +5009,12 @@ async fn drive_run(
                         request.resume = None;
                         request
                     });
-                turn.forget_steer(&steer.message_id);
+                if !provisional_boundary {
+                    turn.forget_steer(&steer.message_id);
+                }
             }
-            if confirmed.is_some_and(|steer| steer.fork_history)
+            if !provisional_boundary
+                && confirmed.is_some_and(|steer| steer.fork_history)
                 && let Some(session) = lock(&inner.harness_sessions)
                     .get(&chat_id)
                     .map(|known| known.session_id.clone())
@@ -4871,6 +5132,7 @@ async fn drive_run(
         }
         analytics_turn.observe(&event);
         if let AgentEvent::Done { status, .. } = &event {
+            open_tools.clear();
             if analytics_turn_open {
                 if let Some(analytics) = inner.analytics.get() {
                     let event = match status {
@@ -4889,9 +5151,18 @@ async fn drive_run(
                 {
                     handle.active_message = None;
                 }
+                let delivery_pending = lock(&inner.runs)
+                    .get(&chat_id)
+                    .filter(|handle| handle.run_id == run_id)
+                    .is_some_and(|handle| {
+                        lock(&handle.routed_steers)
+                            .iter()
+                            .any(|steer| steer.message_id == message)
+                    });
                 let state = match status {
-                    DoneStatus::Completed => crate::execution_progress::State::Completed,
                     DoneStatus::Interrupted => crate::execution_progress::State::Cancelled,
+                    _ if delivery_pending => crate::execution_progress::State::OutcomeUnknown,
+                    DoneStatus::Completed => crate::execution_progress::State::Completed,
                     DoneStatus::Errored => crate::execution_progress::State::Failed,
                 };
                 if !inner.observe_execution(&chat_id, &message, Some(entry_id.clone()), state) {
@@ -5362,6 +5633,53 @@ mod tests {
         assert!(publisher.await.unwrap().is_ok());
         assert_eq!(lock(&ledger).front().unwrap().epoch, turn.steering_epoch());
         assert!(!turn.steer_cancelled("new"));
+    }
+
+    fn routed_steer(message_id: &str) -> RoutedSteer {
+        RoutedSteer {
+            epoch: 0,
+            prompt: format!("prompt {message_id}"),
+            message_id: message_id.into(),
+            fork_history: false,
+            after_stop: false,
+            request: None,
+        }
+    }
+
+    #[test]
+    fn confirmed_steer_names_its_own_ledger_entry_not_the_front() {
+        let mut ledger = std::collections::VecDeque::from([
+            routed_steer("first"),
+            routed_steer("second"),
+            routed_steer("third"),
+        ]);
+        let confirmed = take_confirmed_steer(&mut ledger, Some("second")).unwrap();
+        assert_eq!(confirmed.message_id, "second");
+        assert_eq!(
+            ledger
+                .iter()
+                .map(|s| s.message_id.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "third"]
+        );
+    }
+
+    #[test]
+    fn confirmed_steer_with_unknown_id_leaves_the_ledger_alone() {
+        let mut ledger = std::collections::VecDeque::from([routed_steer("first")]);
+        assert!(take_confirmed_steer(&mut ledger, Some("missing")).is_none());
+        assert_eq!(ledger.len(), 1);
+        assert_eq!(ledger[0].message_id, "first");
+    }
+
+    #[test]
+    fn confirmed_steer_without_id_confirms_the_oldest() {
+        let mut ledger =
+            std::collections::VecDeque::from([routed_steer("first"), routed_steer("second")]);
+        let confirmed = take_confirmed_steer(&mut ledger, None).unwrap();
+        assert_eq!(confirmed.message_id, "first");
+        assert_eq!(ledger.len(), 1);
+        assert_eq!(ledger[0].message_id, "second");
     }
 
     #[tokio::test]

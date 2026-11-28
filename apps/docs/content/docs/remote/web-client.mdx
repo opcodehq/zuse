@@ -1,0 +1,45 @@
+---
+title: "Web client"
+icon: AppWindow
+navTitle: "Web client"
+description: "What the Zuse web client does, how it connects to your computers, and how it saves and forgets them."
+section: "Remote access"
+order: 4
+platforms: [web]
+providers: []
+prerequisites: [/remote/local-browser]
+related: [/remote/local-browser, /remote/recovery, /remote/security, /serve]
+next: /remote/tailscale
+lastVerified: "2026-11-27"
+---
+
+The web client is Zuse in a browser tab. It shows the same projects, chats, transcripts, composer, and settings as the desktop app, and it sends every request to the engine on the computer it is connected to. The engine owns all data; the browser only displays it.
+
+## Open it
+
+| Situation | How |
+| --- | --- |
+| On the computer that runs `zuse serve` | Open the `Open …/#token=…` link that Serve prints. |
+| From another device | Open a pairing link from **Connect device** or `zuse pair`. See [Browser access](/remote/local-browser/). |
+
+A pairing link carries its secret after `#pair=` in the address. The client removes it from the address bar as soon as it reads it.
+
+## Saved computers
+
+After a pairing link works, the browser saves it and reopens the most recent computer when you open the client without a link. It keeps up to 16 computers per address. Links are only saved after they have connected once.
+
+Open **Settings → Remote access** in the web client to see the computers saved in this browser, open one, or forget it. Forgetting reloads the tab, so save drafts first. Forgetting only clears this browser's copy; revoke the device on the computer to end its access.
+
+Settings → Remote access also shows the same controls as the desktop app for the connected computer: its connections, paired devices, and advanced options.
+
+## Connection states
+
+The client reconnects on its own after a dropped connection and resumes requests where they stopped. If an action was in flight when the connection closed, it tells you the action may have completed instead of sending it again. Check the result before you retry.
+
+If the computer no longer accepts the pairing, the client says so and asks you to open a new invitation from that computer. See [Connection recovery](/remote/recovery/).
+
+## Requirements
+
+Use a current desktop or mobile browser. On your local network the client opens over HTTPS with a certificate generated for the computer, so the browser warns once; Tailscale HTTPS avoids that warning.
+
+<NextStep href="/remote/tailscale/" label="Share over Tailscale" />

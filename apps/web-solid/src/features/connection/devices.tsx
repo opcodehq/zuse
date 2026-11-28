@@ -141,7 +141,8 @@ function ComputersCard(props: { open: (kind: DialogKind) => void }) {
   const rows = () => {
     const live = remote.environments;
     const ids = new Set(live.map((row) => str(row.environmentId)));
-    return [...live, ...remote.saved.filter((row) => !ids.has(str(row.environmentId)))];
+    return [...live, ...remote.saved.filter((row) => !ids.has(str(row.environmentId)))]
+      .filter((row) => row.environmentId !== state.localDeviceId && row.environmentId !== remote.host?.environmentId);
   };
   const supports = (row: Record<string, unknown>) => {
     const features = ((row.capabilities ?? {}) as { features?: unknown }).features;
@@ -173,7 +174,6 @@ function ComputersCard(props: { open: (kind: DialogKind) => void }) {
             const label = () => str(computer.label) ?? "Linked computer";
             const current = () => id() === state.localDeviceId;
             const compatible = () => supports(computer);
-            const remembered = () => remote.saved.some((row) => row.environmentId === computer.environmentId);
             const text = () => (current() ? "This computer" : compatible() ? (str(computer.serviceState) ?? "Availability checked on connect") : "Update Zuse on this computer to connect.");
             const connect = () => {
               const subject = accountUser()?.id;
@@ -181,7 +181,7 @@ function ComputersCard(props: { open: (kind: DialogKind) => void }) {
               try {
                 openAccountComputer({ environmentId: id(), expectedSubject: subject, label: label() });
               } catch (error) {
-                setRemote(draft => { draft["error"] = error instanceof Error ? error.message : "Could not open computer tab"; });
+                setRemote(draft => { draft["error"] = error instanceof Error ? error.message : "Could not connect to computer"; });
               }
             };
             return (
@@ -192,13 +192,13 @@ function ComputersCard(props: { open: (kind: DialogKind) => void }) {
                   <Show when={!current() && compatible()}>
                     <Btn aria-label={`Connect to ${label()}`} onClick={connect}>Connect</Btn>
                   </Show>
-                  <Show when={remembered()}>
+                  <Show when={!current()}>
                     <Btn
-                      aria-label={`Forget saved ${label()}`}
+                      aria-label={`Remove ${label()}`}
                       disabled={remote.busy !== null}
                       onClick={() => void forgetSaved(id())}
                     >
-                      Forget saved
+                      Remove
                     </Btn>
                   </Show>
                 </div>
@@ -212,8 +212,13 @@ function ComputersCard(props: { open: (kind: DialogKind) => void }) {
 }
 
 async function forgetSaved(environmentId: string) {
-  const reply = await act<{ computers?: Record<string, unknown>[] }>(M.FORGET_ACCOUNT_ROUTE, { environmentId, expectedSubject: accountUser()?.id ?? "" });
-  if (reply?.computers) setRemote(draft => { draft["saved"] = reply.computers!; });
+  const reply = await act<{ computers?: Record<string, unknown>[] }>(M.REMOVE_ACCOUNT_COMPUTER, { environmentId, expectedSubject: accountUser()?.id ?? "" });
+  if (reply?.computers) {
+    setRemote(draft => {
+      draft["saved"] = reply.computers!;
+      draft["environments"] = draft.environments.filter((row) => row.environmentId !== environmentId);
+    });
+  }
 }
 
 /* Devices that paired with this computer. */

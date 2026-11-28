@@ -9,6 +9,13 @@ use gpui::{prelude::*, *};
 use serde_json::{Value, json};
 use zuse_rpc::methods;
 
+#[derive(Clone)]
+pub(crate) struct ComputerRemoved {
+    pub environment: String,
+    pub subject: String,
+}
+impl EventEmitter<ComputerRemoved> for ManagedAccessCard {}
+
 pub struct AccessChanged;
 impl EventEmitter<AccessChanged> for ManagedAccessCard {}
 
@@ -188,7 +195,7 @@ impl ManagedAccessCard {
             }
         }));
     }
-    fn refresh(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn refresh(&mut self, cx: &mut Context<Self>) {
         let Some(engine) = self.engine.clone() else {
             return;
         };
@@ -270,6 +277,16 @@ impl ManagedAccessCard {
         self.busy = true;
         self.error = None;
         let epoch = self.epoch;
+        let removed = (method == methods::REMOVE_ACCOUNT_COMPUTER).then(|| ComputerRemoved {
+            environment: params["environmentId"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+            subject: params["expectedSubject"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+        });
         self.action = Some(cx.spawn(async move |this, cx| {
             let result = engine.client().call(method, params).await;
             let _ = this.update(cx, |card, cx| {
@@ -277,7 +294,10 @@ impl ManagedAccessCard {
                     return;
                 }
                 card.busy = false;
-                let forgetting = method == methods::FORGET_ACCOUNT_ROUTE;
+                let forgetting = matches!(
+                    method,
+                    methods::FORGET_ACCOUNT_ROUTE | methods::REMOVE_ACCOUNT_COMPUTER
+                );
                 if result.is_ok()
                     && matches!(
                         method,
@@ -298,17 +318,24 @@ impl ManagedAccessCard {
                         }
                     }
                     Ok(value) if forgetting => {
-                        card.saved = value["computers"].as_array().cloned().unwrap_or_default()
+                        card.saved = value["computers"].as_array().cloned().unwrap_or_default();
+                        if let Some(removed) = removed {
+                            cx.emit(removed);
+                        }
                     }
-                    Err(error) => card.error = Some(error.to_string()),
+                    Err(error) => {
+                        if card.dialog.is_none() {
+                            crate::toast::error(cx, error.to_string());
+                        } else {
+                            card.error = Some(error.to_string());
+                        }
+                    }
                     _ => {}
                 }
-                if !forgetting
-                    && !matches!(
-                        method,
-                        methods::CLOUD_ACCOUNT_SIGN_IN | methods::CLOUD_ACCOUNT_SIGN_OUT
-                    )
-                {
+                if !matches!(
+                    method,
+                    methods::CLOUD_ACCOUNT_SIGN_IN | methods::CLOUD_ACCOUNT_SIGN_OUT
+                ) {
                     card.refresh(cx);
                     if matches!(
                         method,
@@ -417,30 +444,105 @@ impl ManagedAccessCard {
     }
     /// Other computers as rows for the Devices list; `offset` rows already sit above them.
     pub(super) fn computer_rows(&self, offset: usize, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        use zuse_viewport::{remote_access_style as r, settings_style as s};
+        use zuse_viewport::remote_access_style as r;
+        let theme = crate::theme::Theme::of(cx).for_settings_surface();
         let rows =
             zuse_protocol::managed_connection::computer_rows(&self.environments, &self.saved);
-        rows.into_iter().enumerate().map(|(index,computer)| {
-                    let index = index + offset;
-                    let environment=computer["environmentId"].as_str().unwrap_or_default().to_owned();
-                    let subject=self.account["user"]["id"].as_str().unwrap_or_default().to_owned();
-                    let controller=self.engine.clone();let label=computer["label"].as_str().unwrap_or("Linked computer").to_owned();
-                    let current=controller.as_ref().is_some_and(|engine|engine.engine_info().device_id==environment);
-                    let compatible=zuse_protocol::managed_connection::supports_record(computer);
-                    let remembered=self.saved.iter().any(|row|row["environmentId"]==computer["environmentId"]);
-                    let forget_id=environment.clone();let forget_subject=subject.clone();
-                    let description=if current {"This computer"}else if compatible {computer["serviceState"].as_str().unwrap_or("Availability checked on connect")}else{"Update Zuse on this computer to connect."};
-                    div().flex().items_center().min_h(px(48.)).gap(px(10.)).px(px(12.)).py(px(8.))
-                        .when(index>0,|v|v.border_t_1().border_color(s::card_border().opacity(0.4)))
-                        .child(zuse_viewport::remote_access_style::glyph("monitor").size(px(16.)))
-                        .child(r::details(label.clone(),description.to_owned()).flex_1())
-                        .when(!current&&compatible,|v|v.child(r::button(("connect-account-computer",index),crate::localization::text("settings-remote_connect", cx))
-                            .on_click(move|_,_,cx|if let Some(controller)=controller.clone(){crate::open_account_window(crate::state::AccountTarget{controller,subject:subject.clone(),environment:environment.clone(),label:label.clone()},cx);})))
-                        .when(remembered,|v|v.child(r::button(("forget-account-computer",index),"Forget saved")
-                            .on_click(cx.listener(move|this,_,_,cx|this.request(methods::FORGET_ACCOUNT_ROUTE,json!({"environmentId":forget_id,"expectedSubject":forget_subject}),cx)))))
-                        .into_any_element()
-                }).collect()
+        rows.into_iter()
+            .filter(|computer| {
+                let id = computer["environmentId"].as_str();
+                id != self
+                    .engine
+                    .as_ref()
+                    .map(|engine| engine.engine_info().device_id.as_str())
+                    && id != self.host["environmentId"].as_str()
+            })
+            .enumerate()
+            .map(|(index, computer)| {
+                let index = index + offset;
+                let environment = computer["environmentId"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned();
+                let subject = self.account["user"]["id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned();
+                let controller = self.engine.clone();
+                let label = computer["label"]
+                    .as_str()
+                    .unwrap_or("Linked computer")
+                    .to_owned();
+                let compatible = zuse_protocol::managed_connection::supports_record(computer);
+                let forget_id = environment.clone();
+                let forget_subject = subject.clone();
+                let description = if compatible {
+                    computer["serviceState"]
+                        .as_str()
+                        .unwrap_or("Availability checked on connect")
+                } else {
+                    "Update Zuse on this computer to connect."
+                };
+                widgets::card_row(&theme, index == 0)
+                    .flex_nowrap()
+                    .child(
+                        div().w(px(20.)).flex_none().flex().justify_center().child(
+                            r::glyph("monitor")
+                                .size(px(16.))
+                                .text_color(theme.text_muted),
+                        ),
+                    )
+                    .child(widgets::row_copy(&theme, &label, description))
+                    .when(compatible, |v| {
+                        v.child(
+                            super::pairing::row_button(
+                                &theme,
+                                widgets::ActionTone::Filled,
+                                ("connect-account-computer", index),
+                            )
+                            .child(crate::localization::text("settings-remote_connect", cx))
+                            .on_click(move |_, window, cx| {
+                                if let Some(controller) = controller.clone() {
+                                    crate::open_remote_workspace(
+                                        crate::state::RemoteTarget::Account(
+                                            crate::state::AccountTarget {
+                                                controller,
+                                                subject: subject.clone(),
+                                                environment: environment.clone(),
+                                                label: label.clone(),
+                                            },
+                                        ),
+                                        window,
+                                        cx,
+                                    );
+                                }
+                            }),
+                        )
+                    })
+                    .child(
+                        super::pairing::row_button(
+                            &theme,
+                            widgets::ActionTone::Quiet,
+                            ("forget-account-computer", index),
+                        )
+                        .child("Remove")
+                        .when(self.busy, |v| v.opacity(0.5).cursor_default())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.request(
+                                methods::REMOVE_ACCOUNT_COMPUTER,
+                                json!({
+                                    "environmentId": forget_id,
+                                    "expectedSubject": forget_subject,
+                                }),
+                                cx,
+                            );
+                        })),
+                    )
+                    .into_any_element()
+            })
+            .collect()
     }
+
     // Returns with the account/relay option; hidden from Remote access until it ships.
     #[allow(dead_code)]
     pub(super) fn account_devices(&self, cx: &mut Context<Self>) -> Option<AnyElement> {

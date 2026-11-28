@@ -3,7 +3,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use ed25519_dalek::{Signer, SigningKey};
 use std::{os::unix::fs::PermissionsExt, time::Duration};
 use swap::{Decision, Phase};
-use zuse_protocol::cloud_runtime_updates::{Outcome, SignedRelease};
+use zuse_protocol::cloud_runtime_updates::{Outcome, SignedRelease, Urgency};
 
 fn signing() -> SigningKey {
     SigningKey::from_bytes(&[7u8; 32])
@@ -603,6 +603,46 @@ fn root_result_for_another_update_is_ignored() {
     assert_eq!(swap::decision(&f.config, &pending), Decision::Undecided);
 }
 
+/// A later helper run overwrote the shared result slot; the update's own
+/// result still decides, so its attestation cannot go stale.
+#[test]
+fn an_updates_own_root_result_survives_a_later_attempt() {
+    let f = root();
+    let staged = stage_bytes(&f.config, "update-1", b"new");
+    swap::request_root(&f.config, &staged, &"c".repeat(64)).unwrap();
+    let pending = stage::read_pending(&f.config).unwrap();
+    std::fs::create_dir_all(f.root.join("results")).unwrap();
+    std::fs::write(
+        f.root.join("results/update-1.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "updateId": "update-1",
+            "outcome": "committed",
+            "sha256": staged.file.release.sha256,
+            "previousSha256": "c".repeat(64),
+            "errorCode": null,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        f.root.join("result.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "updateId": "update-2",
+            "outcome": "failed",
+            "sha256": "d".repeat(64),
+            "previousSha256": staged.file.release.sha256,
+            "errorCode": "runtime_update_request_withdrawn",
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(swap::decision(&f.config, &pending), Decision::Installed);
+    // Ids that could escape the results directory are never used as paths.
+    assert!(!valid_update_id("../result"));
+    assert!(!valid_update_id(".."));
+    assert!(valid_update_id("update-1"));
+}
+
 #[test]
 fn cold_boot_discards_a_rejected_release() {
     let f = root();
@@ -661,4 +701,199 @@ fn mailbox_blocks_a_swap_until_every_lease_is_acknowledged_and_delivered() {
     )
     .unwrap();
     assert!(agent::mailbox_quiescent(&database));
+}
+
+/// REGRESSION GUARD (2026-11-24): the in-place restart bypassed the image's
+/// harness gate, so a release the gate refuses served until the computer's
+/// next cold launch and then never launched again. A runtime the launcher
+/// started now restarts through it, so probation sees the gate's verdict.
+#[test]
+fn a_launcher_started_runtime_restarts_through_the_launcher() {
+    use std::collections::HashMap;
+    use std::ffi::OsString;
+    let dir = tempfile::tempdir().unwrap();
+    let launcher = dir.path().join("launch-rust-runtime-core");
+    write_executable(&launcher, b"#!/bin/sh\n");
+    let data = dir.path().join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    let token = dir.path().join("boot-token");
+    std::fs::write(&token, "boot").unwrap();
+    let binary = dir.path().join("zuse-cloud-runtime");
+    let base: HashMap<&str, OsString> = [
+        ("ZUSE_HARNESS_ROOT", "/opt/zuse/harnesses".into()),
+        ("ZUSE_CLOUD_WORKSPACE_ID", "workspace".into()),
+        ("ZUSE_API_URL", "https://api.example.test".into()),
+        ("ZUSE_RUNTIME_GENERATION", "1".into()),
+        ("ZUSE_STORAGE_INCARNATION_ID", "disk".into()),
+        ("ZUSE_USER_DATA", data.clone().into_os_string()),
+    ]
+    .into_iter()
+    .collect();
+    let command = |vars: &HashMap<&str, OsString>| {
+        restart_command(&binary, &launcher, &|name| vars.get(name).cloned())
+    };
+    let envs = |c: &std::process::Command| -> HashMap<String, Option<String>> {
+        c.get_envs()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.map(|v| v.to_string_lossy().into_owned()),
+                )
+            })
+            .collect()
+    };
+
+    // Retained, identity stored: through the launcher, retained, no token.
+    std::fs::write(data.join("cloud-runtime-identity.json"), "{}").unwrap();
+    let mut retained = base.clone();
+    retained.insert("ZUSE_RUNTIME_RETAINED", "true".into());
+    let c = command(&retained);
+    assert_eq!(c.get_program(), launcher.as_os_str());
+    assert_eq!(c.get_args().collect::<Vec<_>>(), ["--foreground"]);
+    let e = envs(&c);
+    assert_eq!(e["ZUSE_RUNTIME_BINARY"].as_deref(), binary.to_str());
+    assert_eq!(e["ZUSE_RUNTIME_RETAINED"].as_deref(), Some("true"));
+    assert_eq!(e["ZUSE_RUNTIME_BOOT_TOKEN_FILE"], None);
+
+    // First boot, token still unconsumed (a cold-boot swap before enrollment):
+    // the launcher passes the token itself.
+    let mut first = base.clone();
+    first.insert(
+        "ZUSE_RUNTIME_BOOT_TOKEN_FILE",
+        token.clone().into_os_string(),
+    );
+    let c = command(&first);
+    assert_eq!(c.get_program(), launcher.as_os_str());
+    assert!(!envs(&c).contains_key("ZUSE_RUNTIME_RETAINED"));
+
+    // Token consumed after enrollment: restart as a retained runtime.
+    std::fs::remove_file(&token).unwrap();
+    let c = command(&first);
+    assert_eq!(c.get_program(), launcher.as_os_str());
+    let e = envs(&c);
+    assert_eq!(e["ZUSE_RUNTIME_RETAINED"].as_deref(), Some("true"));
+    assert_eq!(e["ZUSE_RUNTIME_BOOT_TOKEN_FILE"], None);
+
+    // Not started by the launcher (no harness gate), no launcher on disk, a
+    // missing launch variable, or a retained restart without stored identity:
+    // exec the binary directly, as before.
+    let mut no_gate = retained.clone();
+    no_gate.remove("ZUSE_HARNESS_ROOT");
+    let mut no_workspace = retained.clone();
+    no_workspace.remove("ZUSE_CLOUD_WORKSPACE_ID");
+    for vars in [&no_gate, &no_workspace] {
+        assert_eq!(command(vars).get_program(), binary.as_os_str());
+    }
+    let missing = dir.path().join("absent-launcher");
+    assert_eq!(
+        restart_command(&binary, &missing, &|name| retained.get(name).cloned()).get_program(),
+        binary.as_os_str()
+    );
+    std::fs::remove_file(data.join("cloud-runtime-identity.json")).unwrap();
+    let c = command(&first);
+    assert_eq!(c.get_program(), binary.as_os_str());
+    assert_eq!(envs(&c)["ZUSE_RUNTIME_BOOT_TOKEN_FILE"], None);
+}
+
+#[test]
+fn the_restart_uses_the_launcher_of_the_computers_layout() {
+    use std::collections::HashMap;
+    use std::ffi::OsString;
+    assert_eq!(
+        launcher_for(Path::new("/usr/local/bin/zuse-cloud-runtime")),
+        Path::new(LAUNCHER)
+    );
+    assert_eq!(
+        launcher_for(Path::new("/home/prized/.zuse/bin/zuse-cloud-runtime")),
+        Path::new("/home/prized/.zuse/lib/launch-rust-runtime")
+    );
+    // A Home install restarts through its own launcher, gate included.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::create_dir_all(root.join("lib")).unwrap();
+    let binary = root.join("bin/zuse-cloud-runtime");
+    write_executable(&binary, b"#!/bin/sh\n");
+    write_executable(&root.join("lib/launch-rust-runtime"), b"#!/bin/sh\n");
+    let data = root.join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(data.join("cloud-runtime-identity.json"), "{}").unwrap();
+    let vars: HashMap<&str, OsString> = [
+        ("ZUSE_HARNESS_ROOT", root.join("harnesses").into_os_string()),
+        ("ZUSE_CLOUD_WORKSPACE_ID", "workspace".into()),
+        ("ZUSE_API_URL", "https://api.example.test".into()),
+        ("ZUSE_RUNTIME_GENERATION", "1".into()),
+        ("ZUSE_STORAGE_INCARNATION_ID", "disk".into()),
+        ("ZUSE_RUNTIME_RETAINED", "true".into()),
+        ("ZUSE_USER_DATA", data.into_os_string()),
+    ]
+    .into_iter()
+    .collect();
+    let command = restart_command(&binary, &launcher_for(&binary), &|name| {
+        vars.get(name).cloned()
+    });
+    assert_eq!(
+        command.get_program(),
+        root.join("lib/launch-rust-runtime").as_os_str()
+    );
+}
+/// Lifecycle invariant: a release staged before a cold start is never
+/// installed at cold boot on the guest's own say-so. Retiring it on the server
+/// must stop computers that staged it before they slept.
+#[test]
+fn cold_boot_never_installs_an_unconfirmed_staged_release() {
+    for f in [root(), owned()] {
+        write_executable(&f.config.binary, b"old");
+        stage_bytes(&f.config, "update-1", b"new");
+        assert_eq!(
+            swap::cold_boot(&f.config, &sha(b"old"), Duration::ZERO).unwrap(),
+            None
+        );
+        assert_eq!(std::fs::read(&f.config.binary).unwrap(), b"old");
+        assert!(!stage::request_path(&f.config).exists());
+        assert!(stage::read_pending(&f.config).is_none());
+        // Kept for the server to confirm or withdraw.
+        assert!(stage::latest(&f.config).is_some());
+    }
+}
+
+#[test]
+fn a_confirmed_staged_release_swaps_once_after_a_cold_start() {
+    let f = root();
+    stage_bytes(&f.config, "update-1", b"new");
+    let updater = Updater::new(f.config.clone(), "c".repeat(64), Vec::new()).unwrap();
+    assert_eq!(updater.confirmed_urgency(Urgency::Background), Urgency::Now);
+    assert_eq!(
+        updater.confirmed_urgency(Urgency::Background),
+        Urgency::Background
+    );
+    // Nothing staged at start: the server's urgency stands.
+    let f = root();
+    let updater = Updater::new(f.config.clone(), "c".repeat(64), Vec::new()).unwrap();
+    assert_eq!(
+        updater.confirmed_urgency(Urgency::Background),
+        Urgency::Background
+    );
+}
+
+#[test]
+fn a_withdrawn_offer_discards_the_staged_release() {
+    let f = root();
+    stage_bytes(&f.config, "update-1", b"new");
+    let updater = Updater::new(f.config.clone(), "c".repeat(64), Vec::new()).unwrap();
+    updater.withdrawn();
+    assert!(stage::latest(&f.config).is_none());
+    assert!(!updater.staged_for_next_start());
+    // A later offer of the same release is not promoted by the old start.
+    assert_eq!(
+        updater.confirmed_urgency(Urgency::Background),
+        Urgency::Background
+    );
+    // A swap in flight keeps its staged files until it is attested.
+    let f = root();
+    let staged = stage_bytes(&f.config, "update-2", b"newer");
+    swap::request_root(&f.config, &staged, &"c".repeat(64)).unwrap();
+    let updater = Updater::new(f.config.clone(), "c".repeat(64), Vec::new()).unwrap();
+    updater.withdrawn();
+    assert!(stage::latest(&f.config).is_some());
 }

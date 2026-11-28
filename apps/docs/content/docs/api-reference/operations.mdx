@@ -1,0 +1,215 @@
+---
+title: Operations
+icon: ListTree
+navTitle: "Operations"
+description: The control API's operation catalog, grouped by area, and every action a Zapper command accepts.
+section: api
+order: 5
+platforms: [desktop, serve]
+providers: []
+prerequisites: [/api-reference]
+related: [/api-reference/cli, /api-reference/sdk, /api-reference/quickstart]
+lastVerified: "2026-11-27"
+---
+
+These are the operations in API version `1`. `ControlInfo.methods` returns the same list from the engine you're connected to, and clients refuse names outside it. Credential management and raw provider transport aren't part of the public surface.
+
+**Call** operations return one result. **Subscription** operations keep sending values; use `zuse-control watch` or the SDK's `watch`. The MCP server exposes calls only.
+
+## Control and updates
+
+| Operation | Kind | Parameters | Returns |
+| --- | --- | --- | --- |
+| `ControlInfo` | Call | none | `apiVersion`, `appVersion`, `capabilities`, `methods`, `schemas` |
+| `ControlUpdateStatus` | Call | none | `version`, `state`, `error` for the managed CLI and SDK install |
+| `RetryControlUpdate` | Call | none | The same status, after retrying the install |
+
+| Operation | Kind |
+| --- | --- |
+| `EngineInfo` | Call |
+| `UpdateStatus` | Subscription |
+| `ApplyUpdate` | Call |
+
+## Zappers
+
+A Zapper is a persistent coordinator. It owns a purpose, repository scope, versioned files, decisions, issues, and worker conversations.
+
+| Operation | Kind | Parameters | Returns |
+| --- | --- | --- | --- |
+| `WatchZappers` | Subscription | none | `Zapper[]` whenever a Zapper changes |
+| `ZapperCommand` | Call | A [Zapper command](#zapper-commands) | The updated `Zapper`, or `null` |
+| `ZapperFiles` | Call | `zapperId`, optional `history` (boolean) | `ZapperFile[]`: `path`, `version`, `content` |
+| `ZapperEvents` | Call | `zapperId` | `ZapperEvent[]`: `id`, `zapperId`, `workerChatId`, `kind`, `summary`, `acknowledged` |
+| `ZapperIssue` | Call | `zapperId`, `issueId` | One `ZapperIssue` in full, including its activity |
+| `AckZapperEvents` | Call | `zapperId`, `eventIds` | Marks events acknowledged |
+
+## Devices, environments, and chats
+
+| Operation | Kind |
+| --- | --- |
+| `WatchDevices` | Subscription |
+| `WatchSpaces` | Subscription |
+| `WatchChats` | Subscription |
+| `WatchSessions` | Subscription |
+| `Mutate` | Call |
+
+## Harnesses, models, skills, and commands
+
+| Operation | Kind |
+| --- | --- |
+| `ListHarnesses` | Call |
+| `ListModels` | Call |
+| `ListSkills` | Call |
+| `ListCommands` | Call |
+| `QueueCommand` | Call |
+
+## Messages and the queue
+
+| Operation | Kind |
+| --- | --- |
+| `WatchDocMessages` | Subscription |
+| `WatchQueue` | Subscription |
+| `QueueMessage` | Call |
+| `UpdateQueuedMessage` | Call |
+| `RemoveQueuedMessage` | Call |
+| `SendQueuedMessageNow` | Call |
+| `SteerQueuedMessageNow` | Call |
+
+## Repositories, branches, and worktrees
+
+| Operation | Kind |
+| --- | --- |
+| `ListRepos` | Call |
+| `AddRepo` | Call |
+| `CloneRepo` | Call |
+| `CreateRepo` | Call |
+| `ListBranches` | Call |
+| `ListRefs` | Call |
+| `ListGitHistory` | Call |
+| `SearchGitHistory` | Call |
+| `FetchAll` | Call |
+| `SwitchRef` | Call |
+| `CreateWorktree` | Call |
+| `DeleteWorktree` | Call |
+| `GetWorktreeSettings` | Call |
+| `SetWorktreeSettings` | Call |
+
+## Workspace files
+
+| Operation | Kind |
+| --- | --- |
+| `ListWorkspaceDirectory` | Call |
+| `SearchWorkspaceFiles` | Call |
+| `SearchWorkspaceContent` | Call |
+| `ReadWorkspaceFile` | Call |
+| `WriteWorkspaceFile` | Call |
+| `MoveWorkspaceEntry` | Call |
+| `DeleteWorkspaceEntry` | Call |
+| `WatchWorkspaceFiles` | Subscription |
+
+## Terminals
+
+| Operation | Kind |
+| --- | --- |
+| `OpenTerminal` | Call |
+| `SubscribeTerminal` | Subscription |
+| `WriteTerminal` | Call |
+| `ResizeTerminal` | Call |
+| `CloseTerminal` | Call |
+
+## Diffs and change requests
+
+| Operation | Kind |
+| --- | --- |
+| `WatchCheckoutDiffs` | Subscription |
+| `WatchWorkspaceGitStatus` | Subscription |
+| `GetCheckoutDiff` | Call |
+| `GetCheckoutFileDiffText` | Call |
+| `WatchCheckoutChangeRequest` | Subscription |
+| `ListChangeRequestPage` | Call |
+| `GetChangeRequest` | Call |
+| `GetChangeRequestDiff` | Call |
+| `PostChangeRequestComment` | Call |
+
+## Project actions
+
+| Operation | Kind |
+| --- | --- |
+| `ListProjectActions` | Call |
+| `UpsertProjectAction` | Call |
+| `DeleteProjectAction` | Call |
+| `RunProjectAction` | Call |
+
+## Titles and recovery
+
+| Operation | Kind |
+| --- | --- |
+| `GetTitleSettings` | Call |
+| `SetTitleSettings` | Call |
+| `InspectRecovery` | Call |
+| `ResolveRecovery` | Call |
+
+## Zapper commands
+
+`ZapperCommand` changes a Zapper. Its parameters are:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `commandId` | string | ID you choose for this command. Reuse it only to retry the same input. See [Retrying Zapper commands safely](/api-reference#retrying-zapper-commands-safely). |
+| `zapperId` | string | The Zapper to change. For `create`, the new Zapper's ID. |
+| `expectedRevision` | number or null | Optional. The Zapper `revision` you based this command on. The command fails only if something it depends on changed after that revision. |
+| `action` | object | One of the actions below, or the same object encoded as a JSON string. |
+
+IDs use letters, digits, `-`, and `_`, up to 160 characters. The full JSON Schema is in `ControlInfo.schemas.ZapperCommand`.
+
+```json title="command.json"
+{
+  "commandId": "pause-release-1",
+  "zapperId": "release",
+  "expectedRevision": 12,
+  "action": { "type": "setStatus", "status": "paused" }
+}
+```
+
+### Actions
+
+The **Conflicts on** column says what `expectedRevision` protects. **Any change** means any newer revision rejects the command. **Issue** or **Decision** means only a change to that issue or decision does. **Never** means the action is append-only or checked another way, such as a file's `expectedVersion`.
+
+| `type` | Fields | Conflicts on |
+| --- | --- | --- |
+| `create` | `config` | Any change |
+| `configure` | `config` | Any change |
+| `setStatus` | `status`: `active`, `paused`, `stopped`, or `archived` | Any change |
+| `freshConversation` | none | Any change |
+| `delete` | none | Any change |
+| `adoptWorker` | `worker` | Never |
+| `delegate` | `worker`, `model`, `base`, optional `issueId` | Issue, when `issueId` is set; otherwise never |
+| `messageWorker` | `chatId`, `text`, `automatic` | Never |
+| `stopWorker` | `chatId` | Never |
+| `archiveWorker` | `chatId` | Never |
+| `releaseWorker` | `chatId` | Never |
+| `decide` | `decision`: `id`, `workerChatId`, `question`, `answer` | Decision |
+| `writeFile` | `path`, `content`, `expectedVersion` | Never |
+| `restoreFile` | `path`, `version`, `expectedVersion` | Never |
+| `createIssue` | `issueId`, `details` | Never |
+| `editIssue` | `issueId`, `details` | Issue |
+| `commentIssue` | `issueId`, `text`, optional `replyTo` | Never |
+| `askUser` | `issueId`, `question`, optional `recommendation` | Issue |
+| `closeIssue` | `issueId`, `outcome`: `merged` or `dropped`, `note` | Issue |
+| `linkIssueThread` | `issueId`, `chatId` | Never |
+| `unlinkIssueThread` | `issueId`, `chatId` | Never |
+| `linkIssuePullRequest` | `issueId`, `url`, `title` | Never |
+| `unlinkIssuePullRequest` | `issueId`, `url` | Never |
+
+`delegate` with an `issueId` links the new worker thread and moves the issue to in progress in the same step. Restoring a file creates a new version rather than rewriting history.
+
+### Shared shapes
+
+| Shape | Fields |
+| --- | --- |
+| `config` (`ZapperConfig`) | `name`, `purpose`, `homeDeviceId`, `repositories` (`deviceId`, `spaceId`), `coordinatorModel`, `workerDeviceId`, `maxConcurrentWorkers`, `maxFollowups`, optional `avatar` (`mascot`, `color`) and `avatarImage` |
+| `worker` (`ZapperWorker`) | `chatId`, `deviceId`, `spaceId`, `objective`, `followups` |
+| `model` (`ZapperModel`) | `harness`, `model` (string or null) |
+| `details` (`ZapperIssueDetails`) | `title`, `description`, `status`, `priority`, `assigned`, `dueDate`, `labels`, `relations`, optional `owner`, `doneCriteria`, `outOfScope`, optional `parent` |
+
+Issue `status` is one of `backlog`, `todo`, `inProgress`, `needsYou`, `blocked`, `inReview`, `done`, or `canceled`. `priority` is `urgent`, `high`, `normal`, or `low`. `owner` is `{ "type": "zapper" }`, `{ "type": "user" }`, or `{ "type": "thread", "chatId": "..." }`.

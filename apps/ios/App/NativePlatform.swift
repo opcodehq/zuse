@@ -68,6 +68,46 @@ import ZuseCore
           : UIColor(red: 0.28, green: 0.41, blue: 0, alpha: 1)
       })
   #endif
+  #if os(macOS)
+    static func adaptive(light: NSColor, dark: NSColor) -> Color {
+      Color(
+        nsColor: NSColor(name: nil) {
+          $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+        })
+    }
+    private static func rgb(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat) -> NSColor {
+      NSColor(red: red / 255, green: green / 255, blue: blue / 255, alpha: 1)
+    }
+  #else
+    static func adaptive(light: UIColor, dark: UIColor) -> Color {
+      Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? dark : light })
+    }
+    private static func rgb(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat) -> UIColor {
+      UIColor(red: red / 255, green: green / 255, blue: blue / 255, alpha: 1)
+    }
+  #endif
+  /// Neutral fills: attachment tiles, pills.
+  static let bubble = adaptive(light: rgb(234, 234, 230), dark: rgb(38, 38, 40))
+  /// The send control: the brand green, deep enough for a white arrow (4.5:1 or better).
+  static let userBubble = adaptive(light: rgb(82, 131, 4), dark: rgb(72, 116, 8))
+  /// The brand lime everything neon is mixed from.
+  static let lime = Color(red: 140 / 255, green: 201 / 255, blue: 33 / 255)
+  /// Text on your messages: 13:1 on the light bubble, 13:1 on the dark one.
+  static let userBubbleText = adaptive(light: rgb(26, 41, 5), dark: rgb(234, 247, 211))
+  /// Labels on the accent: white on the deep light-mode green (6.6:1), near-black on the
+  /// bright dark-mode lime (9:1).
+  static let onAccent = adaptive(light: rgb(255, 255, 255), dark: rgb(22, 34, 4))
+  /// Hairlines and quiet rules in the transcript.
+  static let hairline = adaptive(
+    light: rgb(23, 23, 22).withAlphaComponent(0.09),
+    dark: rgb(255, 255, 255).withAlphaComponent(0.09)
+  )
+  /// Line counts and diff gutters.
+  static let added = adaptive(light: rgb(58, 122, 0), dark: rgb(141, 201, 60))
+  static let removed = adaptive(light: rgb(196, 54, 44), dark: rgb(255, 120, 108))
+  /// Code cards and expanded tool output.
+  static let codeBackground = adaptive(light: rgb(241, 241, 238), dark: rgb(26, 26, 28))
+  static let link = adaptive(light: rgb(0, 102, 214), dark: rgb(116, 172, 255))
 }
 
 extension View {
@@ -123,7 +163,7 @@ struct SettingsIcon: View {
   var brand = false
   var body: some View {
     Image(systemName: symbol).font(.system(size: 14, weight: .semibold))
-      .foregroundStyle(brand ? Color.white : Color.primary)
+      .foregroundStyle(brand ? AppTheme.onAccent : Color.primary)
       .frame(width: 28, height: 28)
       .background(
         brand ? AppTheme.accent : Color.primary.opacity(0.09),
@@ -220,6 +260,28 @@ extension Notification.Name {
 }
 
 extension View {
+  /// The one prominent action on a page: a capsule of the brand accent with a label that stays
+  /// readable on it in both appearances.
+  func brandProminentButton() -> some View { buttonStyle(BrandProminentButtonStyle()) }
+}
+
+private struct BrandProminentButtonStyle: ButtonStyle {
+  @Environment(\.isEnabled) private var enabled
+  @Environment(\.controlSize) private var controlSize
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .font(.body.weight(.semibold))
+      .foregroundStyle(AppTheme.onAccent)
+      .padding(.horizontal, 20)
+      .frame(minHeight: controlSize == .large ? 50 : controlSize == .regular ? 40 : 34)
+      .background(AppTheme.accent, in: Capsule())
+      .opacity(enabled ? (configuration.isPressed ? 0.82 : 1) : 0.45)
+      .contentShape(Capsule())
+      .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+  }
+}
+
+extension View {
   @ViewBuilder func floatingGlass(radius: CGFloat = 24, clear: Bool = false) -> some View {
     let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
     if #available(iOS 26, macOS 26, *) {
@@ -236,9 +298,10 @@ private struct ComposerGlass: ViewModifier {
   @ViewBuilder func body(content: Content) -> some View {
     let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
     if #available(iOS 26, macOS 26, *) {
-      content.glassEffect(.clear.interactive(), in: shape)
+      // Regular glass keeps the transcript scrolling underneath from showing through the text.
+      content.glassEffect(.regular.interactive(), in: shape)
     } else {
-      content.background(.ultraThinMaterial, in: shape)
+      content.background(.regularMaterial, in: shape)
     }
   }
 }
@@ -256,14 +319,13 @@ struct ComposerSendGlyph: View {
       if busy {
         ProgressView().tint(.white)
       } else {
-        Image(systemName: symbol).font(.system(size: 15, weight: .semibold))
+        Image(systemName: symbol)
+          .font(.system(size: symbol == "stop.fill" ? 12 : 15, weight: .bold))
       }
     }
-    .foregroundStyle(.white).frame(width: 32, height: 32)
-    .background(
-      enabled ? AppTheme.accent : Color.secondary.opacity(0.22),
-      in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-    )
+    .foregroundStyle(enabled ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
+    .frame(width: 32, height: 32)
+    .background(enabled ? AppTheme.userBubble : Color.secondary.opacity(0.16), in: Circle())
     .frame(width: 44, height: 44).contentShape(Rectangle())
   }
 }
@@ -307,7 +369,10 @@ struct ModelPickerButton: View {
       HStack(spacing: 5) {
         ProviderMark(providerID: providerID, size: 15)
         Text(
-          catalog.first { $0.id == providerID }?.models.first { $0.id == modelID }?.label ?? modelID
+          catalog.first { $0.id == providerID }?.models.first { $0.id == modelID }?.label
+            // Until the catalog loads, name the model as the transcript does ("Sonnet 4.5").
+            ?? AgentLabel.label(
+              .object(["harness": .string(providerID), "model": .string(modelID)]))
         )
         .lineLimit(1).truncationMode(.middle)
       }.font(.system(size: 15, weight: .medium)).foregroundStyle(.secondary)

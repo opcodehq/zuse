@@ -147,6 +147,18 @@ impl Harness for ProcessHarness {
                 text: format!("on it: {}", request.prompt),
             })
             .await;
+            if request.prompt == "background unread" {
+                ledger.release.notified().await;
+                let _ = send(AgentEvent::SteerBoundary {
+                    assistant_message_id: None,
+                    next_assistant_message_id: None,
+                    message_id: None,
+                })
+                .await;
+                let _ = send(done(DoneStatus::Completed)).await;
+                // Exit without receiving the queued steer.
+                return;
+            }
             let mut waiting = request.prompt.contains("wait");
             if !holding && !waiting && !send(done(DoneStatus::Completed)).await {
                 return;
@@ -173,6 +185,38 @@ impl Harness for ProcessHarness {
                     }
                     steer = controls.steering.recv() => {
                         let Some(steer) = steer else { return };
+                        if steer.prompt.contains("provisional") {
+                            let receipt_first = steer.prompt.contains("receipt-first");
+                            if receipt_first {
+                                let _ = send(AgentEvent::DeliveryAcknowledged {
+                                    message_id: steer.message_id.clone().unwrap(),
+                                }).await;
+                            }
+                            let _ = send(AgentEvent::SteerBoundary {
+                                assistant_message_id: None,
+                                next_assistant_message_id: Some("provisional-assistant".into()),
+                                message_id: steer.message_id.clone(),
+                            }).await;
+                            let _ = send(AgentEvent::TextDelta { text: "provisional output".into() }).await;
+                            ledger.release.notify_one();
+                            if steer.prompt.contains("receipt") {
+                                if !receipt_first {
+                                    let _ = send(AgentEvent::DeliveryAcknowledged {
+                                        message_id: steer.message_id.clone().unwrap(),
+                                    }).await;
+                                }
+                                let _ = send(done(DoneStatus::Completed)).await;
+                            }
+                            if steer.prompt.contains("refused-done") {
+                                let _ = send(done(DoneStatus::Completed)).await;
+                            }
+                            if steer.prompt.contains("stop") {
+                                controls.interrupt.cancelled().await;
+                                let _ = send(done(DoneStatus::Interrupted)).await;
+                            }
+                            // A refused injection never established delivery.
+                            return;
+                        }
                         if steer.prompt.contains("vanish") {
                             return;
                         }
@@ -183,6 +227,7 @@ impl Harness for ProcessHarness {
                         let boundary = AgentEvent::Steered {
                             assistant_message_id: None,
                             next_assistant_message_id: None,
+                            message_id: None,
                         };
                         if !send(boundary).await
                             || !send(AgentEvent::TextDelta { text: format!("on it: {}", steer.prompt) }).await
@@ -1117,4 +1162,222 @@ async fn active_turn_survives_the_shorter_idle_window() {
     assert!(rig.core.sessions.has_run(CHAT));
     assert_eq!(rig.ledger.kills.load(Ordering::SeqCst), 0);
     rig.core.sessions.shutdown().await;
+}
+
+#[tokio::test]
+async fn provisional_split_survives_refusal_and_runtime_failure() {
+    let rig = rig_with(true);
+    rig.core
+        .sessions
+        .dispatch(CHAT, HarnessId::Mock, request("hold: first"), None)
+        .await
+        .unwrap();
+    wait_for(
+        || rig.ledger.prompts.lock().unwrap().len() == 1,
+        "first turn",
+    )
+    .await;
+    rig.core
+        .sessions
+        .dispatch(
+            CHAT,
+            HarnessId::Mock,
+            request("provisional refused"),
+            Some("pending-id".into()),
+        )
+        .await
+        .unwrap();
+    settle(&rig, 2).await;
+    assert_eq!(rig.ledger.spawns.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        rig.ledger.prompts.lock().unwrap()[1].0,
+        "provisional refused"
+    );
+    rig.core.shutdown().await;
+}
+
+#[tokio::test]
+async fn explicit_stop_cancels_a_provisionally_split_steer() {
+    let rig = rig_with(true);
+    rig.core
+        .sessions
+        .dispatch(CHAT, HarnessId::Mock, request("hold: first"), None)
+        .await
+        .unwrap();
+    wait_for(
+        || rig.ledger.prompts.lock().unwrap().len() == 1,
+        "first turn",
+    )
+    .await;
+    rig.core
+        .sessions
+        .dispatch(
+            CHAT,
+            HarnessId::Mock,
+            request("provisional stop"),
+            Some("pending-stop-id".into()),
+        )
+        .await
+        .unwrap();
+    rig.ledger.release.notified().await;
+    wait_for(|| rig.core.doc_host.open(CHAT).unwrap().doc().read_entries().unwrap().iter().any(|entry|
+        entry.parts.iter().any(|part| matches!(part, zuse_doc::MessagePart::Text { text, .. } if text == "provisional output"))), "provisional split").await;
+    rig.core.sessions.interrupt(CHAT).await.unwrap();
+    wait_for(
+        || {
+            !rig.core
+                .sessions
+                .session_status(CHAT)
+                .is_some_and(|s| s.status == SessionStatus::Working)
+        },
+        "runtime stopped",
+    )
+    .await;
+    assert_eq!(rig.ledger.spawns.load(Ordering::SeqCst), 1);
+    assert_eq!(rig.ledger.prompts.lock().unwrap().len(), 1);
+    rig.core.shutdown().await;
+}
+
+#[tokio::test]
+async fn unnamed_background_split_does_not_confirm_an_unread_steer() {
+    let rig = rig_with(true);
+    rig.core
+        .sessions
+        .dispatch(CHAT, HarnessId::Mock, request("background unread"), None)
+        .await
+        .unwrap();
+    wait_for(
+        || rig.ledger.prompts.lock().unwrap().len() == 1,
+        "first turn",
+    )
+    .await;
+    rig.core
+        .sessions
+        .dispatch(
+            CHAT,
+            HarnessId::Mock,
+            request("unread steer"),
+            Some("unread-id".into()),
+        )
+        .await
+        .unwrap();
+    rig.ledger.release.notify_one();
+    settle(&rig, 2).await;
+    assert_eq!(rig.ledger.spawns.load(Ordering::SeqCst), 2);
+    assert_eq!(rig.ledger.prompts.lock().unwrap()[1].0, "unread steer");
+    rig.core.shutdown().await;
+}
+
+#[tokio::test]
+async fn exact_receipt_after_provisional_split_prevents_replay() {
+    receipt_and_boundary_preserve_execution("provisional receipt").await;
+}
+
+#[tokio::test]
+async fn receipt_before_provisional_split_still_assigns_execution() {
+    receipt_and_boundary_preserve_execution("provisional receipt-first").await;
+}
+
+async fn receipt_and_boundary_preserve_execution(prompt: &str) {
+    let rig = rig_with(true);
+    let facts = Arc::new(Mutex::new(Vec::new()));
+    let observed = facts.clone();
+    rig.core
+        .sessions
+        .set_execution_observer(Arc::new(move |fact| {
+            observed.lock().unwrap().push(fact.clone());
+            Ok(())
+        }))
+        .unwrap();
+    rig.core
+        .sessions
+        .dispatch(
+            CHAT,
+            HarnessId::Mock,
+            request("hold: first"),
+            Some("first-id".into()),
+        )
+        .await
+        .unwrap();
+    wait_for(
+        || rig.ledger.prompts.lock().unwrap().len() == 1,
+        "first turn",
+    )
+    .await;
+    rig.core
+        .sessions
+        .dispatch(
+            CHAT,
+            HarnessId::Mock,
+            request(prompt),
+            Some("receipt-id".into()),
+        )
+        .await
+        .unwrap();
+    rig.ledger.release.notified().await;
+    wait_for(|| !rig.core.sessions.has_run(CHAT), "runtime exit").await;
+    assert_eq!(rig.ledger.spawns.load(Ordering::SeqCst), 1);
+    let facts = facts.lock().unwrap();
+    assert!(
+        facts.iter().any(|fact| fact.message_id == "receipt-id"
+            && fact.assistant_message_id.as_deref() == Some("provisional-assistant")
+            && fact.state == zuse_engine::execution_progress::State::Running),
+        "{facts:?}"
+    );
+    drop(facts);
+    rig.core.shutdown().await;
+}
+
+#[tokio::test]
+async fn provisional_turn_completion_keeps_execution_uncertain_until_redelivery() {
+    let rig = rig_with(true);
+    let facts = Arc::new(Mutex::new(Vec::new()));
+    let observed = facts.clone();
+    rig.core
+        .sessions
+        .set_execution_observer(Arc::new(move |fact| {
+            observed.lock().unwrap().push(fact.clone());
+            Ok(())
+        }))
+        .unwrap();
+    rig.core
+        .sessions
+        .dispatch(CHAT, HarnessId::Mock, request("hold: first"), None)
+        .await
+        .unwrap();
+    wait_for(
+        || rig.ledger.prompts.lock().unwrap().len() == 1,
+        "first turn",
+    )
+    .await;
+    rig.core
+        .sessions
+        .dispatch(
+            CHAT,
+            HarnessId::Mock,
+            request("provisional refused-done"),
+            Some("uncertain-id".into()),
+        )
+        .await
+        .unwrap();
+    settle(&rig, 2).await;
+    let states: Vec<_> = facts
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|fact| fact.message_id == "uncertain-id")
+        .map(|fact| fact.state)
+        .collect();
+    use zuse_engine::execution_progress::State;
+    let uncertain = states
+        .iter()
+        .position(|state| *state == State::OutcomeUnknown)
+        .unwrap();
+    assert!(
+        !states[..uncertain].contains(&State::Completed),
+        "{states:?}"
+    );
+    assert_eq!(states.last(), Some(&State::Completed), "{states:?}");
+    assert_eq!(rig.ledger.spawns.load(Ordering::SeqCst), 2);
+    rig.core.shutdown().await;
 }

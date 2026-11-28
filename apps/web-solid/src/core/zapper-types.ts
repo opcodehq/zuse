@@ -63,6 +63,20 @@ export interface IssueDetails {
   outOfScope?: string;
   parent?: string;
 }
+export type IssueDeliveryState = "queued" | "retrying" | "sent" | "answered" | "cancelled" | "held";
+/** Where a person's comment went. "sent" is queue acceptance, not proof it was handled. */
+export interface IssueDelivery {
+  chatId: string;
+  state: IssueDeliveryState;
+  detail?: string;
+  reply?: string;
+}
+/** One typed before/after value; plain text, never markup. */
+export interface IssueChange {
+  field: string;
+  before?: string;
+  after?: string;
+}
 export interface IssueActivity {
   id: string;
   actor?: string | null;
@@ -70,6 +84,9 @@ export interface IssueActivity {
   kind: string;
   text: string;
   replyTo?: string | null;
+  delivery?: IssueDelivery;
+  thread?: string;
+  changes?: IssueChange[];
 }
 export interface ZapperIssue {
   id: string;
@@ -92,11 +109,19 @@ export interface Zapper {
   workers: ZapperWorker[];
   decisions: ZapperDecision[];
   issues: ZapperIssue[];
+  /** Created folders, empty ones included; engines before folders omit it. */
+  folders?: string[];
 }
 export interface ZapperFile {
   path: string;
   version: number;
   content: string;
+  /** This version deleted the file; only histories list deletions. */
+  deleted?: boolean;
+}
+export interface ZapperFileVersion {
+  path: string;
+  version: number;
 }
 export interface ZapperEvent {
   id: string;
@@ -132,6 +157,11 @@ export type ZapperAction =
       version: number;
       expectedVersion: number;
     }
+  | { type: "deleteFile"; path: string; expectedVersion: number }
+  | { type: "moveFile"; path: string; to: string; expectedVersion: number }
+  | { type: "createFolder"; path: string }
+  | { type: "moveFolder"; path: string; to: string; files: ZapperFileVersion[] }
+  | { type: "deleteFolder"; path: string; files: ZapperFileVersion[] }
   | {
       type: "createIssue" | "editIssue";
       issueId: string;

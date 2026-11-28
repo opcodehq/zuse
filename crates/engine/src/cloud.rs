@@ -1,5 +1,7 @@
 //! Host-authorized control plane access. No access token crosses the viewport RPC boundary.
 mod allocation_retry;
+#[cfg(unix)]
+pub mod checkout_sync;
 pub mod environment;
 pub mod events;
 pub mod hosted;
@@ -35,6 +37,36 @@ use zuse_model::cloud::{Head, Workspace};
 /// server gave no reason.
 #[derive(Debug)]
 struct CloudHttpFailure(reqwest::StatusCode, Option<String>);
+/// The cloud service could not be reached at all (no connection, a dropped
+/// or timed-out request): the request may never have arrived. Its text is the
+/// one every caller already shows.
+#[derive(Debug)]
+struct CloudUnreachable(&'static str);
+impl std::fmt::Display for CloudUnreachable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+impl std::error::Error for CloudUnreachable {}
+/// A message the cloud service could not be reached for travels to the app
+/// with its own code, so it waits for the connection and is sent again under
+/// its same command id instead of reading as refused.
+fn task_command_unreachable(error: anyhow::Error) -> anyhow::Error {
+    // A proxy in front of the service answering 502/503/504 without the
+    // service's own error code is the same: the request never got to it.
+    let gateway =
+        error
+            .downcast_ref::<CloudHttpFailure>()
+            .is_some_and(|CloudHttpFailure(status, code)| {
+                code.is_none() && matches!(status.as_u16(), 502..=504)
+            });
+    if gateway || error.downcast_ref::<CloudUnreachable>().is_some() {
+        zuse_rpc::RpcError::Capability(zuse_protocol::cloud_task_commands::TASK_UNREACHABLE.into())
+            .into()
+    } else {
+        error
+    }
+}
 /// Prefix of a conflict the app can't explain; the server's code follows.
 pub(crate) const CLOUD_CONFLICT_PREFIX: &str = "Cloud couldn't do this right now";
 impl CloudHttpFailure {
@@ -189,6 +221,29 @@ fn task_rejection(code: &str) -> Option<&'static str> {
     })
 }
 
+/// Why a cloud call could not get a current access token, in words that say
+/// what helps. A network miss (or the account's short cooldown after one)
+/// keeps the saved sign-in and clears up on its own, so it must not read as a
+/// broken session; only a missing or revoked sign-in asks for a new one.
+fn session_error(error: anyhow::Error) -> anyhow::Error {
+    use crate::account::AccountError;
+    use zuse_protocol::cloud::{SESSION_RENEWAL_UNAVAILABLE, SESSION_SIGNED_OUT};
+    match (
+        error.downcast_ref::<AccountError>(),
+        error.downcast_ref::<zuse_rpc::TokenError>(),
+    ) {
+        (Some(AccountError::SignedOut), _) | (_, Some(zuse_rpc::TokenError::SignedOut)) => {
+            anyhow::anyhow!(SESSION_SIGNED_OUT)
+        }
+        (Some(AccountError::Changed), _) => {
+            anyhow::anyhow!("Your account changed. Reopen this view.")
+        }
+        (Some(_), _) | (_, Some(_)) => anyhow::anyhow!(SESSION_RENEWAL_UNAVAILABLE),
+        // Already a sentence for the owner (an account switch mid-call).
+        (None, None) => error,
+    }
+}
+
 pub(crate) fn rpc_error(error: anyhow::Error) -> zuse_rpc::RpcError {
     if let Some(rejection) = error.downcast_ref::<TaskRejection>() {
         return rejection.rpc();
@@ -311,6 +366,7 @@ pub fn handles(method: &str) -> bool {
     matches!(
         method,
         LIST | READ
+            | "CloudComputerControl"
             | zuse_protocol::methods::SLACK_CONNECTIONS
             | zuse_protocol::methods::SLACK_CONNECT
             | zuse_protocol::methods::SLACK_DISCONNECT
@@ -345,6 +401,9 @@ pub fn handles(method: &str) -> bool {
             | zuse_protocol::methods::CLOUD_MACHINE
             | zuse_protocol::methods::CLOUD_MACHINE_SAVE
             | zuse_protocol::methods::CLOUD_MACHINE_REBUILD
+            | zuse_protocol::methods::CLOUD_MACHINE_SETUP_PROPOSAL
+            | zuse_protocol::methods::CLOUD_MACHINE_SETUP_APPLY
+            | zuse_protocol::methods::CLOUD_MACHINE_SETUP_DISCARD
             | zuse_protocol::methods::CLOUD_PROJECT_SECRETS
             | zuse_protocol::methods::CLOUD_PROJECT_SECRET_SAVE
             | zuse_protocol::methods::CLOUD_PROJECT_SECRET_REVOKE
@@ -362,6 +421,7 @@ pub fn handles(method: &str) -> bool {
             | zuse_protocol::methods::CLOUD_BILLING_CHECKOUT
             | zuse_protocol::methods::CLOUD_BILLING_PORTAL
             | UNARCHIVE
+            | zuse_protocol::methods::CLOUD_WORKSPACE_RENAME
             | ARCHIVE
             | DELETE
             | CLEANUP_MIRROR
@@ -382,6 +442,8 @@ pub struct CloudApi {
     mirrors: mirror::Manager,
     #[cfg(unix)]
     syncs: sync::Manager,
+    #[cfg(unix)]
+    checkouts: checkout_sync::Manager,
     #[cfg(unix)]
     local_terminals: Arc<local_terminal::Manager>,
 }
@@ -408,6 +470,8 @@ impl CloudApi {
             environments: environment::Manager::default(),
             #[cfg(unix)]
             syncs: sync::Manager::default(),
+            #[cfg(unix)]
+            checkouts: checkout_sync::Manager::default(),
             #[cfg(unix)]
             local_terminals: Arc::default(),
             #[cfg(unix)]
@@ -508,13 +572,13 @@ impl CloudApi {
             .bearer_auth(token)
             .send()
             .await
-            .map_err(|_| anyhow::anyhow!("Cloud service is unavailable. Try again."))?;
+            .map_err(|_| CloudUnreachable("Cloud service is unavailable. Try again."))?;
         let status = response.status();
         let mut bytes = Vec::new();
         while let Some(chunk) = response
             .chunk()
             .await
-            .map_err(|_| anyhow::anyhow!("Cloud service is unavailable."))?
+            .map_err(|_| CloudUnreachable("Cloud service is unavailable."))?
         {
             ensure!(
                 bytes.len() + chunk.len() <= 8 * 1024 * 1024,
@@ -913,10 +977,7 @@ impl CloudApi {
             #[cfg(target_arch = "wasm32")]
             return Ok(json!({"head":null,"provisional":true}));
         }
-        let token = auth
-            .access_token()
-            .await
-            .map_err(|_| anyhow::anyhow!("Could not refresh your Cloud session. Check your connection or reconnect in Settings → General."))?;
+        let token = auth.access_token().await.map_err(session_error)?;
         ensure!(
             auth.user_id().as_deref() == Some(account.as_str())
                 && auth.state().org_id() == organization.as_deref(),
@@ -938,6 +999,168 @@ impl CloudApi {
             self.syncs.hydrate(self, auth, &account)?;
         }
         let mut result = match method {
+            "CloudComputerControl" => {
+                ensure!(
+                    organization.is_none()
+                        && params["expectedAccountId"].as_str() == Some(account.as_str()),
+                    "Reopen Computers after signing in"
+                );
+                let action = params["action"].as_str().unwrap_or("list");
+                let text = |key: &str| -> Result<&str> {
+                    params[key]
+                        .as_str()
+                        .filter(|s| !s.is_empty() && s.len() <= 512)
+                        .ok_or_else(|| anyhow::anyhow!("Missing {key}"))
+                };
+                let (path, body, verb) = match action {
+                    "list" => (
+                        vec!["v1", "cloud", "bridge", "computers"],
+                        None,
+                        reqwest::Method::GET,
+                    ),
+                    "rename" => (
+                        vec!["v1", "cloud", "bridge", "computers", text("deviceId")?],
+                        Some(json!({"name":text("name")?})),
+                        reqwest::Method::PATCH,
+                    ),
+                    "forget" => (
+                        vec!["v1", "cloud", "bridge", "computers", text("deviceId")?],
+                        None,
+                        reqwest::Method::DELETE,
+                    ),
+                    "revoke" => (
+                        vec![
+                            "v1",
+                            "cloud",
+                            "bridge",
+                            "computers",
+                            text("deviceId")?,
+                            "always-allow",
+                        ],
+                        None,
+                        reqwest::Method::DELETE,
+                    ),
+                    "attached" => (
+                        vec![
+                            "v1",
+                            "cloud",
+                            "workspaces",
+                            text("workspaceId")?,
+                            "chats",
+                            text("chatId")?,
+                            "attached-computers",
+                        ],
+                        None,
+                        reqwest::Method::GET,
+                    ),
+                    "tasks" => (
+                        vec![
+                            "v1",
+                            "cloud",
+                            "workspaces",
+                            text("workspaceId")?,
+                            "chats",
+                            text("chatId")?,
+                            "computer-tasks",
+                        ],
+                        None,
+                        reqwest::Method::GET,
+                    ),
+                    "results" => (
+                        vec![
+                            "v1",
+                            "cloud",
+                            "workspaces",
+                            text("workspaceId")?,
+                            "chats",
+                            text("chatId")?,
+                            "computer-results",
+                        ],
+                        None,
+                        reqwest::Method::GET,
+                    ),
+                    "cancel" => (
+                        vec![
+                            "v1",
+                            "cloud",
+                            "workspaces",
+                            text("workspaceId")?,
+                            "chats",
+                            text("chatId")?,
+                            "computer-results",
+                            text("requestId")?,
+                        ],
+                        None,
+                        reqwest::Method::DELETE,
+                    ),
+                    "pending" => (
+                        vec![
+                            "v1",
+                            "cloud",
+                            "workspaces",
+                            text("workspaceId")?,
+                            "chats",
+                            text("chatId")?,
+                            "device-approvals",
+                        ],
+                        None,
+                        reqwest::Method::GET,
+                    ),
+                    "decide" => (
+                        vec![
+                            "v1",
+                            "cloud",
+                            "workspaces",
+                            text("workspaceId")?,
+                            "chats",
+                            text("chatId")?,
+                            "device-approvals",
+                            text("requestId")?,
+                        ],
+                        Some(json!({"decision":text("decision")?})),
+                        reqwest::Method::POST,
+                    ),
+                    "primary" | "clearPrimary" => (
+                        vec![
+                            "v1",
+                            "cloud",
+                            "workspaces",
+                            text("workspaceId")?,
+                            "chats",
+                            text("chatId")?,
+                            "primary-computer",
+                        ],
+                        None,
+                        if action == "primary" {
+                            reqwest::Method::GET
+                        } else {
+                            reqwest::Method::DELETE
+                        },
+                    ),
+                    "attach" | "detach" => (
+                        vec![
+                            "v1",
+                            "cloud",
+                            "workspaces",
+                            text("workspaceId")?,
+                            "chats",
+                            text("chatId")?,
+                            "attached-computers",
+                            text("deviceId")?,
+                        ],
+                        None,
+                        if action == "attach" {
+                            reqwest::Method::PUT
+                        } else {
+                            reqwest::Method::DELETE
+                        },
+                    ),
+                    _ => anyhow::bail!("Unknown computer action"),
+                };
+                self.request_scoped_verb(&token, &path, body, None, &[], verb)
+                    .await?
+            }
+
             zuse_protocol::methods::CLOUD_TASK_COMMAND => {
                 ensure!(
                     params["expectedAccountId"].as_str() == Some(account.as_str())
@@ -963,16 +1186,16 @@ impl CloudApi {
                     .await;
                 let response = match response {
                     Ok(value) => value,
-                    Err(_) => {
-                        self.request_scoped(
+                    Err(_) => self
+                        .request_scoped(
                             &token,
                             &["v1", "cloud", "workspaces", workspace, "task-commands"],
                             body,
                             organization.as_deref(),
                             &query,
                         )
-                        .await?
-                    }
+                        .await
+                        .map_err(task_command_unreachable)?,
                 };
                 ensure!(
                     response["durablyAdmitted"] == true
@@ -1194,6 +1417,9 @@ impl CloudApi {
             | zuse_protocol::methods::CLOUD_MACHINE
             | zuse_protocol::methods::CLOUD_MACHINE_SAVE
             | zuse_protocol::methods::CLOUD_MACHINE_REBUILD
+            | zuse_protocol::methods::CLOUD_MACHINE_SETUP_PROPOSAL
+            | zuse_protocol::methods::CLOUD_MACHINE_SETUP_APPLY
+            | zuse_protocol::methods::CLOUD_MACHINE_SETUP_DISCARD
             | zuse_protocol::methods::CLOUD_PROJECT_SECRETS
             | zuse_protocol::methods::CLOUD_PROJECT_SECRET_SAVE
             | zuse_protocol::methods::CLOUD_PROJECT_SECRET_REVOKE => {
@@ -1354,6 +1580,35 @@ impl CloudApi {
                             org.as_deref(),
                             &[],
                             reqwest::Method::POST,
+                        )
+                        .await?
+                    }
+                    zuse_protocol::methods::CLOUD_MACHINE_SETUP_PROPOSAL
+                    | zuse_protocol::methods::CLOUD_MACHINE_SETUP_APPLY
+                    | zuse_protocol::methods::CLOUD_MACHINE_SETUP_DISCARD => {
+                        let proposal = input["proposalId"]
+                            .as_str()
+                            .filter(|id| zuse_protocol::machine_setup::proposal_id_valid(id))
+                            .ok_or_else(|| anyhow::anyhow!("Unknown image proposal."))?
+                            .to_owned();
+                        let action = match method {
+                            zuse_protocol::methods::CLOUD_MACHINE_SETUP_APPLY => Some("apply"),
+                            zuse_protocol::methods::CLOUD_MACHINE_SETUP_DISCARD => Some("discard"),
+                            _ => None,
+                        };
+                        let mut path = vec!["v1", "cloud", "machine", "setup-proposals", &proposal];
+                        path.extend(action);
+                        self.request_scoped_verb(
+                            &token,
+                            &path,
+                            action.map(|_| serde_json::json!({})),
+                            org.as_deref(),
+                            &[],
+                            if action.is_some() {
+                                reqwest::Method::POST
+                            } else {
+                                reqwest::Method::GET
+                            },
                         )
                         .await?
                     }
@@ -1580,7 +1835,7 @@ impl CloudApi {
                         &[],
                     )
                     .await?;
-                json!({"accountId":account,"organizationId":organization,"ownerId":value["ownerId"],"apiOrigin":self.origin.as_str(),"projects":value["projects"],"agentCatalog":value["agentCatalog"],"providerAgentCatalogs":value["providerAgentCatalogs"],"computerCapabilities":value["computerCapabilities"],"commandAdmissionVersion":value["commandAdmissionVersion"],"agentConnections":value["agentConnections"]})
+                json!({"accountId":account,"organizationId":organization,"ownerId":value["ownerId"],"apiOrigin":self.origin.as_str(),"projects":value["projects"],"agentCatalog":value["agentCatalog"],"providerAgentCatalogs":value["providerAgentCatalogs"],"computerCapabilities":value["computerCapabilities"],"commandAdmissionVersion":value["commandAdmissionVersion"],"launchAttachmentHoldVersion":value["launchAttachmentHoldVersion"],"agentConnections":value["agentConnections"]})
             }
             zuse_protocol::methods::CLOUD_CREATE => {
                 let mut params = params;
@@ -1909,6 +2164,24 @@ impl CloudApi {
                 value["localMirrorCleanup"] = serde_json::to_value(row.local_mirror_cleanup)?;
                 json!({"accountId": account, "workspace": value})
             }
+            zuse_protocol::methods::CLOUD_WORKSPACE_RENAME => {
+                let id = params["workspaceId"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Select a workspace."))?;
+                let title = params["title"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Enter a chat name."))?;
+                let workspace = self
+                    .request_scoped(
+                        &token,
+                        &["v1", "cloud", "workspaces", id, "rename"],
+                        Some(json!({"title":title})),
+                        organization.as_deref(),
+                        &[],
+                    )
+                    .await?;
+                json!({"accountId":account,"workspace":workspace})
+            }
             UNARCHIVE | ARCHIVE | DELETE => {
                 let id = params["workspaceId"]
                     .as_str()
@@ -1991,9 +2264,7 @@ pub(crate) async fn slack_link_request(
         (auth.workos_enabled() || api.loopback) && auth.user_id().is_some(),
         "Sign in to Zuse Cloud to use Slack."
     );
-    let token = auth.access_token().await.map_err(|_| {
-        anyhow::anyhow!("Could not refresh your Cloud session. Check your connection or reconnect in Settings → General.")
-    })?;
+    let token = auth.access_token().await.map_err(session_error)?;
     api.request_scoped_verb(&token, path, body, None, query, verb)
         .await
 }
@@ -2017,6 +2288,34 @@ pub async fn handle(auth: &Auth, method: &str, params: Value) -> Result<Value> {
 #[cfg(test)]
 mod beta_tests {
     use super::*;
+    #[test]
+    fn a_token_miss_reads_as_transient_and_only_a_lost_sign_in_asks_to_sign_in() {
+        use crate::account::AccountError;
+        use zuse_protocol::cloud::{SESSION_RENEWAL_UNAVAILABLE, SESSION_SIGNED_OUT};
+        let text = |error: anyhow::Error| session_error(error).to_string();
+        for transient in [
+            anyhow::Error::new(AccountError::Unavailable),
+            anyhow::Error::new(AccountError::InvalidResponse),
+            anyhow::Error::new(zuse_rpc::TokenError::TemporarilyUnavailable("dns".into())),
+        ] {
+            assert_eq!(text(transient), SESSION_RENEWAL_UNAVAILABLE);
+        }
+        assert_eq!(
+            text(anyhow::Error::new(AccountError::SignedOut)),
+            SESSION_SIGNED_OUT
+        );
+        assert_eq!(
+            text(anyhow::Error::new(zuse_rpc::TokenError::SignedOut)),
+            SESSION_SIGNED_OUT
+        );
+        assert_eq!(
+            text(anyhow::Error::new(AccountError::Changed)),
+            "Your account changed. Reopen this view."
+        );
+        assert_eq!(text(anyhow::anyhow!("Kept as is")), "Kept as is");
+        // Neither points at a Settings path that can't fix a network miss.
+        assert!(!SESSION_RENEWAL_UNAVAILABLE.contains("Settings"));
+    }
     #[test]
     fn rejected_messages_say_why_instead_of_busy() {
         assert!(
@@ -2085,6 +2384,51 @@ mod beta_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn an_unreachable_cloud_reaches_the_app_as_a_transport_failure() {
+        // Nothing listens on this port: the request never arrives.
+        let api = CloudApi::new("http://127.0.0.1:9").unwrap();
+        let error = api
+            .request_scoped(
+                "token",
+                &["v1", "cloud", "workspaces", "w", "task-commands"],
+                Some(json!({})),
+                None,
+                &[],
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Cloud service is unavailable. Try again."
+        );
+        assert!(matches!(
+            rpc_error(task_command_unreachable(error)),
+            zuse_rpc::RpcError::Capability(code)
+                if code == zuse_protocol::cloud_task_commands::TASK_UNREACHABLE
+        ));
+        // A proxy's 502/503/504 never reached the service either; the
+        // service's own 503 (with its code) is an answer.
+        let gateway = CloudHttpFailure(reqwest::StatusCode::BAD_GATEWAY, None);
+        assert!(matches!(
+            rpc_error(task_command_unreachable(gateway.into())),
+            zuse_rpc::RpcError::Capability(code)
+                if code == zuse_protocol::cloud_task_commands::TASK_UNREACHABLE
+        ));
+        let answered = CloudHttpFailure(
+            reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            Some("cloud_workspace_effects_storage_failed".into()),
+        );
+        assert!(!matches!(
+            rpc_error(task_command_unreachable(answered.into())),
+            zuse_rpc::RpcError::Capability(_)
+        ));
+        // Any other failure keeps its meaning.
+        assert!(matches!(
+            rpc_error(task_command_unreachable(anyhow::anyhow!("refused"))),
+            zuse_rpc::RpcError::Failed(message) if message == "refused"
+        ));
+    }
     #[test]
     fn cloud_defaults_to_the_rust_cloud_origin() {
         assert_eq!(DEFAULT_API_URL, "https://api-rust.zuse.sh");
@@ -2352,6 +2696,10 @@ impl Drop for MirrorReconciler {
     }
 }
 pub fn start_mirror_reconciliation(auth: Auth) -> MirrorReconciler {
+    // Synced checkouts are restored or resumed whether or not anyone is
+    // signed in (a restart may need to finish putting one back).
+    #[cfg(unix)]
+    checkout_sync::supervise(auth.clone());
     MirrorReconciler(tokio::spawn(async move {
         use futures::StreamExt;
         let mut changes = auth.watch_state();

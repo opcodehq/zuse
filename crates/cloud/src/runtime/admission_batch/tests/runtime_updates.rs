@@ -322,6 +322,44 @@ pub(super) async fn exercise(
     );
     in_flight_deadline(control, owner, pool, id, &directive.update_id, now + 1).await;
 
+    // The swapping runtime reports the binary installed before restarting:
+    // the pin follows the file on disk (provisional), so a retained start
+    // before the new runtime commits verifies the right binary.
+    let before_config = config(pool, id).await;
+    let before_install = before_config["runtimeRelease"].clone();
+    let mut installed = attestation(
+        u::Outcome::Installed,
+        Some(directive.update_id.clone()),
+        &new,
+        &old_caps,
+    );
+    installed.previous_sha256 = Some(old.clone());
+    installed.error_code = None;
+    control
+        .runtime_update_attest(id, CREDENTIAL, installed, now + 2)
+        .await
+        .unwrap();
+    let provisional = config(pool, id).await;
+    assert_eq!(provisional["runtimeRelease"]["sha256"], new);
+    assert_eq!(provisional["runtimeRelease"]["provisional"], true);
+    // A report that names no attempt never moves the pin.
+    let mut anonymous = attestation(u::Outcome::Installed, None, &old, &old_caps);
+    anonymous.error_code = None;
+    control
+        .runtime_update_attest(id, CREDENTIAL, anonymous, now + 2)
+        .await
+        .unwrap();
+    assert_eq!(config(pool, id).await["runtimeRelease"]["sha256"], new);
+    assert_eq!(
+        provisional["runtimeBootstrapReceipt"]["capabilities"],
+        before_config["runtimeBootstrapReceipt"]["capabilities"],
+        "capabilities change only on commit"
+    );
+    assert_eq!(
+        status(control, pool, id).await.state,
+        u::UpdateState::Downloading
+    );
+
     control
         .runtime_update_attest(
             id,
@@ -336,6 +374,11 @@ pub(super) async fn exercise(
         )
         .await
         .unwrap();
+    // The restored runtime's report moves the provisional pin back to it.
+    let reverted = config(pool, id).await["runtimeRelease"].clone();
+    assert_eq!(reverted["sha256"], old);
+    assert_eq!(before_install["sha256"], old);
+    assert!(reverted["provisional"].is_null());
     let rolled = status(control, pool, id).await;
     assert_eq!(rolled.state, u::UpdateState::RolledBack);
     assert_eq!(
@@ -368,6 +411,7 @@ pub(super) async fn exercise(
         .unwrap();
     let stored = config(pool, id).await;
     assert_eq!(stored["runtimeRelease"]["sha256"], new);
+    assert!(stored["runtimeRelease"]["provisional"].is_null());
     assert_eq!(stored["runtimeRelease"]["version"], "1.1.0");
     assert_eq!(stored["runtimeRelease"]["previousSha256"], old);
     assert_eq!(stored["runtimeRelease"]["appliedAt"], now + 4);
@@ -525,4 +569,114 @@ pub(super) async fn exercise(
         .await
         .unwrap_err();
     assert_eq!(refused.code, u::RUNTIME_UPDATE_UNAVAILABLE);
+
+    strict_base(
+        control, owner, pool, access, master, &plan, &old, &new, &old_caps, now,
+    )
+    .await;
+}
+
+/// REGRESSION GUARD (2026-11-24): the base image's harness gate refuses a
+/// runtime whose version differs from the one it was built for, so a computer
+/// updated in place to another version failed its next cold launch. On such a
+/// base nothing of another version is offered, and a computer already pinned
+/// to one is offered the base runtime back.
+#[allow(clippy::too_many_arguments)]
+async fn strict_base(
+    control: &std::sync::Arc<RuntimeControl>,
+    owner: &PgPool,
+    pool: &PgPool,
+    access: &crate::access::Access,
+    master: &crate::crypto::MasterKey,
+    plan: &impl Fn(&str) -> Value,
+    old: &str,
+    new: &str,
+    old_caps: &[Value],
+    now: i64,
+) {
+    let base = "zuse-base-strict-harness-fixture";
+    sqlx::query("INSERT INTO cloud_managed_bases(provider,release_id,artifact_id,architecture,capabilities,state,created_at,runtime_manifest) VALUES('boxd',$1,'strict-artifact','x86_64','[]','verified',$2,$3)")
+        .bind(base)
+        .bind(now)
+        .bind(json!({"manifest":{"commandAdmission":{"runtimeSha256":old}}}))
+        .execute(owner)
+        .await
+        .unwrap();
+    let on_base = |id: &'static str| async move {
+        sqlx::query("UPDATE api_cloud_workspaces SET provider='boxd',managed_release_id=$2 WHERE workspace_id=$1")
+            .bind(id)
+            .bind(base)
+            .execute(owner)
+            .await
+            .unwrap();
+    };
+
+    // On the base runtime: the newer version is not offered.
+    let id = "runtime-update-strict-base";
+    computer(
+        control,
+        pool,
+        access,
+        master,
+        plan(id),
+        Some(old_caps.to_vec()),
+        now,
+    )
+    .await;
+    attach_runtime(owner, id, old, now).await;
+    on_base(id).await;
+    assert!(
+        control
+            .runtime_update_offer(id, CREDENTIAL, now)
+            .await
+            .unwrap()
+            .directive
+            .is_none()
+    );
+    assert_eq!(
+        status(control, pool, id).await.state,
+        u::UpdateState::Current
+    );
+
+    // Pinned to the newer version in place: offered the base runtime back.
+    let id = "runtime-update-strict-base-heal";
+    computer(
+        control,
+        pool,
+        access,
+        master,
+        plan(id),
+        Some(old_caps.to_vec()),
+        now,
+    )
+    .await;
+    attach_runtime(owner, id, new, now).await;
+    on_base(id).await;
+    let heal = control
+        .runtime_update_offer(id, CREDENTIAL, now + 1)
+        .await
+        .unwrap()
+        .directive
+        .expect("the base runtime is offered back");
+    assert_eq!(heal.artifact.release.sha256, old);
+    assert_eq!(heal.artifact.release.version, "1.0.0");
+    assert_eq!(
+        status(control, pool, id).await.state,
+        u::UpdateState::Downloading
+    );
+    let mut report = attestation(u::Outcome::Committed, Some(heal.update_id), old, old_caps);
+    report.version = "1.0.0".into();
+    control
+        .runtime_update_attest(id, CREDENTIAL, report, now + 2)
+        .await
+        .unwrap();
+    assert_eq!(config(pool, id).await["runtimeRelease"]["sha256"], old);
+    assert!(
+        control
+            .runtime_update_offer(id, CREDENTIAL, now + 3)
+            .await
+            .unwrap()
+            .directive
+            .is_none()
+    );
 }

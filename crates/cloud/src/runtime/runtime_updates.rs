@@ -71,6 +71,25 @@ struct Offer {
     state: String,
     error_code: Option<String>,
 }
+/// A report names the computer's current update attempt. Moving a
+/// provisional pin back to the serving runtime needs only that: even after
+/// an anonymous report closed the attempt, the named report from the
+/// restored runtime still repairs the pin, while a stale report for an older
+/// attempt (another id) and an anonymous one never touch it.
+fn names_current_attempt(current: Option<&str>, reported: Option<&str>) -> bool {
+    matches!((current, reported), (Some(current), Some(reported)) if current == reported)
+}
+#[cfg(test)]
+mod pin_repair_tests {
+    #[test]
+    fn only_a_report_naming_the_current_attempt_repairs_the_pin() {
+        use super::names_current_attempt as names;
+        assert!(names(Some("b"), Some("b")));
+        assert!(!names(Some("b"), Some("a")), "stale attempt");
+        assert!(!names(Some("b"), None), "anonymous");
+        assert!(!names(None, Some("b")));
+    }
+}
 async fn offer(conn: &mut PgConnection, id: &str, lock: bool) -> Result<Option<Offer>, ApiError> {
     let statement = if lock {
         "SELECT update_id,target_sha256,urgency,state,error_code FROM zuse_rust_runtime_updates WHERE workspace_id=$1 FOR UPDATE"
@@ -98,7 +117,16 @@ fn in_flight(offer: &Offer, sha: &str) -> bool {
 /// The runtime this computer serves: its last committed update, else the
 /// base's pinned runtime.
 fn current_sha(config: &Value) -> Option<&str> {
-    config["runtimeRelease"]["sha256"]
+    // A provisional pin (installed, not yet committed) already guides the
+    // image checks of a retained start, but offers and status still judge
+    // the computer by the runtime that last committed.
+    let release = &config["runtimeRelease"];
+    let field = if release["provisional"] == true {
+        "previousSha256"
+    } else {
+        "sha256"
+    };
+    release[field]
         .as_str()
         .or_else(|| config["initialRuntimeBootstrap"]["runtimeSha256"].as_str())
         .filter(|s| registry::sha256_valid(s))
@@ -122,6 +150,83 @@ fn short_code(code: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_-".contains(&b))
 }
 
+/// Base manifest field (`runtime_manifest.manifest.<field>`) a base sets
+/// once its harness gate accepts a runtime installed by a verified in-place
+/// update. Bases without it require the runtime's `--version` to equal the
+/// version its harness release was built for.
+pub(crate) const HARNESS_COMPATIBILITY_FIELD: &str = "rustHarnessRuntimeCompatibilityVersion";
+
+/// Which runtimes a computer's base image can cold-launch.
+///
+/// Every launch goes through the image's harness gate
+/// (`infra/cloud/harness-release.py exec`), which today refuses any runtime
+/// whose `--version` differs from the harness release's `runtimeVersion`.
+/// An in-place swap re-execs without that gate, so a computer updated to
+/// another version keeps working until its first cold launch (a sleep
+/// without memory, a reboot), which then fails every time. The harness
+/// release is built for the base's own runtime (a fresh machine passes the
+/// gate), so the base runtime's registered version is that `runtimeVersion`.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum HarnessGate {
+    /// No managed base (nothing to judge) or a base whose gate accepts
+    /// verified in-place updates.
+    Any,
+    /// Only this version (build metadata ignored) cold-launches.
+    Version(Version),
+    /// A managed base whose runtime is not in the registry: no version is
+    /// known to be safe, so nothing is offered.
+    Unknown,
+}
+impl HarnessGate {
+    /// `base` is `None` without a managed base, else its compatibility field.
+    pub(crate) fn of_base(base: Option<Option<&str>>, base_release: Option<&Release>) -> Self {
+        let Some(compatibility) = base else {
+            return Self::Any;
+        };
+        if compatibility
+            .and_then(|v| v.parse::<i64>().ok())
+            .is_some_and(|v| v >= 1)
+        {
+            return Self::Any;
+        }
+        match base_release.and_then(|r| Version::parse(&r.version)) {
+            Some(version) => Self::Version(version),
+            None => Self::Unknown,
+        }
+    }
+    fn admits(&self, version: &str) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Version(base) => Version::parse(version).as_ref() == Some(base),
+            Self::Unknown => false,
+        }
+    }
+    /// The release to offer. A computer pinned to a runtime the gate refuses
+    /// gets its base runtime back (the next cold launch would fail); anything
+    /// else moves forward only to releases the gate admits.
+    pub(crate) fn target(
+        &self,
+        pinned: Option<(&str, &Version, i64)>,
+        base_release: Option<Release>,
+        candidates: Vec<Release>,
+    ) -> Option<Release> {
+        if let (Self::Version(base), Some((sha, version, _)), Some(release)) =
+            (self, pinned, base_release)
+        {
+            if version != base && release.sha256 != sha {
+                return Some(release);
+            }
+        }
+        registry::pick_target(
+            pinned,
+            candidates
+                .into_iter()
+                .filter(|r| self.admits(&r.version))
+                .collect(),
+        )
+    }
+}
+
 impl RuntimeControl {
     pub fn with_runtime_releases(mut self, config: RuntimeReleaseConfig) -> Self {
         self.runtime_releases = config;
@@ -129,7 +234,9 @@ impl RuntimeControl {
     }
 
     /// Newest release in this deployment's channel for the computer's
-    /// architecture that is newer than what it runs now.
+    /// architecture that is newer than what it runs now and that its base
+    /// image can still cold-launch ([`HarnessGate`]). A computer pinned to a
+    /// runtime its base cannot cold-launch is offered the base runtime back.
     async fn runtime_target(
         &self,
         conn: &mut PgConnection,
@@ -137,21 +244,24 @@ impl RuntimeControl {
     ) -> Result<Option<Target>, ApiError> {
         let id = required(row, "workspace_id")?;
         let config = &row["request_config"];
-        let base: Option<(String, Option<String>)> = match (
+        let base: Option<(String, Option<String>, Option<String>)> = match (
             row["provider"].as_str(),
             row["managed_release_id"].as_str(),
         ) {
-            (Some(provider), Some(release)) => sqlx::query_as("SELECT architecture,runtime_manifest#>>'{manifest,commandAdmission,runtimeSha256}' FROM cloud_managed_bases WHERE provider=$1 AND release_id=$2")
+            (Some(provider), Some(release)) => sqlx::query_as(&format!("SELECT architecture,runtime_manifest#>>'{{manifest,commandAdmission,runtimeSha256}}',runtime_manifest#>>'{{manifest,{HARNESS_COMPATIBILITY_FIELD}}}' FROM cloud_managed_bases WHERE provider=$1 AND release_id=$2"))
                 .bind(provider)
                 .bind(release)
                 .fetch_optional(&mut *conn)
                 .await?,
             _ => None,
         };
+        let base_sha = base
+            .as_ref()
+            .and_then(|(_, sha, _)| sha.clone())
+            .filter(|s| registry::sha256_valid(s));
         let current = current_sha(config)
             .map(str::to_owned)
-            .or_else(|| base.as_ref().and_then(|(_, sha)| sha.clone()))
-            .filter(|s| registry::sha256_valid(s));
+            .or_else(|| base_sha.clone());
         let registered: Option<(String, String, i64)> = match &current {
             Some(sha) => sqlx::query_as(
                 "SELECT version,architecture,created_at FROM zuse_rust_runtime_releases WHERE sha256=$1",
@@ -164,10 +274,28 @@ impl RuntimeControl {
         let Some(architecture) = registered
             .as_ref()
             .map(|(_, arch, _)| arch.clone())
-            .or_else(|| base.map(|(arch, _)| arch))
+            .or_else(|| base.as_ref().map(|(arch, _, _)| arch.clone()))
         else {
             return Ok(None);
         };
+        // The base runtime's registry row, in any state: it is what a fresh
+        // machine of this base boots, so it stays installable even retired.
+        let base_release: Option<Release> = match &base_sha {
+            Some(sha) => sqlx::query_as::<_, registry::ReleaseRow>(&format!(
+                "SELECT {} FROM zuse_rust_runtime_releases WHERE sha256=$1",
+                registry::RELEASE_COLUMNS
+            ))
+            .bind(sha)
+            .fetch_optional(&mut *conn)
+            .await?
+            .map(Release::from_row),
+            None => None,
+        };
+        let gate = HarnessGate::of_base(
+            base.as_ref()
+                .map(|(_, _, compatibility)| compatibility.as_deref()),
+            base_release.as_ref(),
+        );
         let rows: Vec<registry::ReleaseRow> = sqlx::query_as(&format!(
             "SELECT {} FROM zuse_rust_runtime_releases WHERE architecture=$1 AND state=ANY($2)",
             registry::RELEASE_COLUMNS
@@ -188,7 +316,7 @@ impl RuntimeControl {
             (Some(sha), Some((version, at))) => Some((sha.as_str(), version, *at)),
             _ => None,
         };
-        let Some(release) = registry::pick_target(pinned, candidates) else {
+        let Some(release) = gate.target(pinned, base_release, candidates) else {
             return Ok(None);
         };
         let failures: Option<(i32, Option<String>)> = sqlx::query_as("SELECT failures,error_code FROM zuse_rust_runtime_update_failures WHERE workspace_id=$1 AND sha256=$2")
@@ -322,7 +450,12 @@ impl RuntimeControl {
                 let current = current_sha(&config).map(str::to_owned);
                 let pinned = config["runtimeRelease"].clone();
                 let release = if pinned["sha256"] == attestation.sha256.as_str() {
-                    // A repeated attestation keeps the original record.
+                    // A repeated attestation (or the commit of a provisional
+                    // install) keeps the original record, now confirmed.
+                    let mut pinned = pinned;
+                    if let Some(record) = pinned.as_object_mut() {
+                        record.remove("provisional");
+                    }
                     pinned
                 } else {
                     json!({
@@ -362,7 +495,74 @@ impl RuntimeControl {
                 // Messages queued while it updated go out now.
                 Self::resume_waiting_queues_tx(&mut tx, &row, now).await?;
             }
+            wire::Outcome::Installed => {
+                let version: String = sqlx::query_scalar(
+                    "SELECT version FROM zuse_rust_runtime_releases WHERE sha256=$1",
+                )
+                .bind(&attestation.sha256)
+                .fetch_optional(&mut *tx)
+                .await?
+                .ok_or_else(|| ApiError::conflict("cloud_runtime_release_unknown"))?;
+                let mut config = row["request_config"].clone();
+                // Only for the attempt still in flight, named by its id: a late
+                // or anonymous report must not re-pin a rolled-back release.
+                let in_flight = prior.as_ref().is_some_and(|o| {
+                    matches!(o.state.as_str(), "pending" | "downloading")
+                        && attestation
+                            .update_id
+                            .as_deref()
+                            .is_some_and(|u| u == o.update_id)
+                });
+                if in_flight && config["runtimeRelease"]["sha256"] != attestation.sha256.as_str() {
+                    let current = current_sha(&config).map(str::to_owned);
+                    config["runtimeRelease"] = json!({
+                        "sha256": attestation.sha256,
+                        "version": version,
+                        "previousSha256": current.or(attestation.previous_sha256.clone()),
+                        "appliedAt": now,
+                        "provisional": true,
+                    });
+                    sqlx::query("UPDATE api_cloud_workspaces SET request_config=$2,revision=revision+1,updated_at=GREATEST(updated_at+1,$3) WHERE workspace_id=$1")
+                        .bind(id)
+                        .bind(&config)
+                        .bind(now)
+                        .execute(&mut *tx)
+                        .await?;
+                }
+            }
             outcome @ (wire::Outcome::RolledBack | wire::Outcome::Failed) => {
+                // The reporting runtime is the one serving: a provisional pin
+                // to another binary follows it back, for the attempt in
+                // flight only, named by its id (a stale or anonymous report
+                // never touches a newer pin).
+                let owns_attempt = names_current_attempt(
+                    prior.as_ref().map(|o| o.update_id.as_str()),
+                    attestation.update_id.as_deref(),
+                );
+                let mut config = row["request_config"].clone();
+                if owns_attempt
+                    && config["runtimeRelease"]["provisional"] == true
+                    && config["runtimeRelease"]["sha256"] != attestation.sha256.as_str()
+                {
+                    let base = config["initialRuntimeBootstrap"]["runtimeSha256"].clone();
+                    if base == attestation.sha256.as_str() {
+                        if let Some(object) = config.as_object_mut() {
+                            object.remove("runtimeRelease");
+                        }
+                    } else {
+                        config["runtimeRelease"] = json!({
+                            "sha256": attestation.sha256,
+                            "version": attestation.version,
+                            "appliedAt": now,
+                        });
+                    }
+                    sqlx::query("UPDATE api_cloud_workspaces SET request_config=$2,revision=revision+1,updated_at=GREATEST(updated_at+1,$3) WHERE workspace_id=$1")
+                        .bind(id)
+                        .bind(&config)
+                        .bind(now)
+                        .execute(&mut *tx)
+                        .await?;
+                }
                 let (state, default_code) = match outcome {
                     wire::Outcome::RolledBack => ("rolled-back", "runtime_update_rolled_back"),
                     _ => ("failed", "runtime_update_failed"),
@@ -549,6 +749,93 @@ impl RuntimeControl {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn release(sha: char, version: &str, created_at: i64) -> Release {
+        Release {
+            sha256: sha.to_string().repeat(64),
+            version: version.into(),
+            architecture: "x86_64".into(),
+            storage_formats: vec!["zuse-rust-engine-v1".into()],
+            bootstrap_capabilities: vec![],
+            signature: String::new(),
+            artifact_key: String::new(),
+            compressed_size_bytes: 1,
+            created_at,
+        }
+    }
+    fn v(value: &str) -> Version {
+        Version::parse(value).unwrap()
+    }
+
+    /// REGRESSION GUARD (2026-11-24): a computer whose base harness gate
+    /// expects 0.26.0 took 0.26.1 in place and later could not cold-launch.
+    #[test]
+    fn a_strict_base_is_only_offered_its_own_runtime_version() {
+        let base = release('a', "0.26.0+gccca87b76e11", 10);
+        let gate = HarnessGate::of_base(Some(None), Some(&base));
+        assert_eq!(gate, HarnessGate::Version(v("0.26.0")));
+        let rebuild = release('b', "0.26.0+g05af06ad7e0c", 20);
+        let candidates = vec![
+            release('c', "0.26.1+g7905b90747ca", 30),
+            release('d', "0.27.8+g32bfcb0652bd", 40),
+            rebuild.clone(),
+        ];
+        let version = v("0.26.0");
+        let pinned = Some((base.sha256.as_str(), &version, 10));
+        // Another build of the same version is fine; newer versions are not.
+        assert_eq!(
+            gate.target(pinned, Some(base.clone()), candidates.clone()),
+            Some(rebuild)
+        );
+        let only_newer = vec![candidates[0].clone(), candidates[1].clone()];
+        assert_eq!(gate.target(pinned, Some(base.clone()), only_newer), None);
+    }
+
+    #[test]
+    fn a_computer_pinned_to_a_version_its_base_cannot_launch_is_offered_the_base_back() {
+        let base = release('a', "0.26.0+gccca87b76e11", 10);
+        let gate = HarnessGate::of_base(Some(None), Some(&base));
+        let updated = release('c', "0.26.1+g7905b90747ca", 30);
+        let version = v("0.26.1");
+        let pinned = Some((updated.sha256.as_str(), &version, 30));
+        // Downgrades are otherwise never offered; this one heals the computer.
+        assert_eq!(
+            gate.target(pinned, Some(base.clone()), vec![release('d', "0.27.8", 40)]),
+            Some(base.clone())
+        );
+        // Without the base runtime in the registry there is nothing to offer.
+        assert_eq!(
+            gate.target(pinned, None, vec![release('d', "0.27.8", 40)]),
+            None
+        );
+        // Back on the base runtime: current again, nothing to do.
+        let base_version = v("0.26.0");
+        let healed = Some((base.sha256.as_str(), &base_version, 10));
+        assert_eq!(gate.target(healed, Some(base.clone()), vec![updated]), None);
+    }
+
+    #[test]
+    fn compatible_bases_and_unmanaged_computers_follow_the_channel() {
+        let base = release('a', "0.26.0", 10);
+        let newer = release('d', "0.27.8", 40);
+        let version = v("0.26.0");
+        let pinned = Some((base.sha256.as_str(), &version, 10));
+        for gate in [
+            HarnessGate::of_base(None, None),
+            HarnessGate::of_base(Some(Some("1")), Some(&base)),
+        ] {
+            assert_eq!(gate, HarnessGate::Any);
+            assert_eq!(
+                gate.target(pinned, Some(base.clone()), vec![newer.clone()]),
+                Some(newer.clone())
+            );
+        }
+        // A managed base whose runtime is unregistered: nothing is known safe.
+        for compatibility in [None, Some("0"), Some("yes")] {
+            let gate = HarnessGate::of_base(Some(compatibility), None);
+            assert_eq!(gate, HarnessGate::Unknown);
+            assert_eq!(gate.target(None, None, vec![newer.clone()]), None);
+        }
+    }
     #[test]
     fn a_fresh_machine_is_judged_by_its_base_runtime_again() {
         let base = "b".repeat(64);

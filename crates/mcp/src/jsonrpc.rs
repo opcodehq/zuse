@@ -52,6 +52,11 @@ Numbers and comparisons go in its built-in BarChart, LineChart or DonutChart, no
 figures. Use `show_visual` (a Luau script) only for custom drawing, 3D scenes, shaders, or live \
 simulations the components can't express. Never announce or restate what a visual shows.\n\
 \n\
+In a cloud chat, \"my computer\", \"my Mac\" or a computer the user names means one of their own \
+computers, not a Zuse device: run commands there with `run_on_computer` right away (pass the name \
+the user gave as `computer`, or nothing for the computer they are typing on); it waits for the \
+user's approval and returns the output. `list_attached_computers` shows which are online.\n\
+\n\
 When the user asks to connect, reconnect or manage an app or MCP server, or a plugin you need \
 isn't connected, call `plugins_connect` so they can sign in from a card in the chat. Never ask for \
 passwords or API keys in chat.";
@@ -198,7 +203,7 @@ pub async fn handle_request(tools: &Tools, id: Value, method: &str, params: Valu
             )
         }
         "ping" => ok_response(id, json!({})),
-        "tools/list" => ok_response(id, json!({ "tools": tools.list() })),
+        "tools/list" => ok_response(id, json!({ "tools": tools.listing() })),
         "tools/call" => {
             let Some(name) = params.get("name").and_then(Value::as_str) else {
                 return error_response(id, INVALID_PARAMS, "tools/call needs a tool name");

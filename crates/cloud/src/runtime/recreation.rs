@@ -569,7 +569,7 @@ impl RuntimeControl {
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 #[cfg(test)]
 mod failed_resume_tests {

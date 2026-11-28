@@ -6,6 +6,7 @@ import { PageTitle, Segmented } from "../ui";
 import { Archives } from "./Archives";
 import { Hosting, Usage } from "./Billing";
 import { Chats } from "./Chats";
+import { Computers } from "./Computers";
 import { History } from "./History";
 import { ImageStorage, Setup } from "./Setup";
 import { cloud, loadBilling } from "./state";
@@ -51,6 +52,7 @@ export function CloudSettings() {
               </Match>
               <Match when={tab() === "setup"}>
                 <Setup />
+                <Computers />
               </Match>
               <Match when={tab() === "usage"}>
                 <ImageStorage />

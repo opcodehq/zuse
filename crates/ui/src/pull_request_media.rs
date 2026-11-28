@@ -835,15 +835,7 @@ mod tests {
                     "https://github.com/a/b/pull/1",
                     Rc::new(|_, _, _| {}),
                 )),
-                tasks: None,
-                row_key: "media-test".into(),
-                veil: None,
-                cache: None,
-                now: std::time::Instant::now(),
-                copy: None,
-                link: None,
-                workspace_root: None,
-                code: None,
+                ..markdown::render::RenderOptions::settled("media-test".into())
             };
             div().size_full().p(px(24.0)).child(render_description(
                 &parse_description(&self.description),

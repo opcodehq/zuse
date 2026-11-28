@@ -110,10 +110,10 @@ fn button_base(
     icon_only: bool,
 ) -> Stateful<Div> {
     let text = text.into();
-    let lime = palette::tone(
+    let lime = palette::accent_or(palette::tone(
         hsla(83. / 360., 0.72, 0.46, 1.),
         hsla(83. / 360., 0.74, 0.43, 1.),
-    );
+    ));
     let mut view = div()
         .id(id)
         .role(Role::Button)
@@ -145,7 +145,7 @@ fn button_base(
         // (`styling::dither_action`): same plate, same texture.
         .when(primary, |v| {
             v.overflow_hidden()
-                .bg(rgb(0x13150f))
+                .bg(hsla(lime.h, (lime.s * 0.4).min(0.2), 0.07, 1.))
                 .child(crate::styling::dither_background(true, !disabled && !busy))
         })
         .when(disabled, |v| v.opacity(0.64))

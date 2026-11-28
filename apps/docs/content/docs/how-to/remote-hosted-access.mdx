@@ -1,0 +1,70 @@
+---
+title: "Reach a computer away from its network"
+icon: Globe
+navTitle: "Reach a remote computer"
+description: "Link a computer to your Zuse account, or use Tailscale, so your other devices can reach it from anywhere."
+section: how-to
+order: 30
+platforms: [desktop, mobile, serve]
+providers: []
+prerequisites: [/remote/hosted-access]
+related: [/remote/tailscale, /serve, /remote/security, /how-to/serve-operate-host, /how-to/remote-recover-connection]
+next: /remote/hosted-access
+lastVerified: "2026-11-27"
+---
+
+Make a computer reachable from your other devices when you are not on its network.
+
+## Applicability
+
+There are two ways. **Account access** links the computer to your Zuse account; any device signed in to that account can find it. **Tailscale** offers the computer's tailnet address to devices you pair; it needs no Zuse account. Neither copies your repositories anywhere or installs agents.
+
+## Prerequisites
+
+- The desktop app or `zuse serve` is running on the computer.
+- For account access: a Zuse account, and a terminal on the computer.
+- For Tailscale: Tailscale (or a Headscale client) signed in on the computer and on your other devices.
+
+## Steps
+
+### With your account
+
+1. In a terminal on the computer, run:
+
+   ```sh
+   zuse link --name studio-mac
+   ```
+
+2. If Zuse prints an address and a code, open the address on any device and confirm the code.
+3. Wait for `Available through your account as studio-mac at …`.
+
+On a headless computer you can instead start Serve with `zuse serve --account`.
+
+To open the computer:
+
+- **Desktop app on another computer:** sign in, open **Settings → Remote access**, and choose **Connect** next to the computer under **Devices**.
+- **Mobile app:** open **Settings**, choose **Sign in to Zuse**, and sign in with the same account.
+
+### With Tailscale
+
+1. On the computer, open **Settings → Remote access** and turn on **Tailscale**, or start `zuse serve --lan`.
+2. Pair each device once with **Connect device** (see [Connect a phone](/how-to/remote-connect-device/)). Paired devices keep using the tailnet when they leave your network.
+
+## Verification
+
+- `zuse status` on the computer shows the signed-in account and `Computer: <name> at <address>` for account access, or a Tailscale route.
+- From the other device, the computer's projects and chats load and an existing chat opens.
+
+## Troubleshooting and recovery
+
+### The computer does not appear on the other device
+
+Confirm both use the same account and that `zuse status` shows the computer as linked. Run `zuse link` again if it was unlinked.
+
+### The computer shows "Update Zuse on this computer to connect."
+
+Update Zuse on the linked computer, then connect again.
+
+### You no longer want account access
+
+Run `zuse unlink` on the computer. Local chats stay, and devices paired over Wi-Fi or Tailscale keep working.

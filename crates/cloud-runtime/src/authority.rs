@@ -294,6 +294,21 @@ impl Authority {
                 "launch_intent_receipt_rejected",
                 "github_runtime_update_required",
                 "project_cache_runtime_update_required",
+                // Why a computer command can't be taken; the agent relays it.
+                "no_primary_computer",
+                "computer_offline",
+                "computer_not_found",
+                "task_offline_or_detached",
+                "too_many_pending_computer_requests",
+                "computer_request_settled",
+                // Why a setup chat's proposal was refused; the agent fixes it.
+                "machine_setup_chat_required",
+                "machine_setup_script_contains_secret",
+                "machine_setup_repository_invalid",
+                "machine_setup_too_many_repositories",
+                "machine_setup_notes_too_long",
+                "machine_recipe_text_too_large",
+                "invalid_machine_recipe",
             ];
             let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
             let code = CODES
@@ -388,7 +403,7 @@ impl Authority {
                     .runtime_storage
                     .as_ref()
                     .is_some_and(|s| s.storage_incarnation_id == binding.incarnation
-                        && s.format == zuse_protocol::cloud::RUST_RUNTIME_STORAGE_FORMAT),
+                        && zuse_protocol::cloud::rust_runtime_storage_readable(&s.format)),
             "runtime_bootstrap_binding_mismatch"
         );
         let mut expected = self.origin.clone();

@@ -121,8 +121,15 @@ fn codex_mcp_overrides(mcp: &zuse_protocol::McpServer) -> Vec<(String, Value)> {
         (key("command"), mcp.command.clone().into()),
         (key("args"), json!(mcp.args)),
         (key("env"), json!(mcp.env)),
+        // Its tools block for as long as their work takes (a chat's turn, a
+        // command on the user's computer up to its one-hour deadline plus
+        // approval), far past the default per-call limit.
+        (key("tool_timeout_sec"), json!(MCP_TOOL_TIMEOUT_SECS)),
     ]
 }
+
+/// Covers the longest blocking tool: approval, then a one-hour command.
+const MCP_TOOL_TIMEOUT_SECS: f64 = 5400.0;
 
 /// A ready-to-spawn `codex login` command for the engine's account flow.
 ///
@@ -788,6 +795,13 @@ impl Harness for CodexHarness {
     /// Done is the CLI's own terminal frame, for wake turns too.
     fn deterministic_turn_end(&self) -> bool {
         true
+    }
+    /// Codex reports every model-stream retry as it happens (each attempt has
+    /// its own idle timeout of a few minutes) and ends the turn itself once
+    /// retries run out, so a quarter hour of total silence with nothing in
+    /// flight means the app server wedged, not that the model is slow.
+    fn stall_timeout(&self) -> Option<std::time::Duration> {
+        Some(STALL_TIMEOUT)
     }
     /// `turn/interrupt` ends the turn; the app-server and its thread — child
     /// agent threads included — stay up for the next `turn/start`.
@@ -1724,6 +1738,7 @@ async fn run_session(session: Session) {
                             if !send(&event_tx, AgentEvent::Steered {
                                 assistant_message_id: Some(prev),
                                 next_assistant_message_id: Some(next),
+                                message_id: None,
                             }).await {
                                 break 'main;
                             }
@@ -1792,6 +1807,7 @@ async fn run_session(session: Session) {
                                 if !send(&event_tx, AgentEvent::Steered {
                                     assistant_message_id: Some(prev),
                                     next_assistant_message_id: Some(next),
+                                    message_id: None,
                                 }).await {
                                     break 'main;
                                 }
@@ -1898,6 +1914,7 @@ async fn run_session(session: Session) {
                             if !send(&event_tx, AgentEvent::Steered {
                                 assistant_message_id: Some(prev),
                                 next_assistant_message_id: Some(next),
+                                message_id: None,
                             }).await {
                                 break 'main;
                             }
@@ -2076,15 +2093,12 @@ async fn run_session(session: Session) {
                     }
 
                     "error" => {
-                        // 0.146.x nests it (`params.error.message`); older
-                        // builds were flat (`params.message`) — accept both.
-                        let message = params
-                            .pointer("/error/message")
-                            .and_then(Value::as_str)
-                            .or_else(|| params.get("message").and_then(Value::as_str))
-                            .unwrap_or("Codex error")
-                            .to_owned();
-                        if !send(&event_tx, AgentEvent::Error { message }).await {
+                        // A retry Codex runs on its own ("Reconnecting...
+                        // 2/5") is a transient notice, not an error; when
+                        // retries run out, `turn/completed` carries the
+                        // final failure and ends the turn.
+                        let event = normalize::error_notification_event(&params, "Codex error");
+                        if !send(&event_tx, event).await {
                             break 'main;
                         }
                     }
@@ -2332,6 +2346,8 @@ async fn run_session(session: Session) {
 /// How long an interrupted turn's commands get to exit before a process
 /// still running counts as background work.
 const COMMAND_EXIT_GRACE: Duration = Duration::from_secs(3);
+/// See `stall_timeout` on the Codex driver.
+const STALL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 /// Whether a process the app-server reported is still running.
 fn process_alive(pid: &str) -> bool {
@@ -2398,6 +2414,7 @@ async fn steer_as_new_turn(
                 AgentEvent::Steered {
                     assistant_message_id: Some(prev),
                     next_assistant_message_id: Some(next),
+                    message_id: None,
                 },
             )
             .await
@@ -3005,6 +3022,10 @@ mod mcp_injection_tests {
         assert_eq!(
             overrides["mcp_servers.zuse.env"],
             json!({ "ZUSE_CHAT_ID": "chat-1" })
+        );
+        assert_eq!(
+            overrides["mcp_servers.zuse.tool_timeout_sec"],
+            json!(5400.0)
         );
     }
 }

@@ -7,7 +7,10 @@ use crate::Authority;
 use anyhow::Result;
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tokio::{io::AsyncWriteExt, sync::watch};
@@ -78,11 +81,21 @@ pub struct Updater {
     ready: watch::Sender<Option<Ready>>,
     poll: tokio::sync::Notify,
     woke: Mutex<Instant>,
+    /// A release was already staged when this process started (a cold start
+    /// after a pause without memory). Cold boot no longer installs it on its
+    /// own; the first offer that still names it promotes it to `now`.
+    staged_at_start: AtomicBool,
+    /// The authority link of the running poller, for the provisional
+    /// `installed` report a swap sends before it restarts.
+    link: Mutex<Option<(Authority, watch::Receiver<CloudRuntimeBootstrap>)>>,
     download: reqwest::Client,
 }
 impl Updater {
     pub fn new(config: Config, running: String, capabilities: Vec<String>) -> Result<Arc<Self>> {
+        let staged_at_start = AtomicBool::new(stage::latest(&config).is_some());
         Ok(Arc::new(Self {
+            staged_at_start,
+            link: Mutex::new(None),
             config,
             running,
             capabilities,
@@ -137,6 +150,11 @@ impl Updater {
         cancel: CancellationToken,
     ) {
         let nudges = zuse_rpc::cloud::runtime_update_poll_requests();
+        *self
+            .link
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some((authority.clone(), boot.clone()));
         loop {
             if cancel.is_cancelled() {
                 return;
@@ -149,9 +167,7 @@ impl Updater {
                         self.handle(&authority, &boot, activity.as_ref(), &cancel, directive)
                             .await
                     }
-                    None => {
-                        self.ready.send_replace(None);
-                    }
+                    None => self.withdrawn(),
                 },
                 // Older servers have no route; keep polling quietly.
                 Err(error) => tracing::debug!(%error, "runtime_update_poll_failed"),
@@ -213,15 +229,18 @@ impl Updater {
             self.refuse(authority, boot, &directive, code).await;
             return;
         }
-        let ready = Ready {
+        let mut ready = Ready {
             update_id: id.clone(),
             sha256: release.sha256.clone(),
             urgency: directive.urgency,
         };
         if stage::load(&self.config, &release.sha256).is_some_and(|s| s.file.update_id == id) {
+            ready.urgency = self.confirmed_urgency(directive.urgency);
             self.ready.send_replace(Some(ready));
             return;
         }
+        // The server targets another release: the staged one is stale.
+        self.staged_at_start.store(false, Ordering::Relaxed);
         if directive.urgency == Urgency::Background {
             tokio::select! {
                 _ = cancel.cancelled() => return,
@@ -243,6 +262,28 @@ impl Updater {
                 self.ready.send_replace(Some(ready));
             }
             Err(code) => self.refuse(authority, boot, &directive, code).await,
+        }
+    }
+
+    /// The server offers nothing: forget a staged release (it may have been
+    /// retired) so neither a later cold start nor a pause acts on it. A swap
+    /// already in flight keeps its files until it is attested.
+    pub fn withdrawn(&self) {
+        self.ready.send_replace(None);
+        self.staged_at_start.store(false, Ordering::Relaxed);
+        if stage::read_pending(&self.config).is_none() {
+            stage::discard_others(&self.config, None);
+        }
+    }
+
+    /// Urgency for a staged release the server just confirmed. The first
+    /// confirmation after a cold start installs it at once (the swap this
+    /// start was meant for); later ones keep the server's urgency.
+    pub fn confirmed_urgency(&self, offered: Urgency) -> Urgency {
+        if self.staged_at_start.swap(false, Ordering::Relaxed) {
+            Urgency::Now
+        } else {
+            offered
         }
     }
 
@@ -374,7 +415,10 @@ impl Updater {
         .await;
         self.ready.send_replace(None);
         match installed {
-            Ok(Ok(Some(binary))) => Some(binary),
+            Ok(Ok(Some(binary))) => {
+                self.announce_installed(&ready).await;
+                Some(binary)
+            }
             Ok(Ok(None)) => {
                 // Attest whatever the helper or journal decided.
                 self.poll_now();
@@ -386,6 +430,41 @@ impl Updater {
                 None
             }
             Err(_) => None,
+        }
+    }
+
+    /// Tell the server the new binary is on disk before restarting into it,
+    /// so a computer stopped before the new runtime commits still resumes
+    /// against the file it has. One bounded attempt; never blocks the swap,
+    /// and older servers that reject the outcome change nothing.
+    async fn announce_installed(&self, ready: &Ready) {
+        let link = self
+            .link
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let Some((authority, boot)) = link else {
+            return;
+        };
+        let attestation = RuntimeAttestation {
+            update_id: Some(ready.update_id.clone()),
+            outcome: Outcome::Installed,
+            sha256: ready.sha256.clone(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            capabilities: self.capabilities.clone(),
+            previous_sha256: Some(self.running.clone()),
+            error_code: None,
+        };
+        let current = boot.borrow().clone();
+        match tokio::time::timeout(
+            Duration::from_secs(5),
+            authority.runtime_update_attestation(&current, &attestation),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::info!(%error, "runtime_update_installed_report_failed"),
+            Err(_) => tracing::info!("runtime_update_installed_report_timed_out"),
         }
     }
 

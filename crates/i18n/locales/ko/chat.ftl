@@ -1872,3 +1872,18 @@ chat-worktree_offline = 원격에 연결할 수 없음 · 로컬 { $branch } 사
 
 # Native and browser history pagination; translations remain draft.
 chat-cloud_history_load_earlier = 이전 메시지 불러오기
+
+# Variables: count
+chat-tool_activity_summary_edited_files = 파일 { $count }개 편집
+# Variables: count
+chat-tool_group_updates = 진행 상황 업데이트 { $count }개
+chat-tool_command_label = 명령
+chat-tool_output_label = 출력
+
+# Elapsed work for the current assistant turn or a settled turn.
+# Variables: duration
+chat-turn_working_for = 작업 중 · { $duration }
+# Variables: duration
+chat-turn_worked_for = 작업 시간 · { $duration }
+chat-turn_thought = 생각
+chat-tool_shell_label = 쉘

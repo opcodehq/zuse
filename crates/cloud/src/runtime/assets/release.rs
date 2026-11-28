@@ -32,7 +32,7 @@ pub(in crate::runtime) enum Holder<'a> {
 }
 
 impl RuntimeControl {
-    async fn asset_release_ready<'e>(
+    pub(in crate::runtime) async fn asset_release_ready<'e>(
         &self,
         db: impl sqlx::PgExecutor<'e>,
     ) -> Result<bool, ApiError> {

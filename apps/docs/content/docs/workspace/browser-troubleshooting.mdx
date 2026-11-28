@@ -1,0 +1,66 @@
+---
+title: Troubleshoot the in-app browser
+icon: LifeBuoy
+navTitle: "Browser troubleshooting"
+description: Recover missing local servers, failed page loads, developer tools, screenshots, annotations, and lost sign-ins.
+section: workspace
+order: 68
+platforms: [desktop]
+providers: []
+prerequisites: [/workspace/browser]
+related: [/workspace/browser-debugging, /workspace/browser-evidence, /workspace/browser-sessions-privacy, /reference/diagnostics]
+next: /workspace/changes-pull-requests
+lastVerified: "2026-11-27"
+---
+
+
+Start by confirming that you are in the desktop app, on the intended chat, with a **Browser** tab open in that chat's workspace pane.
+
+## A local server is missing or will not load
+
+1. Open the chat's [terminal](/workspace/terminal-browser) and confirm that the development server is still running.
+2. Read the port from the server output. Do not assume the framework's usual port was available.
+3. Enter `localhost:<port>` directly in the address field.
+4. Reload after the server reports that it is ready.
+
+**Running locally** on the home page is a convenience, not a health guarantee. An unlisted server can still be opened by address. If the server uses HTTPS locally, type the full `https://` address, because `localhost` defaults to HTTP.
+
+If the chat runs on another device, a `localhost` address opens on this computer. Open the server from **Running on your device** on a new browser tab instead.
+
+## The address is refused
+
+The address field shows why it did not open the page:
+
+- **Enter a valid website or localhost address.** The text could not be read as an address. Check for typos or spaces.
+- **Only http and https addresses are supported.** Other schemes, such as `file:`, do not open in the in-app browser.
+- **Use an address without an embedded username or password.** Remove the `user:password@` part and sign in on the page instead.
+
+## The page is blank or shows an error
+
+- When a load fails, the panel shows **Couldn’t load this page** with the reason. Fix the cause, then click **Retry page**.
+- On Linux, **Starting browser…** appears while the browser starts the first time; you can keep working while the page opens.
+- Confirm the full address, path, scheme, and port, and check the server output for errors.
+- Open **Developer tools** and check the console and network views for failed requests.
+- If the page still does not render, close the Browser tab and open a new one, or restart the desktop app.
+
+## Developer tools will not open
+
+If Zuse shows **Make the browser panel wider or taller to open developer tools inside it.**, widen the workspace pane or hide the terminal below the conversation, then click **Developer tools** again.
+
+## A screenshot or annotation fails
+
+- **The page has not finished drawing yet** means the page had not produced a frame. Wait for it to load and take the screenshot again.
+- **Could not capture the page** or **Could not save screenshot** means the capture or the file write failed. Check that your `Downloads` folder exists and is writable, then retry.
+- An annotation needs a loaded page. If the page navigated while you were annotating, click **Done**, wait for the new page, and start again.
+
+## You keep getting signed out
+
+- On macOS versions before 14, sign-ins in the in-app browser last only until you quit Zuse. Update macOS, or use **Open in default browser** for that site.
+- **Clear cookies** signs you out of every site in the browser profile.
+- The in-app browser does not share sign-ins with your everyday browser. Sign in inside the in-app browser.
+
+## A file opens instead of a page
+
+The in-app browser does not download files. Use **Open in default browser** for downloads and files it cannot preview.
+
+If the Browser controls themselves are missing from a desktop build, collect the app version and diagnostics from [Diagnostics and troubleshooting](/reference/diagnostics) before reporting the issue.

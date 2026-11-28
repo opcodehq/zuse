@@ -1,7 +1,5 @@
 import { LLMS_TEXT } from "@/lib/agent-content";
 
-export const dynamic = "force-static";
-
 export function GET() {
 	return new Response(LLMS_TEXT, {
 		headers: {

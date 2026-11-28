@@ -118,6 +118,12 @@ impl RuntimeControl {
             .map_err(|_| ApiError::bad_request("cloud_task_progress_invalid"))?;
         sqlx::query("UPDATE zuse_rust_task_command_execution SET state=$3,runtime_revision=$4,runtime_report_digest=$5,turn_id=$6,error_code=$7,updated_at=$8 WHERE workspace_id=$1 AND command_id=$2")
             .bind(id).bind(&report.command_id).bind(state.as_str().unwrap_or("outcome-unknown")).bind(report.revision).bind(digest).bind(&report.turn_id).bind(&report.error_code).bind(now).execute(&mut *tx).await?;
+        if existing["state"] != state {
+            // Every open app reads the conversation again: a turn that
+            // started, ended or needs review shows without a manual refresh.
+            sqlx::query("INSERT INTO zuse_rust_account_event_outbox(owner_id,kind,resource_id,workspace_id,payload,created_at) VALUES($1,'task-command-progress',$2,$3,'{\"commandAdmissionVersion\":2}'::jsonb,$4)")
+                .bind(owner).bind(required(&existing, "session_id")?).bind(id).bind(now).execute(&mut *tx).await?;
+        }
         // Only accepted new runtime revisions count; duplicate/stale reports
         // returned above. Terminal completion always starts a full idle window.
         self.record_activity_tx(&mut tx, &row, now, report.state.terminal())

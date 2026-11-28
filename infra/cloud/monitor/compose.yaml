@@ -1,0 +1,18 @@
+services:
+  desktop:
+    platform: linux/amd64
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import socket; socket.create_connection(('127.0.0.1', 5900), 1).close()"
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    build:
+      context: .
+      target: screen-sharing
+    shm_size: 256m
+    ports:
+      - "127.0.0.1:5905:5900"

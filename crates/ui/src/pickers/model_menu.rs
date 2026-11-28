@@ -49,7 +49,34 @@ pub(super) struct MenuState {
     pub(super) hover: popover::HoverIntent<usize>,
     pub(super) card_bounds: Option<gpui::Bounds<gpui::Pixels>>,
     pub(super) card_left: bool,
+    /// Whether `card_left` has been decided for this opening of the menu.
+    /// The side is chosen once, from the menu's measured frame, so the card
+    /// never jumps sides while the pointer moves between rows.
+    pub(super) card_side_decided: bool,
     frame_bounds: Option<gpui::Bounds<gpui::Pixels>>,
+}
+
+/// The gutter the detail card keeps from the window's edge, both when
+/// choosing its side and when the card is laid out.
+const CARD_WINDOW_GUTTER: f32 = 4.;
+
+/// Whether the detail card must open on the left of a menu whose right edge
+/// sits at `menu_right` in a window `window_width` wide (both logical px, in
+/// window coordinates). The card prefers the right and opens there whenever
+/// it fits, with its gap and gutter, inside the window.
+pub(super) fn card_opens_left(menu_right: f32, window_width: f32) -> bool {
+    let needed = popover::NESTED_MENU_GAP + super::model_detail::CARD_WIDTH + CARD_WINDOW_GUTTER;
+    window_width - menu_right < needed
+}
+
+impl MenuState {
+    /// A fresh opening of the menu measures its frame and picks the card's
+    /// side again.
+    pub(super) fn reset_card_side(&mut self) {
+        self.card_left = false;
+        self.card_side_decided = false;
+        self.frame_bounds = None;
+    }
 }
 impl Default for MenuState {
     fn default() -> Self {
@@ -59,6 +86,7 @@ impl Default for MenuState {
             hover: popover::HoverIntent::default(),
             card_bounds: None,
             card_left: false,
+            card_side_decided: false,
             frame_bounds: None,
         }
     }
@@ -677,18 +705,34 @@ impl Pickers {
                         )
                     }),
             );
-        // The card opens on whichever side of the list has room.
-        let viewport = window.viewport_size().width;
-        if let Some(frame) = self.model_menu.frame_bounds {
-            let room_right = f32::from(viewport - frame.right());
-            self.model_menu.card_left = room_right < super::model_detail::CARD_WIDTH + 24.;
+        // The card opens on the right when it fits, else on the left. The
+        // side is decided once per opening, from this opening's frame; until
+        // the frame is measured (the first frame) the card waits.
+        if !self.model_menu.card_side_decided
+            && let Some(frame) = self.model_menu.frame_bounds
+        {
+            self.model_menu.card_left = card_opens_left(
+                f32::from(frame.right()),
+                f32::from(window.viewport_size().width),
+            );
+            self.model_menu.card_side_decided = true;
         }
-        let card = self.render_model_detail(cx);
+        let card = self
+            .model_menu
+            .card_side_decided
+            .then(|| self.render_model_detail(cx))
+            .flatten();
         if card.is_none() {
             self.model_menu.card_bounds = None;
         }
-        let card =
-            card.map(|card| popover::nested_menu("model-detail", card, self.model_menu.card_left));
+        let card = card.map(|card| {
+            popover::nested_menu_with_gutter(
+                "model-detail",
+                card,
+                self.model_menu.card_left,
+                CARD_WINDOW_GUTTER,
+            )
+        });
         let entity = cx.entity().downgrade();
         let content = div()
             .relative()
@@ -715,5 +759,32 @@ impl Pickers {
             .children(card)
             .into_any_element();
         self.popover_frame_flush(MENU_WIDTH, content, cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::card_opens_left;
+
+    // The card needs its 10px gap, 240px width and 4px window gutter.
+    const NEEDED: f32 = 254.;
+
+    #[test]
+    fn detail_card_opens_right_when_it_fits() {
+        // Field report: a ~256px strip right of the menu took the card left.
+        assert!(!card_opens_left(828., 1084.));
+        assert!(!card_opens_left(400., 1200.));
+    }
+
+    #[test]
+    fn detail_card_opens_left_when_it_does_not_fit() {
+        assert!(card_opens_left(900., 1000.));
+        assert!(card_opens_left(1000., 1000.));
+    }
+
+    #[test]
+    fn detail_card_that_fits_exactly_opens_right() {
+        assert!(!card_opens_left(1000. - NEEDED, 1000.));
+        assert!(card_opens_left(1000. - NEEDED + 0.5, 1000.));
     }
 }

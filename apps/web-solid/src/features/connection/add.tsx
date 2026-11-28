@@ -1,3 +1,4 @@
+import { openComputer } from "./multi/navigation";
 // Adding a computer from a pasted private connection link.
 import { createSignal, Show } from "solid-js";
 import { openInThisTab } from "./computers";
@@ -47,15 +48,14 @@ export function AddComputer(props: { onDone?: () => void; autofocus?: boolean })
   );
 }
 
-/** Validate a pasted link, then open it. A generated LAN certificate has to be accepted on its own page first. */
+/** Validate a pasted link, then open it in this tab. */
 export async function addComputer(pasted: string) {
   const module = await loadLink();
   const link = module.normalizeLink(pasted);
+  if (openComputer({ kind: "paired", link })) return;
   const { kind, origin } = module.inspectLink(link);
   if (kind === "lan" && origin !== location.origin) {
-    const child = window.open(link, "_blank");
-    if (!child) throw new Error("Allow pop-ups to open the other computer in a new tab.");
-    child.opener = null;
+    location.assign(link);
     return;
   }
   openInThisTab(link);

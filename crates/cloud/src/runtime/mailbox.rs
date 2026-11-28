@@ -355,6 +355,14 @@ impl RuntimeControl {
                 " AND NOT EXISTS (SELECT 1 FROM zuse_rust_mailbox_commands prior WHERE prior.workspace_id=c.workspace_id AND prior.lane=c.lane AND prior.workspace_sequence<c.workspace_sequence AND prior.state NOT IN {TERMINAL})"
             )
         };
+        // A new chat's first turn waits for files still uploading.
+        let asset_guard = if canonical && self.asset_release_ready(&mut *tx).await? {
+            super::assets::pending_asset_guard(
+                now - zuse_protocol::cloud_assets::PENDING_ASSET_WAIT_MS,
+            )
+        } else {
+            String::new()
+        };
         let control_filter = if request.control_only {
             " AND c.envelope->>'kind' IN ('zuse.session.interrupt','zuse.session.respond-input','zuse.session.stop-background-task')"
         } else {
@@ -363,7 +371,7 @@ impl RuntimeControl {
         let page_limit = request.max_items.unwrap_or(16);
         let mut leases = Vec::new();
         if !fence_required {
-            let candidates=sqlx::query(&format!("SELECT command_id,envelope,workspace_sequence FROM zuse_rust_mailbox_commands c WHERE workspace_id=$1 AND state IN ('accepted','waiting-for-runtime') AND ($2 OR envelope->>'kind' NOT IN ('zuse.session.run','zuse.session.steer','zuse.session.interrupt','zuse.session.respond-input','zuse.session.stop-background-task')){fifo_guard}{execution_guard}{control_filter} ORDER BY workspace_sequence LIMIT {page_limit}"))
+            let candidates=sqlx::query(&format!("SELECT command_id,envelope,workspace_sequence FROM zuse_rust_mailbox_commands c WHERE workspace_id=$1 AND state IN ('accepted','waiting-for-runtime') AND ($2 OR envelope->>'kind' NOT IN ('zuse.session.run','zuse.session.steer','zuse.session.interrupt','zuse.session.respond-input','zuse.session.stop-background-task')){fifo_guard}{execution_guard}{asset_guard}{control_filter} ORDER BY workspace_sequence LIMIT {page_limit}"))
                 .bind(id).bind(native_commands_supported(&row)).fetch_all(&mut *tx).await?;
             for candidate in candidates {
                 let command_id: String = candidate.get("command_id");

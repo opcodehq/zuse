@@ -451,6 +451,7 @@ pub(crate) fn seed(
                 running_subagents: 0,
                 awaiting_input: None,
                 background_tasks: Vec::new(),
+                notice: None,
                 chat_id: demo.id.into(),
                 device_id: demo.device.into(),
                 status,

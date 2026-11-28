@@ -1,0 +1,102 @@
+---
+title: Changes and pull requests
+icon: GitPullRequest
+navTitle: "Changes and PRs"
+description: Review diffs, commit selected files, push, and complete the pull-request workflow.
+section: workspace
+order: 63
+platforms: [desktop, browser]
+providers: []
+prerequisites: [/start/first-chat]
+related: [/projects/worktrees, /workspace/files-editor, /composer/subagents]
+next: /reference
+lastVerified: "2026-11-27"
+---
+
+
+Use the change review as the acceptance boundary between an agent saying the task is done and you deciding the branch is ready. It always shows the active chat's checkout, so a worktree chat reviews its own branch.
+
+## Open the review
+
+- Choose **Diff** from the **+** menu in the workspace pane.
+- Click **Toggle environment summary** in the chat's title bar to open the session card, then click its changes row.
+- Type `/diff` in the composer.
+
+The review opens in the workspace pane beside the conversation. Each chat keeps its own review.
+
+## Review the diff
+
+Pick what to compare from the scope menu:
+
+- **Working tree** shows uncommitted changes and updates as files change.
+- **Branch changes** compares the branch with a base branch. The default branch is preselected; use **Search branches…** to pick another.
+- **Latest turn** shows only what the agent's most recent turn changed.
+- **History** shows the commit graph. Select a commit to open its diff in its own tab.
+
+The toolbar switches between **Stacked view** and **Split view**, toggles **Wrap long lines**, and offers **Copy all patches**, **Expand all files** or **Collapse all files**, and **Refresh**. Mark each file **Viewed** as you finish it; the header counts how many files you have reviewed.
+
+Check generated and dependency files as carefully as source code.
+
+## Comment on a change
+
+Hover a line on the new side of the diff and click **+** to open a comment box. Describe the change and click **Comment**. Comments are staged in the composer's **Annotations** tray for the current chat and are sent with your next message, so you can edit or remove them first.
+
+## Commit and push
+
+Click **Source control and commit** in the review toolbar to show the Git panel above the diff. Its top row shows the branch, how far it is ahead of or behind its upstream, and the one next step as a button:
+
+- **Publish** when the branch has no upstream yet
+- **Pull** with the number of commits behind
+- **Push** with the number of commits ahead
+- **Open PR** after you create a pull request from the panel
+
+A branch that is both ahead and behind gets no one-click step, because a fast-forward pull and a plain push would both refuse it.
+
+Changed files are checkbox rows: a checked file is staged. Check files one at a time or use **Stage all changes**, enter a **Commit message**, and click **Commit**. Only staged files are committed, so you can leave unrelated edits out of a commit without hiding them from review.
+
+**More Git actions** (**…**) holds **Fetch**, **Pull**, **Push** (or **Publish branch**), **Create pull request…**, **New branch…**, **Switch branch…**, and **Refresh**. These run directly in Git on the chat's device, without involving the agent. Pull only fast-forwards, nothing force-pushes, and Git refuses a branch switch that would overwrite your changes. Your Git hooks, signing settings, and credential helpers still apply.
+
+An archived chat keeps its review read-only; unarchive it to use the Git panel.
+
+## Create a pull request
+
+Choose **Create pull request…** from **More Git actions**. Enter a **Title** and description, optionally a **Base branch (optional)**, and turn on **Draft** if the work is not ready for review. Leave the base empty to target the repository's default branch. For a fork, the pull request targets the parent repository unless you choose **Other repository…**. The branch must be published with no unpushed commits first.
+
+You can also ask the agent to open one. When an agent runs `gh pr create`, the chat shows a live pull request card that follows its checks, conflicts, and merge state, with the next step as a button: **Resolve conflicts**, **Fix checks**, **Mark ready**, or **Merge**.
+
+## Work on the pull request
+
+Once the branch has a pull request, the session card (**Toggle environment summary** in the title bar) shows it with the next step worth a click: **Resolve**, **Fix**, **Mark ready**, or **Merge**. Its menu also includes:
+
+- **View pull request**, which opens the pull request pane;
+- **Repair** → **Address feedback**, **Fix failing checks**, **Resolve conflicts**, or **Review the changes**, which stages a repair request in the composer for you to send;
+- **Merge** → **Squash and merge**, **Create a merge commit**, **Rebase and merge**, or **Merge when ready**;
+- **Add to chat**, which adds the pull request's context to the composer;
+- **Status** → **Convert to draft**, **Ready for review**, **Close**, or **Reopen**;
+- **Open on GitHub**.
+
+You can also choose **PR** from the **+** menu or click a pull request link in the chat. Pull request links open in Zuse unless you change **Settings → General → Open pull requests in**.
+
+## The pull request pane
+
+The pane has **Summary**, **Code**, and **Activity** tabs. **Summary** shows the branch, status, reviews, and checks, then the description, the checks with failures first, and feedback from everyone but the author. Use **Add to chat** on a feedback item, or **Add all**, to give the agent specific feedback without sending it yet. **Code** shows the diff, and **Activity** shows the full discussion, where you can post comments.
+
+The header has **Merge** (**Ready for review** on a draft), **Open on GitHub**, and a menu with **Timeline**, **Add reviewers**, **Copy link**, **Copy branch name**, **Add to chat**, **Star**, **Refresh**, **Convert to draft**, and **Close pull request** or **Reopen pull request**. **Edit title** and **Edit description** are in **Summary**.
+
+Choosing a merge method is the confirmation. While checks are still running or failing, the methods stay dimmed under the reason; **Enable auto-merge** merges when checks pass, and **Force merge** attempts an ordinary merge before they do. GitHub still enforces branch protection, and a pull request with conflicts cannot be merged. A merge request also fails if the branch moved since the pane last loaded it.
+
+## Auto-fix CI and reviews
+
+Zuse watches the pull request a chat opens. When CI fails, a review asks for changes, or the branch conflicts with its base, **Auto-fix CI and reviews** lets the chat's agent follow up on its own once the chat is idle, up to five times per pull request. It commits and pushes normally, and never force-pushes, merges, or replies on the pull request. Auto-fix is on by default for pull requests the chat opens itself.
+
+Turn it on or off from the **Agent** section of the pane's **Summary** or the **Auto-fix** button above the composer. When the budget is used up, review the earlier follow-ups and choose **Restart auto-fix** for a fresh budget. A watch without auto-fix offers **Stop watching**.
+
+## In the browser client
+
+The browser client's Changes pane uses the same Git panel, including **Create pull request…**. Its pull requests live in the right sidebar's **PRs** tab, scoped to the selected project's GitHub repository, with the description, discussion, checks, and diff of each pull request.
+
+## Requirements
+
+Pull request features use the GitHub CLI on the chat's device. If the pane asks for it, install `gh` and run `gh auth login` in the integrated terminal, then refresh. GitHub enforces your repository permissions for every action.
+
+To inspect diffs from your phone, see [Files and change review](/mobile/review).
