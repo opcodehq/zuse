@@ -267,6 +267,23 @@ pub fn offered_options(
                     .is_some_and(|choice| option.choices.iter().any(|c| c.id == choice))
         })
     });
+    for option in &model.options {
+        let chosen = selections
+            .get(&option.id)
+            .and_then(|v| v.as_str())
+            .unwrap_or(&option.default_choice);
+        if let Some(details) = option.choice_details.get(chosen) {
+            for (id, allowed) in &details.compatible_options {
+                if selections
+                    .get(id)
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|choice| !allowed.iter().any(|value| value == choice))
+                {
+                    selections.remove(id);
+                }
+            }
+        }
+    }
     selections
 }
 
@@ -1700,6 +1717,12 @@ impl Pickers {
                 model_options: self.explicit_options(cx),
             };
         }
+        let mut model_options = self.explicit_options(cx);
+        if harness == Some(HarnessId::Devin)
+            && let Some(model) = self.selected_model(cx).filter(|m| m.id == "fusion")
+        {
+            model_options = offered_options(model, model_options);
+        }
         ResolvedRunConfig {
             harness,
             sandbox,
@@ -1710,7 +1733,7 @@ impl Pickers {
                 // Catalog not loaded (offline): still send the id we know.
                 .or_else(|| self.effective_model_id(cx).map(str::to_string)),
             reasoning: self.effective_reasoning(cx),
-            model_options: self.explicit_options(cx),
+            model_options,
         }
     }
 
@@ -1756,6 +1779,8 @@ impl Pickers {
         self.menu_bar = popover::MenuScrollbarState::default();
         self.model_menu.hover.reset();
         self.model_menu.card_bounds = None;
+        self.model_menu.fusion_selector = None;
+        self.model_menu.sidekick_dragging = false;
         if self.open.begin_close() {
             popover::reap_popup(cx, |pickers: &mut Self| &mut pickers.open);
         }
@@ -2528,33 +2553,44 @@ impl Pickers {
         default: bool,
         cx: &mut Context<Self>,
     ) {
+        self.pick_options([(option_id, choice_id, default)], cx);
+    }
+
+    fn pick_options<const N: usize>(
+        &mut self,
+        picks: [(String, String, bool); N],
+        cx: &mut Context<Self>,
+    ) {
         if self.cloud_launch_frozen() {
             return;
         }
+        let apply = |options: &mut serde_json::Map<String, serde_json::Value>,
+                     picks: [(String, String, bool); N]| {
+            for (id, choice, default) in picks {
+                if default {
+                    options.remove(&id);
+                } else {
+                    options.insert(id, choice.into());
+                }
+            }
+        };
         if self.edits_saved_choice(cx) {
             self.update_chat_config(cx, move |config| {
-                if default {
-                    config.model_options.remove(&option_id);
-                } else {
-                    config
-                        .model_options
-                        .insert(option_id, serde_json::Value::String(choice_id));
-                }
+                apply(&mut config.model_options, picks);
             });
         } else if let Some(harness) = self.effective_harness(cx)
             && let Some(model) = self
                 .selected_model(cx)
-                .filter(|m| m.options.iter().any(|o| o.id == option_id))
+                .filter(|m| {
+                    picks
+                        .iter()
+                        .all(|(id, _, _)| m.options.iter().any(|o| o.id == *id))
+                })
                 .map(|m| m.id.clone())
         {
             // New chat: the pick is the sticky memory for the catalog model
             // that offered it — never stored unvalidated.
-            let options = self.defaults.model_options_mut(harness, &model);
-            if default {
-                options.remove(&option_id);
-            } else {
-                options.insert(option_id, serde_json::Value::String(choice_id));
-            }
+            apply(self.defaults.model_options_mut(harness, &model), picks);
             self.save_defaults();
         }
         cx.notify();
@@ -2585,7 +2621,12 @@ impl Pickers {
         let mut ladder = model
             .map(|m| m.reasoning_levels.clone())
             .unwrap_or_default();
-        if ladder.is_empty()
+        if config.harness == HarnessId::Devin
+            && let Some(details) = model
+                .and_then(|model| model_detail::fusion_lead_details(model, &config.model_options))
+        {
+            ladder.clone_from(&details.reasoning_levels);
+        } else if ladder.is_empty()
             && let Some(descriptor) = self
                 .harness_catalog(cx)
                 .ready()
@@ -2657,6 +2698,12 @@ impl Pickers {
         let Some(model) = self.selected_model(cx) else {
             return Vec::new();
         };
+        if self.effective_harness(cx) == Some(HarnessId::Devin)
+            && let Some(details) =
+                model_detail::fusion_lead_details(model, &self.explicit_options(cx))
+        {
+            return details.reasoning_levels.clone();
+        }
         if !model.reasoning_levels.is_empty() {
             return model.reasoning_levels.clone();
         }
@@ -5880,6 +5927,27 @@ impl Pickers {
         }
     }
 
+    pub fn fixture_fusion_catalog(&mut self, models: Vec<Model>, cx: &mut Context<Self>) {
+        self.harnesses = Loadable::Ready(
+            serde_json::from_value(serde_json::json!([
+                {"id":"devin","name":"Devin","installed":true,"enabled":true,
+                 "supportsSteering":true,"reasoningLevels":[]}
+            ]))
+            .unwrap(),
+        );
+        self.models
+            .insert(HarnessId::Devin, Loadable::Ready(models));
+        self.config.harness = Some(HarnessId::Devin);
+        self.config.model = Some("fusion".into());
+        self.catalog_rev += 1;
+        cx.notify();
+    }
+
+    pub fn fixture_fusion_selector(&mut self, role: &'static str, cx: &mut Context<Self>) {
+        self.model_menu.fusion_selector = Some(role);
+        cx.notify();
+    }
+
     pub fn fixture_compact_state(&self, cx: &App) -> CompactPickerFixtureState {
         let focused = self
             .compact_model_list
@@ -6170,6 +6238,7 @@ pub(crate) fn normalize_model_rows(harness: HarnessId, models: Vec<Model>) -> Ve
                                 label: "1M".into(),
                             },
                         ],
+                        choice_details: Default::default(),
                         default_choice: "1m".into(),
                     });
                 }
@@ -7288,6 +7357,7 @@ mod tests {
                     label: (*c).into(),
                 })
                 .collect(),
+            choice_details: Default::default(),
             default_choice: default.into(),
         };
         // Codex tier, Claude toggle, ACP speed and the snake_case toggle.
@@ -7354,6 +7424,7 @@ mod tests {
             long.options.push(ModelOption {
                 id: "serviceTier".into(),
                 label: "Service tier".into(),
+                choice_details: Default::default(),
                 default_choice: "default".into(),
                 choices: vec![
                     ModelOptionChoice {
@@ -7476,6 +7547,7 @@ mod tests {
                                 .map(|i| ModelOption {
                                     id: format!("option-{i}"),
                                     label: format!("Option {i}"),
+                                    choice_details: Default::default(),
                                     default_choice: "on".into(),
                                     choices: vec![
                                         ModelOptionChoice {
@@ -8038,6 +8110,7 @@ mod tests {
                     .map(|id| ModelOption {
                         id: id.into(),
                         label: id.into(),
+                        choice_details: Default::default(),
                         default_choice: "standard".into(),
                         choices: ["standard", "extended"]
                             .map(|id| ModelOptionChoice {
@@ -8163,6 +8236,7 @@ mod tests {
         let option = |id: &str, label: &str, choices: &[(&str, &str)]| ModelOption {
             id: id.into(),
             label: label.into(),
+            choice_details: Default::default(),
             default_choice: choices[0].0.into(),
             choices: choices
                 .iter()
@@ -8335,6 +8409,7 @@ mod tests {
                 let option = |id: &str, label: &str, choices: &[(&str, &str)]| ModelOption {
                     id: id.into(),
                     label: label.into(),
+                    choice_details: Default::default(),
                     default_choice: choices[0].0.into(),
                     choices: choices
                         .iter()
@@ -8548,6 +8623,7 @@ mod tests {
                                     label: choice.into(),
                                 })
                                 .into(),
+                            choice_details: Default::default(),
                             default_choice: choices[0].into(),
                         });
                     }
@@ -8909,6 +8985,7 @@ mod tests {
                     label: id.into(),
                 })
                 .into(),
+            choice_details: Default::default(),
             default_choice: "200k".into(),
         });
         let state = cx.new(|_| AppState::new());
@@ -9155,6 +9232,7 @@ mod tests {
         let option = |id: &str, label: &str, choices: &[(&str, &str)]| ModelOption {
             id: id.into(),
             label: label.into(),
+            choice_details: Default::default(),
             default_choice: choices[0].0.into(),
             choices: choices
                 .iter()
@@ -9221,6 +9299,7 @@ mod tests {
                 grok.options = vec![ModelOption {
                     id: "fast".into(),
                     label: "Fast".into(),
+                    choice_details: Default::default(),
                     default_choice: "true".into(),
                     choices: [("false", "false"), ("true", "Fast\u{200b}")]
                         .iter()
@@ -9356,6 +9435,7 @@ mod tests {
                 opus.options = vec![ModelOption {
                     id: "effort".into(),
                     label: "Effort".into(),
+                    choice_details: Default::default(),
                     default_choice: "high".into(),
                     choices: [("low", "Low"), ("medium", "Medium"), ("high", "High")]
                         .iter()
@@ -10068,6 +10148,7 @@ mod tests {
                     label: "1M".into(),
                 },
             ],
+            choice_details: Default::default(),
             default_choice: "standard".into(),
         }];
         let mut remembered = serde_json::Map::new();

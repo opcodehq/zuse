@@ -2350,6 +2350,7 @@ fn trait_from_config_option(option: &Value) -> Option<ModelOption> {
                 id: id.to_owned(),
                 label: label.to_owned(),
                 choices,
+                choice_details: Default::default(),
                 default_choice,
             })
         }
@@ -2366,6 +2367,7 @@ fn trait_from_config_option(option: &Value) -> Option<ModelOption> {
                     label: "On".into(),
                 },
             ],
+            choice_details: Default::default(),
             default_choice: if option.get("currentValue") == Some(&Value::Bool(true)) {
                 "on".into()
             } else {

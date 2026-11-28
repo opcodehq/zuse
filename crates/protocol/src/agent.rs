@@ -1,5 +1,7 @@
 //! Agent-side wire types: harness identity, run requests, streaming events, tool calls.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -552,6 +554,21 @@ pub struct ModelOption {
     pub label: String,
     pub choices: Vec<ModelOptionChoice>,
     pub default_choice: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub choice_details: BTreeMap<String, ModelOptionChoiceDetails>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelOptionChoiceDetails {
+    /// Model name without the reasoning level when the choice encodes both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reasoning_levels: Vec<ReasoningLevel>,
+    /// Allowed values for other options, keyed by option id.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub compatible_options: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

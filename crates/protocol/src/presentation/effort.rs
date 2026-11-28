@@ -167,6 +167,7 @@ mod tests {
                         label: "High".into(),
                     },
                 ],
+                choice_details: Default::default(),
                 default_choice: "balanced".into(),
             }],
         }

@@ -79,6 +79,7 @@ fn toggle(id: &str, label: &str) -> ModelOption {
                 label: "On".into(),
             },
         ],
+        choice_details: Default::default(),
         default_choice: "off".into(),
     }
 }
@@ -100,6 +101,7 @@ pub(crate) fn context_window() -> ModelOption {
                 label: "1M".into(),
             },
         ],
+        choice_details: Default::default(),
         default_choice: "200k".into(),
     }
 }

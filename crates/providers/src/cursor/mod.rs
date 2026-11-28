@@ -555,6 +555,7 @@ fn map_model_items(items: &Value) -> Vec<Model> {
                         label: str_of(p, "displayName").unwrap_or_else(|| pid.clone()),
                         id: pid,
                         choices,
+                        choice_details: Default::default(),
                         default_choice,
                     })
                 })

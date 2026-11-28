@@ -48,6 +48,9 @@ pub(super) struct MenuState {
     /// across other rows on the way into the card keeps the card's model.
     pub(super) hover: popover::HoverIntent<usize>,
     pub(super) card_bounds: Option<gpui::Bounds<gpui::Pixels>>,
+    pub(super) fusion_selector: Option<&'static str>,
+    pub(super) sidekick_slider_bounds: Option<gpui::Bounds<gpui::Pixels>>,
+    pub(super) sidekick_dragging: bool,
     pub(super) card_left: bool,
     /// Whether `card_left` has been decided for this opening of the menu.
     /// The side is chosen once, from the menu's measured frame, so the card
@@ -85,6 +88,9 @@ impl Default for MenuState {
             cache: RefCell::new(None),
             hover: popover::HoverIntent::default(),
             card_bounds: None,
+            fusion_selector: None,
+            sidekick_slider_bounds: None,
+            sidekick_dragging: false,
             card_left: false,
             card_side_decided: false,
             frame_bounds: None,

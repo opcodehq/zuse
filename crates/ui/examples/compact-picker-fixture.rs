@@ -167,6 +167,12 @@ fn main() -> anyhow::Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     let _guard = runtime.enter();
     let output = PathBuf::from(std::env::args().nth(1).expect("output directory"));
+    let fusion = if std::env::args().nth(2).as_deref() == Some("--fusion") {
+        use zuse_providers::Harness as _;
+        Some(runtime.block_on(zuse_providers::AcpHarness::devin().models())?)
+    } else {
+        None
+    };
     std::fs::create_dir_all(&output)?;
     // A reused directory must not keep an earlier run's success marker.
     match std::fs::remove_file(output.join("result.txt")) {
@@ -217,10 +223,15 @@ fn main() -> anyhow::Result<()> {
                 state
             });
             let composer = cx.new(|cx| composer::Composer::new(state, cx));
+            let capture_fusion = fusion.is_some();
             composer.update(cx, |composer, cx| {
-                composer
-                    .pickers()
-                    .update(cx, |pickers, cx| pickers.fixture_compact_catalog(cx));
+                composer.pickers().update(cx, |pickers, cx| {
+                    if let Some(models) = fusion {
+                        pickers.fixture_fusion_catalog(models, cx);
+                    } else {
+                        pickers.fixture_compact_catalog(cx);
+                    }
+                });
             });
             let window = cx
                 .open_window(
@@ -244,6 +255,25 @@ fn main() -> anyhow::Result<()> {
             cx.spawn(async move |cx| {
                 let result: anyhow::Result<()> = async {
                     pause(cx).await;
+                    if capture_fusion {
+                        window.update(cx, |view, window, cx| {
+                            view.title = "Devin Fusion model picker";
+                            view.composer.update(cx, |composer, cx| {
+                                composer.pickers().update(cx, |picker, cx| picker.open_model_menu(window, cx));
+                            });
+                        })?;
+                        pause(cx).await;
+                        capture(window.into(), cx, &output, "fusion-picker.png").await?;
+                        for role in ["lead", "sidekick"] {
+                            window.update(cx, |view, _, cx| {
+                                view.composer.update(cx, |composer, cx| {
+                                    composer.pickers().update(cx, |picker, cx| picker.fixture_fusion_selector(role, cx));
+                                });
+                            })?;
+                            capture(window.into(), cx, &output, &format!("fusion-{role}-selector.png")).await?;
+                        }
+                        return Ok(());
+                    }
                     scene(window, cx, &output, appearance::AppearanceMode::Dark, "dark").await?;
                     scene(window, cx, &output, appearance::AppearanceMode::Light, "light")
                         .await?;

@@ -1052,7 +1052,7 @@ fn effort_fraction(x: f32, width: f32) -> f32 {
 }
 
 /// Slider stops include both endpoints and only advertised reasoning levels.
-fn effort_index(x: f32, width: f32, count: usize) -> Option<usize> {
+pub(super) fn effort_index(x: f32, width: f32, count: usize) -> Option<usize> {
     (count > 0)
         .then(|| (effort_fraction(x, width) * count.saturating_sub(1) as f32).round() as usize)
 }

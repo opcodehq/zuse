@@ -117,6 +117,7 @@ fn service_tier() -> ModelOption {
                 label: "Fast".into(),
             },
         ],
+        choice_details: Default::default(),
         default_choice: "default".into(),
     }
 }
