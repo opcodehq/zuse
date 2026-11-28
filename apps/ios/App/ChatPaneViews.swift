@@ -118,7 +118,6 @@ extension ChatPaneKind {
 struct PaneSelectionView: View {
   let context: ChatPaneContext
   let sources: ChatPaneSources
-  @Environment(\.horizontalSizeClass) private var sizeClass
 
   struct Tile: Identifiable {
     let kind: ChatPaneKind
@@ -165,31 +164,39 @@ struct PaneSelectionView: View {
   }
 
   var body: some View {
-    let columns = Array(
-      repeating: GridItem(.flexible(), spacing: 14), count: sizeClass == .regular ? 3 : 2)
-    ScrollView {
-      VStack(alignment: .leading, spacing: 14) {
-        LazyVGrid(columns: columns, spacing: 14) {
-          ForEach(tiles) { tile in
-            Button {
-              open(tile)
-            } label: {
-              PaneTile(symbol: tile.kind.symbol, title: tile.title, count: tile.count)
-            }
-            .buttonStyle(PaneTileButtonStyle())
-            .accessibilityIdentifier("pane-tile-\(tile.kind.rawValue)")
+    // Two tiles across a phone, more on wider pages.
+    let columns = [GridItem(.adaptive(minimum: 160, maximum: 250), spacing: 14)]
+    GeometryReader { proxy in
+      ScrollView {
+        tileGrid(columns)
+          .padding(.horizontal, 20).padding(.vertical, 20)
+          .frame(maxWidth: 760).frame(maxWidth: .infinity)
+          // A short grid sits in the middle of the page, as the cards do in the overview.
+          .frame(minHeight: proxy.size.height)
+      }
+      .scrollIndicators(.hidden)
+    }
+  }
+
+  private func tileGrid(_ columns: [GridItem]) -> some View {
+    VStack(alignment: .leading, spacing: 14) {
+      LazyVGrid(columns: columns, spacing: 14) {
+        ForEach(tiles) { tile in
+          Button {
+            open(tile)
+          } label: {
+            PaneTile(symbol: tile.kind.symbol, title: tile.title, count: tile.count)
           }
-        }
-        if tiles.isEmpty {
-          Text("Connect to your computer to open terminals and files beside this chat.")
-            .font(.subheadline).foregroundStyle(.secondary).frame(maxWidth: .infinity)
-            .padding(.top, 40)
+          .buttonStyle(PaneTileButtonStyle())
+          .accessibilityIdentifier("pane-tile-\(tile.kind.rawValue)")
         }
       }
-      .padding(.horizontal, 20).padding(.vertical, 20)
-      .frame(maxWidth: 760).frame(maxWidth: .infinity)
+      if tiles.isEmpty {
+        Text("Connect to your computer to open terminals and files beside this chat.")
+          .font(.subheadline).foregroundStyle(.secondary).frame(maxWidth: .infinity)
+          .padding(.top, 40)
+      }
     }
-    .scrollIndicators(.hidden)
   }
 
   private func open(_ tile: Tile) {

@@ -91,10 +91,10 @@ struct ChatPanePager<Page: View>: View {
     #endif
   }
 
-  /// Cards are about 60% of the page on a phone and smaller on wide screens.
+  /// Cards are about 60% of the page on a phone and nearer half on an iPad or a Mac window.
   static func overviewScale(_ size: CGSize) -> CGFloat {
     guard size.width > 0 else { return 0.6 }
-    return min(0.62, max(0.34, 300 / size.width))
+    return min(0.62, max(0.36, 380 / size.width))
   }
 
   // MARK: Cards

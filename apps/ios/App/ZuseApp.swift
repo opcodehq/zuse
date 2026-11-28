@@ -1041,7 +1041,7 @@ struct WorkspaceView: View {
     } label: {
       Label(
         panes.isOverview(session.id) ? "Back to page" : "All panes",
-        systemImage: panes.isOverview(session.id) ? "rectangle" : "square.on.square")
+        systemImage: "square.on.square")
     }
     .tint(.primary)
     .accessibilityIdentifier("pane-overview")

@@ -660,7 +660,7 @@ struct TerminalPaneView: View {
     var body: some View {
       HStack(spacing: 8) {
         ScrollView(.horizontal) {
-          HStack(spacing: 6) {
+          HStack(spacing: 5) {
             TerminalArrowPad { model?.press($0) }
             key("esc", label: "Escape") { model?.press(.escape) }
             toggle("ctrl", label: "Control", on: model?.control == true) {
@@ -691,7 +691,7 @@ struct TerminalPaneView: View {
     private func key(_ title: String, label: String, action: @escaping () -> Void) -> some View {
       Button(action: action) {
         Text(title).font(.system(size: 15, weight: .medium))
-          .frame(minWidth: 38, minHeight: 38).padding(.horizontal, title.count > 1 ? 4 : 0)
+          .frame(minWidth: 34, minHeight: 36).padding(.horizontal, title.count > 1 ? 4 : 0)
           .background(Color.primary.opacity(0.08), in: Capsule())
           .contentShape(Capsule())
       }
@@ -705,7 +705,7 @@ struct TerminalPaneView: View {
       Button(action: action) {
         Text(title).font(.system(size: 15, weight: .medium))
           .foregroundStyle(on ? AppTheme.onAccent : Color.primary)
-          .frame(minWidth: 38, minHeight: 38).padding(.horizontal, 4)
+          .frame(minWidth: 34, minHeight: 36).padding(.horizontal, 4)
           .background(on ? AppTheme.accent : Color.primary.opacity(0.08), in: Capsule())
           .contentShape(Capsule())
       }
