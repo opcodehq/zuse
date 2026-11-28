@@ -12,3 +12,17 @@ slow-timeout = { period = "15s", terminate-after = 4 }
 
 [profile.ci.junit]
 path = "junit.xml"
+
+[test-groups.cloud-postgres]
+max-threads = 1
+
+[[profile.ci.overrides]]
+# Start long timing and recovery scenarios early so they overlap short tests.
+filter = 'test(sync_keeps_git_available_with_256_file_descriptors) | test(delayed_registry_survives_blackout_and_reset_without_losing_writes) | test(cold_jobs_get_a_real_timed_turn_without_any_writer_ending) | test(multimodal_results_remain_structured_and_oversized_frames_pause_without_retry)'
+priority = 100
+
+[[profile.ci.overrides]]
+# Real guests reuse fixture workspace IDs in their shared provider-effect guard.
+# Keep those tests and the process-launching pilot serial; other tests stay parallel.
+filter = 'package(zuse-cloud) & (binary(postgres) | test(staging_pilot_is_separate_bounded_and_reconciles_original_effects))'
+test-group = 'cloud-postgres'

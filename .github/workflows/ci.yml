@@ -17,21 +17,8 @@ concurrency:
   # Main always finishes, so its caches get saved for every branch.
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
-# Budget: every pull request and main job finishes in under ten minutes on
-# GitHub's free 4-core runners once main has saved its caches.
-#
-# - apt packages come from a cache, not `apt-get update` against a mirror
-#   (that alone took 10-27 minutes on a slow-mirror day).
-# - Tests run with more threads than cores: many wait on timers, not CPU.
-#
-# Where the time used to go: ~30 separate `cargo test` invocations, each with a
-# different package set, so Cargo re-unified features and rebuilt the engine
-# several times, and the browser job built two optimized wasm bundles nothing
-# downloaded. Now each job builds once (nextest runs every test binary from
-# that one build in parallel) and the optimized web bundle is built on main
-# only. sccache's GitHub cache backend was tried and dropped: the repository's
-# 10 GB Actions cache is already filled by rust-cache, so its per-crate entries
-# were evicted as fast as they were written.
+# PR validation targets five minutes, including setup and tests. Reuse trusted
+# build artifacts and compile each package set once with the CI Cargo profile.
 env:
   CARGO_INCREMENTAL: 0
   CARGO_PROFILE_DEV_DEBUG: 0
@@ -101,8 +88,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
+          prefix-key: v1-ci
+          save-if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          cache-workspace-crates: true
+          cache-directories: .context/ci-source-cache.json
+      - name: Restore unchanged source timestamps
+        run: python3 scripts/ci_source_cache.py restore
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
@@ -111,35 +103,17 @@ jobs:
           path: ~/apt-debs
           key: apt-debs-${{ runner.os }}-${{ hashFiles('scripts/ci-ubuntu-dependencies.sh') }}-cmake-libclang-dev-libasound2-dev-ripgrep
       - run: bash scripts/ci-apt-install.sh ~/apt-debs cmake libclang-dev libasound2-dev ripgrep
-      # One build for every package: a single feature set, so nothing is
-      # compiled twice.
-      - name: Tests
-        run: >-
-          cargo nextest run --locked --profile ci --test-threads 12
-          -p zuse-analytics -p zuse-cli -p zuse-client -p zuse-commands
-          -p zuse-control -p zuse-doc -p zuse-engine -p zuse-harness
-          -p zuse-harness-extensions -p zuse-i18n -p zuse-mcp -p zuse-model
-          -p zuse-model-accounts -p zuse-orb -p zuse-plugins -p zuse-protocol
-          -p zuse-providers -p zuse-relay -p zuse-remote -p zuse-rpc
-          -p zuse-serve -p zuse-sync -p zuse-update -p zuse-voice-session
-          --features zuse-providers/native-fixture,zuse-sync/mock-server
-      - run: cargo run --locked -p zuse-protocol --example control_types -- --check
-      # Same package set and features as the test build, so the two binaries
-      # the SDK smoke test drives reuse its artifacts instead of a fresh
-      # feature resolution rebuilding the engine.
-      - name: Engine binaries for the SDK
-        run: >-
-          cargo build --locked --bin zuse-cli --bin zuse-control
-          -p zuse-analytics -p zuse-cli -p zuse-client -p zuse-commands
-          -p zuse-control -p zuse-doc -p zuse-engine -p zuse-harness
-          -p zuse-harness-extensions -p zuse-i18n -p zuse-mcp -p zuse-model
-          -p zuse-model-accounts -p zuse-orb -p zuse-plugins -p zuse-protocol
-          -p zuse-providers -p zuse-relay -p zuse-remote -p zuse-rpc
-          -p zuse-serve -p zuse-sync -p zuse-update -p zuse-voice-session
-          --features zuse-providers/native-fixture,zuse-sync/mock-server
+      - name: Build and test Rust packages once
+        run: bash scripts/ci-rust.sh rust
       - name: SDK against the engine
+        env:
+          ZUSE_SERVER_BINARY: ${{ github.workspace }}/target/ci/zuse-cli
+          ZUSE_CONTROL_BINARY: ${{ github.workspace }}/target/ci/zuse-control
         working-directory: packages/sdk
         run: npm ci && npm run test:engine
+      - name: Record source fingerprints for the build cache
+        if: always()
+        run: python3 scripts/ci_source_cache.py save
 
   harness-evaluation:
     runs-on: boat-large
@@ -148,8 +122,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
+          prefix-key: v1-ci
+          save-if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          cache-workspace-crates: true
+          cache-directories: .context/ci-source-cache.json
+      - name: Restore unchanged source timestamps
+        run: python3 scripts/ci_source_cache.py restore
       - uses: actions/cache@v4
         with:
           path: ~/apt-debs
@@ -157,6 +136,9 @@ jobs:
       - run: bash scripts/ci-apt-install.sh ~/apt-debs ripgrep
       - run: cargo build --locked --release -p zuse-harness --example harness-evaluate
       - run: python3 scripts/test-harness-evaluation.py --binary target/release/examples/harness-evaluate --output .context/native-transport-fixtures
+      - name: Record source fingerprints for the build cache
+        if: always()
+        run: python3 scripts/ci_source_cache.py save
 
   native:
     needs: platforms
@@ -181,9 +163,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
           env-vars: "CARGO CC CFLAGS CXX CMAKE RUST HUGEICONS_BUILD_KEY"
+          prefix-key: v1-ci
+          save-if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          cache-workspace-crates: true
+          cache-directories: .context/ci-source-cache.json
+      - name: Restore unchanged source timestamps
+        run: python3 scripts/ci_source_cache.py restore
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
@@ -194,7 +181,8 @@ jobs:
           key: apt-debs-${{ runner.os }}-${{ hashFiles('scripts/ci-ubuntu-dependencies.sh') }}-build-essential-cmake-clang-libclang-dev-pkg-config-libssl-dev-libfontconfig-dev-libfreetype-dev-libxcb1-dev-libxcb-shape0-dev-libxcb-xfixes0-dev-libxkbcommon-dev-libxkbcommon-x11-dev-libwayland-dev-libvulkan-dev-libasound2-dev-libwebkit2gtk-4.1-dev-libjson-glib-dev
       - if: runner.os == 'Linux'
         run: bash scripts/ci-apt-install.sh ~/apt-debs build-essential cmake clang libclang-dev pkg-config libssl-dev libfontconfig-dev libfreetype-dev libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libasound2-dev libwebkit2gtk-4.1-dev libjson-glib-dev
-      - run: cargo check --locked -p zuse -p zuse-cli -p zuse-relay -p zuse-remote
+      - if: runner.os == 'macOS'
+        run: cargo check --locked --profile ci -p zuse -p zuse-cli -p zuse-relay -p zuse-remote
       - if: runner.os == 'macOS'
         uses: actions/setup-python@v5
         with:
@@ -208,16 +196,16 @@ jobs:
           python scripts/test_package.py PackagingTests.test_macos_package_identity_allows_bundle_signing
       - if: runner.os == 'Linux'
         name: Tests
-        run: cargo nextest run --locked --profile ci --test-threads 12 -p zuse-ui -p zuse-viewport -p zuse-text --lib
+        run: bash scripts/ci-rust.sh native
       # Per change, macOS only proves the desktop app compiles (above); its
       # test build alone takes over ten minutes on the free runner.
       - if: runner.os == 'macOS' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         name: Tests
-        run: cargo nextest run --locked --profile ci -p zuse-ui --lib
+        run: cargo nextest run --locked --cargo-profile ci --profile ci -p zuse-ui --lib
       - name: macOS AppKit quit drains the engine before termination
         if: runner.os == 'macOS' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         run: |
-          cargo build --locked -p zuse-ui --example desktop-quit-fixture
+          cargo build --locked --profile ci -p zuse-ui --example desktop-quit-fixture
           python3 - <<'PY'
           import fcntl
           from pathlib import Path
@@ -225,11 +213,14 @@ jobs:
           import tempfile
           with tempfile.TemporaryDirectory(prefix='zuse-appkit-quit-') as temporary:
               profile = Path(temporary)
-              subprocess.run(['target/debug/examples/desktop-quit-fixture', str(profile)], check=True, timeout=20)
+              subprocess.run(['target/ci/examples/desktop-quit-fixture', str(profile)], check=True, timeout=20)
               assert (profile / 'saved-before-termination').read_text() == 'settled'
               with (profile / 'engine.lock').open('a') as lock:
                   fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
           PY
+      - name: Record source fingerprints for the build cache
+        if: always()
+        run: python3 scripts/ci_source_cache.py save
 
   browser:
     runs-on: boat-large
@@ -249,11 +240,16 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
           key: browser
           workspaces: ". -> target/browser"
           cache-on-failure: true
           env-vars: "CARGO CC CFLAGS CXX CMAKE RUST HUGEICONS_BUILD_KEY"
+          prefix-key: v1-ci
+          save-if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          cache-workspace-crates: true
+          cache-directories: .context/ci-source-cache.json
+      - name: Restore unchanged source timestamps
+        run: python3 scripts/ci_source_cache.py restore
       - uses: taiki-e/install-action@v2
         with:
           tool: trunk@0.21.14
@@ -270,3 +266,6 @@ jobs:
         with:
           name: zuse-browser
           path: dist/web
+      - name: Record source fingerprints for the build cache
+        if: always()
+        run: python3 scripts/ci_source_cache.py save
