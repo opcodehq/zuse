@@ -381,6 +381,28 @@ mod tests {
             .unwrap();
     }
     #[gpui::test]
+    fn slash_skills_switches_to_inline_project_picker_and_back(cx: &mut TestAppContext) {
+        let (_dir, window) = super::super::tests::composer_focus_window(cx);
+        window
+            .update(cx, |composer, window, cx| {
+                composer
+                    .input
+                    .update(cx, |input, cx| input.set_text("/skills", cx));
+                composer.on_submit(cx);
+                assert_eq!(composer.input.read(cx).text(), "/skills:");
+                composer.update_slash("/skills:", 8, cx);
+                assert!(composer.slash.project_skills);
+                let query = project_skill_token("/skills:review", 14).unwrap();
+                assert_eq!(query.query, "review");
+                composer.input.update(cx, |input, cx| {
+                    input.backspace(&Backspace, window, cx);
+                    assert_eq!(input.text(), "/");
+                });
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
     fn choosing_a_skill_keeps_its_identity_as_an_atomic_undoable_chip(cx: &mut TestAppContext) {
         let (_dir, window) = super::super::tests::composer_focus_window(cx);
         window

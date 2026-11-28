@@ -1633,64 +1633,52 @@ pub fn ghost_action(theme: &Theme) -> gpui::Div {
     action_button(theme, ActionTone::Quiet)
 }
 
-/// The dismissible red error strip (`flex items-start gap-2 rounded-xl border
-/// border-red-400/20 bg-red-400/[0.06] text-red-300/90` with a leading
-/// `DangerTriangle mt-0.5 size-4`).
-pub fn error_strip(theme: &Theme, message: impl Into<SharedString>) -> gpui::Div {
-    let red = theme.danger; // red-400
-    let red_text = theme.danger_muted; // red-300
+/// A quiet inline notice: a small triangle and tinted text on one line,
+/// wrapping only when the message is long. No card, border or fill, so a
+/// failure reads as part of the page instead of a block on top of it.
+fn inline_notice(
+    icon_color: gpui::Hsla,
+    text_color: gpui::Hsla,
+    message: impl Into<SharedString>,
+) -> gpui::Div {
     div()
-        .mt(px(16.0))
-        .px(px(16.0))
-        .py(px(12.0))
-        .rounded(px(12.0))
-        .border_1()
-        .border_color(red.opacity(0.2))
-        .bg(red.opacity(0.06))
-        .text_size(crate::typography::text_sm())
-        .text_color(red_text.opacity(0.9))
+        .w_full()
+        .min_w_0()
         .flex()
         .flex_row()
         .items_start()
-        .gap(px(8.0))
+        .gap(px(6.0))
+        .text_size(px(12.0))
+        .line_height(px(17.0))
+        .text_color(text_color)
         .child(
-            div().flex_none().mt(px(2.0)).child(
-                crate::icons::icon(crate::icons::DANGER_TRIANGLE)
-                    .size(px(16.0))
-                    .text_color(red_text.opacity(0.9)),
-            ),
+            crate::icons::icon(crate::icons::DANGER_TRIANGLE)
+                .size(px(13.0))
+                .flex_none()
+                .mt(px(2.0))
+                .text_color(icon_color),
         )
-        .child(div().min_w_0().child(message.into()))
+        .child(div().flex_1().min_w_0().child(message.into()))
 }
 
-/// The amber warning strip (`flex items-start gap-2 border-amber-400/20
-/// bg-amber-400/[0.06] text-amber-200/90` with a leading `DangerTriangle
-/// mt-0.5 size-3.5`).
+/// A one-line red error. See [`inline_notice`].
+pub fn inline_error(theme: &Theme, message: impl Into<SharedString>) -> gpui::Div {
+    inline_notice(theme.danger, theme.danger_muted, message)
+}
+
+/// A one-line amber warning. See [`inline_notice`].
+pub fn inline_warning(theme: &Theme, message: impl Into<SharedString>) -> gpui::Div {
+    inline_notice(theme.warning, theme.warning_muted, message)
+}
+
+/// A page-level error: [`inline_error`] with room above it.
+pub fn error_strip(theme: &Theme, message: impl Into<SharedString>) -> gpui::Div {
+    inline_error(theme, message).mt(px(12.0))
+}
+
+/// A page-level warning: [`inline_warning`] with room above it.
 pub fn warning_strip(theme: &Theme, message: impl Into<SharedString>) -> gpui::Div {
-    let amber = theme.warning; // amber-400
-    let amber_text = theme.warning_muted; // amber-200
-    div()
-        .mt(px(8.0))
-        .px(px(16.0))
-        .py(px(10.0))
-        .rounded(px(12.0))
-        .border_1()
-        .border_color(amber.opacity(0.2))
-        .bg(amber.opacity(0.06))
-        .text_size(crate::typography::text_xs())
-        .text_color(amber_text.opacity(0.9))
-        .flex()
-        .flex_row()
-        .items_start()
-        .gap(px(8.0))
-        .child(
-            div().flex_none().mt(px(2.0)).child(
-                crate::icons::icon(crate::icons::DANGER_TRIANGLE)
-                    .size(px(14.0))
-                    .text_color(amber_text.opacity(0.9)),
-            ),
-        )
-        .child(div().min_w_0().child(message.into()))
+    inline_warning(theme, message).mt(px(8.0))
 }
 
 /// The sidebar's paint-time overflow fade, with a persistent scroll handle per

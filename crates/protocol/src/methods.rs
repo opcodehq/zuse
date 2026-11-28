@@ -50,6 +50,7 @@ pub const GET_MODEL_API_KEYS: &str = "GetModelApiKeys";
 /// `{id, apiKey}` → `[ModelApiKey]`. An empty `apiKey` removes the saved key.
 pub const SET_MODEL_API_KEY: &str = "SetModelApiKey";
 pub const LIST_SKILLS: &str = "ListSkills";
+pub const PROJECT_SKILL_CATALOG: &str = "ProjectSkillCatalog";
 pub const LIST_COMMANDS: &str = "ListCommands";
 /// Transient secret submission; never enqueue or persist its parameters.
 pub const REQUEST_PRIVATE_OPERATION: &str = "RequestPrivateOperation";
@@ -362,6 +363,7 @@ pub const RESOLVE_RECOVERY: &str = "ResolveRecovery";
 /// Unknown methods and all actions keep their original delivery uncertainty.
 pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
     match method {
+        PROJECT_SKILL_CATALOG => params["action"] == "list",
         GET_ANALYTICS_SETTINGS
         | GET_GIT_WORKSPACE
         | WATCH_GIT_WORKSPACE

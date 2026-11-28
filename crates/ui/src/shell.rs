@@ -138,6 +138,7 @@ mod top_bar;
 mod voice_stage;
 mod whats_new;
 use voice_stage::VOICE_STAGE_ORB_SCALE;
+pub(crate) use whats_new::announcement_background;
 
 use spaces::{AddSpaceFlow, RenameSpaceDialog};
 
@@ -828,7 +829,7 @@ fn settings_open_route(
 pub enum Route {
     Chat,
     PullRequests,
-    /// The plugin catalog, a main-area page beside the sidebar.
+    /// The Plugins and Skills catalogs in the main area.
     Plugins,
     Archives,
     Usage,
@@ -1031,6 +1032,7 @@ pub enum NavEntry {
     },
     Settings(SettingsSection),
     Plugins,
+    Skills,
     Archives(String),
     NewZapper,
     Usage {
@@ -2948,7 +2950,7 @@ impl Shell {
         let open_route = std::env::var("ZUSE_OPEN_ROUTE").ok();
         let route = match open_route.as_deref() {
             Some("pull-requests") => Route::PullRequests,
-            Some("plugins") => Route::Plugins,
+            Some("plugins" | "skills") => Route::Plugins,
             Some("zappers/new") => Route::Zapper,
             Some(route) if route == "settings" || route.starts_with("settings/") => {
                 match settings_open_route(
@@ -2996,6 +2998,7 @@ impl Shell {
         let nav = NavHistory::new(match route {
             Route::Chat => NavEntry::Chat(String::new()),
             Route::PullRequests => NavEntry::PullRequests,
+            Route::Plugins if open_route.as_deref() == Some("skills") => NavEntry::Skills,
             Route::Plugins => NavEntry::Plugins,
             Route::Archives => NavEntry::Archives(String::new()),
             Route::Zapper => NavEntry::NewZapper,
@@ -6685,13 +6688,23 @@ impl Shell {
         if !zuse_viewport::cloud_gate::enabled() {
             return;
         }
+        self.open_catalog(NavEntry::Plugins, cx);
+    }
+
+    fn open_skills_page(&mut self, cx: &mut Context<Self>) {
+        let page = settings::skills::SkillsPage::shared(self.state.clone(), cx);
+        page.update(cx, |page, cx| page.open(cx));
+        self.open_catalog(NavEntry::Skills, cx);
+    }
+
+    fn open_catalog(&mut self, entry: NavEntry, cx: &mut Context<Self>) {
         self.command_palette = None;
         self.set_voice_stage_open(false, cx);
         self.set_route(Route::Plugins, cx);
         self.close_user_menu(cx);
         self.close_chat_menu(cx);
-        if self.nav.current() != &NavEntry::Plugins {
-            self.nav.push(NavEntry::Plugins);
+        if self.nav.current() != &entry {
+            self.nav.push(entry);
         }
         cx.notify();
     }
@@ -6769,7 +6782,7 @@ impl Shell {
                 // The detail view needs the window; the next render opens it.
                 self.pending_pull_request = Some((url, device));
             }
-            NavEntry::Plugins => self.set_route(Route::Plugins, cx),
+            NavEntry::Plugins | NavEntry::Skills => self.set_route(Route::Plugins, cx),
             NavEntry::NewZapper => self.show_new_zapper(cx),
             NavEntry::Usage {
                 project,
@@ -11773,6 +11786,13 @@ impl Shell {
                     .on_click(cx.listener(|this, _, _, cx| this.open_plugins_page(cx))),
                 )
             })
+            .when(!zuse_viewport::cloud_gate::enabled(), |view| {
+                view.child(
+                    row("sidebar-skills-row", icons::SKILL, "Skills", plugins_open)
+                        .aria_label("Skills")
+                        .on_click(cx.listener(|this, _, _, cx| this.open_skills_page(cx))),
+                )
+            })
             // Pull requests span every chat, so the entry lives with the
             // other global destinations rather than in a chat's top bar.
             .child(
@@ -13831,7 +13851,11 @@ impl Shell {
                 });
         }
         if matches!(self.route, Route::Plugins) {
-            let page = settings::plugins::PluginsPage::shared(self.state.clone(), cx);
+            let page = if self.nav.current() == &NavEntry::Skills {
+                settings::skills::SkillsPage::shared(self.state.clone(), cx).into_any_element()
+            } else {
+                settings::plugins::PluginsPage::shared(self.state.clone(), cx).into_any_element()
+            };
             return div()
                 .flex_1()
                 .min_w_0()
@@ -16211,6 +16235,7 @@ impl Render for Shell {
                 WorkspaceCommand::Resume => self.toggle_command_palette(window, cx),
                 WorkspaceCommand::Settings => self.open_last_settings(cx),
                 WorkspaceCommand::Plugins => self.open_plugins_page(cx),
+                WorkspaceCommand::Skills => self.open_skills_page(cx),
                 WorkspaceCommand::Accounts => self.open_settings(SettingsSection::Harnesses, cx),
                 WorkspaceCommand::Diff if !self.active_chat.is_empty() => {
                     self.open_review_tab(window, cx)
@@ -16548,6 +16573,11 @@ impl Render for Shell {
             .on_action(
                 cx.listener(|this, _: &settings::plugins::OpenPluginsPage, _, cx| {
                     this.open_plugins_page(cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &settings::skills::OpenSkillsPage, _, cx| {
+                    this.open_skills_page(cx)
                 }),
             )
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| {
@@ -19008,6 +19038,7 @@ mod exit_regressions {
         use crate::composer::WorkspaceCommand;
         let dir = tempfile::tempdir().unwrap();
         cx.update(|cx| {
+            gpui_tokio::init(cx);
             gpui_base::init(cx);
             cx.set_global(Theme::default());
             crate::app_menus::init(cx);
@@ -19042,6 +19073,7 @@ mod exit_regressions {
             WorkspaceCommand::New,
             WorkspaceCommand::Resume,
             WorkspaceCommand::Model,
+            WorkspaceCommand::Skills,
         ] {
             window
                 .update(cx, |shell, window, cx| {
@@ -19070,6 +19102,10 @@ mod exit_regressions {
                         WorkspaceCommand::Resume => assert!(shell.command_palette.is_some()),
                         WorkspaceCommand::Model => {
                             assert!(shell.composer.read(cx).pickers().read(cx).is_open());
+                        }
+                        WorkspaceCommand::Skills => {
+                            assert_eq!(shell.route, Route::Plugins);
+                            assert_eq!(shell.nav.current(), &NavEntry::Skills);
                         }
                         _ => unreachable!(),
                     }
@@ -21550,6 +21586,13 @@ impl Shell {
         // `<route>:<variant>` seeds fixture data (plugins, providers, the ACP
         // dialog) for pages that otherwise wait on an engine.
         let (route, variant) = route.split_once(':').unwrap_or((route, ""));
+        if route == "skills" {
+            self.close_settings(cx);
+            self.open_skills_page(cx);
+            let page = settings::skills::SkillsPage::shared(self.state.clone(), cx);
+            page.update(cx, |page, cx| page.fixture_detail(variant, cx));
+            return;
+        }
         if route == "plugins" {
             self.close_settings(cx);
             settings::plugins::fixture_seed(self.state.clone(), variant, cx);

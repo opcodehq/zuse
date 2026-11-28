@@ -401,7 +401,7 @@ fn is_case_alias(root: &Path, source: &Path, destination: &Path) -> bool {
 
 /// Open every ancestor without following links, and anchor the native rename to those handles.
 #[cfg(unix)]
-fn open_parent(root: &Path, relative: &Path) -> std::io::Result<std::fs::File> {
+pub(super) fn open_parent(root: &Path, relative: &Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
     use std::os::{
         fd::{AsRawFd, FromRawFd},
@@ -434,7 +434,11 @@ fn open_parent(root: &Path, relative: &Path) -> std::io::Result<std::fs::File> {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn move_no_replace(root: &Path, source: &Path, destination: &Path) -> std::io::Result<()> {
+pub(super) fn move_no_replace(
+    root: &Path,
+    source: &Path,
+    destination: &Path,
+) -> std::io::Result<()> {
     use std::os::{fd::AsRawFd, unix::ffi::OsStrExt};
     let from = open_parent(root, source)?;
     let to = open_parent(root, destination)?;
@@ -479,7 +483,11 @@ fn move_no_replace(root: &Path, source: &Path, destination: &Path) -> std::io::R
 }
 
 #[cfg(windows)]
-fn move_no_replace(root: &Path, source: &Path, destination: &Path) -> std::io::Result<()> {
+pub(super) fn move_no_replace(
+    root: &Path,
+    source: &Path,
+    destination: &Path,
+) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{MOVEFILE_WRITE_THROUGH, MoveFileExW};
     let from: Vec<u16> = root
@@ -503,7 +511,7 @@ fn move_no_replace(root: &Path, source: &Path, destination: &Path) -> std::io::R
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-fn move_no_replace(_: &Path, _: &Path, _: &Path) -> std::io::Result<()> {
+pub(super) fn move_no_replace(_: &Path, _: &Path, _: &Path) -> std::io::Result<()> {
     Err(std::io::ErrorKind::Unsupported.into())
 }
 
