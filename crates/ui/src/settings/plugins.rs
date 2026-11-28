@@ -1135,8 +1135,14 @@ impl PluginsCard {
             {
                 self.start_oauth(&definition, cx)
             }
-            Some(_) => self.show_plugin(&plugin.plugin_id, cx),
-            None => self.browse_for(&plugin.name, cx),
+            Some(_) => {
+                self.show_plugin(&plugin.plugin_id, cx);
+                window.dispatch_action(Box::new(OpenPluginsPage), cx);
+            }
+            None => {
+                self.browse_for(&plugin.name, cx);
+                window.dispatch_action(Box::new(OpenPluginsPage), cx);
+            }
         }
     }
 

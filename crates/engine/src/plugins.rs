@@ -568,8 +568,9 @@ fn previous_plugins(
     previous
 }
 
-/// Previous plugins with no account here yet. Catalog plugins match by id;
-/// servers added by URL get new ids, so they match by name.
+/// Previous plugins with no connected account here yet. Catalog plugins
+/// match by id; servers added by URL get new ids, so they match by name. An
+/// account still signing in or needing sign-in keeps the Reconnect entry.
 fn not_reconnected(
     previous: Vec<MovedPlugin>,
     catalog: &[zuse_protocol::plugins::PluginDefinition],
@@ -579,13 +580,14 @@ fn not_reconnected(
         .into_iter()
         .filter(|plugin| {
             !connections.iter().any(|connection| {
-                connection.plugin_id == plugin.plugin_id
-                    || (plugin.custom
-                        && catalog.iter().any(|definition| {
-                            definition.custom
-                                && definition.id == connection.plugin_id
-                                && definition.name.eq_ignore_ascii_case(&plugin.name)
-                        }))
+                matches!(connection.state, PluginConnectionState::Connected)
+                    && (connection.plugin_id == plugin.plugin_id
+                        || (plugin.custom
+                            && catalog.iter().any(|definition| {
+                                definition.custom
+                                    && definition.id == connection.plugin_id
+                                    && definition.name.eq_ignore_ascii_case(&plugin.name)
+                            })))
             })
         })
         .collect()
@@ -1219,6 +1221,12 @@ mod tests {
             []
         );
         assert_eq!(not_reconnected(previous.clone(), &catalog, &[]), previous);
+        let mut signing_in = connection("posthog");
+        signing_in.state = PluginConnectionState::NeedsAuth;
+        assert_eq!(
+            not_reconnected(previous.clone(), &catalog, &[signing_in])[0].plugin_id,
+            "posthog"
+        );
         assert!(same_origin("https://api.example/", "https://api.example"));
     }
     #[test]
