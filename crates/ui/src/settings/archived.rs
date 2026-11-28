@@ -1426,28 +1426,34 @@ impl ArchivedPage {
         if !zuse_viewport::cloud_gate::enabled() || self.source == SourceFilter::Saved {
             return None;
         }
-        let message = if let Some(error) = self.cloud.error.as_deref().filter(|_| {
-            self.cloud_action
-                .as_ref()
-                .and_then(cloud_cards::Action::target)
-                .is_none()
-        }) {
-            error.to_owned()
-        } else if self.source != SourceFilter::Cloud {
-            return None;
-        } else if self.cloud_owner.is_none() {
+        let message: Option<String> = if let Some(error) =
+            self.cloud.error.as_deref().filter(|_| {
+                self.cloud_action
+                    .as_ref()
+                    .and_then(cloud_cards::Action::target)
+                    .is_none()
+            }) {
+            Some(error.to_owned())
+        } else if self.source == SourceFilter::Cloud && self.cloud_owner.is_none() {
             let state = self.state.read(cx);
-            if state.cloud_account.is_none() {
-                "Loading your cloud account…"
-            } else if state.cloud_user_id().is_none() {
-                "Sign in through General settings to view cloud archives."
-            } else {
-                "Switch to your personal account to view cloud archives."
-            }
-            .into()
+            Some(
+                if state.cloud_account.is_none() {
+                    "Loading your cloud account…"
+                } else if state.cloud_user_id().is_none() {
+                    "Sign in through General settings to view cloud archives."
+                } else {
+                    "Switch to your personal account to view cloud archives."
+                }
+                .into(),
+            )
         } else {
-            return None;
+            None
         };
+        // Refresh stays available whenever cloud archives are loaded: a row
+        // can ask for it (a missing archive source) without any page error.
+        if message.is_none() && self.cloud_owner.is_none() {
+            return None;
+        }
         Some(
             div()
                 .pt(px(8.))
@@ -1456,7 +1462,7 @@ impl ArchivedPage {
                 .gap(px(8.))
                 .text_size(px(12.))
                 .text_color(theme.text_muted)
-                .child(message)
+                .children(message)
                 .when(self.cloud_owner.is_some(), |el| {
                     el.child(
                         archive_button(
@@ -1524,10 +1530,18 @@ impl Render for ArchivedPage {
             self.scroll.reset();
         }
         let projects = self.archive_groups(cx);
+        // A project whose last archive went away stops filtering, so it
+        // can't silently come back when that project archives again.
         let project_filter = self
             .project
             .clone()
             .filter(|key| projects.keys().any(|(_, id)| id == key));
+        // A list still loading can't prove the project gone.
+        if project_filter != self.project && !self.cloud.loading {
+            self.project = project_filter.clone();
+            self.page = 0;
+            self.scroll.reset();
+        }
         let search_bar = div()
             .flex_1()
             .min_w(px(140.))

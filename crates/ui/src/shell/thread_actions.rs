@@ -98,7 +98,7 @@ impl Shell {
         rows
     }
 
-    fn current_sidebar_thread(&self, cx: &App) -> Option<String> {
+    pub(super) fn current_sidebar_thread(&self, cx: &App) -> Option<String> {
         if let Some(view) = &self.cloud_conversation {
             return Some(format!(
                 "{CLOUD_ROW_PREFIX}{}",

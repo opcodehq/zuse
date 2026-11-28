@@ -57,21 +57,31 @@ impl SidebarFit {
             }
             return;
         }
+        // The button and its margin are drawn only while rows are hidden.
+        let toggle_drawn = shown < total;
+        let drawn_margin = if toggle_drawn {
+            self.toggle_margin.get()
+        } else {
+            0.
+        };
         // Free space under the list, as if unscrolled and with no margin.
-        let bottom = f32::from(list_bottom - scroll.offset().y) - self.toggle_margin.get();
-        let mut free = f32::from(viewport.bottom()) - bottom;
-        if shown >= total {
-            // Hiding a row would add the button.
-            free -= toggle_pitch;
-        }
-        let fit = (shown as isize + (free / row_pitch).floor() as isize).max(MIN_PREVIEW as isize)
-            as usize;
+        let bottom = f32::from(list_bottom - scroll.offset().y) - drawn_margin;
+        let free = f32::from(viewport.bottom()) - bottom;
+        // Room for rows if no button were drawn.
+        let open = free + if toggle_drawn { toggle_pitch } else { 0. };
+        let hidden = (total - shown) as f32 * row_pitch;
         let current = self.limit.get();
-        let (limit, margin) = if fit >= total {
-            // Everything fits: keep a larger limit so it never creeps.
+        let (limit, margin) = if open >= hidden {
+            // The whole list fits: no button, and a larger limit is kept so
+            // it never creeps.
             (current.map_or(total, |limit| limit.max(total)), 0.)
         } else {
-            let leftover = free - (fit as f32 - shown as f32) * row_pitch;
+            // Rows are hidden, so reserve the button's place first.
+            let room = open - toggle_pitch;
+            let fit = (shown as isize + (room / row_pitch).floor() as isize)
+                .clamp(MIN_PREVIEW.min(total - 1) as isize, (total - 1) as isize)
+                as usize;
+            let leftover = room - (fit as f32 - shown as f32) * row_pitch;
             (fit, leftover.max(0.).floor())
         };
         let moved = current != Some(limit) || (self.toggle_margin.get() - margin).abs() >= 1.;

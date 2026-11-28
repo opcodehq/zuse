@@ -302,7 +302,7 @@ impl Shell {
         // The same list `render_active_rows` draws and the jump shortcuts
         // count — one function, so neither can drift from the screen.
         let order = self.sidebar_visible_order(cx);
-        let selected = self.state.read(cx).selected_chat.clone();
+        let selected = self.current_sidebar_thread(cx);
         if let Some(target) = cycle_target(&order, selected.as_deref(), forward) {
             self.open_chat(target, cx);
         }
@@ -334,6 +334,11 @@ impl Shell {
 
     /// Open a session from the sidebar: select it, the main area follows.
     pub(crate) fn open_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
+        // Keyboard navigation reaches cloud rows through the same order.
+        if chat_id.starts_with(CLOUD_ROW_PREFIX) {
+            self.open_cloud_sidebar_row(&chat_id, cx);
+            return;
+        }
         // Leaving the new-chat canvas notes it as it is, for New thread.
         self.track_current_cloud_canvas(cx);
         let same_thread = {
@@ -1588,8 +1593,19 @@ impl Shell {
                 .items_center()
                 .gap(px(8.0))
                 .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                // Scrolls like the conversation strip, so chips past the
+                // title bar's width stay reachable.
                 .when(on_canvas, |row| {
-                    row.children(self.sidebar_thread_tab_chips(&theme, cx))
+                    row.child(
+                        div()
+                            .id("canvas-thread-tabs")
+                            .flex()
+                            .items_center()
+                            .min_w_0()
+                            .overflow_x_scroll()
+                            .gap(px(8.0))
+                            .children(self.sidebar_thread_tab_chips(&theme, cx)),
+                    )
                 })
                 .when(!on_canvas && self.cloud_conversation.is_none(), |row| {
                     row.child(self.render_thread_conversations(cx))

@@ -59,13 +59,39 @@ impl Shell {
                             this.open_new_cloud_session(project.clone(), cx)
                         })),
                 );
+            // Each project previews its first threads, like the online sidebar.
+            let openable: Vec<&Value> = group
+                .rows
+                .iter()
+                .filter(|row| {
+                    row["pendingLaunch"].is_string() || self.cloud_row_target(row, cx).is_some()
+                })
+                .collect();
+            let page = self.thread_page_with(
+                Some((
+                    format!("offline-cloud:{id}"),
+                    spaces::PROJECT_THREAD_PREVIEW,
+                )),
+                std::iter::empty(),
+                &openable,
+                cx,
+            );
             let mut rows = Vec::new();
-            for row in group.rows {
-                if let Some((_, _, row)) = self.render_cloud_sidebar_row(&row, &theme, cx) {
+            for row in page.clouds {
+                if let Some((_, _, row)) = self.render_cloud_sidebar_row(row, None, &theme, cx) {
                     rows.push(row)
                 }
             }
-            elements.push(div().child(header).children(rows).into_any_element());
+            let toggle = page
+                .toggle
+                .map(|(key, expanded)| self.render_sidebar_show_more(key, expanded, &theme, cx));
+            elements.push(
+                div()
+                    .child(header)
+                    .children(rows)
+                    .children(toggle)
+                    .into_any_element(),
+            );
         }
         div()
             .id("offline-cloud-sidebar")
@@ -283,9 +309,37 @@ impl Shell {
     /// A cloud task drawn exactly like a local chat row: the project's
     /// avatar, its title and age, and the same activity corner. Only the
     /// click target differs.
+    /// Whether a cloud row is the thread in front: its open conversation,
+    /// or for a chat still being created, the composer tab creating it.
+    /// Rendering and paging share this so a selected row is never paged away.
+    pub(super) fn cloud_row_selected(&self, row: &Value, cx: &App) -> bool {
+        let state = self.state.read(cx);
+        match row["pendingLaunch"].as_str() {
+            Some(key) => {
+                self.cloud_conversation.is_none()
+                    && state.selected_chat.is_none()
+                    && self.composer.read(cx).current_key == key
+            }
+            None => {
+                let Some(workspace) = row["workspaceId"].as_str() else {
+                    return false;
+                };
+                self.cloud_conversation
+                    .as_ref()
+                    .is_some_and(|view| view.read(cx).target.workspace == workspace)
+                    || state
+                        .engine()
+                        .and_then(|engine| engine.cloud_workspace())
+                        .as_deref()
+                        == Some(workspace)
+            }
+        }
+    }
+
     pub(super) fn render_cloud_sidebar_row(
         &self,
         row: &Value,
+        jump_label: Option<SharedString>,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Option<(String, f32, AnyElement)> {
@@ -294,25 +348,8 @@ impl Shell {
             self.cloud_row_target(row, cx)?;
         }
         let workspace = row["workspaceId"].as_str()?.to_owned();
+        let selected = self.cloud_row_selected(row, cx);
         let state = self.state.read(cx);
-        let selected = match &pending {
-            // The tab creating it is in front.
-            Some(key) => {
-                self.cloud_conversation.is_none()
-                    && state.selected_chat.is_none()
-                    && self.composer.read(cx).current_key == *key
-            }
-            None => {
-                self.cloud_conversation
-                    .as_ref()
-                    .is_some_and(|view| view.read(cx).target.workspace == workspace)
-                    || state
-                        .engine()
-                        .and_then(|engine| engine.cloud_workspace())
-                        .as_deref()
-                        == Some(workspace.as_str())
-            }
-        };
         let title = transcript::single_line(&zuse_protocol::file_mentions::mention_display_text(
             row["title"]
                 .as_str()
@@ -372,7 +409,7 @@ impl Shell {
             false,
             false,
             None,
-            None,
+            jump_label,
             self.settings.sidebar_show_project_icon && !project_group,
             project_group,
             None,

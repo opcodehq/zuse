@@ -2082,7 +2082,7 @@ struct ActiveChatRow {
 }
 
 /// Threads a project shows before "Show more".
-const PROJECT_THREAD_PREVIEW: usize = 4;
+pub(super) const PROJECT_THREAD_PREVIEW: usize = 4;
 /// Threads the single list shows before its first measure; after that it
 /// shows as many as fit above the sidebar footer ([`super::sidebar_fit`]).
 const ALL_THREAD_PREVIEW: usize = 7;
@@ -2102,12 +2102,12 @@ fn cloud_thread_sort_time(sort: SidebarSort, row: &serde_json::Value) -> i64 {
 
 type CloudThreadGroups<'a> = std::collections::HashMap<Option<&'a str>, Vec<&'a serde_json::Value>>;
 
-struct SidebarThreadPage<'a> {
-    local_count: usize,
-    clouds: Vec<&'a serde_json::Value>,
+pub(super) struct SidebarThreadPage<'a> {
+    pub(super) local_count: usize,
+    pub(super) clouds: Vec<&'a serde_json::Value>,
     /// The list's key and whether it is expanded, when it is long enough
     /// to offer "Show more" / "Show less".
-    toggle: Option<(String, bool)>,
+    pub(super) toggle: Option<(String, bool)>,
 }
 
 /// The time a chat sorts by in the sidebar, in epoch milliseconds.
@@ -5329,6 +5329,18 @@ impl Shell {
                 key.map(|key| (self.sidebar_group_collapse_key(key), PROJECT_THREAD_PREVIEW))
             }
         };
+        self.thread_page_with(page, local, cloud, cx)
+    }
+
+    /// [`Self::sidebar_thread_page`] for an explicit `(list key, preview
+    /// size)`; `None` shows every row with no toggle.
+    pub(super) fn thread_page_with<'a, 'b>(
+        &self,
+        page: Option<(String, usize)>,
+        local: impl IntoIterator<Item = (i64, &'b str)>,
+        cloud: &[&'a serde_json::Value],
+        cx: &App,
+    ) -> SidebarThreadPage<'a> {
         let fit_list = page.as_ref().is_some_and(|(key, _)| key == ALL_THREADS_KEY);
         let mut clouds = cloud.to_vec();
         clouds.sort_by_key(|row| {
@@ -5362,10 +5374,6 @@ impl Shell {
 
         let state = self.state.read(cx);
         let selected = state.selected_chat_row().map(|chat| chat.thread_id());
-        let cloud_selected = self
-            .cloud_conversation
-            .as_ref()
-            .map(|view| view.read(cx).target.workspace.as_str());
         let drag = self
             .sidebar_session_transfer
             .as_ref()
@@ -5399,7 +5407,7 @@ impl Shell {
                 keep_local(id)
             } else {
                 let row = remote.next().expect("cloud row");
-                cloud_selected.is_some() && row["workspaceId"].as_str() == cloud_selected
+                self.cloud_row_selected(row, cx)
             };
             if index < shown {
                 if next_local {
@@ -5426,7 +5434,7 @@ impl Shell {
         }
     }
 
-    fn render_sidebar_show_more(
+    pub(super) fn render_sidebar_show_more(
         &self,
         key: String,
         expanded: bool,
@@ -5518,8 +5526,8 @@ impl Shell {
                     .any(|section| section.session_ids.contains(&chat.id))
             })
             .collect();
-        let cloud = self.cloud_sidebar_groups(cx);
-        let cloud = self.sidebar_cloud_thread_groups(&cloud, cx);
+        let cloud_groups = self.cloud_sidebar_groups(cx);
+        let cloud = self.sidebar_cloud_thread_groups(&cloud_groups, cx);
         let mut groups: Vec<(Option<(String, String)>, Vec<&zuse_protocol::Chat>)> = Vec::new();
         let mut indices = std::collections::HashMap::new();
         for chat in chats {
@@ -5530,6 +5538,14 @@ impl Shell {
                 index
             });
             groups[index].1.push(chat);
+        }
+        // Groups holding only cloud threads follow, as the sidebar draws them.
+        for cloud_group in &cloud_groups {
+            let key = cloud_group.group.as_ref().map(|(key, _)| key.clone());
+            if !cloud_group.rows.is_empty() && !indices.contains_key(&key) {
+                indices.insert(key.clone(), groups.len());
+                groups.push((key.map(|key| (key, String::new())), Vec::new()));
+            }
         }
         if self.settings.sidebar_organization == SidebarOrganization::ByDevice {
             promote_local_device_group(&mut groups, state.local_device_id.as_deref());
@@ -5553,10 +5569,22 @@ impl Shell {
                 cloud.get(&key).map_or(&[], Vec::as_slice),
                 cx,
             );
-            rows.into_iter()
+            // Local and cloud rows interleave by time, as the group draws them.
+            let sort = self.settings.sidebar_sort;
+            let mut ids: Vec<(i64, String)> = rows
+                .into_iter()
                 .take(page.local_count)
-                .map(|chat| chat.id.clone())
-                .collect::<Vec<_>>()
+                .map(|chat| (sidebar_sort_time(sort, chat), chat.id.clone()))
+                .collect();
+            ids.extend(page.clouds.iter().filter_map(|row| {
+                let workspace = row["workspaceId"].as_str()?;
+                Some((
+                    cloud_thread_sort_time(sort, row),
+                    format!("{CLOUD_ROW_PREFIX}{workspace}"),
+                ))
+            }));
+            ids.sort_by_key(|(time, _)| std::cmp::Reverse(*time));
+            ids.into_iter().map(|(_, id)| id).collect::<Vec<_>>()
         });
         let ordered = pinned_chats
             .into_iter()
@@ -6254,7 +6282,17 @@ impl Shell {
             let mut show_more = None;
             if let Some(page) = page {
                 for row in page.clouds {
-                    if let Some(row_element) = self.render_cloud_sidebar_row(row, theme, cx) {
+                    let jump_label = row["workspaceId"].as_str().and_then(|workspace| {
+                        let slot = visible_slots
+                            .get(&format!("{CLOUD_ROW_PREFIX}{workspace}"))
+                            .copied()?;
+                        let combo = keymap.get(ShortcutId::JumpSession(slot));
+                        (jump_hints && slot < JUMP_SLOTS && !combo.is_empty())
+                            .then(|| badge_combo(combo).into())
+                    });
+                    if let Some(row_element) =
+                        self.render_cloud_sidebar_row(row, jump_label, theme, cx)
+                    {
                         rendered_rows.push((
                             cloud_thread_sort_time(self.settings.sidebar_sort, row),
                             row_element,
