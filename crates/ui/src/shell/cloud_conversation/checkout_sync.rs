@@ -134,12 +134,27 @@ fn quiet(status: &Value, request_failed: bool) -> bool {
     (matches!(status["state"].as_str(), Some("behind" | "paused")) || update) && !request_failed
 }
 
-/// The last part of a folder path, as the header shows it.
+/// The last part of a folder path.
 fn folder_name(path: &str) -> String {
     std::path::Path::new(path)
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_owned())
+}
+
+/// What the header badge shows: the repository's name (`zuse` for
+/// `github.com/opcodehq/zuse` or its URL), else the folder's name.
+fn badge_name(repository: Option<&str>, path: &str) -> String {
+    repository
+        .map(crate::cloud_destination::normalize)
+        .and_then(|identity| {
+            identity
+                .rsplit('/')
+                .next()
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| folder_name(path))
 }
 
 /// How many characters of the folder's path its button shows.
@@ -161,12 +176,16 @@ impl CloudConversation {
     /// This repository's checkout on this computer, when Zuse knows one:
     /// the engine makes the chat's folder from it instead of cloning.
     pub(super) fn local_checkout(&self) -> Option<String> {
-        let identity = self.computer.metadata["repositoryIdentity"]
+        matching_checkout(&self.computer.checkout.local, self.repository_identity()?)
+    }
+
+    /// The chat's repository, as Cloud names it.
+    fn repository_identity(&self) -> Option<&str> {
+        self.computer.metadata["repositoryIdentity"]
             .as_str()
             .or_else(|| self.config["repositoryIdentity"].as_str())
             .or_else(|| self.computer.metadata["repositoryUrl"].as_str())
-            .or_else(|| self.config["repositoryUrl"].as_str())?;
-        matching_checkout(&self.computer.checkout.local, identity)
+            .or_else(|| self.config["repositoryUrl"].as_str())
     }
 
     /// The chat's folder here, synced or kept after sync stopped.
@@ -328,6 +347,7 @@ impl CloudConversation {
         let theme = Theme::of(cx).clone();
         let path = status["localPath"].as_str().unwrap_or_default().to_owned();
         let (label, tone) = phase(status);
+        let name = badge_name(self.repository_identity(), &path);
         let tip = match status["error"].as_str() {
             Some(why) => format!("{label}: {why}"),
             None => format!("{label} · {path}"),
@@ -355,7 +375,7 @@ impl CloudConversation {
                         .rounded_full()
                         .bg(tone.color(&theme)),
                 )
-                .child(div().max_w(px(120.)).truncate().child(folder_name(&path)))
+                .child(div().max_w(px(120.)).truncate().child(name))
                 .on_click(cx.listener(|this, _, _, cx| {
                     if !this.computer.open {
                         this.toggle_computer(cx);
@@ -689,11 +709,15 @@ mod tests {
     }
 
     #[test]
-    fn the_header_names_the_folder() {
+    fn the_header_names_the_repository() {
+        let path = "/Users/alex/zuse/cloud/opcodehq-zuse/8f3k2c1a";
+        assert_eq!(badge_name(Some("github.com/opcodehq/zuse"), path), "zuse");
         assert_eq!(
-            folder_name("/Users/alex/zuse/cloud/web/8f3k2c1a"),
-            "8f3k2c1a"
+            badge_name(Some("https://github.com/OpcodeHQ/Zuse.git"), path),
+            "zuse"
         );
+        // Without a known repository, the folder's name.
+        assert_eq!(badge_name(None, path), "8f3k2c1a");
         assert_eq!(folder_name("/"), "/");
     }
 }
