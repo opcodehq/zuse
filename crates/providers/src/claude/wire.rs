@@ -220,6 +220,8 @@ pub(crate) struct RateLimitFrame {
 
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct RateLimitInfo {
+    #[serde(rename = "resetsAt", default)]
+    pub resets_at: Option<i64>,
     #[serde(default)]
     pub status: String,
     #[serde(rename = "rateLimitType", default)]

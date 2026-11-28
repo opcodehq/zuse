@@ -15,8 +15,8 @@ use crate::localization::message as tr;
 use crate::tooltip::TooltipExt as _;
 use chrono::{DateTime, Utc};
 use gpui::{
-    AnyElement, Context, Entity, Hsla, SharedString, Subscription, Task, Window, div, prelude::*,
-    px,
+    AnyElement, App, Context, Entity, Hsla, SharedString, Subscription, Task, Window, div,
+    prelude::*, px,
 };
 use std::time::Duration;
 use zuse_i18n::messages as msg;
@@ -446,6 +446,25 @@ pub(crate) struct AccountsSnapshotCache(
 );
 
 impl gpui::Global for AccountsSnapshotCache {}
+
+/// The latest provider sign-in that landed from Settings: its agent and
+/// device (`None` = this device). A chat its auth failure stopped watches
+/// this to carry on by itself (the composer tray's own sign-in resumes
+/// directly).
+#[derive(Default)]
+pub(crate) struct SignInLanded {
+    pub(crate) harness: Option<HarnessId>,
+    pub(crate) target_device: Option<String>,
+}
+
+impl gpui::Global for SignInLanded {}
+
+fn note_sign_in(harness: HarnessId, target_device: Option<String>, cx: &mut App) {
+    cx.set_global(SignInLanded {
+        harness: Some(harness),
+        target_device,
+    });
+}
 
 pub struct AccountsPage {
     plugins: Option<Entity<super::plugins::PluginsCard>>,
@@ -922,8 +941,10 @@ impl AccountsPage {
                 };
                 match result {
                     Ok(_) => {
+                        let harness = flow.harness;
                         page.login = None;
                         page.load(force_usage_for(LoadTrigger::PostLogin), cx);
+                        note_sign_in(harness, page.target_device.clone(), cx);
                     }
                     Err(err) => {
                         flow.step = LoginStep::PasteCode {
@@ -993,8 +1014,10 @@ impl AccountsPage {
         let finished = match result {
             Ok(poll) => match poll.status {
                 AgentLoginStatus::Done => {
+                    let harness = flow.harness;
                     self.login = None;
                     self.load(force_usage_for(LoadTrigger::PostLogin), cx);
+                    note_sign_in(harness, self.target_device.clone(), cx);
                     true
                 }
                 AgentLoginStatus::Error => {
@@ -2508,6 +2531,10 @@ mod tests {
                 // closes and the list reloads to show the account.
                 assert!(page.apply_poll(1, Ok(poll(AgentLoginStatus::Done, None, None)), cx));
                 assert!(page.login.is_none());
+                // ...and says so, so a chat stopped signed out carries on.
+                let landed = cx.global::<SignInLanded>();
+                assert_eq!(landed.harness, Some(HarnessId::Antigravity));
+                assert_eq!(landed.target_device, None);
 
                 // A failure stays on screen, in the dialog, with Retry.
                 page.login = Some(waiting(HarnessId::Codex, 2));

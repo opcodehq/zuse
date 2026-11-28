@@ -11,6 +11,7 @@ const page = await openBrowser(`http://127.0.0.1:${server.httpServer.address().p
 try {
   await page.waitFor("!!window.solid2 && document.querySelectorAll('.virtual-row').length > 0");
   await page.eval("window.solid2.transcriptChecks()");
+  await page.eval("window.solid2.recoveryChecks()");
   assert.deepEqual(await page.eval("window.solid2.counters().effectRuns"), 1);
   await page.eval("window.solid2.update()");
   assert.deepEqual(await page.eval("[window.solid2.counters().effectRuns, window.solid2.counters().cleanups]"), [2, 1]);

@@ -7544,6 +7544,10 @@ impl Composer {
             this.on_input_edited(cx);
         })
         .detach();
+        cx.observe_global::<crate::settings::accounts::SignInLanded>(|this, cx| {
+            this.on_sign_in_landed(cx);
+        })
+        .detach();
         let dictation_events = cx.subscribe(&input, |this: &mut Self, _, event, cx| match event {
             DictationInputEvent::Press => this.press_dictation(HoldSource::Key, cx),
             DictationInputEvent::Release => this.release_dictation(HoldSource::Key, cx),
