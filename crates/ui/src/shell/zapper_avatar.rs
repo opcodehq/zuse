@@ -95,16 +95,30 @@ impl Shell {
             .collect();
         ZapperFace::of(zapper).with_mood(mood_of(
             zapper,
+            state.device_online(&zapper.config.home_device_id, now),
             status(&zapper.coordinator_chat_id),
             &workers,
         ))
     }
 }
 
-/// What a Zapper's mascot should show: needing you beats working, the
-/// Zapper's own work beats its threads', and nothing running is rest.
+/// What a Zapper's mascot should show, from the same state the rest of the
+/// shell reads. Chat statuses arrive already staleness-gated, so a session
+/// nobody refreshed never reads as working. In order:
+///
+/// 1. Not active (paused, stopped, archived): resting.
+/// 2. Its home device offline: offline, whatever its chats last said.
+/// 3. An open decision, an issue waiting on you, or any of its chats
+///    waiting for input: needs you.
+/// 4. Its own last turn failed and nobody has looked: blocked.
+/// 5. Its own turn running: working. Thinking and tool use look the same,
+///    because the session status doesn't tell them apart.
+/// 6. Only its threads running: delegating.
+/// 7. Its own turn finished and not seen yet: done.
+/// 8. Otherwise, including a coordinator chat not synced yet: awake.
 pub(super) fn mood_of(
     zapper: &Zapper,
+    home_online: bool,
     coordinator: Option<zuse_protocol::ChatIndicator>,
     workers: &[zuse_protocol::ChatIndicator],
 ) -> Mood {
@@ -112,6 +126,9 @@ pub(super) fn mood_of(
     use zuse_protocol::zappers::{ZapperIssueStatus, ZapperStatus};
     if zapper.status != ZapperStatus::Active {
         return Mood::Resting;
+    }
+    if !home_online {
+        return Mood::Offline;
     }
     let asks = zapper.decisions.iter().any(|d| d.answer.is_none())
         || zapper
@@ -122,12 +139,16 @@ pub(super) fn mood_of(
         || workers.contains(&C::AwaitingInput);
     if asks {
         Mood::NeedsYou
+    } else if coordinator == Some(C::Errored) {
+        Mood::Blocked
     } else if coordinator == Some(C::Working) {
         Mood::Working
     } else if workers.contains(&C::Working) {
         Mood::Delegating
+    } else if coordinator == Some(C::Completed) {
+        Mood::Done
     } else {
-        Mood::Resting
+        Mood::Awake
     }
 }
 
@@ -152,38 +173,48 @@ mod tests {
     #[test]
     fn mascot_mood_follows_what_the_zapper_is_doing() {
         let active = zapper("active", "[]");
-        assert_eq!(mood_of(&active, None, &[]), Mood::Resting);
+        let mood = |coordinator, workers: &[C]| mood_of(&active, true, coordinator, workers);
+        // Nothing running, or nothing known yet: awake, never busy.
+        assert_eq!(mood(None, &[]), Mood::Awake);
+        assert_eq!(mood(Some(C::Idle), &[C::Idle, C::Completed]), Mood::Awake);
+        assert_eq!(mood(Some(C::Working), &[]), Mood::Working);
         assert_eq!(
-            mood_of(&active, Some(C::Idle), &[C::Completed]),
-            Mood::Resting
-        );
-        assert_eq!(mood_of(&active, Some(C::Working), &[]), Mood::Working);
-        assert_eq!(
-            mood_of(&active, Some(C::Idle), &[C::Idle, C::Working]),
+            mood(Some(C::Idle), &[C::Idle, C::Working]),
             Mood::Delegating
         );
         // The Zapper's own work shows over its threads'.
-        assert_eq!(
-            mood_of(&active, Some(C::Working), &[C::Working]),
-            Mood::Working
-        );
-        // Needing you shows over everything.
-        assert_eq!(
-            mood_of(&active, Some(C::Working), &[C::AwaitingInput]),
-            Mood::NeedsYou
-        );
-        assert_eq!(
-            mood_of(&active, Some(C::AwaitingInput), &[]),
-            Mood::NeedsYou
-        );
+        assert_eq!(mood(Some(C::Working), &[C::Working]), Mood::Working);
+        // Its finished turn shows until you look, but any work beats it.
+        assert_eq!(mood(Some(C::Completed), &[]), Mood::Done);
+        assert_eq!(mood(Some(C::Completed), &[C::Working]), Mood::Delegating);
+        // A failed turn shows over threads still working.
+        assert_eq!(mood(Some(C::Errored), &[C::Working]), Mood::Blocked);
+        // Needing you shows over everything else.
+        assert_eq!(mood(Some(C::Working), &[C::AwaitingInput]), Mood::NeedsYou);
+        assert_eq!(mood(Some(C::AwaitingInput), &[]), Mood::NeedsYou);
+        assert_eq!(mood(Some(C::Errored), &[C::AwaitingInput]), Mood::NeedsYou);
         let asking = zapper(
             "active",
             r#"[{"id": "q", "workerChatId": null, "question": "Ship it?", "answer": null}]"#,
         );
-        assert_eq!(mood_of(&asking, Some(C::Idle), &[]), Mood::NeedsYou);
+        assert_eq!(mood_of(&asking, true, Some(C::Idle), &[]), Mood::NeedsYou);
         // A paused Zapper rests, whatever its chats last said.
         assert_eq!(
-            mood_of(&zapper("paused", "[]"), Some(C::Working), &[]),
+            mood_of(&zapper("paused", "[]"), true, Some(C::Working), &[]),
+            Mood::Resting
+        );
+        // An offline home device beats every cached status: nothing it last
+        // reported is live.
+        assert_eq!(
+            mood_of(&active, false, Some(C::Working), &[C::Working]),
+            Mood::Offline
+        );
+        assert_eq!(
+            mood_of(&asking, false, Some(C::AwaitingInput), &[]),
+            Mood::Offline
+        );
+        assert_eq!(
+            mood_of(&zapper("paused", "[]"), false, None, &[]),
             Mood::Resting
         );
     }

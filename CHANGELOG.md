@@ -11,6 +11,7 @@
 
 ### Changed
 
+- Zapper characters are drawn as smooth, clean shapes on desktop and web, and their faces now show what the Zapper is doing: idle, working, threads working, needs you, a failed turn, done, paused or offline. Changes blend smoothly, idle faces hold still between blinks and glances, and reduced motion shows a still face for each state.
 - The desktop transcript keeps the live "Working for…" timer and loader below the reply for the whole turn instead of moving it above the reply; "Worked for…" still appears above the reply once the turn finishes.
 - The web app's working line rotates through a refreshed set of anime loading phrases.
 - Steering a running Devin turn sends your message straight into it instead of cancelling and re-prompting, and an idle Devin chat stays warm for 30 minutes so the next message skips a full conversation reload.
