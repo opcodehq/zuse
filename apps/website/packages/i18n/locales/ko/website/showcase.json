@@ -1,5 +1,6 @@
 {
-	"book_a_call": "통화 예약",
+	"start_for_1": "$1로 시작하기",
+	"subscribe_in_the_app_after_you_download": "다운로드 후 앱에서 구독하세요",
 	"review": "검토",
 	"inspect_the_complete_branch_commit_deliberately_push_when_it_is_ready": "전체 분기를 검사하고, 의도적으로 커밋하고, 준비가 되면 푸시하고, 실패한 확인을 활성 에이전트에 다시 보냅니다.",
 	"every_task_gets_an_isolated_branch_and_working_tree_run_several_agents": "모든 작업에는 격리된 분기와 작업 트리가 있습니다. 변경 사항을 함께 혼합하지 않고 여러 에이전트를 한 번에 실행합니다.",
@@ -133,7 +134,7 @@
 	"live_beta": "베타 운영 중",
 	"run_isolated_cloud_workspaces_even_after_your_computer_goes_offline": "컴퓨터가 오프라인이 되어도 독립된 클라우드 워크스페이스는 계속 실행됩니다.",
 	"cloud_beta": "클라우드 베타",
-	"interested_in_a_hosted_workspace": "호스팅 워크스페이스에 관심이 있으신가요?",
+	"try_a_hosted_workspace_first_week_1": "호스팅 워크스페이스 체험: 첫 주 $1",
 	"register_your_interest_as_we_open_beta_capacity_to_more_developers": "더 많은 개발자에게 베타를 제공할 수 있도록 확장하고 있습니다. 관심을 등록해 주세요.",
 	"interest_registered_we_ll_email_you_about_beta_access": "관심 등록이 완료되었습니다. 베타 이용 안내를 이메일로 보내 드리겠습니다.",
 	"email_address": "이메일 주소",

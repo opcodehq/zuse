@@ -1,0 +1,7 @@
+.status-icon { display: inline-block; flex: none; vertical-align: middle; color: var(--text-muted); }
+.status-icon[data-status="needsYou"] { color: var(--danger); }
+.status-icon[data-status="inReview"] { color: var(--success); }
+.status-icon[data-status="inProgress"] { color: var(--status-progress); }
+.status-icon[data-status="blocked"] { color: var(--status-waiting); }
+.status-icon[data-status="done"] { color: var(--status-done); }
+.status-icon .status-icon-knock { stroke: var(--bg); }

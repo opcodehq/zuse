@@ -1,5 +1,6 @@
 {
-	"book_a_call": "Book a call",
+	"start_for_1": "Start for $1",
+	"subscribe_in_the_app_after_you_download": "Subscribe in the app after you download",
 	"agent_handoff": "Agent handoff",
 	"continue_the_work_with_another_agent": "Continue the work with another agent",
 	"fork_a_session_or_start_a_new_provider_with_the_plan_transcript_and_fi": "Fork a session or start a new provider with the plan, transcript, and files it needs. You choose what moves forward.",
@@ -133,7 +134,7 @@
 	"live_beta": "Live beta",
 	"run_isolated_cloud_workspaces_even_after_your_computer_goes_offline": "Run isolated cloud workspaces even after your computer goes offline.",
 	"cloud_beta": "Cloud beta",
-	"interested_in_a_hosted_workspace": "Interested in a hosted workspace?",
+	"try_a_hosted_workspace_first_week_1": "Try a hosted workspace: first week $1",
 	"register_your_interest_as_we_open_beta_capacity_to_more_developers": "Register your interest as we open beta capacity to more developers.",
 	"interest_registered_we_ll_email_you_about_beta_access": "Interest registered. We'll email you about beta access.",
 	"email_address": "Email address",

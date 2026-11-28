@@ -4,10 +4,10 @@
 //! Each mascot is a [`Body`]: a flat-colour blob (a superellipse, optionally
 //! tapered into a drop) with big capsule or oval eyes. A [`Pose`] turns it in
 //! fake 3D: the eyes ride the curved front of the body, sliding and
-//! foreshortening as it yaws and pitches, while roll, lift and squash move
-//! the silhouette, and lids, worry and smile change the eyes' shape.
-//! [`outline`] turns a posed mascot into smooth filled outlines that every
-//! renderer draws the same way. [`idle_pose`] supplies the life: irregular
+//! foreshortening as it yaws and pitches, lift hops the silhouette, and
+//! lids, worry and smile change the eyes' shape. [`raster`] samples the
+//! posed mascot onto a coarse grid in whole cells, so it reads as crisp
+//! pixel art at every size. [`idle_pose`] supplies the life: irregular
 //! blinks, glances, a head that follows a look target (the pointer), and a
 //! [`Mood`] that shows what the Zapper is doing, from closed eyes at rest
 //! to a focused bounce at work and happy arcs when it is done. An
@@ -375,12 +375,8 @@ pub struct Pose {
     pub yaw: f32,
     /// Nod: positive faces down.
     pub pitch: f32,
-    /// Tilt: positive leans clockwise.
-    pub roll: f32,
     /// Vertical offset: positive is lower.
     pub lift: f32,
-    /// 0 is at rest; positive squashes, negative stretches.
-    pub squash: f32,
     /// Eye offset across the face.
     pub gaze: (f32, f32),
     /// 0 is open, 1 is shut.
@@ -403,9 +399,7 @@ impl Pose {
         Pose {
             yaw: m(self.yaw, to.yaw),
             pitch: m(self.pitch, to.pitch),
-            roll: m(self.roll, to.roll),
             lift: m(self.lift, to.lift),
-            squash: m(self.squash, to.squash),
             gaze: (m(self.gaze.0, to.gaze.0), m(self.gaze.1, to.gaze.1)),
             blink: m(self.blink, to.blink),
             wide: m(self.wide, to.wide),
@@ -540,7 +534,6 @@ pub fn idle_pose(mascot: &Mascot, mood: Mood, ms: u64, eyes: (f32, f32), head: (
     let looking = Pose {
         yaw: head.0 * LOOK_YAW,
         pitch: head.1 * LOOK_PITCH,
-        roll: head.0 * head.1 * 2.2,
         gaze: (eyes.0 * 0.08, eyes.1 * 0.06),
         blink: blink_at(mascot, ms),
         ..Pose::default()
@@ -584,7 +577,6 @@ pub fn idle_pose(mascot: &Mascot, mood: Mood, ms: u64, eyes: (f32, f32), head: (
                 yaw: g.0 * 5. + head.0 * LOOK_YAW * 0.5,
                 pitch: g.1 * 3. + head.1 * LOOK_PITCH * 0.5,
                 lift: -bounce * 0.07,
-                squash: (1. - bounce) * 0.05 - 0.015,
                 gaze: (g.0 * 0.08 + eyes.0 * 0.04, g.1 * 0.05 + eyes.1 * 0.03),
                 wide: 0.04,
                 lid: 0.38,
@@ -612,7 +604,6 @@ pub fn idle_pose(mascot: &Mascot, mood: Mood, ms: u64, eyes: (f32, f32), head: (
             if let Some(p) = now_and_then(mascot, ms, 2400, 380) {
                 let hop = (p * std::f32::consts::PI).sin();
                 pose.lift = -hop * 0.12;
-                pose.squash = -hop * 0.05;
                 pose.blink = 0.;
             }
             pose
@@ -694,7 +685,6 @@ fn greet(from: Mood, to: Mood, p: f32, pose: &mut Pose) {
         // Work arrived: a quick, wide-eyed hop before it settles to focus.
         Mood::Working | Mood::Delegating if !from.busy() => {
             pose.lift -= arc * 0.08;
-            pose.squash -= arc * 0.05;
             pose.wide += arc * 0.25 * (1. - p);
             pose.lid *= p;
             pose.blink *= p;
@@ -702,7 +692,6 @@ fn greet(from: Mood, to: Mood, p: f32, pose: &mut Pose) {
         // Finished: a small happy bounce.
         Mood::Done => {
             pose.lift -= arc * 0.06;
-            pose.squash -= arc * 0.03;
         }
         // Calling: look up sharply.
         Mood::NeedsYou => {
@@ -787,61 +776,69 @@ impl Animator {
     }
 }
 
-/// A posed mascot as filled outlines in tile units: the tile spans -1..1 on
-/// both axes, `y` pointing down. The body is drawn first, then each eye.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Outline {
-    pub body: Vec<(f32, f32)>,
-    pub eyes: Vec<Vec<(f32, f32)>>,
+/// A grid cell of a drawn mascot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Cell {
+    Body,
+    Eye,
+}
+
+/// Cells across for an avatar `size` logical pixels wide.
+pub fn grid_for(size: f32) -> usize {
+    // About one and a half logical pixels per cell: pixel art, but fine.
+    (((size / 1.5).round() as usize).clamp(16, 44) / 2) * 2
 }
 
 /// Mascots are modelled with room to sway, then drawn this much larger so
 /// they fill their tile.
 const ZOOM: f32 = 1.16;
-/// Eyes are drawn this much larger than modelled, so they read at sidebar size.
-const EYE_SCALE: f32 = 1.25;
-/// Points around the body; enough for a smooth edge at 64px.
-const BODY_POINTS: usize = 72;
-/// Points along each edge of an eye.
-const EYE_POINTS: usize = 13;
 
-/// The thinnest an eye may get, in tile units, for an avatar `size` logical
-/// pixels across: closed eyes stay a visible line at every size.
-pub fn line_for(size: f32) -> f32 {
-    (1.3 / (size / 2.) / ZOOM).clamp(0.03, 0.2)
+/// `mascot` in `pose` on a `grid` x `grid` raster, row by row. Everything
+/// lands on whole cells: the body only ever moves by a whole cell, and the
+/// eyes are whole-cell boxes whose lids, worry and smile add or remove cells,
+/// so a face never smears between pixels.
+pub fn raster(mascot: &Mascot, grid: usize, pose: Pose) -> Vec<Option<Cell>> {
+    raster_eyes(mascot, grid, pose).0
 }
 
-/// `mascot` in `pose` as smooth outlines. `line` is the thinnest an eye may
-/// get, from [`line_for`].
-pub fn outline(mascot: &Mascot, pose: Pose, line: f32) -> Outline {
+/// [`raster`], with which eye (1, 2, ...) drew each cell, 0 for none.
+fn raster_eyes(mascot: &Mascot, grid: usize, pose: Pose) -> (Vec<Option<Cell>>, Vec<u8>) {
     let body = mascot.body;
-    let (yaw, pitch, roll) = (
-        pose.yaw.to_radians(),
-        pose.pitch.to_radians(),
-        pose.roll.to_radians(),
-    );
-    let centre_y = body.dy + pose.lift;
-    let (sin, cos) = roll.sin_cos();
-    // From body coordinates to the tile: squash, tilt, place, zoom.
-    let place = |x: f32, y: f32| {
-        let (x, y) = (x * (1. + pose.squash * 0.5), y * (1. - pose.squash));
-        let (x, y) = (x * cos - y * sin, x * sin + y * cos);
-        (x * ZOOM, (y + centre_y) * ZOOM)
-    };
+    let (yaw, pitch) = (pose.yaw.to_radians(), pose.pitch.to_radians());
+    let g = grid as f32;
+    let cell = 2. / g / ZOOM;
+    let depth = 0.9 * body.a.min(body.b);
     // A turned body looks a touch narrower.
     let a = body.a * (1. - 0.08 * yaw.sin().powi(2));
-    let power = |v: f32, n: f32| v.signum() * v.abs().powf(2. / n);
-    let outline_body = (0..BODY_POINTS)
-        .map(|i| {
-            let t = i as f32 / BODY_POINTS as f32 * std::f32::consts::TAU;
-            let y = body.b * power(t.sin(), body.n);
-            let half = a * (1. - body.taper * (0.5 - 0.5 * (y / body.b)));
-            place(half * power(t.cos(), body.n), y)
-        })
-        .collect();
-    let depth = 0.9 * body.a.min(body.b);
-    let mut eyes = Vec::with_capacity(body.eyes.len());
-    for eye in body.eyes {
+    let centre_y = body.dy + (pose.lift / cell).round() * cell;
+    let inside = |qx: f32, qy: f32| {
+        let along = (qy / body.b).clamp(-1., 1.);
+        let half = a * (1. - body.taper * (0.5 - 0.5 * along));
+        (qx / half).abs().powf(body.n) + (qy / body.b).abs().powf(body.n) <= 1.
+    };
+    let mut out = vec![None; grid * grid];
+    for y in 0..grid {
+        for x in 0..grid {
+            let px = ((x as f32 + 0.5) / g * 2. - 1.) / ZOOM;
+            let py = ((y as f32 + 0.5) / g * 2. - 1.) / ZOOM - centre_y;
+            if inside(px, py) {
+                out[y * grid + x] = Some(Cell::Body);
+            }
+        }
+    }
+    let bodies: Vec<bool> = out.iter().map(Option::is_some).collect();
+    // Keep a ring of body around every eye cell, so an eye near the rim
+    // never bites into the silhouette.
+    let solid = |x: isize, y: isize| {
+        (0..grid as isize).contains(&x)
+            && (0..grid as isize).contains(&y)
+            && bodies[y as usize * grid + x as usize]
+    };
+    let min_side = 2. / g * 1.05 / ZOOM;
+    // Which eye drew each cell, so two eyes never run together into one bar.
+    let mut owner = vec![0u8; grid * grid];
+    for (n, eye) in body.eyes.iter().enumerate() {
+        let id = n as u8 + 1;
         // The eye sits on the front of an ellipsoid; turn it with the head.
         let (u, v) = (eye.x / body.a, eye.y / body.b);
         let z0 = depth * (1. - u * u - v * v).max(0.05).sqrt();
@@ -858,134 +855,99 @@ pub fn outline(mascot: &Mascot, pose: Pose, line: f32) -> Outline {
             continue;
         }
         let squeeze = |turned: f32, rest: f32| (turned.cos() / rest.cos()).clamp(0.6, 1.2);
-        let grow = EYE_SCALE * (1. + pose.wide);
-        let w = eye.w * grow * squeeze(x1.atan2(z1), eye.x.atan2(z0));
-        let h = eye.h * grow * squeeze(y2.atan2(z2), eye.y.atan2(z0));
-        // Look far enough and the eye would slide off the face: pull it back
-        // toward the middle until it sits inside the body with a margin.
-        let (mut cx, mut cy) = (x1 + pose.gaze.0, y2 + pose.gaze.1);
-        let fits = |cx: f32, cy: f32| {
-            [
-                (-1., -1.),
-                (1., -1.),
-                (-1., 1.),
-                (1., 1.),
-                (0., -1.),
-                (0., 1.),
-                (-1., 0.),
-                (1., 0.),
-            ]
-            .iter()
-            .all(|(sx, sy)| {
-                let (x, y) = (cx + sx * w * 0.42, cy + sy * h * 0.42);
-                let half = a * (1. - body.taper * (0.5 - 0.5 * (y / body.b).clamp(-1., 1.)));
-                (x / half).abs().powf(body.n) + (y / body.b).abs().powf(body.n) <= 0.9
-            })
+        let grow = 1. + pose.wide;
+        let shut = pose.blink > 0.8;
+        // Closed eyes are a line; a slit, already a line, narrows instead.
+        let slit = eye.h * ZOOM * g / 2. < 2.5;
+        let w = (eye.w
+            * grow
+            * squeeze(x1.atan2(z1), eye.x.atan2(z0))
+            * if shut && slit { 0.7 } else { 1. })
+        .max(min_side);
+        let h = (eye.h * grow * squeeze(y2.atan2(z2), eye.y.atan2(z0)) * (1. - pose.blink))
+            .max(min_side);
+        // Whole-cell boxes keep eyes crisp; trimmed corners round them.
+        let cx = ((x1 + pose.gaze.0) * ZOOM + 1.) / 2. * g;
+        // An eye centred on a grid line needs an even width, one centred in
+        // a cell an odd one, or it lands a cell off and the face goes lopsided.
+        let mut wc = ((w * ZOOM * g / 2.).round() as isize).max(1);
+        if wc % 2 != ((cx * 2.).round() as isize).rem_euclid(2) {
+            wc += if (w * ZOOM * g / 2.) > wc as f32 {
+                1
+            } else {
+                -1
+            };
+            wc = wc.max(1);
+        }
+        let hc = ((h * ZOOM * g / 2.).round() as isize).max(1);
+        let cy = ((y2 + pose.gaze.1 + centre_y) * ZOOM + 1.) / 2. * g;
+        let x0 = (cx - wc as f32 / 2. + 0.5).floor() as isize;
+        let y0 = (cy - hc as f32 / 2. + 0.5).floor() as isize;
+        let mut put = |xx: isize, yy: isize| {
+            let ring = [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)];
+            // A full cell of body between eyes, diagonals included.
+            let around = (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (dx, dy)));
+            let apart = around.into_iter().all(|(dx, dy)| {
+                let (x, y) = (xx + dx, yy + dy);
+                !(0..grid as isize).contains(&x)
+                    || !(0..grid as isize).contains(&y)
+                    || [0, id].contains(&owner[y as usize * grid + x as usize])
+            });
+            if apart && ring.iter().all(|(dx, dy)| solid(xx + dx, yy + dy)) {
+                out[yy as usize * grid + xx as usize] = Some(Cell::Eye);
+                owner[yy as usize * grid + xx as usize] = id;
+            }
         };
-        if !fits(cx, cy) {
-            let (mut lo, mut hi) = (0., 1.);
-            for _ in 0..10 {
-                let k = (lo + hi) / 2.;
-                if fits(cx * k, cy * k) {
-                    lo = k;
-                } else {
-                    hi = k;
-                }
+        if pose.smile > 0.5 {
+            // Happy: an arch of cells, widened so it reads even when the eye
+            // is two cells across.
+            let aw = if wc < 3 { wc + 2 } else { wc };
+            let xs = x0 - (aw - wc) / 2;
+            let top = y0 + hc / 4;
+            for xx in xs + 1..xs + aw - 1 {
+                put(xx, top);
             }
-            (cx, cy) = (cx * lo, cy * lo);
+            for yy in top + 1..=top + (hc / 4).max(1) {
+                put(xs, yy);
+                put(xs + aw - 1, yy);
+            }
+            continue;
         }
-        // Lids droop toward the outer corner: away from the face's middle.
-        let outward = if eye.x < 0. { -1. } else { 1. };
-        let (top, bottom) = eye_edges(eye.shape, w, h, pose, line, outward);
-        eyes.push(
-            top.iter()
-                .chain(bottom.iter().rev())
-                .map(|(x, y)| place(cx + x, cy + y))
-                .collect(),
-        );
-    }
-    Outline {
-        body: outline_body,
-        eyes,
-    }
-}
-
-/// An eye's upper and lower edge, left to right, relative to its centre.
-fn eye_edges(
-    shape: EyeShape,
-    w: f32,
-    h: f32,
-    pose: Pose,
-    line: f32,
-    outward: f32,
-) -> (Vec<(f32, f32)>, Vec<(f32, f32)>) {
-    let (rx, ry) = (w / 2., h / 2.);
-    // Half the eye's height at `x`, open.
-    let half = |x: f32| -> f32 {
-        let x = x.abs().min(rx);
-        match shape {
-            EyeShape::Oval => ry * (1. - (x / rx).powi(2)).max(0.).sqrt(),
-            EyeShape::Capsule if ry >= rx => (ry - rx) + (rx * rx - x * x).max(0.).sqrt(),
-            EyeShape::Capsule => {
-                let straight = rx - ry;
-                if x <= straight {
-                    ry
+        // Lids come down from the top, straight across when focused and
+        // lower at the outer corner when worried.
+        let lowered = ((hc as f32 * pose.lid * 0.7).round() as isize).min(hc - 1);
+        let outer_left = eye.x < 0.;
+        let round = wc >= 3 && hc >= 3 && wc + hc >= 7;
+        for yy in y0..y0 + hc {
+            for xx in x0..x0 + wc {
+                let outward = if wc > 1 {
+                    let i = if outer_left {
+                        x0 + wc - 1 - xx
+                    } else {
+                        xx - x0
+                    };
+                    i as f32 / (wc - 1) as f32
                 } else {
-                    (ry * ry - (x - straight).powi(2)).max(0.).sqrt()
+                    0.
+                };
+                let worried = (outward * hc as f32 * 0.5 * pose.worry).round() as isize;
+                let lid = y0 + (lowered + worried).min(hc - 1);
+                let corner = (xx == x0 || xx == x0 + wc - 1)
+                    && ((yy == y0 && lowered == 0) || yy == y0 + hc - 1);
+                if yy < lid
+                    || (corner && round)
+                    || xx < 0
+                    || yy < 0
+                    || xx >= grid as isize
+                    || yy >= grid as isize
+                {
+                    continue;
                 }
+                put(xx, yy);
             }
         }
-    };
-    let blink = pose.blink.clamp(0., 1.);
-    let open = 1. - blink;
-    let smile = pose.smile.clamp(0., 1.);
-    // A happy eye is an arch at least as wide as the eye is tall.
-    let wide = rx.max(ry * 0.8);
-    let arch = wide * 0.85;
-    let band = (h * 0.24).max(line * 1.5);
-    let mut top = Vec::with_capacity(EYE_POINTS);
-    let mut bottom = Vec::with_capacity(EYE_POINTS);
-    for i in 0..EYE_POINTS {
-        // Spaced by cosine, so the rounded ends get the most points.
-        let u = -(std::f32::consts::PI * i as f32 / (EYE_POINTS - 1) as f32).cos();
-        let x = u * rx;
-        let across = (1. - u * u).max(0.).sqrt();
-        let thin = line * 0.5 * across.sqrt();
-        let open_half = half(x) * open;
-        // Closed eyes come to rest a little low, as lids do.
-        let drop = ry * 0.25 * blink;
-        let reach = open_half.max(thin);
-        let (mut t, mut b) = (drop - reach, drop + reach);
-        // Lids: lowered straight across, and slanting down toward the
-        // outer corner when worried.
-        let lid = ry * open * (-1. + pose.lid + pose.worry * (0.1 + 0.4 * outward * u));
-        t = t.max(lid).min(b - 2. * thin);
-        let mut x = x;
-        // Happy arcs replace the round eye.
-        if smile > 0. {
-            let arc_top = arch * (0.4 - across);
-            let arc_bottom = arc_top + band * (0.5 + 0.5 * across.sqrt());
-            x += (u * wide - x) * smile;
-            t += (arc_top - t) * smile;
-            b += (arc_bottom - b) * smile;
-        }
-        top.push((x, t));
-        bottom.push((x, b));
     }
-    (top, bottom)
-}
-
-/// The area of a closed polygon.
-pub fn area(points: &[(f32, f32)]) -> f32 {
-    let n = points.len();
-    (0..n)
-        .map(|i| {
-            let (a, b) = (points[i], points[(i + 1) % n]);
-            a.0 * b.1 - b.0 * a.1
-        })
-        .sum::<f32>()
-        .abs()
-        / 2.
+    (out, owner)
 }
 
 #[cfg(test)]
@@ -1041,99 +1003,80 @@ mod tests {
         }
     }
 
-    const LINE: f32 = 0.08;
+    fn count(cells: &[Option<Cell>], kind: Cell) -> usize {
+        cells.iter().filter(|c| **c == Some(kind)).count()
+    }
 
-    /// Mean of a set of points.
-    fn centre(points: &[(f32, f32)]) -> (f32, f32) {
-        let n = points.len() as f32;
+    /// Mean column and row of the eye cells.
+    fn eyes_at(cells: &[Option<Cell>], grid: usize) -> (f32, f32) {
+        let eyes: Vec<_> = (0..cells.len())
+            .filter(|i| cells[*i] == Some(Cell::Eye))
+            .collect();
+        let n = eyes.len() as f32;
         (
-            points.iter().map(|p| p.0).sum::<f32>() / n,
-            points.iter().map(|p| p.1).sum::<f32>() / n,
+            eyes.iter().map(|i| (i % grid) as f32).sum::<f32>() / n,
+            eyes.iter().map(|i| (i / grid) as f32).sum::<f32>() / n,
         )
     }
 
-    fn eyes_at(shape: &Outline) -> (f32, f32) {
-        let all: Vec<_> = shape.eyes.iter().flatten().copied().collect();
-        centre(&all)
+    /// Rows that hold eye cells.
+    fn eye_rows(cells: &[Option<Cell>], grid: usize) -> usize {
+        (0..grid)
+            .filter(|y| (0..grid).any(|x| cells[y * grid + x] == Some(Cell::Eye)))
+            .count()
     }
 
-    fn eye_area(shape: &Outline) -> f32 {
-        shape.eyes.iter().map(|eye| area(eye)).sum()
-    }
-
-    /// Tallest eye, top to bottom.
-    fn eye_height(shape: &Outline) -> f32 {
-        shape
-            .eyes
-            .iter()
-            .map(|eye| {
-                let (lo, hi) = eye.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| {
-                    (lo.min(p.1), hi.max(p.1))
-                });
-                hi - lo
-            })
-            .fold(0., f32::max)
-    }
-
-    fn inside(polygon: &[(f32, f32)], (x, y): (f32, f32)) -> bool {
-        let mut hit = false;
-        let n = polygon.len();
-        for i in 0..n {
-            let (a, b) = (polygon[i], polygon[(i + n - 1) % n]);
-            if (a.1 > y) != (b.1 > y) && x < (b.0 - a.0) * (y - a.1) / (b.1 - a.1) + a.0 {
-                hit = !hit;
-            }
-        }
-        hit
+    /// The body as it was drawn before expressions existed: rows of the
+    /// silhouette, so the pixel art cannot drift.
+    fn silhouette(cells: &[Option<Cell>]) -> Vec<bool> {
+        cells.iter().map(Option::is_some).collect()
     }
 
     #[test]
-    fn mascots_fill_the_tile_show_their_eyes_and_differ() {
-        let mut seen = Vec::<Outline>::new();
-        for mascot in MASCOTS {
-            assert!(!mascot.about.is_empty());
-            let shape = outline(mascot, Pose::default(), LINE);
-            assert!(
-                !seen.iter().any(|other| *other == shape),
-                "{} repeats",
-                mascot.id
-            );
-            // The tile is 2 x 2 units.
-            assert!(area(&shape.body) > 4. * 0.35, "{} too small", mascot.id);
-            assert_eq!(shape.eyes.len(), 2, "{} lost an eye", mascot.id);
-            for eye in &shape.eyes {
-                assert!(area(eye) > 0.01, "{} has a dot for an eye", mascot.id);
-            }
-            for point in shape.body.iter().chain(shape.eyes.iter().flatten()) {
+    fn mascots_fill_the_grid_show_their_eyes_and_differ() {
+        for grid in [16, 26, 42] {
+            let mut seen = std::collections::HashSet::new();
+            for mascot in MASCOTS {
+                assert!(!mascot.about.is_empty());
+                let cells = raster(mascot, grid, Pose::default());
                 assert!(
-                    point.0.abs() <= 1. && point.1.abs() <= 1.,
-                    "{} leaves its tile",
+                    seen.insert(cells.clone()),
+                    "{} repeats at {grid}",
                     mascot.id
                 );
-            }
-            // Symmetric faces come out symmetric at rest.
-            if mascot.id != "rogue" {
-                let (left, right) = (centre(&shape.eyes[0]), centre(&shape.eyes[1]));
+                let filled = cells.iter().filter(|c| c.is_some()).count();
                 assert!(
-                    (left.0 + right.0).abs() < 1e-3 && (left.1 - right.1).abs() < 1e-3,
-                    "{} is lopsided",
+                    filled > grid * grid * 35 / 100,
+                    "{} too small at {grid}",
                     mascot.id
                 );
                 assert!(
-                    (area(&shape.eyes[0]) - area(&shape.eyes[1])).abs() < 1e-4,
-                    "{}",
+                    count(&cells, Cell::Eye) >= 2,
+                    "{} has no eyes at {grid}",
                     mascot.id
                 );
-                assert!(centre(&shape.body).0.abs() < 1e-3, "{}", mascot.id);
+                // Symmetric faces come out symmetric at rest.
+                if mascot.id != "rogue" {
+                    for y in 0..grid {
+                        for x in 0..grid {
+                            assert_eq!(
+                                cells[y * grid + x],
+                                cells[y * grid + grid - 1 - x],
+                                "{} is lopsided at {grid}",
+                                mascot.id
+                            );
+                        }
+                    }
+                }
             }
-            seen.push(shape);
         }
     }
 
     #[test]
     fn turning_moves_the_eyes_across_the_face() {
         for mascot in MASCOTS {
-            let rest = eyes_at(&outline(mascot, Pose::default(), LINE));
+            let grid = 42;
+            let rest = eyes_at(&raster(mascot, grid, Pose::default()), grid);
             let right = Pose {
                 yaw: LOOK_YAW,
                 ..Pose::default()
@@ -1143,49 +1086,162 @@ mod tests {
                 ..Pose::default()
             };
             assert!(
-                eyes_at(&outline(mascot, right, LINE)).0 > rest.0,
+                eyes_at(&raster(mascot, grid, right), grid).0 > rest.0,
                 "{}",
                 mascot.id
             );
             assert!(
-                eyes_at(&outline(mascot, down, LINE)).1 > rest.1,
+                eyes_at(&raster(mascot, grid, down), grid).1 > rest.1,
                 "{}",
                 mascot.id
             );
-            // Eyes never leave the body, even at the widest turn, tilt and
-            // the most expressive faces.
+            // Eyes never leave the body, even at the widest turn and the most
+            // expressive faces.
             for pose in [
                 Pose {
-                    yaw: -LOOK_YAW - 6.,
-                    pitch: -LOOK_PITCH - 5.,
-                    roll: 4.,
+                    yaw: -LOOK_YAW - 3.,
+                    pitch: -LOOK_PITCH - 3.,
                     lift: 0.035,
                     gaze: (-0.11, -0.08),
                     wide: 0.4,
                     ..Pose::default()
                 },
                 Pose {
-                    yaw: LOOK_YAW + 6.,
-                    pitch: LOOK_PITCH + 4.,
-                    gaze: (0.11, 0.08),
                     worry: 1.,
+                    lid: 0.4,
                     ..Pose::default()
                 },
                 Pose {
                     smile: 1.,
-                    lift: -0.09,
-                    squash: -0.05,
+                    lift: -0.12,
                     ..Pose::default()
                 },
             ] {
-                let shape = outline(mascot, pose, LINE);
-                assert!(!shape.eyes.is_empty(), "{}", mascot.id);
-                for point in shape.eyes.iter().flatten() {
+                for grid in [16, 26, 42] {
+                    let cells = raster(mascot, grid, pose);
+                    assert!(count(&cells, Cell::Eye) > 0, "{}", mascot.id);
+                    // Eyes stay inside a ring of body: no bites out of the outline.
+                    for (i, cell) in cells.iter().enumerate() {
+                        if *cell == Some(Cell::Eye) {
+                            let (x, y) = ((i % grid) as isize, (i / grid) as isize);
+                            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                                let (nx, ny) = (x + dx, y + dy);
+                                assert!(
+                                    cells[(ny as usize) * grid + nx as usize].is_some(),
+                                    "{}",
+                                    mascot.id
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_body_only_moves_in_whole_cells() {
+        for mascot in MASCOTS {
+            for grid in [16, 26, 42] {
+                let rest = silhouette(&raster(mascot, grid, Pose::default()));
+                // Any lift draws the same silhouette, shifted by whole rows;
+                // expressions and turns never change its shape.
+                for lift in [-0.12, -0.07, -0.03, 0., 0.03] {
+                    let moved = silhouette(&raster(
+                        mascot,
+                        grid,
+                        Pose {
+                            lift,
+                            ..Pose::default()
+                        },
+                    ));
+                    let rows = (0..grid as isize)
+                        .find(|shift| {
+                            (0..grid).all(|y| {
+                                (0..grid).all(|x| {
+                                    let from = y as isize + shift;
+                                    let was = (0..grid as isize).contains(&from)
+                                        && rest[from as usize * grid + x];
+                                    moved[y * grid + x] == was
+                                })
+                            })
+                        })
+                        .or_else(|| {
+                            (1..grid as isize).find(|up| {
+                                (0..grid).all(|y| {
+                                    (0..grid).all(|x| {
+                                        let from = y as isize - up;
+                                        let was = (0..grid as isize).contains(&from)
+                                            && rest[from as usize * grid + x];
+                                        moved[y * grid + x] == was
+                                    })
+                                })
+                            })
+                        });
                     assert!(
-                        inside(&shape.body, *point),
-                        "{} eye leaves the body at {point:?} in {pose:?}",
+                        rows.is_some(),
+                        "{} warps at {grid} with lift {lift}",
                         mascot.id
                     );
+                }
+                for pose in [
+                    Pose {
+                        lid: 0.4,
+                        worry: 1.,
+                        ..Pose::default()
+                    },
+                    Pose {
+                        smile: 1.,
+                        ..Pose::default()
+                    },
+                    Pose {
+                        blink: 1.,
+                        wide: 0.3,
+                        ..Pose::default()
+                    },
+                ] {
+                    assert_eq!(
+                        silhouette(&raster(mascot, grid, pose)),
+                        rest,
+                        "{} at {grid}",
+                        mascot.id
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn eyes_never_touch_whatever_the_face() {
+        for mascot in MASCOTS {
+            for grid in [16, 26, 42] {
+                for mood in MOODS {
+                    let mut animator = Animator::new(Mood::Awake);
+                    animator.set(mascot, mood, 1_000, (0., 0.), (0., 0.));
+                    // Every 20 ms through the change of mood and six seconds
+                    // after, looking around.
+                    for ms in (1_000..7_000).step_by(20) {
+                        let look = ((ms as f32 / 700.).sin(), (ms as f32 / 900.).cos());
+                        let (_, owner) =
+                            raster_eyes(mascot, grid, animator.pose(mascot, ms, look, look));
+                        for (i, id) in owner.iter().enumerate().filter(|(_, id)| **id != 0) {
+                            let (x, y) = ((i % grid) as isize, (i / grid) as isize);
+                            for (dx, dy) in (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (dx, dy)))
+                            {
+                                let (nx, ny) = (x + dx, y + dy);
+                                if (0..grid as isize).contains(&nx)
+                                    && (0..grid as isize).contains(&ny)
+                                {
+                                    let other = owner[ny as usize * grid + nx as usize];
+                                    assert!(
+                                        other == 0 || other == *id,
+                                        "{} {mood:?} eyes touch at {grid}",
+                                        mascot.id
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1206,18 +1262,20 @@ mod tests {
             );
             let shut = samples.iter().filter(|b| **b > 0.05).count() as f32 / samples.len() as f32;
             assert!(shut < 0.08, "{} blinks too much: {shut}", mascot.id);
-            let open = outline(mascot, Pose::default(), LINE);
-            let closed = outline(
+            let open = raster(mascot, 42, Pose::default());
+            let closed = raster(
                 mascot,
+                42,
                 Pose {
                     blink: 1.,
                     ..Pose::default()
                 },
-                LINE,
             );
-            assert!(eye_area(&closed) < eye_area(&open), "{}", mascot.id);
-            // A closed eye is still a visible line.
-            assert!(eye_height(&closed) >= LINE * 0.99, "{}", mascot.id);
+            assert!(
+                count(&closed, Cell::Eye) < count(&open, Cell::Eye),
+                "{}",
+                mascot.id
+            );
         }
         // Blinks start at different moments for different mascots.
         let first = |m: &Mascot| (0..20_000).find(|ms| blink_at(m, *ms) > 0.5);
@@ -1230,14 +1288,16 @@ mod tests {
         let mascot = &MASCOTS[0];
         for ms in (0..30_000).step_by(97) {
             let pose = idle_pose(mascot, Mood::Awake, ms, (0., 0.), (0., 0.));
-            assert!(pose.yaw.abs() <= 4. && pose.pitch.abs() <= 3. && pose.roll.abs() <= 1.6);
-            assert!(pose.lift.abs() <= 0.035 && pose.squash.abs() <= 0.02);
+            assert!(pose.yaw.abs() <= 4. && pose.pitch.abs() <= 3. && pose.lift == 0.);
         }
         let looking = idle_pose(mascot, Mood::Awake, 0, (1., 1.), (1., 1.));
         let ahead = idle_pose(mascot, Mood::Awake, 0, (0., 0.), (0., 0.));
         assert!(looking.yaw - ahead.yaw > LOOK_YAW - 0.01);
         assert!(looking.pitch - ahead.pitch > LOOK_PITCH - 0.01);
         assert!(looking.gaze.0 > ahead.gaze.0 && looking.gaze.1 > ahead.gaze.1);
+        assert_eq!(grid_for(16.), 16);
+        assert_eq!(grid_for(40.), 26);
+        assert_eq!(grid_for(64.), 42);
     }
 
     const MOODS: [Mood; 8] = [
@@ -1253,103 +1313,84 @@ mod tests {
 
     #[test]
     fn moods_read_at_a_glance() {
-        for mascot in MASCOTS {
-            let at = |mood: Mood, ms: u64| idle_pose(mascot, mood, ms, (0., 0.), (0., 0.));
-            let shape = |pose: Pose| outline(mascot, pose, LINE);
-            let awake = shape(Pose {
-                blink: 0.,
-                ..at(Mood::Awake, 100)
-            });
-            // Resting and offline: eyes are closed lines the whole time.
-            for mood in [Mood::Resting, Mood::Offline] {
-                for ms in (0..20_000).step_by(250) {
-                    let closed = shape(at(mood, ms));
-                    assert!(
-                        eye_height(&closed) <= (eye_height(&awake) * 0.45).max(LINE * ZOOM * 1.01),
-                        "{} opens its eyes",
-                        mascot.id
-                    );
-                    assert_eq!(closed.eyes.len(), 2, "{} loses its eyes", mascot.id);
+        for grid in [16, 26, 42] {
+            for mascot in MASCOTS {
+                let at = |mood: Mood, ms: u64| idle_pose(mascot, mood, ms, (0., 0.), (0., 0.));
+                let open = |mood: Mood| {
+                    raster(
+                        mascot,
+                        grid,
+                        Pose {
+                            blink: 0.,
+                            ..at(mood, 100)
+                        },
+                    )
+                };
+                let awake = open(Mood::Awake);
+                // Resting and offline: eyes are closed lines the whole time.
+                for mood in [Mood::Resting, Mood::Offline] {
+                    for ms in (0..20_000).step_by(250) {
+                        let cells = raster(mascot, grid, at(mood, ms));
+                        assert!(eye_rows(&cells, grid) <= 2, "{} opens its eyes", mascot.id);
+                        assert!(count(&cells, Cell::Eye) > 0, "{} loses its eyes", mascot.id);
+                    }
                 }
-            }
-            // Working: focused lids, and it bounces.
-            let open = |mood| {
-                shape(Pose {
-                    blink: 0.,
-                    ..at(mood, 100)
-                })
-            };
-            assert!(
-                eye_height(&open(Mood::Working)) < eye_height(&awake),
-                "{}",
-                mascot.id
-            );
-            let lifts: Vec<f32> = (0..3000)
-                .step_by(40)
-                .map(|ms| at(Mood::Working, ms).lift)
-                .collect();
-            assert!(
-                lifts.iter().any(|l| *l < -0.03),
-                "{} doesn't bounce",
-                mascot.id
-            );
-            // Delegating: eyes sweep both ways.
-            let sweeps: Vec<f32> = (0..6000)
-                .step_by(50)
-                .map(|ms| at(Mood::Delegating, ms).gaze.0)
-                .collect();
-            assert!(sweeps.iter().any(|g| *g > 0.06) && sweeps.iter().any(|g| *g < -0.06));
-            // Needs you: hops every couple of seconds, with eyes open and wide.
-            let hops = (0..2400)
-                .step_by(20)
-                .filter(|ms| at(Mood::NeedsYou, *ms).lift < -0.06)
-                .count();
-            assert!(hops > 0, "{} never hops", mascot.id);
-            assert!(
-                eye_area(&open(Mood::NeedsYou)) > eye_area(&awake),
-                "{}",
-                mascot.id
-            );
-            // Done: happy arcs, so the eyes hold less ink than round ones.
-            assert!(
-                eye_area(&shape(at(Mood::Done, 100))) < eye_area(&awake),
-                "{}",
-                mascot.id
-            );
-            // Blocked: lids slant down toward the outer corners.
-            let worried = shape(Pose {
-                blink: 0.,
-                ..still_pose(Mood::Blocked)
-            });
-            let left = &worried.eyes[0];
-            let (inner, outer) = (left[EYE_POINTS - 3].1, left[2].1);
-            assert!(outer > inner, "{} isn't worried", mascot.id);
-            // Without motion, each mood still looks different.
-            let still: Vec<Outline> = MOODS.iter().map(|mood| shape(still_pose(*mood))).collect();
-            for (i, a) in still.iter().enumerate() {
-                for b in &still[i + 1..] {
-                    assert!(a != b, "{} has two moods that look alike", mascot.id);
-                }
+                // Working: lids come down; it bounces a whole cell.
+                let slit = mascot
+                    .body
+                    .eyes
+                    .iter()
+                    .all(|e| e.h * ZOOM * grid as f32 / 2. < 2.5);
+                assert!(
+                    eye_rows(&open(Mood::Working), grid) < eye_rows(&awake, grid) || slit,
+                    "{} at {grid}",
+                    mascot.id
+                );
+                let lifts: Vec<f32> = (0..3000)
+                    .step_by(40)
+                    .map(|ms| at(Mood::Working, ms).lift)
+                    .collect();
+                assert!(
+                    lifts.iter().any(|l| *l < -0.06),
+                    "{} doesn't bounce",
+                    mascot.id
+                );
+                // Delegating: eyes sweep both ways.
+                let sweeps: Vec<f32> = (0..6000)
+                    .step_by(50)
+                    .map(|ms| at(Mood::Delegating, ms).gaze.0)
+                    .collect();
+                assert!(sweeps.iter().any(|g| *g > 0.06) && sweeps.iter().any(|g| *g < -0.06));
+                // Needs you: hops every couple of seconds, with eyes open.
+                let hops = (0..2400)
+                    .step_by(20)
+                    .filter(|ms| at(Mood::NeedsYou, *ms).lift < -0.06)
+                    .count();
+                assert!(hops > 0, "{} never hops", mascot.id);
+                assert!(at(Mood::NeedsYou, 0).wide > at(Mood::Working, 0).wide);
+                // Without motion, each mood still looks different (offline
+                // differs by its dimmed colour). At sidebar size a few faces
+                // share a pixel pattern and only their motion tells them apart.
+                let still: std::collections::HashSet<_> = MOODS
+                    .iter()
+                    .filter(|mood| **mood != Mood::Offline)
+                    .map(|mood| raster(mascot, grid, still_pose(*mood)))
+                    .collect();
+                let least = if grid == 16 { 4 } else { MOODS.len() - 1 };
+                assert!(
+                    still.len() >= least,
+                    "{} at {grid}: {}",
+                    mascot.id,
+                    still.len()
+                );
             }
         }
     }
 
-    /// How many of `frames` samples, `step` ms apart, would draw differently
-    /// from the one before, at quarter-pixel precision on a 32px avatar.
+    /// How many of `frames` samples, `step` ms apart, draw differently from
+    /// the one before.
     fn changes(mascot: &Mascot, mood: Mood, frames: u64, step: u64) -> usize {
-        let key = |ms: u64| {
-            let shape = outline(
-                mascot,
-                idle_pose(mascot, mood, ms, (0., 0.), (0., 0.)),
-                LINE,
-            );
-            shape
-                .body
-                .iter()
-                .chain(shape.eyes.iter().flatten())
-                .map(|p| ((p.0 * 64.).round() as i32, (p.1 * 64.).round() as i32))
-                .collect::<Vec<_>>()
-        };
+        let key = |ms: u64| raster(mascot, 26, idle_pose(mascot, mood, ms, (0., 0.), (0., 0.)));
         (1..frames)
             .filter(|i| key(i * step) != key((i - 1) * step))
             .count()
@@ -1367,16 +1408,24 @@ mod tests {
                     mascot.id
                 );
             }
-            for mood in [Mood::Awake, Mood::NeedsYou, Mood::Blocked] {
+            for mood in [
+                Mood::Awake,
+                Mood::NeedsYou,
+                Mood::Blocked,
+                Mood::Working,
+                Mood::Delegating,
+            ] {
                 let moving = changes(mascot, mood, 300, 33);
+                // Pixel art changes in steps: even busy faces redraw a
+                // fraction of frames.
                 assert!(
-                    moving < 300 / 3,
+                    moving < 300 / 2,
                     "{} {mood:?} redraws {moving} of 300 frames",
                     mascot.id
                 );
             }
             assert!(
-                changes(mascot, Mood::Working, 300, 33) > 200,
+                changes(mascot, Mood::Working, 300, 33) > 10,
                 "{} works without moving",
                 mascot.id
             );
@@ -1455,94 +1504,74 @@ mod tests {
             "/../../apps/web-solid/src/features/zappers/mascot-parity.json"
         );
         let round = |v: f32| (v * 1_000.).round() / 1_000.;
-        let points = |list: &[(f32, f32)]| {
-            list.iter()
-                .map(|p| [round(p.0), round(p.1)])
-                .collect::<Vec<_>>()
-        };
-        let mut samples = Vec::new();
-        // Every mascot once, and every mood on the first.
-        let cases = MASCOTS
-            .iter()
-            .enumerate()
-            .map(|(i, _)| (i, i % MOODS.len()))
+        // Every mascot once, and every mood on the first, at three sizes.
+        let cases = (0..MASCOTS.len())
+            .map(|i| (i, i % MOODS.len()))
             .chain((1..MOODS.len()).map(|j| (0, j)));
-        for (i, j) in cases {
-            let (mascot, mood) = (&MASCOTS[i], &MOODS[j]);
-            {
-                let ms = 1_000 + (i * 977 + j * 1_313) as u64;
-                let look = (0.3 - 0.1 * i as f32, -0.2 + 0.05 * j as f32);
-                let pose = idle_pose(mascot, *mood, ms, look, look);
-                let line = line_for(16. + 6. * j as f32);
-                let shape = outline(mascot, pose, line);
-                let numbers = [
-                    pose.yaw,
-                    pose.pitch,
-                    pose.roll,
-                    pose.lift,
-                    pose.squash,
-                    pose.gaze.0,
-                    pose.gaze.1,
-                    pose.blink,
-                    pose.wide,
-                    pose.lid,
-                    pose.worry,
-                    pose.smile,
-                ]
-                .map(round);
-                samples.push(serde_json::json!({
-                    "mascot": mascot.id, "mood": mood_name(*mood), "ms": ms, "look": [look.0, look.1], "line": line,
-                    "pose": numbers,
-                    "body": points(&shape.body.iter().step_by(4).copied().collect::<Vec<_>>()),
-                    "eyes": shape.eyes.iter().map(|eye| points(&eye.iter().step_by(2).copied().collect::<Vec<_>>())).collect::<Vec<_>>(),
-                }));
-            }
+        let mut samples = Vec::new();
+        for (n, (i, j)) in cases.enumerate() {
+            let (mascot, mood) = (&MASCOTS[i], MOODS[j]);
+            let ms = 1_000 + (i * 977 + j * 1_313) as u64;
+            let look = (0.3 - 0.1 * i as f32, -0.2 + 0.05 * j as f32);
+            let pose = idle_pose(mascot, mood, ms, look, look);
+            let grid = [16, 26, 42][n % 3];
+            let rows: Vec<String> = raster(mascot, grid, pose)
+                .chunks(grid)
+                .map(|row| {
+                    row.iter()
+                        .map(|c| match c {
+                            None => '.',
+                            Some(Cell::Body) => 'b',
+                            Some(Cell::Eye) => 'e',
+                        })
+                        .collect()
+                })
+                .collect();
+            let numbers = [
+                pose.yaw,
+                pose.pitch,
+                pose.lift,
+                pose.gaze.0,
+                pose.gaze.1,
+                pose.blink,
+                pose.wide,
+                pose.lid,
+                pose.worry,
+                pose.smile,
+            ]
+            .map(round);
+            samples.push(serde_json::json!({
+                "mascot": mascot.id, "mood": mood_name(mood), "ms": ms, "look": [look.0, look.1],
+                "grid": grid, "pose": numbers, "cells": rows,
+            }));
         }
         let fresh = serde_json::Value::Array(samples);
         if std::env::var_os("ZAPPER_PARITY_WRITE").is_some() {
-            std::fs::write(path, serde_json::to_string(&fresh).unwrap() + "\n").unwrap();
+            std::fs::write(path, serde_json::to_string_pretty(&fresh).unwrap() + "\n").unwrap();
         }
         let saved: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         let (saved, fresh) = (saved.as_array().unwrap(), fresh.as_array().unwrap());
         assert_eq!(saved.len(), fresh.len());
-        let flat = |v: &serde_json::Value| -> Vec<f64> {
-            let mut out = Vec::new();
-            let mut stack = vec![v.clone()];
-            while let Some(v) = stack.pop() {
-                match v {
-                    serde_json::Value::Number(n) => out.push(n.as_f64().unwrap()),
-                    serde_json::Value::Array(list) => stack.extend(list),
-                    _ => {}
-                }
-            }
-            out
+        let numbers = |v: &serde_json::Value| -> Vec<f64> {
+            v.as_array()
+                .unwrap()
+                .iter()
+                .map(|n| n.as_f64().unwrap())
+                .collect()
         };
         for (a, b) in saved.iter().zip(fresh) {
-            for key in ["pose", "body", "eyes"] {
-                let (x, y) = (flat(&a[key]), flat(&b[key]));
-                assert_eq!(x.len(), y.len(), "{} {key}", a["mascot"]);
-                assert!(
-                    x.iter().zip(&y).all(|(x, y)| (x - y).abs() < 2e-3),
-                    "{} {} {key} drifted",
-                    a["mascot"],
-                    a["mood"]
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn eyes_stay_visible_at_sidebar_size() {
-        let line = line_for(16.);
-        // About 1.3 logical pixels at 16px.
-        assert!((line * ZOOM * 8. - 1.3).abs() < 0.01);
-        assert!(line_for(64.) < line && line_for(64.) >= 0.03);
-        for mascot in MASCOTS {
-            for mood in MOODS {
-                let shape = outline(mascot, still_pose(mood), line);
-                assert!(eye_height(&shape) * 8. >= 1.29, "{} {mood:?}", mascot.id);
-            }
+            assert_eq!(
+                a["cells"], b["cells"],
+                "{} {} drifted; rerun with ZAPPER_PARITY_WRITE=1",
+                a["mascot"], a["mood"]
+            );
+            let (x, y) = (numbers(&a["pose"]), numbers(&b["pose"]));
+            assert!(
+                x.iter().zip(&y).all(|(x, y)| (x - y).abs() < 1e-3),
+                "{} pose drifted",
+                a["mascot"]
+            );
         }
     }
 

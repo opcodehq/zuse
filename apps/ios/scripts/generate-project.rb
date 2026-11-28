@@ -11,7 +11,7 @@ ROOT = File.expand_path('..', __dir__)
 PROJECT_PATH = File.join(ROOT, 'Zuse.xcodeproj')
 PROFILE = JSON.parse(File.read(File.join(ROOT, 'config/deployment-profiles.json'))).fetch('production')
 SWIFT_VERSION = '6.0'
-MARKETING_VERSION = '2.0.0'
+MARKETING_VERSION = '2.1.0'
 # The App Store team; the iOS app ships as the existing Zuse app (com.zuse.sh).
 TEAM = 'HMCST4VV42'
 # Bundled as-is; see README.md for where each resource comes from.

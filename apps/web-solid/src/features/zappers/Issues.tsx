@@ -1,4 +1,5 @@
 import { Icon } from "@/ui/Icon";
+import { ISSUE_STATUS_LABELS, ISSUE_STATUS_ORDER, StatusIcon } from "@/ui/StatusIcon";
 import { ZapperSelect } from "./Controls";
 import {
   createMemo,
@@ -23,16 +24,7 @@ import { Markdown } from "@/features/transcript/Markdown";
 import { WorkerDialog } from "./Threads";
 import { Conversation, ThreadsControl } from "./Conversation";
 import { act, command, commandState, threadTitle } from "./state";
-const statuses: Record<IssueStatus, string> = {
-  backlog: "Backlog",
-  todo: "Todo",
-  inProgress: "In progress",
-  needsYou: "Needs you",
-  blocked: "Blocked",
-  inReview: "In review",
-  done: "Done",
-  canceled: "Canceled",
-};
+const statusOptions = () => ISSUE_STATUS_ORDER.map(value => ({ value, label: ISSUE_STATUS_LABELS[value], glyph: () => <StatusIcon status={value} /> }));
 const priorities: IssuePriority[] = ["urgent", "high", "normal", "low"];
 export function Issues(props: { zapper: Zapper; compact?: boolean; onOpen?: (id:string)=>void }) {
   const [filter, setFilter] = createSignal("open");
@@ -76,13 +68,13 @@ export function Issues(props: { zapper: Zapper; compact?: boolean; onOpen?: (id:
             value={query()}
             onInput={(e) => setQuery(e.currentTarget.value)}
           /></label>
-          <ZapperSelect label="Issue status filter" value={filter()} onChange={setFilter} options={[{value:"open",label:"Open issues"},{value:"all",label:"All issues"},...Object.entries(statuses).map(([value,label]) => ({value,label}))]} />
+          <ZapperSelect label="Issue status filter" value={filter()} onChange={setFilter} options={[{value:"open",label:"Open issues"},{value:"all",label:"All issues"},...statusOptions()]} />
         </div>
       </Show>
       <Show when={!props.compact}><div class="zp-list-summary">{filtered().length} {filtered().length === 1 ? "issue" : "issues"}<Show when={query() || filter() !== "open"}><button type="button" class="zp-link" onClick={() => { setQuery(""); setFilter("open"); }}>Clear filters</button></Show></div></Show>
       <div class="zp-issue-list"><For each={props.compact ? filtered().slice(0, 5) : filtered()} fallback={<div class="zp-list-empty"><Icon name="list" size={24} /><strong>{props.zapper.issues.length ? "No matching issues" : "A clear place for the next task"}</strong><p>{props.zapper.issues.length ? "Try another search or status." : "Track tasks, decisions, and progress with your Zapper."}</p><Show when={!props.compact && !props.zapper.issues.length}><Button size="sm" onClick={() => setCreating(true)}>Create an issue</Button></Show></div>}>
         {issue => <button type="button" class="zp-issue-row" onClick={() => { if(props.onOpen) props.onOpen(issue.id); else {setEditing(false);setSelected(issue.id);} }}>
-          <span class="zp-issue-status" data-status={issue.details.status} title={issueStatus(props.zapper,issue)}><Icon name={issue.details.status === "done" ? "check-circle" : issue.details.status === "blocked" ? "danger-triangle" : "clock-circle"} size={14} /></span>
+          <span class="zp-issue-status" title={issueStatus(props.zapper,issue)}><StatusIcon status={issue.details.status} /></span>
           <div class="zp-issue-content"><div class="zp-issue-title"><span class="zp-issue-number">ZAP-{issue.number}</span><strong>{issue.details.title}</strong></div><div class="zp-issue-meta"><span>{issueStatus(props.zapper,issue)}</span><span data-priority={issue.details.priority}>{issue.details.priority}</span><Show when={issue.details.owner || issue.details.assigned}><span>{ownerLabel(props.zapper,issue)}</span></Show><Show when={issue.details.dueDate}><span>Due {issue.details.dueDate}</span></Show><For each={issue.details.labels}>{label => <span class="zp-label">{label}</span>}</For></div></div>
           <Icon name="alt-arrow-right" size={12} class="zp-issue-chevron" />
         </button>}
@@ -123,7 +115,7 @@ function ownerLabel(zapper: Zapper, issue: ZapperIssue) {
 function issueStatus(zapper: Zapper, issue: ZapperIssue) {
   const owner=issue.details.owner;
   const worker=owner?.type === "thread" ? zapper.workers.find(worker=>worker.chatId===owner.chatId) : undefined;
-  return worker?.queuePosition !== undefined ? "Queued" : statuses[issue.details.status];
+  return worker?.queuePosition !== undefined ? "Queued" : ISSUE_STATUS_LABELS[issue.details.status];
 }
 function IssueEditor(props: {
   zapper: Zapper;
@@ -191,7 +183,7 @@ function IssueEditor(props: {
         <div class="zp-form-grid">
           <label>
             Status
-            <ZapperSelect label="Issue status" value={draft().status} onChange={value => change("status", value as IssueStatus)} options={Object.entries(statuses).map(([value,label]) => ({value,label}))} />
+            <ZapperSelect label="Issue status" value={draft().status} onChange={value => change("status", value as IssueStatus)} options={statusOptions()} />
           </label>
           <label>
             Priority
@@ -282,7 +274,8 @@ function IssueDetail(props: {
     <div class="zp-issue-detail">
       <ThreadsControl zapper={props.zapper} issue={props.issue} />
       <div class="zp-section-heading">
-        <span>
+        <span class="zp-issue-detail-status">
+          <StatusIcon status={props.issue.details.status} />
           {issueStatus(props.zapper,props.issue)} ·{" "}
           {props.issue.details.priority}
           {` · ${ownerLabel(props.zapper,props.issue)}`}

@@ -182,12 +182,23 @@ export function Files(props: { target: Target }) {
       })(),
     );
 
-  // Other surfaces (Changes, History) ask for a file through the pending slot.
+  let wantLine: { path: string; line: number } | null = null;
+  let editorPath: string | null = null;
+  const revealWantedLine = () => {
+    if (!editor || !wantLine || editorPath !== wantLine.path) return;
+    editor.revealLine(wantLine.line);
+    wantLine = null;
+  };
+
+  // Other surfaces (Changes, History, transcript file chips) ask for a file through the pending slot.
   createEffect(() => pending.seq, () => {
-    const path = takePending();
+    const { path, line, directory } = takePending();
     if (!path) return;
     reveal(chatId, path);
+    if (directory) return toggleDirectory(chatId, path, true);
+    wantLine = line ? { path, line } : null;
     openPath(path);
+    revealWantedLine();
   });
 
   const open = () => tree()?.open ?? null;
@@ -210,9 +221,11 @@ export function Files(props: { target: Target }) {
     if (lastBaseline === null || current === lastBaseline || !dirty()) {
       if (current !== text) editor.setText(text);
       editor.setLanguage(path);
+      editorPath = path;
     }
     lastBaseline = text;
     syncDirty();
+    revealWantedLine();
   });
   const [editorReady, setEditorReady] = createSignal(0);
   createEffect(() => [editable(), open()?.conflict, editorReady()], () => {
@@ -396,11 +409,13 @@ export function Files(props: { target: Target }) {
                     const draft = open()?.draftText;
                     editor.setText(typeof draft === "string" ? draft : text);
                     editor.setLanguage(file().path);
+                    editorPath = file().path;
                     lastBaseline = text;
                     syncDirty();
                   }
                   editor.setReadOnly(!editable());
                   setEditorReady((n) => n + 1);
+                  revealWantedLine();
                   cleanups.push(() => {
                     editor?.destroy();
                     editor = undefined;

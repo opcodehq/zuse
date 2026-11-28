@@ -91,6 +91,7 @@ export interface EditorHandle {
   text(): string;
   setReadOnly(readOnly: boolean): void;
   setLanguage(path: string): void;
+  revealLine(line: number): void;
   destroy(): void;
 }
 
@@ -151,6 +152,10 @@ export function createEditor(parent: HTMLElement, options: { onChange: () => voi
     setLanguage(path) {
       const seq = ++languageSeq;
       void languageFor(path).then((ext) => seq === languageSeq && view.dispatch({ effects: language.reconfigure(ext) }));
+    },
+    revealLine(line) {
+      const target = view.state.doc.line(Math.min(Math.max(1, Math.floor(line)), view.state.doc.lines));
+      view.dispatch({ selection: { anchor: target.from, head: target.to }, effects: EditorView.scrollIntoView(target.from, { y: "center" }) });
     },
     destroy: () => view.destroy(),
   };

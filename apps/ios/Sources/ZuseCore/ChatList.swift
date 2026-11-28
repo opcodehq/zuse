@@ -75,6 +75,48 @@ public enum ChatList {
   public static let noProject = "No project"
   /// The place key for Zuse Cloud chats.
   public static let cloudPlace = "cloud"
+  /// The place key for chats on the open computer.
+  public static let computerPlace = "computer"
+
+  /// The flat rows for the Chats tab, combining the open computer's chats with Zuse Cloud's.
+  ///
+  /// Cloud chats are always included, so a computer that is connecting or unreachable can never
+  /// hide them. Computer chats are included only when `includesComputerChats` is set, which the
+  /// caller clears while a cloud workspace is the active source (its transcript replaces the
+  /// computer's). `excludedChatIDs` drops chats owned by a Zapper, and `lastActivity` dates the
+  /// computer rows so `recent` can order the whole list.
+  public static func homeRows(
+    computerLabel: String, projectNames: [String: String] = [:],
+    sessions: [SessionRow] = [], archivedSessions: [SessionRow] = [],
+    excludedChatIDs: Set<String> = [], lastActivity: [String: Date] = [:],
+    includesComputerChats: Bool, cloudChats: [CloudChat]
+  ) -> [ChatListRow] {
+    var rows: [ChatListRow] = []
+    if includesComputerChats {
+      for (list, archived) in [(sessions, false), (archivedSessions, true)] {
+        for session in list where !excludedChatIDs.contains(session.id) {
+          let name =
+            session.projectId == CanonicalWorkspace.projectless
+            ? nil : projectNames[session.projectId]
+          rows.append(
+            ChatListRow(
+              id: computerPlace + "|" + session.id, chatID: session.id, placeKey: computerPlace,
+              placeLabel: computerLabel, projectKey: session.projectId, projectName: name,
+              title: session.title.isEmpty ? "New chat" : session.title, archived: archived,
+              lastActivity: lastActivity[session.id]))
+        }
+      }
+    }
+    for chat in cloudChats {
+      rows.append(
+        ChatListRow(
+          id: cloudPlace + "|" + chat.id, chatID: chat.chatId, placeKey: cloudPlace,
+          placeLabel: "Zuse Cloud", projectKey: chat.projectId,
+          projectName: chat.repositoryDisplayName,
+          title: chat.title.isEmpty ? "Untitled chat" : chat.title, archived: chat.isArchived))
+    }
+    return rows
+  }
 
   /// One flat list, most recent first: chats with a known last message by time, then the rest in
   /// the order given. `project` keeps chats whose project has that name (ignoring case), so a

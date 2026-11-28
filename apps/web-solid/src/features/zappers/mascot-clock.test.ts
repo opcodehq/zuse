@@ -32,7 +32,7 @@ const element = () => ({ d: "", setAttribute(_: string, value: string) { this.d 
 const step = (now: number) => { const pending = [...frames.values()]; frames.clear(); pending.forEach(fn => fn(now)); };
 const mount = (mood: "awake" | "working" = "working") => {
   const svg = element();
-  const paths = [element(), element(), element()];
+  const paths = [element(), element()];
   const face = attach(svg as unknown as SVGSVGElement, paths as unknown as SVGPathElement[], mascots[0]!, 17, mood);
   return { svg, paths, face };
 };

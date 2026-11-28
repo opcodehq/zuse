@@ -81,6 +81,7 @@ export function Spinner(props: Parameters<typeof GlyphSpinner>[0]) {
 export interface MenuItem {
   label: string;
   icon?: string;
+  glyph?: () => JSX.Element;
   danger?: boolean;
   disabled?: boolean;
   onSelect?: () => void;
@@ -101,7 +102,7 @@ export function Menu(props: { trigger: (triggerProps: Record<string, unknown>) =
                 <DropdownMenu.Separator class="menu-sep" />
               ) : (
                 <DropdownMenu.Item class="menu-item" data-danger={item.danger ? "true" : undefined} disabled={item.disabled} onSelect={() => item.onSelect?.()}>
-                  <Show when={item.icon}>{(name) => <Icon name={name()} size={14} />}</Show>
+                  {item.glyph?.() ?? <Show when={item.icon}>{(name) => <Icon name={name()} size={14} />}</Show>}
                   {item.label}
                 </DropdownMenu.Item>
               )
