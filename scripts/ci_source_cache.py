@@ -21,6 +21,35 @@ def sources(root):
             yield name, path
 
 
+def directories(root, files):
+    """Fingerprint fully tracked trees, including their entry names and types."""
+    candidates = {str(parent) for name in files for parent in Path(name).parents
+                  if str(parent) != "."}
+    result = {}
+    for name in sorted(candidates, key=lambda name: len(Path(name).parts), reverse=True):
+        path = root / name
+        if path.is_symlink():
+            continue
+        entries = []
+        for child in sorted(path.iterdir()):
+            key = str(child.relative_to(root))
+            if child.is_symlink():
+                break
+            if key in files:
+                entries.append((child.name, "file", files[key]["sha256"]))
+            elif key in result:
+                entries.append((child.name, "directory", result[key]["sha256"]))
+            else:
+                # Untracked/generated entries must retain their real timestamps.
+                break
+        else:
+            result[name] = {
+                "sha256": hashlib.sha256(json.dumps(entries).encode()).hexdigest(),
+                "mtime_ns": path.stat().st_mtime_ns,
+            }
+    return result
+
+
 def save(root=ROOT):
     files = {}
     for name, path in sources(root):
@@ -28,7 +57,8 @@ def save(root=ROOT):
                        "mtime_ns": path.stat().st_mtime_ns}
     receipt = root / RECEIPT
     receipt.parent.mkdir(parents=True, exist_ok=True)
-    receipt.write_text(json.dumps({"version": 1, "files": files}))
+    receipt.write_text(json.dumps({"version": 1, "files": files,
+                                   "directories": directories(root, files)}))
     print(f"Recorded {len(files)} source fingerprints")
 
 
@@ -41,15 +71,40 @@ def restore(root=ROOT):
         print("No usable source fingerprints; Cargo will rebuild normally")
         return 0
     restored = 0
+    current = {}
     # Iterate current tracked files, never arbitrary paths from a cache receipt.
     for name, path in sources(root):
+        current[name] = {"sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
         previous = receipt["files"].get(name, {})
         timestamp = previous.get("mtime_ns") if isinstance(previous, dict) else None
         if (isinstance(timestamp, int) and timestamp > 0
-                and hashlib.sha256(path.read_bytes()).hexdigest() == previous.get("sha256")):
+                and current[name]["sha256"] == previous.get("sha256")):
             info = path.stat()
             os.utime(path, ns=(info.st_atime_ns, timestamp))
             restored += 1
+    previous_directories = receipt.get("directories", {})
+    if isinstance(previous_directories, dict):
+        for name, fingerprint in directories(root, current).items():
+            previous = previous_directories.get(name, {})
+            if not previous and "directories" not in receipt:
+                # Older receipts contain file mtimes only. A fully tracked tree
+                # is unchanged only if every path and digest still matches.
+                prefix = name + "/"
+                before = {key: value for key, value in receipt["files"].items()
+                          if key.startswith(prefix)}
+                after = {key: value for key, value in current.items()
+                         if key.startswith(prefix)}
+                if (before and before.keys() == after.keys()
+                        and all(isinstance(value, dict)
+                                and value.get("sha256") == after[key]["sha256"]
+                                and isinstance(value.get("mtime_ns"), int)
+                                for key, value in before.items())):
+                    previous = {"sha256": fingerprint["sha256"],
+                                "mtime_ns": max(value["mtime_ns"] for value in before.values())}
+            if (isinstance(previous, dict) and fingerprint["sha256"] == previous.get("sha256")
+                    and isinstance(previous.get("mtime_ns"), int) and previous["mtime_ns"] > 0):
+                path = root / name
+                os.utime(path, ns=(path.stat().st_atime_ns, previous["mtime_ns"]))
     print(f"Restored timestamps for {restored} unchanged source files")
     return restored
 
