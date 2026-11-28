@@ -1,0 +1,94 @@
+---
+title: "How much should an agent be allowed to do?"
+description: "Zuse gives you two switches and three notches for what an agent may do without asking. Here is what each one lets through, what no setting unlocks, and why a yes only ever answers one question."
+date: "2026-11-28"
+category: "Note"
+timeToRead: "8 min read"
+authorName: "Zuse (Beta) team"
+authorRole: "Product notes"
+authorAvatar: "/app-icon.png"
+labels:
+  [
+    { name: "Permissions", hex: "#F59E0B" },
+    { name: "Design", hex: "#84CC16" },
+  ]
+---
+
+import { BenchFigure } from "@/components/blogs/agent-permissions/bench-figure";
+import { AccessSlider, ApprovalCards, PathCheck } from "@/components/blogs/agent-permissions/widgets";
+
+Every coding agent runs into the same question within its first minute: it wants to do something, and somebody has to decide whether it may. Read a file. Change one. Run the tests. Push a branch. If the answer is always "ask me", you spend the afternoon clicking yes. If it is never "ask me", you find out what the agent did after it did it.
+
+We don't think there is one right answer, so we didn't try to pick one for you. What we tried to do instead is make the answer legible: a small number of positions, each with an exact meaning, and a short list of things no position unlocks. This post walks through how we got there.
+
+<BenchFigure />
+
+The figure is a lockout board, the kind you find next to machinery that can hurt someone. Each module is one kind of action. A lit lamp means the agent does it without asking. A raised flag means a card comes to you first. The key turns through three notches, the lever drops a bar that locks out everything but reading, and the padlocked box on the right holds what never gets a key at all.
+
+## Two switches, not one dial
+
+Our first version had one control with four positions, running from read only to full access. It looked tidy and it was wrong, because it mixed two different questions.
+
+One question is whether the agent should change anything yet. Sometimes you want it to look around and propose an approach before it touches a file, because the shape of the work isn't settled. The other question is, once it is changing things, which actions it may take without stopping to ask. Those vary independently. You can want a plan from an agent you would otherwise trust with everything, and you can want edits from an agent you still want to watch.
+
+So we split them. **Plan mode** is the lever: while it's on, the agent inspects the project and proposes, and it can't edit files, run commands or call external tools. The **access level** is the key. Turning Plan mode on or off doesn't move the key, and leaving Plan mode always asks you first. Read only is gone as a level; chats that were saved with it now open in Ask for approval, and the planning job it used to do belongs to the lever.
+
+A few agents, coordinator chats and cloud launches don't offer Plan mode yet. On those, the menu says so instead of pretending.
+
+## Three notches
+
+The key has three positions, and the names say who decides.
+
+**Ask for approval** means you decide. With Zuse's own agent, reading and searching run on their own, and every edit, shell command, external tool call and delegated task waits for a card. **Approve for me** means the agent's own automatic reviewer decides, and it can still send the question to you. **Full access** means nobody is asked, apart from the short list in the next section.
+
+<AccessSlider />
+
+The middle notch is the one people ask about. It only exists where an agent ships its own reviewer, which today is two of the agents Zuse runs. We wire the notch to that reviewer rather than building a second judge of our own, because two judges with different opinions about the same command would make the notch mean nothing. Every other agent shows it as **Not available for this agent**.
+
+Other agents also bring their own limits, and the levels map onto each one's native controls rather than replacing them. One agent runs Ask for approval inside its own workspace-write sandbox with network access restricted. Another loads third-party extensions; in any restricted run we switch off their automatic discovery, because an extension could replace the inspection tools or run code outside the approval hooks. Zuse's own access guard still loads, and Full access keeps your installed extensions.
+
+Two smaller rules keep the key honest. Skipping approvals takes both Full access and an explicit opt-in on that run, so a leftover flag from an earlier run can't quietly authorize anything. And changing a chat's level restarts its agent process. We never reuse a process that was started with different permissions, because a process doesn't forget what it was allowed to do just because the menu changed.
+
+Picking a level in the composer also makes it the default for new chats. A chat that already exists keeps its own level.
+
+## What never gets a key
+
+Full access is not a sandbox. It runs the agent in its unrestricted mode, and on your computer that means it can do what you can do in a terminal. We say that plainly in the product, because the worst permission model is one that sounds safer than it is.
+
+What we can do is keep a short list of actions that ask at every notch, Full access included. Sensitive paths are on it: anything that looks like a secret or a key. Sign-in operations are on it, because an agent typing into a login flow is acting as you. Leaving Plan mode is on it. None of these can be saved as a rule. You answer each one, every time.
+
+<PathCheck />
+
+The list is deliberately mechanical. We match names, not contents, so you can predict the answer before the agent asks, and so can we. It errs on the side of asking: a file called `server.key` asks whether or not it holds a key.
+
+Questions the agent asks you, as opposed to permission requests, also stay interactive at every level. Full access lets the agent act without asking, but it never lets the agent answer its own questions for you.
+
+## A yes answers one question
+
+The card is where most of the design went, because it is the thing you see fifty times a day.
+
+Each card shows the operation and its exact target: the file, or the full command. You can allow it once, allow it for the rest of the chat, allow it for the whole project, or deny it. Denying hands control back to the agent so it can explain itself or try another way.
+
+<ApprovalCards />
+
+The rules behind those buttons are narrow on purpose. A saved rule matches the exact tool, the exact resource and the same checkout. A file rule follows the file through later edits, since its content changes every time. A command rule keeps the command, its working directory and its options, so `bun test billing` is not `bun test billing --watch`, and shell prefixes and wildcards never match. A rule saved in one worktree doesn't carry over to another. Rules never reach past the chat's access level, and they live on the machine that runs the agent.
+
+We also made the yes strict. A card is allowed only by an explicit yes to that card's own question. A no, a missing answer, a malformed one or a card that was dropped while you weren't looking all count as a denial. If the rule store is unavailable or an owner is missing, the request fails closed rather than running on a guess.
+
+Type `/permissions` to see every saved rule for the project and the chat. You can change any of them to Allow, Ask or Deny, move it between the chat and the project, or remove it.
+
+One caveat belongs here, because it is the kind of thing a permissions page usually leaves out. The rule store only sees the requests an agent sends to Zuse. In Full access, or when an agent's own reviewer approves something, the agent can act without sending a request at all. So the activity list next to your rules is a record of what was asked, not a complete log of what ran.
+
+## Your computer is not the bench
+
+Everything above happens inside a project checkout. Controlling your desktop is a different kind of reach, so we treat it as a different bench.
+
+Desktop control is opt-in for Zuse's own agent. You install the desktop tool yourself, grant its operating-system permissions yourself after you've looked at it, and it starts out untrusted until you mark it trusted. Once it's on, every call asks in Ask for approval, screenshots included, and Plan mode can't call it at all. Full access skips the ordinary prompts, and we'd suggest you don't use it for desktop work. A click or a keystroke isn't confined to the checkout: it can send a message, submit a form or change an account setting, and what an app shows on screen is content to read, never an instruction to follow. Screenshots can also contain private things, and they go to the model like any other tool output.
+
+Reaching your computer from your phone or another browser follows the same idea from the other side. The device has to be signed in to the same account, each connection gets a fresh, short-lived grant, and signing out ends it. When a connection drops in the middle of an action, we report that the action may have run instead of sending it again.
+
+## What we'd pick
+
+For most work we'd start in Ask for approval, and let saved rules take the repetitive cards off your hands one exact command at a time. Use Plan mode when you don't yet know what you want built. Move to Approve for me on an agent that has a reviewer once you trust its judgment, and to Full access for a run you can afford to throw away, like a fresh cloud computer that only holds a checkout.
+
+Whichever notch you choose, the board shows you what it means before the agent does anything, and the short list of things that always ask stays the same. That is the part we care most about: not where the key sits, but that you know where it sits.
