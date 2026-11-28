@@ -140,7 +140,13 @@ pub fn cloud_project_group(
             .any(|spelling| repository_key(spelling).as_ref() == Some(wanted))
         })
     };
-    let matched = spaces.iter().find(matches);
+    // A monorepo subfolder carries the repository's remote too; the
+    // repository's root checkout is the project the cloud repository is.
+    let matched = spaces
+        .iter()
+        .filter(matches)
+        .min_by_key(|space| (in_repository_subfolder(space), space.created_at, &space.id))
+        .or_else(|| unremoted_namesake(project, spaces));
     let representative = matched.map(|space| crate::view::representative_space(spaces, space));
     Some(CloudProjectGroup {
         key: matched
@@ -152,6 +158,52 @@ pub fn cloud_project_group(
         project_id: project_id.to_owned(),
         local_space: representative.map(|space| space.id.clone()),
     })
+}
+
+/// A space below its repository's top level: its identity carries the
+/// in-repository path (`commit:<sha>:apps/web`, `host/owner/repo:apps/web`).
+fn in_repository_subfolder(space: &Space) -> bool {
+    space.repository_id.as_deref().is_some_and(|id| {
+        id.strip_prefix("commit:")
+            .or_else(|| id.strip_prefix("local:"))
+            .unwrap_or(id)
+            .contains(':')
+    })
+}
+
+/// The one local repository project named like the cloud project when no
+/// checkout of it says which repository it is (no remote stamped yet, an
+/// older engine on another device, no `origin`). A project whose remote
+/// names any repository never joins by name, and neither does a name two
+/// local projects share.
+fn unremoted_namesake<'a>(project: &serde_json::Value, spaces: &'a [Space]) -> Option<&'a Space> {
+    let name = cloud_project_short_name(project);
+    let mut found: Option<&Space> = None;
+    for space in spaces.iter().filter(|space| {
+        !crate::projectless::is_projectless_cwd(Some(&space.path))
+            && crate::view::representative_space(spaces, space)
+                .display_name()
+                .eq_ignore_ascii_case(&name)
+    }) {
+        let remote = [
+            space.remote_repository.as_deref(),
+            space.repository_id.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|spelling| repository_key(spelling).is_some());
+        if remote || !space.git_detected || in_repository_subfolder(space) {
+            return None;
+        }
+        match found {
+            Some(other) if crate::view::project_key(other) != crate::view::project_key(space) => {
+                return None;
+            }
+            Some(_) => {}
+            None => found = Some(space),
+        }
+    }
+    found
 }
 
 #[cfg(test)]
@@ -247,5 +299,74 @@ mod tests {
             "remoteRepository":"github.com/another/app","createdAt":"2026-01-01T00:00:00Z"
         })).unwrap()];
         assert_eq!(cloud_project_group(&cloud, &unrelated).unwrap(), no_local);
+    }
+
+    fn space(id: &str, path: &str, repository: Option<&str>, remote: Option<&str>) -> Space {
+        serde_json::from_value(json!({
+            "id": id, "deviceId": "mac", "path": path, "gitDetected": true,
+            "repositoryId": repository, "remoteRepository": remote,
+            "createdAt": "2026-01-01T00:00:00Z"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn the_repository_root_wins_over_a_monorepo_subfolder() {
+        let spaces = vec![
+            space(
+                "web",
+                "/work/app/apps/web",
+                Some("commit:root:apps/web"),
+                Some("github.com/owner/app"),
+            ),
+            space(
+                "root",
+                "/work/app",
+                Some("commit:root"),
+                Some("github.com/owner/app"),
+            ),
+        ];
+        let project = json!({"projectId":"p","repositoryIdentity":"github.com/owner/app","displayName":"app"});
+        let group = cloud_project_group(&project, &spaces).unwrap();
+        assert_eq!(group.local_space.as_deref(), Some("root"));
+        assert_eq!(group.key, "repo:commit:root");
+    }
+
+    #[test]
+    fn a_checkout_without_a_known_remote_joins_its_namesake_only_when_unambiguous() {
+        let project = json!({"projectId":"p","repositoryIdentity":"github.com/opcodehq/delulu","displayName":"opcodehq/delulu"});
+        // No remote stamped: the one local "delulu" is this repository.
+        let unstamped = vec![
+            space("a", "/work/delulu", Some("commit:root"), None),
+            space("b", "/other/delulu", Some("commit:root"), None),
+        ];
+        let group = cloud_project_group(&project, &unstamped).unwrap();
+        assert_eq!(group.key, "repo:commit:root");
+        assert_eq!(group.name, "delulu");
+        // A remote naming another repository never joins by name.
+        let fork = vec![space(
+            "a",
+            "/work/delulu",
+            Some("commit:root"),
+            Some("github.com/someone/delulu"),
+        )];
+        assert_eq!(
+            cloud_project_group(&project, &fork).unwrap().key,
+            "cloud-project:p"
+        );
+        // Two unrelated local projects of that name: no guess.
+        let two = vec![
+            space("a", "/work/delulu", Some("commit:one"), None),
+            space("b", "/old/delulu", Some("commit:two"), None),
+        ];
+        assert_eq!(
+            cloud_project_group(&project, &two).unwrap().key,
+            "cloud-project:p"
+        );
+        // Home and scratch folders are never projects.
+        assert_eq!(
+            cloud_project_group(&project, &[]).unwrap().key,
+            "cloud-project:p"
+        );
     }
 }

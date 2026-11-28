@@ -885,6 +885,29 @@ mod tests {
         });
     }
 
+    /// Cloud projects without chats stay out of the sidebar, as local ones
+    /// do; the project holding chats keeps its heading.
+    #[gpui::test]
+    fn cloud_projects_without_chats_have_no_sidebar_heading(cx: &mut TestAppContext) {
+        let (_shell, cx) = owner_account_sidebar(cx);
+        cx.update(|window, cx| window.draw(cx).clear());
+        assert!(
+            cx.debug_bounds("sidebar-group-new-chat-project:repo:github.com/opcodehq/zuse")
+                .is_some()
+        );
+        for selector in [
+            "sidebar-group-new-chat-project:cloud-project:project_review",
+            "sidebar-group-new-chat-project:cloud-project:project_zkit",
+            "sidebar-group-new-chat-project:cloud-project:project_delulu",
+            "sidebar-group-new-chat-project:cloud-project:project_brokeboy",
+        ] {
+            assert!(
+                cx.debug_bounds(selector).is_none(),
+                "{selector}: a project without chats kept its heading"
+            );
+        }
+    }
+
     /// Records archive requests and acknowledges them like the controller.
     #[derive(Default)]
     struct Archiver {

@@ -317,30 +317,26 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if let Some(workspace) = chat_id.strip_prefix(super::CLOUD_ROW_PREFIX) {
-            let (name, space, owner) = self.cloud_row_project(workspace, cx);
-            // The repository owner's GitHub avatar, over the local checkout's
-            // artwork (or the monogram) while it loads or when it can't.
-            let fallback = match space {
-                Some(space) => self.project_artwork(Some(&space), selected, cx),
-                None => monogram(&name, false, Theme::of(cx)),
+            let project = {
+                let state = self.state.read(cx);
+                state
+                    .cloud_sidebar_workspaces()
+                    .into_iter()
+                    .find(|row| row["workspaceId"].as_str() == Some(workspace))
+                    .and_then(|row| {
+                        let id = row["projectId"].as_str()?.to_owned();
+                        state
+                            .cloud_sidebar_projects()
+                            .into_iter()
+                            .find(|project| project["projectId"].as_str() == Some(id.as_str()))
+                    })
             };
-            let art = match owner {
-                Some(owner) => div()
-                    .relative()
-                    .size_full()
-                    .child(fallback)
-                    .child(
-                        gpui::img(SharedString::from(format!(
-                            "https://github.com/{owner}.png?size=80"
-                        )))
-                        .absolute()
-                        .inset_0()
-                        .size_full()
-                        .rounded(px(4.0))
-                        .object_fit(gpui::ObjectFit::Cover),
-                    )
-                    .into_any_element(),
-                None => fallback,
+            let (name, art) = match project {
+                Some(project) => self.cloud_project_artwork(&project, selected, cx),
+                None => (
+                    "Cloud project".to_owned(),
+                    monogram("Cloud project", false, Theme::of(cx)),
+                ),
             };
             return project_icon_frame(chat_id, &name, "Cloud computer", size, art);
         }
@@ -360,50 +356,67 @@ impl Shell {
         project_icon_frame(chat_id, &name, &device, size, art)
     }
 
-    /// A cloud task's project name, and the local checkout of the same
-    /// repository when this device has one (its artwork is the project's).
-    fn cloud_row_project(
+    /// A cloud project's name and artwork. A project joined to a local
+    /// checkout looks exactly like it; a cloud-only one shows its GitHub
+    /// owner's avatar over its own monogram (never the "Home" tile).
+    pub(super) fn cloud_project_artwork(
         &self,
-        workspace: &str,
-        cx: &App,
-    ) -> (String, Option<zuse_protocol::Space>, Option<String>) {
-        let state = self.state.read(cx);
-        let project_id = state
-            .cloud_sidebar_workspaces()
-            .into_iter()
-            .find(|row| row["workspaceId"].as_str() == Some(workspace))
-            .and_then(|row| row["projectId"].as_str().map(str::to_owned));
-        let project = project_id.and_then(|id| {
-            state
-                .cloud_sidebar_projects()
-                .into_iter()
-                .find(|project| project["projectId"].as_str() == Some(id.as_str()))
-        });
-        let Some(project) = project else {
-            return ("Cloud project".into(), None, None);
+        project: &serde_json::Value,
+        selected: bool,
+        cx: &mut Context<Self>,
+    ) -> (String, AnyElement) {
+        let (name, space, owner) = {
+            let state = self.state.read(cx);
+            let group = zuse_protocol::presentation::cloud_project_group(project, &state.spaces);
+            let space = group
+                .as_ref()
+                .and_then(|group| group.local_space.as_deref())
+                .and_then(|id| state.space_row(id))
+                .cloned();
+            let owner = project["repositoryIdentity"]
+                .as_str()
+                .and_then(zuse_protocol::presentation::repository_key)
+                .and_then(|key| key.strip_prefix("github.com/").map(str::to_owned))
+                .and_then(|path| github_owner(&path).map(str::to_owned));
+            let name = group
+                .map(|group| group.name)
+                .unwrap_or_else(|| zuse_protocol::presentation::cloud_project_short_name(project));
+            (name, space, owner)
         };
-        let group = zuse_protocol::presentation::cloud_project_group(&project, &state.spaces);
-        let identity = project["repositoryIdentity"].as_str().unwrap_or_default();
-        let space = (!identity.is_empty())
-            .then(|| {
-                state.spaces.iter().find(|space| {
-                    [&space.remote_repository, &space.repository_id]
-                        .into_iter()
-                        .flatten()
-                        .any(|id| id.eq_ignore_ascii_case(identity))
-                })
-            })
-            .flatten()
-            .cloned();
-        let name = group
-            .map(|group| group.name)
-            .or_else(|| project["displayName"].as_str().map(str::to_owned))
-            .unwrap_or_else(|| "Cloud project".into());
-        let owner = identity
-            .strip_prefix("github.com/")
-            .and_then(github_owner)
-            .map(str::to_owned);
-        (name, space, owner)
+        let art = match space {
+            // The checkout's artwork already carries its GitHub owner when
+            // its remote names one; the cloud repository fills in otherwise.
+            Some(space)
+                if github_avatar_url(self.state.read(cx), &space).is_some() || owner.is_none() =>
+            {
+                self.project_artwork(Some(&space), selected, cx)
+            }
+            space => {
+                let fallback = match space {
+                    Some(space) => self.project_artwork(Some(&space), selected, cx),
+                    None => monogram(&name, selected, Theme::of(cx)),
+                };
+                match owner {
+                    Some(owner) => div()
+                        .relative()
+                        .size_full()
+                        .child(fallback)
+                        .child(
+                            gpui::img(SharedString::from(format!(
+                                "https://github.com/{owner}.png?size=80"
+                            )))
+                            .absolute()
+                            .inset_0()
+                            .size_full()
+                            .rounded(px(4.0))
+                            .object_fit(gpui::ObjectFit::Cover),
+                        )
+                        .into_any_element(),
+                    None => fallback,
+                }
+            }
+        };
+        (name, art)
     }
 
     /// Artwork for a chat's project, shared by every space of the project:
