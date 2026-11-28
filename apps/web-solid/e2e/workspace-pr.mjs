@@ -135,7 +135,7 @@ try {
     if (xss || scripts) throw new Error(`unsanitized markdown ${xss} ${scripts}`);
     const link = await page.eval(`(() => { const a = document.querySelector("#ws-surface-pullRequest .ws-markdown a"); return a && a.target + " " + a.rel })()`);
     if (link !== "_blank noopener noreferrer") throw new Error(`link attrs ${link}`);
-    console.log(" merge box:", await txt("#ws-surface-pullRequest .ws-pr-merge"));
+    console.log(" status:", await txt("#ws-surface-pullRequest .ws-pr-status"));
   });
 
   await step("merge-refusal", async () => {
@@ -150,10 +150,10 @@ try {
   await step("status-draft", async () => {
     await page.press('#ws-surface-pullRequest button[aria-label="Pull request actions"]');
     await pickMenu("Convert to draft");
-    await page.waitFor(`/still a draft/.test(document.querySelector("#ws-surface-pullRequest .ws-pr-merge")?.textContent ?? "")`, 5000);
+    await page.waitFor(`document.querySelector("#ws-surface-pullRequest .ws-pr-state")?.textContent === "Draft"`, 5000);
     await shot("draft");
     await page.eval(`[...document.querySelectorAll("#ws-surface-pullRequest .ws-pr-merge button")].find((b) => b.textContent.includes("Ready for review")).click()`);
-    await page.waitFor(`!/still a draft/.test(document.querySelector("#ws-surface-pullRequest .ws-pr-merge")?.textContent ?? "")`, 5000);
+    await page.waitFor(`document.querySelector("#ws-surface-pullRequest .ws-pr-state")?.textContent === "Open"`, 5000);
   });
 
   await step("activity-and-comment", async () => {

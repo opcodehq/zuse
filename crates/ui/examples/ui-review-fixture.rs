@@ -154,10 +154,14 @@ fn main() -> anyhow::Result<()> {
             // unseen and finished unseen (chat-3, bold).
             s.chats[7].last_message_at = Some(chrono::Utc::now());
             let session = |chat_id: &str, device_id: &str, status| zuse_protocol::Session { last_completed_turn: None, awaiting_input: Default::default(), running_subagents: 0, background_tasks: Vec::new(), notice: None, chat_id: chat_id.into(), device_id: device_id.into(), status, started_at: Some(chrono::Utc::now()), updated_at: chrono::Utc::now() };
+            // chat-1's turn ended with a shell still running: background work.
+            let mut background = session("chat-1", "local", zuse_protocol::SessionStatus::Idle);
+            background.background_tasks = vec![zuse_protocol::BackgroundTask { id: "watch".into(), kind: zuse_protocol::BackgroundTaskKind::Shell, description: "Watch CI".into(), command: Some("gh pr checks --watch".into()), started_at: chrono::Utc::now() - chrono::Duration::seconds(84), ended_at: None, outcome: None, stoppable: true }];
             s.apply_sessions(vec![
                 session("zuse-publish", "local", zuse_protocol::SessionStatus::Working),
                 session("chat-5", "local", zuse_protocol::SessionStatus::AwaitingInput),
                 session("chat-6", "remote", zuse_protocol::SessionStatus::Errored),
+                background,
             ]);
             s
         });

@@ -7,6 +7,7 @@ mod launch_upload;
 mod outbox;
 mod reupload;
 mod runtime_update;
+mod send_upload;
 mod unknown;
 mod waiting;
 mod wake;
@@ -66,6 +67,9 @@ pub(super) struct Launch {
     upload: Option<launch_upload::Progress>,
     /// A waiting message's files being copied to server storage.
     waiting_copy: Option<waiting::WaitingCopy>,
+    /// The files of the message being sent, while they upload (see
+    /// [`send_upload`]).
+    send_upload: Option<send_upload::Upload>,
     /// A conversation just added beside the computer's others is still being
     /// recorded by the server (a few tens of milliseconds, no computer work):
     /// a send waits for it, so it never reaches the server unregistered.
@@ -869,25 +873,30 @@ impl Composer {
         let primary = self.primary_claim(&request, cx);
         self.failure = None;
         self.cloud.task = Some(cx.spawn(async move |this, cx| {
-            if !staged.is_empty() && !computer_files_delivered(&request, staged.len()) {
-                // A message's files go straight to its computer, never to server
-                // storage, whether it runs now or waits in the queue: wake it,
-                // wait for its connection, then upload.
-                let engine=match computer_engine(&this,cx).await {
-                    Ok(engine)=>engine,
-                    Err(ComputerWait::Gone)=>return,
-                    Err(ComputerWait::TimedOut)=>{
-                        let _=this.update(cx,|this,cx|{this.keep_unsent_native_send(cx);this.cloud_failure(COMPUTER_TIMEOUT.into(),cx)});
+            if !staged.is_empty() && !send_upload::delivered(&request, staged.len()) {
+                // Straight to its computer while it is connected; server
+                // storage when it isn't, or when that fails or stalls. The
+                // message goes to the server once its files are available.
+                match send_upload::deliver(&this, cx, &target, &mut request, &staged).await {
+                    Ok(()) => {}
+                    Err(send_upload::Failed::Gone) => return,
+                    Err(send_upload::Failed::Unavailable(error)) => {
+                        tracing::warn!(%error, "a message's files couldn't be uploaded");
+                        // Retried with the message, under its same ids, until
+                        // the outbox shows it as not sent.
+                        let _ = this.update(cx, |this, cx| {
+                            this.cloud.task = None;
+                            this.cloud_send_unreachable(cx);
+                        });
                         return;
                     }
-                };
-                let paths=match upload_to_computer(&engine,cx.background_executor(),&staged).await {
-                    Ok(paths)=>paths,
-                    Err(error)=>{let _=this.update(cx,|this,cx|{this.keep_unsent_native_send(cx);this.cloud_failure(error,cx)});return;}
-                };
-                set_computer_files(&mut request, paths);
-                // Retain the uploaded paths so a retry doesn't upload again.
-                let _=this.update(cx,|this,_|this.cloud.pending_native=Some(request.clone()));
+                }
+                // Retain where the files went so a retry doesn't upload again.
+                let _ = this.update(cx, |this, cx| {
+                    this.cloud.pending_native = Some(request.clone());
+                    this.finish_send_upload();
+                    cx.notify();
+                });
             }
             // A message that has to wait for its computer (runtime update,
             // Update computer) is queued on the server, not refused.
@@ -955,7 +964,7 @@ impl Composer {
                         // Its files stay here until the computer takes it, in
                         // case they go missing there first.
                         let text=this.cloud.pending_native_text.clone();
-                        if waiting {
+                        if waiting && !send_upload::stored_on_server(&request) {
                             // Its files go to server storage until it is sent:
                             // the computer may be replaced meanwhile.
                             this.keep_waiting_files_on_server(&request, &value["data"], sent.clone(), cx);
@@ -1143,6 +1152,20 @@ impl Composer {
                             .debug_selector(|| "delete-cloud-launch".into())
                             .on_click(cx.listener(|this, _, _, cx| this.discard_cloud_launch(cx))),
                     ),
+            );
+        }
+        if let Some(upload) = self.cloud_send_upload() {
+            // A message's files on their way: how far along they are.
+            return Some(
+                super::tray::TrayPill::new("cloud-send-upload", upload.label())
+                    .subtitle(upload.detail())
+                    .icon_element(crate::loaders::mini_mono_spinner(
+                        "cloud-send-upload-spinner",
+                        2.,
+                        theme.text_muted,
+                        cx.entity_id(),
+                        cx,
+                    )),
             );
         }
         let (label, busy) = self.cloud.status.clone()?;
@@ -2470,16 +2493,6 @@ pub(crate) async fn upload_to_computer(
         .await
         .map_err(|error| format!("The files couldn't reach the computer: {error}"))
 }
-/// Whether a message's files already reached its computer: a run carries
-/// their paths in its request, a queued message in its input.
-fn computer_files_delivered(request: &Value, files: usize) -> bool {
-    let paths = if request["action"]["type"] == "queue" {
-        &request["action"]["input"]["computerFiles"]
-    } else {
-        &request["action"]["payload"]["request"]["attachments"]
-    };
-    paths.as_array().is_some_and(|paths| paths.len() == files)
-}
 /// Record where a message's files landed on its computer.
 fn set_computer_files(request: &mut Value, paths: Vec<String>) {
     if request["action"]["type"] == "queue" {
@@ -3255,22 +3268,22 @@ mod cached_tests {
     #[test]
     fn a_messages_computer_files_go_in_its_run_or_its_queued_input() {
         let mut run = json!({"action":{"type":"submit","payload":{"request":{"attachments":[]}}}});
-        assert!(!computer_files_delivered(&run, 1));
+        assert!(!send_upload::delivered(&run, 1));
         set_computer_files(&mut run, vec!["/u/a.png".into()]);
         assert_eq!(
             run["action"]["payload"]["request"]["attachments"],
             json!(["/u/a.png"])
         );
-        assert!(computer_files_delivered(&run, 1));
+        assert!(send_upload::delivered(&run, 1));
         let mut queued = json!({"action":{"type":"queue","input":{"text":"later"}}});
-        assert!(!computer_files_delivered(&queued, 1));
+        assert!(!send_upload::delivered(&queued, 1));
         set_computer_files(&mut queued, vec!["/u/a.png".into(), "/u/b.txt".into()]);
         assert_eq!(
             queued["action"]["input"]["computerFiles"],
             json!(["/u/a.png", "/u/b.txt"])
         );
         assert!(queued["action"]["input"].get("attachments").is_none());
-        assert!(computer_files_delivered(&queued, 2));
+        assert!(send_upload::delivered(&queued, 2));
     }
     #[gpui::test]
     fn a_queued_message_with_files_wakes_the_computer_instead_of_uploading_to_the_server(
