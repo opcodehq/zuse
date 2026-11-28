@@ -17,6 +17,7 @@
 
 ### Fixed
 
+- Desktop: the agent-updates card draws above the conversation again instead of underneath it, so chat bubbles, dividers and the scroll rail no longer show through it and it no longer looks faded.
 - Desktop: clicking a subagent in a cloud chat (its spawn chip or the composer's background-work tray) opens its conversation in the right pane again, read from the cloud computer.
 - Devin chats no longer show a stray "Waiting for 1 subagent" from the lead's own usage updates, and sidekick chips settle before the turn ends.
 - A steered Devin turn no longer leaves the running command's chip stuck before the steer.

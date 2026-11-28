@@ -17107,6 +17107,11 @@ impl Render for Shell {
                 // under the header and fade out at its edge. Columns that
                 // must NOT underlap (sidebar content, the changes panel,
                 // settings) pad themselves down by the titlebar height.
+                let update_card = self.render_harness_update_card(
+                    window,
+                    f32::from(window.viewport_size().width),
+                    cx,
+                );
                 let page = div()
                     .size_full()
                     .relative()
@@ -17151,6 +17156,17 @@ impl Render for Shell {
                             .opacity(under_stage)
                             .children(title_bar),
                     )
+                    // Above the transcript and its scroll rail, beneath the
+                    // voice stage, menus and modals.
+                    .when_some(update_card, |view, card| {
+                        view.child(
+                            div()
+                                .absolute()
+                                .top(px(Theme::TITLEBAR_HEIGHT + 12.0))
+                                .right(px(16.0))
+                                .child(card),
+                        )
+                    })
                     // The stage covers the conversation's titlebar but never
                     // the cluster: the sidebar toggle and navigation stay live.
                     .children(voice_stage)
@@ -17163,20 +17179,6 @@ impl Render for Shell {
                     )
                     .child(self.workspace_sidebar_header(cx))
                     .children(overlays);
-                let update_card = self.render_harness_update_card(
-                    window,
-                    f32::from(window.viewport_size().width),
-                    cx,
-                );
-                let root = root.when_some(update_card, |view, card| {
-                    view.child(
-                        div()
-                            .absolute()
-                            .top(px(Theme::TITLEBAR_HEIGHT + 12.0))
-                            .right(px(16.0))
-                            .child(card),
-                    )
-                });
                 root.when(self.workspace_gutter() == 0., |view| {
                     view.child(sidebar_tone)
                 })
