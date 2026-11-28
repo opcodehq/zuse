@@ -1,23 +1,23 @@
 //! Profile pictures for Zappers and the people working with them.
 //!
-//! A Zapper is either the user's own picture or one of the flat mascots in
-//! [`zapper_mascots`], drawn on a transparent ground as smooth filled
-//! outlines. Mascots turn their heads toward the pointer, blink, glance
-//! around and show their mood; a change of mood blends over a few hundred
-//! milliseconds instead of jumping. A shared sampler re-poses every live
-//! mascot thirty times a second and re-renders a view only when one of its
-//! mascots would draw differently, so quiet mascots cost no paints between
-//! blinks. Mascots that stop being painted (scrolled away, hidden, closed)
-//! drop out of the sampler. Under reduced motion mascots hold a still pose
-//! that still shows their mood, and moods change without blending. People
-//! get a quiet monogram disc; an unassigned slot is a dashed ring.
+//! A Zapper is either the user's own picture or one of the soft pixel
+//! mascots in [`zapper_mascots`], drawn on a transparent ground as runs of flat
+//! quads snapped to device pixels. Mascots turn their heads toward the
+//! pointer, blink, glance around and show their mood in whole pixels; a
+//! change of mood blends over a few hundred milliseconds. A shared sampler
+//! re-poses every live mascot thirty times a second and re-renders a view
+//! only when one of its mascots' pixels actually changed, so a still screen
+//! costs no paints. Mascots that stop being painted (scrolled away, hidden,
+//! closed) drop out of the sampler. Under reduced motion mascots hold a still
+//! pose that still shows their mood. People get a quiet monogram disc; an
+//! unassigned slot is a dashed ring.
 use base64::Engine as _;
 use gpui::{prelude::*, *};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use zuse_protocol::presentation::zapper_mascots::{self, Animator, Mascot, Mood, Outline, Pose};
+use zuse_protocol::presentation::zapper_mascots::{self, Animator, Cell, Mascot, Mood, Pose};
 use zuse_protocol::zappers::{AVATAR_IMAGE_MAX_LEN, Zapper, ZapperAvatar, avatar_image_ok};
 
 /// Everything needed to draw one Zapper: its mascot, which is also the
@@ -85,10 +85,11 @@ pub fn zapper_face(face: &ZapperFace, size: f32) -> Div {
                 } else {
                     live_pose(mascot, mood, size, bounds, window, cx)
                 };
-                let shape = zapper_mascots::outline(mascot, pose, zapper_mascots::line_for(size));
+                let grid = zapper_mascots::grid_for(size);
+                let cells = zapper_mascots::raster(mascot, grid, pose);
                 // Offline Zappers fade, so a stale face never reads as present.
                 let alpha = if mood == Mood::Offline { 0.5 } else { 1. };
-                paint_outline(&shape, body, alpha, bounds, window);
+                paint_cells(&cells, grid, body, alpha, bounds, window);
             },
         )
         .size(px(size)),
@@ -255,8 +256,7 @@ struct Live {
     centre: Point<Pixels>,
     mascot: &'static Mascot,
     animator: Animator,
-    size: f32,
-    scale: f32,
+    grid: usize,
     /// Smoothed look targets: the eyes lead, the head follows.
     eyes: (f32, f32),
     head: (f32, f32),
@@ -306,23 +306,13 @@ fn pose_of(live: &Live, ms: u64) -> Pose {
     live.animator.pose(live.mascot, ms, live.eyes, live.head)
 }
 
-/// What a mascot would draw, to a third of a device pixel: equal keys
-/// paint identical frames.
+/// What a mascot would draw: equal keys paint identical frames.
 fn drawn(live: &Live, ms: u64) -> u64 {
-    let shape = zapper_mascots::outline(
+    digest(zapper_mascots::raster(
         live.mascot,
+        live.grid,
         pose_of(live, ms),
-        zapper_mascots::line_for(live.size),
-    );
-    let unit = live.size / 2. * live.scale * 3.;
-    digest(
-        shape
-            .body
-            .iter()
-            .chain(shape.eyes.iter().flatten())
-            .map(|p| ((p.0 * unit).round() as i32, (p.1 * unit).round() as i32))
-            .collect::<Vec<_>>(),
-    )
+    ))
 }
 
 /// Pose a mascot being painted, registering it with the sampler.
@@ -345,15 +335,13 @@ fn live_pose(
     let window_handle = window.window_handle();
     let motion = cx.default_global::<Motion>();
     let ms = now_ms(motion);
-    let scale = window.scale_factor();
     let live = motion.live.entry((view, slot)).or_insert_with(|| Live {
         view,
         window: window_handle,
         centre,
         mascot,
         animator: Animator::new(mood),
-        size,
-        scale,
+        grid: zapper_mascots::grid_for(size),
         eyes: (0., 0.),
         head: (0., 0.),
         sampled: Instant::now(),
@@ -364,7 +352,6 @@ fn live_pose(
     live.asked = None;
     live.painted = Instant::now();
     let painted = live.painted;
-    live.scale = scale;
     // A new mood blends in from the pose on screen; the same mood again is
     // a no-op, so re-renders never restart anything.
     live.animator.set(mascot, mood, ms, live.eyes, live.head);
@@ -480,40 +467,46 @@ fn sample(cx: &mut App) -> bool {
     keep
 }
 
-/// Fill a posed mascot's outlines into `bounds`: the body in its colour,
-/// then the eyes.
-fn paint_outline(
-    shape: &Outline,
+fn paint_cells(
+    cells: &[Option<Cell>],
+    grid: usize,
     body: u32,
     alpha: f32,
     bounds: Bounds<Pixels>,
     window: &mut Window,
 ) {
     let side = f32::from(bounds.size.width.min(bounds.size.height));
+    let scale = window.scale_factor();
     let origin = bounds.origin;
-    let at = |p: &(f32, f32)| {
-        point(
-            origin.x + px((p.0 + 1.) / 2. * side),
-            origin.y + px((p.1 + 1.) / 2. * side),
-        )
+    // Cell edges land on whole device pixels, so every pixel stays sharp.
+    let edge = |base: Pixels, i: usize| -> f32 {
+        ((f32::from(base) + side * i as f32 / grid as f32) * scale).round() / scale
     };
-    let fill_with = |points: &[(f32, f32)], color: u32, window: &mut Window| {
-        let Some(first) = points.first() else {
-            return;
-        };
-        let mut path = PathBuilder::fill();
-        path.move_to(at(first));
-        for p in &points[1..] {
-            path.line_to(at(p));
+    for y in 0..grid {
+        let (top, bottom) = (edge(origin.y, y), edge(origin.y, y + 1));
+        let mut x = 0;
+        while x < grid {
+            let Some(cell) = cells[y * grid + x] else {
+                x += 1;
+                continue;
+            };
+            let start = x;
+            while x < grid && cells[y * grid + x] == Some(cell) {
+                x += 1;
+            }
+            let (left, right) = (edge(origin.x, start), edge(origin.x, x));
+            let color = match cell {
+                Cell::Body => body,
+                Cell::Eye => zapper_mascots::EYE,
+            };
+            window.paint_quad(fill(
+                Bounds::new(
+                    point(px(left), px(top)),
+                    size(px(right - left), px(bottom - top)),
+                ),
+                rgba(color << 8 | (alpha * 255.).round() as u32),
+            ));
         }
-        path.close();
-        if let Ok(path) = path.build() {
-            window.paint_path(path, rgba(color << 8 | (alpha * 255.).round() as u32));
-        }
-    };
-    fill_with(&shape.body, body, window);
-    for eye in &shape.eyes {
-        fill_with(eye, zapper_mascots::EYE, window);
     }
 }
 

@@ -1,4 +1,4 @@
-// The Zapper mascots' motion and outlines, ported from
+// The Zapper mascots' motion and pixel raster, ported from
 // crates/protocol/src/presentation/zapper_mascots.rs so web and desktop draw the
 // same faces. mascot-parity.json pins both to the same numbers.
 import { blinkGaps, type Mascot } from "./mascots";
@@ -6,10 +6,9 @@ import { blinkGaps, type Mascot } from "./mascots";
 export type Mood = "awake" | "resting" | "offline" | "working" | "delegating" | "needsYou" | "blocked" | "done";
 export type Point = [number, number];
 export type Pose = {
-  yaw: number; pitch: number; roll: number; lift: number; squash: number;
+  yaw: number; pitch: number; lift: number;
   gaze: Point; blink: number; wide: number; lid: number; worry: number; smile: number;
 };
-export type Outline = { body: Point[]; eyes: Point[][] };
 
 export const moodLabel: Record<Mood, string> = {
   awake: "Idle", resting: "Resting", offline: "Offline", working: "Working",
@@ -24,12 +23,9 @@ export const HEAD_FOLLOW_MS = 190;
 export const TRANSITION_MS = 420;
 export const GREETING_MS = 620;
 const ZOOM = 1.16;
-const EYE_SCALE = 1.25;
-const BODY_POINTS = 72;
-export const EYE_POINTS = 13;
 const TAU = Math.PI * 2;
 
-export const rest = (): Pose => ({ yaw: 0, pitch: 0, roll: 0, lift: 0, squash: 0, gaze: [0, 0], blink: 0, wide: 0, lid: 0, worry: 0, smile: 0 });
+export const rest = (): Pose => ({ yaw: 0, pitch: 0, lift: 0, gaze: [0, 0], blink: 0, wide: 0, lid: 0, worry: 0, smile: 0 });
 const pose = (over: Partial<Pose>): Pose => ({ ...rest(), ...over });
 
 export function hash(text: string) {
@@ -44,8 +40,7 @@ const easeGentle = (t: number) => t * t * t * (t * (6 * t - 15) + 10);
 export function mix(from: Pose, to: Pose, t: number): Pose {
   const m = (a: number, b: number) => a + (b - a) * t;
   return {
-    yaw: m(from.yaw, to.yaw), pitch: m(from.pitch, to.pitch), roll: m(from.roll, to.roll),
-    lift: m(from.lift, to.lift), squash: m(from.squash, to.squash),
+    yaw: m(from.yaw, to.yaw), pitch: m(from.pitch, to.pitch), lift: m(from.lift, to.lift),
     gaze: [m(from.gaze[0], to.gaze[0]), m(from.gaze[1], to.gaze[1])],
     blink: m(from.blink, to.blink), wide: m(from.wide, to.wide), lid: m(from.lid, to.lid),
     worry: m(from.worry, to.worry), smile: m(from.smile, to.smile),
@@ -91,7 +86,7 @@ export function idlePose(mascot: Mascot, mood: Mood, ms: number, eyes: Point = [
   const s = ms / 1000 + (hash(mascot.id) % 1000) / 37;
   const sway = (rate: number, phase: number) => Math.sin(s * rate + phase);
   const looking = pose({
-    yaw: head[0] * LOOK_YAW, pitch: head[1] * LOOK_PITCH, roll: head[0] * head[1] * 2.2,
+    yaw: head[0] * LOOK_YAW, pitch: head[1] * LOOK_PITCH,
     gaze: [eyes[0] * 0.08, eyes[1] * 0.06], blink: blinkAt(mascot, ms),
   });
   switch (mood) {
@@ -106,7 +101,7 @@ export function idlePose(mascot: Mascot, mood: Mood, ms: number, eyes: Point = [
       const bounce = Math.abs(sway(3.8, 0));
       return {
         ...looking, yaw: g[0] * 5 + head[0] * LOOK_YAW * 0.5, pitch: g[1] * 3 + head[1] * LOOK_PITCH * 0.5,
-        lift: -bounce * 0.07, squash: (1 - bounce) * 0.05 - 0.015,
+        lift: -bounce * 0.07,
         gaze: [g[0] * 0.08 + eyes[0] * 0.04, g[1] * 0.05 + eyes[1] * 0.03], wide: 0.04, lid: 0.38,
       };
     }
@@ -119,7 +114,7 @@ export function idlePose(mascot: Mascot, mood: Mood, ms: number, eyes: Point = [
       const p = nowAndThen(mascot, ms, 2400, 380);
       if (p !== null) {
         const hop = Math.sin(p * Math.PI);
-        out.lift = -hop * 0.12; out.squash = -hop * 0.05; out.blink = 0;
+        out.lift = -hop * 0.12; out.blink = 0;
       }
       return out;
     }
@@ -150,10 +145,10 @@ export function stillPose(mood: Mood): Pose {
 function greet(from: Mood, to: Mood, p: number, out: Pose) {
   const arc = Math.sin(p * Math.PI);
   if ((to === "working" || to === "delegating") && !busy(from)) {
-    out.lift -= arc * 0.08; out.squash -= arc * 0.05; out.wide += arc * 0.25 * (1 - p);
+    out.lift -= arc * 0.08; out.wide += arc * 0.25 * (1 - p);
     out.lid *= p; out.blink *= p;
   } else if (to === "done") {
-    out.lift -= arc * 0.06; out.squash -= arc * 0.03;
+    out.lift -= arc * 0.06;
   } else if (to === "needsYou") {
     out.lift -= arc * 0.07; out.wide += arc * 0.1;
   } else if (to === "blocked") {
@@ -186,104 +181,116 @@ export class Animator {
   }
 }
 
-/** The thinnest an eye may get, in tile units, for an avatar `size` CSS pixels across. */
-export const lineFor = (size: number) => Math.min(0.2, Math.max(0.03, 1.3 / (size / 2) / ZOOM));
+export type Cell = "body" | "eye" | null;
 
-const power = (v: number, n: number) => Math.sign(v) * Math.abs(v) ** (2 / n);
+/** Cells across for an avatar `size` pixels wide; matches grid_for on desktop. */
+export const gridFor = (size: number) => Math.floor(Math.min(44, Math.max(16, roundAway(size / 1.5))) / 2) * 2;
 
-/** `mascot` in `pose` as filled outlines; the tile spans -1..1, y down. */
-export function outline(mascot: Mascot, p: Pose, line: number): Outline {
+/** Rust's rounding: halves go away from zero. */
+function roundAway(v: number) {
+  return Math.sign(v) * Math.round(Math.abs(v));
+}
+
+/** `mascot` in `p` on a `grid` x `grid` raster, row by row, in whole cells. */
+export function raster(mascot: Mascot, grid: number, p: Pose): Cell[] {
+  const f = Math.fround;
   const rad = Math.PI / 180;
-  const [yaw, pitch, roll] = [p.yaw * rad, p.pitch * rad, p.roll * rad];
-  const centreY = mascot.dy + p.lift;
-  const [sin, cos] = [Math.sin(roll), Math.cos(roll)];
-  const place = (x0: number, y0: number): Point => {
-    const [x, y] = [x0 * (1 + p.squash * 0.5), y0 * (1 - p.squash)];
-    return [(x * cos - y * sin) * ZOOM, (x * sin + y * cos + centreY) * ZOOM];
-  };
-  const a = mascot.a * (1 - 0.08 * Math.sin(yaw) ** 2);
-  const halfAt = (y: number) => a * (1 - mascot.taper * (0.5 - 0.5 * (y / mascot.b)));
-  const body: Point[] = [];
-  for (let i = 0; i < BODY_POINTS; i++) {
-    const t = (i / BODY_POINTS) * TAU;
-    const y = mascot.b * power(Math.sin(t), mascot.n);
-    body.push(place(halfAt(y) * power(Math.cos(t), mascot.n), y));
-  }
+  const [yaw, pitch] = [p.yaw * rad, p.pitch * rad];
+  const g = grid;
+  const cell = 2 / g / ZOOM;
   const depth = 0.9 * Math.min(mascot.a, mascot.b);
-  const eyes: Point[][] = [];
-  for (const eye of mascot.eyes) {
+  const a = mascot.a * (1 - 0.08 * Math.sin(yaw) ** 2);
+  const centreY = mascot.dy + roundAway(p.lift / cell) * cell;
+  const inside = (qx: number, qy: number) => {
+    const along = Math.min(1, Math.max(-1, qy / mascot.b));
+    const half = a * (1 - mascot.taper * (0.5 - 0.5 * along));
+    return f(Math.abs(qx / half) ** mascot.n + Math.abs(qy / mascot.b) ** mascot.n) <= 1;
+  };
+  const out: Cell[] = new Array(grid * grid).fill(null);
+  for (let y = 0; y < grid; y++) {
+    for (let x = 0; x < grid; x++) {
+      const px = (((x + 0.5) / g) * 2 - 1) / ZOOM;
+      const py = (((y + 0.5) / g) * 2 - 1) / ZOOM - centreY;
+      if (inside(px, py)) out[y * grid + x] = "body";
+    }
+  }
+  const bodies = out.map(c => c !== null);
+  const solid = (x: number, y: number) => x >= 0 && y >= 0 && x < grid && y < grid && bodies[y * grid + x]!;
+  const minSide = (2 / g) * 1.05 / ZOOM;
+  const owner = new Array<number>(grid * grid).fill(0);
+  for (const [n, eye] of mascot.eyes.entries()) {
+    const id = n + 1;
     const [u, v] = [eye.x / mascot.a, eye.y / mascot.b];
     const z0 = depth * Math.sqrt(Math.max(1 - u * u - v * v, 0.05));
     const [x1, z1] = [eye.x * Math.cos(yaw) + z0 * Math.sin(yaw), -eye.x * Math.sin(yaw) + z0 * Math.cos(yaw)];
     const [y2, z2] = [eye.y * Math.cos(pitch) + z1 * Math.sin(pitch), -eye.y * Math.sin(pitch) + z1 * Math.cos(pitch)];
     if (z2 < 0.12 * depth) continue;
     const squeeze = (turned: number, still: number) => Math.min(1.2, Math.max(0.6, Math.cos(turned) / Math.cos(still)));
-    const grow = EYE_SCALE * (1 + p.wide);
-    const w = eye.w * grow * squeeze(Math.atan2(x1, z1), Math.atan2(eye.x, z0));
-    const h = eye.h * grow * squeeze(Math.atan2(y2, z2), Math.atan2(eye.y, z0));
-    const fits = (cx: number, cy: number) => [[-1, -1], [1, -1], [-1, 1], [1, 1], [0, -1], [0, 1], [-1, 0], [1, 0]].every(([sx, sy]) => {
-      const [x, y] = [cx + sx! * w * 0.42, cy + sy! * h * 0.42];
-      const half = a * (1 - mascot.taper * (0.5 - 0.5 * Math.min(1, Math.max(-1, y / mascot.b))));
-      return Math.abs(x / half) ** mascot.n + Math.abs(y / mascot.b) ** mascot.n <= 0.9;
-    });
-    let [cx, cy] = [x1 + p.gaze[0], y2 + p.gaze[1]];
-    if (!fits(cx, cy)) {
-      let [lo, hi] = [0, 1];
-      for (let i = 0; i < 10; i++) {
-        const k = (lo + hi) / 2;
-        if (fits(cx * k, cy * k)) lo = k; else hi = k;
+    const grow = 1 + p.wide;
+    const shut = p.blink > 0.8;
+    const slit = (eye.h * ZOOM * g) / 2 < 2.5;
+    const w = Math.max(eye.w * grow * squeeze(Math.atan2(x1, z1), Math.atan2(eye.x, z0)) * (shut && slit ? 0.7 : 1), minSide);
+    const h = Math.max(eye.h * grow * squeeze(Math.atan2(y2, z2), Math.atan2(eye.y, z0)) * (1 - p.blink), minSide);
+    const cx = (((x1 + p.gaze[0]) * ZOOM + 1) / 2) * g;
+    let wc = Math.max(1, roundAway((w * ZOOM * g) / 2));
+    if (wc % 2 !== ((roundAway(cx * 2) % 2) + 2) % 2) {
+      wc += (w * ZOOM * g) / 2 > wc ? 1 : -1;
+      wc = Math.max(1, wc);
+    }
+    const hc = Math.max(1, roundAway((h * ZOOM * g) / 2));
+    const cy = (((y2 + p.gaze[1] + centreY) * ZOOM + 1) / 2) * g;
+    const x0 = Math.floor(cx - wc / 2 + 0.5);
+    const y0 = Math.floor(cy - hc / 2 + 0.5);
+    const put = (xx: number, yy: number) => {
+      const ring = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]] as const;
+      const apart = ring.every(([dx, dy]) => {
+        const [x, y] = [xx + dx, yy + dy];
+        return x < 0 || y < 0 || x >= grid || y >= grid || owner[y * grid + x] === 0 || owner[y * grid + x] === id;
+      });
+      if (apart && ring.every(([dx, dy]) => solid(xx + dx, yy + dy))) {
+        out[yy * grid + xx] = "eye";
+        owner[yy * grid + xx] = id;
       }
-      [cx, cy] = [cx * lo, cy * lo];
+    };
+    if (p.smile > 0.5) {
+      const aw = wc < 3 ? wc + 2 : wc;
+      const xs = x0 - Math.trunc((aw - wc) / 2);
+      const top = y0 + Math.trunc(hc / 4);
+      for (let xx = xs + 1; xx < xs + aw - 1; xx++) put(xx, top);
+      for (let yy = top + 1; yy <= top + Math.max(1, Math.trunc(hc / 4)); yy++) {
+        put(xs, yy);
+        put(xs + aw - 1, yy);
+      }
+      continue;
     }
-    const [top, bottom] = eyeEdges(eye.shape, w, h, p, line, eye.x < 0 ? -1 : 1);
-    eyes.push([...top, ...bottom.reverse()].map(([x, y]) => place(cx + x, cy + y)));
+    const lowered = Math.min(hc - 1, roundAway(hc * p.lid * 0.7));
+    const outerLeft = eye.x < 0;
+    const round = wc >= 3 && hc >= 3 && wc + hc >= 7;
+    for (let yy = y0; yy < y0 + hc; yy++) {
+      for (let xx = x0; xx < x0 + wc; xx++) {
+        const outward = wc > 1 ? (outerLeft ? x0 + wc - 1 - xx : xx - x0) / (wc - 1) : 0;
+        const worried = roundAway(outward * hc * 0.5 * p.worry);
+        const lid = y0 + Math.min(hc - 1, lowered + worried);
+        const corner = (xx === x0 || xx === x0 + wc - 1) && ((yy === y0 && lowered === 0) || yy === y0 + hc - 1);
+        if (yy < lid || (corner && round) || xx < 0 || yy < 0 || xx >= grid || yy >= grid) continue;
+        put(xx, yy);
+      }
+    }
   }
-  return { body, eyes };
+  return out;
 }
 
-function eyeEdges(shape: "capsule" | "oval", w: number, h: number, p: Pose, line: number, outward: number): [Point[], Point[]] {
-  const [rx, ry] = [w / 2, h / 2];
-  const half = (x0: number) => {
-    const x = Math.min(Math.abs(x0), rx);
-    if (shape === "oval") return ry * Math.sqrt(Math.max(1 - (x / rx) ** 2, 0));
-    if (ry >= rx) return ry - rx + Math.sqrt(Math.max(rx * rx - x * x, 0));
-    const straight = rx - ry;
-    return x <= straight ? ry : Math.sqrt(Math.max(ry * ry - (x - straight) ** 2, 0));
-  };
-  const blink = Math.min(1, Math.max(0, p.blink));
-  const open = 1 - blink;
-  const smile = Math.min(1, Math.max(0, p.smile));
-  const wide = Math.max(rx, ry * 0.8);
-  const arch = wide * 0.85;
-  const band = Math.max(h * 0.24, line * 1.5);
-  const top: Point[] = [];
-  const bottom: Point[] = [];
-  for (let i = 0; i < EYE_POINTS; i++) {
-    const u = -Math.cos((Math.PI * i) / (EYE_POINTS - 1));
-    let x = u * rx;
-    const across = Math.sqrt(Math.max(1 - u * u, 0));
-    const thin = line * 0.5 * Math.sqrt(across);
-    const drop = ry * 0.25 * blink;
-    const reach = Math.max(half(x) * open, thin);
-    let t = drop - reach;
-    let b = drop + reach;
-    const lid = ry * open * (-1 + p.lid + p.worry * (0.1 + 0.4 * outward * u));
-    t = Math.min(Math.max(t, lid), b - 2 * thin);
-    if (smile > 0) {
-      const arcTop = arch * (0.4 - across);
-      const arcBottom = arcTop + band * (0.5 + 0.5 * Math.sqrt(across));
-      x += (u * wide - x) * smile;
-      t += (arcTop - t) * smile;
-      b += (arcBottom - b) * smile;
+/** SVG path data covering every cell of `kind`, one rectangle per run in a row. */
+export function cellPath(cells: Cell[], grid: number, kind: Cell) {
+  let d = "";
+  for (let y = 0; y < grid; y++) {
+    let x = 0;
+    while (x < grid) {
+      if (cells[y * grid + x] !== kind) { x++; continue; }
+      const start = x;
+      while (x < grid && cells[y * grid + x] === kind) x++;
+      d += `M${start} ${y}h${x - start}v1h${start - x}z`;
     }
-    top.push([x, t]);
-    bottom.push([x, b]);
   }
-  return [top, bottom];
-}
-
-/** SVG path data for an outline at `size` pixels, rounded to a hundredth of a pixel. */
-export function pathData(points: Point[], size: number) {
-  const f = (v: number) => Math.round(((v + 1) / 2) * size * 100) / 100;
-  return points.map(([x, y], i) => `${i ? "L" : "M"}${f(x)} ${f(y)}`).join("") + "Z";
+  return d;
 }
