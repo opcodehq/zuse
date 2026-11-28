@@ -75,33 +75,14 @@ pub async fn present(pool: &PgPool, sql: &'static str) -> Result<bool, sqlx::Err
     Ok(present)
 }
 
-/// Present answers seen on a borrowed connection or transaction, by statement.
-/// A process serves one schema, so a table seen once stays present. Unit
-/// tests mix schemas in one process and never cache.
-static PRESENT_ANYWHERE: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
-
-/// [`present`] for code that only holds a connection or transaction. Only a
-/// present answer is cached; an absent one is checked on every call (as before).
+/// Catalog probe for a borrowed connection or transaction. Its pool and schema
+/// are unknown, so a result cannot safely enter the shared cache. Integration
+/// tests also link this function without `cfg(test)` and use isolated schemas.
 pub async fn present_in(
     connection: &mut sqlx::PgConnection,
     sql: &'static str,
 ) -> Result<bool, sqlx::Error> {
-    if !cfg!(test)
-        && PRESENT_ANYWHERE
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .contains(&sql)
-    {
-        return Ok(true);
-    }
-    let present: bool = sqlx::query_scalar(sql).fetch_one(connection).await?;
-    if present && !cfg!(test) {
-        let mut seen = PRESENT_ANYWHERE.lock().unwrap_or_else(|e| e.into_inner());
-        if !seen.contains(&sql) {
-            seen.push(sql);
-        }
-    }
-    Ok(present)
+    sqlx::query_scalar(sql).fetch_one(connection).await
 }
 
 #[cfg(test)]
