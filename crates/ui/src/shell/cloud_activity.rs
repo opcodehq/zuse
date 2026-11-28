@@ -2,9 +2,10 @@
 //! conversation (in front, in a tab, or left running in the background)
 //! reports its agent's activity to the app state, the one place sidebar rows
 //! and tabs read a chat's status from. A conversation whose agent is still
-//! working, or waiting on the user, stays alive after the user moves to
-//! another chat, so its row keeps spinning and shows "done" when the turn
-//! ends instead of falling back to the computer's state.
+//! working, waiting on the user, or running background work it started
+//! stays alive after the user moves to another chat, so its row keeps its
+//! activity mark and shows "done" when the work ends instead of falling back
+//! to the computer's state.
 use super::cloud_conversation::CloudConversation;
 use super::*;
 use gpui::EntityId;
@@ -15,7 +16,8 @@ pub(super) struct CloudActivity {
     /// Each tracked conversation's workspace and its change and release
     /// watches.
     watches: HashMap<EntityId, (String, [Subscription; 2])>,
-    /// Conversations whose agent is busy, kept alive until the turn ends.
+    /// Conversations whose agent is busy, kept alive until the turn and its
+    /// background work end.
     busy: HashMap<EntityId, Entity<CloudConversation>>,
     /// Withdraws every report when the shell closes: its conversations'
     /// release watches no longer run then.
@@ -90,7 +92,9 @@ impl Shell {
                 self.cloud_scope_matches(&conversation.target, cx),
             )
         };
-        if in_scope && (report.working || report.awaiting_input) {
+        // Background work the turn left running keeps the conversation too:
+        // its row shows the work and settles when it ends.
+        if in_scope && report.busy() {
             self.cloud_activity
                 .busy
                 .entry(id)
@@ -372,6 +376,166 @@ mod tests {
         close(window, shell, cx);
     }
 
+    /// `view`'s agent holds a background shell (`running`) or held one.
+    fn background(view: &Entity<CloudConversation>, running: bool, cx: &mut TestAppContext) {
+        view.update(cx, |view, cx| {
+            let chat = view.target.initial_session.clone();
+            view.state.update(cx, |state, cx| {
+                let now = chrono::Utc::now();
+                state.apply_sessions(vec![zuse_protocol::Session {
+                    last_completed_turn: None,
+                    chat_id: chat,
+                    device_id: "computer".into(),
+                    status: zuse_protocol::SessionStatus::Idle,
+                    started_at: None,
+                    updated_at: now,
+                    running_subagents: 0,
+                    awaiting_input: None,
+                    background_tasks: vec![zuse_protocol::BackgroundTask {
+                        id: "watch".into(),
+                        kind: zuse_protocol::BackgroundTaskKind::Shell,
+                        description: "Watch CI".into(),
+                        command: None,
+                        started_at: now - chrono::Duration::seconds(84),
+                        ended_at: (!running).then_some(now),
+                        outcome: None,
+                        stoppable: true,
+                    }],
+                    notice: None,
+                }]);
+                cx.notify();
+            });
+        });
+    }
+    fn background_count(shell: &Entity<Shell>, workspace: &str, cx: &mut TestAppContext) -> u32 {
+        shell.read_with(cx, |shell, cx| {
+            shell.cloud_row_background(&row(workspace), cx)
+        })
+    }
+    /// The shell's sidebar on its own, as the app paints it.
+    struct SidebarOnly(Entity<Shell>);
+    impl Render for SidebarOnly {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            self.0.update(cx, |shell, cx| {
+                div()
+                    .w(px(280.))
+                    .h(px(800.))
+                    .child(shell.render_chat_sidebar(&Theme::default(), cx))
+            })
+        }
+    }
+    /// Whether `workspace`'s sidebar row wears the background mark.
+    fn background_mark(shell: &Entity<Shell>, workspace: &str, cx: &mut TestAppContext) -> bool {
+        let host = cx.add_window(|_, _| SidebarOnly(shell.clone()));
+        cx.update_window(host.into(), |_, window, cx| window.draw(cx).clear())
+            .unwrap();
+        // Selectors are looked up by `&'static str`.
+        let selector: &'static str =
+            Box::leak(format!("chat-{CLOUD_ROW_PREFIX}{workspace}-background").into_boxed_str());
+        let marked = gpui::VisualTestContext::from_window(host.into(), cx)
+            .debug_bounds(selector)
+            .is_some();
+        host.update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+        marked
+    }
+
+    /// The shell's cloud tabs on their own.
+    struct TabsOnly(Entity<Shell>);
+    impl Render for TabsOnly {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .w(px(900.))
+                .h(px(100.))
+                .children(self.0.update(cx, |shell, cx| shell.render_cloud_tabs(cx)))
+        }
+    }
+    /// Whether the first cloud tab wears the background mark.
+    fn tab_background_mark(shell: &Entity<Shell>, cx: &mut TestAppContext) -> bool {
+        let host = cx.add_window(|_, _| TabsOnly(shell.clone()));
+        cx.update_window(host.into(), |_, window, cx| window.draw(cx).clear())
+            .unwrap();
+        let marked = gpui::VisualTestContext::from_window(host.into(), cx)
+            .debug_bounds("cloud-tab-background-0")
+            .is_some();
+        host.update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+        marked
+    }
+
+    /// The owner's report: a cloud chat whose turn ended with a background
+    /// task still running looked idle in the sidebar. Its row wears the
+    /// background mark, open or not (the conversation is kept to report
+    /// it), a running turn's spinner wins over it, and the work ending out
+    /// of sight reads done until the chat is opened.
+    #[gpui::test]
+    fn background_work_marks_a_cloud_row_open_or_not_and_settles_done(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| gpui_tokio::init_from_handle(cx, runtime.handle().clone()));
+        let window = shell(cx, dir.path());
+        let shell = window.entity(cx).unwrap();
+        open(&shell, "a", cx);
+        let a = shell.read_with(cx, |shell, _| shell.cloud_conversation.clone().unwrap());
+        working(&a, cx);
+        background(&a, true, cx);
+        assert_eq!(status(&shell, "a", cx), ChatIndicator::Working);
+        assert!(
+            !background_mark(&shell, "a", cx),
+            "a running turn shows its spinner, not the background mark"
+        );
+
+        // The turn ends; the shell it started keeps running, in front.
+        finished(&a, cx);
+        assert_eq!(status(&shell, "a", cx), ChatIndicator::Idle);
+        assert_eq!(background_count(&shell, "a", cx), 1);
+        assert!(background_mark(&shell, "a", cx), "open: background mark");
+        assert!(tab_background_mark(&shell, cx), "its tab wears it too");
+
+        // Another chat comes to the front: A's conversation is kept, so its
+        // row still shows the work.
+        open(&shell, "b", cx);
+        let a = a.downgrade();
+        assert_eq!(background_count(&shell, "a", cx), 1);
+        assert!(
+            background_mark(&shell, "a", cx),
+            "not open: background mark"
+        );
+        assert!(!background_mark(&shell, "b", cx));
+        let target = shell.read_with(cx, |shell, cx| crate::state::CloudTarget {
+            controller: shell.state.read(cx).engine().unwrap().controller(),
+            subject: "owner".into(),
+            organization: None,
+            workspace: "a".into(),
+            initial_session: "a-s".into(),
+        });
+        let kept = shell
+            .read_with(cx, |shell, cx| {
+                shell.background_cloud_conversation(&target, cx)
+            })
+            .expect("A's conversation keeps running while its work does");
+        assert_eq!(Some(kept.clone()), a.upgrade());
+
+        // The work ends out of sight: done, the mark gone, and let go.
+        background(&kept, false, cx);
+        drop(kept);
+        cx.run_until_parked();
+        assert_eq!(background_count(&shell, "a", cx), 0);
+        assert_eq!(status(&shell, "a", cx), ChatIndicator::Completed);
+        assert!(!background_mark(&shell, "a", cx));
+        assert!(
+            shell
+                .read_with(cx, |shell, cx| shell
+                    .background_cloud_conversation(&target, cx))
+                .is_none(),
+            "a settled conversation is let go"
+        );
+        open(&shell, "a", cx);
+        assert_eq!(status(&shell, "a", cx), ChatIndicator::Idle);
+        close(window, shell, cx);
+    }
+
     /// Reopening a chat whose conversation still runs in the background
     /// brings that conversation back instead of opening a second one.
     #[gpui::test]
@@ -489,5 +653,30 @@ mod tests {
         state.report_cloud_chat_activity("w", 1, Some(working), false);
         state.report_cloud_chat_activity("w", 2, Some(Default::default()), false);
         assert!(state.cloud_chat_activity("w").live.unwrap().working);
+    }
+
+    /// Background work left running after the turn: the turn ending out of
+    /// sight is still unseen, the work ending out of sight is too, and in
+    /// front neither is. Each conversation's work adds up.
+    #[test]
+    fn background_work_ending_out_of_sight_is_unseen() {
+        use crate::state::CloudLiveActivity;
+        let mut state = AppState::new();
+        let work = |background| CloudLiveActivity {
+            background,
+            ..Default::default()
+        };
+        state.report_cloud_chat_activity("w", 1, Some(work(2)), true);
+        state.report_cloud_chat_activity("w", 1, Some(work(0)), true);
+        assert!(!state.cloud_chat_activity("w").unseen);
+        state.report_cloud_chat_activity("w", 1, Some(work(1)), false);
+        state.report_cloud_chat_activity("w", 2, Some(work(2)), false);
+        assert_eq!(state.cloud_chat_activity("w").live.unwrap().background, 3);
+        assert!(!state.cloud_chat_activity("w").unseen, "still running");
+        state.report_cloud_chat_activity("w", 2, Some(work(0)), false);
+        let activity = state.cloud_chat_activity("w");
+        assert!(activity.unseen);
+        assert_eq!(activity.live.unwrap().background, 1);
+        assert!(work(1).busy() && !work(0).busy());
     }
 }

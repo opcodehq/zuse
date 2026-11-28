@@ -83,6 +83,24 @@ pub fn background_tasks(session: Option<&Session>, now: DateTime<Utc>) -> &[Back
         .map_or(&[], |s| s.background_tasks.as_slice())
 }
 
+/// How many pieces of background work a chat holds beside its turn: its
+/// running subagents plus its running background processes (shells, dev
+/// servers, monitors), what the composer's Background work row lists.
+/// Detached agents surface both as a subagent and as an agent-kind task, so
+/// they count once. Staleness-checked like [`running_subagents`]. Pure.
+pub fn background_work(session: Option<&Session>, now: DateTime<Utc>) -> u32 {
+    let tasks = background_tasks(session, now);
+    let running = |agent: bool| {
+        tasks
+            .iter()
+            .filter(|task| {
+                task.running() && (task.kind == crate::BackgroundTaskKind::Agent) == agent
+            })
+            .count() as u32
+    };
+    running_subagents(session, now).max(running(true)) + running(false)
+}
+
 /// The full display status for a chat row / tab dot: live states win, then the
 /// synced seen marker decides completed-vs-idle. Staleness gating rides on
 /// [`effective_indicator`]; the derivation itself is [`crate::chat_indicator`].
@@ -295,6 +313,44 @@ mod gate_tests {
         );
         assert_eq!(running_subagents(Some(&stale), now), 0);
         assert_eq!(running_subagents(None, now), 0);
+    }
+
+    #[test]
+    fn background_work_counts_live_agents_once_and_running_processes() {
+        use crate::{BackgroundTask, BackgroundTaskKind};
+        let now = Utc::now();
+        let task = |id: &str, kind, ended: bool| BackgroundTask {
+            id: id.into(),
+            kind,
+            description: id.into(),
+            command: None,
+            started_at: now,
+            ended_at: ended.then_some(now),
+            outcome: None,
+            stoppable: true,
+        };
+        let mut session = running_session(1, now);
+        session.status = SessionStatus::Idle;
+        session.background_tasks = vec![
+            task("shell", BackgroundTaskKind::Shell, false),
+            task("done", BackgroundTaskKind::Shell, true),
+            task("agent", BackgroundTaskKind::Agent, false),
+            task("monitor", BackgroundTaskKind::Other, false),
+        ];
+        // The detached agent is the running subagent: counted once.
+        assert_eq!(background_work(Some(&session), now), 3);
+        session.running_subagents = 0;
+        assert_eq!(background_work(Some(&session), now), 3);
+        session.background_tasks.clear();
+        assert_eq!(background_work(Some(&session), now), 0);
+        // A dead engine's row holds nothing.
+        let mut stale = running_session(
+            2,
+            now - chrono::Duration::milliseconds(SESSION_STALE_MS + 1),
+        );
+        stale.background_tasks = vec![task("shell", BackgroundTaskKind::Shell, false)];
+        assert_eq!(background_work(Some(&stale), now), 0);
+        assert_eq!(background_work(None, now), 0);
     }
 
     #[test]

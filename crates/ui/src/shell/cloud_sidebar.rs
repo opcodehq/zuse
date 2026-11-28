@@ -364,6 +364,7 @@ impl Shell {
             .unwrap_or(now);
         let time_ago = zuse_protocol::view::format_time_ago(updated, now);
         let status = self.cloud_row_status(row, cx);
+        let background = self.cloud_row_background(row, cx);
         let harness = self
             .settings
             .sidebar_show_harness
@@ -405,6 +406,7 @@ impl Shell {
             None,
             harness,
             status,
+            background,
             selected,
             false,
             false,
@@ -447,6 +449,17 @@ impl Shell {
             Some("failed" | "error" | "blocked") => ChatIndicator::Errored,
             _ => ChatIndicator::Working,
         }
+    }
+    /// Background work a cloud chat's agent left running, as its open
+    /// conversations (in front, in a tab, or kept running in the background)
+    /// report it. A chat no conversation here has open reports none: the
+    /// account's chat list does not carry it.
+    pub(super) fn cloud_row_background(&self, row: &Value, cx: &App) -> u32 {
+        row["workspaceId"]
+            .as_str()
+            .filter(|_| row["pendingLaunch"].is_null())
+            .and_then(|workspace| self.state.read(cx).cloud_chat_activity(workspace).live)
+            .map_or(0, |live| live.background)
     }
     #[cfg(test)]
     pub(super) fn pending_launch_rows(&self, cx: &App) -> Vec<Value> {

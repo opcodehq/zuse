@@ -10,7 +10,7 @@ providers: [zuse, claude, codex, cursor, devin, grok, hermes, kiro, muse, openco
 prerequisites: [/composer/orchestration]
 related: [/how-to/local-recover-task, /workspace/changes-pull-requests, /reference/diagnostics]
 next: /composer/zappers
-lastVerified: "2026-11-27"
+lastVerified: "2026-11-28"
 ---
 
 
@@ -19,6 +19,8 @@ Delegated work stays useful when you can see its state and change direction with
 ## Read the right signal
 
 Open a delegated chat from the sidebar to inspect it directly. In the target, check the current messages, environment, **Changes**, and terminal output. For provider subagents, open the subagent's chip in the side pane, or use **Open agent** in the background work row.
+
+A chat whose turn has ended but whose agent left work running (a subagent, a shell, a dev server) shows a dimmed loader on its sidebar row and tab, for local and cloud chats. Hover it to see how much is running. A turn in progress shows the regular loader instead. When the work ends in a chat you don't have open, the row shows **Done** until you open it.
 
 Status alone is not proof. A task can be idle after a successful result, after a question, or after stopping at an error. Read its most recent conclusion and verify the repository state it refers to.
 

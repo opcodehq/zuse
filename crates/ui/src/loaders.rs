@@ -502,6 +502,25 @@ pub fn retro_loader(
         .into_any_element()
 }
 
+/// [`retro_loader`] in one quiet tint: the same grid, snake and timing at
+/// lower emphasis, for activity beside the main work (a chat's background
+/// work while no turn runs).
+pub fn retro_mono_loader(key: impl Into<SharedString>, size: f32, tint: gpui::Hsla) -> AnyElement {
+    let cell_px = (size / 4.0).max(1.5).round_to_half();
+    div()
+        .size(px(size))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(MiniSpinner {
+            key: key.into(),
+            cell_px,
+            row_tints: [tint; 3],
+        })
+        .into_any_element()
+}
+
 trait RoundToHalf {
     fn round_to_half(self) -> Self;
 }
