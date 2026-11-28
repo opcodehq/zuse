@@ -235,6 +235,9 @@ struct WorkspaceView: View {
             if case .zapper(let id) = target { push(.overview(id)) }
           },
           showChanges: { showDiff = true },
+          showPanes: {
+            if let session = workspace.selectedSession { togglePaneOverview(session) }
+          },
           left: {
             switch target {
             case .chat: closeChat()
@@ -1035,17 +1038,6 @@ struct WorkspaceView: View {
       panes.setOverview(session.id, !panes.isOverview(session.id))
     }
   }
-  private func paneOverviewButton(_ session: SessionRow) -> some View {
-    Button {
-      togglePaneOverview(session)
-    } label: {
-      Label(
-        panes.isOverview(session.id) ? "Back to page" : "All panes",
-        systemImage: "square.on.square")
-    }
-    .tint(.primary)
-    .accessibilityIdentifier("pane-overview")
-  }
   @ToolbarContentBuilder private func chatToolbar(_ session: SessionRow, deck: ChatPaneDeck)
     -> some ToolbarContent
   {
@@ -1063,10 +1055,11 @@ struct WorkspaceView: View {
           }
           .buttonStyle(.plain)
           .accessibilityLabel("\(zapper.config.name) overview")
-          ChatPageDots(count: deck.pageIDs.count, index: deck.focusIndex)
+          ChatPageDots(count: deck.pageIDs.count, index: deck.focusIndex) {
+            togglePaneOverview(session)
+          }
         }
       }
-      ToolbarItem(placement: .primaryAction) { paneOverviewButton(session) }
       ToolbarItem(placement: .primaryAction) {
         Button {
           chatActions = .zapper(zapper.id)
@@ -1094,7 +1087,8 @@ struct WorkspaceView: View {
           ].compactMap { $0 }.joined(separator: " · "),
           pullRequest: chatPullRequest,
           openPullRequest: { openPullRequestLink($0.url) },
-          pages: (deck.pageIDs.count, deck.focusIndex))
+          pages: (deck.pageIDs.count, deck.focusIndex),
+          openPanes: { togglePaneOverview(session) })
       }
       if !isCompact && !workspace.zappers.keepsChat(session.id) {
         ToolbarItem(placement: .primaryAction) {
@@ -1102,7 +1096,6 @@ struct WorkspaceView: View {
             .tint(.primary).disabled(workspace.connectionState != "Connected")
         }
       }
-      ToolbarItem(placement: .primaryAction) { paneOverviewButton(session) }
       if !workspace.zappers.keepsChat(session.id) {
         ToolbarItem(placement: .primaryAction) {
           Button("More", systemImage: "ellipsis") { chatActions = .chat(session) }
@@ -1432,6 +1425,7 @@ private struct ChatHeaderTitle: View {
   var openPullRequest: (PullRequestCheckoutSummary) -> Void = { _ in }
   /// How many pages the chat has and which is in front, drawn as dots.
   var pages: (count: Int, index: Int)?
+  var openPanes: (() -> Void)?
   var body: some View {
     VStack(spacing: 1) {
       Text(title).font(.system(size: 17, weight: .semibold)).lineLimit(1)
@@ -1459,11 +1453,11 @@ private struct ChatHeaderTitle: View {
         }
       }
       if let pages {
-        ChatPageDots(count: pages.count, index: pages.index).padding(.top, 2)
+        ChatPageDots(count: pages.count, index: pages.index, action: openPanes).padding(.top, 2)
       }
     }
     .frame(maxWidth: 240)
-    .accessibilityElement(children: pullRequest == nil ? .combine : .contain)
+    .accessibilityElement(children: pullRequest == nil && openPanes == nil ? .combine : .contain)
     .accessibilityAddTraits(.isHeader)
   }
 }

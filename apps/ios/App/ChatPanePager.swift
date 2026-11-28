@@ -463,6 +463,8 @@ private struct CardLift: ViewModifier {
 struct ChatPageDots: View {
   let count: Int
   let index: Int
+  /// Tapping the dots zooms out to every pane.
+  var action: (() -> Void)?
   /// Solid ink: the navigation bar's vibrancy would otherwise wash the current dot out. A
   /// system colour, so it also resolves while SwiftUI renders off the main thread.
   #if os(macOS)
@@ -471,6 +473,19 @@ struct ChatPageDots: View {
     private static let ink = Color(uiColor: .label)
   #endif
   var body: some View {
+    if let action {
+      Button(action: action) {
+        dots.padding(.horizontal, 10).padding(.vertical, 6).contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("Page \(index + 1) of \(count)")
+      .accessibilityHint("Shows all panes")
+      .accessibilityIdentifier("pane-dots")
+    } else {
+      dots
+    }
+  }
+  private var dots: some View {
     HStack(spacing: 5) {
       ForEach(0..<min(count, 9), id: \.self) { dot in
         let current = dot == min(index, 8)

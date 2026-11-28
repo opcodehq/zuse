@@ -68,18 +68,15 @@ final class ChatPanesTests: XCTestCase {
     expectDots(app, "Page 3 of 7")
 
     // Pinching in zooms out to every page as a card. The iPad simulator doesn't deliver
-    // XCTest's synthesized pinch, so there the header button opens the overview.
-    let toggle = app.buttons["pane-overview"]
+    // XCTest's synthesized pinch, so there tapping the page dots opens the overview.
+    let toggle = app.buttons["pane-dots"]
     if UIDevice.current.userInterfaceIdiom == .pad {
       toggle.tap()
     } else {
       window.pinch(withScale: 0.45, velocity: -1.5)
     }
-    let zoomedOut = NSPredicate(format: "label == %@", "Back to page")
-    XCTAssertEqual(
-      XCTWaiter.wait(
-        for: [XCTNSPredicateExpectation(predicate: zoomedOut, object: toggle)], timeout: 5),
-      .completed, "The overview didn't open")
+    XCTAssertTrue(
+      app.buttons["pane-card-main"].waitForExistence(timeout: 5), "The overview didn't open")
     capture(app, "panes-overview")
 
     // Swiping the front card up closes it and brings the one before it forward.
@@ -99,12 +96,6 @@ final class ChatPanesTests: XCTestCase {
     app.buttons["pane-card-preview-terminal"].tap()
     let closeTerminal = app.buttons["Close Terminal"]
     XCTAssertTrue(closeTerminal.waitForExistence(timeout: 5))
-    XCTAssertEqual(
-      XCTWaiter.wait(
-        for: [
-          XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "label == %@", "All panes"), object: toggle)
-        ], timeout: 5), .completed)
     capture(app, "panes-terminal-page")
 
     // A pane's own close button closes it too.
@@ -183,7 +174,7 @@ final class ChatPanesTests: XCTestCase {
         .waitForExistence(timeout: 10))
     capture(app, "live-file")
 
-    app.buttons["pane-overview"].tap()
+    app.buttons["pane-dots"].tap()
     let card = app.buttons["pane-card-preview-terminal"]
     XCTAssertTrue(card.waitForExistence(timeout: 5))
     capture(app, "live-overview")
