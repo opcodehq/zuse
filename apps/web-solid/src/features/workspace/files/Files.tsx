@@ -183,9 +183,9 @@ export function Files(props: { target: Target }) {
     );
 
   let wantLine: { path: string; line: number } | null = null;
+  let editorPath: string | null = null;
   const revealWantedLine = () => {
-    const current = open();
-    if (!editor || !wantLine || current?.path !== wantLine.path || typeof current.file?.text !== "string") return;
+    if (!editor || !wantLine || editorPath !== wantLine.path) return;
     editor.revealLine(wantLine.line);
     wantLine = null;
   };
@@ -220,6 +220,7 @@ export function Files(props: { target: Target }) {
     if (lastBaseline === null || current === lastBaseline || !dirty()) {
       if (current !== text) editor.setText(text);
       editor.setLanguage(path);
+      editorPath = path;
     }
     lastBaseline = text;
     syncDirty();
@@ -407,6 +408,7 @@ export function Files(props: { target: Target }) {
                     const draft = open()?.draftText;
                     editor.setText(typeof draft === "string" ? draft : text);
                     editor.setLanguage(file().path);
+                    editorPath = file().path;
                     lastBaseline = text;
                     syncDirty();
                   }

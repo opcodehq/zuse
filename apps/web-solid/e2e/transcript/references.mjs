@@ -96,6 +96,7 @@ try {
   assert.equal(await page.eval("localStorage.getItem('zuse.dismissedAsks')"), JSON.stringify(["question:q-402"]));
   await page.click('.t-entry [data-ref="website-pricing-v2"]');
   assert.equal(await page.eval("__refs.destination().chat"), "c7e1f0a2-9b3d");
+  assert.equal(await page.eval("__refs.destination().panel"), "git");
   assert.deepEqual(page.errors.filter(e => !/image|ReadAttachment|connection/i.test(e)), []);
   console.log("references ok");
 } finally {

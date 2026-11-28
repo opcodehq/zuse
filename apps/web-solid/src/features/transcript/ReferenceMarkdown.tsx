@@ -267,8 +267,9 @@ export function openReference(kind: string, target: string, chatId: string, line
   }
   if (kind === "branch") {
     if (target === chatId) return openPanel("git");
-    if (state.chats[target]) return openChat(target);
-    return;
+    if (!state.chats[target]) return;
+    openChat(target);
+    return openPanel("git");
   }
   const owner = ownerZapper(chatId);
   if (!owner) {

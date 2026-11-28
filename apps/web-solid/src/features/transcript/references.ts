@@ -88,7 +88,8 @@ export function referenceCatalog(sources: ReferenceSources): ReferenceCatalog {
     if (!path || path.startsWith("/")) continue;
     add({ kind: "file", label: file.directory && !path.includes("/") ? `${path}/` : path, title: path, target: path, icon: file.icon, status: file.directory ? "directory" : undefined });
     const base = path.slice(path.lastIndexOf("/") + 1);
-    if (base !== path && /\.\w/.test(base)) basenames.set(base, basenames.has(base) ? null : { ...file, path });
+    const seen = basenames.get(base);
+    if (base !== path && /\.\w/.test(base)) basenames.set(base, seen === undefined || seen?.path === path ? { ...file, path } : null);
   }
   for (const [base, file] of basenames) if (file && !index.has(base)) add({ kind: "file", label: base, title: file.path, target: file.path, icon: file.icon, status: file.directory ? "directory" : undefined });
   for (const branch of sources.branches ?? []) if (branch.name.length >= 3 && /[/\-_.\d]/.test(branch.name)) add({ kind: "branch", label: branch.name, title: `Branch ${branch.name}`, target: branch.chatId ?? branch.name });

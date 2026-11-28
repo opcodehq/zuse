@@ -82,14 +82,13 @@ export function activityEvents(zapper: Zapper | undefined, chatId: string): Acti
   return events.sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
 }
 
-/** Places each event after the last message created at or before it; events older than the first loaded message are left out. */
+/** Places each event after the last message, in transcript order, created at or before it; events older than every loaded message are left out. */
 export function slotEvents(events: readonly ActivityEvent[], messages: readonly { id: string; createdAt: number }[]): Map<string, ActivityEvent[]> {
   const slots = new Map<string, ActivityEvent[]>();
-  let index = 0;
   for (const event of events) {
-    while (index + 1 < messages.length && messages[index + 1]!.createdAt <= event.at) index++;
-    const message = messages[index];
-    if (!message || message.createdAt > event.at) continue;
+    let message: { id: string; createdAt: number } | undefined;
+    for (let index = messages.length - 1; index >= 0 && !message; index--) if (messages[index]!.createdAt <= event.at) message = messages[index];
+    if (!message) continue;
     const slot = slots.get(message.id);
     if (slot) slot.push(event);
     else slots.set(message.id, [event]);

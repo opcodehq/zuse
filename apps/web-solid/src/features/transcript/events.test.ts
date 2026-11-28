@@ -64,6 +64,8 @@ describe("slotEvents and summarize", () => {
     assert.deepEqual(slots.get("m1")!.map(event => event.at), [15, 20, 20, 20, 30, 40]);
     assert.equal(slots.get("m2")!.length, 5);
     assert.equal(slotEvents(events, []).size, 0);
+    const outOfOrder = slotEvents(events.filter(event => event.at === 30), [{ id: "m10", createdAt: 10 }, { id: "m35", createdAt: 35 }, { id: "m20", createdAt: 20 }]);
+    assert.deepEqual([...outOfOrder.keys()], ["m20"]);
   });
   test("the divider counts updates and names closures", () => {
     const code = (id: string) => (id === "a" ? "ZAP-18" : undefined);

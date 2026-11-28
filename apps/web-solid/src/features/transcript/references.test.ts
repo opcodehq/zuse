@@ -106,6 +106,8 @@ describe("new reference kinds", () => {
     assert.deepEqual(found("See src/auth.ts:42, auth.ts, reports/ZUSA-16.md and docs."), [["src/auth.ts:42", "file", 42], ["auth.ts", "file", null], ["reports/ZUSA-16.md", "file", null]]);
     assert.deepEqual(found("src/auth.ts#L7 then src/auth.ts:12:3"), [["src/auth.ts#L7", "file", 7], ["src/auth.ts:12:3", "file", 12]]);
     assert.equal(rich.index.get("auth.ts")?.target, "src/auth.ts");
+    const repeated = referenceCatalog({ issues: [], pullRequests: [], threads: [], agents: [], files: [{ path: "src/auth.ts" }, { path: "./src/auth.ts" }] });
+    assert.equal(repeated.index.get("auth.ts")?.target, "src/auth.ts", "the same file listed twice keeps its basename");
     assert.deepEqual(found("Top-level folders need their slash: docs/ but not docs"), [["docs/", "file", null]]);
   });
   test("unknown, absolute and ambiguous paths stay plain", () => {
