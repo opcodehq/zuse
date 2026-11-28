@@ -114,6 +114,7 @@ fn option(id: &str, label: &str, choices: &[(&str, &str)], default: &str) -> Mod
                 label: (*label).into(),
             })
             .collect(),
+        choice_details: Default::default(),
         default_choice: default.into(),
     }
 }

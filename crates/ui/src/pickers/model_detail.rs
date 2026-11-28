@@ -6,6 +6,7 @@
 //! so a click on the row afterwards (or closing the menu) keeps them.
 use super::*;
 use crate::tooltip::TooltipExt as _;
+use zuse_protocol::{ModelOption, ModelOptionChoiceDetails};
 
 pub(super) const CARD_WIDTH: f32 = 240.;
 const PAD: f32 = 12.;
@@ -30,8 +31,126 @@ pub(super) struct Detail {
     /// The remaining options (context window, ...), excluding the ones the
     /// slider and the fast-mode switch own.
     pub options: Vec<SettingGroup>,
+    fusion: Option<FusionControls>,
     pub favorite: bool,
     pub is_default: bool,
+}
+
+#[derive(Clone)]
+struct FusionChoice {
+    id: String,
+    label: String,
+    effort: Option<ReasoningLevel>,
+}
+
+struct FusionControls {
+    leads: Vec<FusionChoice>,
+    lead: usize,
+    sidekicks: Vec<FusionChoice>,
+    sidekick: usize,
+}
+
+fn selected_option<'a>(
+    option: &'a ModelOption,
+    options: &'a serde_json::Map<String, serde_json::Value>,
+) -> &'a str {
+    options
+        .get(&option.id)
+        .and_then(|v| v.as_str())
+        .unwrap_or(&option.default_choice)
+}
+
+fn fusion_options(model: &Model) -> Option<(&ModelOption, &ModelOption)> {
+    (model.id == "fusion").then_some(())?;
+    Some((
+        model.options.iter().find(|o| o.id == "lead")?,
+        model.options.iter().find(|o| o.id == "sidekick")?,
+    ))
+}
+
+pub(super) fn fusion_lead_details<'a>(
+    model: &'a Model,
+    options: &serde_json::Map<String, serde_json::Value>,
+) -> Option<&'a ModelOptionChoiceDetails> {
+    let (lead, _) = fusion_options(model)?;
+    lead.choice_details
+        .get(selected_option(lead, options))
+        .or_else(|| lead.choice_details.get(&lead.default_choice))
+}
+
+impl FusionControls {
+    fn new(model: &Model, options: &serde_json::Map<String, serde_json::Value>) -> Option<Self> {
+        let (lead_option, sidekick_option) = fusion_options(model)?;
+        let lead = lead_option
+            .choices
+            .iter()
+            .position(|c| c.id == selected_option(lead_option, options))
+            .unwrap_or(0);
+        let leads: Vec<_> = lead_option
+            .choices
+            .iter()
+            .map(|c| FusionChoice {
+                id: c.id.clone(),
+                label: c.label.clone(),
+                effort: None,
+            })
+            .collect();
+        let allowed = lead_option
+            .choice_details
+            .get(&leads.get(lead)?.id)
+            .and_then(|details| details.compatible_options.get("sidekick"));
+        let sidekicks: Vec<_> = sidekick_option
+            .choices
+            .iter()
+            .filter(|c| allowed.is_none_or(|ids| ids.contains(&c.id)))
+            .map(|c| {
+                let details = sidekick_option.choice_details.get(&c.id);
+                FusionChoice {
+                    id: c.id.clone(),
+                    label: details
+                        .and_then(|d| d.model_label.clone())
+                        .unwrap_or_else(|| c.label.clone()),
+                    effort: details.and_then(|d| d.reasoning_levels.first().copied()),
+                }
+            })
+            .collect();
+        let sidekick = sidekicks
+            .iter()
+            .position(|c| c.id == selected_option(sidekick_option, options))
+            .or_else(|| {
+                sidekicks
+                    .iter()
+                    .position(|c| c.id == sidekick_option.default_choice)
+            })
+            .or_else(|| {
+                let first = allowed?.first()?;
+                sidekicks.iter().position(|c| &c.id == first)
+            })
+            .unwrap_or(0);
+        (!sidekicks.is_empty()).then_some(Self {
+            leads,
+            lead,
+            sidekicks,
+            sidekick,
+        })
+    }
+
+    fn sidekick_efforts(&self) -> Vec<&FusionChoice> {
+        let selected = &self.sidekicks[self.sidekick];
+        let mut efforts: Vec<_> = self
+            .sidekicks
+            .iter()
+            .filter(|c| c.label == selected.label && c.effort.is_some())
+            .collect();
+        efforts.sort_by_key(|c| c.effort);
+        efforts
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DetailSlider {
+    Reasoning,
+    Sidekick,
 }
 
 /// A model's long-context option as one switch ("1M context").
@@ -246,6 +365,16 @@ impl Pickers {
         } else {
             let levels = self.row_ladder(&row, cx);
             let (reasoning, options) = self.predicted_settings(&row, &levels, cx);
+            let (levels, reasoning) = if row.harness == HarnessId::Devin
+                && let Some(details) = fusion_lead_details(&row.model, &options)
+            {
+                (
+                    details.reasoning_levels.clone(),
+                    clamp_reasoning(reasoning, &details.reasoning_levels),
+                )
+            } else {
+                (levels, reasoning)
+            };
             (
                 compact::effort_stops(levels, reasoning, Some(&row.model), &options),
                 options,
@@ -269,12 +398,21 @@ impl Pickers {
         let long = configurable
             .then(|| long_context(&row.model, &options))
             .flatten();
+        let fusion = (configurable && row.harness == HarnessId::Devin)
+            .then(|| FusionControls::new(&row.model, &options))
+            .flatten();
         let hidden: Vec<&str> = effort
             .as_ref()
             .and_then(|e| e.option_id())
             .into_iter()
             .chain(fast_option.map(|(o, _)| o.id.as_str()))
             .chain(long.as_ref().map(|l| l.option.as_str()))
+            .chain(
+                fusion
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|_| ["lead", "sidekick"]),
+            )
             .collect();
         let groups = if configurable {
             build_setting_groups(Vec::new(), None, Some(&row.model), &options)
@@ -294,6 +432,7 @@ impl Pickers {
             fast,
             long_context: long,
             options: groups,
+            fusion,
             row,
         })
     }
@@ -393,6 +532,142 @@ impl Pickers {
         cx.notify();
     }
 
+    fn set_fusion_model(&mut self, role: &'static str, choice: &str, cx: &mut Context<Self>) {
+        if !self.select_detail_model(HarnessId::Devin, "fusion", cx) {
+            return;
+        }
+        let Some(model) = self.selected_model(cx) else {
+            return;
+        };
+        let Some((lead, sidekick)) = fusion_options(model) else {
+            return;
+        };
+        let mut options = self.explicit_options(cx);
+        if role == "lead" {
+            if let Some(current) = FusionControls::new(model, &options) {
+                options.insert(
+                    "sidekick".into(),
+                    current.sidekicks[current.sidekick].id.clone().into(),
+                );
+            }
+            options.insert("lead".into(), choice.into());
+        } else {
+            options.insert("sidekick".into(), choice.into());
+        }
+        let Some(fusion) = FusionControls::new(model, &options) else {
+            return;
+        };
+        let lead_id = fusion.leads[fusion.lead].id.clone();
+        let sidekick_id = fusion.sidekicks[fusion.sidekick].id.clone();
+        let picks = [
+            (
+                "lead".into(),
+                lead_id.clone(),
+                lead_id == lead.default_choice,
+            ),
+            (
+                "sidekick".into(),
+                sidekick_id.clone(),
+                sidekick_id == sidekick.default_choice,
+            ),
+        ];
+        self.model_menu.fusion_selector = None;
+        self.pick_options(picks, cx);
+    }
+
+    fn fusion_selector(
+        &self,
+        role: &'static str,
+        label: &'static str,
+        choices: &[FusionChoice],
+        selected: usize,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let current = &choices[selected];
+        let open = self.model_menu.fusion_selector == Some(role);
+        let mut names = HashSet::new();
+        let rows = choices
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| names.insert(c.label.clone()))
+            .map(|(ix, choice)| {
+                let picked = choice.label == current.label;
+                // Keep the current reasoning level when the newly selected
+                // Sidekick supports it.
+                let id = choices
+                    .iter()
+                    .find(|c| c.label == choice.label && c.effort == current.effort)
+                    .unwrap_or(choice)
+                    .id
+                    .clone();
+                crate::settings::widgets::select_row(
+                    theme,
+                    picked,
+                    false,
+                    format!("fusion-{role}-{ix}"),
+                )
+                .id((role, ix))
+                .debug_selector(move || format!("fusion-{role}-choice-{ix}"))
+                .role(gpui::Role::MenuItemRadio)
+                .tab_index(0)
+                .aria_label(choice.label.clone())
+                .aria_selected(picked)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.set_fusion_model(role, &id, cx);
+                }))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(choice.label.clone()),
+                )
+                .child(crate::settings::widgets::select_check(theme, picked))
+            });
+        div()
+            .id(role)
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .text_size(crate::typography::text_xs())
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                if this.model_menu.fusion_selector == Some(role) && event.keystroke.key == "escape"
+                {
+                    this.model_menu.fusion_selector = None;
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
+            .child(div().text_color(theme.text_muted).child(label))
+            .child(
+                crate::settings::widgets::select_trigger(theme, format!("fusion-{role}"), open)
+                    .debug_selector(move || format!("fusion-{role}"))
+                    .aria_label(format!("{label}: {}", current.label))
+                    .tip(current.label.clone())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.model_menu.fusion_selector = if open { None } else { Some(role) };
+                        cx.notify();
+                    }))
+                    .child(crate::settings::widgets::select_value(
+                        current.label.clone(),
+                    ))
+                    .child(crate::settings::widgets::select_chevron(theme, open)),
+            )
+            .when(open, |el| {
+                el.child(
+                    crate::settings::widgets::select_menu(theme)
+                        .id(SharedString::from(format!("fusion-{role}-choices")))
+                        .max_h(px(114.))
+                        .overflow_y_scroll()
+                        .children(rows),
+                )
+            })
+            .into_any_element()
+    }
+
     /// Star or unstar the card's model; the highlight follows it as the
     /// list moves it into or out of Favorites.
     pub(super) fn toggle_detail_favorite(
@@ -444,6 +719,9 @@ impl Pickers {
 
     pub(super) fn render_model_detail(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let detail = self.model_detail(cx)?;
+        if detail.fusion.is_none() {
+            self.model_menu.fusion_selector = None;
+        }
         let theme = Theme::of(cx).for_popup();
         let ink = popover::dither_ink(&theme);
         let harness = detail.row.harness;
@@ -510,26 +788,64 @@ impl Pickers {
             .flex()
             .flex_col()
             .gap(px(8.));
+        if let Some(fusion) = &detail.fusion {
+            body = body.child(self.fusion_selector(
+                "lead",
+                "Lead",
+                &fusion.leads,
+                fusion.lead,
+                &theme,
+                cx,
+            ));
+        }
         if let Some(effort) = detail.effort.as_ref() {
-            let current = effort
-                .labels
-                .get(effort.selected)
-                .cloned()
-                .unwrap_or_default();
-            body = body.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .text_size(crate::typography::text_xs())
-                    .child(div().text_color(theme.text_muted).child("Reasoning"))
-                    .child(div().text_color(theme.text).child(current)),
-            );
-            if effort.labels.len() > 1 {
-                body =
-                    body.child(self.detail_slider(effort, harness, model_id.clone(), &theme, cx));
+            body = body.child(self.detail_slider(
+                DetailSlider::Reasoning,
+                if detail.fusion.is_some() {
+                    "Lead reasoning"
+                } else {
+                    "Reasoning"
+                },
+                &effort.labels,
+                effort.selected,
+                harness,
+                model_id.clone(),
+                &theme,
+                cx,
+            ));
+            if detail.fusion.is_none() {
+                body = body.child(div().h(px(1.)));
             }
-            body = body.child(div().h(px(1.)));
+        }
+        if let Some(fusion) = &detail.fusion {
+            body = body.child(self.fusion_selector(
+                "sidekick",
+                "Sidekick",
+                &fusion.sidekicks,
+                fusion.sidekick,
+                &theme,
+                cx,
+            ));
+            let efforts = fusion.sidekick_efforts();
+            if let Some(selected) = efforts
+                .iter()
+                .position(|c| c.id == fusion.sidekicks[fusion.sidekick].id)
+            {
+                let labels: Vec<_> = efforts
+                    .iter()
+                    .filter_map(|c| c.effort.map(|level| reasoning_label(level).into()))
+                    .collect();
+                body = body.child(self.detail_slider(
+                    DetailSlider::Sidekick,
+                    "Sidekick reasoning",
+                    &labels,
+                    selected,
+                    harness,
+                    model_id.clone(),
+                    &theme,
+                    cx,
+                ));
+            }
         }
 
         // One row under the slider: icon toggles on the left, the context
@@ -706,14 +1022,27 @@ impl Pickers {
     /// knob that rests on the model's reasoning levels.
     fn detail_slider(
         &self,
-        effort: &compact::CompactEffort,
+        slider: DetailSlider,
+        name: &'static str,
+        labels: &[SharedString],
+        selected: usize,
         harness: HarnessId,
         model: SharedString,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let count = effort.labels.len();
-        let selected = effort.selected;
+        let count = labels.len();
+        let label = labels.get(selected).cloned().unwrap_or_default();
+        let heading = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .text_size(crate::typography::text_xs())
+            .child(div().text_color(theme.text_muted).child(name))
+            .child(div().text_color(theme.text).child(label.clone()));
+        if count <= 1 {
+            return heading.into_any_element();
+        }
         let width = CARD_WIDTH - 2. * PAD;
         let inset = compact::THUMB_INSET;
         let stop_x = |index: usize| {
@@ -726,15 +1055,18 @@ impl Pickers {
         let height = track.max(knob_h) + 4.;
         let top = (height - track) / 2.;
         let ink = popover::dither_ink(theme);
-        let label = effort.labels.get(selected).cloned().unwrap_or_default();
         let entity = cx.entity().downgrade();
         let down_model = model.clone();
         let key_model = model.clone();
-        div()
-            .id("model-detail-effort")
+        let control = div()
+            .id(match slider {
+                DetailSlider::Reasoning => "model-detail-effort",
+                DetailSlider::Sidekick => "model-detail-sidekick-effort",
+            })
+            .debug_selector(move || name.to_owned())
             .role(gpui::Role::Slider)
             .tab_index(0)
-            .aria_label(SharedString::from(format!("Reasoning: {label}")))
+            .aria_label(SharedString::from(format!("{name}: {label}")))
             .aria_numeric_value(selected as f64)
             .aria_min_numeric_value(0.)
             .aria_max_numeric_value(count.saturating_sub(1) as f64)
@@ -747,54 +1079,64 @@ impl Pickers {
                 cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
                     cx.stop_propagation();
                     if this.select_detail_model(harness, &down_model, cx) {
-                        this.effort_dragging = true;
-                        this.pick_effort_at(event.position.x, cx);
+                        this.set_detail_dragging(slider, true);
+                        this.pick_detail_effort_at(slider, event.position.x, cx);
                         cx.notify();
                     }
                 }),
             )
-            .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, _, cx| {
-                if this.effort_dragging && event.pressed_button == Some(gpui::MouseButton::Left) {
-                    this.pick_effort_at(event.position.x, cx);
-                    cx.notify();
-                }
-            }))
+            .on_mouse_move(
+                cx.listener(move |this, event: &gpui::MouseMoveEvent, _, cx| {
+                    let dragging = match slider {
+                        DetailSlider::Reasoning => this.effort_dragging,
+                        DetailSlider::Sidekick => this.model_menu.sidekick_dragging,
+                    };
+                    if dragging && event.pressed_button == Some(gpui::MouseButton::Left) {
+                        this.pick_detail_effort_at(slider, event.position.x, cx);
+                        cx.notify();
+                    }
+                }),
+            )
             .on_mouse_up(
                 gpui::MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
-                    this.effort_dragging = false;
+                cx.listener(move |this, _, _, cx| {
+                    this.set_detail_dragging(slider, false);
                     cx.notify();
                 }),
             )
             .on_mouse_up_out(
                 gpui::MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
-                    this.effort_dragging = false;
+                cx.listener(move |this, _, _, cx| {
+                    this.set_detail_dragging(slider, false);
                     cx.notify();
                 }),
             )
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                let Some(detail) = this.model_detail(cx) else {
-                    return;
-                };
-                let Some(effort) = detail.effort else {
-                    return;
-                };
-                let last = effort.labels.len().saturating_sub(1);
+                let last = count - 1;
                 let index = match event.keystroke.key.as_str() {
-                    "left" | "down" => effort.selected.saturating_sub(1),
-                    "right" | "up" => (effort.selected + 1).min(last),
+                    "left" | "down" => selected.saturating_sub(1),
+                    "right" | "up" => (selected + 1).min(last),
                     "home" => 0,
                     "end" => last,
                     _ => return,
                 };
                 cx.stop_propagation();
-                this.set_detail_effort(harness, &key_model, index, cx);
+                match slider {
+                    DetailSlider::Reasoning => {
+                        this.set_detail_effort(harness, &key_model, index, cx)
+                    }
+                    DetailSlider::Sidekick => this.set_sidekick_effort(index, cx),
+                }
             }))
             .child(
                 gpui::canvas(
                     move |bounds, _, cx| {
-                        let _ = entity.update(cx, |this, _| this.effort_bounds = Some(bounds));
+                        let _ = entity.update(cx, |this, _| match slider {
+                            DetailSlider::Reasoning => this.effort_bounds = Some(bounds),
+                            DetailSlider::Sidekick => {
+                                this.model_menu.sidekick_slider_bounds = Some(bounds)
+                            }
+                        });
                     },
                     |_, _, _, _| {},
                 )
@@ -843,8 +1185,56 @@ impl Pickers {
                     .rounded_full()
                     .bg(gpui::white())
                     .shadow_sm(),
-            )
+            );
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(heading)
+            .child(control)
             .into_any_element()
+    }
+
+    fn set_detail_dragging(&mut self, slider: DetailSlider, dragging: bool) {
+        match slider {
+            DetailSlider::Reasoning => self.effort_dragging = dragging,
+            DetailSlider::Sidekick => self.model_menu.sidekick_dragging = dragging,
+        }
+    }
+
+    fn pick_detail_effort_at(
+        &mut self,
+        slider: DetailSlider,
+        x: gpui::Pixels,
+        cx: &mut Context<Self>,
+    ) {
+        if slider == DetailSlider::Reasoning {
+            return self.pick_effort_at(x, cx);
+        }
+        let Some(bounds) = self.model_menu.sidekick_slider_bounds else {
+            return;
+        };
+        let Some(fusion) = self.model_detail(cx).and_then(|detail| detail.fusion) else {
+            return;
+        };
+        if let Some(index) = compact::effort_index(
+            f32::from(x - bounds.left()),
+            f32::from(bounds.size.width),
+            fusion.sidekick_efforts().len(),
+        ) {
+            self.set_sidekick_effort(index, cx);
+        }
+    }
+
+    fn set_sidekick_effort(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(fusion) = self.model_detail(cx).and_then(|detail| detail.fusion) else {
+            return;
+        };
+        if let Some(choice) = fusion.sidekick_efforts().get(index)
+            && choice.id != fusion.sidekicks[fusion.sidekick].id
+        {
+            self.set_fusion_model("sidekick", &choice.id, cx);
+        }
     }
 
     /// One more option of the card's model: a switch for an on/off option,
@@ -1063,6 +1453,98 @@ mod tests {
             .iter()
             .position(|row| row.model.id == model)
             .unwrap()
+    }
+
+    #[gpui::test]
+    fn fusion_selectors_and_reasoning_controls_apply_independent_picks(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use ReasoningLevel::{High, Low, Medium};
+
+        let (_dir, handle) = picker_window(cx);
+        handle
+            .update(cx, |picker, window, cx| {
+                picker.harnesses = Loadable::Ready(vec![descriptor(HarnessId::Devin, "Devin")]);
+                let fusion: Model = serde_json::from_value(serde_json::json!({
+                    "id": "fusion", "label": "Fusion", "reasoningLevels": ["low", "medium", "high"],
+                    "options": [
+                        {"id": "lead", "label": "Lead", "defaultChoice": "opus",
+                         "choices": [{"id":"opus","label":"Claude Opus 5.5"},
+                                     {"id":"sol","label":"GPT-6.2 Sol"}],
+                         "choiceDetails": {
+                             "opus":{"reasoningLevels":["medium","high"],"compatibleOptions":{"sidekick":["haiku-medium","swe-medium","swe-high"]}},
+                             "sol":{"reasoningLevels":["low","medium"],"compatibleOptions":{"sidekick":["swe-medium","swe-high"]}}
+                         }},
+                        {"id": "sidekick", "label": "Sidekick", "defaultChoice": "haiku-medium",
+                         "choices": [{"id":"haiku-medium","label":"Haiku Medium"},
+                                     {"id":"swe-medium","label":"SWE-2 Medium"},
+                                     {"id":"swe-high","label":"SWE-2 High"}],
+                         "choiceDetails": {
+                             "haiku-medium":{"modelLabel":"Haiku","reasoningLevels":["medium"],"compatibleOptions":{}},
+                             "swe-medium":{"modelLabel":"SWE-2","reasoningLevels":["medium"],"compatibleOptions":{}},
+                             "swe-high":{"modelLabel":"SWE-2","reasoningLevels":["high"],"compatibleOptions":{}}
+                         }}
+                    ]
+                }))
+                .unwrap();
+                picker.models.insert(HarnessId::Devin, Loadable::Ready(vec![fusion]));
+                picker.config.harness = Some(HarnessId::Devin);
+                picker.config.model = Some("fusion".into());
+                picker.open_model_menu(window, cx);
+            })
+            .unwrap();
+        let cx = &mut gpui::VisualTestContext::from_window(handle.into(), cx);
+        cx.simulate_resize(gpui::size(px(1180.), px(760.)));
+        let draw = |cx: &mut gpui::VisualTestContext| {
+            // The second frame positions the detail card from the measured list.
+            cx.update(|window, cx| {
+                window.draw(cx).clear();
+                window.draw(cx).clear();
+            });
+        };
+        let click = |cx: &mut gpui::VisualTestContext, selector: &'static str, right: bool| {
+            draw(cx);
+            let bounds = cx.debug_bounds(selector).expect(selector);
+            let mut point = bounds.center();
+            if right {
+                point.x = bounds.right() - px(4.);
+            }
+            cx.simulate_click(point, gpui::Modifiers::default());
+        };
+        click(cx, "fusion-sidekick", false);
+        click(cx, "fusion-sidekick-choice-1", false);
+        click(cx, "Sidekick reasoning", true);
+        handle
+            .update(cx, |picker, _, cx| {
+                let run = picker.resolved(cx);
+                assert_eq!(run.model_options["sidekick"], "swe-high");
+                assert_eq!(run.reasoning, Some(High));
+            })
+            .unwrap();
+
+        click(cx, "fusion-lead", false);
+        click(cx, "fusion-lead-choice-1", false);
+        draw(cx);
+        let bounds = cx.debug_bounds("Lead reasoning").unwrap();
+        cx.simulate_click(
+            gpui::point(bounds.left() + px(4.), bounds.center().y),
+            gpui::Modifiers::default(),
+        );
+        handle
+            .update(cx, |picker, _, cx| {
+                let run = picker.resolved(cx);
+                assert_eq!(run.model_options["lead"], "sol");
+                assert_eq!(run.model_options["sidekick"], "swe-high");
+                assert_eq!(run.reasoning, Some(Low));
+                assert_eq!(picker.trait_ladder(cx), [Low, Medium]);
+            })
+            .unwrap();
+        click(cx, "fusion-sidekick", false);
+        draw(cx);
+        assert!(
+            cx.debug_bounds("fusion-sidekick-choice-1").is_none(),
+            "one compatible Sidekick model, with two reasoning levels"
+        );
     }
 
     #[gpui::test]

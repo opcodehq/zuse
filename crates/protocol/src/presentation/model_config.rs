@@ -156,6 +156,7 @@ mod tests {
                         label: "Fast".into(),
                     },
                 ],
+                choice_details: Default::default(),
                 default_choice: "standard".into(),
             }],
         };

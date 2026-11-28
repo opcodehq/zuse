@@ -10,6 +10,7 @@
 //! group's effort levels and a Fast option; a run selects whichever member the
 //! session advertises and then sets effort and speed.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -18,7 +19,9 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 
-use zuse_protocol::{Model, ModelOption, ModelOptionChoice, ReasoningLevel};
+use zuse_protocol::{
+    Model, ModelOption, ModelOptionChoice, ModelOptionChoiceDetails, ReasoningLevel,
+};
 
 use crate::HarnessError;
 use crate::jsonrpc::{Incoming, RpcClient};
@@ -168,7 +171,8 @@ impl Catalog {
     /// Resolve `model` to its group, refreshing the catalog when this
     /// process has none yet. `None` when the catalog does not know the id —
     /// or, for [`FUSION`], when it offers no pair for the chosen lead and
-    /// sidekick (`options`, falling back to the catalog's first pair).
+    /// sidekick. With no sidekick preference, use the catalog default if it
+    /// pairs with the lead, or the lead's first compatible sidekick.
     pub(super) async fn selection(
         &self,
         exe: &Path,
@@ -183,19 +187,22 @@ impl Catalog {
         let latest = self.latest.lock().await;
         let (_, _, groups) = latest.as_ref()?;
         if model == FUSION {
-            let (default_lead, default_sidekick) = groups.iter().find_map(|g| g.pair.clone())?;
-            let pick = |key: &str, default: String| {
-                options
-                    .get(key)
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned)
-                    .unwrap_or(default)
+            let (default_lead, default_sidekick) = groups.iter().find_map(|g| g.pair.as_ref())?;
+            let pick = |key| options.get(key).and_then(serde_json::Value::as_str);
+            let lead = pick("lead").unwrap_or(default_lead);
+            let sidekick = pick("sidekick");
+            let find_pair = |sidekick: Option<&str>| {
+                groups.iter().find(|g| {
+                    g.pair.as_ref().is_some_and(|(l, s)| {
+                        lead == l && sidekick.is_none_or(|wanted| wanted == s)
+                    })
+                })
             };
-            let wanted = (
-                pick("lead", default_lead),
-                pick("sidekick", default_sidekick),
-            );
-            let group = groups.iter().find(|g| g.pair.as_ref() == Some(&wanted))?;
+            let group = if let Some(sidekick) = sidekick {
+                find_pair(Some(sidekick))
+            } else {
+                find_pair(Some(default_sidekick)).or_else(|| find_pair(None))
+            }?;
             return Some(Selection {
                 members: group.members.iter().map(|m| m.id.clone()).collect(),
                 effort: None,
@@ -335,6 +342,7 @@ fn speed_option(label: &str) -> ModelOption {
                 label: "Fast".into(),
             },
         ],
+        choice_details: Default::default(),
         default_choice: "standard".into(),
     }
 }
@@ -350,6 +358,7 @@ fn choice_option(id: &str, label: &str, choices: &[(String, String)]) -> ModelOp
                 label: label.clone(),
             })
             .collect(),
+        choice_details: Default::default(),
         default_choice: choices[0].0.clone(),
     }
 }
@@ -362,6 +371,8 @@ fn parse_catalog(bytes: &[u8]) -> Result<(Vec<Model>, Vec<Group>), HarnessError>
     // Fusion: every pair folds into one picker model (see [`FUSION`]).
     let mut leads: Vec<(String, String)> = Vec::new();
     let mut sidekicks: Vec<(String, String)> = Vec::new();
+    let mut lead_details = BTreeMap::<String, ModelOptionChoiceDetails>::new();
+    let mut sidekick_details = BTreeMap::new();
     let mut fusion_levels: Vec<ReasoningLevel> = Vec::new();
     let mut fusion_fast = false;
     let mut fusion_label = None;
@@ -430,13 +441,30 @@ fn parse_catalog(bytes: &[u8]) -> Result<(Vec<Model>, Vec<Group>), HarnessError>
                 .and_then(|q| q.strip_suffix(')'))
                 .and_then(|q| q.split_once(" + "))
             {
-                // Devin shows the sidekick without "Thinking".
+                let (sidekick_model, sidekick_effort, _) = split_effort(sidekick);
+                // Preserve the saved sidekick ids, which include its effort.
                 let sidekick = sidekick
                     .split_whitespace()
                     .filter(|w| *w != "Thinking")
                     .collect::<Vec<_>>()
                     .join(" ");
                 let pair = (slug(lead), slug(&sidekick));
+                let details = lead_details.entry(pair.0.clone()).or_default();
+                details.reasoning_levels.extend(&reasoning_levels);
+                let compatible = details
+                    .compatible_options
+                    .entry("sidekick".into())
+                    .or_default();
+                if !compatible.contains(&pair.1) {
+                    compatible.push(pair.1.clone());
+                }
+                sidekick_details.entry(pair.1.clone()).or_insert_with(|| {
+                    ModelOptionChoiceDetails {
+                        model_label: Some(sidekick_model),
+                        reasoning_levels: sidekick_effort.into_iter().collect(),
+                        ..Default::default()
+                    }
+                });
                 if !leads.iter().any(|(id, _)| *id == pair.0) {
                     leads.push((pair.0.clone(), lead.to_owned()));
                 }
@@ -485,6 +513,12 @@ fn parse_catalog(bytes: &[u8]) -> Result<(Vec<Model>, Vec<Group>), HarnessError>
             choice_option("lead", "Lead", &leads),
             choice_option("sidekick", "Sidekick", &sidekicks),
         ];
+        for details in lead_details.values_mut() {
+            details.reasoning_levels.sort();
+            details.reasoning_levels.dedup();
+        }
+        options[0].choice_details = lead_details;
+        options[1].choice_details = sidekick_details;
         // Offered where the lead has fast variants; the session exposes
         // `speed` for those leads and the run ignores it for the rest.
         if fusion_fast {
@@ -640,6 +674,12 @@ mod tests {
             )
         );
         assert_eq!(choices("speed").0, "Fast Mode");
+        let lead = &fusion.options[0].choice_details["gpt-6-sol"];
+        assert_eq!(lead.reasoning_levels, [ReasoningLevel::High]);
+        assert_eq!(lead.compatible_options["sidekick"], ["gpt-6-luna-high"]);
+        let sidekick = &fusion.options[1].choice_details["swe-2-high"];
+        assert_eq!(sidekick.model_label.as_deref(), Some("SWE-2"));
+        assert_eq!(sidekick.reasoning_levels, [ReasoningLevel::High]);
     }
 
     #[tokio::test]
@@ -676,6 +716,15 @@ mod tests {
                 .contains(&"fusion-claude-opus-5-5-high-sidekick-swe-2-medium".to_owned())
         );
         assert!(pick(options("gpt-6-sol", "swe-2-high")).await.is_none());
+        let mut new_lead = options("gpt-6-sol", "swe-2-high");
+        new_lead.remove("sidekick");
+        assert!(
+            pick(new_lead)
+                .await
+                .unwrap()
+                .members
+                .contains(&"fusion-gpt-6-sol-high-sidekick-gpt-6-luna-high".to_owned())
+        );
     }
 
     #[tokio::test]

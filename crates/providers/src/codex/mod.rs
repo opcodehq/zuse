@@ -629,6 +629,7 @@ fn model_service_tier(item: &Value) -> Option<ModelOption> {
         id: "serviceTier".into(),
         label: "Service Tier".into(),
         choices,
+        choice_details: Default::default(),
         default_choice,
     })
 }

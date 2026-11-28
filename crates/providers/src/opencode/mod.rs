@@ -1285,6 +1285,7 @@ fn agent_option(agents: &Value) -> ModelOption {
         id: "agent".into(),
         label: "Agent".into(),
         choices,
+        choice_details: Default::default(),
         default_choice: String::new(),
     }
 }

@@ -53,6 +53,7 @@ fn thinking_option(data: &Value) -> Vec<ModelOption> {
     vec![ModelOption {
         id: "pi_thinking".into(),
         label: "Thinking".into(),
+        choice_details: Default::default(),
         default_choice: "auto".into(),
         choices: vec![
             ModelOptionChoice {
