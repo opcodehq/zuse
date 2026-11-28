@@ -9,7 +9,7 @@ use std::time::{Duration, Instant, SystemTime};
 pub(super) const NOTICE: &str =
     "Can't reach the computer right now. The chat is saved and work keeps running there.";
 /// A failure is shown only after the connection has been failing this long.
-const SHOW_AFTER: Duration = Duration::from_secs(20);
+pub(super) const SHOW_AFTER: Duration = Duration::from_secs(20);
 const FIRST_DELAY: Duration = Duration::from_secs(1);
 const MAX_DELAY: Duration = Duration::from_secs(30);
 /// How often a wait checks the wall clock for a sleep of the machine.
@@ -41,7 +41,10 @@ impl Backoff {
     pub(super) fn visible(&self) -> bool {
         self.shown
     }
-    #[cfg(test)]
+    /// Show the strip: the failure has lasted.
+    pub(super) fn show(&mut self) {
+        self.shown = true;
+    }
     pub(super) fn failing(&self) -> bool {
         self.failures > 0
     }

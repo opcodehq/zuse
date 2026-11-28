@@ -122,6 +122,8 @@ pub(super) struct CloudConversation {
     reconnect: reconnect::Backoff,
     /// The wait before the next attempt.
     reconnect_wait: Option<Task<()>>,
+    /// Shows the strip once the failure has lasted.
+    reconnect_notice: Option<Task<()>>,
     /// The attempt in flight was asked for with Reconnect.
     reconnect_manual: bool,
     operation: Option<Task<()>>,
@@ -369,6 +371,7 @@ impl CloudConversation {
             execution: None,
             reconnect: reconnect::Backoff::default(),
             reconnect_wait: None,
+            reconnect_notice: None,
             reconnect_manual: false,
             operation: None,
             sleep_command: None,
@@ -1051,6 +1054,7 @@ impl CloudConversation {
         self.execution = None;
         self.reconnect = reconnect::Backoff::default();
         self.reconnect_wait = None;
+        self.reconnect_notice = None;
         self.operation = None;
         self.computer = computer::State::default();
         self.state
@@ -1322,6 +1326,7 @@ impl CloudConversation {
             && !self.domain_sleeping()
             && self.status["state"] == "ready"
         {
+            self.reconnect_wait = None;
             self.connect_execution(cx);
             return;
         }
@@ -1419,6 +1424,11 @@ impl CloudConversation {
                             _ => {}
                         }
                     }
+                    // The connection came back on its own (a network change):
+                    // try the tools now rather than wait out the backoff.
+                    if ready && this.status["state"] != "ready" {
+                        this.reconnect_wait = None;
+                    }
                     this.status = status;
                     this.publish_computer_online(cx);
                     if ready && !this.domain_sleeping() {
@@ -1439,7 +1449,9 @@ impl CloudConversation {
         }));
     }
     fn connect_execution(&mut self, cx: &mut Context<Self>) {
-        if !self.authorized || self.execution.is_some() {
+        // A pending backoff wait is honored; its timer, Reconnect, a file tab
+        // asking for the computer, or the connection coming back clear it.
+        if !self.authorized || self.execution.is_some() || self.reconnect_wait.is_some() {
             return;
         }
         if let Some(engine) = self.state.read(cx).engine() {
@@ -1453,7 +1465,6 @@ impl CloudConversation {
             // is opened instead of leaving the tools disconnected.
             self.detach_execution(cx);
         }
-        self.reconnect_wait = None;
         let mut boot = self.boot.clone();
         boot.target = Some(crate::state::RemoteTarget::Cloud(self.target.clone()));
         let session = self.target.initial_session.clone();
@@ -1470,6 +1481,7 @@ impl CloudConversation {
                     Ok(Ok(handle)) => {
                         this.reconnect.succeeded();
                         this.reconnect_wait = None;
+                        this.reconnect_notice = None;
                         this.history
                             .start_live(this.state.read(cx).transcript_revision);
                         this.state.update(cx, |state, cx| {
@@ -1493,12 +1505,29 @@ impl CloudConversation {
     /// The computer's tools did not connect: try again after a backoff
     /// (sooner when the machine wakes). Only a failure that lasts is shown.
     fn reconnect_later(&mut self, manual: bool, cx: &mut Context<Self>) {
+        let first = !self.reconnect.failing();
         let shown = self.reconnect.visible();
         let delay = self
             .reconnect
             .failed(cx.background_executor().now(), manual);
         if self.reconnect.visible() && !shown {
             self.report_wake_failure("Couldn't connect to the computer.", cx);
+        }
+        if first && !self.reconnect.visible() {
+            // Shown once the failure has lasted, even while an attempt or a
+            // wait is still running.
+            let executor = cx.background_executor().clone();
+            self.reconnect_notice = Some(cx.spawn(async move |this, cx| {
+                executor.timer(reconnect::SHOW_AFTER).await;
+                let _ = this.update(cx, |this, cx| {
+                    this.reconnect_notice = None;
+                    if this.reconnect.failing() && !this.reconnect.visible() {
+                        this.reconnect.show();
+                        this.report_wake_failure("Couldn't connect to the computer.", cx);
+                        cx.notify();
+                    }
+                });
+            }));
         }
         let executor = cx.background_executor().clone();
         self.reconnect_wait = Some(cx.spawn(async move |this, cx| {
@@ -1545,6 +1574,7 @@ impl CloudConversation {
         // A sleeping computer is not reconnected; waking it starts afresh.
         self.reconnect = reconnect::Backoff::default();
         self.reconnect_wait = None;
+        self.reconnect_notice = None;
         self.status = json!({"state":"connecting","message":"Putting computer to sleep…"});
         let target = self.target.clone();
         let mut params = self.params();
@@ -1590,12 +1620,6 @@ impl CloudConversation {
             && !self.domain_sleeping()
             && !(self.state.read(cx).engine().is_some()
                 && matches!(self.state.read(cx).connection, ConnectionStatus::Ready))
-    }
-    fn environment_connecting(&self) -> bool {
-        matches!(
-            self.status["state"].as_str(),
-            Some("connecting" | "reconnecting" | "starting")
-        )
     }
     fn render_tools_offline(
         &self,
@@ -1650,7 +1674,7 @@ impl Render for CloudConversation {
             settings::current(cx).transcript_width + 2. * crate::composer::COMPOSER_OUTER_PAD;
         let notice = self.error.clone();
         let tools_offline = self.tools_offline(cx);
-        let reconnecting = self.execution.is_some() || self.environment_connecting();
+        let reconnecting = self.execution.is_some();
         let show_tray = notice.is_some() || tools_offline;
         div()
             .id("native-cloud-conversation")
@@ -4408,8 +4432,11 @@ mod tests {
             fixture.identity_calls() >= 4,
             "retried quietly with backoff"
         );
-        fixture.wait(cx, 16);
-        assert!(fixture.strip(cx), "shown once the failure lasted");
+        fixture.wait(cx, 4);
+        assert!(
+            fixture.strip(cx),
+            "shown once the failure lasted 20s, between attempts"
+        );
         fixture.view.read_with(cx, |view, cx| {
             assert!(view.error.is_none(), "the strip is not a stale error");
             assert_eq!(
