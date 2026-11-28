@@ -74,7 +74,7 @@ export function statusLine(detail: ChangeRequestDetail): StatusLine {
 
 export interface FeedbackItem {
   id: string;
-  kind: "thread" | "review" | "comment";
+  kind: "thread" | "review";
   author: string;
   createdAt: string;
   url: string;
@@ -155,19 +155,18 @@ const item = (comment: ChangeRequestComment, kind: FeedbackItem["kind"], extra: 
 });
 
 /**
- * Review threads, review summaries and other people's conversation comments, oldest first. Open items need
- * action; resolved and outdated threads sit apart.
+ * Actionable review feedback, oldest first: inline review threads and review bodies that request changes.
+ * Conversation comments (deploy previews, CI and coverage summaries, review-bot walkthroughs) stay in Activity.
+ * Open items need action; resolved and outdated threads sit apart.
  */
 export function groupFeedback(detail: ChangeRequestDetail) {
-  const author = detail.author.login;
   const all: FeedbackItem[] = [
     ...(detail.reviewThreads ?? []).flatMap((thread) => {
       const root = thread.comments[0];
       if (!root) return [];
       return [item(root, "thread", { id: thread.id || root.id, path: thread.path || null, line: thread.line ?? null, replies: thread.comments.length - 1, resolved: thread.isResolved, outdated: thread.isOutdated })];
     }),
-    ...detail.reviews.filter((review) => review.body.trim()).map((review) => item(review, "review")),
-    ...detail.comments.filter((comment) => comment.body.trim() && comment.author.login !== author).map((comment) => item(comment, "comment")),
+    ...detail.reviews.filter((review) => review.body.trim() && review.state.toUpperCase() === "CHANGES_REQUESTED").map((review) => item(review, "review")),
   ].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
   return { open: all.filter((entry) => !entry.resolved && !entry.outdated), closed: all.filter((entry) => entry.resolved || entry.outdated) };
 }
@@ -178,7 +177,7 @@ const where = (entry: FeedbackItem) => (entry.path ? (entry.line ? `${entry.path
 export function fixPrompt(entry: FeedbackItem) {
   const location = where(entry);
   if (entry.aiPrompt) return location && !entry.aiPrompt.includes(entry.path!) ? `In ${location}: ${entry.aiPrompt}` : entry.aiPrompt;
-  const source = location ? `review comment from ${entry.author} on ${location}` : `pull request comment from ${entry.author}`;
+  const source = location ? `review comment from ${entry.author} on ${location}` : `review from ${entry.author}`;
   return `Address this ${source}:\n\n${cleanBody(entry.body)}`;
 }
 
@@ -187,4 +186,29 @@ export function fixAllPrompt(entries: readonly FeedbackItem[], pr: { number: num
   if (entries.length === 1) return fixPrompt(entries[0]!);
   const body = entries.map((entry, index) => `${index + 1}. ${fixPrompt(entry).replace(/\n/g, "\n   ")}`).join("\n\n");
   return `Fix these ${entries.length} review comments on #${pr.number} (${pr.title}):\n\n${body}`;
+}
+
+
+/** Removes each whole paragraph-bounded occurrence of `block` from `text`. */
+function withoutBlock(text: string, block: string) {
+  let out = text;
+  for (let at = out.indexOf(block); at >= 0; at = out.indexOf(block, at)) {
+    const end = at + block.length;
+    const starts = at === 0 || out.slice(Math.max(0, at - 2), at) === "\n\n";
+    const ends = end === out.length || out.slice(end, end + 2) === "\n\n";
+    if (starts && ends) out = out.slice(0, at) + out.slice(end);
+    else at = end;
+  }
+  return out;
+}
+
+/**
+ * The draft with `prompt` added as its last paragraph. An earlier add of the same prompt, or of any prompt in
+ * `replaces` (the single items an "Add all" covers), is taken out first so nothing appears twice.
+ */
+export function addPrompt(draft: string, prompt: string, replaces: readonly string[] = []) {
+  let rest = draft;
+  for (const block of new Set([prompt, ...replaces])) rest = withoutBlock(rest, block);
+  rest = rest.replace(/\n{3,}/g, "\n\n").trim();
+  return rest ? `${rest}\n\n${prompt}` : prompt;
 }

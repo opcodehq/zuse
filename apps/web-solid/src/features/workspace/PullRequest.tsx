@@ -7,7 +7,7 @@ import { RpcError } from "@/core/rpc";
 import { state } from "@/core/store";
 import { openChat, view } from "@/core/view";
 import { zapperForChat } from "@/core/zappers";
-import { appendToDraft, focusComposer } from "@/features/composer/drafts";
+import { draftFor, focusComposer, setDraft } from "@/features/composer/drafts";
 import { chatReferences, decorateReferences, referenceClick } from "@/features/transcript/ReferenceMarkdown";
 import { issueLabel, type ReferenceCatalog } from "@/features/transcript/references";
 import { Icon } from "@/ui/Icon";
@@ -17,7 +17,7 @@ import { Button, IconButton, Menu, Spinner, Tabs, toast, type MenuItem } from "@
 import { type JSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
 import { parsePatch } from "./diff";
-import { checksSummary, checksTone, checkTone, cleanBody, fixAllPrompt, fixPrompt, groupFeedback, sortChecks, statusLine, type CheckTone, type FeedbackItem } from "./feedback";
+import { addPrompt, checksSummary, checksTone, checkTone, cleanBody, fixAllPrompt, fixPrompt, groupFeedback, sortChecks, statusLine, type CheckTone, type FeedbackItem } from "./feedback";
 import { DiffView } from "./DiffView";
 import { Banner, DiffStat, Empty, PrStateIcon } from "./parts";
 import { errorText, liveSubscribe, readErrorText, workspace, type Target } from "./store";
@@ -388,9 +388,9 @@ function PullRequestDetail(props: { target: Target; url: string; own: boolean; o
   };
 
   /** Puts a fix prompt into the linked chat's composer, or the current chat's, without sending it. */
-  const addToChat = (text: string, what: string) => {
+  const addToChat = (text: string, what: string, replaces: string[] = []) => {
     const chatId = chat() ? props.target.chatId : view.selectedChatId ?? "";
-    appendToDraft(chatId, text);
+    setDraft(chatId, { text: addPrompt(draftFor(chatId).text, text, replaces) });
     if (chatId && view.selectedChatId !== chatId) openChat(chatId);
     focusComposer();
     toast(`${what} added to the chat`);
@@ -726,7 +726,7 @@ function CheckRow(props: { check: ChangeRequestCheck }) {
   );
 }
 
-function FeedbackSection(props: { detail: ChangeRequestDetail; onAdd: (text: string, what: string) => void }) {
+function FeedbackSection(props: { detail: ChangeRequestDetail; onAdd: (text: string, what: string, replaces?: string[]) => void }) {
   const groups = createMemo(() => groupFeedback(props.detail));
   const [open, setOpen] = createSignal(true);
   const [showClosed, setShowClosed] = createSignal(false);
@@ -735,7 +735,7 @@ function FeedbackSection(props: { detail: ChangeRequestDetail; onAdd: (text: str
       <section class="ws-pr-section" aria-label="Feedback">
         <SectionHead label="Feedback" count={groups().open.length} open={open()} onToggle={() => setOpen(!open())}>
           <Show when={groups().open.length}>
-            <Button size="sm" variant="ghost" icon="pr-add-to-chat" class="ws-fb-add-all" onClick={() => props.onAdd(fixAllPrompt(groups().open, props.detail), plural(groups().open.length, "comment"))}>Add all</Button>
+            <Button size="sm" variant="ghost" icon="pr-add-to-chat" class="ws-fb-add-all" onClick={() => props.onAdd(fixAllPrompt(groups().open, props.detail), plural(groups().open.length, "comment"), groups().open.map(fixPrompt))}>Add all</Button>
           </Show>
         </SectionHead>
         <Show when={open()}>

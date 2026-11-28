@@ -47,14 +47,15 @@ try {
 
   const feedback = await page.eval(`[...document.querySelectorAll("${S} .ws-fb:not([data-closed])")].map((f) => [f.querySelector(".ws-fb-author").textContent, f.querySelector(".ws-fb-summary").textContent])`);
   assert.deepEqual(feedback, [
-    ["cloudflare-workers-and-pages[bot]", "Deploying with Cloudflare Workers"],
     ["coderabbitai[bot]", "Minor · Open the Git panel after switching to the branch's chat."],
+    ["maya", "Keep the banner change in its own pull request; it touches the shell layout and needs its own review."],
     ["maya", "Keep the pending line until the editor shows that file's text. revealWantedLine checks the store snapshot, not the editor content."],
   ]);
+  assert.equal(/cloudflare|Deploying|Walkthrough|Actionable comments/i.test(await page.eval(text(`${S} [aria-label=Feedback]`))), false, "bot status comments and review walkthroughs are not feedback");
   assert.equal(await page.eval(`document.querySelectorAll("${S} .ws-fb[data-closed]").length`), 0, "resolved group starts closed");
   assert.equal(await page.eval(text(`${S} .ws-fb-closed-toggle`)), "2 resolved");
 
-  await page.eval(`document.querySelectorAll("${S} .ws-fb-toggle")[1].click()`);
+  await page.eval(`document.querySelectorAll("${S} .ws-fb-toggle")[0].click()`);
   assert.equal(await page.eval(`document.querySelectorAll("${S} .ws-fb[data-expanded]").length`), 1);
   const prompt = "In @apps/web-solid/src/features/transcript/ReferenceMarkdown.tsx around lines 267 - 270, when the branch belongs to another chat, open that chat and then call openPanel(\"git\") so the Git view shows; keep the current-chat path unchanged.";
   assert.equal(await page.eval(text(`${S} .ws-fb[data-expanded] .ws-fb-prompt-text`)), prompt);
@@ -72,9 +73,13 @@ try {
 
   await page.eval(clickText(`${S} .ws-fb-add-all`, "Add all"));
   const draft = await page.eval("__pr.draft()");
-  assert.ok(draft.startsWith(prompt + "\n\nFix these 3 review comments on #425 (Quieter chat errors, and resume the chat once sign-in lands):\n\n1. Address this pull request comment from cloudflare-workers-and-pages[bot]:"), draft);
-  assert.match(draft, /\n\n2\. In @apps\/web-solid\/src\/features\/transcript\/ReferenceMarkdown\.tsx/);
+  assert.ok(draft.startsWith("Fix these 3 review comments on #425 (Quieter chat errors, and resume the chat once sign-in lands):\n\n1. In @apps/web-solid/src/features/transcript/ReferenceMarkdown.tsx"), draft);
+  assert.equal(draft.split(prompt).length - 1, 1, "Add all replaces the item added before instead of repeating it");
+  assert.match(draft, /\n\n2\. Address this review from maya:/);
   assert.match(draft, /\n\n3\. Address this review comment from maya on apps\/web-solid\/src\/features\/workspace\/files\/Files\.tsx:188:/);
+  assert.equal(/cloudflare|Deploying/i.test(draft), false);
+  await page.eval(clickText(`${S} .ws-fb-add-all`, "Add all"));
+  assert.equal(await page.eval("__pr.draft()"), draft, "a second Add all leaves one copy");
 
   await page.eval(clickText(`${S} .ws-fb-closed-toggle`, "2 resolved"));
   const closed = await page.eval(`[...document.querySelectorAll("${S} .ws-fb[data-closed]")].map((f) => [f.querySelector(".ws-fb-title").textContent, getComputedStyle(f.querySelector(".ws-fb-title")).textDecorationLine, !!f.querySelector(".ws-fb-check")])`);
@@ -86,13 +91,13 @@ try {
     for (const state of ["waiting", "ready"]) {
       await page.eval("localStorage.clear()");
       await page.goto(url(theme, state));
-      assert.equal(await page.eval("document.documentElement.dataset.theme"), theme);
       await ready(page);
+      assert.equal(await page.eval("document.documentElement.dataset.theme"), theme);
       if (state === "ready") {
         assert.equal(await page.eval(text(`${S} .ws-pr-status`)), "Open·Ready to merge");
         assert.equal(await page.eval(`document.querySelector("${S} .ws-pr-merge .btn").dataset.variant`), "primary", "merge turns primary once ready");
       } else {
-        await page.eval(`document.querySelectorAll("${S} .ws-fb-toggle")[1].click()`);
+        await page.eval(`document.querySelectorAll("${S} .ws-fb-toggle")[0].click()`);
         await page.eval(clickText(`${S} .ws-fb-closed-toggle`, "2 resolved"));
       }
       await sleep(300);
