@@ -12,8 +12,8 @@ struct ChatPanePager<Page: View>: View {
   @ViewBuilder let page: (ChatPanePage) -> Page
 
   @State private var scroll = ScrollPosition(idType: String.self)
-  /// The live zoom while pinching: 1 is full screen, `overviewScale` is the overview.
-  @State private var pinch: CGFloat?
+  /// The fingers' magnification while pinching.
+  @State private var magnification: CGFloat?
   @State private var lift: (id: String, offset: CGFloat)?
   @State private var leaving: String?
   @State private var showsHint = false
@@ -26,7 +26,7 @@ struct ChatPanePager<Page: View>: View {
     GeometryReader { proxy in
       let size = proxy.size
       let small = Self.overviewScale(size)
-      let scale = pinch ?? (overview ? small : 1)
+      let scale = Self.scale(magnification, overview: overview, small: small)
       let progress = min(1, max(0, (1 - scale) / (1 - small)))
       ScrollView(.horizontal) {
         HStack(spacing: 18 * progress) {
@@ -50,11 +50,15 @@ struct ChatPanePager<Page: View>: View {
         }
         .ignoresSafeArea()
       }
-      .simultaneousGesture(magnify(small: small, overview: overview))
+      .modifier(
+        PinchToZoomOut(
+          changed: { magnification = $0 },
+          ended: { amount in endPinch(amount, overview: overview) })
+      )
       .onAppear { scroll.scrollTo(id: deck.focus, anchor: .center) }
       // A swipe that settles on another page brings it to the front.
       .onScrollPhaseChange { _, phase in
-        guard phase == .idle, pinch == nil, let id = scroll.viewID(type: String.self),
+        guard phase == .idle, magnification == nil, let id = scroll.viewID(type: String.self),
           id != store.deck(chatID).focus
         else { return }
         store.focus(chatID, id)
@@ -230,25 +234,22 @@ struct ChatPanePager<Page: View>: View {
 
   // MARK: Pinch
 
-  private func magnify(small: CGFloat, overview: Bool) -> some Gesture {
-    MagnifyGesture(minimumScaleDelta: 0.03)
-      .onChanged { value in
-        let amount = value.magnification
-        if overview {
-          pinch = min(1, max(small, small * amount))
-        } else {
-          pinch = min(1, max(small, 1 - (1 - amount) * 1.15))
-        }
-      }
-      .onEnded { value in
-        let amount = value.magnification
-        let next = overview ? amount < 1.12 : amount < 0.9
-        withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(duration: 0.4, bounce: 0.14))
-        {
-          pinch = nil
-          store.setOverview(chatID, next)
-        }
-      }
+  /// The cards' scale: 1 is full screen and `small` the overview, following a pinch live.
+  private static func scale(_ magnification: CGFloat?, overview: Bool, small: CGFloat) -> CGFloat {
+    guard let magnification else { return overview ? small : 1 }
+    let live = overview ? small * magnification : 1 - (1 - magnification) * 1.15
+    return min(1, max(small, live))
+  }
+
+  /// Pinching in past a little zooms out; pinching out over the cards zooms back in. A
+  /// cancelled pinch (`nil`) springs back.
+  private func endPinch(_ amount: CGFloat?, overview: Bool) {
+    let animation: Animation =
+      reduceMotion ? .easeOut(duration: 0.2) : .spring(duration: 0.4, bounce: 0.14)
+    withAnimation(animation) {
+      magnification = nil
+      if let amount { store.setOverview(chatID, overview ? amount < 1.12 : amount < 0.9) }
+    }
   }
 
   // MARK: Hint
@@ -271,6 +272,55 @@ struct ChatPanePager<Page: View>: View {
     }
   }
 }
+
+/// Two-finger pinch over the pages. On iPhone and iPad it is a UIKit pinch that recognises
+/// alongside the scroll views inside, so the transcript and lists keep scrolling.
+private struct PinchToZoomOut: ViewModifier {
+  let changed: (CGFloat) -> Void
+  let ended: (CGFloat?) -> Void
+
+  func body(content: Content) -> some View {
+    #if os(iOS)
+      content.gesture(PagePinch(changed: changed, ended: ended))
+    #else
+      content.simultaneousGesture(
+        MagnifyGesture(minimumScaleDelta: 0.03)
+          .onChanged { changed($0.magnification) }
+          .onEnded { ended($0.magnification) })
+    #endif
+  }
+}
+
+#if os(iOS)
+  private struct PagePinch: UIGestureRecognizerRepresentable {
+    let changed: (CGFloat) -> Void
+    let ended: (CGFloat?) -> Void
+
+    func makeUIGestureRecognizer(context: Context) -> UIPinchGestureRecognizer {
+      let pinch = UIPinchGestureRecognizer()
+      pinch.delegate = context.coordinator
+      return pinch
+    }
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+
+    func handleUIGestureRecognizerAction(_ pinch: UIPinchGestureRecognizer, context: Context) {
+      switch pinch.state {
+      case .began, .changed: changed(pinch.scale)
+      case .ended: ended(pinch.scale)
+      case .cancelled, .failed: ended(nil)
+      default: break
+      }
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+      func gestureRecognizer(
+        _ gesture: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+      ) -> Bool { true }
+    }
+  }
+#endif
 
 /// In the overview each card is one button: open it, or close it with the Close action.
 private struct CardAccessibility: ViewModifier {

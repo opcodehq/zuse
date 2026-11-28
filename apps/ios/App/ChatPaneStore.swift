@@ -47,8 +47,17 @@ import ZuseCore
     return opened ?? ChatPane(kind: kind, target: target, title: title)
   }
 
+  /// The connection used to end shells whose panes close before they were shown this launch.
+  @ObservationIgnored weak var rpc: RPCClient?
+
   func close(_ chat: String, _ pane: String, swiped: Bool = false) {
-    terminals.removeValue(forKey: pane)?.close()
+    if let terminal = terminals.removeValue(forKey: pane) {
+      terminal.close()
+    } else if let closed = deck(chat).pane(pane), closed.kind == .terminal,
+      let id = closed.target, let rpc
+    {
+      Task { try? await TerminalClient(rpc: rpc).close(id) }
+    }
     fileTrees.removeValue(forKey: pane)
     update(chat) { $0.close(pane) }
     if swiped { closedCount += 1 }

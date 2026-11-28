@@ -55,40 +55,60 @@ final class ChatPanesTests: XCTestCase {
     // Sideways swipes page through the panes; the list's own scrolling stays vertical.
     let window = app.windows.firstMatch
     let middle = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.62))
+    // A flick, as a finger would: a slow drag short of half a page springs back.
     middle.press(
       forDuration: 0.05,
-      thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.62)))
+      thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.62)),
+      withVelocity: .fast, thenHoldForDuration: 0)
     expectDots(app, "Page 4 of 7")
-    for expected in ["Page 3 of 7", "Page 2 of 7"] {
-      middle.press(
-        forDuration: 0.05,
-        thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.62)))
-      expectDots(app, expected)
-    }
-    capture(app, "panes-terminal-page")
+    middle.press(
+      forDuration: 0.05,
+      thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.62)),
+      withVelocity: .fast, thenHoldForDuration: 0)
+    expectDots(app, "Page 3 of 7")
 
-    // Pinching in zooms out to every page as a card; swiping the terminal's card up closes it.
-    window.pinch(withScale: 0.45, velocity: -1.5)
-    let terminal = app.buttons["pane-card-preview-terminal"]
-    XCTAssertTrue(terminal.waitForExistence(timeout: 5))
+    // Pinching in zooms out to every page as a card. The iPad simulator doesn't deliver
+    // XCTest's synthesized pinch, so there the header button opens the overview.
+    let toggle = app.buttons["pane-overview"]
+    if UIDevice.current.userInterfaceIdiom == .pad {
+      toggle.tap()
+    } else {
+      window.pinch(withScale: 0.45, velocity: -1.5)
+    }
+    let zoomedOut = NSPredicate(format: "label == %@", "Back to page")
+    XCTAssertEqual(
+      XCTWaiter.wait(
+        for: [XCTNSPredicateExpectation(predicate: zoomedOut, object: toggle)], timeout: 5),
+      .completed, "The overview didn't open")
     capture(app, "panes-overview")
-    let card = terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6))
+
+    // Swiping the front card up closes it and brings the one before it forward.
+    let files = app.buttons["pane-card-preview-files"]
+    let card = files.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6))
     card.press(
       forDuration: 0.05, thenDragTo: card.withOffset(CGVector(dx: 0, dy: -420)),
       withVelocity: .fast, thenHoldForDuration: 0)
-    XCTAssertTrue(waitToDisappear(terminal))
-    expectDots(app, "Page 1 of 6")
+    XCTAssertTrue(waitToDisappear(files))
+    expectDots(app, "Page 2 of 6")
     // The chat and the picker can't be closed.
     XCTAssertTrue(app.buttons["pane-card-main"].exists)
+    XCTAssertTrue(
+      app.buttons["pane-card-selection"].exists || app.buttons["pane-tile-files"].exists)
 
     // Tapping a card brings its page back full screen.
-    app.buttons["pane-card-preview-files"].tap()
-    expectDots(app, "Page 2 of 6")
-    XCTAssertTrue(search.waitForExistence(timeout: 5))
-    XCTAssertTrue(search.isHittable)
+    app.buttons["pane-card-preview-terminal"].tap()
+    let closeTerminal = app.buttons["Close Terminal"]
+    XCTAssertTrue(closeTerminal.waitForExistence(timeout: 5))
+    XCTAssertEqual(
+      XCTWaiter.wait(
+        for: [
+          XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label == %@", "All panes"), object: toggle)
+        ], timeout: 5), .completed)
+    capture(app, "panes-terminal-page")
 
     // A pane's own close button closes it too.
-    app.buttons["Close Files"].tap()
+    closeTerminal.tap()
     expectDots(app, "Page 1 of 5")
   }
 

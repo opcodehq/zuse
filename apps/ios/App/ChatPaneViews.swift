@@ -204,9 +204,7 @@ struct PaneSelectionView: View {
     case .terminal:
       // Pick up a shell this chat already has before opening another.
       let attached = context.store.attachedTerminals(context.chatID)
-      if let free = sources.terminals.first(where: { !attached.contains($0.id) }),
-        !context.preview || attached.isEmpty
-      {
+      if let free = sources.terminals.first(where: { !attached.contains($0.id) }) {
         context.open(.terminal, target: free.id, title: TerminalSessionModel.label(free))
       } else {
         context.open(.terminal, title: "Terminal")
@@ -689,7 +687,10 @@ struct ChatPaneHost<Main: View>: View {
       }
     }
     // The picker's counts refresh whenever it comes into view.
-    .task(id: refreshKey(deck)) { sources = await ChatPaneSources.load(context) }
+    .task(id: refreshKey(deck)) {
+      store.rpc = context.rpc
+      sources = await ChatPaneSources.load(context)
+    }
     #if DEBUG
       .task { seedPreview() }
     #endif

@@ -434,6 +434,17 @@ struct TerminalPaneView: View {
       }
     #endif
     .overlay { status }
+    // Output isn't selectable line by line; copying takes all of it.
+    .contextMenu {
+      Button("Copy output", systemImage: "doc.on.doc") { NativePlatform.copy(model.screen.text) }
+      #if os(iOS)
+        if UIPasteboard.general.hasStrings {
+          Button("Paste", systemImage: "doc.on.clipboard") {
+            if let text = UIPasteboard.general.string { model.paste(text) }
+          }
+        }
+      #endif
+    }
     .accessibilityElement(children: .combine)
     .accessibilityLabel("Terminal")
     .accessibilityIdentifier("terminal-output")
