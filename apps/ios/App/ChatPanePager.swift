@@ -81,7 +81,7 @@ struct ChatPanePager<Page: View>: View {
         withAnimation(.easeOut(duration: 0.3)) { showsHint = true }
       }
     }
-    .overlay(alignment: .bottom) { hint }
+    .overlay(alignment: .trailing) { hint }
     #if DEBUG
       .task {
         // `--pane-hint` shows the one-time hint on every launch, for screenshots.
@@ -265,29 +265,55 @@ struct ChatPanePager<Page: View>: View {
 
   // MARK: Hint
 
-  /// A small solid pill above the composer, so it never sits on the transcript's text.
+  /// An edge cue: two right-aligned lines beside a thin handle at the screen's edge, over a
+  /// soft fade instead of a box. The handle nudges inward, pointing the way to swipe.
   @ViewBuilder private var hint: some View {
     if showsHint {
-      HStack(spacing: 8) {
-        Image(systemName: "hand.draw").font(.system(size: 14, weight: .semibold))
-          .foregroundStyle(AppTheme.accent)
-        Text("Swipe for panes · pinch to see all")
-          .font(.system(size: 14, weight: .medium))
-      }
-      .padding(.horizontal, 14).frame(height: 36)
-      .background(.thickMaterial, in: Capsule())
-      .overlay(Capsule().strokeBorder(AppTheme.hairline, lineWidth: 1))
-      .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
-      .padding(.bottom, 84)
-      .transition(.move(edge: .bottom).combined(with: .opacity))
-      .task {
-        try? await Task.sleep(for: .seconds(3.5))
-        withAnimation(.easeIn(duration: 0.25)) { showsHint = false }
-      }
-      .onTapGesture { withAnimation { showsHint = false } }
-      .accessibilityElement(children: .combine)
-      .accessibilityAddTraits(.isStaticText)
+      PaneEdgeHint()
+        .transition(.move(edge: .trailing).combined(with: .opacity))
+        .task {
+          try? await Task.sleep(for: .seconds(4))
+          withAnimation(.easeIn(duration: 0.3)) { showsHint = false }
+        }
+        .onTapGesture { withAnimation { showsHint = false } }
     }
+  }
+}
+
+private struct PaneEdgeHint: View {
+  @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var nudged = false
+  var body: some View {
+    let dark = colorScheme == .dark
+    HStack(spacing: 14) {
+      Text("Swipe or pinch\nto see all panes")
+        .font(.system(size: 17))
+        .multilineTextAlignment(.trailing)
+        .foregroundStyle(.primary)
+        .offset(x: nudged ? -6 : 0)
+      Capsule().fill(.primary).frame(width: 4, height: 46)
+        .offset(x: nudged ? -6 : 0)
+    }
+    .padding(.trailing, 10).padding(.vertical, 40).padding(.leading, 70)
+    .background {
+      // A soft, blurred patch of the page colour keeps the words readable over the transcript
+      // without drawing a card.
+      Ellipse()
+        .fill(AppTheme.surface)
+        .padding(.trailing, -80)
+        .blur(radius: 24)
+        .opacity(dark ? 0.97 : 0.95)
+        .allowsHitTesting(false)
+    }
+    .onAppear {
+      guard !reduceMotion else { return }
+      withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true).delay(0.3)) {
+        nudged = true
+      }
+    }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("Swipe or pinch to see all panes")
   }
 }
 
