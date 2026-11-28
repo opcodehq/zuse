@@ -41,7 +41,7 @@
 .menu-item[data-danger="true"] { color: var(--danger); }
 .menu-hint { margin-left: auto; padding-left: 16px; color: var(--text-faint); font-size: var(--text-xs); }
 .menu-item[data-expanded] { background: var(--hover); }
-.menu-sep { height: 1px; margin: 4px 2px; background: var(--border); }
+.menu-sep { flex: none; height: 1px; margin: 4px 2px; border: 0; padding: 0; background: var(--border); }
 .menu-label { padding: 6px 8px 2px; font-size: var(--text-xs); color: var(--text-faint); }
 .dialog-overlay { position: fixed; inset: 0; background: rgb(0 0 0 / 0.5); z-index: 60; }
 .dialog {
