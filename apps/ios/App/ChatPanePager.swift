@@ -151,19 +151,16 @@ struct ChatPanePager<Page: View>: View {
     _ page: ChatPanePage, size: CGSize, scale: CGFloat, progress: CGFloat, overview: Bool
   ) -> some View {
     let picker = page == .selection
-    let shape = RoundedRectangle(cornerRadius: 40 * progress / scale, style: .continuous)
-    let focused = page.id == store.deck(chatID).focus
-    let border =
-      picker
-      ? Color.clear
-      : focused ? AppTheme.accent.opacity(0.55 * progress) : Color.primary.opacity(0.08 * progress)
+    let shape = RoundedRectangle(cornerRadius: 22 * progress / scale, style: .continuous)
     let fill: AnyShapeStyle = picker ? AnyShapeStyle(.clear) : AnyShapeStyle(AppTheme.surface)
-    let shadow = Color.black.opacity(picker ? 0 : 0.18 * progress)
+    let shadow = Color.black.opacity(picker ? 0 : 0.22 * progress)
+    // As a card, the page draws a little inside its edges so its content gets a margin.
+    let inset = picker ? 1 : 1 - 0.07 * progress
     return self.page(page)
       .frame(width: size.width, height: size.height)
+      .scaleEffect(inset)
       .background(fill)
       .clipShape(shape)
-      .overlay { shape.strokeBorder(border, lineWidth: (focused ? 1.5 : 1) / scale) }
       // In the overview a card is a picture of its page; only the picker's tiles stay live.
       .allowsHitTesting(!overview || picker)
       .scaleEffect(scale)
