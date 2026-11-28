@@ -24,6 +24,9 @@ case "$suite" in
       -p zuse-remote -p zuse-ui -p zuse-viewport -p zuse-text
     ;;
   cloud|cloud-compat)
+    # Guests inherit this directory, preserving the shared-volume effect guard
+    # within one test while unrelated fixtures can reuse their workspace IDs.
+    export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="python3 $PWD/scripts/ci_test_runner.py"
     args=(-p zuse-cloud -p zuse-cloud-runtime -p zuse-cloud-projection
       -p zuse-cloud-api -p zuse-cloud-guest -p zuse-client -p zuse-protocol
       --features zuse-cloud/runtime-acceptance,zuse-cloud-runtime/engine)

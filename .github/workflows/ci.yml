@@ -86,6 +86,9 @@ jobs:
         with:
           node-version: 22
       - uses: dtolnay/rust-toolchain@stable
+      - name: Configure the Linux test linker
+        if: runner.os == 'Linux'
+        run: bash scripts/ci-linux-linker.sh
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
@@ -101,8 +104,8 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/apt-debs
-          key: apt-debs-${{ runner.os }}-${{ hashFiles('scripts/ci-ubuntu-dependencies.sh') }}-cmake-libclang-dev-libasound2-dev-ripgrep
-      - run: bash scripts/ci-apt-install.sh ~/apt-debs cmake libclang-dev libasound2-dev ripgrep
+          key: apt-debs-${{ runner.os }}-${{ hashFiles('scripts/ci-ubuntu-dependencies.sh') }}-cmake-clang-lld-libclang-dev-libasound2-dev-ripgrep
+      - run: bash scripts/ci-apt-install.sh ~/apt-debs cmake clang lld libclang-dev libasound2-dev ripgrep
       - name: Build and test Rust packages once
         run: bash scripts/ci-rust.sh rust
       - name: SDK against the engine
@@ -161,6 +164,9 @@ jobs:
       - uses: actions/checkout@v4
       - run: python3 scripts/cargo_dev.py --github-env
       - uses: dtolnay/rust-toolchain@stable
+      - name: Configure the Linux test linker
+        if: runner.os == 'Linux'
+        run: bash scripts/ci-linux-linker.sh
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
@@ -178,9 +184,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/apt-debs
-          key: apt-debs-${{ runner.os }}-${{ hashFiles('scripts/ci-ubuntu-dependencies.sh') }}-build-essential-cmake-clang-libclang-dev-pkg-config-libssl-dev-libfontconfig-dev-libfreetype-dev-libxcb1-dev-libxcb-shape0-dev-libxcb-xfixes0-dev-libxkbcommon-dev-libxkbcommon-x11-dev-libwayland-dev-libvulkan-dev-libasound2-dev-libwebkit2gtk-4.1-dev-libjson-glib-dev
+          key: apt-debs-${{ runner.os }}-${{ hashFiles('scripts/ci-ubuntu-dependencies.sh') }}-build-essential-cmake-clang-lld-libclang-dev-pkg-config-libssl-dev-libfontconfig-dev-libfreetype-dev-libxcb1-dev-libxcb-shape0-dev-libxcb-xfixes0-dev-libxkbcommon-dev-libxkbcommon-x11-dev-libwayland-dev-libvulkan-dev-libasound2-dev-libwebkit2gtk-4.1-dev-libjson-glib-dev
       - if: runner.os == 'Linux'
-        run: bash scripts/ci-apt-install.sh ~/apt-debs build-essential cmake clang libclang-dev pkg-config libssl-dev libfontconfig-dev libfreetype-dev libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libasound2-dev libwebkit2gtk-4.1-dev libjson-glib-dev
+        run: bash scripts/ci-apt-install.sh ~/apt-debs build-essential cmake clang lld libclang-dev pkg-config libssl-dev libfontconfig-dev libfreetype-dev libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libasound2-dev libwebkit2gtk-4.1-dev libjson-glib-dev
       - if: runner.os == 'macOS'
         run: cargo check --locked --profile ci -p zuse -p zuse-cli -p zuse-relay -p zuse-remote
       - if: runner.os == 'macOS'

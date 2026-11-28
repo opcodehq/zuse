@@ -14,7 +14,7 @@ slow-timeout = { period = "15s", terminate-after = 4 }
 path = "junit.xml"
 
 [test-groups.cloud-postgres]
-max-threads = 1
+max-threads = 4
 
 [test-groups.cloud-staging]
 max-threads = 1
@@ -31,7 +31,7 @@ filter = 'package(zuse-cloud) & (test(managed_bases::admission::) | test(runtime
 test-group = 'cloud-staging'
 
 [[profile.ci.overrides]]
-# Real guests reuse fixture workspace IDs in their shared provider-effect guard.
-# Keep those tests and the process-launching pilot serial; other tests stay parallel.
+# Each test process tree has private temporary storage for effect locks. Bound
+# guest concurrency to avoid exhausting the shared PostgreSQL connection budget.
 filter = 'package(zuse-cloud) & (binary(postgres) | test(staging_pilot_is_separate_bounded_and_reconciles_original_effects))'
 test-group = 'cloud-postgres'

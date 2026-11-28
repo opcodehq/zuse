@@ -44,6 +44,8 @@ on:
       - .config/nextest.toml
       - scripts/ci-rust.sh
       - scripts/ci_source_cache.py
+      - scripts/ci_test_runner.py
+      - scripts/ci-linux-linker.sh
   pull_request:
     paths:
       - apps/cloud/**
@@ -86,6 +88,8 @@ on:
       - .config/nextest.toml
       - scripts/ci-rust.sh
       - scripts/ci_source_cache.py
+      - scripts/ci_test_runner.py
+      - scripts/ci-linux-linker.sh
 
 permissions:
   contents: read
@@ -167,6 +171,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Configure the Linux test linker
+        if: runner.os == 'Linux'
+        run: bash scripts/ci-linux-linker.sh
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
@@ -185,8 +192,8 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/apt-debs
-          key: apt-debs-${{ runner.os }}-${{ hashFiles('scripts/ci-ubuntu-dependencies.sh') }}-cmake-libclang-dev-libasound2-dev-ripgrep
-      - run: bash scripts/ci-apt-install.sh ~/apt-debs cmake libclang-dev libasound2-dev ripgrep
+          key: apt-debs-${{ runner.os }}-${{ hashFiles('scripts/ci-ubuntu-dependencies.sh') }}-cmake-clang-lld-libclang-dev-libasound2-dev-ripgrep
+      - run: bash scripts/ci-apt-install.sh ~/apt-debs cmake clang lld libclang-dev libasound2-dev ripgrep
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
@@ -201,6 +208,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Configure the Linux test linker
+        if: runner.os == 'Linux'
+        run: bash scripts/ci-linux-linker.sh
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v1-ci
@@ -209,6 +219,7 @@ jobs:
           cache-directories: .context/ci-source-cache.json
       - name: Restore unchanged source timestamps
         run: python3 scripts/ci_source_cache.py restore
+      - run: sudo apt-get update && sudo apt-get install -y clang lld
       - run: cargo test --locked --profile ci -p zuse-cloud-runtime -- --include-ignored
 
       - name: Record source fingerprints for the build cache
@@ -291,6 +302,9 @@ jobs:
           echo "fetched=true" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@stable
         if: steps.fetch.outputs.fetched == 'true'
+      - name: Configure the Linux test linker
+        if: runner.os == 'Linux' && steps.fetch.outputs.fetched == 'true'
+        run: bash scripts/ci-linux-linker.sh
       - uses: Swatinem/rust-cache@v2
         if: steps.fetch.outputs.fetched == 'true'
         with:
@@ -304,7 +318,7 @@ jobs:
         if: steps.fetch.outputs.fetched == 'true'
         run: python3 scripts/ci_source_cache.py restore
       - if: steps.fetch.outputs.fetched == 'true'
-        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev libasound2-dev ripgrep
+        run: sudo apt-get update && sudo apt-get install -y cmake clang lld libclang-dev libasound2-dev ripgrep
       - if: steps.fetch.outputs.fetched == 'true'
         uses: taiki-e/install-action@v2
         with:
