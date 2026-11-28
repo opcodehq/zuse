@@ -229,10 +229,14 @@ fn tag(parent: &str, event: AgentEvent) -> AgentEvent {
 /// It announces the opposite of more work.
 ///
 /// Prefix-matched: the CLI ships at least two spellings of the marker
-/// (`…by user]` and `…by user for tool use]`).
+/// (`…by user]` and `…by user for tool use]`). The image note the CLI adds
+/// after every image read is caught by text too, for frames that arrive
+/// without an `isSynthetic` stamp.
 fn is_synthetic_user_text(text: &str) -> bool {
-    let text = text.trim_start();
-    text.starts_with("<system-reminder>") || text.starts_with("[Request interrupted")
+    let trimmed = text.trim_start();
+    trimmed.starts_with("<system-reminder>")
+        || trimmed.starts_with("[Request interrupted")
+        || zuse_protocol::presentation::image_note::is_image_note(text)
 }
 
 /// Per-run normalization state.
@@ -915,11 +919,16 @@ impl Normalizer {
                     // tool results ride their own blocks, filtered above).
                     // Synthetic harness injections are not conversation, and
                     // must not read as a steer — see [`is_synthetic_user_text`].
+                    // A frame the CLI stamps `isSynthetic` is all injection:
+                    // every image a subagent Reads is followed by one carrying
+                    // an `[Image: original WxH, …]` note, which otherwise
+                    // rendered as a user bubble per screenshot.
                     out.extend(
                         f.message
                             .blocks()
                             .filter(|b: &ContentBlock| {
-                                b.kind == "text"
+                                !f.is_synthetic
+                                    && b.kind == "text"
                                     && !b.text.trim().is_empty()
                                     && !is_synthetic_user_text(&b.text)
                             })
@@ -1552,6 +1561,10 @@ mod tests {
             r#"{"type":"user","parent_tool_use_id":"toolu_sub","message":{"content":[{"type":"text","text":"<system-reminder>tick</system-reminder>"}]}}"#,
             r#"{"type":"user","parent_tool_use_id":"toolu_sub","message":{"content":[{"type":"text","text":"   "}]}}"#,
             r#"{"type":"user","message":{"content":[{"type":"text","text":"typed into the parent"}]}}"#,
+            // The CLI's meta note after every image a subagent Reads, with
+            // and without the `isSynthetic` stamp.
+            r#"{"type":"user","parent_tool_use_id":"toolu_sub","isSynthetic":true,"message":{"content":[{"type":"text","text":"[Image: original 1290x2796, displayed at 923x2000. Multiply coordinates by 1.40 to map to original image.]"}]}}"#,
+            r#"{"type":"user","parent_tool_use_id":"toolu_sub","message":{"content":[{"type":"text","text":"[Image: source: /tmp/a.png]"}]}}"#,
         ] {
             assert_eq!(normalize_one(frame), Vec::new(), "frame: {frame}");
         }

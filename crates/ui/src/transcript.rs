@@ -1488,6 +1488,11 @@ pub fn rows_for_entry(
             source,
             Some(zuse_protocol::slack::MessageSource::Zapper { typed: false, .. })
         );
+        // Subagent transcripts saved before the adapter dropped the CLI's
+        // image notes hold them as user entries: no bubble for those.
+        if source.is_none() && zuse_protocol::presentation::image_note::is_image_note(&raw) {
+            return rows;
+        }
         let raw = source.as_ref().map(|s| s.text().to_owned()).unwrap_or(raw);
         // Attachment refs ride the plain text (the `withAttachments`
         // transport); split them back out for the thumbnail strip.
@@ -17429,6 +17434,19 @@ mod tests {
             &echoed[0].kind,
             RowKind::User { pending: true, .. }
         ));
+    }
+
+    #[test]
+    fn a_saved_cli_image_note_draws_no_user_bubble() {
+        let mut entry = assistant("u1", MessageStatus::Complete, vec![]);
+        entry.role = MessageRole::User;
+        entry.parts = vec![text_part(
+            "t0",
+            "[Image: original 1290x2796, displayed at 923x2000. Multiply coordinates by 1.40 to map to original image.]",
+        )];
+        assert!(rows_for_entry(&entry, false, false, &mut parse).is_empty());
+        entry.parts = vec![text_part("t0", "[Image: source: /tmp/a.png]\n\nfix this")];
+        assert_eq!(rows_for_entry(&entry, false, false, &mut parse).len(), 1);
     }
 
     // Exercise the real Transcript handlers with GPUI's Linux headless
